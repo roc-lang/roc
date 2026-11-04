@@ -16479,6 +16479,126 @@ test "RC a closure taken from a dying record of closures through a borrowed wrap
     try testing.expectEqual(arc_sig.Mode.owned, arc_sig.RcSig.paramMode(.{ .borrowed_params = @intCast(f.store.getProcSpecImmediate(variant_call.proc).rc_borrowed_params) }, 1));
 }
 
+test "RC field takes through a complete projection repeated in a join body" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/12846: a record holding
+    // one record of a list and a scalar is projected before a switch whose
+    // taken branch consumes the list and jumps to a join, and projected again
+    // in the join's body to read the scalar. The body is entered only through
+    // that jump, so the first projection dominates the second: the second is
+    // its alias, and the list moves out of the dying record without a retain.
+    const inner_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const wrapper_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = inner_layout },
+    });
+    const list = try f.local(f.list_i64);
+    const scalar = try f.local(.i64);
+    const inner = try f.local(inner_layout);
+    const wrapper = try f.local(wrapper_layout);
+    const first_view = try f.local(inner_layout);
+    const taken = try f.local(f.list_i64);
+    const changed = try f.local(f.list_i64);
+    const cell = try f.local(f.list_i64);
+    const second_view = try f.local(inner_layout);
+    const tag = try f.local(.i64);
+    const result = try f.local(inner_layout);
+    const cond = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const make_result = try f.assignStruct(result, &.{ cell, tag }, ret);
+    const read_tag = try f.assignRefField(tag, second_view, 1, make_result);
+    const project_again = try f.assignRefField(second_view, wrapper, 0, read_tag);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const initialize = try f.setLocal(cell, changed, .initialize_join_param, jump);
+    const reverse = try f.assignLowLevel(changed, &.{taken}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), initialize);
+    const read_list = try f.assignRefField(taken, first_view, 0, reverse);
+    const branch = try f.switchStmt(cond, read_list, try f.crash("stop"), null);
+    const project_first = try f.assignRefField(first_view, wrapper, 0, branch);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{cell}),
+        .body = project_again,
+        .remainder = project_first,
+    } }, .test_fixture);
+    const make_wrapper = try f.assignStruct(wrapper, &.{inner}, join);
+    const make_inner = try f.assignStruct(inner, &.{ list, scalar }, make_wrapper);
+    const assign_scalar = try f.assignI64(scalar, 0, make_inner);
+    const body = try f.assignList(list, &.{}, assign_scalar);
+    _ = try f.addProc(&.{cond}, body, inner_layout);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 0), f.countRc(first_view, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(wrapper, .incref));
+    const second_projection_stmt = f.store.getCFStmt(project_again);
+    try testing.expect(second_projection_stmt == .assign_ref);
+    try testing.expect(second_projection_stmt.assign_ref.op.kind == .local);
+    try testing.expectEqual(first_view, second_projection_stmt.assign_ref.op.source);
+}
+
+test "RC complete projection after a rebind of its root keeps its own read" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // The root is written between two complete projections of it on a
+    // straight-line path. The first projection dominates the second, but the
+    // second reads the written record, whose scalar differs, so it is no
+    // alias of the first.
+    const inner_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const wrapper_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = inner_layout },
+    });
+    const list = try f.local(f.list_i64);
+    const scalar = try f.local(.i64);
+    const inner = try f.local(inner_layout);
+    const wrapper = try f.local(wrapper_layout);
+    const first_view = try f.local(inner_layout);
+    const taken = try f.local(f.list_i64);
+    const changed = try f.local(f.list_i64);
+    const next_list = try f.local(f.list_i64);
+    const next_scalar = try f.local(.i64);
+    const next_inner = try f.local(inner_layout);
+    const next_wrapper = try f.local(wrapper_layout);
+    const second_view = try f.local(inner_layout);
+    const tag = try f.local(.i64);
+    const result = try f.local(inner_layout);
+
+    const ret = try f.ret(result);
+    const make_result = try f.assignStruct(result, &.{ changed, tag }, ret);
+    const read_tag = try f.assignRefField(tag, second_view, 1, make_result);
+    const project_again = try f.assignRefField(second_view, wrapper, 0, read_tag);
+    const rebind = try f.setLocal(wrapper, next_wrapper, .replace_existing, project_again);
+    const make_next_wrapper = try f.assignStruct(next_wrapper, &.{next_inner}, rebind);
+    const make_next_inner = try f.assignStruct(next_inner, &.{ next_list, next_scalar }, make_next_wrapper);
+    const assign_next_scalar = try f.assignI64(next_scalar, 1, make_next_inner);
+    const make_next_list = try f.assignList(next_list, &.{}, assign_next_scalar);
+    const reverse = try f.assignLowLevel(changed, &.{taken}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), make_next_list);
+    const read_list = try f.assignRefField(taken, first_view, 0, reverse);
+    const project_first = try f.assignRefField(first_view, wrapper, 0, read_list);
+    const make_wrapper = try f.assignStruct(wrapper, &.{inner}, project_first);
+    const make_inner = try f.assignStruct(inner, &.{ list, scalar }, make_wrapper);
+    const assign_scalar = try f.assignI64(scalar, 0, make_inner);
+    const body = try f.assignList(list, &.{}, assign_scalar);
+    _ = try f.addProc(&.{}, body, inner_layout);
+
+    try f.run();
+
+    const second_projection_stmt = f.store.getCFStmt(project_again);
+    try testing.expect(second_projection_stmt == .assign_ref);
+    try testing.expect(second_projection_stmt.assign_ref.op.kind == .field);
+    try testing.expectEqual(wrapper, second_projection_stmt.assign_ref.op.source);
+}
+
 test "RC borrowed field read takes its field at the last consuming operand" {
     for ([_]bool{ false, true }) |consumed_after| {
         try expectBorrowedReadTakesAtLastOperand(consumed_after);
