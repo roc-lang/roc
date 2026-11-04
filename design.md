@@ -5075,21 +5075,39 @@ type arguments themselves belong to the enclosing scope.
 
 ### Per-Expression Checking Facts
 
-Facts that are a function of one expression's checked state are byproducts of
-checking. The checker records them as it finishes the expression's frame, in
-the module's own check task, into per-node columns of `ModuleEnv`:
+What is a function of one node's checked state is a byproduct of
+checking. When checking completes (`checkFileInternal`, after
+`finalizeTypes`, the poisoning of erroneous value uses and expressions,
+the dispatch relation merges and `finalizeLiteralDispatchResolutions`),
+the checker records, in the module's own check task, every node that is
+erroneous in its own right (`ModuleEnv.erroneous_nodes`,
+`Check.recordErroneousNodes`): a runtime error node; an expression or
+pattern whose type reaches erroneous content (a top-level definition's
+pattern is read at the definition's type); a call whose function constraint
+type, or an interpolation whose assembler type, reaches erroneous content; a
+row-coerced result whose widened type does; and a dispatch whose constraint
+checking rejected. The column is part of the module's `ModuleEnv` and of its
+cache entry.
 
-- whether the expression contains a diagnostic error: its own, one propagated
-  from a child, or one propagated from a rejected binding use;
-- whether the expression diverges: a checked-error or unreachable static
-  dispatch, or a runtime error;
-- for each dispatch node, its resolved static dispatch outcome (a direct
-  target, a constraint index, a structural derivation, or a checked error),
-  recorded once the deferred-constraint drain settles it.
+What depends on more than one node, or on dispatch resolutions settled
+after checking, are on-demand analyses of the sealed module
+(`check.BodyAnalyses`; "On-Demand Analyses And Write-Once Slots"):
 
-There is no separate propagation pass over finished bodies. The columns are
-part of the checked module and of its cache entry, and every consumer reads
-them directly.
+- per top-level unit (a definition, a top-level `expect`, a declaration
+  statement, a defaulted field's default): divergence with and without
+  inline expects (a runtime error, or a dispatch whose total resolution is a
+  checked error or unreachable, propagated through evaluation order), inspect
+  elision, and the state merges and loop mutations Monotype threads through
+  control flow;
+- per module: whether an expression contains a diagnostic error (its own
+  `erroneous_nodes` entry, any child's, a dispatch total resolution rejected,
+  and, when a dispatch was rejected, a resolved local constant reference to
+  an erroneous value; the constant-following part crosses definitions, so it
+  is one slot for the module), and which templates and nested procedure sites
+  are single-source calls.
+
+There is no propagation pass over finished bodies during checking or
+checked module assembly, and no analysis result is serialized.
 
 ### Synthesized Types
 
@@ -5254,14 +5272,14 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   (the total resolution of its dispatch plans against the settled store, its
   evidence vectors and its callable specialization); a template's nested
   procedure sites; a declaration's synthesized template; a template's
-  exhaustiveness sites; a template's body-level lowering analyses ("Lowering
-  Reads Bodies From The Canonical IR").
+  exhaustiveness sites; a top-level unit's body-level analyses
+  (divergence, inspect elision, state merges and loop mutations).
 - Per-component slots: analyses that are fixpoints over the call graph
   (template demand vectors, literal requirements) are claimed for a whole
   strongly connected component of the module's call graph, never per root.
 - Per-module slots: the key index (one over source types, one over
-  synthesized types), interface capabilities, the method registry view, and
-  provided exports.
+  synthesized types), interface capabilities, the method registry view,
+  provided exports, diagnostic errors, and single-source calls.
 
 A slot (`collections.OnceSlot`) is a state word with three states: empty,
 claimed and done; a claimed word also records whether a consumer is parked on
@@ -5301,14 +5319,65 @@ the read path takes no lock.
 
 ### Lowering Reads Bodies From The Canonical IR
 
-Monotype and Boxy lowering walk CIR expressions and patterns directly. Each
-node's type is its solver variable, resolved through the pairing overlay when
-one is active. Synthetic expressions that lowering needs and the IR does not
-contain (pattern-error arms, extraction wrappers, literal pattern guards) are
-lowering-side constructs created in the worker's workspace; they are never
-added to the checked module. Body-level analyses that are lowering concerns
-(loop mutations, state merges, inspect elision, single-source calls) are
-per-template on-demand analyses that both lowering strategies read.
+Monotype and Boxy lowering walk CIR expressions, patterns and statements
+directly, keyed by their CIR ids, through one reader
+(`check.CheckedBodies`, `src/check/checked_bodies.zig`). An expression id,
+a pattern id and a statement id are CIR node ids; a binder is the assign,
+var-assign, as, or custom literal pattern that introduces it; a template's
+body is its root CIR expression. Nothing copies a body after checking and
+nothing rewrites a CIR node after checking.
+
+The reader answers each question from where it is recorded:
+
+- structure, from CIR itself: a node's normalized shape, read per call
+  (literal digits from the module's numeral digit table, a string literal's custom
+  conversion from its literal dispatch plan, an interpolation concatenated
+  directly when its type is concretely the builtin `Str`, a promoted local
+  procedure's declaration, a rejected method declaration that evaluates
+  nothing, a retired statement's evaluated expression, a payload-free tag
+  equality, captures, record destructures and field-access segments);
+- types, from the sealed store: `typeOf` is the node's solver variable's
+  checked type, or its image under the pairing's type column when the module
+  is read under a platform/app pairing (`PairingTypeColumn`); `exprType` and
+  `patternType` are a node's own type (a top-level definition's pattern is
+  read at the definition's type); `valueType` is the type a parent reads an
+  expression at;
+- checked tables by node: dispatch plans (`StaticDispatchPlanTable`
+  keyed by node), resolved value references, calls' direct targets and
+  retired expressions (resolved value references: a rejected binding use, a
+  call of a retired callee, a required lookup a pairing rejects, all read as
+  runtime errors), and literal conversion roots (`CompileTimeRootTable`);
+- the checker's per-node columns on `ModuleEnv`;
+- on-demand analyses (`BodyAnalyses`), which both lowering strategies read.
+  The module's CIR index (which nodes checked bodies reach, each node's
+  top-level unit, top-level definition patterns, rejected method
+  declarations, recursive value declarations and scheme-alias binders) is
+  built from CIR when the module's analyses are created; the analyses
+  themselves are computed on first demand.
+
+A literal conversion compile-time root names its literal explicitly
+(`CompileTimeRoot.literal`, an expression or a custom literal pattern), and a
+hoisted pattern root names its hoisted body; no root names a node that does
+not exist in CIR.
+
+Constructs lowering needs that the IR does not contain are built by each
+lowering in its worker's workspace and never added to the checked module:
+
+- a row coercion (`rowCoercion`): the expression is read by its parent at
+  the widened type and lowered as described in "Row Coercion Primitive";
+- a custom literal pattern's guard (`literalPatternGuard`): the conversion of
+  the literal at the pattern's type, a read of the pattern's own binder, and
+  the equality dispatch whose plan is keyed by the pattern node;
+- a hoisted compile-time root's pattern error, validation and extraction
+  (`CompileTimeRoot.hoisted_body`, `bodyParts`): the root refers to the
+  hoisted root, and lowering crashes for a pattern error, or matches the
+  root's base expression against its scrutinee pattern and yields the result
+  binder or `{}`;
+- a literal conversion root's body: the root's source is its literal
+  (`RootSource.literal`, a `LiteralNode` naming a literal expression or a
+  custom literal pattern; `CompileTimeRoot.literalNode`), it holds no
+  expression, and lowering converts the literal's value through the
+  conversion plan keyed by the literal's node.
 
 ### Forbidden Checked-Boundary Shapes
 
@@ -9818,11 +9887,11 @@ nominal's arguments are outside the reach, so its backing then relates to the
 value's payloads exactly as an uncoerced value's would. A forwarding
 construction is then interchangeable with one that builds the same payload
 wherever the reach widens. The expression keeps its own type. Checking records it with the copy (`ModuleEnv.RowCoercedResult`), and
-checked-body construction keeps the expression's own node and adds a
-`row_coerce` of it at the copy's type, which is the node the expression's
-parent refers to (Row Coercion Primitive, below); every consumer keyed by the
-source node—dispatch plans, exhaustiveness sites, value references—still finds
-the expression's own kind. The copy only re-opens rows the value's own type
+the body reader reports the copy's type as the type the expression's parent
+reads it at (`CheckedBodies.rowCoercion`, `valueType`; Row Coercion Primitive,
+below); every consumer keyed by the source node—dispatch plans,
+exhaustiveness sites, value references—still finds the expression's own
+kind. The copy only re-opens rows the value's own type
 closes, so a relation
 that rejects the copy rejects the value's own type too, and the rejection is
 reported through that type. A copy whose rows settle closed with exactly the
@@ -9877,7 +9946,7 @@ result waits (`Check.ResultTarget`); a relation that infers a result is
 what determines it, and relates the value's type as it stands. The body's
 coercion record names the annotated result itself as the wide type, since
 the body's type is the enclosing function's data and never the result's own
-class, so its `row_coerce` always stands and is lowered at the result's
+class, so its row coercion always stands and is lowered at the result's
 cell (Closed Result Rows At Template Boundaries).
 `test/snapshots/deferred_result_relation.md` pins the accepted and rejected
 sides, and `test/cli/DestructuredStepWidenedMatch.roc` runs the widened
@@ -9895,7 +9964,7 @@ of `[MyErr, ..[]]`; that spelling does not exist and is not designed.
 A `?` whose error row is closed contributes that row's tags to the composed
 result and relates no tail (Try Return-Row Composition): a closed row has no
 residual, and equating it with the result would close the result's row. The
-`?` return's error row joins the result's row exactly as a `row_coerce`'s rows
+`?` return's error row joins the result's row exactly as a row coercion's rows
 join (Row Joins).
 
 A hosted declaration is a host-boundary annotation whose rows are generated
@@ -9915,17 +9984,19 @@ constructing definition with one signature, each called at a wider union.
 
 #### Row Coercion Primitive
 
-The lowering half of row widening is a checker-stamped expression,
-`row_coerce { value }` in checked bodies (`CheckedExprData.row_coerce`), whose
-own type is the wider row a value is used at and whose child keeps its own
-closed row. No CIR form lowers to it; checked-body construction stamps it for
-the one checker record that asks for it: a value with a closed row flowing
+The lowering half of row widening is a row coercion: the type a parent reads
+an expression at is the wider row the value is used at, while the expression
+itself keeps its own closed row. No CIR node represents it; checking records
+it for the one place that asks for it, a value with a closed row flowing
 into an annotated function's result (`ModuleEnv.RowCoercedResult`; Row
-Subsumption). A read of a top-level value is never one (Value Rows: Uses
-Share One Row).
+Subsumption), and the body reader reports it for that expression
+(`CheckedBodies.rowCoercion`). Each lowering inserts its own coercion step
+where a parent reads the expression: Monotype reads the expression through a
+lowering-side `row_coerce` form whose value is the expression's own value. A
+read of a top-level value is never one (Value Rows: Uses Share One Row).
 
-The node converts nothing. It marks a place where the child's rows and the
-node's rows flow together. The specialized lowering makes them ONE row there
+The coercion converts nothing. It marks a place where the value's rows and
+the rows it is read at flow together. The specialized lowering makes them ONE row there
 (Row Joins, below), so the child already has its destination's representation
 and is lowered straight into it; `.boxy` builds a constructed child at the
 destination's row and converts a produced one (Sealed Result Rows). The node
@@ -9945,9 +10016,9 @@ payloads of the same arity; the empty source row is uninhabited and satisfies
 that trivially. A row at any other position (a record field, a tuple item, a
 list item, a box payload, a function argument or result, or an argument of a
 named type without a backing such as `List`) is outside the reach and is
-identical on both sides. The checker guarantees both. A `row_coerce` whose
-child diverges diverges, and is lowered by the divergent paths like any other
-wrapper; such a child produces no value, so the join has nothing to relate.
+identical on both sides. The checker guarantees both. A coercion whose
+value diverges diverges, and is lowered by the divergent paths like any other
+wrapper; such a value produces nothing, so the join has nothing to relate.
 
 - Monotype lowers it as `row_widen { value }` (`Ast.RowWiden`). The child is
   lowered at its OWN checked type, exactly as a `try_suffix` return's value
@@ -10032,7 +10103,7 @@ has no specialization to carry a join across a template boundary, so it
 converts instead (Sealed Result Rows); the checker is the same for both.
 
 **Where joins come from.** Every place a value's rows flow into another's:
-a `row_coerce` and its child; a lambda's body and its function's result; a
+a row coercion and its value; a lambda's body and its function's result; a
 `return`'s value and its function's result; a `?` return's error row and the
 function's `Try` result. These are edges between types, not between rows:
 each edge is descended structurally, so rows at matching positions (a
@@ -10189,7 +10260,7 @@ one rule whether the value is local or top-level:
   does not discharge, is left alone.
 
 A use of a top-level value is therefore never a widening of the value: no
-`row_coerce` node and no `ModuleEnv` record exist for value uses. Where a
+row coercion and no `ModuleEnv` record exist for value uses. Where a
 value with a closed row flows into an annotated function's RESULT, Row
 Subsumption applies as to any other value: the result relates to a widening
 copy, the function's result is wider, and the value's own row is untouched.
@@ -13583,7 +13654,7 @@ callers, so widening becomes a CONVERSION at the instantiation that widens:
 - A call whose instantiation widens the callee's sealed result converts the
   result after the call, from the callee's result type at that instantiation
   to the call's own type.
-- A `return`, a `?` return, or a `row_coerce` that flows a produced value (a
+- A `return`, a `?` return, or a row coercion that flows a produced value (a
   read or a call) into the enclosing worker's sealed result converts it
   there; a constructed value is built at the destination's row (Row Coercion
   Primitive).
