@@ -341,8 +341,8 @@ const Kind = struct {
     pub fn exportWeak(image: Image, symbol: u32) bool {
         return exportAt(image, symbol).weak;
     }
-    pub fn digest(image: Image) []const u8 {
-        return &image.view.header.digest;
+    pub fn digest(image: Image) [32]u8 {
+        return image.view.header.digest;
     }
 };
 
