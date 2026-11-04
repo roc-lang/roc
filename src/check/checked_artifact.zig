@@ -30609,7 +30609,9 @@ const NominalFormalReach = struct {
         }
 
         pub fn noteMention(sink: *FormalSink, var_ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
-            const position = std.mem.findScalar(CheckedTypeId, sink.formals, var_ty) orelse return;
+            const position = for (sink.formals, 0..) |formal_ty, index| {
+                if (formal_ty == var_ty) break index;
+            } else return;
             const entry = sink.reach.entries.items[sink.index];
             const formal = &sink.reach.pool.items[entry.start + position];
             var path = flags;
