@@ -1833,14 +1833,11 @@ fn appendControlFlowSuccessors(
     gpa: Allocator,
 ) Error!void {
     try body_clone.appendSuccessorsInOrder(store, successors, stmt_id, gpa, .{ .join_body = false });
-    switch (store.getCFStmtImmediate(stmt_id).*) {
-        .jump => |stmt| {
-            var entry = joins.heads.get(@backingInt(stmt.target)) orelse no_index;
-            while (entry != no_index) : (entry = joins.entries.items[entry].next) {
-                try successors.append(gpa, joins.entries.items[entry].body);
-            }
-        },
-        else => {},
+    const stmt = store.getCFStmtImmediate(stmt_id);
+    if (stmt.* != .jump) return;
+    var entry = joins.heads.get(@backingInt(stmt.jump.target)) orelse no_index;
+    while (entry != no_index) : (entry = joins.entries.items[entry].next) {
+        try successors.append(gpa, joins.entries.items[entry].body);
     }
 }
 
@@ -2589,11 +2586,11 @@ fn forwardsWholeOnEveryReturn(
                     try scratch.forwards.append(gpa, edge.stmt);
                 },
                 .assign_struct => |stmt| {
-                    if (!aggregateMovesWhole(store, solution, analysis, forest_mark, root, store.getLocalSpan(stmt.fields))) return false;
+                    if (!aggregateMovesWhole(solution, analysis, forest_mark, root, store.getLocalSpan(stmt.fields))) return false;
                     try scratch.forwards.append(gpa, edge.stmt);
                 },
                 .assign_list => |stmt| {
-                    if (!aggregateMovesWhole(store, solution, analysis, forest_mark, root, store.getLocalSpan(stmt.elems))) return false;
+                    if (!aggregateMovesWhole(solution, analysis, forest_mark, root, store.getLocalSpan(stmt.elems))) return false;
                     try scratch.forwards.append(gpa, edge.stmt);
                 },
                 .assign_tag => |stmt| {
@@ -2667,14 +2664,12 @@ fn forwardsWholeOnEveryReturn(
 /// Whether every forest member among `operands` carries the parameter's
 /// whole unit into the aggregate, which consumes it.
 fn aggregateMovesWhole(
-    store: *const LirStore,
     solution: *const arc_solve.Solution,
     analysis: *const Analysis,
     forest_mark: []const bool,
     root: u32,
     operands: anytype,
 ) bool {
-    _ = store;
     var found = false;
     for (0..GuardedList.borrowLen(operands)) |index| {
         const operand = GuardedList.at(operands, index);
