@@ -571,6 +571,7 @@ pub fn typeCheckModule(
     // TODO: re-enable defer_numeric_defaults once ModuleEnv has the field
     if (loaded) |capsule| {
         try capsule.metadata.install(&checker, &checking_scope);
+        env.types.seal();
     } else {
         try checker.checkFile();
         if (inference_cache) |cache| cache.store(inference_key, env, &checker, &checking_scope);
@@ -621,6 +622,9 @@ pub fn publishCheckedArtifactFromCheckedModule(
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     publication: ArtifactPublicationInputs,
 ) PublishError!CheckedArtifact.CheckedModuleArtifact {
+    if (std.debug.runtime_safety and !env.types.isSealed()) {
+        base.invariant("a checked artifact was published from a module whose type store checking never sealed", .{});
+    }
     return publishCheckedArtifactFromCheckedModuleWithStorage(
         gpa,
         env,

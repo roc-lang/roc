@@ -40,6 +40,9 @@ pub const Var = enum {
     test_llvm_object_compile_count_file,
     /// Print deterministic work counters for one test command.
     test_command_work,
+    /// Check that the sealed type view renders every published source type
+    /// root exactly as checked type publication does.
+    verify_sealed_type_view,
     /// Emit every wasm procedure whose body passes this many bytes as a
     /// family of functions of at most this many bytes of code each, so every
     /// program exercises wasm function splitting.
@@ -60,6 +63,7 @@ pub const Var = enum {
             .dev_excerpt_roundtrip => "ROC_DEV_EXCERPT_ROUNDTRIP",
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
             .test_command_work => "ROC_TEST_COMMAND_WORK",
+            .verify_sealed_type_view => "ROC_VERIFY_SEALED_TYPE_VIEW",
             .wasm_split_bytes => "ROC_WASM_SPLIT_BYTES",
         };
     }
