@@ -107,8 +107,8 @@ pub const Digests = struct {
             .name => hasher.update(&self.nameOf(artifact.key.bytes)),
             .checking => hasher.update(&artifact.moduleEnvConst().checking_dependency.digest),
             .templates => for (artifact.exported_procedure_templates.templates) |exported| try self.hashTemplateRef(hasher, artifact, exported.template),
-            .bindings => self.hashBindings(hasher, artifact),
-            .methods => self.hashMethods(hasher, artifact),
+            .bindings => try self.hashBindings(hasher, artifact),
+            .methods => try self.hashMethods(hasher, artifact),
             .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len)))),
             .nominals => hashNominals(hasher, artifact),
             .consts => try self.hashConsts(hasher, artifact),
@@ -208,15 +208,15 @@ pub const Digests = struct {
         for (artifact.exported_procedure_templates.templates) |exported| {
             try self.hashTemplateRef(hasher, artifact, exported.template);
         }
-        self.hashBindings(hasher, artifact);
-        self.hashMethods(hasher, artifact);
+        try self.hashBindings(hasher, artifact);
+        try self.hashMethods(hasher, artifact);
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len))));
         hashNominals(hasher, artifact);
         try self.hashConsts(hasher, artifact);
         try self.hashStoredValues(hasher, artifact, .read_by_importers);
     }
 
-    fn hashBindings(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) void {
+    fn hashBindings(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         for (artifact.exported_procedure_bindings.bindings) |binding| {
             hashTag(hasher, @tagName(std.meta.activeTag(binding.body)));
             switch (binding.body) {
@@ -229,7 +229,7 @@ pub const Digests = struct {
         }
     }
 
-    fn hashMethods(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) void {
+    fn hashMethods(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         for (artifact.method_registry.entries) |entry| {
             const target = entry.target orelse {
                 hashTag(hasher, "rejected");

@@ -23137,6 +23137,7 @@ pub const PlatformPairing = struct {
                 "source_hash",
                 "module_identity",
                 "direct_import_module_keys",
+                "dispatch_view_keys",
                 "module_env",
                 "exports",
                 "provides_requires",
