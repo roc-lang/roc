@@ -4947,6 +4947,7 @@ const SpecJobWorkerInputs = struct {
     modules: Common.CheckedModules,
     module_views: []const ModuleViewData,
     closed_occurrences: *const ClosedOccurrenceIndex,
+    literal_argument_roots: *const LiteralArgumentRootIndex,
     source_file_ids: *const SourceFileIds,
     lowering_module_ids: *const LoweringModuleIds,
     snapshot: *const WorkerInputs.Snapshot,
@@ -5298,6 +5299,78 @@ const DeclaredComptimeRoots = std.AutoHashMap(EntryRoot, u32);
 /// module indices do not; distinct checked modules routinely share an index.
 const SourceFileIds = std.AutoHashMap([32]u8, u32);
 
+/// The `literal_argument` roots with stored values in the lowering's module
+/// views, by the literal each converts (design.md "Literal Arguments"). A
+/// literal is converted where its type first becomes concrete, under either
+/// strategy, so a specialization converting a literal at the closed type of
+/// one of these roots restores that root's value. The coordinator builds the
+/// index once before any body is lowered, and workers read it.
+const LiteralArgumentRootIndex = struct {
+    ranges: std.AutoHashMapUnmanaged(Site, Range) = .empty,
+    candidates: []const Candidate = &.{},
+
+    const Range = struct { start: u32, len: u32 };
+
+    /// A literal: its module, expression, and conversion kind.
+    const Site = struct { module: [32]u8, expr: u32, kind: checked.LiteralArgumentKind };
+
+    /// A root converting a literal: its module's position in the module
+    /// views, and its identity there.
+    const Candidate = struct { view: u32, root: checked.ComptimeRootId };
+
+    fn build(allocator: Allocator, views: []const ModuleViewData) Allocator.Error!LiteralArgumentRootIndex {
+        var counts = std.AutoHashMapUnmanaged(Site, Range).empty;
+        errdefer counts.deinit(allocator);
+        var total: u32 = 0;
+        for (views) |*view| {
+            for (view.compile_time_roots.roots) |root| {
+                const site = storedSite(root) orelse continue;
+                const entry = try counts.getOrPut(allocator, site);
+                if (!entry.found_existing) entry.value_ptr.* = .{ .start = 0, .len = 0 };
+                entry.value_ptr.len += 1;
+                total += 1;
+            }
+        }
+        var next: u32 = 0;
+        var ranges = counts.valueIterator();
+        while (ranges.next()) |range| {
+            range.start = next;
+            next += range.len;
+            range.len = 0;
+        }
+        const candidates = try allocator.alloc(Candidate, total);
+        for (views, 0..) |*view, view_index| {
+            for (view.compile_time_roots.roots) |root| {
+                const site = storedSite(root) orelse continue;
+                const range = counts.getPtr(site).?;
+                candidates[range.start + range.len] = .{ .view = @intCast(view_index), .root = root.id };
+                range.len += 1;
+            }
+        }
+        return .{ .ranges = counts, .candidates = candidates };
+    }
+
+    /// The literal a root converts, when it is a `literal_argument` root
+    /// whose value is stored.
+    fn storedSite(root: checked.CompileTimeRoot) ?Site {
+        const argument = root.literal_argument orelse return null;
+        if (root.payload != .const_node) return null;
+        return .{ .module = argument.site.module.bytes, .expr = @backingInt(argument.site.expr), .kind = argument.site.kind };
+    }
+
+    fn deinit(self: *LiteralArgumentRootIndex, allocator: Allocator) void {
+        self.ranges.deinit(allocator);
+        allocator.free(self.candidates);
+        self.candidates = &.{};
+    }
+
+    /// The roots with stored values converting the literal `site`.
+    fn rootsOf(self: *const LiteralArgumentRootIndex, site: Site) []const Candidate {
+        const range = self.ranges.get(site) orelse return &.{};
+        return self.candidates[range.start..][0..range.len];
+    }
+};
+
 /// `Common.LoweringModuleId` of every checked module in the lowering input,
 /// keyed by checked module identity. Separate from `SourceFileIds` because the
 /// two domains have different lifetimes: source-file ordinals are remapped
@@ -5462,6 +5535,11 @@ const Builder = struct {
     /// `seedProgramModuleTables`. Workers borrow the coordinator's.
     closed_occurrences: ClosedOccurrenceIndex = .{},
     borrowed_closed_occurrences: ?*const ClosedOccurrenceIndex = null,
+    /// Coordinator only: the program's literal argument roots with stored
+    /// values, built by `seedProgramModuleTables`. Workers borrow the
+    /// coordinator's.
+    literal_argument_roots: LiteralArgumentRootIndex = .{},
+    borrowed_literal_argument_roots: ?*const LiteralArgumentRootIndex = null,
 
     replay_interface_summaries: base.TestSwitch(true),
     declared_comptime_roots: DeclaredComptimeRoots,
@@ -5854,6 +5932,8 @@ const Builder = struct {
     fn seedProgramModuleTables(self: *Builder) Allocator.Error!void {
         try self.seedModuleIdentityIndex();
         try self.buildClosedOccurrenceIndex();
+        std.debug.assert(self.borrowed_literal_argument_roots == null);
+        self.literal_argument_roots = try LiteralArgumentRootIndex.build(self.allocator, self.moduleViews());
         std.debug.assert(self.borrowed_source_file_ids == null);
         std.debug.assert(self.borrowed_lowering_module_ids == null);
         std.debug.assert(self.source_file_ids.count() == 0);
@@ -5932,6 +6012,7 @@ const Builder = struct {
         builder.borrowed_source_file_ids = inputs.source_file_ids;
         builder.borrowed_module_views = inputs.module_views;
         builder.borrowed_closed_occurrences = inputs.closed_occurrences;
+        builder.borrowed_literal_argument_roots = inputs.literal_argument_roots;
         try builder.seedModuleIdentityIndex();
         builder.borrowed_lowering_module_ids = inputs.lowering_module_ids;
         builder.borrowed_comptime_roots = inputs.declared_comptime_roots;
@@ -6028,6 +6109,7 @@ const Builder = struct {
         self.deinitModuleClosures();
         self.closed_occurrence_representatives.deinit(self.allocator);
         self.closed_occurrences.deinit(self.allocator);
+        self.literal_argument_roots.deinit(self.allocator);
         self.module_index.deinit();
         self.module_identity_index.deinit(self.allocator);
         self.spec_job_task_buffers.deinit(self.allocator);
@@ -6920,6 +7002,7 @@ const Builder = struct {
             .modules = self.modules,
             .module_views = self.moduleViews(),
             .closed_occurrences = &self.closed_occurrences,
+            .literal_argument_roots = &self.literal_argument_roots,
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
@@ -7133,6 +7216,7 @@ const Builder = struct {
             .modules = self.modules,
             .module_views = self.moduleViews(),
             .closed_occurrences = &self.closed_occurrences,
+            .literal_argument_roots = &self.literal_argument_roots,
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
@@ -9312,6 +9396,7 @@ const Builder = struct {
                             .modules = self.modules,
                             .module_views = self.moduleViews(),
                             .closed_occurrences = &self.closed_occurrences,
+                            .literal_argument_roots = &self.literal_argument_roots,
                             .source_file_ids = self.sourceFileIds(),
                             .lowering_module_ids = self.loweringModuleIds(),
                             .snapshot = &context.snapshot,
@@ -11859,6 +11944,10 @@ const Builder = struct {
 
     fn closedOccurrenceIndex(self: *const Builder) *const ClosedOccurrenceIndex {
         return self.borrowed_closed_occurrences orelse &self.closed_occurrences;
+    }
+
+    fn literalArgumentRootIndex(self: *const Builder) *const LiteralArgumentRootIndex {
+        return self.borrowed_literal_argument_roots orelse &self.literal_argument_roots;
     }
 
     fn seedModuleIdentityIndex(self: *Builder) Allocator.Error!void {
@@ -50665,6 +50754,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         value_node: NodeId,
     ) Allocator.Error!DraftExprId {
+        if (try self.restoredLiteralArgument(expr_id, value_node)) |restored| return restored;
         const plan = self.literalConversionPlan(expr_id);
         const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
@@ -50676,6 +50766,84 @@ const BodyContext = struct {
         // context runs where that context exists: in place, at runtime.
         if (self.dispatchPlanSelectsLocalProc(plan)) return value;
         return try self.literalRootRead(expr_id, site, value, value_node);
+    }
+
+    /// The value a `literal_argument` root stored for this literal at the
+    /// type its node has, when its node's type is closed and some module's
+    /// root converts the literal at that type (design.md "Literal
+    /// Arguments"): both strategies convert a literal where its type first
+    /// becomes concrete, so every root for the literal and type holds the
+    /// value this specialization's conversion would produce.
+    fn restoredLiteralArgument(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        value_node: NodeId,
+    ) Allocator.Error!?DraftExprId {
+        const kind: checked.LiteralArgumentKind = switch (self.literalRejectionSite(expr_id).kind) {
+            .numeral => .numeral,
+            .quote => .quote,
+            .interpolation => Common.invariant("a specialized literal conversion pointed at an interpolation"),
+        };
+        const candidates = self.builder.literalArgumentRootIndex().rootsOf(.{ .module = self.view.key.bytes, .expr = @backingInt(expr_id), .kind = kind });
+        if (candidates.len == 0) return null;
+        if (!try self.graph.typeIsResolved(value_node)) return null;
+        const ty = try self.activeTypeFromNode(value_node);
+        for (candidates) |candidate| {
+            const view = &self.builder.moduleViews()[candidate.view];
+            const root = view.compile_time_roots.root(candidate.root);
+            const argument = root.literal_argument orelse Common.invariant("a literal argument root index entry named a root that converts no literal");
+            const node = switch (root.payload) {
+                .const_node => |stored| stored,
+                .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => Common.invariant("a literal argument root index entry named a root with no stored value"),
+            };
+            const root_ty = try self.closedCheckedMonoOf(view, argument.ty);
+            if (root_ty != ty and !try self.typeStore().typeEql(self.nameStore(), root_ty, ty)) continue;
+            if (@import("builtin").mode == .debug) try self.assertLiteralArgumentValuesAgree(candidates, view, node, ty);
+            const restored = switch (view.const_store.get(node)) {
+                // The root's conversion failed and the root reported it in
+                // its module: reaching the value is reaching a failure
+                // already reported, as reaching code checking rejected is,
+                // so a compile-time root that reads it does not report it
+                // again.
+                .crash => |message| try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(value_node), .{ .checked_error = try self.addStringView(
+                    view.const_store.blobData(message.data),
+                    message.offset,
+                    message.len,
+                ) }),
+                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn, .checked_error => try self.restoreConstNodeAtNode(view, view, node, value_node),
+            };
+            try self.draft.recordRestoredRootRead(restored, view.key, candidate.root);
+            return restored;
+        }
+        return null;
+    }
+
+    /// Every root converting one literal at one type stores one value.
+    fn assertLiteralArgumentValuesAgree(
+        self: *BodyContext,
+        candidates: []const LiteralArgumentRootIndex.Candidate,
+        view: ModuleView,
+        node: checked.ConstNodeId,
+        ty: Type.TypeId,
+    ) Allocator.Error!void {
+        for (candidates) |candidate| {
+            const other_view = &self.builder.moduleViews()[candidate.view];
+            const other = other_view.compile_time_roots.root(candidate.root);
+            const other_ty = try self.closedCheckedMonoOf(other_view, other.literal_argument.?.ty);
+            if (other_ty != ty and !try self.typeStore().typeEql(self.nameStore(), other_ty, ty)) continue;
+            if (!try view.const_store.graphEql(node, other_view.const_store, other.payload.const_node))
+                Common.invariant("two literal argument roots converting one literal at one type stored different values");
+        }
+    }
+
+    /// The Monotype a closed checked type of `view`'s module denotes
+    /// (`closedCheckedMono`).
+    fn closedCheckedMonoOf(self: *BodyContext, view: ModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
+        if (self.graph.closedCheckedMono(checkedTypeAddress(view, checked_ty))) |known| return known;
+        const previous = self.view;
+        self.view = view;
+        defer self.view = previous;
+        return try self.closedCheckedMono(checked_ty);
     }
 
     /// Lower a literal's conversion call. A program that evaluates its

@@ -681,6 +681,7 @@ const CustomCase = enum {
     issue_12220_shared_object_cache_literals,
     issue_12564_package_from_numeral_cache,
     issue_12809_boxed_callable_warm_check,
+    issue_12839_warm_check_specializes_nothing,
     local_format_outer_type_var_cache,
     issue_12693_shared_package_cache,
     issue_12701_shared_package_codec_cache,
@@ -3672,6 +3673,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12564: a package from_numeral cached by one app's check converts another app's literal", .timeout_ms = 600_000, .body = .{ .custom = .issue_12564_package_from_numeral_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12809: a constant holding a boxed function behind imported nominal types checks and builds warm after an app edit", .timeout_ms = 600_000, .body = .{ .custom = .issue_12809_boxed_callable_warm_check } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12839: a warm check specializes nothing for a custom literal whose record codec its caller fixes", .timeout_ms = 600_000, .body = .{ .custom = .issue_12839_warm_check_specializes_nothing } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12693: a package value cached by one app's check builds in another app that shares the package", .timeout_ms = 600_000, .body = .{ .custom = .issue_12693_shared_package_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12747: a dev build erasing a boxed function succeeds against the cache a roc check wrote without erasing it", .timeout_ms = 600_000, .body = .{ .custom = .issue_12747_check_then_build } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12747: an app boxing a function shares a package function with an app that boxes none", .timeout_ms = 600_000, .body = .{ .custom = .issue_12747_shared_package } },
@@ -6221,6 +6223,7 @@ fn runCustomCase(
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
         .issue_12564_package_from_numeral_cache => customIssue12564PackageFromNumeralCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12809_boxed_callable_warm_check => customIssue12809BoxedCallableWarmCheck(io, allocator, &env, &timer, timeout_ms),
+        .issue_12839_warm_check_specializes_nothing => customIssue12839WarmCheckSpecializesNothing(io, allocator, &env, &timer, timeout_ms),
         .local_format_outer_type_var_cache => customLocalFormatOuterTypeVarCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12693_shared_package_cache => customIssue12693SharedPackageCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12701_shared_package_codec_cache => customIssue12701SharedPackageCodecCache(io, allocator, &env, &timer, timeout_ms),
@@ -10143,12 +10146,14 @@ fn customNativeBuildExcerptRoundTrip(
     });
 }
 
-/// A literal that only a specialization made by the app converts, inside a
+/// A literal that only an instantiation made by the app converts, inside a
 /// module an earlier build cached clean, is converted at compile time and
-/// reported on every build: with the object cache on and off, from a
-/// compile-time constant that reads it (reported where the constant is,
-/// naming the literal), and from code that only runs at runtime (reported at
-/// the literal).
+/// reported on every build: with the object cache on and off, whether a
+/// compile-time constant reads it or only code that runs at runtime does.
+/// The app's instantiation converts it in a literal argument root of the app,
+/// which reports the rejection where the app instantiates the literal's
+/// function, naming the literal: the app's cached result holds the failure,
+/// so its report stays with the app (design.md "Literal Arguments").
 fn customLiteralRootRejectedEveryBuild(
     io: std.Io,
     allocator: Allocator,
@@ -10164,12 +10169,12 @@ fn customLiteralRootRejectedEveryBuild(
     const builds = [_]Build{
         // Caches Query clean: nothing in this app specializes its literal.
         .{ .roc_file = "test/cli/literal_root_rejected/Clean.roc", .reported_at = null },
-        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .reported_at = "Rejecting.roc" },
-        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .reported_at = "Rejecting.roc" },
-        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .no_cache = true, .reported_at = "Rejecting.roc" },
-        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .reported_at = "Query.roc" },
-        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .reported_at = "Query.roc" },
-        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .no_cache = true, .reported_at = "Query.roc" },
+        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .reported_at = "Rejecting.roc:10:10" },
+        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .reported_at = "Rejecting.roc:10:10" },
+        .{ .roc_file = "test/cli/literal_root_rejected/Rejecting.roc", .no_cache = true, .reported_at = "Rejecting.roc:10:10" },
+        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .reported_at = "RejectingAtRuntime.roc:11:10" },
+        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .reported_at = "RejectingAtRuntime.roc:11:10" },
+        .{ .roc_file = "test/cli/literal_root_rejected/RejectingAtRuntime.roc", .no_cache = true, .reported_at = "RejectingAtRuntime.roc:11:10" },
     };
     for (builds) |build| {
         const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
@@ -11254,6 +11259,54 @@ fn customIssue12809BoxedCallableWarmCheck(
         .args = &.{},
         .stdout_exact = "<input>\n",
     });
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/12839: the app's custom
+// string literal sits in a function whose instance its caller fixes, because
+// its conversion requires the generated JSON codec of the record the function
+// returns. A cold check evaluates the conversion and caches every module; a
+// warm check of the unchanged source must then reuse that work under either
+// strategy, so its `--timings` report shows no Monotype template request.
+// Each strategy fills its own cache from cold.
+fn customIssue12839WarmCheckSpecializesNothing(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const app = "test/echo/issue_12839_record_row_quote.roc";
+    for ([_][]const u8{ "--specialize=no", "--specialize=yes" }) |strategy| {
+        const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "issue_12839_cache", strategy[2..] }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+        var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+        defer isolated.env_map.deinit();
+        for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |name| {
+            isolated.env_map.put(name, cache_root) catch |err|
+                return customInfraFailure(allocator, timer, "environment: {}", .{err});
+        }
+        for ([_][]const u8{ "cold", "warm" }) |label| {
+            const check_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+                return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a check");
+            const checked = runRocInEnv(io, allocator, &isolated, &.{ "check", "--no-color", "--timings", strategy }, app, .relative, &.{}, null, check_timeout) catch |err|
+                return customInfraFailure(allocator, timer, "check spawn error: {}", .{err});
+            if (!processSucceeded(checked.term) or std.mem.find(u8, checked.stdout, "No errors found") == null or std.mem.find(u8, checked.stderr, "panic") != null) {
+                return failureFromRun(allocator, timer, checked, "check did not succeed");
+            }
+            if (!std.mem.eql(u8, label, "warm")) continue;
+            var lines = std.mem.splitScalar(u8, checked.stderr, '\n');
+            while (lines.next()) |line| {
+                const trimmed = std.mem.trim(u8, line, " ");
+                if (!std.mem.startsWith(u8, trimmed, "Template requests")) continue;
+                const count = std.mem.trim(u8, trimmed["Template requests".len..], " ");
+                if (!std.mem.eql(u8, count, "0")) {
+                    return failureFromRun(allocator, timer, checked, std.fmt.allocPrint(allocator, "a warm check {s} specialized the program again ({s} template requests) instead of reusing the cold check's cached results", .{ strategy, count }) catch "a warm check specialized the program again");
+                }
+            }
+        }
+    }
+    return null;
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/12693: checking Primer
