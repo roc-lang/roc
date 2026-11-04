@@ -739,12 +739,26 @@ fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Local
     const fam_ = b.program.codec.families.items[family];
     const bound = try b.relateVariables(fam_.constructor_fn, actual, fam_.env.vars.len);
     defer b.allocator.free(bound);
-    const composed = try composeConstructor(b, family, bound);
+    const composition = switch (try b.beginCodecComposition(family, bound, actual)) {
+        .back_edge => |word| return word,
+        .composing => |index| index,
+    };
+    const composed = try composeConstructorIn(b, family, bound, composition);
     return try b.adaptDictionary(composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound), actual);
 }
 
 /// A family's constructor composed with its variables at `bound`.
 fn composeConstructor(b: *Builder, family: u32, bound: []const TypeId) Allocator.Error!LocalId {
+    const constructor_ty = try b.program.substitute(b.allocator, b.program.codec.families.items[family].constructor_fn, bound);
+    const composition = switch (try b.beginCodecComposition(family, bound, constructor_ty)) {
+        .back_edge => invariant("a stored codec constructor is restored while it is being composed"),
+        .composing => |index| index,
+    };
+    return try composeConstructorIn(b, family, bound, composition);
+}
+
+/// Composition `composition` of a family's constructor at `bound`.
+fn composeConstructorIn(b: *Builder, family: u32, bound: []const TypeId, composition: u32) Allocator.Error!LocalId {
     const fam_ = b.program.codec.families.items[family];
     const captures = try b.allocator.alloc(LocalId, fam_.locals.items.len + bound.len);
     defer b.allocator.free(captures);
@@ -762,7 +776,9 @@ fn composeConstructor(b: *Builder, family: u32, bound: []const TypeId) Allocator
         }
     }
     for (bound, captures[fam_.locals.items.len..]) |ty, *desc| desc.* = try b.descOf(ty);
-    return try b.composeDictionary(try constructorWorker(b.program, family), captures);
+    const composed = try b.composeDictionary(try constructorWorker(b.program, family), captures);
+    try b.finishCodecComposition(composition, composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound));
+    return composed;
 }
 
 /// The function values of family `family`'s local procedures at its
