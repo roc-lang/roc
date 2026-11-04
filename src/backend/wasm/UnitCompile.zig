@@ -9,7 +9,10 @@
 //! and the unit's own exported procedures and entry wrappers keep global
 //! names. The image is then read straight off the generated module: its
 //! bodies, its data segments, and its relocations, which become the image's
-//! sites. Data and table references keep the position-independent form of
+//! sites. The constants the program named for itself are defined weak under
+//! content names and referenced by name (`contentNamedStaticData`), so a
+//! link keeps one copy of a constant the program's units share. Data and
+//! table references keep the position-independent form of
 //! every wasm object Roc emits (`__memory_base` and `__table_base` plus an
 //! offset), so one image serves every output kind.
 
@@ -25,6 +28,7 @@ const WasmLinking = @import("WasmLinking.zig");
 const WasmUnitImage = @import("WasmUnitImage.zig");
 const StackRoom = @import("StackRoom.zig");
 const StaticDataExport = @import("../dev/StaticDataExport.zig").StaticDataExport;
+const CodeExcerpt = @import("../dev/CodeExcerpt.zig");
 const collectRequiredRcHelpers = @import("../dev/StaticDataExport.zig").collectRequiredRcHelpers;
 const tasks = base.post_check_task_executor;
 
@@ -60,6 +64,10 @@ pub fn compileUnitImage(
     static_data: []const StaticDataExport,
     options: Options,
 ) Error![]align(WasmUnitImage.alignment.toByteUnits()) u8 {
+    // The content names of the unit's static data live as long as the
+    // module naming them.
+    var naming_arena = std.heap.ArenaAllocator.init(gpa);
+    defer naming_arena.deinit();
     var module = WasmModule.init(gpa);
     var module_owned_here = true;
     errdefer if (module_owned_here) module.deinit();
@@ -107,7 +115,8 @@ pub fn compileUnitImage(
                 base.invariant("wasm unit invariant violated: static data names function {s}, which the unit neither defines nor imports", .{relocation.target_symbol_name});
             if (codegen.module.linking.symbol_table.items[symbol].kind != .function) base.invariant("wasm unit invariant violated: static data names {s} as a function, but it is not one", .{relocation.target_symbol_name});
         };
-        var static_module = try WasmModule.staticDataModule(gpa, static_data);
+        const named = try contentNamedStaticData(gpa, naming_arena.allocator(), static_data);
+        var static_module = try WasmModule.staticDataModule(gpa, named);
         defer static_module.deinit();
         var merge_result = try codegen.module.mergeModuleForObject(&static_module);
         merge_result.deinit();
@@ -115,6 +124,41 @@ pub fn compileUnitImage(
 
     const stack_low: ?u32 = if (codegen.stack_checks) |symbols| symbols.stack_low.raw() else null;
     return imageOfModule(gpa, &codegen.module, options.stack_checks, stack_low);
+}
+
+/// The unit's static data with every constant the program named for itself
+/// under its content name (`CodeExcerpt.ContentNames`): the nodes of its
+/// descriptors, dictionaries, names and carried values, named by the digest
+/// of their bytes and references and defined weak, so the units of a program
+/// that carry one constant define one symbol and a link keeps one of them. A
+/// constant the unit's code names (one holding a static-data value), a
+/// mutable constant, and a constant the host sees keep the program's names.
+/// Two constants of the unit with one content name are one constant: the
+/// second is left out and every reference to it names the first.
+fn contentNamedStaticData(gpa: Allocator, arena: Allocator, static_data: []const StaticDataExport) Allocator.Error![]const StaticDataExport {
+    var names = try CodeExcerpt.ContentNames.initObjectData(gpa, static_data);
+    defer names.deinit();
+    var renamed: std.ArrayList(StaticDataExport) = .empty;
+    var defined: std.StringHashMapUnmanaged(void) = .empty;
+    for (static_data) |data_export| {
+        const content_name = names.of(data_export.symbol_name);
+        const shared = data_export.value_id == null and !data_export.is_mutable and !data_export.is_exported and content_name.ptr != data_export.symbol_name.ptr;
+        if (shared and (try defined.getOrPut(arena, content_name)).found_existing) continue;
+        const relocations = try arena.alloc(@import("../dev/StaticDataExport.zig").StaticDataRelocation, data_export.relocations.len);
+        for (data_export.relocations, relocations) |relocation, *out| {
+            out.* = relocation;
+            if (relocation.kind == .address) out.target_symbol_name = try arena.dupe(u8, names.of(relocation.target_symbol_name));
+        }
+        var out = data_export;
+        out.relocations = relocations;
+        if (shared) {
+            out.symbol_name = try arena.dupe(u8, content_name);
+            out.is_global = true;
+            out.content_named = true;
+        }
+        try renamed.append(arena, out);
+    }
+    return renamed.items;
 }
 
 /// The image of a unit's generated module: every defined function and data
@@ -227,6 +271,7 @@ pub fn imageOfModule(gpa: Allocator, module: *const WasmModule, stack_checks: bo
                 .segment = symbol.index,
                 .offset = symbol.data_offset,
                 .size = symbol.data_size,
+                .weak = sharedDataDefinition(symbol),
             }),
             .global, .table, .section, .event => base.invariant("wasm unit invariant violated: a unit defines a {s} symbol", .{@tagName(symbol.kind)}),
         }
@@ -358,12 +403,20 @@ const Target = struct { kind: WasmUnitImage.TargetKind, index: u32, data_offset:
 
 fn targetOf(symbols: []const WasmLinking.SymInfo, symbol_index: u32, import_count: u32, imports: *const Imports) Target {
     const symbol = symbols[symbol_index];
-    if (symbol.isUndefined()) return .{ .kind = .import, .index = imports.indexOfSymbol(symbol_index) };
+    if (symbol.isUndefined() or sharedDataDefinition(symbol)) return .{ .kind = .import, .index = imports.indexOfSymbol(symbol_index) };
     return switch (symbol.kind) {
         .function => .{ .kind = .function, .index = symbol.index - import_count },
         .data => .{ .kind = .data, .index = symbol.index, .data_offset = symbol.data_offset },
         .global, .table, .section, .event => base.invariant("wasm unit invariant violated: a relocation names a defined {s} symbol", .{@tagName(symbol.kind)}),
     };
+}
+
+/// Whether `symbol` is a constant defined weak under its content name
+/// (`contentNamedStaticData`): the unit names it as an import, so a link
+/// resolves every unit's references to the one definition it keeps, and
+/// exports its own definition weak.
+fn sharedDataDefinition(symbol: WasmLinking.SymInfo) bool {
+    return !symbol.isUndefined() and symbol.kind == .data and symbol.flags & WasmLinking.SymFlag.BINDING_WEAK != 0;
 }
 
 /// The image's signatures, each module signature once, in first-use order.
@@ -419,13 +472,13 @@ const Imports = struct {
                 .offset => {},
             }
             const symbol_index = entry.getSymbolIndex();
-            if (symbols[symbol_index].isUndefined()) try referenced.put(self.arena, symbol_index, {});
+            if (symbols[symbol_index].isUndefined() or sharedDataDefinition(symbols[symbol_index])) try referenced.put(self.arena, symbol_index, {});
         };
         var candidates: std.ArrayList(struct { symbol: u32, import: Import }) = .empty;
         for (referenced.keys()) |symbol_index| {
             const symbol = symbols[symbol_index];
             const name = symbol.resolveName(self.module.imports.items, self.module.global_imports.items, self.module.table_imports.items) orelse
-                base.invariant("wasm unit invariant violated: an undefined symbol has no name", .{});
+                base.invariant("wasm unit invariant violated: an imported symbol has no name", .{});
             const import: Import = switch (symbol.kind) {
                 .function => blk: {
                     const real = symbol.index < self.module.imports.items.len and std.mem.eql(u8, self.module.imports.items[symbol.index].field_name, name);
@@ -472,6 +525,124 @@ const Imports = struct {
         return self.by_symbol.get(symbol_index) orelse base.invariant("wasm unit invariant violated: undefined symbol {d} is not an import of the unit", .{symbol_index});
     }
 };
+
+test "a switch on a 32-bit value compares against the branch value's bits" {
+    const allocator = std.testing.allocator;
+    const LIR = lir.LIR;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+
+    // `|x| match x { 0x8000_0000 => 1, _ => 0 }` over a U32: the branch
+    // value is past the signed range of the i32 the condition lives in.
+    const cond = try store.addLocal(.{ .layout_idx = .u32 });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret_one = try store.addCFStmt(.{ .ret = .{ .value = one } }, .test_fixture);
+    const hit = try store.addCFStmt(.{ .assign_literal = .{ .target = one, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } }, .next = ret_one } }, .test_fixture);
+    const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
+    const miss = try store.addCFStmt(.{ .assign_literal = .{ .target = zero, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } }, .next = ret_zero } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0x8000_0000, .body = hit }}),
+        .default_branch = miss,
+    } }, .test_fixture);
+    const exported = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(44), .args = try store.addLocalSpan(&.{cond}), .body = body, .ret_layout = .u64, .exported = true }, .none);
+    const entries = [_]Entry{.{ .symbol_name = "roc__main_for_host", .proc = exported, .arg_layouts = &.{.u32}, .ret_layout = .u64 }};
+
+    const image = try compileUnitImage(allocator, &store, &layouts, &entries, &.{}, .{ .cpu_level = .default, .stack_checks = false });
+    defer allocator.free(image);
+    const view = try WasmUnitImage.View.init(image);
+    // `i32.const -2147483648` then `i32.eq`: the same bits as the U32 branch
+    // value. The exported function is the entry wrapper that calls the
+    // worker, so the compare is in exactly one of the unit's functions.
+    const compare = [_]u8{ 0x41, 0x80, 0x80, 0x80, 0x80, 0x78, 0x46 };
+    var comparing: usize = 0;
+    for (view.functions()) |function| {
+        if (std.mem.find(u8, view.body(function), &compare) != null) comparing += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), comparing);
+}
+
+test "constants with one content name are one weak definition the unit names as an import" {
+    const allocator = std.testing.allocator;
+    const LIR = lir.LIR;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+
+    // A procedure reading two static-data values whose nodes hold the same
+    // string.
+    const first = try store.addLocal(.{ .layout_idx = .str });
+    const second = try store.addLocal(.{ .layout_idx = .str });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = second } }, .test_fixture);
+    const read_second = try store.addCFStmt(.{ .assign_literal = .{ .target = second, .value = .{ .static_data = .{ .id = @fromBackingInt(@intCast(8)) } }, .next = ret } }, .test_fixture);
+    const read_first = try store.addCFStmt(.{ .assign_literal = .{ .target = first, .value = .{ .static_data = .{ .id = @fromBackingInt(@intCast(7)) } }, .next = read_second } }, .test_fixture);
+    const exported = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(43), .args = .empty(), .body = read_first, .ret_layout = .str, .exported = true }, .none);
+
+    const contents = "one string two values share";
+    const descriptor = try arena.alloc(u8, 12);
+    @memset(descriptor, 0);
+    std.mem.writeInt(u32, descriptor[4..8], contents.len, .little);
+    std.mem.writeInt(u32, descriptor[8..12], contents.len, .little);
+    const backing = try arena.alloc(u8, 8 + contents.len);
+    @memset(backing[0..8], 0);
+    @memcpy(backing[8..], contents);
+    const Relocation = @import("../dev/StaticDataExport.zig").StaticDataRelocation;
+    const to_first = [_]Relocation{.{ .offset = 0, .target_symbol_name = "roc__d7_1", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) }, .addend = 8 }};
+    const to_second = [_]Relocation{.{ .offset = 0, .target_symbol_name = "roc__d8_1", .target = .{ .data_symbol = @fromBackingInt(@intCast(3)) }, .addend = 8 }};
+    const static_data = [_]StaticDataExport{
+        .{ .symbol_name = "roc__d7", .value_id = @fromBackingInt(@intCast(7)), .bytes = descriptor, .alignment = 4, .is_global = true, .is_exported = false, .relocations = &to_first },
+        .{ .symbol_name = "roc__d7_1", .bytes = backing, .symbol_offset = 8, .alignment = 4, .is_global = true, .is_exported = false },
+        .{ .symbol_name = "roc__d8", .value_id = @fromBackingInt(@intCast(8)), .bytes = descriptor, .alignment = 4, .is_global = true, .is_exported = false, .relocations = &to_second },
+        .{ .symbol_name = "roc__d8_1", .bytes = backing, .symbol_offset = 8, .alignment = 4, .is_global = true, .is_exported = false },
+    };
+    const entries = [_]Entry{.{ .symbol_name = "roc__main_for_host", .proc = exported, .arg_layouts = &.{}, .ret_layout = .str }};
+
+    const image = try compileUnitImage(allocator, &store, &layouts, &entries, &static_data, .{ .cpu_level = .default, .stack_checks = false });
+    defer allocator.free(image);
+    const view = try WasmUnitImage.View.init(image);
+
+    // The two nodes are one weak data export under a content name, and the
+    // two slots keep the program's names and their own segments.
+    var node_segments: usize = 0;
+    var slot_segments: usize = 0;
+    for (view.segments()) |segment| {
+        if (segment.size == backing.len) node_segments += 1;
+        if (segment.size == descriptor.len) slot_segments += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), node_segments);
+    try std.testing.expectEqual(@as(usize, 2), slot_segments);
+    try std.testing.expectEqual(@as(usize, 1), view.dataExports().len);
+    const shared = view.dataExports()[0];
+    const shared_name = view.name(shared.name);
+    try std.testing.expect(std.mem.startsWith(u8, shared_name, lir.Program.content_data_symbol_prefix));
+    try std.testing.expect(shared.flags & WasmUnitImage.definition_weak != 0);
+    try std.testing.expectEqual(@as(u32, 8), shared.offset);
+    try std.testing.expectEqual(@as(u32, contents.len), shared.size);
+    // Both slots name the shared constant as an import, never as their own
+    // segment, so a link resolves them to the one definition it keeps.
+    var shared_import: ?u32 = null;
+    for (view.imports(), 0..) |import, index| {
+        if (import.kind == @backingInt(WasmUnitImage.ImportKind.data) and std.mem.eql(u8, view.name(import.name), shared_name)) shared_import = @intCast(index);
+    }
+    try std.testing.expect(shared_import != null);
+    var slot_sites: usize = 0;
+    for (view.segments()) |segment| {
+        for (view.sites()[segment.first_site..][0..segment.site_count]) |site| {
+            try std.testing.expectEqual(@backingInt(WasmUnitImage.TargetKind.import), site.target_kind);
+            try std.testing.expectEqual(shared_import.?, site.target);
+            try std.testing.expectEqual(@as(i32, 8), site.addend);
+            slot_sites += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), slot_sites);
+}
 
 test "a unit compiled alone imports what it calls and names its data through sites" {
     const allocator = std.testing.allocator;
@@ -559,13 +730,23 @@ test "a unit compiled alone imports what it calls and names its data through sit
     }
     try std.testing.expect(calls_import and addresses_data and reads_memory_base);
 
-    // The descriptor's pointer to its backing is a data site in its segment.
+    // The descriptor's pointer to its backing is a data site in its
+    // segment, naming the backing's content name as an import: the backing
+    // is a constant the program named for itself, so it is defined weak
+    // under that name for every unit carrying it to share.
+    try std.testing.expectEqual(@as(usize, 1), view.dataExports().len);
+    const backing_export = view.dataExports()[0];
+    try std.testing.expect(std.mem.startsWith(u8, view.name(backing_export.name), lir.Program.content_data_symbol_prefix));
+    try std.testing.expect(backing_export.flags & WasmUnitImage.definition_weak != 0);
     var data_sites: usize = 0;
     for (view.segments()) |segment| {
         for (view.segmentSites(segment)) |site| {
             try std.testing.expectEqual(@backingInt(WasmUnitImage.SiteKind.memory_addr_i32), site.kind);
-            try std.testing.expectEqual(@backingInt(WasmUnitImage.TargetKind.data), site.target_kind);
-            try std.testing.expectEqual(@as(i32, 16), site.addend);
+            try std.testing.expectEqual(@backingInt(WasmUnitImage.TargetKind.import), site.target_kind);
+            try std.testing.expectEqualStrings(view.name(backing_export.name), view.name(view.imports()[site.target].name));
+            // The addend is relative to the symbol, which sits 8 bytes
+            // into its segment.
+            try std.testing.expectEqual(@as(i32, 8), site.addend);
             data_sites += 1;
         }
     }

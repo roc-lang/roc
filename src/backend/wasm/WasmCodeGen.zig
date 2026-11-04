@@ -7814,7 +7814,11 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
                     try self.emitI64Const(t.branch_value);
                     self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
                 } else {
-                    try self.emitI32Const(@intCast(t.branch_value));
+                    // The condition's low 32 bits as the local holds them:
+                    // a branch value of a 32-bit unsigned type at or past
+                    // 2^31 is the same bits as a negative `i32.const`.
+                    const low_bits: u32 = @truncate(@as(u64, @bitCast(t.branch_value)));
+                    try self.emitI32Const(@bitCast(low_bits));
                     self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
                 }
 

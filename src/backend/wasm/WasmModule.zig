@@ -1271,7 +1271,12 @@ pub fn addStaticDataExports(self: *Self, exports: []const StaticDataExport) Stat
             0,
         );
 
-        const symbol_flags: u32 = if (data_export.is_exported)
+        std.debug.assert(!data_export.content_named or !(data_export.is_exported or data_export.is_mutable));
+        const symbol_flags: u32 = if (data_export.content_named)
+            // A weak definition every unit carrying the constant repeats
+            // under the same name; a link keeps one of them.
+            WasmLinking.SymFlag.BINDING_WEAK
+        else if (data_export.is_exported)
             0
         else if (data_export.is_global)
             WasmLinking.SymFlag.VISIBILITY_HIDDEN

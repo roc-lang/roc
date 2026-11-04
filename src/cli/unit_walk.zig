@@ -68,7 +68,9 @@ pub fn collectExportsOf(comptime Kind: type, gpa: Allocator, images: []const Kin
                 const existing = images[gop.value_ptr.image];
                 const existing_weak = Kind.exportWeak(existing, gop.value_ptr.symbol);
                 if (existing_weak == entry.weak) {
-                    if (std.mem.order(u8, Kind.digest(existing), Kind.digest(image)) != .gt) continue;
+                    const existing_digest = Kind.digest(existing);
+                    const image_digest = Kind.digest(image);
+                    if (std.mem.order(u8, &existing_digest, &image_digest) != .gt) continue;
                 } else if (entry.weak) continue;
             }
             gop.value_ptr.* = .{ .image = @intCast(image_index), .symbol = entry.symbol };
@@ -281,8 +283,8 @@ pub const Native = struct {
     pub fn exportWeak(image: Image, symbol: u32) bool {
         return image.view.symbols()[symbol].flags & UnitImage.symbol_weak != 0;
     }
-    pub fn digest(image: Image) []const u8 {
-        return &image.view.header.digest;
+    pub fn digest(image: Image) [32]u8 {
+        return image.view.header.digest;
     }
 };
 

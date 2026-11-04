@@ -1876,7 +1876,11 @@ fn finishLoweredOutput(
     var arc_roots = std.ArrayList(LIR.LirProcSpecId).empty;
     defer arc_roots.deinit(allocator);
     try arc_roots.appendSlice(allocator, lowered.lir_result.root_procs.items);
-    try arc_roots.appendSlice(allocator, lowered.lir_result.exported_procs.items);
+    // A unit's exported workers are not ARC roots: ARC solves each one's
+    // ownership signature from its body, the unit's object records it in the
+    // export interface its importers compile against (design.md "Per-Module
+    // Output"), and a root's signature would instead be pinned to the
+    // all-owned convention.
     // The procedures something other than Roc code or the erased-call runtime
     // enters (design.md "Deferred Erased Calls"): the roots, and every procedure frozen
     // data holds the address of. A unit's exported workers are not among

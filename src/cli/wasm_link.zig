@@ -341,8 +341,8 @@ const Kind = struct {
     pub fn exportWeak(image: Image, symbol: u32) bool {
         return exportAt(image, symbol).weak;
     }
-    pub fn digest(image: Image) []const u8 {
-        return &image.view.header.digest;
+    pub fn digest(image: Image) [32]u8 {
+        return image.view.header.digest;
     }
 };
 
@@ -3036,6 +3036,85 @@ test "a composed object relocates every site and does not depend on the units' o
     try std.testing.expectEqual(WasmLinking.OffsetRelocType.memory_addr_i32, data_reloc.type_id);
     try std.testing.expectEqual(@as(i32, 4), data_reloc.addend);
     try std.testing.expectEqual(WasmLinking.SymKind.data, symbols[data_reloc.symbol_index].kind);
+}
+
+test "a constant two units carry under one content name is placed once" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Both units define the constant weak under its content name and name
+    // it as an import; A's `roc_main` calls B's `helper`.
+    const shared_name = "roc__h0123456789abcdef0123456789abcdef";
+    const main_body = try testBody(arena, &.{ &.{0x10}, &test_zero_leb, &.{0x41}, &test_zero_leb, &.{0x0b} });
+    const unit_a = try WasmUnitImage.encode(allocator, .{
+        .stack_checks = false,
+        .types = &.{ .{ .params = &.{}, .results = &.{0x7f} }, .{ .params = &.{}, .results = &.{} } },
+        .functions = &.{.{ .body = main_body, .type = 0, .export_name = "roc_main", .sites = &.{
+            .{ .offset = 2, .kind = .function_index_leb, .target_kind = .import, .target = 0, .addend = 0 },
+            .{ .offset = 8, .kind = .memory_addr_sleb, .target_kind = .import, .target = 1, .addend = 0 },
+        } }},
+        .segments = &.{.{ .bytes = "CCCC", .size = 4, .alignment_log2 = 2, .sites = &.{} }},
+        .data_exports = &.{.{ .name = shared_name, .segment = 0, .offset = 0, .size = 4, .weak = true }},
+        .table_requests = &.{},
+        .imports = &.{
+            .{ .module = "env", .name = "helper", .kind = .function, .type = 1 },
+            .{ .module = "env", .name = shared_name, .kind = .data },
+        },
+    });
+    defer allocator.free(unit_a);
+    const helper_body = try testBody(arena, &.{ &.{0x41}, &test_zero_leb, &.{ 0x1a, 0x0b } });
+    const unit_b = try WasmUnitImage.encode(allocator, .{
+        .stack_checks = false,
+        .types = &.{.{ .params = &.{}, .results = &.{} }},
+        .functions = &.{.{ .body = helper_body, .type = 0, .export_name = "helper", .sites = &.{
+            .{ .offset = 2, .kind = .memory_addr_sleb, .target_kind = .import, .target = 0, .addend = 0 },
+        } }},
+        .segments = &.{.{ .bytes = "CCCC", .size = 4, .alignment_log2 = 2, .sites = &.{} }},
+        .data_exports = &.{.{ .name = shared_name, .segment = 0, .offset = 0, .size = 4, .weak = true }},
+        .table_requests = &.{},
+        .imports = &.{.{ .module = "env", .name = shared_name, .kind = .data }},
+    });
+    defer allocator.free(unit_b);
+    const support = try testIdleImage(allocator, arena, "roc_builtins_unused");
+    defer allocator.free(support);
+
+    var objects: [2][]u8 = undefined;
+    const Image = []align(WasmUnitImage.alignment.toByteUnits()) const u8;
+    const orders = [2][2]Image{ .{ unit_a, unit_b }, .{ unit_b, unit_a } };
+    for (&objects, orders, [_]usize{ 0, 1 }) |*object, order, root| {
+        const units = [_]View{ try View.init(order[0]), try View.init(order[1]) };
+        var timing: Timing = .{};
+        var outcome: Outcome = .{};
+        object.* = try composeObject(allocator, arena, std.testing.io, .{
+            .host = null,
+            .support = try View.init(support),
+            .units = &units,
+            .root = root,
+            .app_public = &.{"roc_main"},
+            .provides = &.{"roc_main"},
+            .hosted = &.{},
+        }, &timing, &outcome);
+    }
+    defer for (objects) |object| allocator.free(object);
+    try std.testing.expectEqualSlices(u8, objects[0], objects[1]);
+
+    // One copy of the constant is placed, and both addresses name it.
+    var module = try WasmModule.preload(allocator, objects[0], .relocatable_for_image);
+    defer module.deinit();
+    try std.testing.expectEqual(@as(usize, 1), module.data_segments.items.len);
+    const symbols = module.linking.symbol_table.items;
+    var addresses: usize = 0;
+    for (module.reloc_code.entries.items) |entry| switch (entry) {
+        .index => {},
+        .offset => |reloc| {
+            try std.testing.expectEqual(WasmLinking.SymKind.data, symbols[reloc.symbol_index].kind);
+            try std.testing.expectEqual(@as(u32, 0), symbols[reloc.symbol_index].index);
+            addresses += 1;
+        },
+    };
+    try std.testing.expectEqual(@as(usize, 2), addresses);
 }
 
 test "the first engine limit a module exceeds is reported" {
