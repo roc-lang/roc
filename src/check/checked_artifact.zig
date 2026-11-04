@@ -875,10 +875,25 @@ pub const ProvidedDataExport = struct {
     const_ref: ConstRef,
 };
 
+/// Public `ProvidedCheckedErrorExport` declaration: a `provides` entry whose
+/// checked type contains an error, so the host boundary it declares has no
+/// ABI. It keeps the declaration's identity and nothing to lower: no runtime
+/// root, static data request, or glue signature is published for it, and a
+/// runtime command stops before linking a program whose host boundary has no
+/// ABI (`CheckedModuleArtifact.hasProvidedExportWithoutAbi`). The error
+/// itself was reported where the type was checked.
+pub const ProvidedCheckedErrorExport = struct {
+    source_name: canonical.ExportNameId,
+    ffi_symbol: canonical.ExternalSymbolNameId,
+    def: CIR.Def.Idx,
+    pattern: CheckedPatternId,
+};
+
 /// Public `ProvidedExport` declaration.
 pub const ProvidedExport = union(enum) {
     procedure: ProvidedProcedureExport,
     data: ProvidedDataExport,
+    checked_error: ProvidedCheckedErrorExport,
 };
 
 /// Dense declaration identity in one checked module's provided export table.
@@ -904,6 +919,9 @@ pub const ProvidedExportTable = struct {
     ) Allocator.Error!ProvidedExportTable {
         var exports = std.ArrayList(ProvidedExport).empty;
         errdefer exports.deinit(allocator);
+        var type_scan = CheckedTypeErrorScan{ .checked_types = &checked_types.store };
+        var type_errors = CheckedTypeErrorTraversal.init(allocator, &type_scan);
+        defer type_errors.deinit();
 
         for (published_provides) |published| {
             const def_idx = published.def;
@@ -915,6 +933,19 @@ pub const ProvidedExportTable = struct {
                 checked_types,
                 .{ .def = def_idx },
             );
+            // The host ABI is derived from the published type, so an entry
+            // whose type contains an error (an undeclared type in its
+            // annotation, for instance) declares no ABI, whatever value kind
+            // it binds.
+            if (try type_errors.visit(checked_type)) {
+                try exports.append(allocator, .{ .checked_error = .{
+                    .source_name = published.source_name,
+                    .ffi_symbol = published.ffi_symbol,
+                    .def = def_idx,
+                    .pattern = top_level.pattern,
+                } });
+                continue;
+            }
             switch (top_level.value) {
                 .procedure_binding => |binding| try exports.append(allocator, .{ .procedure = .{
                     .source_name = published.source_name,
@@ -2273,7 +2304,9 @@ fn appendPublishedEntrypointRoots(
                         .procedure_binding = procedure.binding,
                     });
                 },
-                .data => {},
+                // Data is requested as static data for builds; an export with
+                // no ABI has nothing to lower.
+                .data, .checked_error => {},
             }
         }
     }
@@ -28702,6 +28735,7 @@ pub fn pairCheckedPlatform(
     result.provided_exports = try copyPairingColumns(ProvidedExportTable, platform.provided_exports, session);
     for (result.provided_exports.exports) |*provided| switch (provided.*) {
         inline .procedure, .data => |*value| value.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, value.checked_type, &type_memo),
+        .checked_error => {},
     };
     var roots = std.ArrayList(RootRequest).empty;
     for (platform.root_requests.requests) |request| {
@@ -35771,9 +35805,20 @@ pub const CheckedModuleArtifact = struct {
         const provided = self.provided_exports.exports[@backingInt(export_id)];
         const procedure = switch (provided) {
             .procedure => |procedure| procedure,
-            .data => checkedArtifactInvariant("provided procedure root names a data export", .{}),
+            .data, .checked_error => checkedArtifactInvariant("provided procedure root names an export that is not a procedure", .{}),
         };
         return self.canonical_names.externalSymbolNameText(procedure.ffi_symbol);
+    }
+
+    /// Whether a `provides` entry declares a host boundary with no ABI
+    /// (`ProvidedCheckedErrorExport`), in which case no program with this
+    /// module's host boundary exists and a runtime command stops at the
+    /// diagnostics already reported.
+    pub fn hasProvidedExportWithoutAbi(self: *const CheckedModuleArtifact) bool {
+        for (self.provided_exports.exports) |provided| {
+            if (provided == .checked_error) return true;
+        }
+        return false;
     }
 
     /// Extern-compatible inline mirror of `ModuleIdentity`. `ModuleIdentity`
@@ -37713,6 +37758,16 @@ pub const CheckedModuleArtifact = struct {
         }
         for (self.provided_exports.exports, self.provides_requires.provides) |provided, metadata| {
             switch (provided) {
+                .checked_error => |export_| {
+                    std.debug.assert(export_.source_name == metadata.source_name);
+                    std.debug.assert(export_.ffi_symbol == metadata.ffi_symbol);
+                    std.debug.assert(export_.def == metadata.def);
+                    const top_level = self.top_level_values.lookupByDef(export_.def) orelse {
+                        base.invariant("checked artifact invariant violated: provided checked-error export references missing top-level value", .{});
+                    };
+                    std.debug.assert(top_level.pattern == export_.pattern);
+                    std.debug.assert(top_level.source_name == export_.source_name);
+                },
                 .procedure => |procedure| {
                     std.debug.assert(procedure.source_name == metadata.source_name);
                     std.debug.assert(procedure.ffi_symbol == metadata.ffi_symbol);
@@ -40040,6 +40095,7 @@ fn expectProvidedExportKind(
         switch (provided) {
             .data => provided_data_exports += 1,
             .procedure => provided_procedure_exports += 1,
+            .checked_error => {},
         }
     }
 
@@ -42225,8 +42281,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x83, 0x80, 0x30, 0x4D, 0xEB, 0xB6, 0xCE, 0x1A, 0x40, 0x44, 0xF7, 0x66, 0xF0, 0x67, 0x07, 0x62,
-        0xC7, 0xC7, 0x98, 0x03, 0x58, 0x50, 0x8E, 0x57, 0x4E, 0xDC, 0xC6, 0x7D, 0x10, 0xFA, 0xEA, 0xFF,
+        0xD6, 0x33, 0xC3, 0x6D, 0x0D, 0xCF, 0x11, 0x68, 0xA1, 0xE0, 0xDC, 0xF3, 0xFA, 0x72, 0xB7, 0x6B,
+        0xBB, 0xF2, 0x18, 0xE4, 0x8E, 0xF8, 0xE3, 0xB0, 0x57, 0xB3, 0x7E, 0x45, 0x3F, 0x42, 0xA8, 0xC9,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

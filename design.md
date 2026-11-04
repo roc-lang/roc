@@ -3775,8 +3775,12 @@ consumes these checked modules; it never suspends or reconstructs a checker.
 
 User diagnostics never suppress checked module output or propagate dependency failure. Every invalid source construct is represented at its first owning
 producer boundary by explicit checked data: a checked runtime-error expression,
-a checked-error dispatch plan, a crash constant, or a checked-error platform
-requirement. Importers and every post-check stage consume that data normally.
+a checked-error dispatch plan, a crash constant, a checked-error platform
+requirement, or a checked-error provided export (a `provides` entry whose
+checked type contains an error declares no host ABI, so it publishes no
+runtime root, static data request, or glue signature, and a runtime command
+stops before linking). Importers and every post-check stage consume that data
+normally.
 Independent definitions, imports, compile-time roots, and runtime paths remain
 available; execution crashes only if it reaches a recorded checked error.
 

@@ -5312,6 +5312,9 @@ fn checkedArtifactForBuild(
     if (artifact.hasUnboundPlatformRequirements()) {
         return ctx.fail(.{ .platform_requires_app = .{ .platform_path = source_path } });
     }
+    // A `provides` entry whose type is erroneous declares no host ABI, so no
+    // program exists to link; the error was rendered with the diagnostics.
+    if (artifact.hasProvidedExportWithoutAbi()) return error.TypeCheckingFailed;
     return artifact;
 }
 
@@ -6719,6 +6722,9 @@ fn lowerRunUnits(
     reporter: *progress.Reporter,
     hot_reload: bool,
 ) CliMainError!RunUnits {
+    // A `provides` entry whose type is erroneous declares no host ABI, so no
+    // program exists to run; the error was rendered with the diagnostics.
+    if (build_env.executableRootCheckedArtifact().hasProvidedExportWithoutAbi()) return error.TypeCheckingFailed;
     var runtime_lowering = checkedRuntimeLoweringConfig(.{ .platform_entrypoints = .{ .dev_run_image = .{ .target = target, .hot_reload = hot_reload } } }, .dev, .boxy, target, false);
     // The checked host identity covers each entrypoint's host boundary digest.
     runtime_lowering.target.host_boundary_digests = true;
