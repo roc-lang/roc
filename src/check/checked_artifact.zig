@@ -10229,8 +10229,9 @@ const TestImportViewTables = struct {
         module_env: *const ModuleEnv,
         names: *const canonical.CanonicalNameStore,
         identity: ModuleIdentity,
-        checked_types: CheckedTypeStoreView,
+        store: *const CheckedTypeStore,
     ) Allocator.Error!ImportedModuleView {
+        const checked_types = store.view();
         const analyses = try BodyAnalyses.create(self.allocator, std.testing.io, module_env, &.{});
         {
             errdefer analyses.destroy();
@@ -10310,7 +10311,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
 
     var tables = TestImportViewTables.init(allocator);
     defer tables.deinit();
-    const builtin_view = try tables.view(.{}, builtin_env, &builtin_names, builtin_identity, .{});
+    const builtin_view = try tables.view(.{}, builtin_env, &builtin_names, builtin_identity, &tables.checked_type_store);
     const imports = [_]PublishImportArtifact{.{
         .module_idx = 1,
         .key = .{},
@@ -10366,6 +10367,10 @@ test "imported origin resolution visits each import view and owner declaration o
         };
     }
 
+    var owner_store = CheckedTypeStore{};
+    defer owner_store.deinit(allocator);
+    try owner_store.nominal_declarations.appendSlice(allocator, &declarations);
+
     var views: [view_count]ImportedModuleView = undefined;
     for (&views, 0..) |*view, index| {
         var hash: [32]u8 = @splat(0);
@@ -10376,7 +10381,7 @@ test "imported origin resolution visits each import view and owner declaration o
             .module_name = owner_module_name,
             .display_module_name = owner_module_name,
             .kind = module_env.module_kind,
-        }, if (index == owner_view_index) .{ .nominal_declarations = &declarations } else .{});
+        }, if (index == owner_view_index) &owner_store else &tables.checked_type_store);
     }
     const imports = CheckedImportViews{
         .current_owner = testCheckedModuleKey(255).digest(),
@@ -34428,6 +34433,7 @@ test "issue 11290: builtin backing declarations survive serialization with share
     }
     try std.testing.expectEqual(@as(usize, 2), store.nominal_declarations.items.len);
 
+    store.markPublished();
     const rt = try artifact_serialize.roundTripForTest(gpa, CheckedTypeStore, &store);
     defer gpa.free(rt.buffer);
     for ([_]CheckedTypeStoreView{ store.view(), rt.loaded.view() }) |view| {
@@ -35534,6 +35540,7 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const source_key = try canonical_type_keys.fromVar(allocator, module.typeStoreConst(), module.moduleEnvConst(), function.ret);
     try std.testing.expectEqualSlices(u8, &source_key.bytes, &(try store.rootKey(root)).bytes);
 
+    store.markPublished();
     var roundtrip = try artifact_serialize.roundTripForTest(allocator, CheckedTypeStore, &store);
     defer allocator.free(roundtrip.buffer);
     roundtrip.loaded.attachSealedTypes(module.moduleEnvConst(), test_keys, try SynthesizedTypeKeys.create(allocator, std.testing.io, roundtrip.loaded.roots.items.len));
