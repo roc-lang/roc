@@ -7413,6 +7413,7 @@ pub const Builder = struct {
     }
 
     pub fn lowerDispatchAt(self: *Builder, plan_id: static_dispatch.StaticDispatchPlanId, result_ty: TypeId) Allocator.Error!void {
+        const table = self.view.view.dispatch();
         const call_plan = try self.dispatchPlan(plan_id);
         const operands = call_plan.argsSlice(self.view.view.static_dispatch_plans);
         const operand_types = try self.allocator.dupe(TypeId, try self.operandTypes(call_plan));
