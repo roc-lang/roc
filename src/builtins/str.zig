@@ -1478,7 +1478,7 @@ inline fn smallShiftedUp(words: SmallWords, bit_count: usize) SmallWords {
         0 => shifted[0],
         1 => shifted[1],
         2 => shifted[2],
-        else => unreachable,
+        else => unreachable, // bit_count < 3 * word_bits, asserted above
     };
 }
 
