@@ -14046,7 +14046,13 @@ from the captures' descriptors, its first word is the capture record's
 descriptor, and the callable's `on_drop` is the shared runtime drop that reads
 that word. When every capture is of closed type, the capture record has a
 static layout and `on_drop` is the per-worker helper the backend generates for
-that layout. Zero-capture functions are static, immortal callables. The
+that layout. A callable whose captures are all static (none, or only static
+callables such as dictionaries) is a static, immortal callable: `packClosure`
+reads the program's static dictionary of its worker and captures
+(`StaticDescs.dictionary`), whose node carries the zero (static) refcount, so
+creating, sharing, or dropping it never allocates or frees. A compile-time
+program, which reads its function values' types back from what their
+compositions noted, packs them instead. The
 `out_desc` slot of the erased-callable ABI is always written null: the caller
 knows the result type's descriptor itself.
 
@@ -18243,7 +18249,22 @@ representation tier and marks a completed forced-dynamic backing callable as
 erased. It unifies all requirements through the same function
 `args/callable/ret` graph used for finite lambda sets. If a callable slot is
 forced to `erased`, direct LIR lowering produces packed erased callable values
-and indirect erased calls. If no explicit erased requirement reaches a callable
+and indirect erased calls.
+
+A capture-free erased callable is never packed at runtime. Its value is static
+data: a static-data slot whose `StaticDataValue.callable` names the target
+procedure, frozen directly as the callable's payload (the function-pointer
+relocation, no `on_drop`, no capture bytes) behind the static refcount, with no
+initializer procedure. The program interns one such slot per procedure, so
+every procedure that erases the same capture-free function reads the same
+slot. Worker preparation creates the slot for each capture-free member of every
+erased type it prepares, since workers cannot add static data; lowering then
+reads it with an `assign_literal` of the slot wherever it would have packed the
+member (a function reference at an erased type, and a callable-to-erased
+boundary over a capture-free variant). Such a read takes no erased-callable
+reuse destination: an immortal value is never unique, so no later repack can
+reuse it, and a repack of it allocates afresh. Debug builds assert after
+lowering that no capture-free `assign_packed_erased_fn` remains. If no explicit erased requirement reaches a callable
 slot and no box holds it, finite lambda-set dispatch is used.
 
 No ordinary source expression becomes erased because direct lowering finds
@@ -18470,8 +18491,8 @@ builder owns:
   pattern decisions and committed layouts, then emits LIR switches, joins, and
   bindings directly
 - callable lowering that turns generated callable tag unions into ordinary LIR
-  tag operations and erased callable values into explicit packed-erased-callable
-  statements
+  tag operations and capturing erased callable values into explicit
+  packed-erased-callable statements (a capture-free one is a static-data read)
 - bool predicate creation from ordinary Bool tag-union layouts
 - runtime value schema output from committed nominal layouts
 - erased callable code map output from Lambda Mono callable/procedure data
