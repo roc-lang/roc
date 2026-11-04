@@ -8895,8 +8895,438 @@ pub const Builder = struct {
             return;
         }
         try self.push(.{ .unreachable_or_unit = {} });
+        if (try self.iteratorChain(plan_id)) |chain| {
+            try self.forChainStart(pattern, body, plan_id, mutations, chain);
+            return;
+        }
         try self.push(.{ .for_start = .{ .pattern = pattern, .body = body, .plan = plan_id, .mutations = mutations } });
         try self.push(.{ .expr = iterable });
+    }
+
+    /// One producer of a `for` loop's iterable, which the loop runs
+    /// structurally when the checker stamped every producer of the chain
+    /// (design.md "Iterator `for`"): a source yielding each item of a
+    /// list, a string's bytes, or the steps of an iterator value, and the
+    /// adapters over it, innermost first. Operands are checked expressions
+    /// the loop evaluates in chain order before it starts.
+    pub const ChainLayer = union(enum) {
+        list: ChainListSource,
+        list_rev: ChainListSource,
+        str: struct { str: CheckedExprId },
+        /// An iterator value whose steps the loop takes through the `Iter`
+        /// protocol, as a loop over the value alone does.
+        value: struct { iterator: CheckedExprId },
+        map: struct { transform: CheckedExprId, item_ty: TypeId },
+        keep_if: struct { predicate: CheckedExprId },
+        drop_if: struct { predicate: CheckedExprId },
+        /// The stamped `iter_with_index` worker: its counter starts at the
+        /// second operand.
+        with_index: struct { start: CheckedExprId, item_ty: TypeId },
+        take_first: struct { count: CheckedExprId },
+        drop_first: struct { count: CheckedExprId },
+    };
+
+    pub const ChainListSource = struct { list: CheckedExprId, item_ty: TypeId };
+
+    /// The structural chain of a `for` loop's iterable, innermost producer
+    /// first, or null when the loop takes its steps through the `Iter`
+    /// protocol alone: its `iter` dispatch and every producer of the
+    /// iterable expression are read from the checker's
+    /// `IteratorProcedureId` stamps on their resolved targets, never from
+    /// names or type shapes, and a producer without a stamp this lowering
+    /// runs structurally ends the chain as an iterator value.
+    fn iteratorChain(self: *Builder, plan_id: static_dispatch.IteratorForPlanId) Allocator.Error!?[]const ChainLayer {
+        const plan = self.view.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)];
+        const iterator_ty = try self.convert(plan.iterator_ty);
+        // The loop steps the chain's result and every iterator value in it
+        // through the builtin protocol, whose step field the loop calls.
+        if (try self.builtinStepField(plan.next, iterator_ty) == null) return null;
+        var layers: std.ArrayList(ChainLayer) = .empty;
+        defer layers.deinit(self.allocator);
+        const iter_stamp = self.dispatchStamp(plan.iter.resolution);
+        switch (iter_stamp orelse return null) {
+            .list_iter => try layers.append(self.allocator, .{ .list = .{ .list = plan.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
+            .list_iter_rev => try layers.append(self.allocator, .{ .list_rev = .{ .list = plan.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
+            .str_iter_utf8 => try layers.append(self.allocator, .{ .str = .{ .str = plan.iterable } }),
+            .identity => {
+                var current = plan.iterable;
+                walk: while (true) {
+                    const call = try self.chainCall(current) orelse {
+                        try layers.append(self.allocator, .{ .value = .{ .iterator = current } });
+                        break :walk;
+                    };
+                    const item_ty = try self.iteratorItemType(try self.exprType(current));
+                    switch (call.stamp) {
+                        .identity => current = call.operands[0],
+                        .list_iter => {
+                            try layers.append(self.allocator, .{ .list = .{ .list = call.operands[0], .item_ty = item_ty } });
+                            break :walk;
+                        },
+                        .list_iter_rev => {
+                            try layers.append(self.allocator, .{ .list_rev = .{ .list = call.operands[0], .item_ty = item_ty } });
+                            break :walk;
+                        },
+                        .str_iter_utf8 => {
+                            try layers.append(self.allocator, .{ .str = .{ .str = call.operands[0] } });
+                            break :walk;
+                        },
+                        .map => {
+                            try layers.append(self.allocator, .{ .map = .{ .transform = call.operands[1], .item_ty = item_ty } });
+                            current = call.operands[0];
+                        },
+                        .keep_if => {
+                            try layers.append(self.allocator, .{ .keep_if = .{ .predicate = call.operands[1] } });
+                            current = call.operands[0];
+                        },
+                        .drop_if => {
+                            try layers.append(self.allocator, .{ .drop_if = .{ .predicate = call.operands[1] } });
+                            current = call.operands[0];
+                        },
+                        .with_index => {
+                            try layers.append(self.allocator, .{ .with_index = .{ .start = call.operands[1], .item_ty = item_ty } });
+                            current = call.operands[0];
+                        },
+                        .take_first => {
+                            try layers.append(self.allocator, .{ .take_first = .{ .count = call.operands[1] } });
+                            current = call.operands[0];
+                        },
+                        .drop_first => {
+                            try layers.append(self.allocator, .{ .drop_first = .{ .count = call.operands[1] } });
+                            current = call.operands[0];
+                        },
+                        .next, .custom, .single, .concat, .append, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => {
+                            try layers.append(self.allocator, .{ .value = .{ .iterator = current } });
+                            break :walk;
+                        },
+                    }
+                }
+            },
+            .next, .custom, .single, .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => return null,
+        }
+        // A chain of one iterator value and nothing over it is the loop the
+        // protocol lowering already emits.
+        if (layers.items.len == 1 and layers.items[0] == .value) return null;
+        std.mem.reverse(ChainLayer, layers.items);
+        return try self.program.arena.allocator().dupe(ChainLayer, layers.items);
+    }
+
+    /// The `IteratorProcedureId` the checker stamped on the procedure a
+    /// dispatch resolves to, or null when it resolves to anything else.
+    fn dispatchStamp(self: *Builder, resolution: static_dispatch.CheckedCallResolution) ?static_dispatch.IteratorProcedureId {
+        const table = self.view.view.static_dispatch_plans;
+        const node = switch (resolution) {
+            .direct_closed, .direct_parametric => |direct| table.evidenceNode(direct.evidence),
+            .evidence_dependent, .checked_error, .@"unreachable", .structural, .direct_pending => return null,
+        };
+        return switch (node.target.kind) {
+            .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
+            .local_proc, .structural => null,
+        };
+    }
+
+    pub const ChainCall = struct { stamp: static_dispatch.IteratorProcedureId, operands: []const CheckedExprId };
+
+    /// The stamped producer call `expr` is: a dispatch of a value result on
+    /// the pure `Iter` protocol whose target the checker stamped, with its
+    /// checked operand expressions (the receiver first). Null for any other
+    /// expression.
+    fn chainCall(self: *Builder, expr: CheckedExprId) Allocator.Error!?ChainCall {
+        const plan_id = switch (self.bodies().expr(expr).data) {
+            .dispatch_call, .type_dispatch_call => |plan| plan orelse return null,
+            else => return null,
+        };
+        const call_plan = self.dispatchPlan(plan_id);
+        // A `map` dispatch on a type with a map method carries the map
+        // result mode, which a direct resolution calls as a value does.
+        switch (call_plan.result_mode) {
+            .value, .map => {},
+            .equality, .hash, .parser_for, .encoder_for, .map_effectful => return null,
+        }
+        const stamp = self.dispatchStamp(call_plan.resolution) orelse return null;
+        switch (self.program.store.get(try self.exprType(expr))) {
+            .nominal => |nominal| if ((nominal.builtin orelse return null) != .iter) return null,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return null,
+        }
+        const operands = call_plan.argsSlice(self.view.view.static_dispatch_plans);
+        const exprs = try self.program.arena.allocator().alloc(CheckedExprId, operands.len);
+        for (operands, exprs) |operand, *slot| {
+            slot.* = switch (operand) {
+                .checked_expr => |operand_expr| operand_expr,
+                .generated_interpolation_segments, .generated_numeral, .generated_quote => return null,
+            };
+        }
+        const expected_operands: usize = switch (stamp) {
+            .identity, .list_iter, .list_iter_rev, .str_iter_utf8 => 1,
+            .map, .keep_if, .drop_if, .take_first, .drop_first, .with_index => 2,
+            .next, .custom, .single, .concat, .append, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => return .{ .stamp = stamp, .operands = exprs },
+        };
+        if (exprs.len != expected_operands) invariant("a stamped iterator producer's checked operand count differs from its definition's");
+        return .{ .stamp = stamp, .operands = exprs };
+    }
+
+    /// The item type of the iterator nominal `iterator_ty`: its one
+    /// argument.
+    fn iteratorItemType(self: *Builder, iterator_ty: TypeId) Allocator.Error!TypeId {
+        const args = switch (self.program.store.get(iterator_ty)) {
+            .nominal => |nominal| self.program.store.nominalArgs(nominal),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => invariant("an iterator's type is not the iterator nominal"),
+        };
+        if (args.len != 1) invariant("the iterator nominal has one argument");
+        return args[0];
+    }
+
+    /// A `u64` local holding `value`.
+    fn u64Literal(self: *Builder, value: u64) Allocator.Error!LocalId {
+        const local = try self.closedLocal(.u64);
+        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .i64_literal = .{ .value = @bitCast(value), .layout_idx = .u64 } }, .next = undefined } });
+        return local;
+    }
+
+    /// `lhs op rhs` for `u64` operands.
+    fn u64Op(self: *Builder, op: LIR.LowLevel, lhs: LocalId, rhs: LocalId) Allocator.Error!LocalId {
+        const local = try self.closedLocal(if (op == .num_is_eq) .bool else .u64);
+        try self.emitLowLevel(local, op, &.{ lhs, rhs });
+        return local;
+    }
+
+    /// `for pattern in <chain> { body }` over a structural chain: the loop
+    /// carries the chain's state (a list source's index, a reversed list
+    /// source's remaining count, an iterator source's value, an adapter's
+    /// counter) in one tuple, and each iteration steps the source and runs
+    /// the adapters over its item, innermost first, exactly as each
+    /// producer's step does: a `take_first` at its count is done before the
+    /// source steps, a `keep_if` or `drop_if` or `drop_first` skip
+    /// continues with the state the inner producers advanced to, and a
+    /// `with_index` counter advances only when its item is yielded.
+    fn forChainStart(self: *Builder, pattern: CheckedPatternId, body: CheckedExprId, plan_id: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId, chain: []const ChainLayer) Allocator.Error!void {
+        const table = self.view.view.static_dispatch_plans;
+        const plan = table.iterator_for_plans[@backingInt(plan_id)];
+        const store = &self.program.store;
+        const names = self.view.nameStore();
+
+        // The chain's operands, in chain order.
+        const Evaluated = union(enum) {
+            list: struct { list: LocalId, list_ty: TypeId, item_ty: TypeId, len: LocalId },
+            str: struct { str: LocalId, len: LocalId },
+            value: struct { iterator_ty: TypeId, step_name: types.NameId },
+            map: struct { transform: LocalId, fn_ty: TypeId, item_ty: TypeId },
+            keep_if: struct { predicate: LocalId, fn_ty: TypeId },
+            drop_if: struct { predicate: LocalId, fn_ty: TypeId },
+            with_index: struct { item_ty: TypeId },
+            take_first,
+            drop_first,
+        };
+        const evaluated = try self.allocator.alloc(Evaluated, chain.len);
+        defer self.allocator.free(evaluated);
+        // The loop's state tuple: each layer's carried slot, and its initial
+        // value.
+        var state_types: std.ArrayList(TypeId) = .empty;
+        defer state_types.deinit(self.allocator);
+        var state_init: std.ArrayList(LocalId) = .empty;
+        defer state_init.deinit(self.allocator);
+        const slot_of = try self.allocator.alloc(?usize, chain.len);
+        defer self.allocator.free(slot_of);
+        const u64_ty = try store.primitive(.u64);
+        for (chain, evaluated, slot_of) |layer, *done, *slot| {
+            slot.* = null;
+            switch (layer) {
+                inline .list, .list_rev => |source, tag| {
+                    const list = try self.lowerExprNow(source.list);
+                    const list_ty = try self.exprType(source.list);
+                    const len = try self.closedLocal(.u64);
+                    try self.emitListLowLevel(len, .list_len, &.{list}, source.item_ty, list_ty);
+                    done.* = .{ .list = .{ .list = list, .list_ty = list_ty, .item_ty = source.item_ty, .len = len } };
+                    slot.* = state_types.items.len;
+                    try state_types.append(self.allocator, u64_ty);
+                    try state_init.append(self.allocator, if (tag == .list) try self.u64Literal(0) else len);
+                },
+                .str => |source| {
+                    const str = try self.lowerExprNow(source.str);
+                    const len = try self.closedLocal(.u64);
+                    try self.emitLowLevel(len, .str_count_utf8_bytes, &.{str});
+                    done.* = .{ .str = .{ .str = str, .len = len } };
+                    slot.* = state_types.items.len;
+                    try state_types.append(self.allocator, u64_ty);
+                    try state_init.append(self.allocator, try self.u64Literal(0));
+                },
+                .value => |source| {
+                    const iterator = try self.lowerExprNow(source.iterator);
+                    const iterator_ty = try self.exprType(source.iterator);
+                    const step_name = (try self.builtinStepField(plan.next, iterator_ty)) orelse invariant("a chain's iterator value is not stepped by the builtin protocol");
+                    done.* = .{ .value = .{ .iterator_ty = iterator_ty, .step_name = step_name } };
+                    slot.* = state_types.items.len;
+                    try state_types.append(self.allocator, iterator_ty);
+                    try state_init.append(self.allocator, iterator);
+                },
+                .map => |adapter| {
+                    const transform = try self.lowerExprNow(adapter.transform);
+                    done.* = .{ .map = .{ .transform = transform, .fn_ty = try self.exprType(adapter.transform), .item_ty = adapter.item_ty } };
+                },
+                .keep_if => |adapter| {
+                    const predicate = try self.lowerExprNow(adapter.predicate);
+                    done.* = .{ .keep_if = .{ .predicate = predicate, .fn_ty = try self.exprType(adapter.predicate) } };
+                },
+                .drop_if => |adapter| {
+                    const predicate = try self.lowerExprNow(adapter.predicate);
+                    done.* = .{ .drop_if = .{ .predicate = predicate, .fn_ty = try self.exprType(adapter.predicate) } };
+                },
+                .with_index => |adapter| {
+                    const start = try self.lowerExprNow(adapter.start);
+                    done.* = .{ .with_index = .{ .item_ty = adapter.item_ty } };
+                    slot.* = state_types.items.len;
+                    try state_types.append(self.allocator, u64_ty);
+                    try state_init.append(self.allocator, start);
+                },
+                inline .take_first, .drop_first => |adapter, tag| {
+                    const count = try self.lowerExprNow(adapter.count);
+                    done.* = if (tag == .take_first) .take_first else .drop_first;
+                    slot.* = state_types.items.len;
+                    try state_types.append(self.allocator, u64_ty);
+                    try state_init.append(self.allocator, count);
+                },
+            }
+        }
+        const state_ty = try store.intern(.{ .tuple = state_types.items });
+        const initial = try self.buildStruct(state_ty, state_init.items);
+
+        const binders: []const checked.PatternBinderId = if (mutations) |id| blk: {
+            const range = self.bodies().loopMutations(id).binders;
+            break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
+        } else &.{};
+        const exit_merge = try self.beginMerge(binders, .joined);
+        const head_merge = try self.beginMerge(binders, .joined);
+        const exit = self.freshJoin();
+        const head = self.freshJoin();
+        const state = try self.localOf(state_ty, .frame);
+        const after = try self.declareMergeJoin(exit, null, exit_merge);
+        const head_body = try self.declareMergeJoin(head, state, head_merge);
+        try self.emitJump(head, initial);
+        self.store.shapes.loop = true;
+
+        self.hole = head_body;
+        if (head_merge) |m| try self.enterMerge(m);
+        // The state this iteration advances to, slot by slot.
+        const current = try self.allocator.alloc(LocalId, state_types.items.len);
+        defer self.allocator.free(current);
+        for (current, state_types.items, 0..) |*slot, slot_ty, index| slot.* = try self.readField(state_ty, state, @intCast(index), slot_ty);
+
+        // A `take_first` at its count is done before anything steps.
+        for (chain, slot_of) |layer, slot| {
+            if (layer != .take_first) continue;
+            const remaining = current[slot.?];
+            const is_done = try self.u64Op(.num_is_eq, remaining, try self.u64Literal(0));
+            const holes = try self.emitBoolSwitch(is_done);
+            self.hole = holes.then;
+            try self.emitJump(exit, null);
+            self.hole = holes.otherwise;
+        }
+
+        // The source's item.
+        var item: TypedValue = undefined;
+        switch (evaluated[0]) {
+            .list => |source| {
+                const index = current[slot_of[0].?];
+                const reversed = chain[0] == .list_rev;
+                const is_done = try self.u64Op(.num_is_eq, index, if (reversed) try self.u64Literal(0) else source.len);
+                const holes = try self.emitBoolSwitch(is_done);
+                self.hole = holes.then;
+                try self.emitJump(exit, null);
+                self.hole = holes.otherwise;
+                const one = try self.u64Literal(1);
+                const at = if (reversed) try self.u64Op(.num_int_sub_wrap, index, one) else index;
+                const value = try self.localOf(source.item_ty, .frame);
+                try self.emitListLowLevel(value, .list_get_unsafe, &.{ source.list, at }, source.item_ty, source.list_ty);
+                item = .{ .value = value, .ty = source.item_ty };
+                current[slot_of[0].?] = if (reversed) at else try self.u64Op(.num_int_add_wrap, index, one);
+            },
+            .str => |source| {
+                const index = current[slot_of[0].?];
+                const is_done = try self.u64Op(.num_is_eq, index, source.len);
+                const holes = try self.emitBoolSwitch(is_done);
+                self.hole = holes.then;
+                try self.emitJump(exit, null);
+                self.hole = holes.otherwise;
+                const value = try self.closedLocal(.u8);
+                try self.emitLowLevel(value, .str_get_utf8_byte_unsafe, &.{ source.str, index });
+                item = .{ .value = value, .ty = try store.primitive(.u8) };
+                current[slot_of[0].?] = try self.u64Op(.num_int_add_wrap, index, try self.u64Literal(1));
+            },
+            .value => |source| {
+                const iterator = current[slot_of[0].?];
+                const thunk = try self.recordFieldValue(iterator, source.iterator_ty, source.step_name);
+                const step_ty = switch (store.get(thunk.ty)) {
+                    .function => |function| function.ret,
+                    .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an iterator's step field is not a function"),
+                };
+                const step_value = try self.emitErasedCall(thunk.value, thunk.ty, &.{}, step_ty);
+                const done_name = try store.internName(names.tagLabelText(plan.step_topology.done_tag));
+                const skip_name = try store.internName(names.tagLabelText(plan.step_topology.skip_tag));
+                const one_name = try store.internName(names.tagLabelText(plan.step_topology.one_tag));
+                const item_name = try store.internName(names.recordFieldLabelText(plan.step_topology.item_field));
+                const rest_name = try store.internName(names.recordFieldLabelText(plan.step_topology.rest_field));
+                const not_done_hole = try self.newHole();
+                try self.branchOnTag(step_value, step_ty, done_name, not_done_hole);
+                try self.emitJump(exit, null);
+                self.hole = not_done_hole;
+                const one_hole = try self.newHole();
+                try self.branchOnTag(step_value, step_ty, skip_name, one_hole);
+                {
+                    const payload = try self.tagPayloadValue(step_value, step_ty, skip_name, 0);
+                    const rest = try self.recordFieldValue(payload.value, payload.ty, rest_name);
+                    current[slot_of[0].?] = rest.value;
+                    try self.emitJump(head, try self.buildStruct(state_ty, current));
+                }
+                self.hole = one_hole;
+                const payload = try self.tagPayloadValue(step_value, step_ty, one_name, 0);
+                item = try self.recordFieldValue(payload.value, payload.ty, item_name);
+                current[slot_of[0].?] = (try self.recordFieldValue(payload.value, payload.ty, rest_name)).value;
+            },
+            .map, .keep_if, .drop_if, .with_index, .take_first, .drop_first => invariant("a structural chain does not start with a source"),
+        }
+
+        // The adapters, innermost first.
+        for (evaluated[1..], slot_of[1..]) |layer, slot| {
+            switch (layer) {
+                .map => |adapter| item = .{ .value = try self.emitErasedCall(adapter.transform, adapter.fn_ty, &.{item.value}, adapter.item_ty), .ty = adapter.item_ty },
+                inline .keep_if, .drop_if => |adapter, tag| {
+                    const verdict = try self.emitErasedCall(adapter.predicate, adapter.fn_ty, &.{item.value}, try store.primitive(.bool));
+                    const holes = try self.emitBoolSwitch(verdict);
+                    // A rejected item is skipped: the loop continues with the
+                    // state the inner producers advanced to.
+                    self.hole = if (tag == .keep_if) holes.otherwise else holes.then;
+                    try self.emitJump(head, try self.buildStruct(state_ty, current));
+                    self.hole = if (tag == .keep_if) holes.then else holes.otherwise;
+                },
+                .with_index => |adapter| {
+                    const index = current[slot.?];
+                    item = .{ .value = try self.buildStruct(adapter.item_ty, &.{ index, item.value }), .ty = adapter.item_ty };
+                    current[slot.?] = try self.u64Op(.num_int_add_wrap, index, try self.u64Literal(1));
+                },
+                .take_first => current[slot.?] = try self.u64Op(.num_int_sub_wrap, current[slot.?], try self.u64Literal(1)),
+                .drop_first => {
+                    const pending = current[slot.?];
+                    const yields = try self.u64Op(.num_is_eq, pending, try self.u64Literal(0));
+                    const holes = try self.emitBoolSwitch(yields);
+                    self.hole = holes.otherwise;
+                    current[slot.?] = try self.u64Op(.num_int_sub_wrap, pending, try self.u64Literal(1));
+                    try self.emitJump(head, try self.buildStruct(state_ty, current));
+                    current[slot.?] = pending;
+                    self.hole = holes.then;
+                },
+                .list, .str, .value => invariant("a structural chain has one source, first"),
+            }
+        }
+
+        const next_state = try self.buildStruct(state_ty, current);
+        try self.bindIrrefutable(pattern, item.value, item.ty);
+        try self.loops.append(self.allocator, .{ .join = exit, .reached = true });
+        try self.push(.end_loop);
+        if (exit_merge) |m| try self.push(.{ .enter_merge = m });
+        try self.push(.{ .resume_at = after });
+        try self.push(.{ .jump = head });
+        try self.push(.{ .push_value = next_state });
+        try self.push(.discard);
+        try self.push(.{ .expr = body });
     }
 
     /// `for pattern in iterable { body }`: the iterable's iterator is the

@@ -17762,6 +17762,43 @@ without an allocation. The call is made where the loop matches its result, so
 no pending call is left for the loop to drive. Every other `next`, including
 `Stream.next!`, is dispatched to as the plan resolves it.
 
+A `.boxy` loop whose iterable is a chain of stamped producers runs the chain
+structurally, building no step closure at all (`body.zig` `iteratorChain`,
+`forChainStart`). The chain is read from the checker's
+`IteratorProcedureId` stamps alone: the plan's `iter` dispatch stamped
+`list_iter`, `list_iter_rev` or `str_iter_utf8` makes the iterable the
+source, and one stamped `identity` makes the iterable expression the chain,
+each of whose dispatch calls of a value result on the `Iter` protocol whose
+target is stamped `map`, `keep_if`, `drop_if`, `with_index`, `take_first` or
+`drop_first` is an adapter over its receiver, `identity` passes its receiver
+through, and `list_iter`, `list_iter_rev` or `str_iter_utf8` is the source.
+Any other expression is the source as an iterator value, stepped through the
+protocol as above; a chain that is only such a value is the plain loop. No
+producer is recognized by a name or a type shape, and a producer this
+lowering does not run structurally (`custom` and the ranges built on it,
+`single`, `concat`, `append`, `step_by`, `prepended`) ends the chain as a
+value, keeping every behavior of its own step, such as a `Known` count a
+`custom` source exceeds crashing on.
+
+The loop evaluates the chain's operands in chain order before it starts,
+exactly when the producer calls would evaluate them, and carries the chain's
+state in one tuple: a list source's index (a reversed one's remaining
+count), a string source's byte index, an iterator source's value, a
+`with_index` counter, a `take_first` remaining count and a `drop_first`
+pending count; join-parameter scalarization gives each its own local. Each
+iteration is the composition of the producers' steps: every `take_first` at
+its count ends the loop before the source steps, the source yields its item
+(`list_get_unsafe` or `str_get_utf8_byte_unsafe` by index, or the owned
+step call of the iterator value, whose `Skip` continues with its `rest`),
+and the adapters run innermost first: `map` calls its transform, `keep_if`
+and `drop_if` call their predicate and continue the loop with the state the
+inner producers advanced to when they skip, `with_index` pairs the item with
+a counter that advances only when its item is yielded, `take_first` counts
+the item down, and `drop_first` skips while its count is pending. The
+observable behavior, including the order of the user functions' effects and
+of their calls, is the closure protocol's; only the allocation of step
+closures is gone, as it is under `.lss`.
+
 No `for` node exists after Monotype IR.
 
 ## Monotype Lifted IR
