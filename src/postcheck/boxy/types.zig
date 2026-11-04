@@ -328,11 +328,11 @@ pub const Env = struct {
     }
 };
 
-/// The program-wide type store.
 /// How many erased-callable slots a value of a type holds
 /// (`Converter.erasedResultSlots`).
 pub const ErasedSlots = enum(u32) { none = 0, single = 1, several = 2 };
 
+/// The program-wide type store.
 pub const Store = struct {
     allocator: Allocator,
     nodes: std.ArrayList(Node) = .empty,
