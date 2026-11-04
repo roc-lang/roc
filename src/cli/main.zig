@@ -186,6 +186,7 @@ comptime {
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(host_prelink);
+        std.testing.refAllDecls(patch_link);
         std.testing.refAllDecls(wasm_link);
         std.testing.refAllDecls(wasm_host_image);
         std.testing.refAllDecls(@import("test/platform_config.zig"));
@@ -11852,6 +11853,8 @@ const FastDevLink = struct {
             .{ .name = "Images placed", .count = timing.images_placed },
             .{ .name = "Bytes written", .count = timing.bytes_written },
             .{ .name = "Patch sites", .count = timing.sites_patched },
+            .{ .name = "References fixed", .count = timing.refs_fixed },
+            .{ .name = "Hole bytes dropped", .count = timing.hole_bytes },
         });
     }
 };

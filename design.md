@@ -24683,8 +24683,13 @@ image is built; what remains is a patch site: an import of another image or
 of the host, or a reference whose distance depends on where the linker places
 the image's regions. The image is a pure function of the unit (Per-Module
 Output), so two builds of a unit write identical images. The block divides
-into atoms, one per symbol start, each recording what it references; a link
-writes only the atoms the program reaches and leaves the rest as zero holes.
+into atoms, one per function in the text and one per datum in the read-only
+data (a refcounted datum's symbol sits inside its atom, after the header),
+each recording what it references and, for every relative reference the
+image resolved between two of its atoms, where the field is; a link writes
+only the atoms the program reaches, each image's packed together in image
+order, and fixes a resolved reference again only when the atoms it left out
+moved the reference's two ends by different amounts.
 The compiler's builtins and Boxy runtime objects are converted once, in Roc's
 own build graph, into a support image of the same format and embedded. A
 library unit's cache entry files the image's `CodeLocations` beside it, so
@@ -24796,7 +24801,9 @@ directory when the build starts, and a background job hashes the host inputs,
 looks the host up and copies it into the output while the program compiles;
 on a miss the link step prelinks the host. The link then walks atoms from
 the `provides` symbols, places the reached images after the host at
-addresses that are a function of their content digests, resolves imports
+addresses that are a function of their content digests (each run of an
+image's consecutive reached atoms keeps its bytes together and the
+alignment its image offsets had), resolves imports
 (app region first, then host), fills the output through a shared mapping on
 the compilation's worker threads, writes the provide windows, program
 headers, build id (a hash of the host's and the images' content digests),
