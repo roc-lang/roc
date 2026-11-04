@@ -101,7 +101,7 @@ pub const SealedTypeKeys = struct {
     /// Whether `var_` reaches an identity variable, when a walk recorded it.
     pub fn knownIdentity(self: *const SealedTypeKeys, var_: Var) ?bool {
         const index: usize = @backingInt(var_);
-        if (index >= self.identity.len) return null;
+        std.debug.assert(index < self.identity.len);
         return switch (self.identity[index].load(.acquire)) {
             0 => null,
             1 => false,
@@ -112,7 +112,7 @@ pub const SealedTypeKeys = struct {
     /// Record whether `var_` reaches an identity variable.
     pub fn recordIdentity(self: *SealedTypeKeys, var_: Var, value: bool) void {
         const index: usize = @backingInt(var_);
-        if (index >= self.identity.len) return;
+        std.debug.assert(index < self.identity.len);
         self.identity[index].store(if (value) 2 else 1, .release);
     }
 

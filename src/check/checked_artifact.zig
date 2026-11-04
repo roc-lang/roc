@@ -7673,7 +7673,7 @@ pub const SynthesizedTypeKeys = struct {
     }
 
     fn knownIdentity(self: *const SynthesizedTypeKeys, index: usize) ?bool {
-        if (index >= self.identity.items.len) return null;
+        std.debug.assert(index < self.identity.items.len);
         return switch (self.identity.items[index].load(.acquire)) {
             0 => null,
             1 => false,
@@ -7682,7 +7682,7 @@ pub const SynthesizedTypeKeys = struct {
     }
 
     fn recordIdentity(self: *SynthesizedTypeKeys, index: usize, value: bool) void {
-        if (index >= self.identity.items.len) return;
+        std.debug.assert(index < self.identity.items.len);
         self.identity.items[index].store(if (value) 2 else 1, .release);
     }
 
