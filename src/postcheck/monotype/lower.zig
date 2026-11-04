@@ -244,7 +244,8 @@ const CommittedGraphTypes = struct {
         if (committed.iterator_topology) |*topology| {
             topology.len_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.len_field);
             topology.step_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.step_field);
-            topology.known_tag = try relocation.relocateTagLabel(self.source_names, topology.known_tag);
+            topology.ok_tag = try relocation.relocateTagLabel(self.source_names, topology.ok_tag);
+            topology.err_tag = try relocation.relocateTagLabel(self.source_names, topology.err_tag);
             topology.unknown_tag = try relocation.relocateTagLabel(self.source_names, topology.unknown_tag);
             topology.done_tag = try relocation.relocateTagLabel(self.source_names, topology.done_tag);
             topology.one_tag = try relocation.relocateTagLabel(self.source_names, topology.one_tag);
@@ -39577,7 +39578,8 @@ const BodyContext = struct {
         return .{
             .len_field = try recordFieldName(self.nameStoreMut(), self.view, topology.len_field),
             .step_field = try recordFieldName(self.nameStoreMut(), self.view, topology.step_field),
-            .known_tag = try tagName(self.nameStoreMut(), self.view, topology.known_tag),
+            .ok_tag = try tagName(self.nameStoreMut(), self.view, topology.ok_tag),
+            .err_tag = try tagName(self.nameStoreMut(), self.view, topology.err_tag),
             .unknown_tag = try tagName(self.nameStoreMut(), self.view, topology.unknown_tag),
             .done_tag = try tagName(self.nameStoreMut(), self.view, topology.done_tag),
             .one_tag = try tagName(self.nameStoreMut(), self.view, topology.one_tag),
@@ -40228,17 +40230,31 @@ const BodyContext = struct {
         ty: Type.TypeId,
         mode: FieldNamesIterMode,
     ) Allocator.Error!DraftExprId {
-        const topology = try self.iteratorRepresentationNames(.iter);
         return switch (mode) {
             .all => try self.lowerGeneratedIterLenIfKnown(remaining, ty),
-            .for_size => blk: {
-                const unknown_tag = self.monoTagByName(ty, topology.unknown_tag);
-                break :blk try self.addExpr(.{ .ty = ty, .data = .{ .tag = .{
-                    .name = unknown_tag.name,
-                    .payloads = .empty(),
-                } } });
-            },
+            .for_size => try self.lowerGeneratedIterLenUnknown(ty),
         };
+    }
+
+    /// `Err(Unknown)` at `ty`, the iterator's `len_if_known` type
+    /// `Try(U64, [Unknown])`.
+    fn lowerGeneratedIterLenUnknown(self: *BodyContext, ty: Type.TypeId) Allocator.Error!DraftExprId {
+        const topology = try self.iteratorRepresentationNames(.iter);
+        const backing_ty = namedBackingType(self.typeStore(), ty) orelse Common.invariant("Iter.len_if_known type had no backing");
+        const err_tag = self.monoTagByName(backing_ty, topology.err_tag);
+        const err_payloads = self.typeStore().span(err_tag.payloads);
+        if (err_payloads.len != 1) Common.invariant("Iter.len_if_known Err tag did not have one payload");
+        const unknown_ty = GuardedList.at(err_payloads, 0);
+        const unknown_tag = self.monoTagByName(unknown_ty, topology.unknown_tag);
+        const unknown = try self.addExpr(.{ .ty = unknown_ty, .data = .{ .tag = .{
+            .name = unknown_tag.name,
+            .payloads = .empty(),
+        } } });
+        const err = try self.addExpr(.{ .ty = backing_ty, .data = .{ .tag = .{
+            .name = err_tag.name,
+            .payloads = try self.addExprSpan(&[_]DraftExprId{unknown}),
+        } } });
+        return try self.addExpr(.{ .ty = ty, .data = .{ .nominal = err } });
     }
 
     fn lowerFieldNamesDoneStep(
@@ -40382,14 +40398,16 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const topology = try self.iteratorRepresentationNames(.iter);
-        const known_tag = self.monoTagByName(ty, topology.known_tag);
-        const payloads = self.typeStore().span(known_tag.payloads);
-        if (payloads.len != 1) Common.invariant("Iter.len_if_known Known tag did not have one payload");
+        const backing_ty = namedBackingType(self.typeStore(), ty) orelse Common.invariant("Iter.len_if_known type had no backing");
+        const ok_tag = self.monoTagByName(backing_ty, topology.ok_tag);
+        const payloads = self.typeStore().span(ok_tag.payloads);
+        if (payloads.len != 1) Common.invariant("Iter.len_if_known Ok tag did not have one payload");
         const count = try self.intLiteralExpr(@intCast(remaining), GuardedList.at(payloads, 0));
-        return try self.addExpr(.{ .ty = ty, .data = .{ .tag = .{
-            .name = known_tag.name,
+        const ok = try self.addExpr(.{ .ty = backing_ty, .data = .{ .tag = .{
+            .name = ok_tag.name,
             .payloads = try self.addExprSpan(&[_]DraftExprId{count}),
         } } });
+        return try self.addExpr(.{ .ty = ty, .data = .{ .nominal = ok } });
     }
 
     fn lowerGeneratedIterOnePayload(
@@ -48191,7 +48209,8 @@ const BodyContext = struct {
             .iterator_topology = if (def.iterator_topology) |topology| .{
                 .len_field = try self.constRecordFieldName(store_view, topology.len_field),
                 .step_field = try self.constRecordFieldName(store_view, topology.step_field),
-                .known_tag = try self.constTagName(store_view, topology.known_tag),
+                .ok_tag = try self.constTagName(store_view, topology.ok_tag),
+                .err_tag = try self.constTagName(store_view, topology.err_tag),
                 .unknown_tag = try self.constTagName(store_view, topology.unknown_tag),
                 .done_tag = try self.constTagName(store_view, topology.done_tag),
                 .one_tag = try self.constTagName(store_view, topology.one_tag),

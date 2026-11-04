@@ -254,7 +254,7 @@ PageNum := { num : U32 }.{
             step: PageNum.{ num: 1 },
             upper_bound: Exclusive,
             direction: To,
-            len_if_known: Unknown,
+            len_if_known: Err(Unknown),
         })
 }
 

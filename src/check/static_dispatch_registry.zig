@@ -1985,7 +1985,10 @@ pub const IteratorStepTopology = struct {
 pub const IteratorRepresentationTopology = struct {
     len_field: canonical.RecordFieldLabelId,
     step_field: canonical.RecordFieldLabelId,
-    known_tag: canonical.TagLabelId,
+    /// The length field's `Try(U64, [Unknown])`: its `Ok` and `Err` tags, and
+    /// the `Unknown` tag of `Err`'s payload.
+    ok_tag: canonical.TagLabelId,
+    err_tag: canonical.TagLabelId,
     unknown_tag: canonical.TagLabelId,
     done_tag: canonical.TagLabelId,
     one_tag: canonical.TagLabelId,
@@ -2208,7 +2211,8 @@ pub const StaticDispatchPlanTable = struct {
             iterator_topologies[@backingInt(owner)] = .{
                 .len_field = try names.internRecordFieldLabel("len_if_known"),
                 .step_field = try names.internRecordFieldLabel(owner.stepFieldName()),
-                .known_tag = try names.internTagLabel("Known"),
+                .ok_tag = try names.internTagLabel("Ok"),
+                .err_tag = try names.internTagLabel("Err"),
                 .unknown_tag = try names.internTagLabel("Unknown"),
                 .done_tag = try names.internTagLabel("Done"),
                 .one_tag = try names.internTagLabel("One"),
@@ -3445,7 +3449,8 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
         var iterator_topologies = [_]IteratorRepresentationTopology{.{
             .len_field = @fromBackingInt(@intCast(20)),
             .step_field = @fromBackingInt(@intCast(21)),
-            .known_tag = @fromBackingInt(@intCast(22)),
+            .ok_tag = @fromBackingInt(@intCast(22)),
+            .err_tag = @fromBackingInt(@intCast(29)),
             .unknown_tag = @fromBackingInt(@intCast(23)),
             .done_tag = @fromBackingInt(@intCast(24)),
             .one_tag = @fromBackingInt(@intCast(25)),

@@ -14,7 +14,7 @@ counter! = || {
 	handle = Host.boxed_add!(1)
 	Stream.custom(
 		{ handle, n: 0 },
-		Unknown,
+		Err(Unknown),
 		|state| if state.n < 10 { Ok((state.n, { handle: state.handle, n: state.n + 1 })) } else { Err(NoMore) },
 	)
 }

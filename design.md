@@ -8255,12 +8255,12 @@ types:
 
 ```roc
 Iter(item) :: {
-    len_if_known : [Known(U64), Unknown],
+    len_if_known : Try(U64, [Unknown]),
     step : () -> [One({ item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done],
 }
 
 Stream(item) :: {
-    len_if_known : [Known(U64), Unknown],
+    len_if_known : Try(U64, [Unknown]),
     step! : () => [One({ item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
 }
 
@@ -8270,7 +8270,7 @@ Range(num) :: {
     step : num,
     upper_bound : [Exclusive, Inclusive],
     direction : [To, From],
-    len_if_known : [Known(U64), Unknown],
+    len_if_known : Try(U64, [Unknown]),
 }
 ```
 
@@ -8305,8 +8305,8 @@ Range syntax produces a reusable `Range(num)`, not an `Iter(num)`. The
 exclusive and inclusive operators dispatch to `num.range_exclusive_to` and
 `num.range_inclusive_to`, respectively. `Range.step_by` replaces the stored
 absolute step with another value of `num`; it does not compose or multiply
-steps. `Range.size_hint` returns the stored exact count when that count fits in
-`U64`, otherwise `Unknown`. `Range.iter` delegates to `num.range_iter` and
+steps. `Range.len_if_known` returns the stored exact count when that count fits in
+`U64`, otherwise `Err(Unknown)`. `Range.iter` delegates to `num.range_iter` and
 propagates that hint into the resulting iterator. `Range.iter` and the numeric
 `range_iter` implementations are iterator producers that mint no
 representation of their own: the result is exactly the `Iter.custom` chain the

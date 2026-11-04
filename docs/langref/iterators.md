@@ -76,7 +76,7 @@ advances it:
 
 ```roc
 powers_of_two : Iter(U64)
-powers_of_two = Iter.custom(1, Unknown, |n| Ok((n, n * 2)))
+powers_of_two = Iter.custom(1, Err(Unknown), |n| Ok((n, n * 2)))
 
 first_five : List(U64)
 first_five = powers_of_two.take_first(5).collect() # [1, 2, 4, 8, 16]
@@ -85,14 +85,14 @@ first_five = powers_of_two.take_first(5).collect() # [1, 2, 4, 8, 16]
 `Iter.custom` takes three arguments:
 
 1. The initial state. Here, it's `1`.
-2. The number of items the iterator will produce, if it's known in advance: `Known(count)` or `Unknown`. Collections use this to allocate the right amount of memory up front.
+2. The number of items the iterator will produce, if it's known in advance: `Ok(count)` or `Err(Unknown)`. Collections use this to allocate the right amount of memory up front.
 3. A function that takes the current state and returns either `Ok((item, next_state))` to produce an item and continue with a new state, or `Err(NoMore)` to end the iteration.
 
 Here's an iterator that counts down to 1, and then ends:
 
 ```roc
 countdown : U64 -> Iter(U64)
-countdown = |start| Iter.custom(start, Known(start), |n| {
+countdown = |start| Iter.custom(start, Ok(start), |n| {
     if n == 0 {
         Err(NoMore)
     } else {
@@ -185,11 +185,11 @@ slower.
 ### Collecting
 
 When you [`collect`](#collecting) an iterator into a list, the number of items the iterator says
-it will produce (the `Known(count)` or `Unknown` that [`Iter.custom`](#custom-iterators) takes)
-determines how the list gets allocated. If it's `Known`, the list's memory gets allocated once,
-at exactly the right size. If it's `Unknown` (for example, after a `keep_if`, since nobody knows
+it will produce (the `Ok(count)` or `Err(Unknown)` that [`Iter.custom`](#custom-iterators) takes)
+determines how the list gets allocated. If it's `Ok`, the list's memory gets allocated once,
+at exactly the right size. If it's `Err(Unknown)` (for example, after a `keep_if`, since nobody knows
 in advance how many items will be kept), the list starts small and grows as items are added.
 
-So when you write a custom iterator, it's worth passing `Known(count)` whenever you know the count.
+So when you write a custom iterator, it's worth passing `Ok(count)` whenever you know the count.
 Just make sure the count is exact, because collecting relies on the iterator producing exactly
 that many items.
