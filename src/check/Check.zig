@@ -8033,7 +8033,7 @@ fn walkSettledRoot(
 
 test "settled row reachability uses caller-owned scratch across all seeds" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initExpr("SettledScratch", "1.U64");
+    var test_env = try TestEnv.initExprOpen("SettledScratch", "1.U64");
     defer test_env.deinit();
     const checker = &test_env.checker;
     const store = checker.types;
@@ -8059,7 +8059,7 @@ test "settled row reachability uses caller-owned scratch across all seeds" {
 
 test "settled walk finds a cycle through structure and none through a method requirement" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initExpr("SettledCycles", "1.U64");
+    var test_env = try TestEnv.initExprOpen("SettledCycles", "1.U64");
     defer test_env.deinit();
     const checker = &test_env.checker;
     const store = checker.types;
@@ -8117,7 +8117,7 @@ test "a default-decided class merged into a frozen class renders its pre-default
     // diagnostic's view of its pre-default type is of that whole class, and
     // the savepoint it is rendered under restores the frozen class after.
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initExpr("FrozenPreDefault", "1.U64");
+    var test_env = try TestEnv.initExprOpen("FrozenPreDefault", "1.U64");
     defer test_env.deinit();
     const checker = &test_env.checker;
     const store = checker.types;
@@ -8143,7 +8143,7 @@ test "a frozen copy carries exactly the flags an instantiated copy carries" {
     // default chose the original, whose record names the original's
     // variable, and no default chose the copy, so no record names it either.
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initExpr("FrozenFlags", "1.U64");
+    var test_env = try TestEnv.initExprOpen("FrozenFlags", "1.U64");
     defer test_env.deinit();
     const checker = &test_env.checker;
     const store = checker.types;
@@ -8174,7 +8174,7 @@ test "an expected type a default chose reuses its pristine backup" {
     // decision, so the next expected type identical to the first is handed
     // that same copy.
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initExpr("DefaultedBackup", "1.U64");
+    var test_env = try TestEnv.initExprOpen("DefaultedBackup", "1.U64");
     defer test_env.deinit();
     const checker = &test_env.checker;
     const store = checker.types;
@@ -8198,7 +8198,7 @@ test "a replay shape records every flag relating can observe and no defaulting d
     // default chose shares the shape of one the program wrote. A flag that
     // relating does observe still tells shapes apart.
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initExpr("ShapeFlags", "1.U64");
+    var test_env = try TestEnv.initExprOpen("ShapeFlags", "1.U64");
     defer test_env.deinit();
     const checker = &test_env.checker;
     const store = checker.types;
@@ -12827,9 +12827,19 @@ const PendingRecordDestruct = struct {
 };
 
 /// Type-check every def in the module, including the numeric-literal
-/// defaulting rounds at finalize (see `checkFileInternal`).
+/// defaulting rounds at finalize (see `checkFileInternal`), then seal the
+/// solved type store: every later stage only reads it.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
-    return self.checkFileInternal(false);
+    try self.checkFileInternal(false);
+    self.types.seal();
+}
+
+/// `checkFile` for a test that drives solver machinery on the checked module
+/// or builds solver state in it: the type store stays open, and a test that
+/// then reads the module as checked output seals it first.
+pub fn checkFileLeavingStoreOpen(self: *Self) std.mem.Allocator.Error!void {
+    if (comptime !builtin.is_test) @compileError("checkFileLeavingStoreOpen is test scaffolding");
+    try self.checkFileInternal(false);
 }
 
 fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
@@ -27378,7 +27388,7 @@ fn projectExpectedTagPayload(
 
 test "tag projection copies selected slots together without copying other variants" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initExpr("Projection", "1.U64");
+    var test_env = try TestEnv.initExprOpen("Projection", "1.U64");
     defer test_env.deinit();
     const checker = &test_env.checker;
     const store = checker.types;
@@ -36316,7 +36326,7 @@ const ConstructorTag = struct {
 
 test "constructor projection retains nominal identity and sparse owned children" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.init("Constructors",
+    var test_env = try TestEnv.initOpen("Constructors",
         \\Tree(a) := [Leaf(a), Branch(Tree(a), Tree(a)), Empty]
         \\number : Tree(U32)
         \\number = Tree.Leaf(1)
@@ -40838,7 +40848,7 @@ fn deduplicateGeneralizedDispatchRequirements(
 
 test "row union normalization relates repeated labels and omits outer copies" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initExpr("RowUnion", "1.U64");
+    var test_env = try TestEnv.initExprOpen("RowUnion", "1.U64");
     defer test_env.deinit();
     const checker = &test_env.checker;
     const store = checker.types;
@@ -40923,7 +40933,7 @@ test "row union normalization relates repeated labels and omits outer copies" {
 
 test "issue 11350 singleton dispatch requirements need no deduplication scratch" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initExpr("Deduplication", "1.U64");
+    var test_env = try TestEnv.initExprOpen("Deduplication", "1.U64");
     defer test_env.deinit();
     try test_env.assertNoErrors();
     const checker = &test_env.checker;
@@ -53595,7 +53605,7 @@ test "literal dispatch finalization preserves generalized specialization obligat
 
 test "issue 12505 dispatch replay compares transparent aliases by their backing types" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.initExpr("ReplayAliases", "1.I64");
+    var test_env = try TestEnv.initExprOpen("ReplayAliases", "1.I64");
     defer test_env.deinit();
     const checker = &test_env.checker;
     const gpa = std.testing.allocator;
@@ -53645,7 +53655,7 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
     var source = try TestEnv.init("Codec", @import("test/issue_11444_test.zig").codec_source);
     defer source.deinit();
     try source.assertNoErrors();
-    var client = try TestEnv.initWithImport("Client", "import Codec\nvalue = True", "Codec", &source);
+    var client = try TestEnv.initWithImportOpen("Client", "import Codec\nvalue = True", "Codec", &source);
     defer client.deinit();
     try client.assertNoErrors();
 
@@ -53725,7 +53735,7 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
 // rule, not here.
 test "dispatch derivation edge hops out of the child's class instead of recording a cycle" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.init("SelfEdgeGuard", "value = \"x\"");
+    var test_env = try TestEnv.initOpen("SelfEdgeGuard", "value = \"x\"");
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
@@ -53772,7 +53782,7 @@ test "dispatch derivation edge hops out of the child's class instead of recordin
 // ancestor outside the child's class.
 test "dispatch derivation of a child merged into its parent's class points at the grandparent" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.init("MergedChildLineage", "value = \"x\"");
+    var test_env = try TestEnv.initOpen("MergedChildLineage", "value = \"x\"");
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
@@ -53816,7 +53826,7 @@ test "dispatch derivation of a child merged into its parent's class points at th
 
 test "dispatch relations derived only from a rejected target become inactive" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.init("RejectedDerivation", "value = \"x\"");
+    var test_env = try TestEnv.initOpen("RejectedDerivation", "value = \"x\"");
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
@@ -53872,7 +53882,7 @@ test "dispatch relations derived only from a rejected target become inactive" {
 // by `retireResolvedTypeSchemeRequirements`.
 test "finalization re-enqueue identifies relations by callable and measures only its own" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.init("FinalizationReenqueue", "value = \"x\"");
+    var test_env = try TestEnv.initOpen("FinalizationReenqueue", "value = \"x\"");
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
@@ -54058,7 +54068,7 @@ test "an orphan dispatch obligation is adopted only by the outermost frame" {
 // and the journal semantics are identical for all of them.
 test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.init("EscalationJournal", "value : U64\nvalue = 42");
+    var test_env = try TestEnv.initOpen("EscalationJournal", "value : U64\nvalue = 42");
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
@@ -54099,7 +54109,7 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
 
 test "in-probe row-tail observation is journaled: rollback resets, commit keeps" {
     const TestEnv = @import("test/TestEnv.zig");
-    var test_env = try TestEnv.init("RowTailJournal", "value : U64\nvalue = 42");
+    var test_env = try TestEnv.initOpen("RowTailJournal", "value : U64\nvalue = 42");
     defer test_env.deinit();
     try test_env.assertNoErrors();
 

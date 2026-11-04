@@ -4215,10 +4215,9 @@ pub const Serialized = extern struct {
         return env;
     }
 
-    /// Deserialize with mutable type store and node store for cache modules.
-    /// Allocates fresh memory for the type store and node store arrays,
-    /// allowing them to be mutated (e.g., during type checking).
-    /// Use this for disk cache modules that may need to add new types.
+    /// Deserialize a checked module from the checked-module cache.
+    /// Allocates fresh memory for the type store and node store arrays. The
+    /// type store holds the module's solved types, so it is sealed.
     pub fn deserializeWithMutableTypes(
         self: *const Serialized,
         base_addr: usize,
@@ -4233,7 +4232,6 @@ pub const Serialized = extern struct {
         env.* = Self{
             .gpa = gpa,
             .common = self.common.deserializeInto(base_addr, source),
-            // Use deserializeWithCopy to get mutable type store
             .types = try self.types.deserializeWithCopy(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
             .module_role = self.module_role,
@@ -4295,6 +4293,7 @@ pub const Serialized = extern struct {
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
         };
+        env.types.seal();
 
         env.debugAssertModuleBasename();
 

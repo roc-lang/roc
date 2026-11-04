@@ -2580,7 +2580,7 @@ pub fn build(b: *std.Build) void {
     fixture_options.addOptionPathUntracked("roc_binary_build_path", fixture_roc);
     fixture_options.addOption([]const u8, "build_root", b.root.joinString(b.allocator, "") catch @panic("OOM"));
     roc_modules.addAll(roc_exe);
-    const roc_install_step = install_and_run(b, no_bin, roc_exe, strip_macho_exports_tool, build_roc_step, run_roc_step, run_args);
+    const roc_install_step = install_and_run(b, no_bin, roc_exe, strip_macho_exports_tool, build_roc_step, run_roc_step, run_args, &.{});
 
     const run_builtin_format = b.addRunArtifact(roc_exe);
     run_builtin_format.addArgs(&.{ "fmt", "--check", "src/build/roc/Builtin.roc" });
@@ -3081,6 +3081,7 @@ pub fn build(b: *std.Build) void {
         build_snapshot_tool_step,
         run_snapshot_tool_step,
         run_args,
+        verify_sealed_type_view_env,
     );
     const check_snapshot_diff = CheckSnapshotDiffStep.create(b);
     check_snapshot_diff.step.dependOn(run_snapshot_tool_step);
@@ -3137,6 +3138,7 @@ pub fn build(b: *std.Build) void {
         build_test_eval_runner_step,
         run_test_eval_step,
         eval_run_args,
+        verify_sealed_type_view_env,
     );
 
     // `run-test-eval` leaves LLVM evaluation out for speed. This focused run
@@ -3201,6 +3203,7 @@ pub fn build(b: *std.Build) void {
         build_test_eval_host_effects_runner_step,
         run_test_eval_host_effects_step,
         eval_host_effects_run_args,
+        &.{},
     );
 
     const strategy_differential_exe = b.addExecutable(.{
@@ -3230,6 +3233,7 @@ pub fn build(b: *std.Build) void {
         build_test_strategy_differential_runner_step,
         run_test_strategy_differential_step,
         eval_host_effects_run_args,
+        &.{},
     );
 
     // One explicitly expensive proof gate owns every execution lane. Keep the
@@ -5252,7 +5256,7 @@ fn add_fuzz_target(
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
     repro_exe.root_module.addImport("build_options", roc_modules.build_options);
 
-    _ = install_and_run(b, no_bin, repro_exe, null, build_repro_step, run_repro_step, run_args);
+    _ = install_and_run(b, no_bin, repro_exe, null, build_repro_step, run_repro_step, run_args, &.{});
 
     if (fuzz and build_afl and !no_bin) {
         const fuzz_step = b.step(b.fmt("build-fuzz-{s}", .{name}), b.fmt("Build fuzz executable for {s}", .{name}));
@@ -6506,6 +6510,16 @@ fn addBuildPathCheck(b: *std.Build, binary: std.Build.LazyPath) *Step {
     return &run.step;
 }
 
+/// An environment variable a tool's run step sets, as name and value.
+const RunEnvVar = struct { []const u8, []const u8 };
+
+/// The snapshot tool and eval runner check the sealed type view against
+/// checked type publication for every module they compile
+/// (`verify_sealed_type_view` in src/base/dev_diagnostics.zig). The strategy
+/// differential runner does not: checked types are the same under every
+/// specialization strategy, so the eval runner's check already covers them.
+const verify_sealed_type_view_env: []const RunEnvVar = &.{.{ "ROC_VERIFY_SEALED_TYPE_VIEW", "1" }};
+
 fn install_and_run(
     b: *std.Build,
     no_bin: bool,
@@ -6514,6 +6528,7 @@ fn install_and_run(
     build_step: *Step,
     run_step: *Step,
     run_args: []const []const u8,
+    run_env: []const RunEnvVar,
 ) ?*Step {
     if (run_step != build_step) {
         run_step.dependOn(build_step);
@@ -6536,6 +6551,7 @@ fn install_and_run(
         const run = b.addRunArtifact(exe);
         run.step.dependOn(install_step);
         if (run_args.len != 0) run.addArgs(run_args);
+        for (run_env) |env| run.setEnvironmentVariable(env[0], env[1]);
         run.addPassthruArgs();
         run_step.dependOn(&run.step);
         return install_step;

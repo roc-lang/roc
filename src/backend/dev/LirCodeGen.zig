@@ -8679,7 +8679,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             pub fn statement(extra: StackPlanExtra, plan: *StackPlan, _: u32, stmt: LIR.CFStmt) Allocator.Error!void {
                 const self = extra.owner;
                 switch (stmt) {
-                    inline .set_local, .init_uninitialized => |s| {
+                    .set_local => |s| {
+                        if (s.mode != .initialize_join_param) plan.values.items[try plan.local(s.target)].mutable = true;
+                    },
+                    .init_uninitialized => |s| {
                         plan.values.items[try plan.local(s.target)].mutable = true;
                     },
                     .assign_low_level => |s| {
@@ -8736,14 +8739,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (work.items) |id| {
                 const stmt = self.store.getCFStmt(id);
                 const at = indexes.nodeOf(id).?;
-                if (stmt == .join) {
-                    // A declaration alone needs no storage. Mark only locals
-                    // present in the completed read/write inventory as mutable.
-                    const params = self.store.getLocalSpan(stmt.join.params);
-                    for (0..params.len) |i| {
-                        if (plan.localIndex(GuardedList.at(params, i))) |index| plan.values.items[index].mutable = true;
-                    }
-                }
                 if (stmt == .assign_low_level) {
                     if (OverflowFusion.findResultConsumer(self.store, id)) |fusion| {
                         // The producer emits the consumer's result early. Keep
@@ -8766,11 +8761,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const t = plan.values.items[target_index];
                 const s = plan.values.items[source];
                 if (t.definitions != 1 or s.definitions > 1 or t.mutable or s.mutable) continue;
+                // Prologue storage is already defined, and cannot become an
+                // alias. An unwritten source must be such a parameter.
+                if (self.local_locations.contains(localKey(t.local))) continue;
+                if (s.definitions == 0 and !self.local_locations.contains(localKey(s.local))) continue;
                 const rep = self.runtimeRepresentationLayoutIdx(self.localLayout(assign.target));
                 if (rep != self.runtimeRepresentationLayoutIdx(self.localLayout(assign.op.source))) continue;
                 if (rep == .f32 or rep == .f64 or self.simdKindForLayout(rep) != null) continue;
                 plan.values.items[target_index].representative = source;
             }
+            try plan.solveAliasLifetimes(indexes.nodeOf(root).?);
+            for (plan.values.items) |*value| value.size = 0;
             for (plan.values.items, 0..) |v, i| {
                 const root_index = plan.representative(@intCast(i));
                 if (root_index != i or self.local_locations.contains(localKey(v.local))) continue;
@@ -8781,7 +8782,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
                 plan.values.items[i].size = std.mem.alignForward(u32, size, alignment);
             }
-            try plan.solve();
+            try plan.assignSlots();
             const offsets = try self.allocator.alloc(i32, plan.slots.items.len);
             defer self.allocator.free(offsets);
             for (plan.slots.items, offsets) |slot, *offset| offset.* = self.codegen.allocStackSlot(slot.size);
@@ -24559,6 +24560,35 @@ test "proc params and mutable list cells use distinct stack slots" {
     try std.testing.expect(answer_slot != end_slot);
     try std.testing.expect(appended_slot != end_slot);
     try std.testing.expect(appended_slot != answer_slot);
+}
+
+test "issue 12819: dev reads a single-definition join parameter in place" {
+    const gpa = std.testing.allocator;
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64mac }) |target| {
+        var store = LirStore.init(gpa);
+        defer store.deinit();
+        var state = try TestLayoutState.init(gpa);
+        defer state.deinit();
+        const source = try addLocal(&store, .u64);
+        const joined = try addLocal(&store, .u64);
+        const alias = try addLocal(&store, .u64);
+        var next_join_point: u32 = 0;
+        const join_id = freshTestJoinPointId(&next_join_point);
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } }, .test_fixture);
+        const read = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(joined), .next = ret } }, .test_fixture);
+        const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+        const initialize = try store.addCFStmt(.{ .set_local = .{ .target = joined, .value = source, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+        const join = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = try store.addLocalSpan(&.{joined}), .body = read, .remainder = initialize } }, .test_fixture);
+        const body = try store.addCFStmt(.{ .assign_literal = .{ .target = source, .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .next = join } }, .test_fixture);
+        const proc = try addNoArgProc(&store, body, .u64);
+        var codegen = try LirCodeGen(target).init(gpa, &store, &state.layout_store, .{}, .default);
+        defer codegen.deinit();
+        try codegen.ensureStableLocationsForStmtLocals(body);
+        try std.testing.expectEqualDeep(codegen.local_locations.get(@backingInt(joined)).?, codegen.local_locations.get(@backingInt(alias)).?);
+        if (comptime host_lir_codegen_available) {
+            try std.testing.expectEqual(@as(u64, 42), try runRootU64(&store, &state.layout_store, proc, .u64));
+        }
+    }
 }
 
 test "immutable aliases share storage but aliases of mutable locals do not" {

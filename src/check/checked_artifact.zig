@@ -38,6 +38,7 @@ const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
 const output_type_roots = @import("output_type_roots.zig");
+const sealed_type_view = @import("sealed_type_view.zig");
 const value_identity = @import("value_identity.zig");
 
 /// Publishes each visited root into a checked type store.
@@ -48,6 +49,8 @@ const CheckedTypeRootPublisher = struct {
     imports: CheckedImportViews,
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
+    source_schemes: *collections.DenseMap(Var, CheckedTypeSchemeId),
+    local_type_declarations: *const LocalTypeDeclarationIndex,
 
     /// Publish one root.
     pub fn visit(self: *const CheckedTypeRootPublisher, var_: Var) Allocator.Error!void {
@@ -58,7 +61,162 @@ const CheckedTypeRootPublisher = struct {
     pub fn visitRequired(self: *const CheckedTypeRootPublisher, maybe_var: ?Var, comptime missing: []const u8) Allocator.Error!void {
         try self.visit(maybe_var orelse checkedArtifactInvariant(missing, .{}));
     }
+
+    /// Publish one root and the source scheme it owns.
+    pub fn visitScheme(self: *const CheckedTypeRootPublisher, var_: Var) Allocator.Error!void {
+        const root = try appendCheckedTypeRoot(self.allocator, self.module, self.names, self.imports, self.store, self.active, var_);
+        try self.store.publishSourceScheme(self.allocator, self.module, self.source_schemes, &self.active.scratch.?.key_writer, var_, root);
+    }
+
+    /// Publish a local nominal declaration and the roots its annotation names.
+    pub fn visitNominalDeclaration(self: *const CheckedTypeRootPublisher, statement_idx: CIR.Statement.Idx, nominal: NominalDeclStatement) Allocator.Error!void {
+        try appendCheckedNominalDeclarationFromStatement(
+            self.allocator,
+            self.module,
+            self.names,
+            self.imports,
+            self.store,
+            self.active,
+            self.local_type_declarations,
+            statement_idx,
+            nominal.header,
+            nominal.anno,
+            nominal.is_opaque,
+        );
+    }
 };
+
+/// The payload of a nominal declaration statement.
+pub const NominalDeclStatement = @FieldType(CIR.Statement, "s_nominal_decl");
+
+/// The source inputs that select a module's checked source type roots.
+pub const CheckedSourceTypeRootInputs = struct {
+    source_nodes: *const CheckedSourceNodes,
+    selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
+    promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
+};
+
+/// Every source type root of a module's checked type publication, in
+/// publication order. Type publication and the sealed type view
+/// (`sealed_type_view.zig`) both enumerate roots here, so the two cannot
+/// disagree on the root set. A visitor provides `visit(Var)`,
+/// `visitRequired(?Var, comptime []const u8)` (as `output_type_roots`
+/// visitors do), `visitScheme(Var)` for a root that owns a source scheme, and
+/// `visitNominalDeclaration(CIR.Statement.Idx, NominalDeclStatement)` for a
+/// local nominal declaration statement.
+pub fn forEachCheckedSourceTypeRoot(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    inputs: CheckedSourceTypeRootInputs,
+    visitor: anytype,
+) Allocator.Error!void {
+    const source_nodes = inputs.source_nodes;
+    var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
+    defer top_level_defs.deinit(allocator);
+    const module_env = module.moduleEnvConst();
+
+    var node_idx: u32 = 0;
+    while (node_idx < module.nodeCount()) : (node_idx += 1) {
+        // Every source-marked expr/pattern node gets a published type
+        // root, matching exactly what `CheckedBodyStore.fromModule`
+        // demands. That includes nodes checking rewrote to runtime
+        // errors (tag `.malformed`, e.g. via ambiguity poisoning): their
+        // type vars are real, and the body store still publishes the
+        // node so the user-facing diagnostics survive to reporting.
+        if (source_nodes.hasExpr(@fromBackingInt(@intCast(node_idx)))) {
+            const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
+            try visitor.visit(module.exprType(expr_idx));
+            try output_type_roots.forEachCallTypeRoot(module_env, expr_idx, visitor);
+        } else if (source_nodes.hasPattern(@fromBackingInt(@intCast(node_idx)))) {
+            try visitor.visit(checkedPatternSourceTypeVar(module, &top_level_defs, @fromBackingInt(@intCast(node_idx))));
+        }
+    }
+
+    // Static-dispatch evidence resolves constrained scheme instantiations
+    // after type publication. Publish each recorded fresh variable now so
+    // evidence nodes can name the exact concrete dispatcher type by a
+    // checked type id rather than retaining checker-only variables.
+    // Explicit scheme requirements may be absent from the public callable.
+    // Publish their roots before the evidence schema names them.
+    try output_type_roots.forEachRecordedTypeRoot(module_env, visitor);
+    for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        if (!source_nodes.hasStatement(statement_idx)) continue;
+        switch (module.getStatement(statement_idx)) {
+            .s_alias_decl => try visitor.visit(ModuleEnv.varFrom(statement_idx)),
+            .s_nominal_decl => |nominal| try visitor.visitNominalDeclaration(statement_idx, nominal),
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
+        }
+    }
+
+    for (module.requiresTypes()) |required_type| {
+        try visitor.visitScheme(ModuleEnv.varFrom(required_type.type_anno));
+
+        const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
+        for (aliases) |alias| {
+            const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
+            if (alias_statement != .s_alias_decl) {
+                checkedArtifactInvariant("platform for-clause alias metadata referenced a non-alias statement", .{});
+            }
+            try visitor.visit(ModuleEnv.varFrom(alias.alias_stmt_idx));
+            try visitor.visit(ModuleEnv.varFrom(alias_statement.s_alias_decl.anno));
+        }
+    }
+
+    try forEachStaticDispatchTypeRoot(module, source_nodes, visitor);
+
+    // Evidence nodes retain exact checked callable instantiations. Publish
+    // every fresh type participating in a recorded scheme use, including
+    // the constraint function that identifies a selected dispatch target
+    // or a per-use where-method callable.
+    try output_type_roots.forEachSchemeUseTypeRoot(module_env, visitor);
+
+    // A row-coerced result's coercion node has its widening copy's type;
+    // the expression's own node keeps its own type
+    // (`ModuleEnv.RowCoercedResult`).
+    for (module_env.row_coerced_results.items.items) |result| {
+        try visitor.visit(@fromBackingInt(result.wide_var));
+    }
+
+    for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
+        try visitor.visitScheme(module.defType(def_idx));
+    }
+
+    // Selected roots own source schemes just like ordinary top-level
+    // values. Publish them explicitly so const and callable templates can
+    // name the exact scheme without relying on an unrelated definition
+    // having the same canonical key.
+    for (inputs.selected_hoisted_roots) |selected| {
+        try visitor.visitScheme(if (selected.pattern) |pattern|
+            ModuleEnv.varFrom(pattern)
+        else
+            module.exprType(selected.expr));
+    }
+
+    // A promoted local function is a procedure of its own, published
+    // under its binding's generalized scheme like a top-level function.
+    for (inputs.promoted_local_procedures) |promoted| {
+        try visitor.visitScheme(ModuleEnv.varFrom(promoted.pattern));
+    }
+}
 
 /// Public `ModuleEnvStorage` declaration.
 pub const ModuleEnvStorage = union(enum) {
@@ -461,7 +619,8 @@ pub const PublishImportArtifact = struct {
     view: ImportedModuleView,
 };
 
-const CheckedImportViews = struct {
+/// The checked artifacts a module's publication resolves named types against.
+pub const CheckedImportViews = struct {
     current_owner: ModuleId,
     direct: []const PublishImportArtifact,
     available: []const ImportedModuleView = &.{},
@@ -4036,7 +4195,7 @@ const CheckedTypePublication = struct {
         self.source_schemes.clearAndFree();
     }
 
-    fn deinit(self: *CheckedTypePublication, allocator: Allocator) void {
+    pub fn deinit(self: *CheckedTypePublication, allocator: Allocator) void {
         self.deinitIndex(allocator);
         self.store.deinit(allocator);
     }
@@ -4397,9 +4556,6 @@ pub const CheckedTypeStore = struct {
         errdefer active.deinit();
         var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, source_nodes);
         defer local_type_declarations.deinit();
-        var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
-        defer top_level_defs.deinit(allocator);
-        const module_env = module.moduleEnvConst();
         const publisher = CheckedTypeRootPublisher{
             .allocator = allocator,
             .module = module,
@@ -4407,137 +4563,18 @@ pub const CheckedTypeStore = struct {
             .imports = import_views,
             .store = &store,
             .active = &active,
+            .source_schemes = &source_schemes,
+            .local_type_declarations = &local_type_declarations,
         };
+        const root_inputs = CheckedSourceTypeRootInputs{
+            .source_nodes = source_nodes,
+            .selected_hoisted_roots = selected_hoisted_roots,
+            .promoted_local_procedures = promoted_local_procedures,
+        };
+        try forEachCheckedSourceTypeRoot(allocator, module, root_inputs, &publisher);
 
-        var node_idx: u32 = 0;
-        while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            // Every source-marked expr/pattern node gets a published type
-            // root, matching exactly what `CheckedBodyStore.fromModule`
-            // demands. That includes nodes checking rewrote to runtime
-            // errors (tag `.malformed`, e.g. via ambiguity poisoning): their
-            // type vars are real, and the body store still publishes the
-            // node so the user-facing diagnostics survive to reporting.
-            if (source_nodes.hasExpr(@fromBackingInt(@intCast(node_idx)))) {
-                const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.exprType(expr_idx));
-                try output_type_roots.forEachCallTypeRoot(module_env, expr_idx, &publisher);
-            } else if (source_nodes.hasPattern(@fromBackingInt(@intCast(node_idx)))) {
-                const pattern_source_var = checkedPatternSourceTypeVar(module, &top_level_defs, @fromBackingInt(@intCast(node_idx)));
-                _ = try appendCheckedTypeRoot(
-                    allocator,
-                    module,
-                    names,
-                    import_views,
-                    &store,
-                    &active,
-                    pattern_source_var,
-                );
-            }
-        }
-
-        // Static-dispatch evidence resolves constrained scheme instantiations
-        // after type publication. Publish each recorded fresh variable now so
-        // evidence nodes can name the exact concrete dispatcher type by a
-        // checked type id rather than retaining checker-only variables.
-        // Explicit scheme requirements may be absent from the public callable.
-        // Publish their roots before the evidence schema names them.
-        try output_type_roots.forEachRecordedTypeRoot(module_env, &publisher);
-        for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
-            if (!source_nodes.hasStatement(statement_idx)) continue;
-            switch (module.getStatement(statement_idx)) {
-                .s_alias_decl => _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, ModuleEnv.varFrom(statement_idx)),
-                .s_nominal_decl => |nominal| try appendCheckedNominalDeclarationFromStatement(
-                    allocator,
-                    module,
-                    names,
-                    import_views,
-                    &store,
-                    &active,
-                    &local_type_declarations,
-                    statement_idx,
-                    nominal.header,
-                    nominal.anno,
-                    nominal.is_opaque,
-                ),
-                .s_decl,
-                .s_var,
-                .s_var_uninitialized,
-                .s_reassign,
-                .s_crash,
-                .s_dbg,
-                .s_expr,
-                .s_expect,
-                .s_for,
-                .s_while,
-                .s_infinite_loop,
-                .s_breakable_loop,
-                .s_break,
-                .s_return,
-                .s_import,
-                .s_where_alias_decl,
-                .s_type_anno,
-                .s_type_var_alias,
-                .s_runtime_error,
-                => {},
-            }
-        }
-
-        for (module.requiresTypes()) |required_type| {
-            const required_var = ModuleEnv.varFrom(required_type.type_anno);
-            const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, required_var);
-            try store.publishSourceScheme(allocator, module, &source_schemes, &active.scratch.?.key_writer, required_var, root);
-
-            const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
-            for (aliases) |alias| {
-                const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
-                if (alias_statement != .s_alias_decl) {
-                    checkedArtifactInvariant("platform for-clause alias metadata referenced a non-alias statement", .{});
-                }
-                const alias_anno = alias_statement.s_alias_decl.anno;
-                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, ModuleEnv.varFrom(alias.alias_stmt_idx));
-                _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, ModuleEnv.varFrom(alias_anno));
-            }
-        }
-
-        try appendStaticDispatchTypeRoots(allocator, module, names, import_views, source_nodes, &store, &active);
-
-        // Evidence nodes retain exact checked callable instantiations. Publish
-        // every fresh type participating in a recorded scheme use, including
-        // the constraint function that identifies a selected dispatch target
-        // or a per-use where-method callable.
-        try output_type_roots.forEachSchemeUseTypeRoot(module_env, &publisher);
-
-        // A row-coerced result's coercion node has its widening copy's type;
-        // the expression's own node keeps its own type
-        // (`ModuleEnv.RowCoercedResult`).
-        for (module_env.row_coerced_results.items.items) |result| {
-            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(result.wide_var));
-        }
-
-        for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
-            const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, module.defType(def_idx));
-            try store.publishSourceScheme(allocator, module, &source_schemes, &active.scratch.?.key_writer, module.defType(def_idx), root);
-        }
-
-        // Selected roots own source schemes just like ordinary top-level
-        // values. Publish them explicitly so const and callable templates can
-        // name the exact scheme without relying on an unrelated definition
-        // having the same canonical key.
-        for (selected_hoisted_roots) |selected| {
-            const source_var = if (selected.pattern) |pattern|
-                ModuleEnv.varFrom(pattern)
-            else
-                module.exprType(selected.expr);
-            const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, source_var);
-            try store.publishSourceScheme(allocator, module, &source_schemes, &active.scratch.?.key_writer, source_var, root);
-        }
-
-        // A promoted local function is a procedure of its own, published
-        // under its binding's generalized scheme like a top-level function.
-        for (promoted_local_procedures) |promoted| {
-            const source_var = ModuleEnv.varFrom(promoted.pattern);
-            const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, source_var);
-            try store.publishSourceScheme(allocator, module, &source_schemes, &active.scratch.?.key_writer, source_var, root);
+        if (base.dev_diagnostics.isSet(.verify_sealed_type_view)) {
+            try sealed_type_view.verifyModulePublication(allocator, module, names, import_views, root_inputs, &store, &active);
         }
 
         // Self-containment (issue #9983 / Option A): the published declaration
@@ -5706,7 +5743,8 @@ fn deinitCheckedTypePayloadBuild(allocator: Allocator, payload: *CheckedTypePayl
     payload.* = .pending;
 }
 
-const LocalTypeDeclarationIndex = struct {
+/// The finalized local type declaration each relative type name refers to.
+pub const LocalTypeDeclarationIndex = struct {
     const FinalizedRelativeName = union(enum) {
         unique: CIR.Statement.Idx,
         ambiguous,
@@ -5714,7 +5752,7 @@ const LocalTypeDeclarationIndex = struct {
 
     finalized_by_relative_name: std.AutoHashMap(Ident.Idx, FinalizedRelativeName),
 
-    fn init(
+    pub fn init(
         allocator: Allocator,
         module: TypedCIR.Module,
         source_nodes: *const CheckedSourceNodes,
@@ -5768,11 +5806,11 @@ const LocalTypeDeclarationIndex = struct {
         return .{ .finalized_by_relative_name = finalized_by_relative_name };
     }
 
-    fn deinit(self: *LocalTypeDeclarationIndex) void {
+    pub fn deinit(self: *LocalTypeDeclarationIndex) void {
         self.finalized_by_relative_name.deinit();
     }
 
-    fn finalizedStatementForReference(
+    pub fn finalizedStatementForReference(
         self: *const LocalTypeDeclarationIndex,
         module: TypedCIR.Module,
         statement_idx: CIR.Statement.Idx,
@@ -6057,6 +6095,136 @@ fn checkedTagBuildLabelLessThan(names: *const canonical.CanonicalNameStore, lhs:
     return names.tagLabelTextLessThan(lhs.name, rhs.name);
 }
 
+/// What a nominal declaration's annotation walk (`DeclarationAnnoWalk`) does
+/// at one annotation, with parentheses stripped. The sealed type view reads
+/// the same classification to enumerate the source roots the walk publishes.
+pub const DeclarationAnnoNode = union(enum) {
+    /// A leaf the walk publishes as the root of this source variable.
+    leaf: Var,
+    /// A rigid variable: the walk's formal of that name when it binds one,
+    /// otherwise the root of `var_`. `name` is null for a lookup that does
+    /// not refer to a rigid variable annotation.
+    rigid: struct { name: ?Ident.Idx, var_: Var },
+    /// A bare reference to a local alias, which the walk expands as its body.
+    local_alias: struct { anno: CIR.TypeAnno.Idx, statement: CIR.Statement.Idx },
+    /// A composite annotation the walk builds from its children.
+    composite: CIR.TypeAnno.Idx,
+};
+
+/// Classify one declaration annotation for `DeclarationAnnoWalk`.
+pub fn declarationAnnoNode(
+    module: TypedCIR.Module,
+    local_type_declarations: *const LocalTypeDeclarationIndex,
+    anno_idx: CIR.TypeAnno.Idx,
+) DeclarationAnnoNode {
+    const module_env = module.moduleEnvConst();
+    var current = anno_idx;
+    while (true) {
+        switch (module_env.store.getTypeAnno(current)) {
+            .parens => |parens| current = parens.anno,
+            .tag_union, .tuple, .record, .@"fn", .apply => return .{ .composite = current },
+            .lookup => |lookup| switch (lookup.base) {
+                .local => |local| {
+                    const finalized = local_type_declarations.finalizedStatementForReference(module, local.decl_idx);
+                    if (module.getStatement(finalized) != .s_alias_decl) return .{ .leaf = ModuleEnv.varFrom(finalized) };
+                    return .{ .local_alias = .{ .anno = current, .statement = finalized } };
+                },
+                .builtin,
+                .external,
+                .external_identity,
+                .pending,
+                => return .{ .leaf = ModuleEnv.varFrom(current) },
+            },
+            .rigid_var => |rigid| return .{ .rigid = .{ .name = rigid.name, .var_ = ModuleEnv.varFrom(current) } },
+            .rigid_var_lookup => |lookup| return .{ .rigid = .{
+                .name = switch (module_env.store.getTypeAnno(lookup.ref)) {
+                    .rigid_var => |rigid| rigid.name,
+                    .apply,
+                    .rigid_var_lookup,
+                    .underscore,
+                    .lookup,
+                    .tag_union,
+                    .tag,
+                    .tuple,
+                    .record,
+                    .@"fn",
+                    .parens,
+                    .malformed,
+                    => null,
+                },
+                .var_ = ModuleEnv.varFrom(lookup.ref),
+            } },
+            .underscore,
+            .tag,
+            .malformed,
+            => return .{ .leaf = ModuleEnv.varFrom(current) },
+        }
+    }
+}
+
+/// What a declaration annotation walk does with an applied type once its
+/// arguments are walked.
+pub const DeclarationApplyBase = union(enum) {
+    /// The root of this source variable, used as written.
+    leaf: Var,
+    /// A local alias, which the walk expands as its body at the arguments.
+    alias: CIR.Statement.Idx,
+    /// A generic nominal whose root, the root of this source variable, the
+    /// walk instantiates at the arguments.
+    template: Var,
+};
+
+/// Classify the base of the applied type annotation `apply_anno`.
+pub fn declarationApplyBase(
+    module: TypedCIR.Module,
+    local_type_declarations: *const LocalTypeDeclarationIndex,
+    apply_anno: CIR.TypeAnno.Idx,
+    apply: @FieldType(CIR.TypeAnno, "apply"),
+    arg_count: usize,
+) DeclarationApplyBase {
+    switch (apply.base) {
+        .local => |local| {
+            const finalized = local_type_declarations.finalizedStatementForReference(module, local.decl_idx);
+            const statement = module.getStatement(finalized);
+            if (arg_count == 0 and statement != .s_alias_decl) return .{ .leaf = ModuleEnv.varFrom(finalized) };
+            switch (statement) {
+                .s_alias_decl => return .{ .alias = finalized },
+                .s_nominal_decl => {
+                    if (finalized != local.decl_idx) {
+                        checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
+                    }
+                    return .{ .template = ModuleEnv.varFrom(finalized) };
+                },
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_where_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => checkedArtifactInvariant("checked declaration template generic application referenced a non-type declaration", .{}),
+            }
+        },
+        .builtin,
+        .external,
+        .external_identity,
+        .pending,
+        => return .{ .template = ModuleEnv.varFrom(apply_anno) },
+    }
+}
+
 const DeclarationAnnoWalk = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -6152,17 +6320,36 @@ const DeclarationAnnoWalk = struct {
     fn enter(self: *DeclarationAnnoWalk, formals: []const DeclarationFormal, anno_idx: CIR.TypeAnno.Idx) Allocator.Error!?CheckedTypeId {
         const gpa = self.allocator;
         const module_env = self.module.moduleEnvConst();
-        var current = anno_idx;
-        const anno = while (true) {
-            const anno = module_env.store.getTypeAnno(current);
-            switch (anno) {
-                .parens => |parens| current = parens.anno,
-                .apply, .rigid_var, .rigid_var_lookup, .underscore, .lookup, .tag_union, .tag, .tuple, .record, .@"fn", .malformed => break anno,
-            }
-        };
         const ops_start = self.ops.items.len;
-        switch (anno) {
-            .parens => unreachable, // the loop above strips every parens wrapper
+        const current = switch (declarationAnnoNode(self.module, self.local_type_declarations, anno_idx)) {
+            .leaf => |var_| return try self.appendRoot(var_),
+            .rigid => |rigid| {
+                if (rigid.name) |name| if (declarationFormalRoot(formals, name)) |formal| return formal;
+                return try self.appendRoot(rigid.var_);
+            },
+            .local_alias => |local_alias| {
+                // A bare local alias walks its body like an alias
+                // application with no arguments (checking rejects a bare
+                // reference that leaves formals unapplied): the alias
+                // declaration's own root keeps its output rows deferred
+                // for its use sites, while a declaration body closes them
+                // as written.
+                if (self.publishedAliasExpansion(local_alias.statement, &.{})) |id| return id;
+                const body = try self.beginAliasApplication(local_alias.statement, &.{});
+                try self.ops.append(gpa, .{ .child = body.anno });
+                try self.frames.append(gpa, .{
+                    .anno = local_alias.anno,
+                    .formals = formals,
+                    .ops_start = ops_start,
+                    .next = ops_start,
+                    .results_start = self.results.items.len,
+                    .alias_body = body.alias_body,
+                });
+                return null;
+            },
+            .composite => |composite| composite,
+        };
+        switch (module_env.store.getTypeAnno(current)) {
             .tag_union => |tag_union| {
                 for (module_env.store.sliceTypeAnnos(tag_union.tags)) |tag_anno_idx| {
                     const tag = switch (module_env.store.getTypeAnno(tag_anno_idx)) {
@@ -6204,59 +6391,14 @@ const DeclarationAnnoWalk = struct {
                 try self.ops.append(gpa, .{ .child = func.ret });
             },
             .apply => |apply| for (module_env.store.sliceTypeAnnos(apply.args)) |arg| try self.ops.append(gpa, .{ .child = arg }),
-            .lookup => |lookup| switch (lookup.base) {
-                .local => |local| {
-                    const finalized = self.local_type_declarations.finalizedStatementForReference(self.module, local.decl_idx);
-                    if (self.module.getStatement(finalized) != .s_alias_decl) return try self.appendRoot(ModuleEnv.varFrom(finalized));
-                    // A bare local alias walks its body like an alias
-                    // application with no arguments (checking rejects a bare
-                    // reference that leaves formals unapplied): the alias
-                    // declaration's own root keeps its output rows deferred
-                    // for its use sites, while a declaration body closes them
-                    // as written.
-                    if (self.publishedAliasExpansion(finalized, &.{})) |id| return id;
-                    const body = try self.beginAliasApplication(finalized, &.{});
-                    try self.ops.append(gpa, .{ .child = body.anno });
-                    try self.frames.append(gpa, .{
-                        .anno = current,
-                        .formals = formals,
-                        .ops_start = ops_start,
-                        .next = ops_start,
-                        .results_start = self.results.items.len,
-                        .alias_body = body.alias_body,
-                    });
-                    return null;
-                },
-                .builtin,
-                .external,
-                .external_identity,
-                .pending,
-                => return try self.appendRoot(ModuleEnv.varFrom(current)),
-            },
-            .rigid_var => |rigid| return declarationFormalRoot(formals, rigid.name) orelse
-                try self.appendRoot(ModuleEnv.varFrom(current)),
-            .underscore => return try self.appendRoot(ModuleEnv.varFrom(current)),
-            .rigid_var_lookup => |lookup| {
-                switch (module_env.store.getTypeAnno(lookup.ref)) {
-                    .rigid_var => |rigid| if (declarationFormalRoot(formals, rigid.name)) |formal| return formal,
-                    .apply,
-                    .rigid_var_lookup,
-                    .underscore,
-                    .lookup,
-                    .tag_union,
-                    .tag,
-                    .tuple,
-                    .record,
-                    .@"fn",
-                    .parens,
-                    .malformed,
-                    => {},
-                }
-                return try self.appendRoot(ModuleEnv.varFrom(lookup.ref));
-            },
+            .parens,
+            .lookup,
+            .rigid_var,
+            .underscore,
+            .rigid_var_lookup,
             .tag,
             .malformed,
-            => return try self.appendRoot(ModuleEnv.varFrom(current)),
+            => unreachable, // declarationAnnoNode classifies these as leaves, rigid variables or bare local aliases
         }
         try self.frames.append(gpa, .{
             .anno = current,
@@ -6402,54 +6544,17 @@ const DeclarationAnnoWalk = struct {
 
         const actual_args = try results.typeIds(gpa, arg_count);
         defer if (actual_args.len != 0) gpa.free(actual_args);
-        switch (apply.base) {
-            .local => |local| {
-                const finalized = self.local_type_declarations.finalizedStatementForReference(self.module, local.decl_idx);
-                const statement = self.module.getStatement(finalized);
-                if (actual_args.len == 0 and statement != .s_alias_decl) return try self.appendRoot(ModuleEnv.varFrom(finalized));
-                switch (statement) {
-                    .s_alias_decl => {
-                        if (self.publishedAliasExpansion(finalized, actual_args)) |id| return id;
-                        const body = try self.beginAliasApplication(finalized, actual_args);
-                        self.frames.items[index].alias_body = body.alias_body;
-                        try self.ops.append(gpa, .{ .child = body.anno });
-                        return null;
-                    },
-                    .s_nominal_decl => {
-                        if (finalized != local.decl_idx) {
-                            checkedArtifactInvariant("checked declaration template generic nominal application referenced an associated-type placeholder", .{});
-                        }
-                        const generic_root = try self.appendRoot(ModuleEnv.varFrom(finalized));
-                        return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.names, self.store, generic_root, actual_args);
-                    },
-                    .s_decl,
-                    .s_var,
-                    .s_var_uninitialized,
-                    .s_reassign,
-                    .s_crash,
-                    .s_dbg,
-                    .s_expr,
-                    .s_expect,
-                    .s_for,
-                    .s_while,
-                    .s_infinite_loop,
-                    .s_breakable_loop,
-                    .s_break,
-                    .s_return,
-                    .s_import,
-                    .s_where_alias_decl,
-                    .s_type_anno,
-                    .s_type_var_alias,
-                    .s_runtime_error,
-                    => checkedArtifactInvariant("checked declaration template generic application referenced a non-type declaration", .{}),
-                }
+        switch (declarationApplyBase(self.module, self.local_type_declarations, frame.anno, apply, arg_count)) {
+            .leaf => |var_| return try self.appendRoot(var_),
+            .alias => |statement| {
+                if (self.publishedAliasExpansion(statement, actual_args)) |id| return id;
+                const body = try self.beginAliasApplication(statement, actual_args);
+                self.frames.items[index].alias_body = body.alias_body;
+                try self.ops.append(gpa, .{ .child = body.anno });
+                return null;
             },
-            .builtin,
-            .external,
-            .external_identity,
-            .pending,
-            => {
-                const generic_root = try self.appendRoot(ModuleEnv.varFrom(self.frames.items[index].anno));
+            .template => |var_| {
+                const generic_root = try self.appendRoot(var_);
                 if (actual_args.len == 0) return generic_root;
                 return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.names, self.store, generic_root, actual_args);
             },
@@ -7935,23 +8040,11 @@ pub const CheckedIdentityOrderer = struct {
     }
 };
 
-fn appendStaticDispatchTypeRoots(
-    allocator: Allocator,
+fn forEachStaticDispatchTypeRoot(
     module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
     source_nodes: *const CheckedSourceNodes,
-    store: *CheckedTypeStore,
-    active: *CheckedSourceTypeRoots,
+    visitor: anytype,
 ) Allocator.Error!void {
-    const publisher = CheckedTypeRootPublisher{
-        .allocator = allocator,
-        .module = module,
-        .names = names,
-        .imports = imports,
-        .store = store,
-        .active = active,
-    };
     var node_idx: u32 = 0;
     while (node_idx < module.nodeCount()) : (node_idx += 1) {
         const tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
@@ -7963,15 +8056,15 @@ fn appendStaticDispatchTypeRoots(
 
         const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
         if (!source_nodes.hasExpr(expr_idx)) continue;
-        try output_type_roots.forEachStaticDispatchTypeRoot(module.moduleEnvConst(), expr_idx, &publisher);
+        try output_type_roots.forEachStaticDispatchTypeRoot(module.moduleEnvConst(), expr_idx, visitor);
     }
 
     for (module.moduleEnvConst().for_loop_dispatch_plans.items.items) |plan| {
         if (!source_nodes.hasRawLoop(plan.node_idx)) continue;
-        try output_type_roots.forEachForLoopDispatchTypeRoot(plan, &publisher);
+        try output_type_roots.forEachForLoopDispatchTypeRoot(plan, visitor);
     }
 
-    try output_type_roots.forEachLiteralDispatchTypeRoot(module.moduleEnvConst(), &publisher);
+    try output_type_roots.forEachLiteralDispatchTypeRoot(module.moduleEnvConst(), visitor);
 }
 
 fn rootKeyFacts(root: CheckedTypeRoot) canonical_type_keys.TypeKeyInfo {
@@ -8213,7 +8306,9 @@ const SourceTypeGraphAnalysis = struct {
     }
 };
 
-const CheckedSourceTypeRoots = struct {
+/// The published root of every source variable a module's type publication
+/// reached, keyed by representative variable, with the publisher's scratch.
+pub const CheckedSourceTypeRoots = struct {
     roots: collections.DenseMap(Var, CheckedTypeId),
     scratch: ?struct {
         allocator: Allocator,
@@ -8314,10 +8409,7 @@ fn appendCheckedTypeRootWithRowDefault(
     // exactly as a publication's root step would, without starting one.
     const resolved = module.typeStoreConst().resolveVar(var_);
     if (active.get(resolved.var_)) |id| {
-        applyCheckedTypeRowDefault(store, id, checkedTypeVariableRowDefault(resolved.desc.content, row_default_candidate, switch (resolved.desc.content) {
-            .flex => |flex| rowDefaultDischargesConstraints(module, flex.constraints),
-            .rigid, .err, .alias, .field_presence, .structure => false,
-        }));
+        applyCheckedTypeRowDefault(store, id, checkedRowDefaultForContent(module, resolved.desc.content, row_default_candidate));
         return id;
     }
     var publisher = CheckedTypePublisher{
@@ -8485,10 +8577,7 @@ const CheckedTypePublisher = struct {
 
         const resolved = self.module.typeStoreConst().resolveVar(task.var_);
         task.resolved_var = resolved.var_;
-        task.row_default = checkedTypeVariableRowDefault(resolved.desc.content, task.row_default_candidate, switch (resolved.desc.content) {
-            .flex => |flex| rowDefaultDischargesConstraints(self.module, flex.constraints),
-            .rigid, .err, .alias, .field_presence, .structure => false,
-        });
+        task.row_default = checkedRowDefaultForContent(self.module, resolved.desc.content, task.row_default_candidate);
         const resolved_var = task.resolved_var;
         const row_default = task.row_default;
 
@@ -8671,10 +8760,11 @@ const CheckedTypePublisher = struct {
                     return .{ .call = .{ .constraints = .{ .range = flex.constraints } } };
                 },
                 else => {
+                    const facts = flexVariableFacts(module, flex, task.bounded_row_ext);
                     build.flex.constraints = input.?.get(.constraints);
-                    build.flex.numeric_default_phase = numericDefaultPhaseForFlex(module, flex);
-                    build.flex.row_default_discharges_constraints = rowDefaultDischargesConstraints(module, flex.constraints);
-                    build.flex.bounded_row_ext = task.bounded_row_ext;
+                    build.flex.numeric_default_phase = facts.numeric_default_phase;
+                    build.flex.row_default_discharges_constraints = facts.row_default_discharges_constraints;
+                    build.flex.bounded_row_ext = facts.bounded_row_ext;
                 },
             },
             .rigid => |rigid| switch (cursor) {
@@ -8689,9 +8779,11 @@ const CheckedTypePublisher = struct {
                     return .{ .call = .{ .constraints = .{ .range = rigid.constraints } } };
                 },
                 else => {
+                    const facts = rigidVariableFacts(module, rigid);
                     build.rigid.constraints = input.?.get(.constraints);
-                    build.rigid.numeric_default_phase = numericDefaultPhaseForConstraints(module, rigid.constraints);
-                    build.rigid.row_default_discharges_constraints = rowDefaultDischargesConstraints(module, rigid.constraints);
+                    build.rigid.numeric_default_phase = facts.numeric_default_phase;
+                    build.rigid.row_default_discharges_constraints = facts.row_default_discharges_constraints;
+                    build.rigid.bounded_row_ext = facts.bounded_row_ext;
                 },
             },
             .alias => |alias| switch (cursor) {
@@ -8984,12 +9076,48 @@ const CheckedTypePublisher = struct {
     }
 };
 
+/// The facts a checked type variable carries besides its name, constraints
+/// and row default.
+pub const CheckedVariableFacts = struct {
+    numeric_default_phase: ?NumericDefaultPhase,
+    row_default_discharges_constraints: bool,
+    bounded_row_ext: bool,
+};
+
+/// A flex variable's facts. `bounded_row_ext` is its class's
+/// `DescriptorFlags.bounded_row_ext`.
+pub fn flexVariableFacts(module: TypedCIR.Module, flex: types.Flex, bounded_row_ext: bool) CheckedVariableFacts {
+    return .{
+        .numeric_default_phase = numericDefaultPhaseForFlex(module, flex),
+        .row_default_discharges_constraints = rowDefaultDischargesConstraints(module, flex.constraints),
+        .bounded_row_ext = bounded_row_ext,
+    };
+}
+
+/// A rigid variable's facts. Only an implicitly opened flex row is bounded.
+pub fn rigidVariableFacts(module: TypedCIR.Module, rigid: types.Rigid) CheckedVariableFacts {
+    return .{
+        .numeric_default_phase = numericDefaultPhaseForConstraints(module, rigid.constraints),
+        .row_default_discharges_constraints = rowDefaultDischargesConstraints(module, rigid.constraints),
+        .bounded_row_ext = false,
+    };
+}
+
+/// The row default a variable takes when reached through a row-tail position
+/// offering `candidate`; see `checkedTypeVariableRowDefault`.
+pub fn checkedRowDefaultForContent(module: TypedCIR.Module, content: types.Content, candidate: ?RowDefault) ?RowDefault {
+    return checkedTypeVariableRowDefault(content, candidate, switch (content) {
+        .flex => |flex| rowDefaultDischargesConstraints(module, flex.constraints),
+        .rigid, .err, .alias, .field_presence, .structure => false,
+    });
+}
+
 /// A row-tail occurrence supplies a close-to-empty default only when its
 /// variable has no static-dispatch requirements. A constrained row must stay
 /// open so each use can instantiate both the row and its evidence together.
 /// `flex_constraints_discharged` is `rowDefaultDischargesConstraints` of a
 /// flex `content`'s constraints.
-fn checkedTypeVariableRowDefault(
+pub fn checkedTypeVariableRowDefault(
     content: types.Content,
     candidate: ?RowDefault,
     flex_constraints_discharged: bool,
@@ -9004,7 +9132,7 @@ fn checkedTypeVariableRowDefault(
 
 /// Whether closing a row satisfies every constraint on its flex tail: each is
 /// an `is_eq` or `to_hash`, which the empty row derives.
-fn rowDefaultDischargesConstraints(module: TypedCIR.Module, constraints: types.StaticDispatchConstraint.SafeList.Range) bool {
+pub fn rowDefaultDischargesConstraints(module: TypedCIR.Module, constraints: types.StaticDispatchConstraint.SafeList.Range) bool {
     if (constraints.len() == 0) return false;
     const idents = &module.moduleEnvConst().idents;
     for (module.typeStoreConst().sliceStaticDispatchConstraints(constraints)) |constraint| {
@@ -9050,11 +9178,13 @@ fn setStoredTypeVariableRowDefault(variable: *StoredTypeVariable, row_default: R
     variable.row_default = row_default;
 }
 
-fn numericDefaultPhaseForFlex(module: TypedCIR.Module, flex: types.Flex) ?NumericDefaultPhase {
+/// The numeric default phase a flex variable's constraints give it.
+pub fn numericDefaultPhaseForFlex(module: TypedCIR.Module, flex: types.Flex) ?NumericDefaultPhase {
     return numericDefaultPhaseForConstraints(module, flex.constraints);
 }
 
-fn numericDefaultPhaseForConstraints(
+/// The numeric default phase a variable with these constraints takes.
+pub fn numericDefaultPhaseForConstraints(
     module: TypedCIR.Module,
     constraints_range: types.StaticDispatchConstraint.SafeList.Range,
 ) ?NumericDefaultPhase {
@@ -9075,14 +9205,16 @@ fn numericDefaultPhaseForConstraints(
     }, constraints);
 }
 
-fn checkedRecordExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
+/// Whether a record's extension is the closed empty record.
+pub fn checkedRecordExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
     return switch (module.typeStoreConst().resolveVar(ext).desc.content) {
         .structure => |flat| flat == .empty_record,
         .flex, .rigid, .alias, .field_presence, .err => false,
     };
 }
 
-fn checkedTagUnionExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
+/// Whether a tag union's extension is the closed empty tag union.
+pub fn checkedTagUnionExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
     return switch (module.typeStoreConst().resolveVar(ext).desc.content) {
         .structure => |flat| flat == .empty_tag_union,
         .flex, .rigid, .alias, .field_presence, .err => false,
@@ -9095,7 +9227,7 @@ fn checkedTagUnionExtIsEmpty(module: TypedCIR.Module, ext: Var) bool {
 /// every import view and indexes the owner's nominal declarations. The index
 /// does that once per origin, so publication work grows with the number of
 /// named types plus the size of the imports, not with their product.
-const ImportedOriginIndex = struct {
+pub const ImportedOriginIndex = struct {
     allocator: Allocator,
     /// The import views every resolution in this index reads; fixed by the
     /// first resolution.
@@ -9122,14 +9254,14 @@ const ImportedOriginIndex = struct {
         declarations_indexed: bool = false,
     };
 
-    fn init(allocator: Allocator) ImportedOriginIndex {
+    pub fn init(allocator: Allocator) ImportedOriginIndex {
         return .{
             .allocator = allocator,
             .slots = collections.DenseMap(base.ModuleIdentity.Idx, u32).init(allocator),
         };
     }
 
-    fn deinit(self: *ImportedOriginIndex) void {
+    pub fn deinit(self: *ImportedOriginIndex) void {
         for (self.origins.items) |*origin| {
             origin.first.deinit(self.allocator);
             self.allocator.free(origin.next);
@@ -9178,7 +9310,7 @@ const ImportedOriginIndex = struct {
     }
 
     /// The artifact that owns a named type from `origin_module`.
-    fn owner(
+    pub fn owner(
         self: *ImportedOriginIndex,
         module_env: *const ModuleEnv,
         imports: CheckedImportViews,
@@ -9194,7 +9326,7 @@ const ImportedOriginIndex = struct {
     }
 
     /// The builtin a nominal names, if any.
-    fn builtinNominal(
+    pub fn builtinNominal(
         self: *ImportedOriginIndex,
         module_env: *const ModuleEnv,
         imports: CheckedImportViews,
@@ -9602,7 +9734,7 @@ test "published closed roots compose three deep and a closed cyclic root does no
     const TestEnv = @import("test/TestEnv.zig");
     const allocator = testing.allocator;
 
-    var test_env = try TestEnv.init("Main", "value = {}");
+    var test_env = try TestEnv.initOpen("Main", "value = {}");
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
@@ -9627,6 +9759,7 @@ test "published closed roots compose three deep and a closed cyclic root does no
     try types_store.setVarContent(cyclic, .{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ cyclic, leaf }) } } });
     const holder = try types_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ cyclic, inner }) } } });
 
+    test_env.module_env.types.seal();
     const source_modules = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.module_env },
     };
@@ -9968,7 +10101,7 @@ test "poisoned record field presence preserves its value type and canonical key"
     const TestEnv = @import("test/TestEnv.zig");
     const allocator = testing.allocator;
 
-    var test_env = try TestEnv.init("Main", "value = {}");
+    var test_env = try TestEnv.initOpen("Main", "value = {}");
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
@@ -9988,6 +10121,7 @@ test "poisoned record field presence preserves its value type and canonical key"
         .ext = ext_var,
     } } });
 
+    test_env.module_env.types.seal();
     const source_modules = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.module_env },
     };
@@ -10022,7 +10156,7 @@ test "checked and source keys agree on recursive types however they are unrolled
     const TestEnv = @import("test/TestEnv.zig");
     const allocator = testing.allocator;
 
-    var test_env = try TestEnv.init("Main", "value = {}");
+    var test_env = try TestEnv.initOpen("Main", "value = {}");
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
@@ -10046,6 +10180,7 @@ test "checked and source keys agree on recursive types however they are unrolled
     try types_store.setVarContent(rolled, try Build.tagUnion(types_store, nil_name, cons_name, &.{ elem, rolled }));
     const once = try types_store.freshFromContent(try Build.tagUnion(types_store, nil_name, cons_name, &.{ elem, rolled }));
 
+    test_env.module_env.types.seal();
     const source_modules = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.module_env },
     };
@@ -10350,7 +10485,7 @@ fn withEmptyTagCheckedOutputForTest(
 ) EmptyTagCheckedOutputTestError!void {
     const TestEnv = @import("test/TestEnv.zig");
 
-    var test_env = try TestEnv.init("Main", "value = {}");
+    var test_env = try TestEnv.initOpen("Main", "value = {}");
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
@@ -10382,6 +10517,7 @@ test "checked output preserves shared defaulted empty-tag identity" {
             const identity = try type_store.fresh();
             try type_store.setVarToEmptyTagUnionDefault(identity);
             const alias = try type_store.freshRedirect(identity);
+            type_store.seal();
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, identity);
@@ -10403,6 +10539,7 @@ test "checked output preserves distinct defaulted empty-tag identities" {
             const second_identity = try type_store.fresh();
             try type_store.setVarToEmptyTagUnionDefault(first_identity);
             try type_store.setVarToEmptyTagUnionDefault(second_identity);
+            type_store.seal();
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, first_identity);
@@ -10421,7 +10558,8 @@ test "checked output preserves distinct defaulted empty-tag identities" {
 test "checked output keeps proven closed empty tag union explicit" {
     const allocator = std.testing.allocator;
     try withEmptyTagCheckedOutputForTest(allocator, struct {
-        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, _: *types.Store, explicit_empty: Var) EmptyTagCheckedOutputTestError!void {
+        fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, explicit_empty: Var) EmptyTagCheckedOutputTestError!void {
+            type_store.seal();
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, explicit_empty);
@@ -10435,6 +10573,7 @@ test "checked output keeps redirected proven empty tag union explicit" {
     try withEmptyTagCheckedOutputForTest(allocator, struct {
         fn inspect(module: TypedCIR.Module, names: *canonical.CanonicalNameStore, imports: CheckedImportViews, store: *CheckedTypeStore, type_store: *types.Store, explicit_empty: Var) EmptyTagCheckedOutputTestError!void {
             const redirected = try type_store.freshRedirect(explicit_empty);
+            type_store.seal();
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, redirected);
@@ -10455,6 +10594,7 @@ test "checked output structurally interns independent closed function graphs" {
             const second_ret = try type_store.freshFromContent(.{ .structure = .empty_tag_union });
             const second_fn = try type_store.freshFromContent(try type_store.mkFuncPure(&.{second_arg}, second_ret));
 
+            type_store.seal();
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const first = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, first_fn);
@@ -10504,6 +10644,7 @@ test "checked output retains defaulted identity inside parent function digest" {
             try type_store.setVarToEmptyTagUnionDefault(identity);
             const function_content = try type_store.mkFuncPure(&.{identity}, identity);
             const function_var = try type_store.freshFromContent(function_content);
+            type_store.seal();
             var active = try CheckedSourceTypeRoots.init(allocator, module);
             defer active.deinit();
             const root = try appendCheckedTypeRoot(allocator, module, names, imports, store, &active, function_var);
@@ -10727,7 +10868,7 @@ fn moduleEnvIdentityMatches(module_env: *const ModuleEnv, origin_hash: *const [3
 /// A nominal application's opacity is its declaration's: checked type keys
 /// identify a nominal by its declaration alone, so applications that disagree
 /// would share one key while lowering to different types.
-fn debugAssertNominalOpacityMatchesDeclaration(type_store: *const types.Store, nominal: types.NominalType) void {
+pub fn debugAssertNominalOpacityMatchesDeclaration(type_store: *const types.Store, nominal: types.NominalType) void {
     if (builtin.mode != .debug) return;
     const decl_idx = type_store.lookupNominalDecl(nominal) orelse return;
     if (type_store.getNominalDecl(decl_idx).source.isOpaque() != nominal.isOpaque()) {
@@ -10735,7 +10876,8 @@ fn debugAssertNominalOpacityMatchesDeclaration(type_store: *const types.Store, n
     }
 }
 
-fn checkedNominalRepresentationForSourceNominal(
+/// The checked representation of a source nominal application.
+pub fn checkedNominalRepresentationForSourceNominal(
     module: TypedCIR.Module,
     imports: CheckedImportViews,
     origins: *ImportedOriginIndex,
@@ -10761,10 +10903,10 @@ fn checkedNominalRepresentationForSourceNominal(
 /// The checked declaration id of every published local nominal declaration,
 /// keyed by its statement. Ids are dense in statement order over exactly the
 /// declarations `appendCheckedNominalDeclarationFromStatement` publishes.
-const LocalNominalDeclarationIds = struct {
+pub const LocalNominalDeclarationIds = struct {
     ids: std.AutoHashMap(CIR.Statement.Idx, CheckedNominalDeclarationId),
 
-    fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!LocalNominalDeclarationIds {
+    pub fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!LocalNominalDeclarationIds {
         var ids = std.AutoHashMap(CIR.Statement.Idx, CheckedNominalDeclarationId).init(allocator);
         errdefer ids.deinit();
         var next_id: u32 = 0;
@@ -10780,17 +10922,18 @@ const LocalNominalDeclarationIds = struct {
         return .{ .ids = ids };
     }
 
-    fn deinit(self: *LocalNominalDeclarationIds) void {
+    pub fn deinit(self: *LocalNominalDeclarationIds) void {
         self.ids.deinit();
     }
 
-    fn get(self: *const LocalNominalDeclarationIds, statement_idx: CIR.Statement.Idx) CheckedNominalDeclarationId {
+    pub fn get(self: *const LocalNominalDeclarationIds, statement_idx: CIR.Statement.Idx) CheckedNominalDeclarationId {
         return self.ids.get(statement_idx) orelse
             checkedArtifactInvariant("checked nominal declaration statement had no declaration id", .{});
     }
 };
 
-fn localNominalDeclarationIsValid(
+/// Whether checking accepted the local nominal declaration at `statement_idx`.
+pub fn localNominalDeclarationIsValid(
     module: TypedCIR.Module,
     statement_idx: CIR.Statement.Idx,
 ) bool {
@@ -10802,7 +10945,8 @@ fn localNominalDeclarationIsValid(
     return types_store.getNominalDecl(decl_idx).isValid();
 }
 
-fn copyOptionalIdentText(
+/// An owned copy of a variable's optional name text.
+pub fn copyOptionalIdentText(
     allocator: Allocator,
     module: TypedCIR.Module,
     ident: ?Ident.Idx,
@@ -10811,12 +10955,18 @@ fn copyOptionalIdentText(
     return try copyIdentText(allocator, module, idx);
 }
 
-fn copyIdentText(
+/// An owned copy of a variable name's text.
+pub fn copyIdentText(
     allocator: Allocator,
     module: TypedCIR.Module,
     idx: Ident.Idx,
 ) Allocator.Error![]const u8 {
-    return try allocator.dupe(u8, module.getIdent(idx));
+    return try allocator.dupe(u8, checkedVariableNameText(module, idx));
+}
+
+/// The text a checked type variable named `idx` publishes as its name.
+pub fn checkedVariableNameText(module: TypedCIR.Module, idx: Ident.Idx) []const u8 {
+    return module.getIdent(idx);
 }
 
 /// Public `CheckedBody` declaration.
@@ -11945,13 +12095,14 @@ const CheckedSourceNodeRef = union(enum) {
     statement: CIR.Statement.Idx,
 };
 
-const CheckedSourceNodes = struct {
+/// The expression, pattern and statement nodes a checked module publishes.
+pub const CheckedSourceNodes = struct {
     allocator: Allocator = undefined,
     exprs: []bool = &.{},
     patterns: []bool = &.{},
     statements: []bool = &.{},
 
-    fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceNodes {
+    pub fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceNodes {
         const node_count = module.nodeCount();
         const exprs = try allocator.alloc(bool, node_count);
         errdefer allocator.free(exprs);
@@ -12037,17 +12188,17 @@ const CheckedSourceNodes = struct {
         return self;
     }
 
-    fn hasExpr(self: *const CheckedSourceNodes, expr_idx: CIR.Expr.Idx) bool {
+    pub fn hasExpr(self: *const CheckedSourceNodes, expr_idx: CIR.Expr.Idx) bool {
         const raw = @backingInt(expr_idx);
         return raw < self.exprs.len and self.exprs[raw];
     }
 
-    fn hasPattern(self: *const CheckedSourceNodes, pattern_idx: CIR.Pattern.Idx) bool {
+    pub fn hasPattern(self: *const CheckedSourceNodes, pattern_idx: CIR.Pattern.Idx) bool {
         const raw = @backingInt(pattern_idx);
         return raw < self.patterns.len and self.patterns[raw];
     }
 
-    fn hasStatement(self: *const CheckedSourceNodes, statement_idx: CIR.Statement.Idx) bool {
+    pub fn hasStatement(self: *const CheckedSourceNodes, statement_idx: CIR.Statement.Idx) bool {
         const raw = @backingInt(statement_idx);
         return raw < self.statements.len and self.statements[raw];
     }
@@ -12364,7 +12515,7 @@ const CheckedSourceNodes = struct {
         }
     }
 
-    fn deinit(self: *CheckedSourceNodes, allocator: Allocator) void {
+    pub fn deinit(self: *CheckedSourceNodes, allocator: Allocator) void {
         allocator.free(self.statements);
         allocator.free(self.patterns);
         allocator.free(self.exprs);
@@ -35023,7 +35174,9 @@ pub const ExportedConstTemplateTable = struct {
     }
 };
 
-fn checkedArtifactInvariant(comptime message: []const u8, args: anytype) noreturn {
+/// A compiler invariant of checked artifact construction: a debug-only
+/// assertion, unreachable in release builds.
+pub fn checkedArtifactInvariant(comptime message: []const u8, args: anytype) noreturn {
     base.invariant("checked artifact invariant violated: " ++ message, args);
 }
 
@@ -39004,6 +39157,9 @@ pub fn publishFromTypedModule(
 ) CompileTimeFinalizer.Error!CheckedModuleArtifact {
     const module = modules.module(module_idx);
     const module_env = module.moduleEnvConst();
+    if (std.debug.runtime_safety and !module_env.types.isSealed()) {
+        base.invariant("a checked artifact was published from a module whose type store checking never sealed", .{});
+    }
     const idents = module.identStoreConst();
 
     var canonical_names = canonical.CanonicalNameStore.init(allocator);

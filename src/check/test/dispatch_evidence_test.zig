@@ -181,7 +181,7 @@ test "evidence params reach vars bound only inside constraint fn types" {
 }
 
 test "record-tail evidence path is normalized to its logical row field" {
-    var test_env = try TestEnv.init("Test", "");
+    var test_env = try TestEnv.initOpen("Test", "");
     defer test_env.deinit();
 
     const gpa = std.testing.allocator;
@@ -220,7 +220,7 @@ test "record-tail evidence path is normalized to its logical row field" {
 }
 
 test "tag-tail evidence path is normalized to its logical tag payload" {
-    var test_env = try TestEnv.init("Test", "");
+    var test_env = try TestEnv.initOpen("Test", "");
     defer test_env.deinit();
 
     const gpa = std.testing.allocator;
@@ -262,7 +262,7 @@ test "tag-tail evidence path is normalized to its logical tag payload" {
 // the sum of all the depths, quadratic in nesting depth (a literal tens of
 // thousands of levels deep exhausted memory publishing its scheme).
 test "deeply nested evidence paths cost one node per distinct prefix" {
-    var test_env = try TestEnv.init("Test", "");
+    var test_env = try TestEnv.initOpen("Test", "");
     defer test_env.deinit();
 
     const gpa = std.testing.allocator;
