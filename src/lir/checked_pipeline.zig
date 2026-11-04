@@ -2218,7 +2218,7 @@ fn collectStaticDataRequests(
                     .checked_type = data.checked_type,
                 });
             },
-            .procedure => {},
+            .procedure, .checked_error => {},
         }
     }
 

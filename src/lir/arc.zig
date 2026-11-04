@@ -546,6 +546,38 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     // Dismantle rewrote canonicalized reads into aliases of their
     // representatives after the solve; the borrow facts must describe them.
     try solution.adoptProjectionAliases(store.allocator, &dismantles.projection_aliases);
+    // A binding solved borrowed whose read dismantle committed as a take
+    // holds a unit of its own where that take applies, so it leads its own
+    // liveness group and its container dies at the container's last use.
+    {
+        var held = std.ArrayList(LIR.LocalId).empty;
+        defer held.deinit(store.allocator);
+        for (0..store.localCount()) |local_index| {
+            const local: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(local_index))));
+            if (!solution.isBorrowed(local)) continue;
+            if (dismantles.isTakeBinding(local) or dismantles.ownedOnlyBindingRoot(local) != null) try held.append(store.allocator, local);
+        }
+        try solution.adoptHeldBindings(store.allocator, held.items);
+    }
+    // A borrowed parameter whose owned variant takes every stored unit on
+    // every returning path is owned by the base signature: the borrowed base
+    // would retain each unit where the variant takes it, so borrowing saves
+    // no caller any work and would only emit a second body. A position that
+    // lends the return, or holds a demand hole, keeps its borrowed mode.
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
+        if (solution.isPinnedProc(proc)) continue;
+        const sig = solution.sigOf(proc);
+        var mask = dismantles.ownedOnlyParamTotals(proc) & sig.borrowed_params;
+        if (sig.ret_mode == .borrowed) mask &= ~sig.ret_lenders;
+        if (mask == 0) continue;
+        const params = store.getLocalSpan(store.getProcSpecImmediate(proc).args);
+        for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
+            const bit = arc_sig.paramBit(position).?;
+            if ((mask & bit) != 0 and layouts.layoutHoldsHole(store.getLocal(GuardedList.at(params, position)).layout_idx)) mask &= ~bit;
+        }
+        if (mask != 0) solution.ownParams(proc, mask);
+    }
 
     // Committed takes carry field uniqueness to the locals they define;
     // the solver settled without them, so re-derive against the takes.
@@ -1016,12 +1048,14 @@ const EmissionOwner = struct {
         // Variant parameter positions demanded owned override the solved
         // borrowed binding for this emission only; positions the demand
         // vector seeds unique are read through `isLocalUniqueHere`.
-        const solved_sig = solution.sigOf(source_proc);
+        // A parameter whose binding is solved borrowed but whose emitted
+        // signature owns the position: a demanded variant, or a base whose
+        // signature owns a totally taken position.
         const emit_params_for_overrides = store.getLocalSpan(emit_args);
         for (0..GuardedList.borrowLen(emit_params_for_overrides)) |position| {
             const param = GuardedList.at(emit_params_for_overrides, position);
             if (arc_sig.paramBit(position) == null) break;
-            if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
+            if (solution.isBorrowed(param) and emit_sig.paramMode(position) == .owned) {
                 try owned_binding_override.set(param);
             }
         }
