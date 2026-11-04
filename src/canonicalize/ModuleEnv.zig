@@ -844,6 +844,14 @@ pub const RowCoercedResult = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A source node whose own checked state is erroneous (`erroneous_nodes`).
+pub const ErroneousNode = extern struct {
+    node_idx: u32,
+
+    /// The checked module's sorted table of erroneous nodes.
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// A source node whose checked value is a rank-1 polymorphic type scheme.
 ///
 /// Generalization records this explicitly because a partially generalized
@@ -1098,6 +1106,11 @@ binding_schemes: BindingScheme.SafeList,
 /// Value expressions whose checked type is a widening copy of their own
 /// type, lowered as a `row_coerce` of the expression. Sorted by source node.
 row_coerced_results: RowCoercedResult.SafeList,
+/// Nodes whose own checked state is erroneous: an expression or pattern
+/// whose type contains an error, a runtime error node, or a dispatch whose
+/// obligation checking rejected. Recorded once checking is complete.
+/// Sorted by source node.
+erroneous_nodes: ErroneousNode.SafeList,
 /// Generated-codec relations carried by those schemes. Sorted by source node;
 /// multiple requirements for one binding occupy one contiguous run.
 binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
@@ -1513,6 +1526,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .dispatch_relation_merges = try DispatchRelationMerge.SafeList.initCapacity(gpa, 0),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
         .row_coerced_results = try RowCoercedResult.SafeList.initCapacity(gpa, 8),
+        .erroneous_nodes = try ErroneousNode.SafeList.initCapacity(gpa, 0),
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
@@ -1552,6 +1566,7 @@ pub fn deinit(self: *Self) void {
     self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.row_coerced_results.deinit(self.gpa);
+    self.erroneous_nodes.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -1709,6 +1724,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.row_coerced_results.deinit(self.gpa);
+    self.erroneous_nodes.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -3999,6 +4015,7 @@ pub const Serialized = extern struct {
     dispatch_relation_merges: DispatchRelationMerge.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
     row_coerced_results: RowCoercedResult.SafeList.Serialized,
+    erroneous_nodes: ErroneousNode.SafeList.Serialized,
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
@@ -4123,6 +4140,7 @@ pub const Serialized = extern struct {
         try self.dispatch_relation_merges.serialize(&env.dispatch_relation_merges, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
         try self.row_coerced_results.serialize(&env.row_coerced_results, allocator, writer);
+        try self.erroneous_nodes.serialize(&env.erroneous_nodes, allocator, writer);
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
@@ -4202,6 +4220,7 @@ pub const Serialized = extern struct {
             .dispatch_relation_merges = self.dispatch_relation_merges.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .row_coerced_results = self.row_coerced_results.deserializeInto(base_addr),
+            .erroneous_nodes = self.erroneous_nodes.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
@@ -4285,6 +4304,7 @@ pub const Serialized = extern struct {
             .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .row_coerced_results = try self.row_coerced_results.deserializeWithCopy(base_addr, gpa),
+            .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -4383,6 +4403,7 @@ pub const Serialized = extern struct {
             .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .row_coerced_results = try self.row_coerced_results.deserializeWithCopy(base_addr, gpa),
+            .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -4622,6 +4643,23 @@ pub fn rowCoercedResultWideVar(self: *const Self, node_idx: Node.Idx) ?types_mod
         @backingInt(node_idx),
     ) orelse return null;
     return @fromBackingInt(entry.wide_var);
+}
+
+/// Record the nodes whose own checked state is erroneous, in increasing node
+/// order (`erroneous_nodes`).
+pub fn recordErroneousNodes(self: *Self, nodes: []const u32) std.mem.Allocator.Error!void {
+    self.erroneous_nodes.items.clearRetainingCapacity();
+    try self.erroneous_nodes.items.ensureTotalCapacity(self.gpa, nodes.len);
+    for (nodes, 0..) |node, index| {
+        std.debug.assert(index == 0 or nodes[index - 1] < node);
+        self.erroneous_nodes.items.appendAssumeCapacity(.{ .node_idx = node });
+    }
+}
+
+/// Whether checking recorded the node at `node_idx` as erroneous in its own
+/// right (`erroneous_nodes`).
+pub fn nodeIsErroneous(self: *const Self, node_idx: Node.Idx) bool {
+    return findSortedByNode(ErroneousNode, self.erroneous_nodes.items.items, @backingInt(node_idx)) != null;
 }
 
 /// Record one exact generated-codec relation owned by a source binding scheme.
