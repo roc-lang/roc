@@ -13995,7 +13995,11 @@ strategy).
   evaluation reads no value of another pending root (other than one of
   these) complete before its Solved program is specialized, and the rest
   once that program's roots have, each with every pending root whose value
-  it reads that the Solved program did not demand. A module's own
+  it reads that the Solved program did not demand. Such a compilation links
+  no module objects, so a module's compile-time program would lower
+  everything its roots reach; the literal argument roots of every module
+  instead share one program per phase (`BoxyGrouping.one_program`), which
+  lowers the conversions and codecs they reach once. A module's own
   finalization outside a program session (the baked Builtin's among them)
   hands each batch's literal argument roots to the `.boxy` evaluator the
   same way.
