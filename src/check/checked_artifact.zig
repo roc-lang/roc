@@ -738,14 +738,13 @@ fn dispatchViewKeys(allocator: Allocator, analyses: *ModuleAnalyses, import_view
 }
 
 /// Give a loaded artifact's analyses the modules its dispatch resolution
-/// searches: the modules `dispatch_view_keys` names, which `resolver`
+/// searches: the modules its `dispatch_view_keys` name, which `resolver`
 /// resolves.
-pub fn attachDispatchImports(artifact: *const CheckedModuleArtifact, resolver: ModuleResolver) Allocator.Error!void {
-    const analyses = artifact.module_analyses orelse checkedArtifactInvariant("dispatch imports were attached to an artifact without module analyses", .{});
+pub fn attachDispatchImports(analyses: *ModuleAnalyses, dispatch_view_keys: []const ModuleId, resolver: ModuleResolver) Allocator.Error!void {
     const allocator = analyses.allocator;
-    const views = try allocator.alloc(ImportedModuleView, artifact.dispatch_view_keys.len);
+    const views = try allocator.alloc(ImportedModuleView, dispatch_view_keys.len);
     defer allocator.free(views);
-    for (artifact.dispatch_view_keys, views) |key, *view| view.* = resolver.require(key);
+    for (dispatch_view_keys, views) |key, *view| view.* = resolver.require(key);
     try analyses.setDispatchImports(views);
 }
 

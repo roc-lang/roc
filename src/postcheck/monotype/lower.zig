@@ -33847,7 +33847,7 @@ const BodyContext = struct {
         saved: std.ArrayList(BinderRestore) = .empty,
         binders_replaced: bool = false,
         loop_context_pushed: bool = false,
-        plan: static_dispatch.IteratorForPlan = undefined,
+        plan: static_dispatch.ResolvedIteratorForPlan = undefined,
         iterator_cell: DraftTypeCell = undefined,
         iterator_param: DraftTypedLocal = undefined,
         initial_iterator: DraftExprId = undefined,
@@ -34153,7 +34153,7 @@ const BodyContext = struct {
     /// An iterator method call whose operands lower
     /// as child tasks.
     const IteratorDispatchTask = struct {
-        plan: static_dispatch.IteratorDispatchCall,
+        plan: static_dispatch.ResolvedIteratorDispatchCall,
         loop_iterator: ?DraftTypedLocal,
         expected_ret_ty: ?DraftTypeCell,
         call_ctx: ?*BodyContext = null,
@@ -54045,13 +54045,7 @@ const BodyContext = struct {
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
         };
         const node = (try self.view.dispatch.evidenceNode(direct.evidence));
-        const table = self.view.static_dispatch_plans;
-        const start: usize = node.subst.start;
-        const len: usize = node.subst.len;
-        if (start > table.site_substitutions.len or len > table.site_substitutions.len - start) {
-            Common.invariant("direct dispatch target substitution range was outside its checked module");
-        }
-        return try self.substitutionFromCheckedTypes(self.view, table.site_substitutions[start .. start + len]);
+        return try self.substitutionFromCheckedTypes(self.view, try self.view.dispatch.substitution(node.subst));
     }
 
     /// A context instantiating `lookup`'s target, with the target's quantified
@@ -58681,7 +58675,8 @@ const BodyContext = struct {
 
         const calls_start = self.instantiated_codec_calls.items.len;
         errdefer self.instantiated_codec_calls.shrinkRetainingCapacity(calls_start);
-        for (derivation.callsSlice(checked_view.static_dispatch_plans), 0..) |call, call_index| {
+        const codec_table = try checked_view.dispatch.generatedCodecs();
+        for (derivation.callsSlice(&codec_table), 0..) |call, call_index| {
             const instantiated_callable = try contract_ctx.instNode(call.callable_ty);
             try self.instantiated_codec_calls.append(self.allocator, .{
                 .view = checked_view,
@@ -64761,7 +64756,7 @@ const BodyContext = struct {
         always_true,
     };
 
-    fn iteratorMethodLookup(self: *BodyContext, plan: static_dispatch.IteratorDispatchCall) MethodLookup {
+    fn iteratorMethodLookup(self: *BodyContext, plan: static_dispatch.ResolvedIteratorDispatchCall) MethodLookup {
         return switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| blk: {
                 break :blk self.methodLookupForEvidenceNode((try self.view.dispatch.evidenceNode(direct.evidence)));
@@ -65136,7 +65131,7 @@ const BodyContext = struct {
 
     fn iteratorStepShape(
         self: *BodyContext,
-        plan: static_dispatch.IteratorForPlan,
+        plan: static_dispatch.ResolvedIteratorForPlan,
         iterator_cell: DraftTypeCell,
     ) Allocator.Error!IterStepShape {
         const topology = plan.step_topology;

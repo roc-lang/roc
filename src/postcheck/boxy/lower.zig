@@ -1571,7 +1571,6 @@ pub const Program = struct {
             .template => |key| key,
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
         };
-        const templates = self.module(key.module).view.checked_procedure_templates;
         const params = try self.module(key.module).view.dispatch().evidenceParams(key.template);
         const env: types.Env = .{ .module = key.module, .vars = target_worker.scheme_vars, .bound = bound };
         for (target_worker.dictionary_params, requirements) |param_index, *requirement| {
@@ -1727,7 +1726,6 @@ pub const Program = struct {
             .template => |key| key,
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
         };
-        const templates = self.module(key.module).view.checked_procedure_templates;
         const all_params = try self.module(key.module).view.dispatch().evidenceParams(key.template);
         const params = try self.allocator.alloc(static_dispatch.EvidenceParamRecord, target_worker.dictionary_params.len);
         defer self.allocator.free(params);

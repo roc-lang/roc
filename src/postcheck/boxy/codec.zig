@@ -283,7 +283,7 @@ fn fnRet(program: *Program, ty: TypeId) TypeId {
 pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Allocator.Error!u32 {
     const state = &program.codec;
     const allocator = program.allocator;
-    const table = program.module(module).view.static_dispatch_plans;
+    const table = try program.module(module).view.dispatch().generatedCodecs();
     const derivation = table.generated_codec_derivations[@backingInt(id)];
     const kind: Kind = switch (derivation.kind) {
         .parser => .parser,
@@ -371,7 +371,7 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
     const allocator = program.allocator;
     const module = program.codec.families.items[family_index].module;
     const env = program.codec.families.items[family_index].env;
-    const table = program.module(module).view.static_dispatch_plans;
+    const table = try program.module(module).view.dispatch().generatedCodecs();
     const names = program.module(module).nameStore();
     var visited: collections.DenseMapUnmanaged(DerivationId, void) = .empty;
     defer visited.deinit(allocator);
@@ -381,7 +381,7 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
     try visited.put(allocator, program.codec.families.items[family_index].root, {});
     while (pending.pop()) |id| {
         const derivation = table.generated_codec_derivations[@backingInt(id)];
-        for (derivation.callsSlice(table)) |call| {
+        for (derivation.callsSlice(&table)) |call| {
             const method = try methodName(program, names.methodNameText(call.method));
             const subject: ?TypeId = if (call.subject_ty) |subject_ty|
                 try subjectKey(program, method, try convertIn(program, env, subject_ty))
@@ -751,7 +751,7 @@ fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Local
     defer b.allocator.free(captures);
     if (fam_.locals.items.len != 0) {
         if (fam_.module != b.module) invariant("a generated codec calling local procedures is used outside the module declaring them");
-        const table = b.view.view.static_dispatch_plans;
+        const table = b.view.view.dispatch();
         // The function values are built in the entry chain, where the
         // constructor that holds them is composed.
         const saved = b.immortal_closures;
@@ -759,7 +759,7 @@ fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Local
         defer b.immortal_closures = saved;
         for (fam_.locals.items, captures[0..fam_.locals.items.len]) |local, *value| {
             const fn_ty = try b.program.substitute(b.allocator, local.fn_ty, bound);
-            value.* = try b.emitIntoEntry(Builder.localMethodValue, .{ table.evidenceNode(local.node), fn_ty });
+            value.* = try b.emitIntoEntry(Builder.localMethodValue, ..{ try table.evidenceNode(local.node), fn_ty });
         }
     }
     for (bound, captures[fam_.locals.items.len..]) |ty, *desc| desc.* = try b.descOf(ty);
@@ -874,13 +874,13 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
     const stored_count = 1 + fam_.names.items.len;
     if (fam_.locals.items.len != 0) {
         if (fam_.module != b.module) invariant("a stored generated codec calling local procedures is restored outside the module declaring them");
-        const table = b.view.view.static_dispatch_plans;
+        const table = b.view.view.dispatch();
         var local_index = fam_.locals.items.len;
         while (local_index > 0) {
             local_index -= 1;
             const local = fam_.locals.items[local_index];
             const local_ty = try program.substitute(b.allocator, local.fn_ty, bound);
-            try b.push(.{ .push_value = try b.localMethodValue(table.evidenceNode(local.node), local_ty) });
+            try b.push(.{ .push_value = try b.localMethodValue(try table.evidenceNode(local.node), local_ty) });
         }
     }
     var index = stored_count;
@@ -1248,8 +1248,8 @@ const Gen = struct {
                 return .{ .value = try self.local(ret_ty), .ty = ret_ty };
             },
             .callable => |callable| {
-                const table = program_.module(self.fam().module).view.static_dispatch_plans;
-                const node = table.evidenceNode(callable.node);
+                const table = program_.module(self.fam().module).view.dispatch();
+                const node = try table.evidenceNode(callable.node);
                 if (callable.local) |index| {
                     const value = try self.localValue(index);
                     const ret_ty = fnRet(program_, callable.fn_ty);
@@ -1266,7 +1266,7 @@ const Gen = struct {
                 // nested evidence (design.md "Workers And Hidden Parameters").
                 const target_worker = program_.worker(callee).*;
                 const nested: []const static_dispatch.CheckedEvidence = if (target_worker.dictionary_params.len == 0) &.{} else switch (node.nested) {
-                    .resolved => table.nestedEvidence(node),
+                    .resolved => try table.nestedEvidence(node),
                     .from_callable, .through_alias => invariant("a generated codec call's evidence is not resolved"),
                 };
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];

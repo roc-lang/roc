@@ -1987,18 +1987,52 @@ pub const IteratorPlanResolution = struct {
     next_callable_ty: CheckedTypeId,
 };
 
-/// An iterator plan with its calls' total resolutions; each call's
-/// `callable_ty` is specialized against a direct target.
+/// One iterator dispatch call with its total resolution; `callable_ty` is
+/// specialized against a direct target.
+pub const ResolvedIteratorDispatchCall = struct {
+    method: canonical.MethodNameId,
+    dispatcher_ty: CheckedTypeId,
+    callable_ty: CheckedTypeId,
+    dispatcher_arg_index: u32,
+    args: artifact_serialize.Span = .{},
+    resolution: CheckedCallResolution,
+
+    fn fromRecorded(call: IteratorDispatchCall, resolution: CheckedCallResolution, callable_ty: CheckedTypeId) ResolvedIteratorDispatchCall {
+        return .{
+            .method = call.method,
+            .dispatcher_ty = call.dispatcher_ty,
+            .callable_ty = callable_ty,
+            .dispatcher_arg_index = call.dispatcher_arg_index,
+            .args = call.args,
+            .resolution = resolution,
+        };
+    }
+
+    pub fn argsSlice(self: ResolvedIteratorDispatchCall, table: *const StaticDispatchPlanTable) []const IteratorDispatchOperand {
+        return table.iter_operand_pool[self.args.start .. self.args.start + self.args.len];
+    }
+};
+
+/// An iterator plan with its calls' total resolutions.
 pub const ResolvedIteratorForPlan = struct {
-    plan: IteratorForPlan,
-    iter: CheckedCallResolution,
-    next: CheckedCallResolution,
+    iter: ResolvedIteratorDispatchCall,
+    next: ResolvedIteratorDispatchCall,
+    iterable: CIR.Expr.Idx,
+    item_ty: CheckedTypeId,
+    iterator_ty: CheckedTypeId,
+    step_ty: CheckedTypeId,
+    step_topology: IteratorStepTopology,
 
     pub fn fromRecorded(recorded: IteratorForPlan, resolved: IteratorPlanResolution) ResolvedIteratorForPlan {
-        var plan = recorded;
-        plan.iter.callable_ty = resolved.iter_callable_ty;
-        plan.next.callable_ty = resolved.next_callable_ty;
-        return .{ .plan = plan, .iter = resolved.iter, .next = resolved.next };
+        return .{
+            .iter = ResolvedIteratorDispatchCall.fromRecorded(recorded.iter, resolved.iter, resolved.iter_callable_ty),
+            .next = ResolvedIteratorDispatchCall.fromRecorded(recorded.next, resolved.next, resolved.next_callable_ty),
+            .iterable = recorded.iterable,
+            .item_ty = recorded.item_ty,
+            .iterator_ty = recorded.iterator_ty,
+            .step_ty = recorded.step_ty,
+            .step_topology = recorded.step_topology,
+        };
     }
 };
 

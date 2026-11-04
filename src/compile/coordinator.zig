@@ -4984,6 +4984,10 @@ pub const Coordinator = struct {
                 .source = source,
             } },
         );
+        check.CheckedArtifact.attachDispatchImports(module_analyses, artifact_ptr.dispatch_view_keys, self.moduleResolver()) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
         artifact_ptr.checked_types.attachSealedTypes(cached_env, sealed_keys, synthesized_keys);
         artifact_ptr.body_analyses = body_analyses;
         artifact_ptr.module_analyses = module_analyses;
