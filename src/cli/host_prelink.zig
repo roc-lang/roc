@@ -173,7 +173,7 @@ pub fn key(input: KeyInput) [32]u8 {
     hashList(&hasher, input.provides);
     hashU64(&hasher, input.provide_layouts.len);
     for (input.provide_layouts) |layout| {
-        hasher.update(&.{@intFromEnum(layout.kind)});
+        hasher.update(&.{@backingInt(layout.kind)});
         hashU64(&hasher, layout.size);
     }
     hashList(&hasher, input.keep);

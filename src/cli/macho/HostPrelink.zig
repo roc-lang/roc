@@ -135,7 +135,7 @@ pub fn linkObject(allocator: Allocator, provides: []const Provide, keep: []const
     std.mem.writeInt(u32, bytes[20..24], @intCast(commands_size), .little);
 
     var at: usize = header_size;
-    std.mem.writeInt(u32, bytes[at..][0..4], @intFromEnum(macho.LC.SEGMENT_64), .little);
+    std.mem.writeInt(u32, bytes[at..][0..4], @backingInt(macho.LC.SEGMENT_64), .little);
     std.mem.writeInt(u32, bytes[at + 4 ..][0..4], @intCast(segment_size), .little);
     std.mem.writeInt(u64, bytes[at + 24 ..][0..8], 0, .little);
     std.mem.writeInt(u64, bytes[at + 32 ..][0..8], total, .little);
@@ -160,7 +160,7 @@ pub fn linkObject(allocator: Allocator, provides: []const Provide, keep: []const
         std.mem.writeInt(u32, entry[64..68], section.flags, .little);
         at += 80;
     }
-    std.mem.writeInt(u32, bytes[at..][0..4], @intFromEnum(macho.LC.SYMTAB), .little);
+    std.mem.writeInt(u32, bytes[at..][0..4], @backingInt(macho.LC.SYMTAB), .little);
     std.mem.writeInt(u32, bytes[at + 4 ..][0..4], symtab_size, .little);
     std.mem.writeInt(u32, bytes[at + 8 ..][0..4], @intCast(symtab_offset), .little);
     std.mem.writeInt(u32, bytes[at + 12 ..][0..4], @intCast(symbol_count), .little);
@@ -168,14 +168,14 @@ pub fn linkObject(allocator: Allocator, provides: []const Provide, keep: []const
     // strsize is written once the string table is built.
     const strsize_at = at + 20;
     at += symtab_size;
-    std.mem.writeInt(u32, bytes[at..][0..4], @intFromEnum(macho.LC.DYSYMTAB), .little);
+    std.mem.writeInt(u32, bytes[at..][0..4], @backingInt(macho.LC.DYSYMTAB), .little);
     std.mem.writeInt(u32, bytes[at + 4 ..][0..4], dysymtab_size, .little);
     // ilocalsym 0, nlocalsym 0; iextdefsym 0, nextdefsym; iundefsym, nundefsym.
     std.mem.writeInt(u32, bytes[at + 20 ..][0..4], @intCast(provides.len), .little);
     std.mem.writeInt(u32, bytes[at + 24 ..][0..4], @intCast(provides.len), .little);
     std.mem.writeInt(u32, bytes[at + 28 ..][0..4], @intCast(keep.len), .little);
     at += dysymtab_size;
-    std.mem.writeInt(u32, bytes[at..][0..4], @intFromEnum(macho.LC.BUILD_VERSION), .little);
+    std.mem.writeInt(u32, bytes[at..][0..4], @backingInt(macho.LC.BUILD_VERSION), .little);
     std.mem.writeInt(u32, bytes[at + 4 ..][0..4], build_version_size, .little);
     std.mem.writeInt(u32, bytes[at + 8 ..][0..4], macho_platform_macos, .little);
     std.mem.writeInt(u32, bytes[at + 12 ..][0..4], macos_11, .little);
@@ -263,6 +263,7 @@ pub const HostSymbol = extern struct {
     vaddr: u64,
 };
 
+/// `HostSymbol.flags` bit: the host imports the symbol weakly.
 pub const symbol_weak_import: u16 = 1;
 
 /// One `provides` symbol's window in the host.
@@ -367,7 +368,7 @@ pub fn finish(allocator: Allocator, exe: []const u8, provides: []const Provide, 
         if (within + size > section.size or section.offset == 0) return error.UnexpectedHostLayout;
         record.* = .{
             .name = @intCast(strings.items.len),
-            .kind = @intFromEnum(provide.kind),
+            .kind = @backingInt(provide.kind),
             .vaddr = section.addr + within,
             .offset = section.offset + within,
             .size = size,
@@ -404,21 +405,20 @@ pub fn finish(allocator: Allocator, exe: []const u8, provides: []const Provide, 
         const full_name = std.mem.sliceTo(symbol_names[n_strx..], 0);
         if (full_name.len == 0 or full_name[0] != '_') continue;
         const keep_index = findSorted(keep, full_name[1..]) orelse continue;
-        switch (n_type & macho.N_TYPE) {
-            macho.N_SECT => found[keep_index] = .{ .name = 0, .ordinal = 0, .flags = 0, .vaddr = n_value },
-            macho.N_UNDF => {
-                const ordinal: u16 = (n_desc >> 8) & 0xff;
-                // Self, dynamic lookup and executable ordinals name no dylib.
-                if (ordinal == 0 or ordinal >= 0xfe) continue;
-                const section = tramp orelse return error.UnexpectedHostLayout;
-                found[keep_index] = .{
-                    .name = 0,
-                    .ordinal = ordinal,
-                    .flags = if (n_desc & macho.N_WEAK_REF != 0) symbol_weak_import else 0,
-                    .vaddr = section.addr + keep_index * trampoline_size,
-                };
-            },
-            else => {},
+        const n_kind = n_type & macho.N_TYPE;
+        if (n_kind == macho.N_SECT) {
+            found[keep_index] = .{ .name = 0, .ordinal = 0, .flags = 0, .vaddr = n_value };
+        } else if (n_kind == macho.N_UNDF) {
+            const ordinal: u16 = (n_desc >> 8) & 0xff;
+            // Self, dynamic lookup and executable ordinals name no dylib.
+            if (ordinal == 0 or ordinal >= 0xfe) continue;
+            const section = tramp orelse return error.UnexpectedHostLayout;
+            found[keep_index] = .{
+                .name = 0,
+                .ordinal = ordinal,
+                .flags = if (n_desc & macho.N_WEAK_REF != 0) symbol_weak_import else 0,
+                .vaddr = section.addr + keep_index * trampoline_size,
+            };
         }
     }
     for (keep, found) |name, entry_or_null| {
@@ -670,101 +670,97 @@ pub const Executable = struct {
                 const cmd = std.mem.readInt(u32, bytes[at..][0..4], .little);
                 const cmdsize = std.mem.readInt(u32, bytes[at + 4 ..][0..4], .little);
                 if (cmdsize < 8 or at + cmdsize > 32 + sizeofcmds) return error.InvalidExecutable;
-                switch (cmd) {
-                    @intFromEnum(macho.LC.SEGMENT_64) => {
-                        if (cmdsize < 72 or segment_count == max_segments) return error.InvalidExecutable;
-                        const nsects = std.mem.readInt(u32, bytes[at + 64 ..][0..4], .little);
-                        if (cmdsize < 72 + nsects * 80 or section_count + nsects > max_sections) return error.InvalidExecutable;
-                        const name = std.mem.sliceTo(bytes[at + 8 ..][0..16], 0);
-                        self.segments[segment_count] = .{
-                            .name = name,
-                            .command_offset = at,
-                            .vmaddr = std.mem.readInt(u64, bytes[at + 24 ..][0..8], .little),
-                            .vmsize = std.mem.readInt(u64, bytes[at + 32 ..][0..8], .little),
-                            .fileoff = std.mem.readInt(u64, bytes[at + 40 ..][0..8], .little),
-                            .filesize = std.mem.readInt(u64, bytes[at + 48 ..][0..8], .little),
-                            .maxprot = std.mem.readInt(u32, bytes[at + 56 ..][0..4], .little),
-                            .initprot = std.mem.readInt(u32, bytes[at + 60 ..][0..4], .little),
-                            .nsects = nsects,
+                if (cmd == @backingInt(macho.LC.SEGMENT_64)) {
+                    if (cmdsize < 72 or segment_count == max_segments) return error.InvalidExecutable;
+                    const nsects = std.mem.readInt(u32, bytes[at + 64 ..][0..4], .little);
+                    if (cmdsize < 72 + nsects * 80 or section_count + nsects > max_sections) return error.InvalidExecutable;
+                    const name = std.mem.sliceTo(bytes[at + 8 ..][0..16], 0);
+                    self.segments[segment_count] = .{
+                        .name = name,
+                        .command_offset = at,
+                        .vmaddr = std.mem.readInt(u64, bytes[at + 24 ..][0..8], .little),
+                        .vmsize = std.mem.readInt(u64, bytes[at + 32 ..][0..8], .little),
+                        .fileoff = std.mem.readInt(u64, bytes[at + 40 ..][0..8], .little),
+                        .filesize = std.mem.readInt(u64, bytes[at + 48 ..][0..8], .little),
+                        .maxprot = std.mem.readInt(u32, bytes[at + 56 ..][0..4], .little),
+                        .initprot = std.mem.readInt(u32, bytes[at + 60 ..][0..4], .little),
+                        .nsects = nsects,
+                    };
+                    if (std.mem.eql(u8, name, "__TEXT")) text = segment_count;
+                    if (std.mem.eql(u8, name, "__LINKEDIT")) linkedit = segment_count;
+                    for (0..nsects) |index| {
+                        const header = at + 72 + @as(u32, @intCast(index)) * 80;
+                        const section: Section = .{
+                            .sectname = std.mem.sliceTo(bytes[header..][0..16], 0),
+                            .segname = std.mem.sliceTo(bytes[header + 16 ..][0..16], 0),
+                            .addr = std.mem.readInt(u64, bytes[header + 32 ..][0..8], .little),
+                            .size = std.mem.readInt(u64, bytes[header + 40 ..][0..8], .little),
+                            .offset = std.mem.readInt(u32, bytes[header + 48 ..][0..4], .little),
+                            .segment = segment_count,
                         };
-                        if (std.mem.eql(u8, name, "__TEXT")) text = segment_count;
-                        if (std.mem.eql(u8, name, "__LINKEDIT")) linkedit = segment_count;
-                        for (0..nsects) |index| {
-                            const header = at + 72 + @as(u32, @intCast(index)) * 80;
-                            const section: Section = .{
-                                .sectname = std.mem.sliceTo(bytes[header..][0..16], 0),
-                                .segname = std.mem.sliceTo(bytes[header + 16 ..][0..16], 0),
-                                .addr = std.mem.readInt(u64, bytes[header + 32 ..][0..8], .little),
-                                .size = std.mem.readInt(u64, bytes[header + 40 ..][0..8], .little),
-                                .offset = std.mem.readInt(u32, bytes[header + 48 ..][0..4], .little),
-                                .segment = segment_count,
-                            };
-                            if (section.offset != 0 and section.size != 0) exe.first_content = @min(exe.first_content, section.offset);
-                            self.sections[section_count] = section;
-                            section_count += 1;
-                        }
-                        segment_count += 1;
-                    },
-                    @intFromEnum(macho.LC.SYMTAB) => {
-                        if (cmdsize < 24) return error.InvalidExecutable;
-                        exe.symtab = .{
-                            .command_offset = at,
-                            .symoff = std.mem.readInt(u32, bytes[at + 8 ..][0..4], .little),
-                            .nsyms = std.mem.readInt(u32, bytes[at + 12 ..][0..4], .little),
-                            .stroff = std.mem.readInt(u32, bytes[at + 16 ..][0..4], .little),
-                            .strsize = std.mem.readInt(u32, bytes[at + 20 ..][0..4], .little),
-                        };
-                    },
-                    @intFromEnum(macho.LC.DYSYMTAB) => {
-                        if (cmdsize < 80) return error.InvalidExecutable;
-                        exe.dysymtab = .{
-                            .command_offset = at,
-                            .ilocalsym = std.mem.readInt(u32, bytes[at + 8 ..][0..4], .little),
-                            .nlocalsym = std.mem.readInt(u32, bytes[at + 12 ..][0..4], .little),
-                            .iextdefsym = std.mem.readInt(u32, bytes[at + 16 ..][0..4], .little),
-                            .nextdefsym = std.mem.readInt(u32, bytes[at + 20 ..][0..4], .little),
-                            .iundefsym = std.mem.readInt(u32, bytes[at + 24 ..][0..4], .little),
-                            .nundefsym = std.mem.readInt(u32, bytes[at + 28 ..][0..4], .little),
-                            .indirectsymoff = std.mem.readInt(u32, bytes[at + 56 ..][0..4], .little),
-                            .nindirectsyms = std.mem.readInt(u32, bytes[at + 60 ..][0..4], .little),
-                        };
-                        // Tables of contents, module tables and external
-                        // references belong to dylibs.
-                        for ([_]u32{ 32, 36, 40, 44, 48, 52, 64, 68, 72, 76 }) |field| {
-                            if (std.mem.readInt(u32, bytes[at + field ..][0..4], .little) != 0) return error.InvalidExecutable;
-                        }
-                    },
-                    @intFromEnum(macho.LC.DYLD_INFO), @intFromEnum(macho.LC.DYLD_INFO_ONLY) => {
-                        if (cmdsize < 48) return error.InvalidExecutable;
-                        exe.dyld_info = .{
-                            .command_offset = at,
-                            .rebase_off = std.mem.readInt(u32, bytes[at + 8 ..][0..4], .little),
-                            .rebase_size = std.mem.readInt(u32, bytes[at + 12 ..][0..4], .little),
-                            .bind_off = std.mem.readInt(u32, bytes[at + 16 ..][0..4], .little),
-                            .bind_size = std.mem.readInt(u32, bytes[at + 20 ..][0..4], .little),
-                            .weak_bind_off = std.mem.readInt(u32, bytes[at + 24 ..][0..4], .little),
-                            .weak_bind_size = std.mem.readInt(u32, bytes[at + 28 ..][0..4], .little),
-                            .lazy_bind_off = std.mem.readInt(u32, bytes[at + 32 ..][0..4], .little),
-                            .lazy_bind_size = std.mem.readInt(u32, bytes[at + 36 ..][0..4], .little),
-                            .export_off = std.mem.readInt(u32, bytes[at + 40 ..][0..4], .little),
-                            .export_size = std.mem.readInt(u32, bytes[at + 44 ..][0..4], .little),
-                        };
-                    },
-                    @intFromEnum(macho.LC.FUNCTION_STARTS), @intFromEnum(macho.LC.DATA_IN_CODE), @intFromEnum(macho.LC.CODE_SIGNATURE) => {
-                        if (cmdsize < 16) return error.InvalidExecutable;
-                        const data: LinkeditData = .{
-                            .command_offset = at,
-                            .dataoff = std.mem.readInt(u32, bytes[at + 8 ..][0..4], .little),
-                            .datasize = std.mem.readInt(u32, bytes[at + 12 ..][0..4], .little),
-                        };
-                        switch (cmd) {
-                            @intFromEnum(macho.LC.FUNCTION_STARTS) => exe.function_starts = data,
-                            @intFromEnum(macho.LC.DATA_IN_CODE) => exe.data_in_code = data,
-                            else => exe.code_signature = data,
-                        }
-                    },
-                    @intFromEnum(macho.LC.DYLD_CHAINED_FIXUPS), @intFromEnum(macho.LC.DYLD_EXPORTS_TRIE) => exe.chained_fixups = true,
-                    else => {},
+                        if (section.offset != 0 and section.size != 0) exe.first_content = @min(exe.first_content, section.offset);
+                        self.sections[section_count] = section;
+                        section_count += 1;
+                    }
+                    segment_count += 1;
+                } else if (cmd == @backingInt(macho.LC.SYMTAB)) {
+                    if (cmdsize < 24) return error.InvalidExecutable;
+                    exe.symtab = .{
+                        .command_offset = at,
+                        .symoff = std.mem.readInt(u32, bytes[at + 8 ..][0..4], .little),
+                        .nsyms = std.mem.readInt(u32, bytes[at + 12 ..][0..4], .little),
+                        .stroff = std.mem.readInt(u32, bytes[at + 16 ..][0..4], .little),
+                        .strsize = std.mem.readInt(u32, bytes[at + 20 ..][0..4], .little),
+                    };
+                } else if (cmd == @backingInt(macho.LC.DYSYMTAB)) {
+                    if (cmdsize < 80) return error.InvalidExecutable;
+                    exe.dysymtab = .{
+                        .command_offset = at,
+                        .ilocalsym = std.mem.readInt(u32, bytes[at + 8 ..][0..4], .little),
+                        .nlocalsym = std.mem.readInt(u32, bytes[at + 12 ..][0..4], .little),
+                        .iextdefsym = std.mem.readInt(u32, bytes[at + 16 ..][0..4], .little),
+                        .nextdefsym = std.mem.readInt(u32, bytes[at + 20 ..][0..4], .little),
+                        .iundefsym = std.mem.readInt(u32, bytes[at + 24 ..][0..4], .little),
+                        .nundefsym = std.mem.readInt(u32, bytes[at + 28 ..][0..4], .little),
+                        .indirectsymoff = std.mem.readInt(u32, bytes[at + 56 ..][0..4], .little),
+                        .nindirectsyms = std.mem.readInt(u32, bytes[at + 60 ..][0..4], .little),
+                    };
+                    // Tables of contents, module tables and external
+                    // references belong to dylibs.
+                    for ([_]u32{ 32, 36, 40, 44, 48, 52, 64, 68, 72, 76 }) |field| {
+                        if (std.mem.readInt(u32, bytes[at + field ..][0..4], .little) != 0) return error.InvalidExecutable;
+                    }
+                } else if (cmd == @backingInt(macho.LC.DYLD_INFO) or cmd == @backingInt(macho.LC.DYLD_INFO_ONLY)) {
+                    if (cmdsize < 48) return error.InvalidExecutable;
+                    exe.dyld_info = .{
+                        .command_offset = at,
+                        .rebase_off = std.mem.readInt(u32, bytes[at + 8 ..][0..4], .little),
+                        .rebase_size = std.mem.readInt(u32, bytes[at + 12 ..][0..4], .little),
+                        .bind_off = std.mem.readInt(u32, bytes[at + 16 ..][0..4], .little),
+                        .bind_size = std.mem.readInt(u32, bytes[at + 20 ..][0..4], .little),
+                        .weak_bind_off = std.mem.readInt(u32, bytes[at + 24 ..][0..4], .little),
+                        .weak_bind_size = std.mem.readInt(u32, bytes[at + 28 ..][0..4], .little),
+                        .lazy_bind_off = std.mem.readInt(u32, bytes[at + 32 ..][0..4], .little),
+                        .lazy_bind_size = std.mem.readInt(u32, bytes[at + 36 ..][0..4], .little),
+                        .export_off = std.mem.readInt(u32, bytes[at + 40 ..][0..4], .little),
+                        .export_size = std.mem.readInt(u32, bytes[at + 44 ..][0..4], .little),
+                    };
+                } else if (cmd == @backingInt(macho.LC.FUNCTION_STARTS) or cmd == @backingInt(macho.LC.DATA_IN_CODE) or cmd == @backingInt(macho.LC.CODE_SIGNATURE)) {
+                    if (cmdsize < 16) return error.InvalidExecutable;
+                    const data: LinkeditData = .{
+                        .command_offset = at,
+                        .dataoff = std.mem.readInt(u32, bytes[at + 8 ..][0..4], .little),
+                        .datasize = std.mem.readInt(u32, bytes[at + 12 ..][0..4], .little),
+                    };
+                    if (cmd == @backingInt(macho.LC.FUNCTION_STARTS)) {
+                        exe.function_starts = data;
+                    } else if (cmd == @backingInt(macho.LC.DATA_IN_CODE)) {
+                        exe.data_in_code = data;
+                    } else {
+                        exe.code_signature = data;
+                    }
+                } else if (cmd == @backingInt(macho.LC.DYLD_CHAINED_FIXUPS) or cmd == @backingInt(macho.LC.DYLD_EXPORTS_TRIE)) {
+                    exe.chained_fixups = true;
                 }
                 at += cmdsize;
             }

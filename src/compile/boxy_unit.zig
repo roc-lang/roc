@@ -67,11 +67,11 @@ pub const ImageKind = enum {
 /// entry for the target holds one, whichever command wrote it.
 pub fn imageKind(target: roc_target.RocTarget) ImageKind {
     if (target.toCpuArch() == .wasm32) return .wasm;
-    return switch (target.toOsTag()) {
-        .linux => if (target.toCpuArch() == .x86_64) .native else .none,
-        .macos => if (target.toCpuArch() == .aarch64) .native else .none,
-        else => .none,
-    };
+    const os = target.toOsTag();
+    const arch = target.toCpuArch();
+    if (os == .linux and arch == .x86_64) return .native;
+    if (os == .macos and arch == .aarch64) return .native;
+    return .none;
 }
 
 /// Whether a unit compiled for `target` carries a native unit image: the

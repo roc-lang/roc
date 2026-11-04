@@ -17,7 +17,6 @@ const builtin = @import("builtin");
 const compile = @import("compile");
 const linker = @import("linker.zig");
 const host_prelink = @import("host_prelink.zig");
-const patch_link = @import("patch_link.zig");
 const HostPrelink = @import("macho/HostPrelink.zig");
 const link_output = @import("link_output.zig");
 const CliCtx = @import("CliCtx.zig").CliCtx;

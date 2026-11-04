@@ -275,9 +275,10 @@ fn testImage(allocator: std.mem.Allocator) UnitImage.BuildError![]align(UnitImag
         // call_ext: stp x29, x30, [sp, #-16]!; bl ext; ldp x29, x30, [sp], #16; ret
         // bump: adrp x8, counter; ldr x9, [x8, counter]; add x9, x9, #1; str x9, [x8, counter]; mov x0, x9; ret
         const text = [_]u32{
-            0x5280_0540, 0xd65f_03c0, 0, 0,
+            0x5280_0540, 0xd65f_03c0, 0,           0,
             0xa9bf_7bfd, 0x9400_0000, 0xa8c1_7bfd, 0xd65f_03c0,
-            0x9000_0008, 0xf940_0109, 0x9100_0529, 0xf900_0109, 0xaa09_03e0, 0xd65f_03c0, 0, 0,
+            0x9000_0008, 0xf940_0109, 0x9100_0529, 0xf900_0109,
+            0xaa09_03e0, 0xd65f_03c0, 0,           0,
         };
         var bytes: [text.len * 4]u8 = undefined;
         for (text, 0..) |word, index| std.mem.writeInt(u32, bytes[index * 4 ..][0..4], word, .little);

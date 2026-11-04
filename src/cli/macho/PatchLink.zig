@@ -108,7 +108,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
 
     // The host's load commands, which the record admitted.
     var parsed: HostPrelink.Executable.Parsed = undefined;
-    const exe = parsed.parse(host.host()) catch unreachable;
+    const exe = parsed.parse(host.host()) catch unreachable; // the host record was admitted only after these load commands parsed
     const host_text = exe.segments[exe.text];
     const symtab = exe.symtab.?;
     const dysymtab = exe.dysymtab.?;
@@ -256,9 +256,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
             const region: UnitImage.Region = @fromBackingInt(site.region);
             switch (region) {
                 .data => {},
-                // Absolute words in code cannot be rebased; the image
-                // builder admits none. Debug words are not loaded.
-                .block => unreachable,
+                // Debug words are not loaded.
+                .block => unreachable, // the image builder admits no absolute words in code, which cannot be rebased
                 .bss, .debug_line, .debug_info, .debug_abbrev => continue,
             }
             const fixup: Fixup = .{ .segment = data_segment_index, .offset = place.data - data_vmaddr + site.offset };
@@ -665,21 +664,21 @@ fn withoutDone(stream: []const u8, kind: OpcodeStream) []const u8 {
         if (opcode == 0) return stream[0..at];
         at += 1;
         const ulebs: usize = switch (kind) {
-            .rebase => switch (opcode) {
-                macho.REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB, macho.REBASE_OPCODE_ADD_ADDR_ULEB, macho.REBASE_OPCODE_DO_REBASE_ULEB_TIMES, macho.REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB => 1,
-                macho.REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB => 2,
-                else => 0,
-            },
-            .bind => switch (opcode) {
-                macho.BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB, macho.BIND_OPCODE_SET_ADDEND_SLEB, macho.BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB, macho.BIND_OPCODE_ADD_ADDR_ULEB, macho.BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB => 1,
-                macho.BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB => 2,
-                macho.BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM => name: {
-                    while (at < stream.len and stream[at] != 0) at += 1;
-                    at += 1;
-                    break :name 0;
-                },
-                else => 0,
-            },
+            .rebase => if (opcode == macho.REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB or opcode == macho.REBASE_OPCODE_ADD_ADDR_ULEB or opcode == macho.REBASE_OPCODE_DO_REBASE_ULEB_TIMES or opcode == macho.REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB)
+                1
+            else if (opcode == macho.REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB)
+                2
+            else
+                0,
+            .bind => if (opcode == macho.BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB or opcode == macho.BIND_OPCODE_SET_ADDEND_SLEB or opcode == macho.BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB or opcode == macho.BIND_OPCODE_ADD_ADDR_ULEB or opcode == macho.BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB)
+                1
+            else if (opcode == macho.BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB)
+                2
+            else if (opcode == macho.BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM) name: {
+                while (at < stream.len and stream[at] != 0) at += 1;
+                at += 1;
+                break :name 0;
+            } else 0,
         };
         for (0..ulebs) |_| {
             while (at < stream.len and stream[at] & 0x80 != 0) at += 1;

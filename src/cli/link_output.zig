@@ -11,8 +11,11 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const linux = std.os.linux;
 
+/// The output executable of a fast dev link, written through the compiler
+/// host's own system calls.
 pub const OutputFile = if (builtin.os.tag == .macos) MacOutputFile else LinuxOutputFile;
 
+/// The ways creating, writing or publishing an `OutputFile` can fail.
 pub const OutputError = Allocator.Error || error{ AccessDenied, NoSpaceLeft, FileNotFound, Unexpected };
 
 fn failure(errno: anytype) OutputError {

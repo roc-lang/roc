@@ -644,7 +644,7 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
                     try sites.noteEdge(site_place, site_offset, target, symbol);
                     try sites.add(site_place, site_offset, kind, slot_definition, "", false, reloc.addend);
                 },
-                else => {
+                .abs64, .pc32, .abs32, .abs32s, .branch26, .page21, .pageoff12 => {
                     const kind = reloc.kind.siteKind();
                     if (reloc.offset + kindWidth(kind) > site_section.size) return error.InvalidObject;
                     const site_offset = site_place.offset + reloc.offset;
@@ -1249,17 +1249,15 @@ fn parseElf(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildErr
                 .value = readU64(entries, at + 8),
                 .size = readU64(entries, at + 16),
                 .section = if (shndx == SHN_UNDEF or skip) null else if (shndx >= SHN_LORESERVE) return error.UnsupportedSymbol else shndx,
-                .bind = switch (bind) {
-                    STB_LOCAL => .local,
-                    STB_GLOBAL => .global,
-                    else => .weak,
-                },
-                .kind = switch (symbol_type) {
-                    STT_OBJECT => .object,
-                    STT_FUNC => .func,
-                    STT_SECTION => .section,
-                    else => .notype,
-                },
+                .bind = if (bind == STB_LOCAL) .local else if (bind == STB_GLOBAL) .global else .weak,
+                .kind = if (symbol_type == STT_OBJECT)
+                    .object
+                else if (symbol_type == STT_FUNC)
+                    .func
+                else if (symbol_type == STT_SECTION)
+                    .section
+                else
+                    .notype,
                 .hidden = visibility != STV_DEFAULT and visibility != STV_PROTECTED,
                 .skip = skip,
             };
@@ -1344,39 +1342,35 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
         const cmd = readU32(bytes, at);
         const cmdsize = readU32(bytes, at + 4);
         if (cmdsize < 8 or at + cmdsize > 32 + sizeofcmds) return error.InvalidObject;
-        switch (cmd) {
-            LC_SEGMENT_64 => {
-                if (cmdsize < 72) return error.InvalidObject;
-                const nsects = readU32(bytes, at + 64);
-                if (cmdsize < 72 + @as(u64, nsects) * 80) return error.InvalidObject;
-                for (0..nsects) |index| {
-                    const header = at + 72 + index * 80;
-                    const section: MachSection = .{
-                        .sectname = std.mem.sliceTo(bytes[header..][0..16], 0),
-                        .segname = std.mem.sliceTo(bytes[header + 16 ..][0..16], 0),
-                        .addr = readU64(bytes, header + 32),
-                        .size = readU64(bytes, header + 40),
-                        .offset = readU32(bytes, header + 48),
-                        .@"align" = readU32(bytes, header + 52),
-                        .reloff = readU32(bytes, header + 56),
-                        .nreloc = readU32(bytes, header + 60),
-                        .flags = readU32(bytes, header + 64),
-                    };
-                    const zero_fill = section.flags & SECTION_TYPE == S_ZEROFILL or section.flags & SECTION_TYPE == S_GB_ZEROFILL;
-                    if (!zero_fill and (section.offset > bytes.len or bytes.len - section.offset < section.size)) return error.InvalidObject;
-                    if (@as(u64, section.reloff) + @as(u64, section.nreloc) * 8 > bytes.len) return error.InvalidObject;
-                    try raw.append(arena, section);
-                }
-            },
-            LC_SYMTAB => {
-                if (cmdsize < 24) return error.InvalidObject;
-                symoff = readU32(bytes, at + 8);
-                nsyms = readU32(bytes, at + 12);
-                stroff = readU32(bytes, at + 16);
-                strsize = readU32(bytes, at + 20);
-                if (@as(u64, symoff) + @as(u64, nsyms) * 16 > bytes.len or @as(u64, stroff) + strsize > bytes.len) return error.InvalidObject;
-            },
-            else => {},
+        if (cmd == LC_SEGMENT_64) {
+            if (cmdsize < 72) return error.InvalidObject;
+            const nsects = readU32(bytes, at + 64);
+            if (cmdsize < 72 + @as(u64, nsects) * 80) return error.InvalidObject;
+            for (0..nsects) |index| {
+                const header = at + 72 + index * 80;
+                const section: MachSection = .{
+                    .sectname = std.mem.sliceTo(bytes[header..][0..16], 0),
+                    .segname = std.mem.sliceTo(bytes[header + 16 ..][0..16], 0),
+                    .addr = readU64(bytes, header + 32),
+                    .size = readU64(bytes, header + 40),
+                    .offset = readU32(bytes, header + 48),
+                    .@"align" = readU32(bytes, header + 52),
+                    .reloff = readU32(bytes, header + 56),
+                    .nreloc = readU32(bytes, header + 60),
+                    .flags = readU32(bytes, header + 64),
+                };
+                const zero_fill = section.flags & SECTION_TYPE == S_ZEROFILL or section.flags & SECTION_TYPE == S_GB_ZEROFILL;
+                if (!zero_fill and (section.offset > bytes.len or bytes.len - section.offset < section.size)) return error.InvalidObject;
+                if (@as(u64, section.reloff) + @as(u64, section.nreloc) * 8 > bytes.len) return error.InvalidObject;
+                try raw.append(arena, section);
+            }
+        } else if (cmd == LC_SYMTAB) {
+            if (cmdsize < 24) return error.InvalidObject;
+            symoff = readU32(bytes, at + 8);
+            nsyms = readU32(bytes, at + 12);
+            stroff = readU32(bytes, at + 16);
+            strsize = readU32(bytes, at + 20);
+            if (@as(u64, symoff) + @as(u64, nsyms) * 16 > bytes.len or @as(u64, stroff) + strsize > bytes.len) return error.InvalidObject;
         }
         at += cmdsize;
     }
@@ -1412,29 +1406,26 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
             continue;
         }
         const external = n_type & N_EXT != 0;
-        switch (n_type & N_TYPE) {
-            N_UNDF => {
-                // A nonzero value is a common symbol.
-                if (n_value != 0) return error.UnsupportedSymbol;
-                symbol.* = .{ .name = name, .value = 0, .size = 0, .section = null, .bind = if (n_desc & N_WEAK_REF != 0) .weak else .global, .kind = .notype, .hidden = false, .skip = false };
-            },
-            N_SECT => {
-                if (n_sect == 0 or n_sect > raw.items.len) return error.InvalidObject;
-                const section = raw.items[n_sect - 1];
-                if (n_value < section.addr or n_value - section.addr > section.size) return error.InvalidObject;
-                symbol.* = .{
-                    .name = name,
-                    .value = n_value - section.addr,
-                    .size = 0,
-                    .section = n_sect - 1,
-                    .bind = if (!external) .local else if (n_desc & N_WEAK_DEF != 0) .weak else .global,
-                    .kind = if (sections[n_sect - 1].class == .text) .func else .object,
-                    .hidden = external and n_type & N_PEXT != 0,
-                    .skip = false,
-                };
-            },
-            else => return error.UnsupportedSymbol,
-        }
+        const n_kind = n_type & N_TYPE;
+        if (n_kind == N_UNDF) {
+            // A nonzero value is a common symbol.
+            if (n_value != 0) return error.UnsupportedSymbol;
+            symbol.* = .{ .name = name, .value = 0, .size = 0, .section = null, .bind = if (n_desc & N_WEAK_REF != 0) .weak else .global, .kind = .notype, .hidden = false, .skip = false };
+        } else if (n_kind == N_SECT) {
+            if (n_sect == 0 or n_sect > raw.items.len) return error.InvalidObject;
+            const section = raw.items[n_sect - 1];
+            if (n_value < section.addr or n_value - section.addr > section.size) return error.InvalidObject;
+            symbol.* = .{
+                .name = name,
+                .value = n_value - section.addr,
+                .size = 0,
+                .section = n_sect - 1,
+                .bind = if (!external) .local else if (n_desc & N_WEAK_DEF != 0) .weak else .global,
+                .kind = if (sections[n_sect - 1].class == .text) .func else .object,
+                .hidden = external and n_type & N_PEXT != 0,
+                .skip = false,
+            };
+        } else return error.UnsupportedSymbol;
     }
     for (symbols[nsyms..], 0..) |*symbol, index| {
         symbol.* = .{ .name = "", .value = 0, .size = 0, .section = @as(u32, @intCast(index)), .bind = .local, .kind = .section, .hidden = false, .skip = false };
@@ -1487,19 +1478,24 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
             }
             const addend_before = pending_addend;
             pending_addend = null;
-            const kind: RelocKind = switch (r_type) {
-                ARM64_RELOC_UNSIGNED => if (r_pcrel) return error.UnsupportedRelocation else switch (r_length) {
+            const kind: RelocKind = if (r_type == ARM64_RELOC_UNSIGNED)
+                (if (r_pcrel) return error.UnsupportedRelocation else switch (r_length) {
                     3 => .abs64,
                     2 => .abs32,
                     else => return error.UnsupportedRelocation,
-                },
-                ARM64_RELOC_BRANCH26 => .branch26,
-                ARM64_RELOC_PAGE21 => .page21,
-                ARM64_RELOC_PAGEOFF12 => .pageoff12,
-                ARM64_RELOC_GOT_LOAD_PAGE21 => .got_load_page21,
-                ARM64_RELOC_GOT_LOAD_PAGEOFF12 => .got_load_pageoff12,
-                else => return error.UnsupportedRelocation,
-            };
+                })
+            else if (r_type == ARM64_RELOC_BRANCH26)
+                .branch26
+            else if (r_type == ARM64_RELOC_PAGE21)
+                .page21
+            else if (r_type == ARM64_RELOC_PAGEOFF12)
+                .pageoff12
+            else if (r_type == ARM64_RELOC_GOT_LOAD_PAGE21)
+                .got_load_page21
+            else if (r_type == ARM64_RELOC_GOT_LOAD_PAGEOFF12)
+                .got_load_pageoff12
+            else
+                return error.UnsupportedRelocation;
             const width: u64 = if (kind == .abs64) 8 else 4;
             if (r_length != 2 and kind != .abs64) return error.UnsupportedRelocation;
             if (@as(u64, r_address) + width > section.size) return error.InvalidObject;
@@ -1512,7 +1508,7 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
                 addend = switch (kind) {
                     .abs64 => @bitCast(readU64(field, 0)),
                     .abs32 => readU32(field, 0),
-                    else => addend_before orelse 0,
+                    .pc32, .abs32s, .branch26, .page21, .pageoff12, .got_load_page21, .got_load_pageoff12 => addend_before orelse 0,
                 };
                 if (addend_before != null and (kind == .abs64 or kind == .abs32)) return error.InvalidObject;
             } else {
@@ -1541,17 +1537,13 @@ fn classifyMachO(segname: []const u8, sectname: []const u8, flags: u32, options:
             if (section_type != S_REGULAR) return error.UnsupportedSection;
             return .text;
         }
-        return switch (section_type) {
-            S_REGULAR, S_CSTRING_LITERALS, S_4BYTE_LITERALS, S_8BYTE_LITERALS, S_16BYTE_LITERALS => .rodata,
-            else => error.UnsupportedSection,
-        };
+        if (section_type == S_REGULAR or section_type == S_CSTRING_LITERALS or section_type == S_4BYTE_LITERALS or section_type == S_8BYTE_LITERALS or section_type == S_16BYTE_LITERALS) return .rodata;
+        return error.UnsupportedSection;
     }
     if (std.mem.eql(u8, segname, "__DATA") or std.mem.eql(u8, segname, "__DATA_CONST")) {
-        return switch (section_type) {
-            S_REGULAR => .data,
-            S_ZEROFILL, S_GB_ZEROFILL => .bss,
-            else => error.UnsupportedSection,
-        };
+        if (section_type == S_REGULAR) return .data;
+        if (section_type == S_ZEROFILL or section_type == S_GB_ZEROFILL) return .bss;
+        return error.UnsupportedSection;
     }
     if (std.mem.eql(u8, segname, "__LD") and std.mem.eql(u8, sectname, "__compact_unwind")) return .skip;
     if (std.mem.eql(u8, segname, "__DWARF")) {
