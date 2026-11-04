@@ -678,6 +678,7 @@ const CustomCase = enum {
     issue_12220_shared_object_cache_literals,
     issue_12564_package_from_numeral_cache,
     issue_12809_boxed_callable_warm_check,
+    local_format_outer_type_var_cache,
     issue_12693_shared_package_cache,
     issue_12701_shared_package_codec_cache,
     issue_12747_check_then_build,
@@ -1561,6 +1562,9 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test reports anonymous recursion reached through a method call on a flex receiver (specialize=yes)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/AnonymousRecursionThroughFlexDispatch.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "anonymous recursion" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test reports anonymous recursion reached through a method call on a flex receiver (specialize=no)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/AnonymousRecursionThroughFlexDispatch.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "anonymous recursion" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test encodes through a local format type's local procedures (specialize=yes)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/BoxyCodecLocalFormat.roc", .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test restores stored encoders whose local format reads its builder's type variable at Apples (specialize=yes)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/local_format_outer_type_var/ApplesOuterTypeVar.roc", .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test restores stored encoders whose local format reads its builder's type variable at Pears (specialize=yes)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/local_format_outer_type_var/PearsOuterTypeVar.roc", .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test restores stored encoders whose local format reads its builder's type variable from a cold and a warm cache (specialize=yes)", .timeout_ms = 600_000, .body = .{ .custom = .local_format_outer_type_var_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reports stored nominal boxes and rows read at Bool (dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcomes } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reports stored nominal boxes and rows read at Bool (interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcomes } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reuses each module's test outcome file across edits (dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcome_files } },
@@ -6111,6 +6115,7 @@ fn runCustomCase(
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
         .issue_12564_package_from_numeral_cache => customIssue12564PackageFromNumeralCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12809_boxed_callable_warm_check => customIssue12809BoxedCallableWarmCheck(io, allocator, &env, &timer, timeout_ms),
+        .local_format_outer_type_var_cache => customLocalFormatOuterTypeVarCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12693_shared_package_cache => customIssue12693SharedPackageCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12701_shared_package_codec_cache => customIssue12701SharedPackageCodecCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12747_check_then_build => customIssue12747CheckThenBuild(io, allocator, &env, &timer, timeout_ms),
@@ -14841,6 +14846,38 @@ fn customStoredRootDeclaredRow(io: std.Io, allocator: Allocator, env: *const Cas
         .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }},
         .not_contains = &not_contains,
     })) |failure| return failure;
+    return null;
+}
+
+// Each module stores encoders built at one instantiation of a builder whose
+// local format type's string method reads the builder's type variable. The
+// first run evaluates and caches them; the second restores them from that
+// cache. Both must encode with the instantiated variable.
+fn customLocalFormatOuterTypeVarCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const modules = [_][]const u8{
+        "test/cli/local_format_outer_type_var/ApplesOuterTypeVar.roc",
+        "test/cli/local_format_outer_type_var/PearsOuterTypeVar.roc",
+    };
+    for (modules) |module| {
+        for (0..2) |_| {
+            if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+                .args = &.{ "test", "--specialize=yes" },
+                .roc_file = module,
+                .exit = .success,
+                .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }},
+                .not_contains = &.{
+                    .{ .stream = .stderr, .text = "invariant violated" },
+                    .{ .stream = .stderr, .text = "panic" },
+                },
+            })) |failure| return failure;
+        }
+    }
     return null;
 }
 
