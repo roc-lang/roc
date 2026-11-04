@@ -959,11 +959,11 @@ fn dispatchNodes(
     comptime selected: fn (static_dispatch.CheckedCallResolution) bool,
 ) Allocator.Error!NodeBits {
     const plans = bodies.tables.plans orelse invariant("a body analysis ran without the module's dispatch plans");
-    const dispatch = bodies.tables.dispatch orelse invariant("a body analysis ran without the module's dispatch resolution");
     var bits = try std.DynamicBitSetUnmanaged.initEmpty(allocator, bodies.nodeCount());
     errdefer bits.deinit(allocator);
     for ([_][]const static_dispatch.PlanKV{ plans.by_node, plans.numeral_by_node, plans.quote_by_node }) |entries| {
         for (entries) |entry| {
+            const dispatch = bodies.tables.dispatch orelse invariant("a body analysis read a dispatch plan without the module's dispatch resolution");
             if (selected((try dispatch.plan(@fromBackingInt(entry.val))).resolution)) bits.set(entry.key);
         }
     }

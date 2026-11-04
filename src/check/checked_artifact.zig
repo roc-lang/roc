@@ -3615,13 +3615,11 @@ pub const StoredNominalId = enum(u32) { _ };
 /// alias the pools; no allocation.
 ///
 /// ALIASING INVARIANT: returned slices and owner-module pointers borrow the
-/// store's pools and payload array. On a frozen/deserialized store the pools
-/// are immutable (buffer-backed), so this is unconditionally safe—the common case (all post-load consumers: lowering, glue).
-/// During CONSTRUCTION the pools are growable `ArrayList`s, so a build-time caller
-/// must not retain a returned slice across a subsequent pool-growing call
-/// (`appendPool`/`commitPayload`/…), which may reallocate and dangle it; snapshot
-/// or `dupe` first (as `cloneCheckedTypeRootSubstituting` and `instantiateNominalBacking`
-/// do). `appendPool` asserts `!serialized` to mark that growth boundary.
+/// store's pools and payload array. A caller must not retain a returned slice
+/// across a subsequent pool-growing call (`appendPool`/`commitPayload`/…):
+/// growth copies a still-borrowed column into owned memory and may reallocate
+/// an owned one, either of which dangles the slice. Snapshot or `dupe` first
+/// (as `cloneCheckedTypeRootSubstituting` and `instantiateNominalBacking` do).
 fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype) Live {
     const Stored = @typeInfo(@TypeOf(stored)).pointer.child;
     const info = @typeInfo(Live);
@@ -4687,10 +4685,6 @@ pub const CheckedTypeStore = struct {
     /// by importing module and imported id, so an imported type projected
     /// twice names one root.
     projected_imports: std.AutoHashMapUnmanaged(ProjectedImportKey, CheckedTypeId) = .empty,
-    /// True for a store reconstructed from a serialized buffer (pools point into
-    /// buffer-owned memory and must not be freed).
-    serialized: bool = false,
-
     const SchemeRootKey = struct { root: CheckedTypeId, domain: CheckedTypeSchemeDomain };
     const ProjectedImportKey = struct { module: [32]u8, ty: CheckedTypeId };
 
@@ -4775,11 +4769,8 @@ pub const CheckedTypeStore = struct {
 
     /// Append `items` to the pool holding `T`, returning their range.
     fn appendPool(self: *CheckedTypeStore, allocator: Allocator, comptime T: type, items: []const T) Allocator.Error!CheckedTypeRange {
-        // Pools only grow during construction. A frozen (deserialized) store's pools
-        // alias buffer memory and must never be appended to—this catches such a bug,
-        // and is the boundary where build-time aliasing slices could be invalidated
-        // (see the `payload`/`formalArgs` aliasing-invariant docs).
-        std.debug.assert(!self.serialized);
+        // Growth is where build-time aliasing slices are invalidated (see the
+        // `payload`/`formalArgs` aliasing-invariant docs).
         const field = comptime poolField(CheckedTypeStore, T);
         if (items.len != 0) try self.ownColumn(allocator, @field(BorrowedColumn, field));
         return artifact_serialize.appendSpan(CheckedTypeRange, T, &@field(self, field), allocator, items);
@@ -5264,7 +5255,6 @@ pub const CheckedTypeStore = struct {
         domain: CheckedTypeSchemeDomain,
         root: CheckedTypeId,
     ) Allocator.Error!CheckedTypeSchemeId {
-        std.debug.assert(!self.serialized);
         const entry = try self.scheme_by_root.getOrPut(allocator, .{ .root = root, .domain = domain });
         if (entry.found_existing) return entry.value_ptr.*;
         errdefer _ = self.scheme_by_root.remove(.{ .root = root, .domain = domain });
@@ -34839,8 +34829,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x77, 0xF2, 0x4C, 0xA1, 0xCE, 0xD5, 0x85, 0x32, 0x18, 0x81, 0x43, 0xEF, 0xE2, 0x39, 0x4B, 0xF3,
-        0xBE, 0x49, 0xDE, 0xF6, 0x80, 0x09, 0x66, 0x0E, 0x81, 0x20, 0xD2, 0x12, 0x5B, 0x74, 0x5D, 0x70,
+        0xAD, 0x56, 0x53, 0x15, 0x85, 0x20, 0x3B, 0x76, 0xFB, 0xB1, 0xD8, 0x15, 0xB4, 0x26, 0xA4, 0x23,
+        0xB9, 0xE0, 0x74, 0xF1, 0x9E, 0x74, 0x29, 0x1E, 0xD3, 0xAF, 0x3A, 0x14, 0xC2, 0x8E, 0x69, 0x33,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
