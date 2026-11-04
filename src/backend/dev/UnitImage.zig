@@ -1722,63 +1722,60 @@ fn parseCoff(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildEr
         if (section_number > 0 and @as(usize, @intCast(section_number)) > section_count) return error.InvalidObject;
         const section: ?u32 = if (section_number > 0) @as(u32, @intCast(section_number - 1)) else null;
         const is_function = symbol_type & 0xf0 == IMAGE_SYM_DTYPE_FUNCTION << 4;
-        switch (storage_class) {
-            IMAGE_SYM_CLASS_EXTERNAL => {
-                if (section_number == IMAGE_SYM_ABSOLUTE or section_number == IMAGE_SYM_DEBUG) return error.UnsupportedSymbol;
-                if (section == null) {
-                    // A nonzero value is a common symbol.
-                    if (value != 0) return error.UnsupportedSymbol;
-                    symbols[index] = .{ .name = name, .value = 0, .size = 0, .section = null, .bind = .global, .kind = .notype, .hidden = false, .skip = false };
-                } else {
-                    const in = raw[section.?];
-                    if (value > in.size) return error.InvalidObject;
-                    const comdat = in.characteristics & IMAGE_SCN_LNK_COMDAT != 0 and in.comdat_selection != IMAGE_COMDAT_SELECT_NODUPLICATES and in.comdat_selection != IMAGE_COMDAT_SELECT_ASSOCIATIVE;
-                    symbols[index] = .{
-                        .name = name,
-                        .value = value,
-                        .size = 0,
-                        .section = section,
-                        .bind = if (comdat) .weak else .global,
-                        .kind = if (is_function or in.characteristics & IMAGE_SCN_CNT_CODE != 0) .func else .object,
-                        .hidden = false,
-                        .skip = false,
-                    };
-                }
-            },
-            IMAGE_SYM_CLASS_STATIC => {
-                if (section == null) {
-                    // An absolute or debug static, such as a feature flag.
-                    symbols[index] = skipped;
-                } else if (aux_count != 0 and value == 0 and std.mem.eql(u8, name, raw[section.?].name)) {
-                    // The section's own symbol, whose auxiliary record
-                    // carries the COMDAT selection.
-                    const aux = bytes[symtab_offset + (index + 1) * coff_symbol_size ..][0..coff_symbol_size];
-                    raw[section.?].comdat_selection = aux[14];
-                    symbols[index] = .{ .name = "", .value = 0, .size = 0, .section = section, .bind = .local, .kind = .section, .hidden = false, .skip = false };
-                } else {
-                    const in = raw[section.?];
-                    if (value > in.size) return error.InvalidObject;
-                    symbols[index] = .{
-                        .name = name,
-                        .value = value,
-                        .size = 0,
-                        .section = section,
-                        .bind = .local,
-                        .kind = if (is_function or in.characteristics & IMAGE_SCN_CNT_CODE != 0) .func else .object,
-                        .hidden = false,
-                        .skip = false,
-                    };
-                }
-            },
-            IMAGE_SYM_CLASS_WEAK_EXTERNAL => {
-                if (aux_count == 0 or section != null) return error.UnsupportedSymbol;
+        if (storage_class == IMAGE_SYM_CLASS_EXTERNAL) {
+            if (section_number == IMAGE_SYM_ABSOLUTE or section_number == IMAGE_SYM_DEBUG) return error.UnsupportedSymbol;
+            if (section == null) {
+                // A nonzero value is a common symbol.
+                if (value != 0) return error.UnsupportedSymbol;
+                symbols[index] = .{ .name = name, .value = 0, .size = 0, .section = null, .bind = .global, .kind = .notype, .hidden = false, .skip = false };
+            } else {
+                const in = raw[section.?];
+                if (value > in.size) return error.InvalidObject;
+                const comdat = in.characteristics & IMAGE_SCN_LNK_COMDAT != 0 and in.comdat_selection != IMAGE_COMDAT_SELECT_NODUPLICATES and in.comdat_selection != IMAGE_COMDAT_SELECT_ASSOCIATIVE;
+                symbols[index] = .{
+                    .name = name,
+                    .value = value,
+                    .size = 0,
+                    .section = section,
+                    .bind = if (comdat) .weak else .global,
+                    .kind = if (is_function or in.characteristics & IMAGE_SCN_CNT_CODE != 0) .func else .object,
+                    .hidden = false,
+                    .skip = false,
+                };
+            }
+        } else if (storage_class == IMAGE_SYM_CLASS_STATIC) {
+            if (section == null) {
+                // An absolute or debug static, such as a feature flag.
+                symbols[index] = skipped;
+            } else if (aux_count != 0 and value == 0 and std.mem.eql(u8, name, raw[section.?].name)) {
+                // The section's own symbol, whose auxiliary record
+                // carries the COMDAT selection.
                 const aux = bytes[symtab_offset + (index + 1) * coff_symbol_size ..][0..coff_symbol_size];
-                const tag = readU32(aux, 0);
-                if (tag >= symbol_count) return error.InvalidObject;
-                try weak_tags.append(arena, .{ .symbol = @intCast(index), .tag = tag });
-                symbols[index] = .{ .name = name, .value = 0, .size = 0, .section = null, .bind = .weak, .kind = .notype, .hidden = false, .skip = false };
-            },
-            else => symbols[index] = skipped,
+                raw[section.?].comdat_selection = aux[14];
+                symbols[index] = .{ .name = "", .value = 0, .size = 0, .section = section, .bind = .local, .kind = .section, .hidden = false, .skip = false };
+            } else {
+                const in = raw[section.?];
+                if (value > in.size) return error.InvalidObject;
+                symbols[index] = .{
+                    .name = name,
+                    .value = value,
+                    .size = 0,
+                    .section = section,
+                    .bind = .local,
+                    .kind = if (is_function or in.characteristics & IMAGE_SCN_CNT_CODE != 0) .func else .object,
+                    .hidden = false,
+                    .skip = false,
+                };
+            }
+        } else if (storage_class == IMAGE_SYM_CLASS_WEAK_EXTERNAL) {
+            if (aux_count == 0 or section != null) return error.UnsupportedSymbol;
+            const aux = bytes[symtab_offset + (index + 1) * coff_symbol_size ..][0..coff_symbol_size];
+            const tag = readU32(aux, 0);
+            if (tag >= symbol_count) return error.InvalidObject;
+            try weak_tags.append(arena, .{ .symbol = @intCast(index), .tag = tag });
+            symbols[index] = .{ .name = name, .value = 0, .size = 0, .section = null, .bind = .weak, .kind = .notype, .hidden = false, .skip = false };
+        } else {
+            symbols[index] = skipped;
         }
         for (1..aux_count + 1) |aux| symbols[index + aux] = skipped;
         index += 1 + aux_count;
@@ -1868,27 +1865,23 @@ fn decodeCoffReloc(arm64: bool, reloc_type: u16, section_bytes: []const u8, offs
     if (@as(u64, offset) + width > section_size) return error.InvalidObject;
     const field = section_bytes[offset..][0..@intCast(width)];
     if (!arm64) {
-        return switch (reloc_type) {
-            IMAGE_REL_AMD64_ADDR64 => .{ .kind = .abs64, .addend = @bitCast(readU64(field, 0)) },
-            IMAGE_REL_AMD64_ADDR32 => .{ .kind = .abs32, .addend = readU32(field, 0) },
-            IMAGE_REL_AMD64_ADDR32NB => .{ .kind = .rva32, .addend = readU32(field, 0) },
-            IMAGE_REL_AMD64_REL32...IMAGE_REL_AMD64_REL32_5 => .{ .kind = .pc32, .addend = @as(i64, @as(i32, @bitCast(readU32(field, 0)))) - 4 - @as(i64, reloc_type - IMAGE_REL_AMD64_REL32) },
-            IMAGE_REL_AMD64_SECREL => .{ .kind = .abs32, .addend = readU32(field, 0), .section_relative = true },
-            else => error.UnsupportedRelocation,
-        };
+        if (reloc_type == IMAGE_REL_AMD64_ADDR64) return .{ .kind = .abs64, .addend = @bitCast(readU64(field, 0)) };
+        if (reloc_type == IMAGE_REL_AMD64_ADDR32) return .{ .kind = .abs32, .addend = readU32(field, 0) };
+        if (reloc_type == IMAGE_REL_AMD64_ADDR32NB) return .{ .kind = .rva32, .addend = readU32(field, 0) };
+        if (reloc_type >= IMAGE_REL_AMD64_REL32 and reloc_type <= IMAGE_REL_AMD64_REL32_5) return .{ .kind = .pc32, .addend = @as(i64, @as(i32, @bitCast(readU32(field, 0)))) - 4 - @as(i64, reloc_type - IMAGE_REL_AMD64_REL32) };
+        if (reloc_type == IMAGE_REL_AMD64_SECREL) return .{ .kind = .abs32, .addend = readU32(field, 0), .section_relative = true };
+        return error.UnsupportedRelocation;
     }
     const instruction = readU32(field, 0);
-    return switch (reloc_type) {
-        IMAGE_REL_ARM64_ADDR32 => .{ .kind = .abs32, .addend = instruction },
-        IMAGE_REL_ARM64_ADDR32NB => .{ .kind = .rva32, .addend = instruction },
-        IMAGE_REL_ARM64_BRANCH26 => .{ .kind = .branch26, .addend = @as(i64, @as(i26, @bitCast(@as(u26, @truncate(instruction))))) << 2 },
-        IMAGE_REL_ARM64_PAGEBASE_REL21 => .{ .kind = .page21, .addend = ((instruction >> 29) & 0x3) | ((instruction >> 3) & 0x1f_fffc) },
-        IMAGE_REL_ARM64_PAGEOFFSET_12A => .{ .kind = .pageoff12, .addend = (instruction >> 10) & 0xfff },
-        IMAGE_REL_ARM64_PAGEOFFSET_12L => .{ .kind = .pageoff12, .addend = @as(i64, (instruction >> 10) & 0xfff) << (pageOffsetShift(instruction) orelse return error.UnsupportedRelocation) },
-        IMAGE_REL_ARM64_SECREL => .{ .kind = .abs32, .addend = instruction, .section_relative = true },
-        IMAGE_REL_ARM64_ADDR64 => .{ .kind = .abs64, .addend = @bitCast(readU64(field, 0)) },
-        else => error.UnsupportedRelocation,
-    };
+    if (reloc_type == IMAGE_REL_ARM64_ADDR32) return .{ .kind = .abs32, .addend = instruction };
+    if (reloc_type == IMAGE_REL_ARM64_ADDR32NB) return .{ .kind = .rva32, .addend = instruction };
+    if (reloc_type == IMAGE_REL_ARM64_BRANCH26) return .{ .kind = .branch26, .addend = @as(i64, @as(i26, @bitCast(@as(u26, @truncate(instruction))))) << 2 };
+    if (reloc_type == IMAGE_REL_ARM64_PAGEBASE_REL21) return .{ .kind = .page21, .addend = ((instruction >> 29) & 0x3) | ((instruction >> 3) & 0x1f_fffc) };
+    if (reloc_type == IMAGE_REL_ARM64_PAGEOFFSET_12A) return .{ .kind = .pageoff12, .addend = (instruction >> 10) & 0xfff };
+    if (reloc_type == IMAGE_REL_ARM64_PAGEOFFSET_12L) return .{ .kind = .pageoff12, .addend = @as(i64, (instruction >> 10) & 0xfff) << (pageOffsetShift(instruction) orelse return error.UnsupportedRelocation) };
+    if (reloc_type == IMAGE_REL_ARM64_SECREL) return .{ .kind = .abs32, .addend = instruction, .section_relative = true };
+    if (reloc_type == IMAGE_REL_ARM64_ADDR64) return .{ .kind = .abs64, .addend = @bitCast(readU64(field, 0)) };
+    return error.UnsupportedRelocation;
 }
 
 fn classifyCoff(name: []const u8, characteristics: u32, options: BuildOptions) BuildError!SectionClass {
@@ -1925,7 +1918,7 @@ fn coffSectionName(field: *const [8]u8, strtab: []const u8) BuildError![]const u
     if (field[1] == '/') {
         const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         for (field[2..]) |digit| {
-            const value = std.mem.indexOfScalar(u8, alphabet, digit) orelse return error.InvalidObject;
+            const value = std.mem.findScalar(u8, alphabet, digit) orelse return error.InvalidObject;
             offset = offset * 64 + value;
         }
     } else {
@@ -2009,12 +2002,10 @@ const IMAGE_SCN_MEM_DISCARDABLE = 0x0200_0000;
 const IMAGE_SCN_MEM_EXECUTE = 0x2000_0000;
 const IMAGE_SCN_MEM_READ = 0x4000_0000;
 const IMAGE_SCN_MEM_WRITE = 0x8000_0000;
-const IMAGE_SYM_UNDEFINED = 0;
 const IMAGE_SYM_ABSOLUTE = -1;
 const IMAGE_SYM_DEBUG = -2;
 const IMAGE_SYM_CLASS_EXTERNAL = 2;
 const IMAGE_SYM_CLASS_STATIC = 3;
-const IMAGE_SYM_CLASS_FILE = 103;
 const IMAGE_SYM_CLASS_WEAK_EXTERNAL = 105;
 const IMAGE_SYM_DTYPE_FUNCTION = 2;
 const IMAGE_COMDAT_SELECT_NODUPLICATES = 1;

@@ -30,7 +30,6 @@ pub const ProvideKind = host_prelink.ProvideKind;
 pub const Provide = host_prelink.Provide;
 /// A procedure window: a jump to the entry wrapper and traps.
 pub const procedure_window = host_prelink.procedure_window;
-const window_align = host_prelink.window_align;
 /// The section and file alignment of the host, which the prelink sets.
 pub const page_size: u64 = 0x1000;
 
@@ -39,7 +38,9 @@ pub const procedure_section = ".rocprov";
 /// The section holding the value windows.
 pub const value_section = ".rocpval";
 
+/// The COFF machine type of an x86_64 executable.
 pub const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
+/// The COFF machine type of an arm64 executable.
 pub const IMAGE_FILE_MACHINE_ARM64: u16 = 0xaa64;
 
 const IMAGE_SCN_CNT_CODE: u32 = 0x0000_0020;

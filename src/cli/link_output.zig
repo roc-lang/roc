@@ -18,11 +18,7 @@ const linux = std.os.linux;
 
 /// The output executable of a fast dev link, written through the compiler
 /// host's own system calls.
-pub const OutputFile = switch (builtin.os.tag) {
-    .linux => LinuxOutputFile,
-    .windows => WindowsOutputFile,
-    else => PosixOutputFile,
-};
+pub const OutputFile = if (builtin.os.tag == .linux) LinuxOutputFile else if (builtin.os.tag == .windows) WindowsOutputFile else PosixOutputFile;
 
 /// The ways creating, writing or publishing an `OutputFile` can fail.
 pub const OutputError = Allocator.Error || error{ AccessDenied, NoSpaceLeft, FileNotFound, Unexpected };
@@ -333,12 +329,10 @@ const win32 = struct {
     extern "kernel32" fn Sleep(milliseconds: DWORD) callconv(.winapi) void;
 
     fn failure(code: DWORD) OutputError {
-        return switch (code) {
-            ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION => error.AccessDenied,
-            ERROR_DISK_FULL, ERROR_HANDLE_DISK_FULL => error.NoSpaceLeft,
-            ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND => error.FileNotFound,
-            else => error.Unexpected,
-        };
+        if (code == ERROR_ACCESS_DENIED or code == ERROR_SHARING_VIOLATION) return error.AccessDenied;
+        if (code == ERROR_DISK_FULL or code == ERROR_HANDLE_DISK_FULL) return error.NoSpaceLeft;
+        if (code == ERROR_FILE_NOT_FOUND or code == ERROR_PATH_NOT_FOUND) return error.FileNotFound;
+        return error.Unexpected;
     }
 };
 
@@ -380,7 +374,10 @@ pub const WindowsOutputFile = struct {
             const handle = win32.CreateFileW(temp_w, win32.GENERIC_READ | win32.GENERIC_WRITE, win32.FILE_SHARE_READ | win32.FILE_SHARE_DELETE, null, win32.CREATE_ALWAYS, win32.FILE_ATTRIBUTE_NORMAL, null);
             if (handle != std.os.windows.INVALID_HANDLE_VALUE) return .{ .handle = handle, .dest = dest, .dest_w = dest_w, .temp_w = temp_w };
             const err = win32.failure(win32.GetLastError());
-            if (err != error.AccessDenied or attempt + 1 >= windows_attempts) return err;
+            switch (err) {
+                error.AccessDenied => if (attempt + 1 >= windows_attempts) return err,
+                error.NoSpaceLeft, error.FileNotFound, error.Unexpected, error.OutOfMemory => return err,
+            }
             win32.Sleep(@as(u32, 10) << @intCast(attempt));
         }
     }
@@ -441,7 +438,10 @@ pub const WindowsOutputFile = struct {
         while (true) : (attempt += 1) {
             if (win32.MoveFileExW(self.temp_w, self.dest_w, win32.MOVEFILE_REPLACE_EXISTING) != 0) return;
             const err = win32.failure(win32.GetLastError());
-            if (err != error.AccessDenied or attempt + 1 >= windows_attempts) return err;
+            switch (err) {
+                error.AccessDenied => if (attempt + 1 >= windows_attempts) return err,
+                error.NoSpaceLeft, error.FileNotFound, error.Unexpected, error.OutOfMemory => return err,
+            }
             win32.Sleep(@as(u32, 10) << @intCast(attempt));
         }
     }
