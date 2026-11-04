@@ -35627,7 +35627,9 @@ pub const CheckedModuleArtifact = struct {
     pairing_arena: ?*base.SingleThreadArena = null,
 
     pub fn owningAllocator(self: *const CheckedModuleArtifact) Allocator {
-        return if (self.pairing_arena) |arena| arena.child_allocator else self.canonical_names.allocator;
+        if (self.pairing_arena) |arena| return arena.child_allocator;
+        if (self.reopened_arena) |arena| return arena.child_allocator;
+        return self.canonical_names.allocator;
     }
 
     /// Semantic identity of executable code, including the session's exact
@@ -35700,14 +35702,17 @@ pub const CheckedModuleArtifact = struct {
     /// this artifact owns, every unevaluated root awaits evaluation again,
     /// and the artifact awaits finalization. Roots this compilation does not
     /// demand either return to `unevaluated` when it seals the artifact.
-    pub fn reopenForEvaluation(self: *CheckedModuleArtifact, allocator: Allocator) Allocator.Error!void {
+    pub fn reopenForEvaluation(self: *CheckedModuleArtifact) Allocator.Error!void {
         if (self.evaluation_state != .finalized) checkedArtifactInvariant("only a finalized artifact can be reopened for evaluation", .{});
         if (self.reopened_arena != null) checkedArtifactInvariant("checked artifact was reopened for evaluation twice", .{});
         // A relocated cache entry's columns alias its buffer and a pairing
         // overlay's borrow its platform, so they move into owned storage; an
-        // artifact this process published already owns them.
+        // artifact this process published already owns them. The arena
+        // belongs to the allocator that owns the artifact, which
+        // `owningAllocator` reads back through the arena.
         if (self.serialized_backing != null or self.pairing_arena != null) {
             const owner = if (self.pairing_arena) |arena| arena.allocator() else blk: {
+                const allocator = self.owningAllocator();
                 const arena = try allocator.create(base.SingleThreadArena);
                 arena.* = base.SingleThreadArena.init(allocator);
                 self.reopened_arena = arena;
@@ -35717,6 +35722,18 @@ pub const CheckedModuleArtifact = struct {
             self.const_templates = try copyPairingColumns(ConstTemplateTable, self.const_templates, owner);
             self.exported_const_templates = try copyPairingColumns(ExportedConstTemplateTable, self.exported_const_templates, owner);
             self.const_store = try copyPairingColumns(ConstStore, self.const_store, owner);
+            // A stored type names its labels and nominal types in this name
+            // store, and a value evaluated here can reach names the module's
+            // own source never mentions (the capture types of an imported
+            // closure), so the name store grows with the evaluation columns.
+            // A pairing overlay cloned its platform's names when it was
+            // composed; a store read from a cache entry still aliases the
+            // entry's buffer.
+            if (self.canonical_names.serialized) {
+                var frozen = self.canonical_names;
+                self.canonical_names = try frozen.clone(owner);
+                frozen.deinit();
+            }
         }
         for (self.compile_time_roots.roots) |*root| {
             if (root.payload == .unevaluated) root.payload = .pending;
@@ -36063,6 +36080,7 @@ pub const CheckedModuleArtifact = struct {
     }
 
     fn deinitInternal(self: *CheckedModuleArtifact, allocator: Allocator, comptime deinit_module_env: bool) void {
+        const owning = self.owningAllocator();
         if (self.reopened_arena) |arena| {
             const owner = arena.child_allocator;
             arena.deinit();
@@ -36089,13 +36107,13 @@ pub const CheckedModuleArtifact = struct {
                 self.module_env = undefined;
             }
             if (!self.serialized_backing_is_static) {
-                // `deserialize` allocated `backing` with the same gpa it recorded in
-                // `canonical_names.allocator`, and every teardown site passes that
-                // allocator back here. Assert the coupling so a caller freeing the
-                // frozen buffer with a different allocator trips in Debug rather than
+                // `deserialize` allocated `backing` with the gpa it recorded in
+                // `canonical_names.allocator`, which a reopened artifact's arena
+                // took over, and every teardown site passes that allocator back
+                // here. Assert the coupling so a caller freeing the frozen buffer
+                // with a different allocator trips in Debug rather than
                 // corrupting an unrelated heap.
-                std.debug.assert(allocator.ptr == self.canonical_names.allocator.ptr and
-                    allocator.vtable == self.canonical_names.allocator.vtable);
+                std.debug.assert(allocator.ptr == owning.ptr and allocator.vtable == owning.vtable);
                 allocator.free(backing);
             }
             self.* = undefined;

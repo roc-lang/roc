@@ -2235,9 +2235,13 @@ A checked module cache entry records every requested root it did not evaluate
 with the explicit `unevaluated` payload; its constant template keeps its
 `eval_template` state and the constant store holds nothing for it. When a
 compilation loads a finalized checked module with unevaluated requests, it
-reopens that module before evaluation: the evaluation columns move into
-storage the module owns, every unevaluated root returns to `pending`, and the
-module joins finalization with the compilation's other modules. Finalization
+reopens that module before evaluation: the evaluation columns (the
+compile-time roots, the constant templates, the constant store, and the
+canonical name store, since a stored type names its labels and nominal types
+there and a value evaluated here can reach names the module's own source never
+mentions, such as the capture types of an imported closure) move into storage
+the module owns, every unevaluated root returns to `pending`, and the module
+joins finalization with the compilation's other modules. Finalization
 requests only the pending roots of the modules it finalizes, so the reopened
 module's evaluated roots are restored from its store like any other module's,
 and its demanded pending roots evaluate against the same checked module data
