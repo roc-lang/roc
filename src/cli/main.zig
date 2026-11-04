@@ -11267,13 +11267,15 @@ const WasmFastLink = struct {
         const provides = try ctx.arena.alloc([]const u8, symbols.provides.len);
         for (symbols.provides, provides) |entry, *name| name.* = entry.ffi_symbol;
 
+        const hosted = try fast_dev_link.sortedUnion(ctx.arena, &.{symbols.hosted});
+        const platform_files = try hostInputPaths(ctx, link_inputs);
         const self = try ctx.gpa.create(WasmFastLink);
         errdefer ctx.gpa.destroy(self);
         self.* = .{
             .spec = .{
                 .target = target,
                 .support_objects = variants,
-                .platform_files = try hostInputPaths(ctx, link_inputs),
+                .platform_files = platform_files,
                 .link_items = link_items.items,
                 .bundle_hash = build_env.getPlatformBundleHash(),
                 .needs_host = module_output,
@@ -11288,8 +11290,9 @@ const WasmFastLink = struct {
                 else => |file_err| return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = file_err } }),
             } else null,
             .provides = provides,
-            .hosted = try fast_dev_link.sortedUnion(ctx.arena, &.{symbols.hosted}),
+            .hosted = hosted,
         };
+        errdefer if (self.output) |*output| output.discard();
         std.debug.assert(!no_cache); // `wasmFastLinkApplies` requires the cache
         self.job = .{
             .gpa = ctx.gpa,
@@ -11298,7 +11301,6 @@ const WasmFastLink = struct {
             .spec = &self.spec,
         };
         self.job.start() catch |err| {
-            if (self.output) |*output| output.discard();
             std.log.err("Starting the wasm fast dev link's image job failed: {}", .{err});
             return error.NativeCompilationFailed;
         };
@@ -11349,9 +11351,16 @@ const WasmFastLink = struct {
                         .host => return ctx.fail(.{ .wasm_host_unsupported = .{ .reason = unsupported.?.describe(), .target = target_name } }),
                         .support => base.invariant("wasm fast dev link invariant violated: the compiler's support objects do not convert: {s}", .{unsupported.?.describe()}),
                     },
-                    error.ReadFailed, error.ImageTooLarge, error.UnexpectedEnd, error.Overflow, error.InvalidMagic, error.InvalidVersion, error.InvalidSection, error.MissingLinkingSection, error.InvalidLinkingVersion, error.HasInternalGlobals => |read_err| {
-                        std.log.err("Preparing the {s} for a wasm dev build failed: {s}", .{ @tagName(kind), @errorName(read_err) });
+                    error.ReadFailed => {
+                        std.log.err("Writing or reading the {s} objects for a wasm dev build failed", .{@tagName(kind)});
                         return failLink(ctx, error.LinkFailed, target_name);
+                    },
+                    error.ImageTooLarge, error.UnexpectedEnd, error.Overflow, error.InvalidMagic, error.InvalidVersion, error.InvalidSection, error.MissingLinkingSection, error.InvalidLinkingVersion, error.HasInternalGlobals => |read_err| switch (kind) {
+                        .host => {
+                            std.log.err("Preparing the host for a wasm dev build failed: {s}", .{@errorName(read_err)});
+                            return failLink(ctx, error.LinkFailed, target_name);
+                        },
+                        .support => base.invariant("wasm fast dev link invariant violated: the compiler's support objects do not read: {s}", .{@errorName(read_err)}),
                     },
                 };
                 owned.* = bytes;
@@ -11508,7 +11517,22 @@ const WasmFastLink = struct {
     fn reportFailure(self: *WasmFastLink, ctx: *CliCtx, err: wasm_link.LinkError, outcome: wasm_link.Outcome, target_name: []const u8) CliMainError {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.MissingHostSymbols => return ctx.fail(.{ .missing_host_symbols = .{ .symbols = outcome.missing, .target = target_name } }),
+            error.MissingSymbols => {
+                const symbols = try ctx.arena.alloc(cli_problem.WasmMissingSymbol, outcome.missing.len);
+                for (outcome.missing, symbols) |missing, *symbol| symbol.* = .{
+                    .name = missing.name,
+                    .kind = switch (missing.kind) {
+                        .data => .data,
+                        .table => .table,
+                    },
+                    .needed_by = switch (missing.needed_by) {
+                        .host => .host,
+                        .support => .support,
+                        .unit => .unit,
+                    },
+                };
+                return ctx.fail(.{ .wasm_symbols_undefined = .{ .symbols = symbols, .target = target_name } });
+            },
             error.UndefinedExports => return ctx.fail(.{ .wasm_exports_undefined = .{ .symbols = outcome.undefined_exports, .target = target_name } }),
             error.ImportConflict => return ctx.fail(.{ .wasm_import_conflict = .{ .symbol = outcome.conflict.?, .target = target_name } }),
             error.EngineLimit => return ctx.fail(.{ .wasm_engine_limit = .{ .what = outcome.limit.?.what, .count = outcome.limit.?.count, .limit = outcome.limit.?.limit, .target = target_name } }),

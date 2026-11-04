@@ -37,7 +37,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RBWU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 
 /// The alignment an image's bytes need in memory for `View`.
 pub const alignment: std.mem.Alignment = .@"16";
@@ -120,6 +120,11 @@ pub const export_object_exported: u32 = 4;
 /// `Import.flags` bit: a table site names the import, so the function it
 /// resolves to needs a table slot.
 pub const import_address_taken: u8 = 1;
+/// `Import.flags` bit: every reference to the import is weak, so a link
+/// that finds no definition resolves it to null (a function a call reaches
+/// traps, its table slot is 0; a data symbol's address is 0) instead of
+/// importing it.
+pub const import_weak: u8 = 2;
 /// `Segment.flags` bit: the segment is zero-filled memory with no bytes.
 pub const segment_zero_fill: u32 = 1;
 /// `Header.flags` bit: the unit's code checks stack bounds, and every
@@ -246,7 +251,7 @@ pub const Import = extern struct {
     /// For a global: its value type and whether it is mutable.
     valtype: u8,
     mutable: u8,
-    /// `import_address_taken`.
+    /// `import_address_taken`, `import_weak`.
     flags: u8,
 };
 
@@ -442,7 +447,7 @@ pub const View = struct {
             try self.checkName(import.name);
             try self.checkName(import.field);
             if (import.name == 0 or import.field == 0) return error.InvalidImage;
-            if (import.flags & ~import_address_taken != 0) return error.InvalidImage;
+            if (import.flags & ~(import_address_taken | import_weak) != 0) return error.InvalidImage;
             const kind = std.enums.fromInt(ImportKind, import.kind) orelse return error.InvalidImage;
             switch (kind) {
                 .function => if (import.type != no_type and import.type >= self.header.type_count) return error.InvalidImage,
@@ -763,6 +768,8 @@ pub const InputImport = struct {
     valtype: u8 = 0,
     mutable: bool = false,
     address_taken: bool = false,
+    /// Every reference to the symbol is weak (`import_weak`).
+    weak: bool = false,
 };
 
 /// Why an input could not be encoded.
@@ -874,7 +881,7 @@ pub fn encode(allocator: Allocator, input: Input) EncodeError![]align(alignment.
         .kind = @backingInt(import.kind),
         .valtype = import.valtype,
         .mutable = @intFromBool(import.mutable),
-        .flags = if (import.address_taken) import_address_taken else 0,
+        .flags = (if (import.address_taken) import_address_taken else 0) | (if (import.weak) import_weak else 0),
     };
 
     const globals_out = try arena.alloc(Global, input.globals.len);

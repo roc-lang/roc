@@ -19,6 +19,14 @@ const lir = @import("lir");
 const unbundle = @import("unbundle");
 const cli_args = @import("cli_args.zig");
 
+/// A symbol a wasm image needs that nothing it may resolve to defines.
+pub const WasmMissingSymbol = struct {
+    name: []const u8,
+    kind: enum { data, table },
+    /// The image that needs it.
+    needed_by: enum { host, support, unit },
+};
+
 /// Errors that can be attached to structured CLI problem reports.
 pub const ReportedError =
     Allocator.Error ||
@@ -303,6 +311,13 @@ pub const CliProblem = union(enum) {
         target: []const u8,
     },
 
+    /// Parts of a wasm program need data symbols or tables nothing that
+    /// may define them defines
+    wasm_symbols_undefined: struct {
+        symbols: []const WasmMissingSymbol,
+        target: []const u8,
+    },
+
     /// Two parts of a wasm program import one host function with
     /// different signatures
     wasm_import_conflict: struct {
@@ -484,6 +499,7 @@ pub const CliProblem = union(enum) {
             .dev_program_too_large,
             .wasm_engine_limit,
             .wasm_exports_undefined,
+            .wasm_symbols_undefined,
             .wasm_import_conflict,
             .wasm_memory_layout,
             .wasm_host_unsupported,
@@ -559,6 +575,7 @@ pub const CliProblem = union(enum) {
             .dev_program_too_large => |info| try createDevProgramTooLargeReport(allocator, info),
             .wasm_engine_limit => |info| try createWasmEngineLimitReport(allocator, info),
             .wasm_exports_undefined => |info| try createWasmExportsUndefinedReport(allocator, info),
+            .wasm_symbols_undefined => |info| try createWasmSymbolsUndefinedReport(allocator, info),
             .wasm_import_conflict => |info| try createWasmImportConflictReport(allocator, info),
             .wasm_memory_layout => |info| try createWasmMemoryLayoutReport(allocator, info),
             .wasm_host_unsupported => |info| try createWasmHostUnsupportedReport(allocator, info),
@@ -1263,6 +1280,33 @@ fn createWasmExportsUndefinedReport(allocator: Allocator, info: anytype) Allocat
     try report.document.addText("Every name in the platform header's ");
     try report.document.addAnnotated("exports", .emphasized);
     try report.document.addText(" list must be defined by the host inputs or provided by the application.");
+    return report;
+}
+
+fn createWasmSymbolsUndefinedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The wasm program for target {s} needs these symbols, and nothing that may define them does.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Undefined Wasm Symbols", headline, .fatal);
+    for (info.symbols) |symbol| {
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(symbol.name, .emphasized);
+        try report.document.addText(switch (symbol.kind) {
+            .data => ", a data symbol ",
+            .table => ", a table ",
+        });
+        try report.document.addText(switch (symbol.needed_by) {
+            .host => "the platform's host needs, which only a name the application provides to the host can define",
+            .support => "the compiler's support code needs, which the application or the platform's host inputs must define",
+            .unit => "the application needs, which the application or the platform's host inputs must define",
+        });
+    }
+    try report.document.addLineBreaks(2);
+    try report.document.addText("The host inputs are the ones listed in the platform header's ");
+    try report.document.addAnnotated("targets", .emphasized);
+    try report.document.addText(" section, and the names the application provides to the host are its ");
+    try report.document.addAnnotated("provides", .emphasized);
+    try report.document.addText(" and the data it exports.");
     return report;
 }
 

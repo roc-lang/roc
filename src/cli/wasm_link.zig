@@ -25,7 +25,14 @@
 //! link defines (`__stack_pointer`, `__stack_low`, ...), then to the host's
 //! definitions, and is otherwise left to the embedder. An import of the
 //! host resolves only to the names the app gives the host, then to the
-//! link's own symbols, then to the embedder.
+//! link's own symbols, then to the embedder. A weak import nothing defines
+//! resolves to null, as LLD resolves it: a call reaches a function that
+//! traps, a table slot is 0, and a data address is 0.
+//!
+//! The constructors of every placed image run, as LLD runs those of every
+//! object it links: from `__wasm_call_ctors` when something names it, and
+//! otherwise from a wrapper of each exported function that calls them
+//! before the function, as LLD's command exports do.
 //!
 //! Everything the composer decides is a function of the images and the
 //! platform's configuration: placement order by content digest, index
@@ -42,6 +49,7 @@ const linker = @import("linker.zig");
 const Allocator = std.mem.Allocator;
 const WasmUnitImage = backend.wasm.WasmUnitImage;
 const WasmModule = backend.wasm.WasmModule;
+const WasmLinking = backend.wasm.WasmLinking;
 const StackRoom = backend.wasm.StackRoom;
 const View = WasmUnitImage.View;
 const Executor = base.post_check_task_executor.Executor;
@@ -122,10 +130,21 @@ pub const MemoryProblem = struct {
     configured: u64,
 };
 
+/// A symbol an image needs that nothing it may resolve to defines.
+pub const MissingSymbol = struct {
+    name: []const u8,
+    kind: enum { data, table },
+    /// The image that needs it, which decides where it could have come
+    /// from: the app's own definitions, the link's symbols and the host's
+    /// definitions for the support code and the units; the names the app
+    /// gives the host and the link's symbols for the host.
+    needed_by: Role,
+};
+
 /// What a failed link reports beyond its error, allocated from the arena,
 /// which outlives the images and the platform's configuration.
 pub const Outcome = struct {
-    missing: []const []const u8 = &.{},
+    missing: []const MissingSymbol = &.{},
     undefined_exports: []const []const u8 = &.{},
     conflict: ?[]const u8 = null,
     limit: ?Limit = null,
@@ -135,8 +154,9 @@ pub const Outcome = struct {
 
 /// Why a link failed.
 pub const LinkError = Allocator.Error || OutputFile.Error || error{
-    /// A data symbol the program uses is defined nowhere: `Outcome.missing`.
-    MissingHostSymbols,
+    /// A data symbol or table the program uses is defined nowhere:
+    /// `Outcome.missing`.
+    MissingSymbols,
     /// The platform exports names nothing defines: `Outcome.undefined_exports`.
     UndefinedExports,
     /// Two images import one embedder function with different signatures:
@@ -166,10 +186,35 @@ const stack_alignment: u64 = 16;
 
 const none: u32 = std.math.maxInt(u32);
 
+/// `__memory_base`: static data is at its linked addresses.
+const memory_base: u32 = 0;
+/// `__table_base`, LLD's first table slot after the null slot 0: the
+/// table's element segment starts here, and a `table_index_rel_sleb` field
+/// holds a slot minus this base.
+const table_base: u32 = 1;
+
+/// What an image of the walk is.
+pub const Role = enum {
+    host,
+    support,
+    unit,
+
+    fn side(self: Role) Side {
+        return switch (self) {
+            .host => .host,
+            .support, .unit => .app,
+        };
+    }
+};
+
 /// One image of the walk and the scope its imports resolve in.
 const Item = struct {
     view: View,
-    side: Side,
+    role: Role,
+
+    fn side(self: Item) Side {
+        return self.role.side();
+    }
 };
 
 const Side = enum { host, app };
@@ -223,7 +268,9 @@ const Resolved = union(enum) {
     synthetic: Synthetic,
     /// Left to the embedder (a module) or undefined (an object).
     external,
-    /// A data symbol nothing defines.
+    /// A weak function or data symbol a module defines nowhere: null.
+    weak_undefined,
+    /// A data symbol or table nothing defines.
     missing,
 };
 
@@ -270,7 +317,7 @@ const Kind = struct {
     pub fn reference(target: Target) ?SymbolRef {
         return switch (target) {
             .defined => |found| found,
-            .synthetic, .external, .missing => null,
+            .synthetic, .external, .weak_undefined, .missing => null,
         };
     }
     pub fn exportCount(image: Image) u32 {
@@ -326,14 +373,13 @@ const Resolving = struct {
     app_exports: *const unit_walk.Exports,
     host_exports: *const unit_walk.Exports,
     app_public: []const []const u8,
-    missing: std.StringArrayHashMapUnmanaged(void) = .empty,
 
-    pub fn resolve(self: *Resolving, gpa: Allocator, images: []const Item, image: u32, import_index: u32) Allocator.Error!Resolved {
+    pub fn resolve(self: *Resolving, _: Allocator, images: []const Item, image: u32, import_index: u32) Allocator.Error!Resolved {
         const item = images[image];
         const import = item.view.imports()[import_index];
         const name = item.view.name(import.name);
         const kind: WasmUnitImage.ImportKind = @fromBackingInt(import.kind);
-        switch (item.side) {
+        switch (item.side()) {
             .app => {
                 if (self.app_exports.get(name)) |found| if (kindMatches(kind, symbolKind(images[found.image].view, found.symbol))) return .{ .defined = found };
                 if (self.mode == .object) return .external;
@@ -347,17 +393,13 @@ const Resolving = struct {
                 if (Synthetic.of(name, kind)) |synthetic| return .{ .synthetic = synthetic };
             },
         }
-        switch (kind) {
-            .function, .global => return .external,
-            .data, .table => {
-                try self.missing.put(gpa, name, {});
-                return .missing;
-            },
-        }
-    }
-
-    pub fn deinit(self: *Resolving, gpa: Allocator) void {
-        self.missing.deinit(gpa);
+        const weak = import.flags & WasmUnitImage.import_weak != 0;
+        return switch (kind) {
+            .function => if (weak) .weak_undefined else .external,
+            .global => .external,
+            .data => if (weak) .weak_undefined else .missing,
+            .table => .missing,
+        };
     }
 };
 
@@ -377,7 +419,12 @@ const Program = struct {
     support: u32,
     /// Index of the root unit in `items`.
     root: u32,
+    /// Whether the module defines `__wasm_call_ctors`.
     ctors: bool,
+    /// Whether every exported function is wrapped so the constructors run
+    /// first: a placed image has constructors and nothing names
+    /// `__wasm_call_ctors`.
+    wrap_exports: bool,
 
     fn deinit(self: *Program, gpa: Allocator) void {
         self.walk.deinit();
@@ -402,9 +449,9 @@ fn walkProgram(gpa: Allocator, mode: Mode, inputs: Inputs, program: *Program) Al
     const host_count: u32 = @intFromBool(inputs.host != null);
     const items = try gpa.alloc(Item, host_count + 1 + inputs.units.len);
     errdefer gpa.free(items);
-    if (inputs.host) |host| items[0] = .{ .view = host, .side = .host };
-    items[host_count] = .{ .view = inputs.support, .side = .app };
-    for (inputs.units, items[host_count + 1 ..]) |view, *item| item.* = .{ .view = view, .side = .app };
+    if (inputs.host) |host| items[0] = .{ .view = host, .role = .host };
+    items[host_count] = .{ .view = inputs.support, .role = .support };
+    for (inputs.units, items[host_count + 1 ..]) |view, *item| item.* = .{ .view = view, .role = .unit };
 
     var app_exports = try unit_walk.collectExportsOf(Kind, gpa, items[host_count..]);
     errdefer app_exports.deinit(gpa);
@@ -422,6 +469,7 @@ fn walkProgram(gpa: Allocator, mode: Mode, inputs: Inputs, program: *Program) Al
         .support = host_count,
         .root = host_count + 1 + @as(u32, @intCast(inputs.root)),
         .ctors = false,
+        .wrap_exports = false,
     };
     program.walk = .{ .gpa = gpa, .images = items, .resolver = .{ .mode = mode, .app_exports = &program.app_exports, .host_exports = &program.host_exports, .app_public = inputs.app_public } };
 }
@@ -441,17 +489,36 @@ fn reachExport(program: *Program, mode: Mode, name: []const u8) Allocator.Error!
     return null;
 }
 
-/// Run the walk to completion, including the constructors once anything
-/// names `__wasm_call_ctors`, and fix the placement order.
-fn finishWalk(gpa: Allocator, program: *Program, ctors_exported: bool) Allocator.Error!void {
-    try program.walk.run();
-    program.ctors = ctors_exported or namesSynthetic(program, .call_ctors);
-    if (program.ctors) {
-        for (program.items, 0..) |item, index| {
-            if (program.walk.states[index] == null) continue;
-            for (item.view.initFuncs()) |init_func| try program.walk.reachImageAtom(@intCast(index), init_func.function);
-        }
+/// Run the walk to completion, reaching the constructors of every placed
+/// image (placing an image can place more), decide how a module runs them,
+/// and fix the placement order.
+fn finishWalk(gpa: Allocator, program: *Program, mode: Mode, ctors_exported: bool) Allocator.Error!void {
+    const visited = try gpa.alloc(bool, program.items.len);
+    defer gpa.free(visited);
+    @memset(visited, false);
+    var has_ctors = false;
+    while (true) {
         try program.walk.run();
+        var reached_more = false;
+        for (program.items, visited, 0..) |item, *seen, index| {
+            if (seen.* or program.walk.states[index] == null) continue;
+            seen.* = true;
+            for (item.view.initFuncs()) |init_func| {
+                try program.walk.reachImageAtom(@intCast(index), init_func.function);
+                reached_more = true;
+                has_ctors = true;
+            }
+        }
+        if (!reached_more) break;
+    }
+    switch (mode) {
+        .module => {
+            const named = ctors_exported or namesSynthetic(program, .call_ctors);
+            program.ctors = named or has_ctors;
+            program.wrap_exports = has_ctors and !named;
+        },
+        // The platform's linker runs an object's constructors.
+        .object => {},
     }
     var order: std.ArrayList(u32) = .empty;
     errdefer order.deinit(gpa);
@@ -466,6 +533,36 @@ fn finishWalk(gpa: Allocator, program: *Program, ctors_exported: bool) Allocator
     program.order = try order.toOwnedSlice(gpa);
 }
 
+/// Every symbol a reached site of a placed image needs and nothing defines,
+/// each name once, in placement order.
+fn missingSymbols(arena: Allocator, program: *const Program) Allocator.Error![]const MissingSymbol {
+    var missing: std.ArrayList(MissingSymbol) = .empty;
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    for (program.order) |image| {
+        const item = program.items[image];
+        const state = program.state(image);
+        for (item.view.imports(), state.targets, state.imports_used) |import, target, used| {
+            if (!used) continue;
+            switch (target) {
+                .missing => {},
+                .defined, .synthetic, .external, .weak_undefined => continue,
+            }
+            const name = item.view.name(import.name);
+            if ((try seen.getOrPut(arena, name)).found_existing) continue;
+            try missing.append(arena, .{
+                .name = try arena.dupe(u8, name),
+                .kind = switch (@as(WasmUnitImage.ImportKind, @fromBackingInt(import.kind))) {
+                    .data => .data,
+                    .table => .table,
+                    .function, .global => unreachable, // `Resolving` leaves a function or global it cannot resolve to the embedder
+                },
+                .needed_by = item.role,
+            });
+        }
+    }
+    return missing.items;
+}
+
 /// Whether a reached site of any placed image names `synthetic`.
 fn namesSynthetic(program: *const Program, synthetic: Synthetic) bool {
     for (program.walk.states) |state_or_null| {
@@ -474,7 +571,7 @@ fn namesSynthetic(program: *const Program, synthetic: Synthetic) bool {
             if (!used) continue;
             switch (target) {
                 .synthetic => |found| if (found == synthetic) return true,
-                .defined, .external, .missing => {},
+                .defined, .external, .weak_undefined, .missing => {},
             }
         }
     }
@@ -511,7 +608,7 @@ const Types = struct {
     fn encodedSize(self: *const Types) u64 {
         var size: u64 = lebSize(self.shapes.items.len);
         for (self.shapes.items) |shape| {
-            const split = std.mem.indexOfScalar(u8, shape, 0x40).?;
+            const split = std.mem.findScalar(u8, shape, 0x40).?;
             size += 1 + lebSize(split) + split + lebSize(shape.len - split - 1) + (shape.len - split - 1);
         }
         return size;
@@ -520,7 +617,7 @@ const Types = struct {
     fn encode(self: *const Types, out: *Writer) void {
         out.leb(self.shapes.items.len);
         for (self.shapes.items) |shape| {
-            const split = std.mem.indexOfScalar(u8, shape, 0x40).?;
+            const split = std.mem.findScalar(u8, shape, 0x40).?;
             out.byte(0x60);
             out.leb(split);
             out.bytes(shape[0..split]);
@@ -529,12 +626,17 @@ const Types = struct {
         }
     }
 
+    /// The number of parameters of composed signature `index`.
+    fn paramCount(self: *const Types, index: u32) usize {
+        return std.mem.findScalar(u8, self.shapes.items[index], 0x40).?;
+    }
+
     /// The composed signature equal to `params -> results`.
     fn find(self: *const Types, params: []const u8, results: []const u8) ?u32 {
         var buffer: [512]u8 = undefined;
         if (params.len + 1 + results.len > buffer.len) {
             for (self.shapes.items, 0..) |shape, index| {
-                const split = std.mem.indexOfScalar(u8, shape, 0x40).?;
+                const split = std.mem.findScalar(u8, shape, 0x40).?;
                 if (std.mem.eql(u8, shape[0..split], params) and std.mem.eql(u8, shape[split + 1 ..], results)) return @intCast(index);
             }
             return null;
@@ -588,14 +690,6 @@ const Writer = struct {
         self.leb(text.len);
         self.bytes(text);
     }
-    fn padded(self: *Writer, value: u32) void {
-        var rest = value;
-        for (0..4) |_| {
-            self.byte(@as(u8, @truncate(rest & 0x7f)) | 0x80);
-            rest >>= 7;
-        }
-        self.byte(@truncate(rest));
-    }
 };
 
 fn lebSize(value: u64) u64 {
@@ -636,6 +730,8 @@ const External = struct {
     type: u32 = 0,
     valtype: u8 = 0,
     mutable: bool = false,
+    /// Every import it stands for is weak; an object's symbol is then weak.
+    weak: bool = false,
 };
 
 /// Every index a placed image's sites resolve to.
@@ -653,7 +749,6 @@ const Placement = struct {
 
 /// The composed program: every decision of the layout.
 const Layout = struct {
-    gpa: Allocator,
     arena: Allocator,
     mode: Mode,
     program: *Program,
@@ -663,8 +758,7 @@ const Layout = struct {
     global_externals: u32 = 0,
     /// Per image of the walk; only placed images have one.
     placements: []Placement,
-    /// The defined functions in index order: their image and local index;
-    /// `none` image for the synthetic constructor caller.
+    /// The defined functions in index order.
     defined: std.ArrayList(DefinedRef) = .empty,
     /// Table slot of each composed function, or 0.
     slots: []u32 = &.{},
@@ -678,12 +772,26 @@ const Layout = struct {
     table_base_global: u32 = none,
     memory: Memory = .{},
     ctors_function: u32 = none,
+    /// The functions `__wasm_call_ctors` calls, in order.
+    ctor_calls: []const u32 = &.{},
     /// Stack rooms of the defined functions, by defined index; empty
     /// without stack checks.
     rooms: []u64 = &.{},
     stack_checks: bool = false,
 
-    const DefinedRef = struct { image: u32, local: u32 };
+    /// What a defined function of the composed module is.
+    const DefinedRef = union(enum) {
+        /// A reached function of a placed image.
+        image: struct { image: u32, local: u32 },
+        /// `__wasm_call_ctors`.
+        ctors,
+        /// The function a call to a weak function nothing defines reaches,
+        /// which traps (LLD's `undefined_weak:` stub).
+        stub: struct { type: u32, name: []const u8 },
+        /// An exported function's wrapper that runs the constructors first
+        /// (LLD's `.command_export` wrapper).
+        wrapper: struct { function: u32, type: u32, name: []const u8 },
+    };
 
     const GlobalDef = struct {
         valtype: u8,
@@ -763,18 +871,19 @@ pub fn composeModule(
         .synthetic => |synthetic| if (synthetic == .call_ctors) {
             ctors_exported = true;
         },
-        .defined, .external, .missing => {},
+        .defined, .external, .weak_undefined, .missing => {},
     };
-    try finishWalk(gpa, &program, ctors_exported);
-    if (program.walk.resolver.missing.count() != 0) {
-        outcome.missing = try dupeNames(arena, program.walk.resolver.missing.keys());
-        return error.MissingHostSymbols;
+    try finishWalk(gpa, &program, .module, ctors_exported);
+    const missing = try missingSymbols(arena, &program);
+    if (missing.len != 0) {
+        outcome.missing = missing;
+        return error.MissingSymbols;
     }
     timing.walk_ns = elapsed(std_io, walk_started);
 
     const layout_started = now(std_io);
     var plan = try planLayout(arena, &program, .module, config, outcome);
-    try checkParameters(arena, &program, inputs, &plan, outcome);
+    try checkParameters(arena, &program, inputs, outcome);
 
     // Exports: memory, the platform's exports, the stack exports, and what
     // the host's objects mark exported.
@@ -795,8 +904,10 @@ pub fn composeModule(
             try exports.append(arena, .{ .name = name, .kind = 0, .index = plan.placements[0].functions[entry.function] });
         }
     }
+    if (program.wrap_exports) try wrapExports(&plan, exports.items);
+    if (plan.stack_checks) plan.rooms = try stackRooms(arena, &plan);
 
-    try checkLimits(&plan, exports.items.len, outcome);
+    try checkLimits(&plan, exports.items.len, config.import_memory, outcome);
 
     // The file's layout, section by section.
     const sections = try moduleSections(arena, &plan, exports.items, config);
@@ -820,9 +931,12 @@ pub fn composeModule(
     timing.write_ns = elapsed(std_io, write_started);
 
     const finalize_started = now(std_io);
-    // The coordinator's own writes: the constructor caller, the data
-    // section's header and the name section.
-    if (plan.ctors_function != none) writeCtorsBody(&plan, mapped[sections.ctors_offset..]);
+    // The coordinator's own writes: the functions the link synthesizes,
+    // the data section's header and the name section.
+    for (plan.defined.items, sections.function_offsets) |ref, offset| switch (ref) {
+        .image => {},
+        .ctors, .stub, .wrapper => writeSynthesizedBody(&plan, ref, mapped[@intCast(offset)..]),
+    };
     @memcpy(mapped[sections.data_header_offset..][0..sections.data_header.len], sections.data_header);
     @memcpy(mapped[sections.names_offset..][0..sections.names.len], sections.names);
     output.unmap(mapped);
@@ -830,12 +944,6 @@ pub fn composeModule(
     timing.finalize_ns = elapsed(std_io, finalize_started);
     timing.images_placed = program.order.len;
     timing.functions = plan.functionCount();
-}
-
-fn dupeNames(arena: Allocator, names: []const []const u8) Allocator.Error![]const []const u8 {
-    const out = try arena.alloc([]const u8, names.len);
-    for (names, out) |name, *slot| slot.* = try arena.dupe(u8, name);
-    return out;
 }
 
 const ExportEntry = struct {
@@ -864,14 +972,21 @@ fn exportEntry(plan: *Layout, name: []const u8, target: Resolved) Allocator.Erro
         },
         .synthetic => |synthetic| return switch (synthetic) {
             .stack_pointer => .{ .name = name, .kind = 3, .index = plan.stack_pointer_global },
-            .memory_base => .{ .name = name, .kind = 3, .index = try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = false, .init = 0 }) },
-            .table_base => .{ .name = name, .kind = 3, .index = try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = false, .init = 1 }) },
+            .memory_base => .{ .name = name, .kind = 3, .index = try baseGlobal(plan, &plan.memory_base_global, memory_base) },
+            .table_base => .{ .name = name, .kind = 3, .index = try baseGlobal(plan, &plan.table_base_global, table_base) },
             .call_ctors => .{ .name = name, .kind = 0, .index = plan.ctors_function },
             .indirect_function_table => .{ .name = name, .kind = 1, .index = 0 },
             .stack_low, .stack_high, .heap_base, .heap_end, .data_end, .global_base, .dso_handle => .{ .name = name, .kind = 3, .index = try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = false, .init = syntheticAddress(plan, synthetic) }) },
         },
-        .external, .missing => unreachable, // `reachExport` resolves an export to a definition or a synthetic symbol only
+        .external, .weak_undefined, .missing => unreachable, // `reachExport` resolves an export to a definition or a synthetic symbol only
     }
+}
+
+/// The immutable global holding a base, defined the first time a site or
+/// an export names it.
+fn baseGlobal(plan: *Layout, global: *u32, value: u32) Allocator.Error!u32 {
+    if (global.* == none) global.* = try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = false, .init = value });
+    return global.*;
 }
 
 fn syntheticAddress(plan: *const Layout, synthetic: Synthetic) u64 {
@@ -892,7 +1007,6 @@ fn syntheticAddress(plan: *const Layout, synthetic: Synthetic) u64 {
 fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleConfig, outcome: *Outcome) LinkError!Layout {
     const items = program.items;
     var plan: Layout = .{
-        .gpa = arena,
         .arena = arena,
         .mode = mode,
         .program = program,
@@ -932,16 +1046,18 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
                     break :blk plan.types.maps[image][import.type];
                 } else 0;
                 const key = try std.fmt.allocPrint(arena, "{d}\x00{s}\x00{s}", .{ @backingInt(wanted), module_name, field });
+                const weak = import.flags & WasmUnitImage.import_weak != 0;
                 const gop = try external_index.getOrPut(arena, key);
                 if (gop.found_existing) {
-                    const existing = plan.externals.items[gop.value_ptr.*];
+                    const existing = &plan.externals.items[gop.value_ptr.*];
                     if (existing.type != type_index or existing.valtype != import.valtype or existing.mutable != (import.mutable != 0)) {
                         outcome.conflict = try arena.dupe(u8, field);
                         return error.ImportConflict;
                     }
+                    existing.weak = existing.weak and weak;
                 } else {
                     gop.value_ptr.* = @intCast(plan.externals.items.len);
-                    try plan.externals.append(arena, .{ .module = module_name, .field = field, .name = view.name(import.name), .kind = wanted, .type = type_index, .valtype = import.valtype, .mutable = import.mutable != 0 });
+                    try plan.externals.append(arena, .{ .module = module_name, .field = field, .name = view.name(import.name), .kind = wanted, .type = type_index, .valtype = import.valtype, .mutable = import.mutable != 0, .weak = weak });
                 }
                 // Globals are numbered after functions; fixed below.
                 plan.placements[image].imports[index] = gop.value_ptr.*;
@@ -960,20 +1076,38 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
     }
 
     // Functions: the externals, then each placed image's reached functions
-    // in its order, then the constructor caller.
+    // in its order, then the constructor caller, then a stub for each weak
+    // function nothing defines, by name in placement order.
     for (program.order) |image| {
-        const view = items[image].view;
         for (plan.placements[image].functions, 0..) |*slot, local| {
             if (!program.reached(image, @intCast(local))) continue;
             slot.* = plan.functionCount();
-            try plan.defined.append(arena, .{ .image = image, .local = @intCast(local) });
+            try plan.defined.append(arena, .{ .image = .{ .image = image, .local = @intCast(local) } });
         }
-        _ = view;
     }
     if (program.ctors) {
         plan.ctors_function = plan.functionCount();
-        try plan.defined.append(arena, .{ .image = none, .local = 0 });
+        try plan.defined.append(arena, .ctors);
         _ = try plan.types.addShape(&.{}, &.{});
+        plan.ctor_calls = try ctorsOrder(&plan, arena);
+    }
+    var stubs: std.StringHashMapUnmanaged(u32) = .empty;
+    for (program.order) |image| {
+        const view = items[image].view;
+        const state = program.state(image);
+        for (view.imports(), state.targets, state.imports_used, plan.placements[image].imports) |import, target, used, *slot| {
+            if (!used or target != .weak_undefined or import.kind != @backingInt(WasmUnitImage.ImportKind.function)) continue;
+            // A function import only a data segment's table slot names has
+            // no signature, and its slot is 0 without a stub.
+            if (import.type == WasmUnitImage.no_type) continue;
+            const name = view.name(import.name);
+            const gop = try stubs.getOrPut(arena, name);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = plan.functionCount();
+                try plan.defined.append(arena, .{ .stub = .{ .type = plan.types.maps[image][import.type], .name = try std.fmt.allocPrint(arena, "undefined_weak:{s}", .{name}) } });
+            }
+            slot.* = gop.value_ptr.*;
+        }
     }
 
     // Globals: the stack pointer, the host's own, then the base globals a
@@ -994,8 +1128,8 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
                 slot.* = try plan.defineGlobal(.{ .valtype = global.valtype, .mutable = global.mutable != 0, .init = global.init });
             }
         }
-        if (namesSynthetic(program, .memory_base)) plan.memory_base_global = try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = false, .init = 0 });
-        if (namesSynthetic(program, .table_base)) plan.table_base_global = try plan.defineGlobal(.{ .valtype = 0x7f, .mutable = false, .init = 0 });
+        if (namesSynthetic(program, .memory_base)) _ = try baseGlobal(&plan, &plan.memory_base_global, memory_base);
+        if (namesSynthetic(program, .table_base)) _ = try baseGlobal(&plan, &plan.table_base_global, table_base);
     }
 
     // Memory.
@@ -1030,8 +1164,15 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
                 // Functions and globals were numbered with the externals
                 // above; an object leaves data and its table undefined.
                 .external => {},
+                // A weak function's stub was numbered above; a weak data
+                // symbol's address is 0.
+                .weak_undefined => if (import.kind == @backingInt(WasmUnitImage.ImportKind.data)) {
+                    slot.* = 0;
+                },
                 .missing => unreachable, // the link reports a missing symbol before it lays anything out
             }
+            // A weak function nothing defines has slot 0, the null pointer.
+            if (target == .weak_undefined) continue;
             if (import.flags & WasmUnitImage.import_address_taken != 0 and import.kind == @backingInt(WasmUnitImage.ImportKind.function) and slot.* != none) requested[slot.*] = true;
         }
     }
@@ -1041,7 +1182,6 @@ fn planLayout(arena: Allocator, program: *Program, mode: Mode, config: ?ModuleCo
         try plan.elements.append(arena, @intCast(function));
     };
 
-    if (plan.stack_checks) plan.rooms = try stackRooms(arena, &plan);
     return plan;
 }
 
@@ -1184,19 +1324,25 @@ fn stackRooms(arena: Allocator, plan: *const Layout) Allocator.Error![]u64 {
     var table_by_type: std.AutoHashMapUnmanaged(u32, std.ArrayList(u32)) = .empty;
     for (plan.elements.items) |function| {
         if (function < first) continue;
-        const ref = plan.defined.items[function - first];
-        if (ref.image == none or program.items[ref.image].side != .app) continue;
+        const ref = switch (plan.defined.items[function - first]) {
+            .image => |ref| ref,
+            .ctors, .stub, .wrapper => continue,
+        };
+        if (program.items[ref.image].side() != .app) continue;
         const view = program.items[ref.image].view;
         const type_index = plan.types.maps[ref.image][view.functions()[ref.local].type];
         const gop = try table_by_type.getOrPut(arena, type_index);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
         try gop.value_ptr.append(arena, function - first);
     }
-    for (plan.defined.items, functions) |ref, *out| {
+    for (plan.defined.items, functions) |defined, *out| {
         out.* = .{ .own_depth = 0, .checked = true, .first_edge = @intCast(edges.items.len), .edge_count = 0 };
-        if (ref.image == none) continue;
+        const ref = switch (defined) {
+            .image => |ref| ref,
+            .ctors, .stub, .wrapper => continue,
+        };
         const item = program.items[ref.image];
-        if (item.side != .app or !item.view.stackChecks()) continue;
+        if (item.side() != .app or !item.view.stackChecks()) continue;
         const function = item.view.functions()[ref.local];
         const placement = plan.placements[ref.image];
         out.own_depth = function.frame_depth;
@@ -1205,11 +1351,12 @@ fn stackRooms(arena: Allocator, plan: *const Layout) Allocator.Error![]u64 {
             switch (@as(WasmUnitImage.TargetKind, @fromBackingInt(call.target_kind))) {
                 .function => try edges.append(arena, .{ .callee = placement.functions[call.target] - first, .depth = call.depth }),
                 .import => switch (program.state(ref.image).targets[call.target]) {
-                    .defined => |found| if (program.items[found.image].side == .app) {
+                    .defined => |found| if (program.items[found.image].side() == .app) {
                         try edges.append(arena, .{ .callee = definedValue(plan, found) - first, .depth = call.depth });
                     },
-                    // The host's code is the host's own business.
-                    .synthetic, .external, .missing => {},
+                    // The host's code is the host's own business, and a
+                    // weak function's stub traps.
+                    .synthetic, .external, .weak_undefined, .missing => {},
                 },
                 .type => if (table_by_type.get(plan.types.maps[ref.image][call.target])) |targets| {
                     for (targets.items) |callee| try edges.append(arena, .{ .callee = callee, .depth = call.depth });
@@ -1224,7 +1371,7 @@ fn stackRooms(arena: Allocator, plan: *const Layout) Allocator.Error![]u64 {
 
 /// Report every platform boundary function no engine would load: a
 /// provided entry wrapper, or a hosted function the app calls.
-fn checkParameters(arena: Allocator, program: *const Program, inputs: Inputs, plan: *const Layout, outcome: *Outcome) LinkError!void {
+fn checkParameters(arena: Allocator, program: *const Program, inputs: Inputs, outcome: *Outcome) LinkError!void {
     const limit = layout.abi.wasm_max_function_params;
     var problems: std.ArrayList(ParameterProblem) = .empty;
     for (inputs.provides) |name| {
@@ -1238,50 +1385,74 @@ fn checkParameters(arena: Allocator, program: *const Program, inputs: Inputs, pl
     var seen: std.StringHashMapUnmanaged(void) = .empty;
     for (program.order) |image| {
         const item = program.items[image];
-        if (item.side != .app) continue;
+        if (item.side() != .app) continue;
         const state = program.state(image);
         for (item.view.imports(), state.targets, state.imports_used) |import, target, used| {
             if (!used or import.kind != @backingInt(WasmUnitImage.ImportKind.function) or import.type == WasmUnitImage.no_type) continue;
             const name = item.view.name(import.name);
             if (unit_walk.findSorted(inputs.hosted, name) == null) continue;
             switch (target) {
-                .defined => |found| if (program.items[found.image].side == .app) continue,
-                .synthetic, .external, .missing => {},
+                .defined => |found| if (program.items[found.image].side() == .app) continue,
+                .synthetic, .external, .weak_undefined, .missing => {},
             }
             if ((try seen.getOrPut(arena, name)).found_existing) continue;
             const params = item.view.types()[import.type].param_count;
             if (params > limit) try problems.append(arena, .{ .symbol = try arena.dupe(u8, name), .hosted = true, .param_count = params });
         }
     }
-    _ = plan;
     if (problems.items.len != 0) {
         outcome.parameters = problems.items;
         return error.ParameterLimit;
     }
 }
 
-fn checkLimits(plan: *const Layout, export_count: usize, outcome: *Outcome) LinkError!void {
-    const checks = [_]Limit{
-        .{ .what = "functions", .count = plan.functionCount(), .limit = max_functions },
-        .{ .what = "imports", .count = plan.externals.items.len + @intFromBool(false), .limit = max_imports },
-        .{ .what = "exports", .count = export_count, .limit = max_exports },
-        .{ .what = "function signatures", .count = plan.types.shapes.items.len, .limit = max_types },
-        .{ .what = "globals", .count = plan.global_externals + plan.globals.items.len, .limit = max_globals },
-        .{ .what = "table elements", .count = plan.table_size, .limit = max_table_size },
-        .{ .what = "data segments", .count = @intFromBool(plan.memory.emit_end > plan.memory.emit_start), .limit = max_data_segments },
+fn checkLimits(plan: *const Layout, export_count: usize, import_memory: bool, outcome: *Outcome) LinkError!void {
+    var max_body: u64 = 0;
+    for (plan.defined.items) |ref| switch (ref) {
+        .image => |found| max_body = @max(max_body, plan.program.items[found.image].view.functions()[found.local].body_size),
+        .ctors, .stub, .wrapper => max_body = @max(max_body, synthesizedBodySize(plan, ref)),
     };
-    for (checks) |check| if (check.count > check.limit) {
-        outcome.limit = check;
+    if (exceededLimit(.{
+        .functions = plan.functionCount(),
+        .imports = plan.externals.items.len + @intFromBool(import_memory),
+        .exports = export_count,
+        .types = plan.types.shapes.items.len,
+        .globals = plan.global_externals + plan.globals.items.len,
+        .table_size = plan.table_size,
+        .data_segments = @intFromBool(plan.memory.emit_end > plan.memory.emit_start),
+        .max_body_size = max_body,
+    })) |limit| {
+        outcome.limit = limit;
         return error.EngineLimit;
-    };
-    for (plan.defined.items) |ref| {
-        if (ref.image == none) continue;
-        const function = plan.program.items[ref.image].view.functions()[ref.local];
-        if (function.body_size > max_body_size) {
-            outcome.limit = .{ .what = "bytes in one function body", .count = function.body_size, .limit = max_body_size };
-            return error.EngineLimit;
-        }
     }
+}
+
+/// What a module holds that an engine limits.
+const ModuleCounts = struct {
+    functions: u64,
+    imports: u64,
+    exports: u64,
+    types: u64,
+    globals: u64,
+    table_size: u64,
+    data_segments: u64,
+    max_body_size: u64,
+};
+
+/// The first engine limit `counts` exceed.
+fn exceededLimit(counts: ModuleCounts) ?Limit {
+    const checks = [_]Limit{
+        .{ .what = "functions", .count = counts.functions, .limit = max_functions },
+        .{ .what = "imports", .count = counts.imports, .limit = max_imports },
+        .{ .what = "exports", .count = counts.exports, .limit = max_exports },
+        .{ .what = "function signatures", .count = counts.types, .limit = max_types },
+        .{ .what = "globals", .count = counts.globals, .limit = max_globals },
+        .{ .what = "table elements", .count = counts.table_size, .limit = max_table_size },
+        .{ .what = "data segments", .count = counts.data_segments, .limit = max_data_segments },
+        .{ .what = "bytes in one function body", .count = counts.max_body_size, .limit = max_body_size },
+    };
+    for (checks) |check| if (check.count > check.limit) return check;
+    return null;
 }
 
 /// The module's bytes before the code section, the code and data sections'
@@ -1292,7 +1463,6 @@ const ModuleSections = struct {
     head: []const u8,
     /// Output offset of each defined function's size prefix.
     function_offsets: []u64,
-    ctors_offset: usize,
     data_header: []const u8,
     data_header_offset: usize,
     /// Output offset of the data segment's payload.
@@ -1339,19 +1509,16 @@ fn moduleSections(arena: Allocator, plan: *Layout, exports: []const ExportEntry,
 
     // The code section: each body after its size prefix.
     var code_payload: u64 = if (defined_count == 0) 0 else lebSize(defined_count);
-    const ctors_body = ctorsBodySize(plan);
     for (plan.defined.items) |ref| {
-        const size = definedBodySize(plan, ref, ctors_body);
+        const size = definedBodySize(plan, ref);
         code_payload += lebSize(size) + size;
     }
     const code_start = head_size + if (code_payload == 0) 0 else 1 + lebSize(code_payload);
     const function_offsets = try arena.alloc(u64, defined_count);
     var at = code_start + if (defined_count == 0) 0 else lebSize(defined_count);
-    var ctors_offset: u64 = 0;
     for (plan.defined.items, function_offsets) |ref, *offset| {
         offset.* = at;
-        const size = definedBodySize(plan, ref, ctors_body);
-        if (ref.image == none) ctors_offset = at;
+        const size = definedBodySize(plan, ref);
         at += lebSize(size) + size;
     }
     std.debug.assert(at == code_start + code_payload);
@@ -1519,7 +1686,6 @@ fn moduleSections(arena: Allocator, plan: *Layout, exports: []const ExportEntry,
     return .{
         .head = head,
         .function_offsets = function_offsets,
-        .ctors_offset = @intCast(ctors_offset),
         .data_header = data_header,
         .data_header_offset = @intCast(data_start),
         .data_payload = data_payload_offset,
@@ -1582,25 +1748,36 @@ fn writeInitExpr(out: *Writer, global: Layout.GlobalDef) void {
 }
 
 fn definedType(plan: *const Layout, ref: Layout.DefinedRef) u32 {
-    if (ref.image == none) return plan.types.find(&.{}, &.{}).?;
-    const view = plan.program.items[ref.image].view;
-    return plan.types.maps[ref.image][view.functions()[ref.local].type];
+    return switch (ref) {
+        .image => |found| plan.types.maps[found.image][plan.program.items[found.image].view.functions()[found.local].type],
+        .ctors => plan.types.find(&.{}, &.{}).?,
+        .stub => |stub| stub.type,
+        .wrapper => |wrapper| wrapper.type,
+    };
 }
 
 fn definedName(plan: *const Layout, ref: Layout.DefinedRef) []const u8 {
-    if (ref.image == none) return "__wasm_call_ctors";
-    const view = plan.program.items[ref.image].view;
-    return view.name(view.functions()[ref.local].name);
+    return switch (ref) {
+        .image => |found| blk: {
+            const view = plan.program.items[found.image].view;
+            break :blk view.name(view.functions()[found.local].name);
+        },
+        .ctors => "__wasm_call_ctors",
+        .stub => |stub| stub.name,
+        .wrapper => |wrapper| wrapper.name,
+    };
 }
 
-fn definedBodySize(plan: *const Layout, ref: Layout.DefinedRef, ctors_body: u64) u64 {
-    if (ref.image == none) return ctors_body;
-    return plan.program.items[ref.image].view.functions()[ref.local].body_size;
+fn definedBodySize(plan: *const Layout, ref: Layout.DefinedRef) u64 {
+    return switch (ref) {
+        .image => |found| plan.program.items[found.image].view.functions()[found.local].body_size,
+        .ctors, .stub, .wrapper => synthesizedBodySize(plan, ref),
+    };
 }
 
 /// The constructors in the order they run: every placed image's, by
 /// priority, in placement order among equals.
-fn ctorsOrder(plan: *const Layout, out: *std.ArrayList(u32), arena: Allocator) Allocator.Error!void {
+fn ctorsOrder(plan: *const Layout, arena: Allocator) Allocator.Error![]const u32 {
     const Entry = struct { priority: u32, function: u32 };
     var entries: std.ArrayList(Entry) = .empty;
     for (plan.program.order) |image| {
@@ -1613,31 +1790,70 @@ fn ctorsOrder(plan: *const Layout, out: *std.ArrayList(u32), arena: Allocator) A
             return a.function < b.function;
         }
     }.lessThan);
-    for (entries.items) |entry| try out.append(arena, entry.function);
+    const calls = try arena.alloc(u32, entries.items.len);
+    for (entries.items, calls) |entry, *call| call.* = entry.function;
+    return calls;
 }
 
-fn ctorsBodySize(plan: *const Layout) u64 {
-    if (plan.ctors_function == none) return 0;
-    var size: u64 = 1 + 1; // no locals, end
-    for (plan.program.order) |image| {
-        const view = plan.program.items[image].view;
-        for (view.initFuncs()) |init_func| size += 1 + lebSize(plan.placements[image].functions[init_func.function]);
+/// The body size of a function the link writes itself, without its size
+/// prefix.
+fn synthesizedBodySize(plan: *const Layout, ref: Layout.DefinedRef) u64 {
+    // No locals, then the code, then `end`.
+    var size: u64 = 1 + 1;
+    switch (ref) {
+        .image => unreachable, // an image's function is copied, not synthesized
+        .ctors => for (plan.ctor_calls) |function| {
+            size += 1 + lebSize(function);
+        },
+        .stub => size += 1,
+        .wrapper => |wrapper| {
+            size += 1 + lebSize(plan.ctors_function);
+            const params = plan.types.paramCount(wrapper.type);
+            for (0..params) |param| size += 1 + lebSize(param);
+            size += 1 + lebSize(wrapper.function);
+        },
     }
     return size;
 }
 
-fn writeCtorsBody(plan: *const Layout, out_bytes: []u8) void {
-    var order: std.ArrayList(u32) = .empty;
-    ctorsOrder(plan, &order, plan.arena) catch base.invariant("wasm fast dev link invariant violated: the constructor order does not fit the link's arena", .{});
-    const size = ctorsBodySize(plan);
+/// Write a function the link writes itself, with its size prefix.
+fn writeSynthesizedBody(plan: *const Layout, ref: Layout.DefinedRef, out_bytes: []u8) void {
     var out: Writer = .{ .buffer = out_bytes };
-    out.leb(size);
+    out.leb(synthesizedBodySize(plan, ref));
     out.byte(0);
-    for (order.items) |function| {
-        out.byte(0x10);
-        out.leb(function);
+    switch (ref) {
+        .image => unreachable, // an image's function is copied, not synthesized
+        .ctors => for (plan.ctor_calls) |function| {
+            out.byte(0x10);
+            out.leb(function);
+        },
+        .stub => out.byte(0x00),
+        .wrapper => |wrapper| {
+            out.byte(0x10);
+            out.leb(plan.ctors_function);
+            const params = plan.types.paramCount(wrapper.type);
+            for (0..params) |param| {
+                out.byte(0x20);
+                out.leb(param);
+            }
+            out.byte(0x10);
+            out.leb(wrapper.function);
+        },
     }
     out.byte(0x0b);
+}
+
+/// Wrap every exported function so the constructors run before it, as
+/// LLD's command exports do when nothing names `__wasm_call_ctors`.
+fn wrapExports(plan: *Layout, exports: []ExportEntry) Allocator.Error!void {
+    for (exports) |*entry| {
+        if (entry.kind != 0 or entry.index == plan.ctors_function) continue;
+        const function = entry.index;
+        const type_index = if (function < plan.function_externals) plan.externals.items[function].type else definedType(plan, plan.defined.items[function - plan.function_externals]);
+        const wrapper = plan.functionCount();
+        try plan.defined.append(plan.arena, .{ .wrapper = .{ .function = function, .type = type_index, .name = try std.fmt.allocPrint(plan.arena, "{s}.command_export", .{entry.name}) } });
+        entry.index = wrapper;
+    }
 }
 
 /// What the write tasks share.
@@ -1674,8 +1890,12 @@ const Task = struct {
     fn writeFunctions(self: *Task, first: u32, count: u32) void {
         const context = self.context;
         const plan = context.plan;
-        for (plan.defined.items[first..][0..count], context.function_offsets[first..][0..count], first..) |ref, offset, defined_index| {
-            if (ref.image == none) continue;
+        for (plan.defined.items[first..][0..count], context.function_offsets[first..][0..count], first..) |defined, offset, defined_index| {
+            const ref = switch (defined) {
+                .image => |ref| ref,
+                // The coordinator writes what the link synthesizes.
+                .ctors, .stub, .wrapper => continue,
+            };
             const view = plan.program.items[ref.image].view;
             const function = view.functions()[ref.local];
             var prefix: Writer = .{ .buffer = context.out[@intCast(offset)..] };
@@ -1724,14 +1944,18 @@ fn signedKind(kind: WasmUnitImage.SiteKind) bool {
 }
 
 /// The value a site's field holds in the composed module. Relative forms
-/// are relative to the base globals, which are 0.
+/// are relative to the base globals (`memory_base`, `table_base`). A weak
+/// symbol nothing defines is null: table slot 0 and address 0, as LLD
+/// resolves it.
 fn siteValue(plan: *const Layout, image: u32, site: WasmUnitImage.Site, room: u64) u32 {
     const placement = plan.placements[image];
     const target_kind: WasmUnitImage.TargetKind = @fromBackingInt(site.target_kind);
     const kind: WasmUnitImage.SiteKind = @fromBackingInt(site.kind);
+    const weak_undefined = target_kind == .import and plan.program.state(image).targets[site.target] == .weak_undefined;
     return switch (kind) {
         .function_index_leb => functionTarget(placement, target_kind, site.target),
-        .table_index_sleb, .table_index_rel_sleb, .table_index_i32 => plan.slots[functionTarget(placement, target_kind, site.target)],
+        .table_index_sleb, .table_index_i32 => if (weak_undefined) 0 else plan.slots[functionTarget(placement, target_kind, site.target)],
+        .table_index_rel_sleb => (if (weak_undefined) 0 else plan.slots[functionTarget(placement, target_kind, site.target)]) -% table_base,
         .type_index_leb => plan.types.maps[image][site.target],
         .global_index_leb => switch (target_kind) {
             .global => placement.globals[site.target],
@@ -1740,12 +1964,13 @@ fn siteValue(plan: *const Layout, image: u32, site: WasmUnitImage.Site, room: u6
         },
         .table_number_leb => 0,
         .memory_addr_leb, .memory_addr_sleb, .memory_addr_rel_sleb, .memory_addr_i32 => blk: {
+            if (weak_undefined) break :blk 0;
             const address: u32 = switch (target_kind) {
                 .data => placement.segments[site.target],
                 .import => placement.imports[site.target],
                 .function, .type, .global => unreachable, // `View` admits only data targets for memory sites
             };
-            break :blk address +% @as(u32, @bitCast(site.addend));
+            break :blk address +% @as(u32, @bitCast(site.addend)) -% if (kind == .memory_addr_rel_sleb) memory_base else 0;
         },
         .stack_room_sleb => blk: {
             const room32 = std.math.cast(u32, room) orelse base.invariant("wasm stack room invariant violated: check room {d} exceeds the address space", .{room});
@@ -1769,7 +1994,10 @@ fn addTasks(gpa: Allocator, tasks: *std.ArrayList(Task), context: *const TaskCon
     var first: u32 = 0;
     var bytes: u64 = 0;
     for (plan.defined.items, 0..) |ref, index| {
-        if (ref.image != none) bytes += plan.program.items[ref.image].view.functions()[ref.local].body_size;
+        switch (ref) {
+            .image => |found| bytes += plan.program.items[found.image].view.functions()[found.local].body_size,
+            .ctors, .stub, .wrapper => {},
+        }
         if (bytes < task_chunk and index + 1 < plan.defined.items.len) continue;
         try tasks.append(gpa, .{ .context = context, .work = .{ .functions = .{ .first = first, .count = @as(u32, @intCast(index + 1)) - first } } });
         first = @intCast(index + 1);
@@ -1826,19 +2054,13 @@ pub fn composeObject(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: I
         const found = program.app_exports.get(name) orelse base.invariant("wasm fast dev link invariant violated: no unit image defines the provided symbol {s}", .{name});
         try program.walk.reachSymbol(found.image, found.symbol);
     }
-    try program.walk.run();
-    // The platform's linker runs the constructors, so every placed image's
-    // are kept.
-    for (program.items, 0..) |item, index| {
-        if (program.walk.states[index] == null) continue;
-        for (item.view.initFuncs()) |init_func| try program.walk.reachImageAtom(@intCast(index), init_func.function);
-    }
-    try finishWalk(gpa, &program, false);
+    try finishWalk(gpa, &program, .object, false);
     timing.walk_ns = elapsed(std_io, walk_started);
 
     const layout_started = now(std_io);
     var plan = try planLayout(arena, &program, .object, null, outcome);
-    try checkParameters(arena, &program, inputs, &plan, outcome);
+    if (plan.stack_checks) plan.rooms = try stackRooms(arena, &plan);
+    try checkParameters(arena, &program, inputs, outcome);
     timing.layout_ns = elapsed(std_io, layout_started);
 
     const write_started = now(std_io);
@@ -1850,7 +2072,7 @@ pub fn composeObject(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: I
     return bytes;
 }
 
-const SymFlag = backend.wasm.WasmLinking.SymFlag;
+const SymFlag = WasmLinking.SymFlag;
 
 /// A symbol of the composed object's symbol table.
 const ObjectSymbol = struct {
@@ -1881,7 +2103,7 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
         const explicit = !std.mem.eql(u8, external.name, external.field);
         try symbols.append(arena, .{
             .kind = if (external.kind == .function) .function else .global,
-            .flags = SymFlag.UNDEFINED | (if (explicit) SymFlag.EXPLICIT_NAME else 0),
+            .flags = SymFlag.UNDEFINED | (if (explicit) SymFlag.EXPLICIT_NAME else 0) | (if (external.weak) SymFlag.BINDING_WEAK else 0),
             .name = if (explicit) external.name else null,
             .index = if (external.kind == .function) @intCast(index) else @as(u32, @intCast(index)) - plan.function_externals,
         });
@@ -1904,14 +2126,14 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
     // Every placed segment under a local name.
     const segment_symbols = try arena.alloc([]u32, program.items.len);
     var segment_count: u32 = 0;
-    for (program.order) |image| {
+    for (program.order, 0..) |image, position| {
         const view = program.items[image].view;
         segment_symbols[image] = try arena.alloc(u32, view.segments().len);
         for (view.segments(), plan.placements[image].segments, segment_symbols[image], 0..) |segment, address, *symbol, index| {
             symbol.* = none;
             if (address == none) continue;
             symbol.* = @intCast(symbols.items.len);
-            try symbols.append(arena, .{ .kind = .data, .flags = SymFlag.BINDING_LOCAL, .name = try std.fmt.allocPrint(arena, "roc_wasm_data_{d}_{d}", .{ image, index }), .index = segment_count, .offset = 0, .size = segment.size });
+            try symbols.append(arena, .{ .kind = .data, .flags = SymFlag.BINDING_LOCAL, .name = try std.fmt.allocPrint(arena, "roc_wasm_data_{d}_{d}", .{ position, index }), .index = segment_count, .offset = 0, .size = segment.size });
             segment_count += 1;
         }
     }
@@ -1961,15 +2183,18 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
                     .table => symbol.* = table_symbol,
                     .data => {
                         const name = view.name(import.name);
+                        const weak = import.flags & WasmUnitImage.import_weak != 0;
                         const gop = try data_symbols.getOrPut(arena, name);
-                        if (!gop.found_existing) {
+                        if (gop.found_existing) {
+                            if (!weak) symbols.items[gop.value_ptr.*].flags &= ~SymFlag.BINDING_WEAK;
+                        } else {
                             gop.value_ptr.* = @intCast(symbols.items.len);
-                            try symbols.append(arena, .{ .kind = .data, .flags = SymFlag.UNDEFINED, .name = name });
+                            try symbols.append(arena, .{ .kind = .data, .flags = SymFlag.UNDEFINED | (if (weak) SymFlag.BINDING_WEAK else 0), .name = name });
                         }
                         symbol.* = gop.value_ptr.*;
                     },
                 },
-                .synthetic, .missing => unreachable, // an object resolves an import to a definition or leaves it undefined
+                .synthetic, .weak_undefined, .missing => unreachable, // an object resolves an import to a definition or leaves it undefined
             }
         }
     }
@@ -2064,16 +2289,18 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
     var code_section: ?u32 = null;
     if (plan.defined.items.len != 0) {
         var payload: u64 = lebSize(plan.defined.items.len);
-        const ctors_body = ctorsBodySize(plan);
         for (plan.defined.items) |ref| {
-            const size = definedBodySize(plan, ref, ctors_body);
+            const size = definedBodySize(plan, ref);
             payload += lebSize(size) + size;
         }
         const start = try beginSection(gpa, &out, 10, payload);
         var w: Writer = .{ .buffer = out.items[start..] };
         w.leb(plan.defined.items.len);
-        for (plan.defined.items, 0..) |ref, defined_index| {
-            std.debug.assert(ref.image != none); // an object never synthesizes a constructor caller
+        for (plan.defined.items, 0..) |defined, defined_index| {
+            const ref = switch (defined) {
+                .image => |ref| ref,
+                .ctors, .stub, .wrapper => unreachable, // an object synthesizes no function: its linker runs the constructors and resolves weak symbols
+            };
             const view = program.items[ref.image].view;
             const function = view.functions()[ref.local];
             w.leb(function.body_size);
@@ -2084,7 +2311,7 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
             for (view.functionSites(function)) |site| {
                 const reloc = objectReloc(plan, ref.image, site, room, .{ .functions = function_symbols, .segments = segment_symbols, .imports = import_symbols, .global_base = global_symbol_base });
                 const kind: WasmUnitImage.SiteKind = @fromBackingInt(site.kind);
-                const value = objectFieldValue(plan, ref.image, site, room);
+                const value = objectFieldValue(plan, ref.image, site);
                 if (signedKind(kind)) WasmModule.overwritePaddedI32(body_out, site.offset, @bitCast(value)) else WasmModule.overwritePaddedU32(body_out, site.offset, value);
                 try code_relocs.append(arena, .{ .type = reloc.type, .offset = @intCast(body_at + site.offset), .index = reloc.index, .addend = reloc.addend });
             }
@@ -2111,7 +2338,7 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
         const start = try beginSection(gpa, &out, 11, payload);
         var w: Writer = .{ .buffer = out.items[start..] };
         w.leb(segment_count);
-        for (program.order) |image| {
+        for (program.order, 0..) |image, position| {
             const view = program.items[image].view;
             for (view.segments(), plan.placements[image].segments, 0..) |segment, address, index| {
                 if (address == none) continue;
@@ -2130,11 +2357,11 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
                 const segment_out = w.buffer[bytes_at..][0..segment.size];
                 for (view.segmentSites(segment)) |site| {
                     const reloc = objectReloc(plan, image, site, 0, .{ .functions = function_symbols, .segments = segment_symbols, .imports = import_symbols, .global_base = global_symbol_base });
-                    std.mem.writeInt(u32, segment_out[site.offset..][0..4], objectFieldValue(plan, image, site, 0), .little);
+                    std.mem.writeInt(u32, segment_out[site.offset..][0..4], objectFieldValue(plan, image, site), .little);
                     try data_relocs.append(arena, .{ .type = reloc.type, .offset = @intCast(bytes_at + site.offset), .index = reloc.index, .addend = reloc.addend });
                 }
                 const zero_fill = segment.flags & WasmUnitImage.segment_zero_fill != 0;
-                try segment_infos.append(arena, .{ .name = try std.fmt.allocPrint(arena, "{s}.roc_{d}_{d}", .{ if (zero_fill) ".bss" else ".data", image, index }), .alignment = segment.alignment_log2 });
+                try segment_infos.append(arena, .{ .name = try std.fmt.allocPrint(arena, "{s}.roc_{d}_{d}", .{ if (zero_fill) ".bss" else ".data", position, index }), .alignment = segment.alignment_log2 });
             }
         }
         std.debug.assert(w.at == payload);
@@ -2209,7 +2436,6 @@ fn writeObject(gpa: Allocator, arena: Allocator, plan: *const Layout, inputs: In
     return out.toOwnedSlice(gpa);
 }
 
-/// The relocation a site of `image` becomes in the object.
 /// The object's symbol index of each thing a site names.
 const ObjectSymbols = struct {
     /// By defined function index.
@@ -2222,6 +2448,7 @@ const ObjectSymbols = struct {
     global_base: u32,
 };
 
+/// The relocation a site of `image` becomes in the object.
 fn objectReloc(plan: *const Layout, image: u32, site: WasmUnitImage.Site, room: u64, symbols: ObjectSymbols) ObjectReloc {
     const kind: WasmUnitImage.SiteKind = @fromBackingInt(site.kind);
     const target_kind: WasmUnitImage.TargetKind = @fromBackingInt(site.target_kind);
@@ -2251,8 +2478,7 @@ fn objectReloc(plan: *const Layout, image: u32, site: WasmUnitImage.Site, room: 
 
 /// The value an object's field holds before its linker relocates it: the
 /// object's own index or virtual address, as compilers write it.
-fn objectFieldValue(plan: *const Layout, image: u32, site: WasmUnitImage.Site, room: u64) u32 {
-    _ = room;
+fn objectFieldValue(plan: *const Layout, image: u32, site: WasmUnitImage.Site) u32 {
     const kind: WasmUnitImage.SiteKind = @fromBackingInt(site.kind);
     const target_kind: WasmUnitImage.TargetKind = @fromBackingInt(site.target_kind);
     const placement = plan.placements[image];
@@ -2469,4 +2695,358 @@ test "a composed module places the reached code and data and patches every site"
     try std.testing.expectEqual(@as(usize, 1), module.data_segments.items.len);
     try std.testing.expectEqualStrings("abcdefgh", module.data_segments.items[0].data);
     try std.testing.expectEqual(@as(u32, 64 * 1024), module.data_segments.items[0].offset);
+}
+
+/// An image of one function of type `() -> ()` that does nothing and is
+/// exported as `name`: support code nothing reaches, or a provided entry.
+fn testIdleImage(allocator: Allocator, arena: Allocator, name: []const u8) WasmUnitImage.EncodeError![]align(WasmUnitImage.alignment.toByteUnits()) u8 {
+    return WasmUnitImage.encode(allocator, .{
+        .stack_checks = false,
+        .types = &.{.{ .params = &.{}, .results = &.{} }},
+        .functions = &.{.{ .body = try testBody(arena, &.{&.{0x0b}}), .type = 0, .export_name = name, .sites = &.{} }},
+        .segments = &.{},
+        .data_exports = &.{},
+        .table_requests = &.{},
+        .imports = &.{},
+    });
+}
+
+/// Compose a module of `inputs` with no stack exports and the given
+/// platform exports, and return its bytes.
+fn testComposeModule(allocator: Allocator, arena: Allocator, inputs: Inputs, exports: []const []const u8) (LinkError || error{TestUnexpectedResult})![]u8 {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = tmp.dir.realPathFileAlloc(std.testing.io, ".", arena) catch return error.TestUnexpectedResult;
+    const path = try std.fmt.allocPrint(arena, "{s}/out.wasm", .{dir});
+    var output = try OutputFile.create(arena, path);
+    var timing: Timing = .{};
+    var outcome: Outcome = .{};
+    try composeModule(allocator, arena, std.testing.io, inputs, .{
+        .exports = exports,
+        .stack_exports = &.{},
+        .stack_size = 64 * 1024,
+        .global_base = null,
+        .initial_memory = null,
+        .maximum_memory = null,
+        .import_memory = false,
+        .zero_filled_memory = true,
+        .names = false,
+    }, &output, null, &timing, &outcome);
+    try output.publish(arena);
+    return std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, arena, .unlimited) catch return error.TestUnexpectedResult;
+}
+
+/// The payload of the module's section `id`.
+fn testSection(bytes: []const u8, id: u8) (WasmModule.ParseError || error{TestUnexpectedResult})![]const u8 {
+    var cursor: usize = 8;
+    while (cursor < bytes.len) {
+        const section_id = bytes[cursor];
+        cursor += 1;
+        const size = try WasmModule.readU32(bytes, &cursor);
+        if (section_id == id) return bytes[cursor..][0..size];
+        cursor += size;
+    }
+    return error.TestUnexpectedResult;
+}
+
+/// The body of defined function `index` (after its size prefix).
+fn testFunctionBody(module: *const WasmModule, index: usize) WasmModule.ParseError![]const u8 {
+    var cursor: usize = module.function_offsets.items[index];
+    const size = try WasmModule.readU32(module.code_bytes.items, &cursor);
+    return module.code_bytes.items[cursor..][0..size];
+}
+
+fn testExportIndex(module: *const WasmModule, name: []const u8) error{TestUnexpectedResult}!u32 {
+    for (module.exports.items) |entry| if (std.mem.eql(u8, entry.name, name)) return entry.idx;
+    return error.TestUnexpectedResult;
+}
+
+test "__table_base is 1 wherever it appears, and a relative table index is the slot minus it" {
+    if (comptime @import("builtin").os.tag != .linux) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // `roc_main` reads `__table_base`, then names `target` by a relative and
+    // by an absolute table index.
+    const main_body = try testBody(arena, &.{ &.{0x23}, &test_zero_leb, &.{0x41}, &test_zero_leb, &.{ 0x6a, 0x1a, 0x41 }, &test_zero_leb, &.{ 0x1a, 0x0b } });
+    const root = try WasmUnitImage.encode(allocator, .{
+        .stack_checks = false,
+        .types = &.{.{ .params = &.{}, .results = &.{} }},
+        .functions = &.{
+            .{ .body = main_body, .type = 0, .export_name = "roc_main", .sites = &.{
+                .{ .offset = 2, .kind = .global_index_leb, .target_kind = .import, .target = 0, .addend = 0 },
+                .{ .offset = 8, .kind = .table_index_rel_sleb, .target_kind = .function, .target = 1, .addend = 0 },
+                .{ .offset = 16, .kind = .table_index_sleb, .target_kind = .function, .target = 1, .addend = 0 },
+            } },
+            .{ .body = try testBody(arena, &.{&.{0x0b}}), .type = 0, .export_name = null, .sites = &.{} },
+        },
+        .segments = &.{},
+        .data_exports = &.{},
+        .table_requests = &.{1},
+        .imports = &.{.{ .module = "env", .name = "__table_base", .kind = .global, .valtype = 0x7f }},
+    });
+    defer allocator.free(root);
+    const support = try testIdleImage(allocator, arena, "roc_builtins_unused");
+    defer allocator.free(support);
+    const host = try testIdleImage(allocator, arena, "host_unused");
+    defer allocator.free(host);
+
+    const units = [_]View{try View.init(root)};
+    const bytes = try testComposeModule(allocator, arena, .{
+        .host = try View.init(host),
+        .support = try View.init(support),
+        .units = &units,
+        .root = 0,
+        .app_public = &.{"roc_main"},
+        .provides = &.{"roc_main"},
+        .hosted = &.{},
+    }, &.{ "roc_main", "__table_base" });
+    var module = try WasmModule.preload(allocator, bytes, .executable);
+    defer module.deinit();
+
+    // One global holds the base: the one the site reads is the one
+    // exported, and it holds 1.
+    const exported = try testExportIndex(&module, "__table_base");
+    const body = try testFunctionBody(&module, 0);
+    var cursor: usize = 2;
+    try std.testing.expectEqual(exported, try WasmModule.readU32(body, &cursor));
+    const globals = try testSection(bytes, 6);
+    cursor = 0;
+    const global_count = try WasmModule.readU32(globals, &cursor);
+    try std.testing.expect(exported < global_count);
+    // Every global before it is an `i32` with an `i32.const` initializer.
+    for (0..exported) |_| {
+        cursor += 3;
+        _ = try WasmModule.readI32(globals, &cursor);
+        cursor += 1;
+    }
+    try std.testing.expectEqualSlices(u8, &.{ 0x7f, 0x00, 0x41 }, globals[cursor..][0..3]);
+    cursor += 3;
+    try std.testing.expectEqual(@as(i32, @intCast(table_base)), try WasmModule.readI32(globals, &cursor));
+    // `target` takes the first slot after the null one: its relative index
+    // plus the base is its absolute index.
+    cursor = 8;
+    const relative = try WasmModule.readI32(body, &cursor);
+    cursor = 16;
+    const absolute = try WasmModule.readI32(body, &cursor);
+    try std.testing.expectEqual(@as(i32, 1), absolute);
+    try std.testing.expectEqual(absolute, relative + @as(i32, @intCast(table_base)));
+}
+
+test "constructors nothing names run from a wrapper of each exported function" {
+    if (comptime @import("builtin").os.tag != .linux) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The host exports `run` and has a constructor, and nothing names
+    // `__wasm_call_ctors`.
+    const host = try WasmUnitImage.encode(allocator, .{
+        .stack_checks = false,
+        .types = &.{ .{ .params = &.{0x7f}, .results = &.{0x7f} }, .{ .params = &.{}, .results = &.{} } },
+        .functions = &.{
+            .{ .body = try testBody(arena, &.{&.{ 0x20, 0x00, 0x0b }}), .type = 0, .export_name = "run", .sites = &.{} },
+            .{ .body = try testBody(arena, &.{&.{0x0b}}), .type = 1, .export_name = null, .sites = &.{}, .name = "ctor" },
+        },
+        .segments = &.{},
+        .data_exports = &.{},
+        .table_requests = &.{},
+        .imports = &.{},
+        .init_funcs = &.{.{ .priority = 65535, .function = 1 }},
+    });
+    defer allocator.free(host);
+    const support = try testIdleImage(allocator, arena, "roc_builtins_unused");
+    defer allocator.free(support);
+    const root = try testIdleImage(allocator, arena, "roc_main");
+    defer allocator.free(root);
+
+    const units = [_]View{try View.init(root)};
+    const bytes = try testComposeModule(allocator, arena, .{
+        .host = try View.init(host),
+        .support = try View.init(support),
+        .units = &units,
+        .root = 0,
+        .app_public = &.{"roc_main"},
+        .provides = &.{"roc_main"},
+        .hosted = &.{},
+    }, &.{"run"});
+    var module = try WasmModule.preload(allocator, bytes, .executable);
+    defer module.deinit();
+
+    // Functions: `run`, `ctor`, `roc_main`, `__wasm_call_ctors`, then the
+    // wrapper the export names.
+    try std.testing.expectEqual(@as(usize, 5), module.function_offsets.items.len);
+    try std.testing.expectEqual(@as(u32, 4), try testExportIndex(&module, "run"));
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x10, 0x01, 0x0b }, try testFunctionBody(&module, 3));
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x10, 0x03, 0x20, 0x00, 0x10, 0x00, 0x0b }, try testFunctionBody(&module, 4));
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x20, 0x00, 0x0b }, try testFunctionBody(&module, 0));
+}
+
+test "a weak symbol nothing defines is null instead of an import" {
+    if (comptime @import("builtin").os.tag != .linux) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // `roc_main` calls the weak `maybe`, takes its table slot, and takes the
+    // address of the weak `maybe_data` plus 4.
+    const main_body = try testBody(arena, &.{ &.{0x10}, &test_zero_leb, &.{0x41}, &test_zero_leb, &.{ 0x1a, 0x41 }, &test_zero_leb, &.{ 0x1a, 0x0b } });
+    const root = try WasmUnitImage.encode(allocator, .{
+        .stack_checks = false,
+        .types = &.{.{ .params = &.{}, .results = &.{} }},
+        .functions = &.{.{ .body = main_body, .type = 0, .export_name = "roc_main", .sites = &.{
+            .{ .offset = 2, .kind = .function_index_leb, .target_kind = .import, .target = 0, .addend = 0 },
+            .{ .offset = 8, .kind = .table_index_sleb, .target_kind = .import, .target = 0, .addend = 0 },
+            .{ .offset = 15, .kind = .memory_addr_sleb, .target_kind = .import, .target = 1, .addend = 4 },
+        } }},
+        .segments = &.{},
+        .data_exports = &.{},
+        .table_requests = &.{},
+        .imports = &.{
+            .{ .module = "env", .name = "maybe", .kind = .function, .type = 0, .address_taken = true, .weak = true },
+            .{ .module = "env", .name = "maybe_data", .kind = .data, .weak = true },
+        },
+    });
+    defer allocator.free(root);
+    const support = try testIdleImage(allocator, arena, "roc_builtins_unused");
+    defer allocator.free(support);
+    const host = try testIdleImage(allocator, arena, "host_unused");
+    defer allocator.free(host);
+
+    const units = [_]View{try View.init(root)};
+    const bytes = try testComposeModule(allocator, arena, .{
+        .host = try View.init(host),
+        .support = try View.init(support),
+        .units = &units,
+        .root = 0,
+        .app_public = &.{"roc_main"},
+        .provides = &.{"roc_main"},
+        .hosted = &.{},
+    }, &.{"roc_main"});
+    var module = try WasmModule.preload(allocator, bytes, .executable);
+    defer module.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), module.imports.items.len);
+    // The call reaches a stub that traps; the slot and the address are 0.
+    const body = try testFunctionBody(&module, 0);
+    var cursor: usize = 2;
+    const callee = try WasmModule.readU32(body, &cursor);
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x00, 0x0b }, try testFunctionBody(&module, callee));
+    cursor = 8;
+    try std.testing.expectEqual(@as(i32, 0), try WasmModule.readI32(body, &cursor));
+    cursor = 15;
+    try std.testing.expectEqual(@as(i32, 0), try WasmModule.readI32(body, &cursor));
+}
+
+test "a composed object relocates every site and does not depend on the units' order" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Unit A's `roc_main` calls unit B's `helper` and returns the address
+    // of its own data; B's code and data both name B's data.
+    const main_body = try testBody(arena, &.{ &.{0x10}, &test_zero_leb, &.{0x41}, &test_zero_leb, &.{0x0b} });
+    const unit_a = try WasmUnitImage.encode(allocator, .{
+        .stack_checks = false,
+        .types = &.{ .{ .params = &.{}, .results = &.{0x7f} }, .{ .params = &.{}, .results = &.{} } },
+        .functions = &.{.{ .body = main_body, .type = 0, .export_name = "roc_main", .sites = &.{
+            .{ .offset = 2, .kind = .function_index_leb, .target_kind = .import, .target = 0, .addend = 0 },
+            .{ .offset = 8, .kind = .memory_addr_sleb, .target_kind = .data, .target = 0, .addend = 0 },
+        } }},
+        .segments = &.{.{ .bytes = "AAAA", .size = 4, .alignment_log2 = 2, .sites = &.{} }},
+        .data_exports = &.{},
+        .table_requests = &.{},
+        .imports = &.{.{ .module = "env", .name = "helper", .kind = .function, .type = 1 }},
+    });
+    defer allocator.free(unit_a);
+    const helper_body = try testBody(arena, &.{ &.{0x41}, &test_zero_leb, &.{ 0x1a, 0x0b } });
+    const unit_b = try WasmUnitImage.encode(allocator, .{
+        .stack_checks = false,
+        .types = &.{.{ .params = &.{}, .results = &.{} }},
+        .functions = &.{.{ .body = helper_body, .type = 0, .export_name = "helper", .sites = &.{
+            .{ .offset = 2, .kind = .memory_addr_sleb, .target_kind = .data, .target = 0, .addend = 0 },
+        } }},
+        .segments = &.{.{ .bytes = "BBBBBBBB", .size = 8, .alignment_log2 = 3, .sites = &.{
+            .{ .offset = 0, .kind = .memory_addr_i32, .target_kind = .data, .target = 0, .addend = 4 },
+        } }},
+        .data_exports = &.{},
+        .table_requests = &.{},
+        .imports = &.{},
+    });
+    defer allocator.free(unit_b);
+    const support = try testIdleImage(allocator, arena, "roc_builtins_unused");
+    defer allocator.free(support);
+
+    var objects: [2][]u8 = undefined;
+    const Image = []align(WasmUnitImage.alignment.toByteUnits()) const u8;
+    const orders = [2][2]Image{ .{ unit_a, unit_b }, .{ unit_b, unit_a } };
+    for (&objects, orders, [_]usize{ 0, 1 }) |*object, order, root| {
+        const units = [_]View{ try View.init(order[0]), try View.init(order[1]) };
+        var timing: Timing = .{};
+        var outcome: Outcome = .{};
+        object.* = try composeObject(allocator, arena, std.testing.io, .{
+            .host = null,
+            .support = try View.init(support),
+            .units = &units,
+            .root = root,
+            .app_public = &.{"roc_main"},
+            .provides = &.{"roc_main"},
+            .hosted = &.{},
+        }, &timing, &outcome);
+    }
+    defer for (objects) |object| allocator.free(object);
+    try std.testing.expectEqualSlices(u8, objects[0], objects[1]);
+
+    var module = try WasmModule.preload(allocator, objects[0], .relocatable_for_image);
+    defer module.deinit();
+    const symbols = module.linking.symbol_table.items;
+    // Only `roc_main` is global; `helper` and the segments are local.
+    var globals: usize = 0;
+    for (symbols) |symbol| {
+        if (symbol.isUndefined() or symbol.isLocal()) continue;
+        globals += 1;
+        try std.testing.expectEqualStrings("roc_main", symbol.name.?);
+        try std.testing.expectEqual(WasmLinking.SymKind.function, symbol.kind);
+    }
+    try std.testing.expectEqual(@as(usize, 1), globals);
+    try std.testing.expectEqual(@as(usize, 2), module.data_segments.items.len);
+    for (module.linking.segment_info.items) |info| try std.testing.expect(std.mem.startsWith(u8, info.name, ".data.roc_"));
+    // Code: a call and two addresses; data: one address. Each names a
+    // symbol of the kind its type relocates.
+    try std.testing.expectEqual(@as(usize, 3), module.reloc_code.entries.items.len);
+    for (module.reloc_code.entries.items) |entry| switch (entry) {
+        .index => |reloc| {
+            try std.testing.expectEqual(WasmLinking.IndexRelocType.function_index_leb, reloc.type_id);
+            try std.testing.expectEqual(WasmLinking.SymKind.function, symbols[reloc.symbol_index].kind);
+        },
+        .offset => |reloc| {
+            try std.testing.expectEqual(WasmLinking.OffsetRelocType.memory_addr_sleb, reloc.type_id);
+            const symbol = symbols[reloc.symbol_index];
+            try std.testing.expectEqual(WasmLinking.SymKind.data, symbol.kind);
+            try std.testing.expect(symbol.index < module.data_segments.items.len);
+        },
+    };
+    try std.testing.expectEqual(@as(usize, 1), module.reloc_data.entries.items.len);
+    const data_reloc = module.reloc_data.entries.items[0].offset;
+    try std.testing.expectEqual(WasmLinking.OffsetRelocType.memory_addr_i32, data_reloc.type_id);
+    try std.testing.expectEqual(@as(i32, 4), data_reloc.addend);
+    try std.testing.expectEqual(WasmLinking.SymKind.data, symbols[data_reloc.symbol_index].kind);
+}
+
+test "the first engine limit a module exceeds is reported" {
+    const within: ModuleCounts = .{ .functions = 10, .imports = 2, .exports = 3, .types = 4, .globals = 1, .table_size = 1, .data_segments = 1, .max_body_size = 100 };
+    try std.testing.expectEqual(@as(?Limit, null), exceededLimit(within));
+    var imports = within;
+    imports.imports = max_imports + 1;
+    try std.testing.expectEqualStrings("imports", exceededLimit(imports).?.what);
+    var body = within;
+    body.max_body_size = max_body_size + 1;
+    const limit = exceededLimit(body).?;
+    try std.testing.expectEqualStrings("bytes in one function body", limit.what);
+    try std.testing.expectEqual(@as(u64, max_body_size + 1), limit.count);
 }

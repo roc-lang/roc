@@ -169,6 +169,7 @@ pub const ImageJob = struct {
         self.thread = null;
     }
 
+    /// Wait for the job, then release the records it found.
     pub fn deinit(self: *ImageJob) void {
         self.wait();
         for ([_]*Lookup{ &self.support[0], &self.support[1], &self.host }) |found| switch (found.*) {

@@ -7,8 +7,9 @@
 //!
 //! The object is read with `WasmModule.preload`, and each of its defined
 //! functions and data segments becomes an atom of the image, each of its
-//! relocations a site, each undefined symbol a relocation names an import,
-//! and each defined symbol that is not local an export. Globals the object
+//! relocations a site, each undefined symbol a relocation names an import
+//! (weak when every reference to it is weak), and each defined symbol that
+//! is not local an export. Globals the object
 //! defines keep their initial values, and its constructors their order.
 //!
 //! An object holding something an image cannot represent (thread-local
@@ -48,6 +49,7 @@ pub const Unsupported = enum {
     unpadded_site,
     exported_data,
     zero_fill_relocation,
+    weak_undefined_global,
 
     /// A sentence describing it, for the report.
     pub fn describe(self: Unsupported) []const u8 {
@@ -59,6 +61,7 @@ pub const Unsupported = enum {
             .unpadded_site => "a relocated field in its code is not a 5-byte LEB128",
             .exported_data => "it marks a data symbol for export from the finished module",
             .zero_fill_relocation => "a zero-filled data segment holds a relocation",
+            .weak_undefined_global => "it references a global only weakly, which no link gives a null value",
         };
     }
 };
@@ -93,6 +96,10 @@ pub fn convert(gpa: Allocator, bytes: []const u8, options: Options, unsupported:
     var types: Types = .{ .arena = arena, .signatures = signatures };
     var imports: Imports = .{ .arena = arena, .module = &module };
     try imports.collect();
+    for (imports.list.items) |import| if (import.input.weak and import.input.kind == .global) {
+        unsupported.* = .weak_undefined_global;
+        return error.UnsupportedObject;
+    };
 
     // The checks of stack-checked code, which a composer gives their rooms.
     const frames: []const StackRoom.UnitFrame = if (options.stack_checks) try StackRoom.unitFrames(arena, &module) else &.{};
@@ -179,7 +186,7 @@ pub fn convert(gpa: Allocator, bytes: []const u8, options: Options, unsupported:
     if (next_reloc != data_relocs.len) return error.InvalidSection;
 
     // Globals the object defines, with their initial values.
-    if (module.preloaded_globals.items.len != module.preloaded_defined_global_count) return error.InvalidSection;
+    std.debug.assert(module.preloaded_globals.items.len == module.preloaded_defined_global_count); // `.relocatable_for_image` reads every defined global
     const globals = try arena.alloc(WasmUnitImage.InputGlobal, module.preloaded_globals.items.len);
     for (globals, module.preloaded_globals.items) |*global, source| {
         global.* = .{
@@ -344,7 +351,7 @@ fn markTableSite(site: WasmUnitImage.InputSite, requested: []bool, imports: *Imp
     switch (site.target_kind) {
         .function => requested[site.target] = true,
         .import => imports.list.items[site.target].input.address_taken = true,
-        .data, .type, .global => {},
+        .data, .type, .global => unreachable, // `siteOf` names a function or an import for every table relocation
     }
 }
 
@@ -520,7 +527,8 @@ const Types = struct {
 };
 
 /// The image's imports: every undefined symbol a relocation names, one
-/// import per kind and symbol name, in the object's symbol order.
+/// import per kind and symbol name, in the object's symbol order. An import
+/// is weak when every symbol it stands for is.
 const Imports = struct {
     arena: Allocator,
     module: *const WasmModule,
@@ -578,11 +586,17 @@ const Imports = struct {
                 .data => .{ .input = .{ .module = "env", .name = name, .kind = .data }, .module_type = null },
                 .section, .event => return error.InvalidSection,
             };
+            const weak = symbol.flags & WasmLinking.SymFlag.BINDING_WEAK != 0;
             const key = try std.mem.concat(self.arena, u8, &.{ &.{@backingInt(import.input.kind)}, name });
             const gop = try by_name.getOrPut(self.arena, key);
-            if (!gop.found_existing) {
+            if (gop.found_existing) {
+                const existing = &self.list.items[gop.value_ptr.*].input;
+                existing.weak = existing.weak and weak;
+            } else {
                 gop.value_ptr.* = @intCast(self.list.items.len);
-                try self.list.append(self.arena, import);
+                var weak_import = import;
+                weak_import.input.weak = weak;
+                try self.list.append(self.arena, weak_import);
             }
             try self.by_symbol.put(self.arena, symbol_index, gop.value_ptr.*);
             if (symbol.kind == .table and self.table_import == null) self.table_import = gop.value_ptr.*;

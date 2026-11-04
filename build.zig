@@ -1575,6 +1575,16 @@ fn setupTestPlatforms(
         },
     }));
 
+    // A wasm host that imports the app's hosted function from the embedder
+    // with a signature that disagrees with the app's.
+    prepared_hosts_step.dependOn(buildAndCopyWasmHostObject(b, wasm_target, optimize, strip, omit_frame_pointer, .{
+        .name = "import_conflict_host",
+        .root_source_file = "test/wasm/wasm_import_conflict/wasm_host.zig",
+        .imports = host_alloc_imports,
+        .bundle_compiler_rt = false,
+        .dest_paths = &.{"test/wasm/wasm_import_conflict/platform/targets/wasm32/host.wasm"},
+    }));
+
     for (glibc_cross_targets) |cross_target| {
         if (generateGlibcStub(b, b.resolveTargetQuery(cross_target.query), cross_target.name)) |stubs| {
             prepared_hosts_step.dependOn(&stubs.step);
