@@ -737,10 +737,16 @@ pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.
 /// the use's types, then its variables' descriptors, adapted to `actual`.
 fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!LocalId {
     const fam_ = b.program.codec.families.items[family];
-    const count = fam_.env.vars.len;
-    const bound = try b.relateVariables(fam_.constructor_fn, actual, count);
+    const bound = try b.relateVariables(fam_.constructor_fn, actual, fam_.env.vars.len);
     defer b.allocator.free(bound);
-    const captures = try b.allocator.alloc(LocalId, fam_.locals.items.len + count);
+    const composed = try composeConstructor(b, family, bound);
+    return try b.adaptDictionary(composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound), actual);
+}
+
+/// A family's constructor composed with its variables at `bound`.
+fn composeConstructor(b: *Builder, family: u32, bound: []const TypeId) Allocator.Error!LocalId {
+    const fam_ = b.program.codec.families.items[family];
+    const captures = try b.allocator.alloc(LocalId, fam_.locals.items.len + bound.len);
     defer b.allocator.free(captures);
     if (fam_.locals.items.len != 0) {
         if (fam_.module != b.module) invariant("a generated codec calling local procedures is used outside the module declaring them");
@@ -756,8 +762,32 @@ fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Local
         }
     }
     for (bound, captures[fam_.locals.items.len..]) |ty, *desc| desc.* = try b.descOf(ty);
-    const composed = try b.composeDictionary(try constructorWorker(b.program, family), captures);
-    return try b.adaptDictionary(composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound), actual);
+    return try b.composeDictionary(try constructorWorker(b.program, family), captures);
+}
+
+/// The function values of family `family`'s local procedures at its
+/// variables' types `bound`, built in this body's innermost declaration
+/// context, into `out`.
+pub fn localValues(b: *Builder, family: u32, bound: []const TypeId, out: []LocalId) Allocator.Error!void {
+    const fam_ = b.program.codec.families.items[family];
+    const table = b.view.view.static_dispatch_plans;
+    for (fam_.locals.items, out) |local, *value| {
+        value.* = try b.localMethodValue(table.evidenceNode(local.node), try b.program.substitute(b.allocator, local.fn_ty, bound));
+    }
+}
+
+/// A stored constructor of worker `worker` composed again with its
+/// variables at `bound`, and its type there.
+pub fn restoreConstructor(b: *Builder, worker: WorkerId, bound: []const TypeId) Allocator.Error!struct { composed: LocalId, ty: TypeId } {
+    const piece = switch (b.program.worker(worker).key) {
+        .codec => |index| b.program.codec.pieces.items[index],
+        .template, .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a stored codec constructor's worker is no codec piece"),
+    };
+    if (piece.kind != .constructor) invariant("a stored codec constructor's worker is no constructor");
+    return .{
+        .composed = try composeConstructor(b, piece.family, bound),
+        .ty = try b.program.substitute(b.allocator, b.program.codec.families.items[piece.family].constructor_fn, bound),
+    };
 }
 
 /// A structural `parser_for`/`encoder_for` dispatch: the derivation's
@@ -863,17 +893,19 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
     try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = descs, .dicts = &.{}, .capture_types = captures, .worker_ty = try program.substitute(b.allocator, fam_.runtime_fn, bound), .ty = fn_ty } });
     // The local procedures' function values follow the names; compile-time
     // evaluation stores none of them, as a local procedure is a procedure
-    // of its declaring body, not a value the runtime holds.
+    // of its declaring body, not a value the runtime holds. They are built
+    // in the declaration context of the stored value's procedure, which
+    // declares them, at the instance the value records.
     const stored_count = 1 + fam_.names.items.len;
     if (fam_.locals.items.len != 0) {
         if (fam_.module != b.module) invariant("a stored generated codec calling local procedures is restored outside the module declaring them");
-        const table = b.view.view.static_dispatch_plans;
-        var local_index = fam_.locals.items.len;
+        const values = try b.allocator.alloc(LocalId, fam_.locals.items.len);
+        defer b.allocator.free(values);
+        try b.storedRuntimeLocals(source, stored, owner, values, family, bound);
+        var local_index = values.len;
         while (local_index > 0) {
             local_index -= 1;
-            const local = fam_.locals.items[local_index];
-            const local_ty = try program.substitute(b.allocator, local.fn_ty, bound);
-            try b.push(.{ .push_value = try b.localMethodValue(table.evidenceNode(local.node), local_ty) });
+            try b.push(.{ .push_value = values[local_index] });
         }
     }
     var index = stored_count;

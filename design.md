@@ -6770,11 +6770,23 @@ plan or enter the LSS pipeline as a fallback. Stored generated callables retain 
 and compiler-assigned capture identities so restoration rebuilds the same
 ordinary Boxy callable from `ConstStore` data. A format or custom codec method
 that is a local procedure (a method of a type declared in a function body that
-stays a procedure of that body) is a function value of its declaring body: each
-use builds it there, in the entry chain, and the constructor captures it and
-hands it to the runtime worker after the renamed names, where every call of it
-is an erased call. Restoring a stored runtime builds those values in the
-restoring body, since compile-time evaluation stores none of them.
+stays a procedure of that body) is a function value of its declaring body,
+built in the entry chain as an immortal composition; the constructor captures
+it and hands it to the runtime worker after the renamed names, where every
+call of it is an erased call. Its value is built only where the declaring
+body's hidden words are explicit: in a worker chain containing the declaring
+body, or from a *declaration context*, the declaring procedure's worker with
+the descriptors, dictionaries, and literal arguments of one instance of it.
+A caller building the dictionaries of a call instance (a direct call, a
+literal chain frame, or a platform requirement's root evidence) builds them
+in that instance's declaration context, since a caller-supplied codec
+requirement of the callee's scheme calls the callee's local procedures. The
+procedure's worker is then a lambda of the callee's procedure worker,
+capturing the instance's words. Restoring a stored generated runtime builds
+those values in the declaration context of the instance of the stored value's
+procedure that built it, which the value records, since compile-time
+evaluation stores none of them. Building a local procedure's value anywhere
+else is a compiler bug.
 
 Boxy generated encoders call the same format methods, with the same callback
 protocols, as the checked derivation contract names. A tag union of any
@@ -13856,6 +13868,22 @@ compositions fill a slot with the same dictionary.
 A stored function value's types are closed, so a dictionary that captures
 itself is stored as its target and types alone and composed again on restore,
 which keeps the constant graph acyclic.
+
+A declaration context's dictionaries include the one being built, so a local
+procedure's value built from it can capture the dictionary that captures it:
+a generated codec constructor captures its format's local methods, which
+capture the callee's dictionaries, the codec among them. Each slot of the
+context is built on its first read; a procedure reading a slot still being
+built captures a null word there, and `dict_patch` fills that capture word of
+the procedure's immortal composition once the slot is built. A stored
+constructor in such a cycle is stored as its worker and types plus the
+declaration context: the declaring procedure, its types, which of its
+dictionary slots lead back to the constructor, and its other dictionaries and
+literal arguments as stored captures. Restoring it composes the constructor
+again in that context and fills those slots with it, adapted to their
+parameters. A stored dictionary built from parts is restored in the entry
+chain with everything it captures, its function values immortal compositions,
+as a live one is composed.
 
 Compiler-derived structural evidence (equality, hashing, inspection) is a
 callable over the dispatcher's descriptor: the dictionary for `[a.is_eq]` with

@@ -149,6 +149,10 @@ pub const Task = union(enum) {
     /// the restored value's.
     /// Pop a stored function's captures and pack them (`stored_fn.zig`).
     finish_stored_fn: struct { worker: WorkerId, shape: StoredFn.CaptureShape, descs: []const LocalId, capture_types: []const TypeId },
+    /// Pop a stored generated codec constructor's declaration context's
+    /// restored dictionaries and literal arguments, and compose the
+    /// constructor again in it (`stored_fn.zig`).
+    finish_stored_codec: struct { worker: WorkerId, bound: []const TypeId, declaration: StoredFn.Decoded.Declaration },
     finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const LocalId, dicts: []const LocalId, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
@@ -189,6 +193,20 @@ pub const Task = union(enum) {
     match_advance: struct { state: *Match.State, input: ?CFStmtId },
     /// Pop a match guard's value into `cond`, continuing at `next`.
     match_guard_done: struct { cond: LocalId, next: CFStmtId },
+    /// Emit into the entry chain, building function values as immortal
+    /// compositions, until the matching `leave_immortal_restore`: a stored
+    /// dictionary built from parts is restored there with everything it
+    /// captures, as a live one is composed.
+    enter_immortal_restore,
+    leave_immortal_restore,
+};
+
+/// The emission state `Task.enter_immortal_restore` replaced.
+const ImmortalRestore = struct {
+    hole: ?CFStmtId,
+    last_stmt: ?CFStmtId,
+    emitting_entry: bool,
+    immortal_closures: bool,
 };
 
 /// A literal conversion the compile-time evaluator runs where the literal
@@ -261,6 +279,9 @@ const DeferredDictionaries = struct {
     frames: usize,
     /// Each parameter's dictionary, once read.
     composed: []?LocalId,
+    /// The template worker whose call instance the frame is, whose body can
+    /// declare local procedures its dictionaries call (`Declaration`).
+    declaring: ?WorkerId = null,
 };
 
 /// Where a literal chain frame's literal arguments come from.
@@ -275,6 +296,66 @@ const DeferredLiterals = union(enum) {
     },
     /// The thunks of `owner`'s literal requirements at the types `bound`.
     thunks: struct { owner: WorkerId, bound: []const TypeId },
+};
+
+/// The declaration context of a call instance of template worker `worker`
+/// while its dictionaries are built (design.md "Dictionaries"): the hidden
+/// descriptors, dictionaries, and literal arguments the instance passes, as
+/// this body holds them. A dictionary such as a generated codec can call
+/// local procedures of the callee's body, which is not this body's; their
+/// function values are built from this context. A dictionary slot is built
+/// when the instance or a procedure first reads it; a procedure reading a
+/// slot still being built (the dictionary that captures the procedure)
+/// captures a null word there, which `dict_patch` fills once the slot is
+/// built.
+const Declaration = struct {
+    worker: WorkerId,
+    /// The callee's scheme types, in this body's variables.
+    bound: []const TypeId,
+    descs: []const LocalId,
+    /// By hidden dictionary position; null until built.
+    dicts: []?LocalId,
+    /// Which dictionary slots are being built.
+    building: []bool,
+    literals: []const LocalId,
+    source: Source,
+    /// Captures holding a null word for a slot still being built.
+    patches: std.ArrayList(Patch) = .empty,
+    outer: ?*Declaration,
+
+    const Source = union(enum) {
+        /// The evidence of a call, read in `module`'s view `view`.
+        call: struct {
+            evidence: []const static_dispatch.CheckedEvidence,
+            context: Builder.ParamContext,
+            owner: ?*const types.ModuleView,
+        },
+        /// A literal chain frame's dictionaries, at its position in
+        /// `alias_scopes`; `composed` is its `DeferredDictionaries.composed`,
+        /// which identifies it.
+        frame: struct { position: usize, composed: [*]?LocalId },
+        /// A stored dictionary's declaration context: every slot is
+        /// restored or is the one being composed again.
+        restored,
+    };
+
+    const Patch = struct { closure: LocalId, index: u32, slot: u32 };
+};
+
+/// The scope a local procedure's function value is built in: the worker
+/// declaring it, the procedure's worker there, and the declaring worker's
+/// scheme types and hidden words as this body holds them.
+const LocalProcScope = struct {
+    declaring: WorkerId,
+    worker: WorkerId,
+    bound: []const TypeId,
+    descs: []const LocalId,
+    /// A null word stands for each slot of `declaration` still being built.
+    dicts: []const LocalId,
+    literals: []const LocalId,
+    /// The declaration context the words come from, when the declaring
+    /// body is not one this body is lowered in.
+    declaration: ?*Declaration,
 };
 
 /// A `literal_argument` root of a module, whose thunk a body composes once.
@@ -393,6 +474,12 @@ pub const Builder = struct {
     /// alias's own module (`aliasTargetHidden`): where that alias's scopes
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
     foreign_scopes: ?usize = null,
+    /// The innermost declaration context of the call instances whose
+    /// dictionaries are being built (`Declaration`).
+    declaration: ?*Declaration = null,
+    /// The emission states the immortal restores being lowered replaced,
+    /// innermost last.
+    immortal_restores: std.ArrayList(ImmortalRestore) = .empty,
     type_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
     /// Complete argument layouts already emitted in this entry chain. Keys
     /// name the exact ordered descriptor locals, not an approximation of types.
@@ -472,6 +559,7 @@ pub const Builder = struct {
         self.frame_locals.deinit(self.allocator);
         self.binders.deinit(self.allocator);
         self.alias_scopes.deinit(self.allocator);
+        self.immortal_restores.deinit(self.allocator);
         self.recursive_slots.deinit(self.allocator);
         self.declared_captures.deinit(self.allocator);
         self.root_thunks.deinit(self.allocator);
@@ -2795,6 +2883,30 @@ pub const Builder = struct {
                     .discarded, .expect => invariant("a callable-eval binding's root holds a value, which no expect or discarded root does"),
                 }
             },
+            .enter_immortal_restore => {
+                try self.immortal_restores.append(self.allocator, .{
+                    .hole = self.hole,
+                    .last_stmt = self.last_stmt,
+                    .emitting_entry = self.emitting_entry,
+                    .immortal_closures = self.immortal_closures,
+                });
+                if (!self.emitting_entry) {
+                    self.hole = self.entry_hole;
+                    self.emitting_entry = true;
+                }
+                self.immortal_closures = true;
+            },
+            .leave_immortal_restore => {
+                const saved = self.immortal_restores.pop() orelse invariant("an immortal restore ended without beginning");
+                if (!saved.emitting_entry) {
+                    self.entry_hole = self.hole orelse invariant("an entry-chain restore diverged");
+                    self.hole = saved.hole;
+                    self.last_stmt = saved.last_stmt;
+                    self.emitting_entry = false;
+                }
+                self.immortal_closures = saved.immortal_closures;
+            },
+            .finish_stored_codec => |stored| try self.finishStoredCodec(stored.worker, stored.bound, stored.declaration),
             .finish_stored_fn => |stored| {
                 const captured = try self.popValues(@intCast(stored.shape.values.len + stored.shape.dicts));
                 defer self.allocator.free(captured);
@@ -4320,10 +4432,37 @@ pub const Builder = struct {
             return try self.localProcValue(local);
         var scheme = try self.localScheme(scope_id);
         if (!scheme.per_call or (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0)) return try self.localProcValue(local);
-        const scope_worker, const per_call = try self.localProcWorker(local);
+        const scope = try self.localProcWorker(local, self.localProcDeclaration(lambda_expr));
+        const scope_worker = scope.declaring;
         const declaring = self.program.worker(scope_worker).*;
-        const per_call_worker = self.program.worker(per_call).*;
+        const per_call_worker = self.program.worker(scope.worker).*;
         const outer_count = declaring.scheme_vars.len;
+        // Built from a declaration context, the procedure's types are read in
+        // its callee's scope, whose dictionaries the evidence of its scheme
+        // names, and its function value is a dictionary's method, an
+        // immortal composition.
+        const saved_env = self.env;
+        const saved_foreign = self.foreign_scopes;
+        const saved_scopes = self.alias_scopes.items.len;
+        const saved_immortal = self.immortal_closures;
+        defer {
+            self.env = saved_env;
+            self.foreign_scopes = saved_foreign;
+            self.alias_scopes.shrinkRetainingCapacity(saved_scopes);
+            self.immortal_closures = saved_immortal;
+        }
+        if (scope.declaration != null) {
+            self.env = .{ .module = self.module, .vars = declaring.scheme_vars, .bound = scope.bound };
+            try self.alias_scopes.append(self.allocator, .{
+                .params = declaring.dictionary_params,
+                .dicts = scope.dicts,
+                .literals = scope.literals,
+                .literal_requirements = if (declaring.literal_scopes.len == 0) &.{} else declaring.literal_scopes[0],
+                .saved_env = self.env,
+            });
+            self.foreign_scopes = saved_scopes;
+            self.immortal_closures = true;
+        }
         const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ declaring.scheme_vars, scheme.scheme_vars });
         defer self.allocator.free(vars);
         const generic_bound = try self.allocator.alloc(TypeId, vars.len);
@@ -4338,7 +4477,7 @@ pub const Builder = struct {
         // A variable the use's type does not reach, like the type of a
         // numeral only the body's methods fix, takes the type those methods
         // give it.
-        for (related[0..outer_count], self.env.bound[0..outer_count]) |*slot, ty| {
+        for (related[0..outer_count], scope.bound) |*slot, ty| {
             if (slot.* == null) slot.* = ty;
         }
         try self.program.relateThroughRequirements(self.module, vars, scheme.params, related);
@@ -4350,11 +4489,10 @@ pub const Builder = struct {
         for (per_call_worker.captures, values, 0..) |capture, *value, index| {
             value.* = if (declared) |captured| captured[index] else self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is used");
         }
-        var declaring_dicts: usize = 0;
-        for (declaring.dict_scopes) |dict_scope| declaring_dicts += dict_scope.len;
+        const declaring_dicts = scope.dicts.len;
         const descs = try self.allocator.alloc(LocalId, vars.len);
         defer self.allocator.free(descs);
-        @memcpy(descs[0..outer_count], self.var_descs[0..outer_count]);
+        @memcpy(descs[0..outer_count], scope.descs);
         const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
         defer self.allocator.free(own_types);
         for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*own_ty, ty, variable, index| {
@@ -4384,27 +4522,27 @@ pub const Builder = struct {
                 });
             }
         }
-        @memcpy(dicts[scheme.dictionaries.len..], self.dict_locals[self.dict_locals.len - declaring_dicts ..]);
+        @memcpy(dicts[scheme.dictionaries.len..], scope.dicts);
         // The procedure's own scheme's literal arguments, then the
         // declaring scope's.
-        var declaring_literals: usize = 0;
-        for (declaring.literal_scopes) |literal_scope| declaring_literals += literal_scope.len;
+        const declaring_literals = scope.literals.len;
         const literals = try self.allocator.alloc(LocalId, scheme.literal_requirements.len + declaring_literals);
         defer self.allocator.free(literals);
         if (edge) |use_edge| {
             try self.fillLiteralArgs(null, use_edge, literals[0..scheme.literal_requirements.len]);
         } else {
-            const bound_all = try std.mem.concat(self.allocator, TypeId, &.{ self.env.bound[0..outer_count], own_types });
+            const bound_all = try std.mem.concat(self.allocator, TypeId, &.{ scope.bound, own_types });
             defer self.allocator.free(bound_all);
             try self.derivedLiteralArgs(callee, bound_all, literals[0..scheme.literal_requirements.len]);
         }
-        @memcpy(literals[scheme.literal_requirements.len..], self.literal_locals[self.literal_locals.len - declaring_literals ..]);
+        @memcpy(literals[scheme.literal_requirements.len..], scope.literals);
         const words = try std.mem.concat(self.allocator, LocalId, &.{ dicts, literals });
         defer self.allocator.free(words);
         const closure = if (try self.allClosed(per_call_worker.capture_types))
             try self.packClosure(callee, values, per_call_worker.capture_types, descs, words)
         else
             try self.packDynamicClosure(callee, values, per_call_worker.capture_types, descs, words);
+        try self.notePendingCaptures(scope, closure, values.len + descs.len + scheme.dictionaries.len);
         // The procedure's type at this use, in this worker's variables.
         const use_bound = try self.allocator.alloc(TypeId, vars.len);
         defer self.allocator.free(use_bound);
@@ -4435,30 +4573,33 @@ pub const Builder = struct {
         return try self.localProcInstanceValue(local, fn_ty, evidence, null, subst);
     }
 
-    /// The worker that declares local procedure `local` (this worker or one
-    /// it is nested in) and the procedure's worker there. A procedure whose
-    /// declaring body never ran here (it ran at compile time, and a closure
-    /// it built was stored) gets its worker now.
-    pub fn localProcWorker(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!struct { WorkerId, WorkerId } {
-        const closure_expr = self.bodies().expr(local.expr);
-        const lambda_expr = switch (closure_expr.data) {
-            .lambda => local.expr,
-            .closure => |closure| closure.lambda,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+    /// The declaration context a function value of the local procedure
+    /// whose lambda is `lambda_expr` is built from: the innermost one being
+    /// built whose callee is the template owning the procedure's site.
+    fn localProcDeclaration(self: *Builder, lambda_expr: CheckedExprId) ?*Declaration {
+        if (self.declaration == null) return null;
+        return self.declarationOf(self.localProcOwner(lambda_expr) orelse return null);
+    }
+
+    /// The worker of the procedure template owning the site of the local
+    /// procedure whose lambda is `lambda_expr`, when it has one.
+    fn localProcOwner(self: *Builder, lambda_expr: CheckedExprId) ?WorkerId {
+        const site_index = self.program.sites_by_expr.get(.{ .module = self.module, .expr = lambda_expr }) orelse
+            invariant("a local procedure has no nested procedure site");
+        const owner = switch (self.view.view.nested_proc_sites.sites[site_index].owner) {
+            .template => |ref| ref,
+            .default_root => return null,
         };
-        const captures = try self.program.siteCaptures(self.module, local.expr);
-        var scope_worker = self.worker_id;
-        while (true) {
-            if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| return .{ scope_worker, id };
-            switch (self.program.worker(scope_worker).key) {
-                .lambda => |key| scope_worker = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => break,
-            }
-        }
-        // No body of the chain declared it: the chain is a stored closure
-        // restored in its procedure's scope, and the procedure is declared
-        // in that scope's body, which ran at compile time.
-        const scope = self.program.worker(scope_worker).*;
+        const owner_module = self.program.moduleByKey(.{ .bytes = owner.artifact.bytes }).index;
+        return self.program.worker_ids.get(.{ .template = .{ .module = owner_module, .template = owner.template } });
+    }
+
+    /// The worker of local procedure `lambda_expr` (of closure expression
+    /// `closure_expr`, capturing `captures`) declared in `outer`'s body,
+    /// created now when that body was never lowered here: it ran at compile
+    /// time, and a closure it built was stored.
+    fn declaredLambdaWorker(self: *Builder, outer: WorkerId, lambda_expr: CheckedExprId, closure_ty: checked.CheckedTypeId, captures: []const checked.CheckedCapture, chain: bool) Allocator.Error!WorkerId {
+        const scope = self.program.worker(outer).*;
         const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr })) |scope_id| blk: {
             const scheme = try self.localScheme(scope_id);
             break :blk if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) null else scheme;
@@ -4469,11 +4610,74 @@ pub const Builder = struct {
         defer self.allocator.free(bound);
         for (bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
         const env: types.Env = .{ .module = self.module, .vars = vars, .bound = bound };
-        const fn_ty = try self.program.converter().convert(self.module, closure_expr.ty, env);
+        const fn_ty = try self.program.converter().convert(self.module, closure_ty, env);
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
+        if (!chain and captures.len != 0) invariant("a local procedure built from a declaration context captures values");
         for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.capturedType(capture.pattern, try self.program.converter().convert(self.module, self.bodies().pattern(capture.pattern).ty, env));
-        return .{ scope_worker, try self.program.lambdaWorker(scope_worker, lambda_expr, captures, capture_types, fn_ty, own) };
+        return try self.program.lambdaWorker(outer, lambda_expr, captures, capture_types, fn_ty, own);
+    }
+
+    /// The scope a function value of local procedure `local` is built in.
+    /// From `declaration`, it is the context's callee's; otherwise it is the
+    /// worker of this worker's chain that declares the procedure, whose
+    /// body this body is or is nested in.
+    fn localProcWorker(self: *Builder, local: checked.LocalProcedureBinding, declaration: ?*Declaration) Allocator.Error!LocalProcScope {
+        const closure_expr = self.bodies().expr(local.expr);
+        const lambda_expr = switch (closure_expr.data) {
+            .lambda => local.expr,
+            .closure => |closure| closure.lambda,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+        };
+        const captures = try self.program.siteCaptures(self.module, local.expr);
+        const context = declaration orelse {
+            var scope_worker = self.worker_id;
+            const found = while (true) {
+                if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| break id;
+                switch (self.program.worker(scope_worker).key) {
+                    .lambda => |key| scope_worker = key.outer,
+                    // The chain's procedure declares it but never lowered
+                    // its declaration here: the chain is a stored closure
+                    // of that procedure, whose body ran at compile time.
+                    .template => if (self.localProcOwner(lambda_expr) == scope_worker)
+                        break try self.declaredLambdaWorker(scope_worker, lambda_expr, closure_expr.ty, captures, true)
+                    else
+                        invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
+                    .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
+                }
+            };
+            const declaring = self.program.worker(scope_worker).*;
+            var declaring_dicts: usize = 0;
+            for (declaring.dict_scopes) |scope| declaring_dicts += scope.len;
+            var declaring_literals: usize = 0;
+            for (declaring.literal_scopes) |scope| declaring_literals += scope.len;
+            return .{
+                .declaring = scope_worker,
+                .worker = found,
+                .bound = self.env.bound[0..declaring.scheme_vars.len],
+                .descs = self.var_descs[0..declaring.scheme_vars.len],
+                .dicts = self.dict_locals[self.dict_locals.len - declaring_dicts ..],
+                .literals = self.literal_locals[self.literal_locals.len - declaring_literals ..],
+                .declaration = null,
+            };
+        };
+        // A procedure built from a declaration context is a method of a type
+        // its callee's body declares, outside every generalized local, and
+        // methods capture no values.
+        if (self.view.view.nested_proc_sites.sites[self.program.sites_by_expr.get(.{ .module = self.module, .expr = lambda_expr }).?].lexical_scope != .root)
+            invariant("a local procedure built from a declaration context is declared in a generalized local");
+        const worker = try self.declaredLambdaWorker(context.worker, lambda_expr, closure_expr.ty, captures, false);
+        const dicts = try self.program.arena.allocator().alloc(LocalId, context.dicts.len);
+        for (dicts, 0..) |*dict, slot| dict.* = (try self.declarationDictionary(context, slot)) orelse try self.nullWord();
+        return .{
+            .declaring = context.worker,
+            .worker = worker,
+            .bound = context.bound,
+            .descs = context.descs,
+            .dicts = dicts,
+            .literals = context.literals,
+            .declaration = context,
+        };
     }
 
     /// The type a callable captures `pattern`'s binder at: its value's type
@@ -4585,21 +4789,26 @@ pub const Builder = struct {
     /// bound, or, inside the procedure's own body, the same closure rebuilt
     /// from the captures the body received.
     pub fn localProcValue(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
-        // The entry chain reads only values the entry chain defines.
-        if (self.binders.get(local.binder)) |value| {
-            if (!self.emitting_entry or self.entry_locals.contains(value)) return value;
+        const declaration = if (local.is_alias) null else self.localProcDeclaration(switch (self.bodies().expr(local.expr).data) {
+            .lambda => local.expr,
+            .closure => |closure| closure.lambda,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+        });
+        if (declaration == null) {
+            // The entry chain reads only values the entry chain defines.
+            if (self.binders.get(local.binder)) |value| {
+                if (!self.emitting_entry or self.entry_locals.contains(value)) return value;
+            }
         }
         if (local.is_alias) invariant("an alias is used only after its declaration binds it");
         // Referenced inside its own body or a nested function: build the
         // procedure's function value from its captures, which the checker
         // makes visible wherever the procedure is, and the scope it was
         // declared in, whose descriptors and dictionaries this body holds.
-        switch (self.bodies().expr(local.expr).data) {
-            .lambda, .closure => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
-        }
-        const scope_worker, const target = try self.localProcWorker(local);
-        const declaring = self.program.worker(scope_worker).*;
+        // Built from a declaration context, it is a dictionary's method,
+        // an immortal composition.
+        const scope = try self.localProcWorker(local, declaration);
+        const target = scope.worker;
         const target_worker = self.program.worker(target).*;
         const values = try self.allocator.alloc(LocalId, target_worker.captures.len);
         defer self.allocator.free(values);
@@ -4607,12 +4816,16 @@ pub const Builder = struct {
         for (target_worker.captures, values, 0..) |capture, *value, index| {
             value.* = if (declared) |captured| captured[index] else self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is referenced");
         }
-        var declaring_dicts: usize = 0;
-        for (declaring.dict_scopes) |scope| declaring_dicts += scope.len;
-        var declaring_literals: usize = 0;
-        for (declaring.literal_scopes) |scope| declaring_literals += scope.len;
-        const descs = self.var_descs[0..declaring.scheme_vars.len];
-        const dicts = try std.mem.concat(self.program.arena.allocator(), LocalId, &.{ self.dict_locals[self.dict_locals.len - declaring_dicts ..], self.literal_locals[self.literal_locals.len - declaring_literals ..] });
+        const descs = scope.descs;
+        const dicts = try std.mem.concat(self.program.arena.allocator(), LocalId, &.{ scope.dicts, scope.literals });
+        if (scope.declaration != null) {
+            const saved = self.immortal_closures;
+            self.immortal_closures = true;
+            defer self.immortal_closures = saved;
+            const closure = try self.emitIntoEntry(packClosure, .{ target, values, target_worker.capture_types, descs, dicts });
+            try self.notePendingCaptures(scope, closure, values.len + descs.len);
+            return closure;
+        }
         // A value built from entry locals only is built once, in the entry
         // chain, for every reference; one reading a value the body computes
         // is built where it is referenced.
@@ -5207,6 +5420,19 @@ pub const Builder = struct {
             const instance = try self.program.targetRequirements(target, decoded.bound);
             return try self.pushValue(try self.dictionaryOfTree(.{ .target = .{ .target = target, .instance = instance } }));
         }
+        if (decoded.declaration) |declaration| {
+            const declaring = self.program.worker(declaration.worker).*;
+            if (captures.len != declaring.dictionary_params.len - declaration.self_slots.len + declaring.literal_params) invariant("a stored codec constructor's captures differ from its declaration context's");
+            try self.push(.leave_immortal_restore);
+            try self.push(.{ .finish_stored_codec = .{ .worker = decoded.worker, .bound = decoded.bound, .declaration = declaration } });
+            const function = try self.program.anyFunction();
+            var index = captures.len;
+            while (index > 0) {
+                index -= 1;
+                try self.push(.{ .restore = .{ .source = source, .node = captures[index], .ty = function } });
+            }
+            return try self.push(.enter_immortal_restore);
+        }
         const shape = StoredFn.captureShape(self.program, decoded.worker);
         const arena = self.program.arena.allocator();
         const descs = try arena.alloc(LocalId, decoded.bound.len);
@@ -5214,6 +5440,7 @@ pub const Builder = struct {
         const capture_types = try arena.alloc(TypeId, shape.values.len);
         for (shape.values, capture_types) |generic, *concrete| concrete.* = try self.program.substitute(self.allocator, generic, decoded.bound);
         if (captures.len != shape.values.len + shape.dicts) invariant("a stored function's captures differ from its worker's");
+        if (shape.composed) try self.push(.leave_immortal_restore);
         try self.push(.{ .finish_stored_fn = .{ .worker = decoded.worker, .shape = shape, .descs = descs, .capture_types = capture_types } });
         const function = try self.program.anyFunction();
         var index = captures.len;
@@ -5222,6 +5449,100 @@ pub const Builder = struct {
             const ty = if (index < capture_types.len) capture_types[index] else function;
             try self.push(.{ .restore = .{ .source = source, .node = captures[index], .ty = ty } });
         }
+        if (shape.composed) try self.push(.enter_immortal_restore);
+    }
+
+    /// Compose generated codec constructor `worker` at the types `bound`
+    /// again in the declaration context `stored` describes, whose restored
+    /// dictionaries and literal arguments are on the value stack: the
+    /// dictionary slots that lead back to the constructor are filled with
+    /// it, adapted to their parameters, once it is composed.
+    fn finishStoredCodec(self: *Builder, worker: WorkerId, bound: []const TypeId, stored: StoredFn.Decoded.Declaration) Allocator.Error!void {
+        const declaring = self.program.worker(stored.worker).*;
+        const dict_count = declaring.dictionary_params.len;
+        const words = try self.popValues(@intCast(dict_count - stored.self_slots.len + declaring.literal_params));
+        defer self.allocator.free(words);
+        const dicts = try self.allocator.alloc(?LocalId, dict_count);
+        defer self.allocator.free(dicts);
+        const building = try self.allocator.alloc(bool, dict_count);
+        defer self.allocator.free(building);
+        var next: usize = 0;
+        for (dicts, building, 0..) |*dict, *slot_building, slot| {
+            slot_building.* = std.mem.findScalar(u32, stored.self_slots, @intCast(slot)) != null;
+            if (slot_building.*) {
+                dict.* = null;
+            } else {
+                dict.* = words[next];
+                next += 1;
+            }
+        }
+        const descs = try self.allocator.alloc(LocalId, stored.bound.len);
+        defer self.allocator.free(descs);
+        for (stored.bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+        var declaration: Declaration = .{
+            .worker = stored.worker,
+            .bound = stored.bound,
+            .descs = descs,
+            .dicts = dicts,
+            .building = building,
+            .literals = words[next..],
+            .source = .restored,
+            .outer = self.declaration,
+        };
+        defer declaration.patches.deinit(self.allocator);
+        self.declaration = &declaration;
+        defer self.declaration = declaration.outer;
+        const constructor = try Codec.restoreConstructor(self, worker, bound);
+        const params = self.templateEvidenceParams(stored.worker);
+        const env: types.Env = .{ .module = declaring.module, .vars = declaring.scheme_vars, .bound = stored.bound };
+        for (stored.self_slots) |slot| {
+            const interface = try self.program.converter().convert(declaring.module, params[declaring.dictionary_params[slot]].callable_ty, env);
+            try self.completeDeclarationSlot(&declaration, slot, try self.adaptDictionary(constructor.composed, constructor.ty, interface));
+        }
+        try self.pushValue(constructor.composed);
+    }
+
+    /// The function values of generated codec family `family`'s local
+    /// procedures, at its variables' types `bound`, for restoring stored
+    /// generated runtime `stored` of procedure `owner`, into `out`. The
+    /// procedures are local procedures of `owner`'s body, built in the
+    /// declaration context of the instance of `owner` that built the
+    /// runtime: its function type, which the value records, and its stored
+    /// evidence.
+    pub fn storedRuntimeLocals(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, owner: check.CheckedNames.ProcTemplate, out: []LocalId, family: u32, bound: []const TypeId) Allocator.Error!void {
+        const owner_worker = try self.program.templateRefWorker(owner);
+        const target = self.program.worker(owner_worker).*;
+        const owner_fn_ty = stored.owner_fn_ty orelse invariant("a stored generated runtime calling local procedures records no instance of its procedure");
+        const formal = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });
+        const owner_bound = (try self.program.instantiateTarget(owner_worker, formal, try self.constType(source, owner_fn_ty))).bound;
+        const descs = try self.allocator.alloc(LocalId, owner_bound.len);
+        defer self.allocator.free(descs);
+        for (owner_bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+        const restored = try self.storedDictionaries(source, stored, owner_worker, owner_bound);
+        defer self.allocator.free(restored);
+        const dicts = try self.allocator.alloc(?LocalId, restored.len);
+        defer self.allocator.free(dicts);
+        for (dicts, restored) |*dict, dictionary| dict.* = dictionary;
+        const building = try self.allocator.alloc(bool, restored.len);
+        defer self.allocator.free(building);
+        @memset(building, false);
+        const literals = try self.allocator.alloc(LocalId, target.literal_params);
+        defer self.allocator.free(literals);
+        try self.derivedLiteralArgs(owner_worker, owner_bound, literals);
+        var declaration: Declaration = .{
+            .worker = owner_worker,
+            .bound = owner_bound,
+            .descs = descs,
+            .dicts = dicts,
+            .building = building,
+            .literals = literals,
+            .source = .restored,
+            .outer = self.declaration,
+        };
+        defer declaration.patches.deinit(self.allocator);
+        self.declaration = &declaration;
+        defer self.declaration = declaration.outer;
+        try Codec.localValues(self, family, bound, out);
     }
 
     /// The lambda worker of expression `lambda_expr` of the worker
@@ -5716,6 +6037,7 @@ pub const Builder = struct {
             if (target.dictionary_params.len == 0) return .{ .hidden = hidden, .bound = bound, .ret = ret };
             const context = self.templateParamContext(callee, bound);
             var deferred = try self.deferredDictionaries(evidence, context, target.dictionary_params.len);
+            deferred.declaring = callee;
             if (evidence_owner) |owner| {
                 deferred.module = owner.index;
                 deferred.view = owner;
@@ -5725,29 +6047,6 @@ pub const Builder = struct {
             return .{ .hidden = hidden, .bound = bound, .ret = ret, .deferred_dicts = deferred };
         }
         for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
-        if (target.dictionary_params.len != 0) {
-            const context = self.templateParamContext(callee, bound);
-            const saved_module = self.module;
-            const saved_view = self.view;
-            const saved_env = self.env;
-            const saved_foreign = self.foreign_scopes;
-            defer {
-                self.module = saved_module;
-                self.view = saved_view;
-                self.env = saved_env;
-                self.foreign_scopes = saved_foreign;
-            }
-            if (evidence_owner) |owner| {
-                self.module = owner.index;
-                self.view = owner;
-                self.env = context.env;
-                self.foreign_scopes = self.alias_scopes.items.len;
-            }
-            for (target.dictionary_params, hidden[bound.len..][0..target.dictionary_params.len]) |param_index, *dict| {
-                if (param_index >= evidence.len) invariant("a call's evidence does not cover its target's dictionaries");
-                dict.* = try self.paramDictionary(evidence, param_index, context);
-            }
-        }
         const literals = hidden[bound.len + target.dictionary_params.len ..];
         if (edge == .literal) {
             // A call checking recorded no edge for (a platform requirement's
@@ -5757,7 +6056,122 @@ pub const Builder = struct {
         } else {
             try self.fillLiteralArgs(callee, edge, literals);
         }
+        if (target.dictionary_params.len != 0) {
+            const count = target.dictionary_params.len;
+            const dicts = try self.allocator.alloc(?LocalId, count);
+            defer self.allocator.free(dicts);
+            @memset(dicts, null);
+            const building = try self.allocator.alloc(bool, count);
+            defer self.allocator.free(building);
+            @memset(building, false);
+            var declaration: Declaration = .{
+                .worker = callee,
+                .bound = bound,
+                .descs = hidden[0..bound.len],
+                .dicts = dicts,
+                .building = building,
+                .literals = literals,
+                .source = .{ .call = .{ .evidence = evidence, .context = self.templateParamContext(callee, bound), .owner = evidence_owner } },
+                .outer = self.declaration,
+            };
+            defer declaration.patches.deinit(self.allocator);
+            for (hidden[bound.len..][0..count], 0..) |*dict, slot| {
+                dict.* = try self.declarationDictionary(&declaration, slot) orelse invariant("a call instance's dictionary was read while it was built");
+            }
+        }
         return .{ .hidden = hidden, .bound = bound, .ret = try self.program.substitute(self.allocator, target.ret, bound) };
+    }
+
+    /// Dictionary slot `slot` of `declaration`, built on its first read;
+    /// null while it is being built.
+    fn declarationDictionary(self: *Builder, declaration: *Declaration, slot: usize) Allocator.Error!?LocalId {
+        if (declaration.dicts[slot]) |dictionary| return dictionary;
+        if (declaration.building[slot]) return null;
+        declaration.building[slot] = true;
+        // The slot is built in the scope its instance's evidence is read
+        // in, whose innermost declaration context is the instance's.
+        const saved_declaration = self.declaration;
+        self.declaration = declaration;
+        defer self.declaration = saved_declaration;
+        const param_index = self.program.worker(declaration.worker).dictionary_params[slot];
+        const dictionary = switch (declaration.source) {
+            .call => |call| blk: {
+                if (param_index >= call.evidence.len) invariant("a call's evidence does not cover its target's dictionaries");
+                const saved_module = self.module;
+                const saved_view = self.view;
+                const saved_env = self.env;
+                const saved_foreign = self.foreign_scopes;
+                defer {
+                    self.module = saved_module;
+                    self.view = saved_view;
+                    self.env = saved_env;
+                    self.foreign_scopes = saved_foreign;
+                }
+                if (call.owner) |owner| {
+                    self.module = owner.index;
+                    self.view = owner;
+                    self.env = call.context.env;
+                    self.foreign_scopes = self.alias_scopes.items.len;
+                }
+                break :blk try self.paramDictionary(call.evidence, param_index, call.context);
+            },
+            .frame => |frame| try self.frameDictionary(frame.position, param_index),
+            .restored => invariant("a restored declaration context's dictionary is neither restored nor being composed"),
+        };
+        try self.completeDeclarationSlot(declaration, slot, dictionary);
+        return dictionary;
+    }
+
+    /// Fill dictionary slot `slot` of `declaration` with `dictionary`, and
+    /// the captures that held a null word for it.
+    fn completeDeclarationSlot(self: *Builder, declaration: *Declaration, slot: usize, dictionary: LocalId) Allocator.Error!void {
+        declaration.building[slot] = false;
+        declaration.dicts[slot] = dictionary;
+        for (declaration.patches.items) |patch| {
+            if (patch.slot != slot) continue;
+            const patched = try self.closedLocal(try self.erasedLayout());
+            try self.emitEntry(.{ .dyn = .{ .target = patched, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_patch = .{
+                .dict = patch.closure,
+                .index = patch.index,
+                .value = dictionary,
+            } }), .next = undefined } });
+        }
+    }
+
+    /// The innermost declaration context of the call instances being built
+    /// whose callee is `worker`.
+    fn declarationOf(self: *const Builder, worker: WorkerId) ?*Declaration {
+        var next = self.declaration;
+        while (next) |declaration| : (next = declaration.outer) {
+            if (declaration.worker == worker) return declaration;
+        }
+        return null;
+    }
+
+    /// The declaration context of the literal chain frame whose
+    /// dictionaries are `composed`, when one is being built.
+    fn frameDeclaration(self: *const Builder, composed: []?LocalId) ?*Declaration {
+        var next = self.declaration;
+        while (next) |declaration| : (next = declaration.outer) {
+            switch (declaration.source) {
+                .frame => |frame| if (frame.composed == composed.ptr) return declaration,
+                .call, .restored => {},
+            }
+        }
+        return null;
+    }
+
+    /// Record that `closure`'s capture word `index` holds a null word for
+    /// each slot of `scope`'s declaration context still being built, to be
+    /// filled with the slot's dictionary once it is. `first` is the capture
+    /// index of the scope's first dictionary.
+    fn notePendingCaptures(self: *Builder, scope: LocalProcScope, closure: LocalId, first: usize) Allocator.Error!void {
+        const declaration = scope.declaration orelse return;
+        for (declaration.dicts, 0..) |dictionary, slot| {
+            if (dictionary != null) continue;
+            if (!declaration.building[slot]) invariant("a declaration context's dictionary was neither built nor being built when a procedure captured it");
+            try declaration.patches.append(self.allocator, .{ .closure = closure, .index = @intCast(first + slot), .slot = @intCast(slot) });
+        }
     }
 
     /// The dictionaries of a literal chain frame with `count` parameters,
@@ -6863,6 +7277,9 @@ pub const Builder = struct {
         const slot = std.mem.findScalar(u32, scope.params, param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
         const deferred = scope.deferred_dicts orelse return scope.dicts[slot];
         if (deferred.composed[slot]) |dictionary| return dictionary;
+        if (deferred.declaring) |declaring| if (self.frameDeclaration(deferred.composed) == null) {
+            return try self.frameDeclarationDictionary(position, declaring, deferred, slot);
+        };
         const saved_module = self.module;
         const saved_view = self.view;
         const saved_env = self.env;
@@ -6890,6 +7307,38 @@ pub const Builder = struct {
             invariant("an alias's evidence does not cover the parameter a chain read");
         deferred.composed[slot] = dictionary;
         return dictionary;
+    }
+
+    /// Dictionary `slot` of the literal chain frame at `position`, a call
+    /// instance of template worker `declaring`, built in the frame's
+    /// declaration context.
+    fn frameDeclarationDictionary(self: *Builder, position: usize, declaring: WorkerId, deferred: DeferredDictionaries, slot: usize) Allocator.Error!LocalId {
+        const target = self.program.worker(declaring).*;
+        const context = deferred.context orelse invariant("a template frame's dictionaries have no parameter context");
+        const bound = context.env.bound;
+        const descs = try self.allocator.alloc(LocalId, bound.len);
+        defer self.allocator.free(descs);
+        for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+        const literals = try self.allocator.alloc(LocalId, target.literal_params);
+        defer self.allocator.free(literals);
+        for (literals, 0..) |*literal, index| literal.* = try self.frameLiteral(position, @intCast(index));
+        const dicts = try self.allocator.dupe(?LocalId, deferred.composed);
+        defer self.allocator.free(dicts);
+        const building = try self.allocator.alloc(bool, dicts.len);
+        defer self.allocator.free(building);
+        @memset(building, false);
+        var declaration: Declaration = .{
+            .worker = declaring,
+            .bound = bound,
+            .descs = descs,
+            .dicts = dicts,
+            .building = building,
+            .literals = literals,
+            .source = .{ .frame = .{ .position = position, .composed = deferred.composed.ptr } },
+            .outer = self.declaration,
+        };
+        defer declaration.patches.deinit(self.allocator);
+        return try self.declarationDictionary(&declaration, slot) orelse invariant("a frame's dictionary was read while it was built");
     }
 
     /// The dictionary in scope for checked evidence parameter `index`.
