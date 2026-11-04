@@ -1484,7 +1484,7 @@ pub const Program = struct {
         for (self.modules.views.items) |*view| {
             const env = view.view.module_env;
             const ident = env.common.findIdent(qualified) orelse continue;
-            for (view.types().nominal_declarations) |declaration| {
+            for (view.types().nominalDeclarations()) |declaration| {
                 if (declaration.source_statement >= env.store.nodes.len()) continue;
                 const node: can.CIR.Node.Idx = @fromBackingInt(@intCast(declaration.source_statement));
                 if (env.store.nodes.get(node).tag != .statement_nominal_decl) continue;

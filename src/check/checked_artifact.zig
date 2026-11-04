@@ -3657,23 +3657,17 @@ fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype
 
 /// Public `CheckedTypeStoreView` declaration.
 ///
-/// Immutable read interface over a `CheckedTypeStore`'s flat data, carrying the
-/// side pools so reconstructed payloads (`payload`) and range accessors
-/// (`CheckedTag.args`, `CheckedTypeScheme.generalizedVars`,
-/// `CheckedNominalDeclaration.formalArgs`) resolve without the owning store.
-/// Default empty interner for a default-initialized (`.{}`) view, so the
-/// non-optional `var_names` pointer always points at a valid (empty) interner.
-var empty_view_var_names: canonical.NameInterner = .{};
-
 // Builtin identity selects its declaration directly, independently of the
 // declaring module's source statement numbering. Zero means absent; stored
 // declaration ids are offset by one so the index is compact serializable POD.
 const BuiltinNominalDeclarationIndex = [@typeInfo(CheckedBuiltinNominal).@"enum".field_names.len]u32;
 const empty_builtin_nominal_declarations: BuiltinNominalDeclarationIndex = @splat(0);
 
-/// Borrowed, read-only view over a `CheckedTypeStore`'s relocated slices plus its
-/// `var_names` interner, so type accessors can resolve ids without holding the owning
-/// store (used by both a live store and a deserialized, buffer-backed one).
+/// Read-only view over a `CheckedTypeStore`: reconstructed payloads
+/// (`payload`) and range accessors (`CheckedTag.args`,
+/// `CheckedTypeScheme.generalizedVars`, `CheckedNominalDeclaration.formalArgs`)
+/// read the store's columns at the time of each read, so a view sees the
+/// types a module analysis synthesizes after the view was taken.
 pub const CheckedTypeStoreView = struct {
     /// Reusable scratch for checked type equality queries. Every query
     /// clears it on entry, so one scratch serves any number of queries of
@@ -3710,27 +3704,7 @@ pub const CheckedTypeStoreView = struct {
         }
     };
 
-    roots: []const CheckedTypeRoot = &.{},
-    schemes: []const CheckedTypeScheme = &.{},
-    stored_payloads: []const StoredCheckedTypePayload = &.{},
-    alias_row_pool: []const StoredAlias = &.{},
-    nominal_row_pool: []const StoredNominal = &.{},
-    nominal_declarations: []const CheckedNominalDeclaration = &.{},
-    builtin_nominal_declarations: *const BuiltinNominalDeclarationIndex = &empty_builtin_nominal_declarations,
-    type_id_pool: []const CheckedTypeId = &.{},
-    record_field_pool: []const CheckedRecordField = &.{},
-    declared_field_pool: []const CheckedDeclaredField = &.{},
-    nominal_record_field_pool: []const CheckedNominalRecordField = &.{},
-    constraint_pool: []const CheckedStaticDispatchConstraint = &.{},
-    tag_pool: []const StoredTag = &.{},
-    var_names: *const canonical.NameInterner = &empty_view_var_names,
-    /// The module's source types, read from its sealed solver store; null
-    /// for a store holding only synthesized types.
-    sealed: ?sealed_type_view.SealedTypeView = null,
-    /// The key slots of the module's source types.
-    sealed_keys: ?*sealed_type_keys.SealedTypeKeys = null,
-    /// The key slots of the store's synthesized types.
-    synthesized_keys: ?*SynthesizedTypeKeys = null,
+    store: *const CheckedTypeStore,
     /// The name store the store's types name, which synthesized types' keys
     /// read; null for a view that computes no synthesized key.
     names: ?*const canonical.CanonicalNameStore = null,
@@ -3738,33 +3712,50 @@ pub const CheckedTypeStoreView = struct {
     /// Text of a stored variable name id, or null when absent.
     pub fn varName(self: CheckedTypeStoreView, id: OptionalVarNameId) ?[]const u8 {
         const name_id = id.get() orelse return null;
-        return self.var_names.getText(@backingInt(name_id));
+        return self.store.var_names.getText(@backingInt(name_id));
+    }
+
+    /// The module's source types, read from its sealed solver store; null
+    /// for a store holding only synthesized types.
+    pub fn sealedTypes(self: CheckedTypeStoreView) ?sealed_type_view.SealedTypeView {
+        const env = self.store.sealed_env orelse return null;
+        return self.store.sealedView(env);
+    }
+
+    /// The store's synthesized root rows.
+    pub fn rootRows(self: CheckedTypeStoreView) []const CheckedTypeRoot {
+        return self.store.roots.items;
+    }
+
+    /// The store's nominal declarations.
+    pub fn nominalDeclarations(self: CheckedTypeStoreView) []const CheckedNominalDeclaration {
+        return self.store.nominal_declarations.items;
     }
 
     fn sealedView(self: CheckedTypeStoreView) sealed_type_view.SealedTypeView {
-        return self.sealed orelse checkedArtifactInvariant("a checked source type was read from a store without its sealed solver store", .{});
+        return self.sealedTypes() orelse checkedArtifactInvariant("a checked source type was read from a store without its sealed solver store", .{});
     }
 
     fn sealedKeys(self: CheckedTypeStoreView) *sealed_type_keys.SealedTypeKeys {
-        return self.sealed_keys orelse checkedArtifactInvariant("a checked source type key was requested from a store without key slots", .{});
+        return self.store.sealed_keys orelse checkedArtifactInvariant("a checked source type key was requested from a store without key slots", .{});
     }
 
     fn synthesizedKeys(self: CheckedTypeStoreView) *SynthesizedTypeKeys {
-        return self.synthesized_keys orelse checkedArtifactInvariant("a synthesized checked type key was requested from a store without key slots", .{});
+        return self.store.synthesized_keys orelse checkedArtifactInvariant("a synthesized checked type key was requested from a store without key slots", .{});
     }
 
     /// The number of distinct checked types the view holds: an upper bound
     /// on the length of any acyclic chain through them.
     pub fn typeCount(self: CheckedTypeStoreView) usize {
-        const source_count: usize = if (self.sealed) |sealed| sealed.var_facts.len else 0;
-        return source_count + self.stored_payloads.len;
+        const source_count: usize = if (self.sealedTypes()) |sealed| sealed.var_facts.len else 0;
+        return source_count + self.store.payloads.items.len;
     }
 
     /// Whether `id` names a type of this view: a synthesized entry it holds,
     /// or a reached checked representative of its sealed store.
     pub fn containsId(self: CheckedTypeStoreView, id: CheckedTypeId) bool {
-        if (type_ids.isSynthesized(id)) return type_ids.synthesizedIndex(id) < self.stored_payloads.len;
-        const sealed = self.sealed orelse return false;
+        if (type_ids.isSynthesized(id)) return type_ids.synthesizedIndex(id) < self.store.payloads.items.len;
+        const sealed = self.sealedTypes() orelse return false;
         const var_ = type_ids.asVar(id);
         if (@backingInt(var_) >= sealed.var_facts.len) return false;
         return sealed.reaches(var_) and sealed.representative(var_) == var_;
@@ -3772,7 +3763,7 @@ pub const CheckedTypeStoreView = struct {
 
     fn synthesizedIndex(self: CheckedTypeStoreView, id: CheckedTypeId) usize {
         const index = type_ids.synthesizedIndex(id);
-        if (index >= self.stored_payloads.len) checkedArtifactInvariant("synthesized checked type id is out of range", .{});
+        if (index >= self.store.payloads.items.len) checkedArtifactInvariant("synthesized checked type id is out of range", .{});
         return index;
     }
 
@@ -3780,7 +3771,7 @@ pub const CheckedTypeStoreView = struct {
     /// view's pools or the module's sealed solver store; no allocation.
     pub fn payload(self: CheckedTypeStoreView, id: CheckedTypeId) CheckedTypePayload {
         if (!type_ids.isSynthesized(id)) return self.sealedView().payload(type_ids.asVar(id));
-        return reconstructTypeData(CheckedTypePayload, self, &self.stored_payloads[self.synthesizedIndex(id)]);
+        return reconstructTypeData(CheckedTypePayload, self, &self.store.payloads.items[self.synthesizedIndex(id)]);
     }
 
     /// Whether `id` is a nominal or alias type.
@@ -3795,15 +3786,11 @@ pub const CheckedTypeStoreView = struct {
     /// else the lowest synthesized one. Each key index is built on its first
     /// demand.
     pub fn rootForKey(self: CheckedTypeStoreView, key: canonical.CanonicalTypeKey) Allocator.Error!?CheckedTypeId {
-        if (self.sealed) |sealed| {
+        if (self.sealedTypes()) |sealed| {
             if (try self.sealedKeys().varForKey(sealed, key)) |var_| return type_ids.fromVar(var_);
         }
-        if (self.roots.len == 0) return null;
+        if (self.store.roots.items.len == 0) return null;
         return try self.synthesizedKeys().rootForKey(self, key);
-    }
-
-    pub fn rootRows(self: CheckedTypeStoreView) []const CheckedTypeRoot {
-        return self.roots;
     }
 
     /// The key of `root` and the facts its encoding found, computed on the
@@ -3833,23 +3820,23 @@ pub const CheckedTypeStoreView = struct {
     /// The identity-variable fact of `root` a previous walk recorded.
     fn knownIdentity(self: CheckedTypeStoreView, root: CheckedTypeId) ?bool {
         if (type_ids.isSynthesized(root)) {
-            const keys = self.synthesized_keys orelse return null;
+            const keys = self.store.synthesized_keys orelse return null;
             return keys.knownIdentity(type_ids.synthesizedIndex(root));
         }
-        const keys = self.sealed_keys orelse return null;
+        const keys = self.store.sealed_keys orelse return null;
         return keys.knownIdentity(type_ids.asVar(root));
     }
 
     fn recordIdentity(self: CheckedTypeStoreView, root: CheckedTypeId, value: bool) void {
         if (type_ids.isSynthesized(root)) {
-            if (self.synthesized_keys) |keys| keys.recordIdentity(type_ids.synthesizedIndex(root), value);
-        } else if (self.sealed_keys) |keys| keys.recordIdentity(type_ids.asVar(root), value);
+            if (self.store.synthesized_keys) |keys| keys.recordIdentity(type_ids.synthesizedIndex(root), value);
+        } else if (self.store.sealed_keys) |keys| keys.recordIdentity(type_ids.asVar(root), value);
     }
 
     /// A thread-safe allocator owned by the module the view reads.
     fn scanAllocator(self: CheckedTypeStoreView) Allocator {
-        if (self.synthesized_keys) |keys| return keys.allocator;
-        if (self.sealed_keys) |keys| return keys.allocator;
+        if (self.store.synthesized_keys) |keys| return keys.allocator;
+        if (self.store.sealed_keys) |keys| return keys.allocator;
         checkedArtifactInvariant("a checked type walk was requested from a store without key slots", .{});
     }
 
@@ -3877,7 +3864,7 @@ pub const CheckedTypeStoreView = struct {
     /// The checked type of the source variable `var_`, or null when
     /// publication never reached it.
     pub fn sourceTypeRoot(self: CheckedTypeStoreView, var_: Var) ?CheckedTypeId {
-        const sealed = self.sealed orelse return null;
+        const sealed = self.sealedTypes() orelse return null;
         if (!sealed.reaches(var_)) return null;
         return type_ids.fromVar(sealed.representative(var_));
     }
@@ -3885,8 +3872,8 @@ pub const CheckedTypeStoreView = struct {
     /// The scheme `id` names.
     pub fn scheme(self: CheckedTypeStoreView, id: CheckedTypeSchemeId) CheckedTypeScheme {
         const raw = @backingInt(id);
-        if (raw >= self.schemes.len) checkedArtifactInvariant("checked type scheme id is out of range", .{});
-        return self.schemes[raw];
+        if (raw >= self.store.schemes.items.len) checkedArtifactInvariant("checked type scheme id is out of range", .{});
+        return self.store.schemes.items[raw];
     }
 
     /// The canonical key of the scheme `id` names, computed from its root's
@@ -4051,7 +4038,7 @@ pub const CheckedTypeStoreView = struct {
         self: CheckedTypeStoreView,
         nominal: canonical.NominalTypeKey,
     ) ?CheckedNominalDeclaration {
-        for (self.nominal_declarations) |declaration| {
+        for (self.store.nominal_declarations.items) |declaration| {
             if (canonicalNominalTypeKeyEql(declaration.nominal, nominal)) return declaration;
         }
         return null;
@@ -4070,10 +4057,10 @@ pub const CheckedTypeStoreView = struct {
         id: CheckedNominalDeclarationId,
     ) CheckedNominalDeclaration {
         const index: usize = @backingInt(id);
-        if (index >= self.nominal_declarations.len) {
+        if (index >= self.store.nominal_declarations.items.len) {
             checkedArtifactInvariant("checked nominal declaration id is out of range", .{});
         }
-        const declaration = self.nominal_declarations[index];
+        const declaration = self.store.nominal_declarations.items[index];
         if (declaration.id != id) {
             checkedArtifactInvariant("checked nominal declaration id disagrees with declaration slot", .{});
         }
@@ -4086,7 +4073,7 @@ pub const CheckedTypeStoreView = struct {
         self: CheckedTypeStoreView,
         builtin_nominal: CheckedBuiltinNominal,
     ) ?CheckedNominalDeclaration {
-        const entry = self.builtin_nominal_declarations[@backingInt(builtin_nominal)];
+        const entry = self.store.builtin_nominal_declarations[@backingInt(builtin_nominal)];
         if (entry == 0) return null;
         return self.nominalDeclarationById(@fromBackingInt(@intCast(entry - 1)));
     }
@@ -4951,26 +4938,7 @@ pub const CheckedTypeStore = struct {
     }
 
     pub fn view(self: *const CheckedTypeStore) CheckedTypeStoreView {
-        return .{
-            .roots = self.roots.items,
-            .schemes = self.schemes.items,
-            .stored_payloads = self.payloads.items,
-            .alias_row_pool = self.alias_row_pool.items,
-            .nominal_row_pool = self.nominal_row_pool.items,
-            .nominal_declarations = self.nominal_declarations.items,
-            .builtin_nominal_declarations = &self.builtin_nominal_declarations,
-            .type_id_pool = self.type_id_pool.items,
-            .record_field_pool = self.record_field_pool.items,
-            .declared_field_pool = self.declared_field_pool.items,
-            .nominal_record_field_pool = self.nominal_record_field_pool.items,
-            .constraint_pool = self.constraint_pool.items,
-            .tag_pool = self.tag_pool.items,
-            .var_names = &self.var_names,
-            .sealed = if (self.sealed_env) |env| self.sealedView(env) else null,
-            .sealed_keys = self.sealed_keys,
-            .synthesized_keys = self.synthesized_keys,
-            .names = self.key_names,
-        };
+        return .{ .store = self, .names = self.key_names };
     }
 
     /// The number of distinct checked types the store holds: an upper bound
@@ -7746,7 +7714,7 @@ pub const SynthesizedTypeKeys = struct {
             // A synthesized function's source children are keyed through
             // their own slots before the writer is taken, so the writer is
             // never held while waiting on a slot.
-            if (view.roots[type_ids.synthesizedIndex(request.root)].recipe == .synthetic_function) {
+            if (view.rootRows()[type_ids.synthesizedIndex(request.root)].recipe == .synthetic_function) {
                 const function = syntheticFunctionPayload(view, request.root);
                 for (function.args) |arg| if (!type_ids.isSynthesized(arg)) {
                     _ = try view.rootInfo(arg);
@@ -7767,7 +7735,7 @@ pub const SynthesizedTypeKeys = struct {
     fn computeLocked(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         const index = type_ids.synthesizedIndex(root);
         if (self.slots.items[index].peek()) |known| return known;
-        return switch (view.roots[index].recipe) {
+        return switch (view.rootRows()[index].recipe) {
             .payload => try self.writer.?.keyInfo(root),
             .synthetic_function => try self.syntheticFunctionInfo(view, root),
         };
@@ -7847,7 +7815,7 @@ pub const SynthesizedTypeKeys = struct {
                 index.deinit(allocator);
                 allocator.destroy(index);
             }
-            for (request.view.roots) |row| {
+            for (request.view.rootRows()) |row| {
                 const entry = try index.getOrPut(allocator, (try keys.info(request.view, row.id)).key.bytes);
                 if (!entry.found_existing) entry.value_ptr.* = row.id;
             }
@@ -8712,7 +8680,7 @@ pub const ImportedOriginIndex = struct {
         const origin_hash = module_env.moduleIdentityHash(origin_module);
         const origin = try self.resolve(module_env, imports, origin_module);
         const view = origin.view orelse return null;
-        const declarations = view.checked_types.nominal_declarations;
+        const declarations = view.checked_types.nominalDeclarations();
         if (!origin.declarations_indexed) {
             const next = try self.allocator.alloc(u32, declarations.len);
             errdefer self.allocator.free(next);
@@ -10693,7 +10661,7 @@ fn poolField(comptime Owner: type, comptime T: type) []const u8 {
         const owner = @typeInfo(Owner).@"struct";
         for (owner.field_names, owner.field_types) |name, FT| {
             if (name.len < 5 or !artifact_serialize.comptimeStrEq(name[name.len - 5 ..], "_pool")) continue;
-            if (FT != std.ArrayList(T) and FT != []const T) continue;
+            if (FT != std.ArrayList(T)) continue;
             if (found != null) @compileError("two pools of " ++ @typeName(Owner) ++ " hold " ++ @typeName(T));
             found = name;
         }
@@ -10704,8 +10672,9 @@ fn poolField(comptime Owner: type, comptime T: type) []const u8 {
 /// The pool of `T` elements in a checked type store or its view.
 fn storePool(pool_owner: anytype, comptime T: type) []const T {
     const Owner = @TypeOf(pool_owner);
-    const pool = @field(pool_owner, poolField(if (@typeInfo(Owner) == .pointer) @typeInfo(Owner).pointer.child else Owner, T));
-    return if (@TypeOf(pool) == std.ArrayList(T)) pool.items else pool;
+    const Unwrapped = if (@typeInfo(Owner) == .pointer) @typeInfo(Owner).pointer.child else Owner;
+    if (Unwrapped == CheckedTypeStoreView) return storePool(pool_owner.store, T);
+    return @field(pool_owner, poolField(Unwrapped, T)).items;
 }
 
 /// Whether a value of `T` can own a slice: one held directly or through a
@@ -27584,7 +27553,7 @@ const ArtifactKeyAccumulator = UniqueList(ModuleId);
 /// output reaches the variable.
 fn reachedSourceRoot(owner: ImportedModuleView, var_: Var) ?CheckedTypeId {
     const resolved = owner.module_env.types.resolveVar(var_).var_;
-    const sealed = owner.checked_types.sealed orelse checkedArtifactInvariant("a source root was read from a store without sealed types", .{});
+    const sealed = owner.checked_types.sealedTypes() orelse checkedArtifactInvariant("a source root was read from a store without sealed types", .{});
     if (!sealed.var_facts[@backingInt(resolved)].reached) return null;
     return owner.checked_bodies.typeOf(resolved);
 }
@@ -28806,7 +28775,7 @@ const ImportedTemplateClosureBuilder = struct {
         self: *ImportedTemplateClosureBuilder,
         scheme: CheckedTypeSchemeId,
     ) Allocator.Error!void {
-        std.debug.assert(@backingInt(scheme) < self.context.checked_types.schemes.len);
+        std.debug.assert(@backingInt(scheme) < self.context.checked_types.store.schemes.items.len);
         const ref = ArtifactCheckedTypeSchemeRef{ .artifact = self.context.artifact_key.digest(), .scheme = scheme };
         _ = try self.checked_type_schemes.append(self.context.allocator, ref);
     }
@@ -31461,7 +31430,7 @@ const CheckedTypeStoreImportProjector = struct {
 
         // A synthesized function keeps the key its source computes.
         const recipe: CheckedTypeKeyRecipe = if (type_ids.isSynthesized(ty))
-            self.imported.checked_types.roots[type_ids.synthesizedIndex(ty)].recipe
+            self.imported.checked_types.rootRows()[type_ids.synthesizedIndex(ty)].recipe
         else
             .payload;
         const reserved = try self.target_store.reserveSyntheticTypeRootWithRecipe(self.allocator, recipe);
