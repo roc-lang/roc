@@ -2484,7 +2484,7 @@ fn templateHasInterfaceRelations(view: ModuleView, template: *const checked.Chec
 /// the template's relation table relates only cells private to its own body,
 /// so requesters never replay it.
 fn templateInterfaceIsClosed(view: ModuleView, template: *const checked.CheckedProcedureTemplate) Allocator.Error!bool {
-    const schema = try view.dispatch.templateSchema(template.template_id);
+    const schema = try view.try dispatch.templateSchema(template.template_id);
     return schema.vars.len == 0 and
         schema.params.len == 0 and
         !try view.types.rootHasIdentityVariables(template.checked_fn_root);
@@ -2647,7 +2647,7 @@ const ParametricHoles = struct {
 
 /// The requirement schema of a procedure template's scheme.
 fn templateSchemaIn(view: ModuleView, template: *const checked.CheckedProcedureTemplate) Allocator.Error!SchemeRequirements {
-    return schemeRequirements(view, template.checked_fn_root, try view.dispatch.templateSchema(template.template_id));
+    return schemeRequirements(view, template.checked_fn_root, try view.try dispatch.templateSchema(template.template_id));
 }
 
 /// A checked plan's recorded entries for a target's requirements, with the
@@ -10679,7 +10679,7 @@ const Builder = struct {
         const structural_lexical_dependent = template.target != .hosted and
             source_ctx.local_proc_contexts.count() != 0 and
             (try specEvidenceContainsStructural(self.allocator, evidence) or
-                (codec_contract != null and source_ctx.activeCodecContractContainsLocalTarget()));
+                (codec_contract != null and try source_ctx.activeCodecContractContainsLocalTarget()));
         const lexical_context_key: ?names.TypeDigest = if (structural_lexical_dependent)
             try source_ctx.codecLexicalContextKey()
         else
@@ -16389,7 +16389,7 @@ const Builder = struct {
         defer self.releaseConstSourceCaptures(&fn_ctx, &source_captures);
 
         const expr = checkedExpr(fn_view, ExprSite.own(fn_view, runtime.expr));
-        const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
+        const plan = try dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
         try fn_ctx.restoreGeneratedRuntimeEvidence(store_view, fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const stored_encoding = constGeneratedCapture(fn_value, encoding_capture_id) orelse
@@ -28645,7 +28645,7 @@ const BodyContext = struct {
                     const expr = checkedExpr(self.view, ExprSite.own(self.view, @fromBackingInt(plan.node)));
                     // An interpolation's conversion returns the `Try` of the
                     // assembler whose result is the interpolation's value.
-                    break :blk if (expr.data == .interpolation) self.literalConversionTryType(plan_id) else expr.ty;
+                    break :blk if (expr.data == .interpolation) try self.literalConversionTryType(plan_id) else expr.ty;
                 },
                 // A custom literal pattern's `is_eq` returns its equality's
                 // result.
@@ -28666,7 +28666,7 @@ const BodyContext = struct {
     /// Whether a custom literal pattern's dispatch plan cannot run: its
     /// resolution is a checked error or unreachable, or this specialization's
     /// evidence resolves it to one.
-    fn patternPlanCrashes(self: *const BodyContext, maybe_plan: ?static_dispatch.StaticDispatchPlanId) bool {
+    fn patternPlanCrashes(self: *const BodyContext, maybe_plan: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!bool {
         const plan_id = maybe_plan orelse Common.invariant("custom literal pattern dispatch reached Monotype without a dispatch plan");
         switch ((try self.view.dispatch.plan(plan_id)).resolution) {
             .checked_error, .@"unreachable" => return true,
@@ -31148,7 +31148,7 @@ const BodyContext = struct {
                             relation_lookup,
                             callable_node,
                             plan,
-                            self.dispatchUsesDirectGraphCallee(plan),
+                            try self.dispatchUsesDirectGraphCallee(plan),
                         );
                     }
                 },
@@ -31193,7 +31193,7 @@ const BodyContext = struct {
             const assembler_node = (try self.graphTryPayloads(input.?.nodeValue())).ok;
             return .{ .ret = .{ .node = (try self.graph.functionNodes(assembler_node)).ret } };
         }
-        const try_ty = self.literalConversionTryType(task.maybe_plan);
+        const try_ty = try self.literalConversionTryType(task.maybe_plan);
         const expected_try_node: ?NodeId = if (task.expected_ret_node) |expected| blk: {
             const try_node = try self.instNode(try_ty);
             const assembler_node = (try self.graphTryPayloads(try_node)).ok;
@@ -34194,7 +34194,7 @@ const BodyContext = struct {
         frame.cursor = 1;
         if (plan.dispatcher_arg_index >= plan_args.len) Common.invariant("iterator dispatch plan dispatcher argument index was outside the argument span");
 
-        const lookup = try self.withLocalProcContext(self.iteratorMethodLookup(plan));
+        const lookup = try self.withLocalProcContext(try self.iteratorMethodLookup(plan));
         task.lookup = lookup;
         task.call_ctx = try self.createCallContext();
         const call_ctx = task.call_ctx.?;
@@ -34232,7 +34232,7 @@ const BodyContext = struct {
         task.callee = try self.methodTargetCalleeAtNodeWithEvidence(
             lookup,
             callable_node,
-            self.iteratorTargetEvidenceSource(plan),
+            try self.iteratorTargetEvidenceSource(plan),
         );
         const completed_callable_node = try self.draftFnSlotTypeNode(task.callee, callable_node);
         if (task.expected_ret_ty) |expected| {
@@ -35006,7 +35006,7 @@ const BodyContext = struct {
     fn stepInterpolationLower(self: *BodyContext, frame: *LowerFrame, task: *InterpolationLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
         switch (frame.cursor) {
             0 => {
-                const try_ty = self.literalConversionTryType(task.maybe_plan);
+                const try_ty = try self.literalConversionTryType(task.maybe_plan);
                 task.try_node = try self.instNode(try_ty);
                 task.assembler_node = (try self.graphTryPayloads(task.try_node)).ok;
                 const assembler_fn = try self.graph.functionNodes(task.assembler_node);
@@ -35922,7 +35922,7 @@ const BodyContext = struct {
 
         task.timing = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
         self.builder.countBodyDiagnostic("dispatch_expressions");
-        task.direct_graph_call = self.dispatchUsesDirectGraphCallee(plan);
+        task.direct_graph_call = try self.dispatchUsesDirectGraphCallee(plan);
         switch (plan.resolution) {
             .direct_closed => |direct| {
                 const node = (try self.view.dispatch.evidenceNode(direct.evidence));
@@ -36382,7 +36382,7 @@ const BodyContext = struct {
                         (try templateSchemaIn(lookup.view, &template)),
                         subst,
                         self.view,
-                        if (self.dispatchTargetContract(plan)) |c| c.entries else null,
+                        if (try self.dispatchTargetContract(plan)) |c| c.entries else null,
                         .body_lowering,
                     ),
                 };
@@ -48555,7 +48555,7 @@ const BodyContext = struct {
         defer self.builder.releaseConstSourceCaptures(&fn_ctx, &source_captures);
 
         const expr = checkedExpr(fn_view, ExprSite.own(fn_view, runtime.expr));
-        const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
+        const plan = try dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
         try fn_ctx.restoreGeneratedRuntimeEvidence(store_view, fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const stored_encoding = constGeneratedCapture(fn_value, encoding_capture_id) orelse
@@ -50907,7 +50907,7 @@ const BodyContext = struct {
     fn dispatchUsesDirectGraphCallee(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
-    ) bool {
+    ) Allocator.Error!bool {
         const evidence = switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| direct.evidence,
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
@@ -50980,7 +50980,7 @@ const BodyContext = struct {
         value_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const plan = self.literalConversionPlan(expr_id);
-        const try_ty = self.literalConversionTryType(plan);
+        const try_ty = try self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
         const try_value = try self.lowerLiteralConversionDispatch(try_ty, plan, try_node);
         const site = self.literalRejectionSite(expr_id);
@@ -51118,7 +51118,7 @@ const BodyContext = struct {
     }
 
     /// The checked `Try` result type of a literal's conversion call.
-    fn literalConversionTryType(self: *BodyContext, plan_id: ?static_dispatch.StaticDispatchPlanId) checked.CheckedTypeId {
+    fn literalConversionTryType(self: *BodyContext, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!checked.CheckedTypeId {
         const id = plan_id orelse Common.invariant("checked literal conversion reached Monotype without a dispatch plan");
         const plan = (try self.view.dispatch.plan(id));
         if (plan.result_mode != .value) Common.invariant("checked literal conversion plan had a non-value result mode");
@@ -51134,7 +51134,7 @@ const BodyContext = struct {
         ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
         const plan = self.literalConversionPlan(expr_id);
-        const try_ty = self.literalConversionTryType(plan);
+        const try_ty = try self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
         const value = try self.lowerDispatchExprAtType(try_ty, plan, DraftTypeCell.fromGraphNode(try_node));
         return try self.unwrapLiteralConversionAtNode(value, try_node, try ret_cell.toGraphNode(self.graph), self.literalRejectionSite(expr_id));
@@ -51171,7 +51171,7 @@ const BodyContext = struct {
             return try self.declaredComptimeValueRead(self.view, root_id, DraftTypeCell.fromGraphNode(request_node), null);
         }
         const plan = self.literalConversionPlan(expr_id);
-        const try_ty = self.literalConversionTryType(plan);
+        const try_ty = try self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
         const try_value = try self.lowerLiteralConversionDispatch(try_ty, plan, try_node);
         const site = self.literalRejectionSite(expr_id);
@@ -52085,7 +52085,7 @@ const BodyContext = struct {
         parent: ?*const EvidenceChain,
     ) Allocator.Error!EvidenceChain {
         const schema = switch (scope) {
-            .root => self.templateSchema(owner),
+            .root => try self.templateSchema(owner),
             .generalized => |id| try self.scopeSchema(view, id),
         };
         const subst = try self.substitutionFromCheckedTypes(view, schema.scheme_vars);
@@ -52224,6 +52224,7 @@ const BodyContext = struct {
                                     .callable_ty = recorded.callable_ty,
                                     .generated_codec_derivation = recorded.generated_codec_derivation,
                                 },
+                                .codec_content = content,
                             };
                         },
                         .codec => |codec| try self.builder.storedCodecEdge(
@@ -52592,12 +52593,12 @@ const BodyContext = struct {
             const eval_template = callable_eval.view.callable_eval_templates.templates[raw_template];
             const wrapper = callable_eval.view.entry_wrappers.lookupByRoot(eval_template.root) orelse
                 Common.invariant("callable eval template root had no checked entry wrapper");
-            return self.templateSchema(wrapper.template);
+            return try self.templateSchema(wrapper.template);
         }
-        return self.templateSchema(self.builder.templateRefForProcedureUse(proc));
+        return try self.templateSchema(self.builder.templateRefForProcedureUse(proc));
     }
 
-    fn templateSchema(self: *BodyContext, template_ref: names.ProcTemplate) SchemeRequirements {
+    fn templateSchema(self: *BodyContext, template_ref: names.ProcTemplate) Allocator.Error!SchemeRequirements {
         const view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
         return (try templateSchemaIn(view, &template));
@@ -52609,7 +52610,7 @@ const BodyContext = struct {
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
-            .eval_template => |eval| self.templateSchema(eval.entry_template),
+            .eval_template => |eval| try self.templateSchema(eval.entry_template),
             .stored_const, .reserved, .unimplemented => emptySchema(store_view),
         };
     }
@@ -53166,7 +53167,7 @@ const BodyContext = struct {
             // alias when the frame finishes.
             .through_alias => .{
                 (try site_view.dispatch.aliasScopeEvidence(node)),
-                self.aliasScopeSchema(.{
+                try self.aliasScopeSchema(.{
                     .view = lookup.view,
                     .alias = node.target.alias orelse
                         Common.invariant("alias-scope evidence named a target with no alias binding"),
@@ -53710,7 +53711,7 @@ const BodyContext = struct {
             };
             var target_ctx = try self.methodTargetContext(lookup);
             defer target_ctx.deinit();
-            if (subst.len != 0) try target_ctx.seedSubstitution(self.methodTargetSchema(lookup), subst);
+            if (subst.len != 0) try target_ctx.seedSubstitution(try self.methodTargetSchema(lookup), subst);
             break :blk try target_ctx.instNode(lookup.target.callable_ty);
         };
         if (cacheable) {
@@ -53837,7 +53838,7 @@ const BodyContext = struct {
     fn targetProcedureEvidenceSchema(
         self: *BodyContext,
         target: *const SpecEvidenceTarget,
-    ) static_dispatch.ProcedureEvidenceSchema {
+    ) Allocator.Error!static_dispatch.ProcedureEvidenceSchema {
         return switch (target.target.kind) {
             .procedure => |procedure| blk: {
                 const template = target.view.templates.get(procedure.template.template);
@@ -53845,7 +53846,7 @@ const BodyContext = struct {
                 // A signature that leaves a scheme variable to the target's
                 // nested evidence cannot supply an independent callable's
                 // substitution; checking records that callable's own contract.
-                break :blk if (schema == .from_callable and !(try target.view.dispatch.templateSchema(template.template_id)).callable_determines_scheme) .requires_record else schema;
+                break :blk if (schema == .from_callable and !(try target.try view.dispatch.templateSchema(template.template_id)).callable_determines_scheme) .requires_record else schema;
             },
             .local_proc => |local| static_dispatch.procedureEvidenceSchema((try self.scopeSchema(target.view, local.dispatch_scope)).params),
             .structural => Common.invariant("structural evidence target reached callable nested-evidence classification"),
@@ -53878,7 +53879,7 @@ const BodyContext = struct {
         target: *const SpecEvidenceTarget,
     ) DependentCallableEvidenceError!NestedSpecEvidence {
         const schema = if (dependent.independent_callable and !dependent.reuse_slot_nested_evidence)
-            self.targetProcedureEvidenceSchema(target)
+            try self.targetProcedureEvidenceSchema(target)
         else
             static_dispatch.ProcedureEvidenceSchema.none;
         return dependentCallableNestedEvidenceForSchema(dependent, target.nested, schema);
@@ -53901,7 +53902,7 @@ const BodyContext = struct {
 
     /// The alias-scope evidence a direct edge resolved, when it instantiated
     /// the scheme of the exact procedure alias its target was reached through.
-    fn directAliasScopeContract(self: *BodyContext, node_id: static_dispatch.EvidenceNodeId) ?EvidenceContract {
+    fn directAliasScopeContract(self: *BodyContext, node_id: static_dispatch.EvidenceNodeId) Allocator.Error!?EvidenceContract {
         const node = (try self.view.dispatch.evidenceNode(node_id));
         return switch (node.nested) {
             .through_alias => .{ .view = self.view, .entries = (try self.view.dispatch.aliasScopeEvidence(node)) },
@@ -53921,7 +53922,7 @@ const BodyContext = struct {
         const target_alias = recorded.alias orelse
             Common.invariant("alias-scope evidence had no alias substitution");
         const alias_subst = try self.substitutionFromCheckedTypes(recorded.view, recorded.tys);
-        const alias_vector = try self.deriveEvidenceVector(self.aliasScopeSchema(target_alias), alias_subst, contract.view, contract.entries, purpose);
+        const alias_vector = try self.deriveEvidenceVector(try self.aliasScopeSchema(target_alias), alias_subst, contract.view, contract.entries, purpose);
         return try self.edgeThroughAlias(target_alias, .{ .subst = alias_subst, .vector = alias_vector }, purpose);
     }
 
@@ -53937,7 +53938,7 @@ const BodyContext = struct {
             .evidence_dependent, .structural, .checked_error, .@"unreachable" => return null,
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
         };
-        const contract = self.directAliasScopeContract(direct.evidence) orelse return null;
+        const contract = try self.directAliasScopeContract(direct.evidence) orelse return null;
         const node = (try self.view.dispatch.evidenceNode(direct.evidence));
         return try self.aliasTargetEdge((try checkedTargetSubstitution(self.view, lookup.view, node)).?, contract, .body_lowering);
     }
@@ -53946,7 +53947,7 @@ const BodyContext = struct {
     /// its target's own requirements: a direct plan's resolved nested
     /// entries. Every other edge derives the target's evidence from the
     /// callable alone.
-    fn dispatchTargetContract(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?EvidenceContract {
+    fn dispatchTargetContract(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!?EvidenceContract {
         return switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| blk: {
                 const node = (try self.view.dispatch.evidenceNode(direct.evidence));
@@ -53971,9 +53972,9 @@ const BodyContext = struct {
         plan: static_dispatch.StaticDispatchCallPlan,
     ) TargetEvidenceSource {
         return switch (plan.resolution) {
-            .direct_closed, .direct_parametric => |direct| if (self.directAliasScopeContract(direct.evidence)) |contract|
+            .direct_closed, .direct_parametric => |direct| if (try self.directAliasScopeContract(direct.evidence)) |contract|
                 .{ .alias_scope = contract }
-            else if (self.dispatchTargetContract(plan)) |contract|
+            else if (try self.dispatchTargetContract(plan)) |contract|
                 .{ .checked = contract }
             else
                 .derive,
@@ -54059,7 +54060,7 @@ const BodyContext = struct {
         var target_ctx = try self.methodTargetContext(lookup);
         errdefer target_ctx.deinit();
         if (lookup.substitution) |substitution| {
-            try target_ctx.seedSubstitution(self.methodTargetSchema(lookup), switch (substitution) {
+            try target_ctx.seedSubstitution(try self.methodTargetSchema(lookup), switch (substitution) {
                 .own_body => |own| try self.targetSubstitutionNodes(own),
                 .carried => |carried| try self.carriedSubstitutionNodes(carried),
             });
@@ -54210,7 +54211,7 @@ const BodyContext = struct {
     /// The requirement schema of the scope an exact procedure alias owns:
     /// a top-level alias's entry wrapper's, or a block-local alias's
     /// generalized-local scope's.
-    fn aliasScopeSchema(self: *BodyContext, target_alias: TargetAlias) SchemeRequirements {
+    fn aliasScopeSchema(self: *BodyContext, target_alias: TargetAlias) Allocator.Error!SchemeRequirements {
         return switch (target_alias.alias) {
             .top_level => |binding| blk: {
                 const use = self.builder.callableEvalForAliasBinding(target_alias.view, binding);
@@ -54223,7 +54224,7 @@ const BodyContext = struct {
         };
     }
 
-    fn methodTargetSchema(self: *BodyContext, lookup: MethodLookup) SchemeRequirements {
+    fn methodTargetSchema(self: *BodyContext, lookup: MethodLookup) Allocator.Error!SchemeRequirements {
         return switch (lookup.target.kind) {
             .procedure => |procedure| templateSchemaIn(lookup.view, &lookup.view.templates.get(procedure.template.template)),
             .local_proc => |local| try self.scopeSchema(lookup.view, local.dispatch_scope),
@@ -54249,10 +54250,10 @@ const BodyContext = struct {
 
     fn iteratorTargetEvidenceSource(
         self: *BodyContext,
-        call: static_dispatch.IteratorDispatchCall,
-    ) TargetEvidenceSource {
+        call: static_dispatch.ResolvedIteratorDispatchCall,
+    ) Allocator.Error!TargetEvidenceSource {
         return switch (call.resolution) {
-            .direct_closed, .direct_parametric => |direct| if (self.directAliasScopeContract(direct.evidence)) |contract|
+            .direct_closed, .direct_parametric => |direct| if (try self.directAliasScopeContract(direct.evidence)) |contract|
                 .{ .alias_scope = contract }
             else if (self.iteratorCallContract(call)) |contract|
                 .{ .checked = contract }
@@ -54314,16 +54315,13 @@ const BodyContext = struct {
             .structural => |derivation| return .{ .structural = .{
                 .derivation = derivation,
                 .checked = switch (derivation.kind()) {
-                    .parser, .encoder => .{
-                        .view = self.view,
-                        .evidence = .{
-                            .derivation = derivation,
-                            .dispatcher_ty = plan.dispatcher_ty,
-                            .callable_ty = plan.callable_ty,
-                            .generated_codec_derivation = plan.generated_codec_derivation orelse
-                                Common.invariant("direct structural codec plan had no checked derivation contract"),
-                        },
-                    },
+                    .parser, .encoder => try CheckedSpecStructuralEvidence.of(self.view, .{
+                        .derivation = derivation,
+                        .dispatcher_ty = plan.dispatcher_ty,
+                        .callable_ty = plan.callable_ty,
+                        .generated_codec_derivation = plan.generated_codec_derivation orelse
+                            Common.invariant("direct structural codec plan had no checked derivation contract"),
+                    }),
                     .equality, .hash, .map, .map_effectful => null,
                 },
             } },
@@ -55220,7 +55218,7 @@ const BodyContext = struct {
         const alias_edge = try self.directAliasTargetEdge(plan, lookup);
         const subst = if (alias_edge) |edge| edge.subst else (try self.directDispatchTargetSubstitution(plan, lookup, request_fn_node)) orelse
             Common.invariant("direct dispatch target had no checked substitution");
-        const contract: ?[]const static_dispatch.CheckedEvidence = if (self.dispatchTargetContract(plan)) |c| c.entries else null;
+        const contract: ?[]const static_dispatch.CheckedEvidence = if (try self.dispatchTargetContract(plan)) |c| c.entries else null;
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
                 const template = lookup.view.templates.get(procedure.template.template);
@@ -58888,7 +58886,7 @@ const BodyContext = struct {
         return slots[0..len];
     }
 
-    fn activeCodecContractContainsLocalTarget(self: *const BodyContext) bool {
+    fn activeCodecContractContainsLocalTarget(self: *const BodyContext) Allocator.Error!bool {
         for (self.activeCodecCalls()) |call| switch (call.resolution) {
             .structural => {},
             .callable => |node_id| switch ((try call.view.dispatch.evidenceNode(node_id)).target.kind) {
@@ -59191,15 +59189,12 @@ const BodyContext = struct {
         };
         return try self.instantiateCodecContract(.{
             .derivation = derivation,
-            .checked = .{
-                .view = call.view,
-                .evidence = .{
-                    .derivation = derivation,
-                    .dispatcher_ty = call.checked.dispatcher_ty,
-                    .callable_ty = call.checked.callable_ty,
-                    .generated_codec_derivation = nested_id,
-                },
-            },
+            .checked = try CheckedSpecStructuralEvidence.of(call.view, .{
+                .derivation = derivation,
+                .dispatcher_ty = call.checked.dispatcher_ty,
+                .callable_ty = call.checked.callable_ty,
+                .generated_codec_derivation = nested_id,
+            }),
         }, call.callable_node, shape_node);
     }
 
@@ -64710,11 +64705,11 @@ const BodyContext = struct {
             // A custom literal pattern's literal conversion diverges when its
             // dispatch cannot run; its equality test also diverges when its
             // conversion operand does.
-            .literal_conversion => return self.patternPlanCrashes(self.view.bodies.literalConversion(@backingInt(expr_ref.literalPattern())).plan),
+            .literal_conversion => return try self.patternPlanCrashes(self.view.bodies.literalConversion(@backingInt(expr_ref.literalPattern())).plan),
             .literal_guard => {
                 const pattern = expr_ref.literalPattern();
                 const guard = self.view.bodies.literalPatternGuard(pattern) orelse Common.invariant("a literal guard belonged to a pattern compared directly");
-                return self.patternPlanCrashes(guard.equality_plan) or
+                return try self.patternPlanCrashes(guard.equality_plan) or
                     try self.checkedExprDivergesInLoweredRuntime(ExprSite.literalConversion(pattern));
             },
         };
@@ -64756,7 +64751,7 @@ const BodyContext = struct {
         always_true,
     };
 
-    fn iteratorMethodLookup(self: *BodyContext, plan: static_dispatch.ResolvedIteratorDispatchCall) MethodLookup {
+    fn iteratorMethodLookup(self: *BodyContext, plan: static_dispatch.ResolvedIteratorDispatchCall) Allocator.Error!MethodLookup {
         return switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| blk: {
                 break :blk self.methodLookupForEvidenceNode((try self.view.dispatch.evidenceNode(direct.evidence)));
@@ -69621,7 +69616,7 @@ fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
     };
 }
 
-fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: CIR.Expr.Idx) static_dispatch.StaticDispatchCallPlan {
+fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: CIR.Expr.Idx) Allocator.Error!static_dispatch.StaticDispatchCallPlan {
     const plan_id = dispatchPlanIdForRuntimeExpr(view, expr_id);
     return (try view.dispatch.plan(plan_id));
 }

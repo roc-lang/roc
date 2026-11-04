@@ -759,7 +759,7 @@ fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Local
         defer b.immortal_closures = saved;
         for (fam_.locals.items, captures[0..fam_.locals.items.len]) |local, *value| {
             const fn_ty = try b.program.substitute(b.allocator, local.fn_ty, bound);
-            value.* = try b.emitIntoEntry(Builder.localMethodValue, ..{ try table.evidenceNode(local.node), fn_ty });
+            value.* = try b.emitIntoEntry(Builder.localMethodValue, .{ try table.evidenceNode(local.node), fn_ty });
         }
     }
     for (bound, captures[fam_.locals.items.len..]) |ty, *desc| desc.* = try b.descOf(ty);
