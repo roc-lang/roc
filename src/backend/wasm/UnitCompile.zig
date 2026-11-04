@@ -526,6 +526,44 @@ const Imports = struct {
     }
 };
 
+test "a switch on a 32-bit value compares against the branch value's bits" {
+    const allocator = std.testing.allocator;
+    const LIR = lir.LIR;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+
+    // `|x| match x { 0x8000_0000 => 1, _ => 0 }` over a U32: the branch
+    // value is past the signed range of the i32 the condition lives in.
+    const cond = try store.addLocal(.{ .layout_idx = .u32 });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret_one = try store.addCFStmt(.{ .ret = .{ .value = one } }, .test_fixture);
+    const hit = try store.addCFStmt(.{ .assign_literal = .{ .target = one, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } }, .next = ret_one } }, .test_fixture);
+    const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
+    const miss = try store.addCFStmt(.{ .assign_literal = .{ .target = zero, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } }, .next = ret_zero } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = cond,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0x8000_0000, .body = hit }}),
+        .default_branch = miss,
+    } }, .test_fixture);
+    const exported = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(44), .args = try store.addLocalSpan(&.{cond}), .body = body, .ret_layout = .u64, .exported = true }, .none);
+    const entries = [_]Entry{.{ .symbol_name = "roc__main_for_host", .proc = exported, .arg_layouts = &.{.u32}, .ret_layout = .u64 }};
+
+    const image = try compileUnitImage(allocator, &store, &layouts, &entries, &.{}, .{ .cpu_level = .default, .stack_checks = false });
+    defer allocator.free(image);
+    const view = try WasmUnitImage.View.init(image);
+    const exported_index = view.findExport(try LIR.ProcIdentity.forTest(44).symbolName(arena)) orelse return error.TestUnexpectedResult;
+    const code = view.body(view.functions()[view.exports()[exported_index].function]);
+    // `i32.const -2147483648`: the same bits as the U32 branch value.
+    const compare = [_]u8{ 0x41, 0x80, 0x80, 0x80, 0x80, 0x78, 0x46 };
+    try std.testing.expect(std.mem.indexOf(u8, code, &compare) != null);
+}
+
 test "constants with one content name are one weak definition the unit names as an import" {
     const allocator = std.testing.allocator;
     const LIR = lir.LIR;
