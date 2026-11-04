@@ -4527,7 +4527,11 @@ const Inserter = struct {
 
         const Pending = struct { decision: CompleteProjectionDecision, next: LIR.CFStmtId, unit: LIR.LocalId };
         var pending = std.ArrayList(Pending).empty;
+        // The parameters some restitution boundary of this procedure hands
+        // back; only their places gain uses under the outcome contract.
+        var restituted: arc_sig.ParamMask = 0;
         for (self.solution.procStatements(proc)) |stmt| {
+            restituted |= self.solution.restitutionParamsAt(stmt);
             const root = self.dismantles.completeTakeRoot(stmt) orelse continue;
             const assign = self.store.getCFStmtImmediate(stmt).assign_ref;
             if (self.isBindingBorrowed(assign.target)) continue;
@@ -4550,13 +4554,41 @@ const Inserter = struct {
         self.current_sig.outcomes = .empty;
         self.place_use_facts = null;
         for (pending.items) |*entry| entry.decision.retains = try self.ownershipPlaceUsedInPath(entry.next, entry.unit);
+        // Both contracts share one statement graph, and the outcome contract
+        // adds only uses of the restituted parameters at restitution
+        // boundaries, so a read whose place holds no restituted parameter
+        // has one answer under both.
+        var restituted_places = std.ArrayList(LIR.LocalId).empty;
         const available = self.solution.availableOutcomeSpanOf(proc);
-        if (available.isEmpty()) {
-            for (pending.items) |*entry| entry.decision.retains_restituting = entry.decision.retains;
-        } else {
+        if (!available.isEmpty() and restituted != 0) {
+            const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(proc).args);
+            for (0..GuardedList.borrowLen(params)) |position| {
+                const bit = arc_sig.paramBit(position) orelse break;
+                if ((restituted & bit) == 0) continue;
+                try restituted_places.append(scratch, self.ownershipPlaceLeader(GuardedList.at(params, position)));
+            }
+        }
+        var any_restituting = false;
+        for (pending.items) |*entry| {
+            entry.decision.retains_restituting = entry.decision.retains;
+            if (entry.decision.retains) continue;
+            const place = self.ownershipPlaceLeader(entry.unit);
+            for (restituted_places.items) |restituted_place| {
+                if (restituted_place == place) any_restituting = true;
+            }
+        }
+        if (any_restituting) {
             self.current_sig.outcomes = available;
             self.place_use_facts = null;
-            for (pending.items) |*entry| entry.decision.retains_restituting = try self.ownershipPlaceUsedInPath(entry.next, entry.unit);
+            for (pending.items) |*entry| {
+                if (entry.decision.retains) continue;
+                const place = self.ownershipPlaceLeader(entry.unit);
+                for (restituted_places.items) |restituted_place| {
+                    if (restituted_place != place) continue;
+                    entry.decision.retains_restituting = try self.ownershipPlaceUsedInPath(entry.next, entry.unit);
+                    break;
+                }
+            }
         }
         const decisions = try allocator.alloc(CompleteProjectionDecision, pending.items.len);
         for (decisions, pending.items) |*decision, entry| decision.* = entry.decision;
