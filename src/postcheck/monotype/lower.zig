@@ -34984,7 +34984,7 @@ const BodyContext = struct {
             .inspect_only => |*task| return self.stepInspectOnly(task, input),
             .scheme_alias => |*task| return self.stepSchemeAlias(task, input),
             .callsite_intrinsic => |*task| return self.stepCallsiteIntrinsic(task, input),
-            .interpolation => |*task| return self.stepInterpolationLower(frame, task, input),
+            .interpolation => |*task| return self.stepInterpolationLower(task, input),
         }
     }
 
@@ -34996,8 +34996,7 @@ const BodyContext = struct {
     /// iterator over its values: `iter` on an empty list, then `append` for
     /// each value, every step bound to a local so the iterator lives on the
     /// stack. A `Str` literal writes its parts once instead.
-    fn stepInterpolationLower(self: *BodyContext, frame: *LowerFrame, task: *InterpolationLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
-        _ = frame;
+    fn stepInterpolationLower(self: *BodyContext, task: *InterpolationLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const interpolation = switch (self.view.bodies.expr(task.expr).data) {
             .interpolation => |value| value,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
