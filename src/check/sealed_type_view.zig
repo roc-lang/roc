@@ -96,6 +96,9 @@ pub const SealedNominalType = struct {
     is_opaque: bool,
     representation: CheckedNominalRepresentationRef,
     args: []const Var,
+    /// The enclosing type variables a declaration in a function body depends
+    /// on, which publication lists after `args`.
+    context: []const Var,
 };
 
 /// A checked record type with at least one field or an open tail. The
@@ -325,6 +328,7 @@ pub const SealedTypeView = struct {
                             builtin_nominal,
                         ),
                         .args = type_store.sliceNominalArgs(nominal),
+                        .context = type_store.nominalContextVars(nominal),
                     } };
                 },
                 .fn_pure, .fn_unbound => |func| return .{ .function = functionType(type_store, .pure, func) },
@@ -452,7 +456,10 @@ pub const SealedTypeView = struct {
                     try self.reach(pending, record.ext, .empty_record);
                 },
                 .tuple => |tuple| for (type_store.sliceVars(tuple.elems)) |elem| try self.reach(pending, elem, null),
-                .nominal_type => |nominal| for (type_store.sliceNominalArgs(nominal)) |arg| try self.reach(pending, arg, null),
+                .nominal_type => |nominal| {
+                    for (type_store.sliceNominalArgs(nominal)) |arg| try self.reach(pending, arg, null);
+                    for (type_store.nominalContextVars(nominal)) |context_var| try self.reach(pending, context_var, null);
+                },
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
                     for (type_store.sliceVars(func.args)) |arg| try self.reach(pending, arg, null);
                     try self.reach(pending, func.ret, null);
@@ -801,7 +808,9 @@ const Gate = struct {
                 expect(nominal.is_opaque == other.is_opaque, "nominal opacity", pair);
                 expect(std.meta.eql(nominal.representation, other.representation), "nominal representation", pair);
                 expect(nominal.padding_field_types.len == 0 and nominal.declared_fields.len == 0, "nominal declaration-only fields", pair);
-                try self.children(nominal.args, other.args, "nominal argument", pair);
+                expect(nominal.args.len == other.args.len + other.context.len, "nominal argument count", pair);
+                try self.children(nominal.args[0..other.args.len], other.args, "nominal argument", pair);
+                try self.children(nominal.args[other.args.len..], other.context, "nominal context argument", pair);
             },
             .function => |function| {
                 const other = sealed.function;

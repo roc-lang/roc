@@ -5682,12 +5682,14 @@ enclosing function—no outer local, no outer rigid type variable, no local type
 declaration that names one—is a promoted local procedure. Checking decides
 promotion while it already walks the body: each `s_decl` of a lambda or
 closure is a candidate, every local lookup, rigid-variable use, and reference
-to a local type declaration naming an enclosing rigid variable records the
-candidate depths it crosses, and the greatest fixpoint over references between
-candidates removes every candidate that reaches a contextual one. A local type
-declaration names an enclosing rigid variable when its own annotation looks one
-up, other than its own parameters, or names another local declaration that
-does; any other local type declaration is context free. Naming a method of a
+to a local type declaration records the candidate depths it crosses, and the
+greatest fixpoint over references between candidates removes every candidate
+that reaches a contextual one. A reference to a local type declaration makes
+the candidates it crosses contextual, from the shallowest of the variables,
+when the declaration has a context ("Body-Local Type Context" below); its
+methods are checked after many references to it, so each reference records
+its candidates and they are marked once every context is final. A local type
+declaration with no context is context free. Naming a method of a
 local type through the type is a lookup of the method's binding, and a
 dispatch is a reference to the local procedure it selects: once targets
 settle, each lineage selecting one adds that reference for the candidates
@@ -5757,6 +5759,55 @@ whose only declaration context is type variables, or is rejected. No later
 stage meets a method that needs values of its declaration's frame: Boxy calls a
 local procedure a dispatch selects directly as its nested worker, and treats a
 method selection with runtime captures as an invariant failure.
+
+### Body-Local Type Context
+
+A type declared in a function body can depend on the type variables of the
+functions enclosing it: its annotation can name one (`Wrap := [Wrap(a)]`), and
+its methods can name one, in their annotations or bodies, directly or through
+the local procedures they refer to or dispatch to. Each instantiation of the
+enclosing function then gives the type different contents or different
+behavior, so the type's identity includes those variables: one declaration
+used at two instantiations is two types, exactly as if it had declared a
+parameter for each and every use applied it to the variable.
+
+Checking decides each such declaration's context once solving settles
+(`finalizeLocalTypeContexts`, before promotion is decided): the rigid type
+variables of enclosing functions it depends on, in source order. That is each
+one its annotation names other than its own parameters, each one its methods
+name (a method's candidate records each enclosing rigid variable it looks up,
+and follows its references and dispatches to other candidates), and the
+context of each local type its annotation or those methods name, as a least
+fixpoint. A variable introduced inside the declaration's own block never
+belongs to it. A nominal declaration records its context in the declaration
+table (`NominalDecl.context`). The checker's own nominal applications never
+list the context: within the body every use means the body's own variables,
+so nothing inside checking can tell instantiations apart, and diagnostics and
+printed types never show it.
+
+Checked publication treats the context as hidden trailing parameters. A
+nominal use of such a declaration lists, after its own arguments, the
+variables of its context (the rigid variables themselves, as the body's types
+name them), and its canonical key includes them; the published
+`CheckedNominalDeclaration` takes the same variables as formals after its
+declared ones (`context_len` of them). The declaration's backing names those
+variables directly, so binding the formals to a use's arguments substitutes
+them like any other formal. Monotype's declaration scopes and its nominal
+caches, keyed by arguments, therefore tell `Wrap` at `U64` from `Wrap` at
+`Str`, and give each its own methods' specializations, with no rule of their
+own; Boxy reads the same arguments. A stored constant's type lists only the
+declared arguments; restoring it takes the context arguments from the
+restoring scope.
+
+A local function that names such a type depends on the body, so it stays a
+local procedure, and so does any method whose signature names its own type.
+A codec dispatched inside one is built in that function's lexical scope: a
+stored codec runtime's evidence chain ends at the scope its chain names, which
+restoring checks frame by frame against the owner's checked scope tree, not at
+the root. A format method that is a local procedure reaches a Boxy codec
+family as a captured function value; the constructor calls `rename_field`
+through the value it captures, since the names tuple that holds the values for
+every other piece is what the constructor builds.
 
 A block-local value binding whose own binders are referenced inside its
 expression is a recursive value. Canonicalization rejects an eager
@@ -14658,7 +14709,7 @@ versions; a module elsewhere in the recipe is an index into that table. The
 recipe then holds its own table of types rather than ids of stored types. A
 generated codec worker's signature is generic, so a recipe type can name
 variables, which no stored type does, and a table keeps a block-local nominal's
-outer arguments, which a stored type leaves to its reader's scope. Workers are
+context arguments, which a stored type leaves to its reader's scope. Workers are
 named as their keys name them: templates and lambdas by checked id, codec
 pieces by their family's derivation, a compile-time slot by its root.
 

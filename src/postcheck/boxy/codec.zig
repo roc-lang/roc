@@ -958,6 +958,10 @@ const Gen = struct {
     /// The encoding and names of the worker being lowered.
     encoding: LocalId = undefined,
     names: LocalId = undefined,
+    /// While the constructor is lowered, the local procedures' function
+    /// values it captures: the names tuple that holds them elsewhere is what
+    /// the constructor builds.
+    constructor_locals: ?[]const LocalId = null,
 
     fn program(self: *Gen) *Program {
         return self.b.program;
@@ -1316,6 +1320,7 @@ const Gen = struct {
     /// The function value of the family's local procedure `index`, which
     /// follows the names.
     fn localValue(self: *Gen, index: u32) Allocator.Error!LocalId {
+        if (self.constructor_locals) |locals| return locals[index];
         const fam_ = self.fam();
         return self.b.readField(fam_.names_ty, self.names, @intCast(fam_.names.items.len + index), fam_.locals.items[index].fn_ty);
     }
@@ -1435,6 +1440,8 @@ const Gen = struct {
         defer self.b.allocator.free(captured);
         captured[0] = encoding;
         @memcpy(captured[1 + entries.len ..], frame.captures);
+        self.constructor_locals = frame.captures;
+        defer self.constructor_locals = null;
         for (entries, captured[1..][0..entries.len]) |entry, *slot| {
             const label = try self.b.strLiteral(self.store().nameText(entry.label));
             slot.* = (try self.callFormat("rename_field", null, &.{ encoding, label })).value;

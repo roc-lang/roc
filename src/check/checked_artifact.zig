@@ -4137,6 +4137,11 @@ pub const CheckedNominalDeclaration = struct {
     backing: CheckedTypeId,
     fa_start: u32 = 0,
     fa_len: u32 = 0,
+    /// How many of the formal args, at their end, are context formals: the
+    /// enclosing type variables a declaration in a function body depends on
+    /// (design.md "Body-Local Type Context"). Every use lists their
+    /// arguments after its own.
+    context_len: u32 = 0,
 
     /// Range into `CheckedTypeStore.type_id_pool` for the resolved types of the
     /// declaration's unnamed (`_` / `_name`) padding fields, in declared order.
@@ -4158,6 +4163,16 @@ pub const CheckedNominalDeclaration = struct {
     /// The declaration's formal args within its store's `type_id_pool`.
     pub fn formalArgs(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedTypeId {
         return storePool(pool_owner, CheckedTypeId)[self.fa_start .. self.fa_start + self.fa_len];
+    }
+
+    /// The formal args the declaration's source header declares.
+    pub fn declaredFormalArgs(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedTypeId {
+        return self.formalArgs(pool_owner)[0 .. self.fa_len - self.context_len];
+    }
+
+    /// The context formals that follow the declared ones.
+    pub fn contextFormalArgs(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedTypeId {
+        return self.formalArgs(pool_owner)[self.fa_len - self.context_len ..];
     }
 
     /// The declaration's padding field types within its store's `type_id_pool`.
@@ -5935,8 +5950,17 @@ fn appendCheckedNominalDeclarationFromStatement(
     const header = module_env.store.getTypeHeader(header_idx);
     const header_args = module_env.store.sliceTypeAnnos(header.args);
 
-    const formal_args = if (header_args.len == 0) &.{} else blk: {
-        const out = try allocator.alloc(CheckedTypeId, header_args.len);
+    // A declaration in a function body takes the enclosing type variables its
+    // identity depends on as formals after its own (design.md "Body-Local
+    // Type Context"). Each is the variable itself, which its backing and its
+    // methods name directly, so every use's matching argument binds it.
+    const type_store = module.typeStoreConst();
+    const statement_type = type_store.resolveVar(ModuleEnv.varFrom(statement_idx)).desc.content.unwrapNominalType() orelse
+        checkedArtifactInvariant("nominal declaration statement variable was not a nominal type", .{});
+    const context_vars = type_store.nominalContextVars(statement_type);
+    const formal_count = header_args.len + context_vars.len;
+    const formal_args = if (formal_count == 0) &.{} else blk: {
+        const out = try allocator.alloc(CheckedTypeId, formal_count);
         errdefer allocator.free(out);
         for (header_args, 0..) |arg_anno, i| {
             out[i] = try appendCheckedTypeRoot(
@@ -5949,6 +5973,17 @@ fn appendCheckedNominalDeclarationFromStatement(
                 ModuleEnv.varFrom(arg_anno),
             );
         }
+        for (context_vars, header_args.len..) |context_var, i| {
+            out[i] = try appendCheckedTypeRoot(
+                allocator,
+                module,
+                names,
+                imports,
+                store,
+                active,
+                context_var,
+            );
+        }
         break :blk out;
     };
     var formal_args_owned = formal_args.len != 0;
@@ -5957,7 +5992,7 @@ fn appendCheckedNominalDeclarationFromStatement(
     const declaration_formals = if (header_args.len == 0) &.{} else blk: {
         const out = try allocator.alloc(DeclarationFormal, header_args.len);
         errdefer allocator.free(out);
-        for (header_args, formal_args, 0..) |arg_anno, formal_arg, i| {
+        for (header_args, formal_args[0..header_args.len], 0..) |arg_anno, formal_arg, i| {
             const arg = module_env.store.getTypeAnno(arg_anno);
             out[i] = .{
                 .name = switch (arg) {
@@ -6047,14 +6082,18 @@ fn appendCheckedNominalDeclarationFromStatement(
     );
     if (builtin.mode == .debug) {
         // The declaration's formals are exactly the roots its backing was
-        // built over, so instantiating them substitutes into that backing.
+        // built over, so instantiating them substitutes into that backing,
+        // and the statement's own type lists the same context roots.
         const declared_args = store.payload(declaration_root).nominal.args;
-        std.debug.assert(declared_args.len == declaration_formals.len);
-        for (declared_args, declaration_formals) |declared_arg, formal| {
+        std.debug.assert(declared_args.len == declaration_formals.len + context_vars.len);
+        for (declared_args[0..declaration_formals.len], declaration_formals) |declared_arg, formal| {
             std.debug.assert(declared_arg == formal.root);
         }
+        const statement_args = store.payload(statement_root).nominal.args;
+        std.debug.assert(statement_args.len == formal_count);
+        std.debug.assert(checkedTypeIdSliceEql(declared_args[declaration_formals.len..], statement_args[header_args.len..]));
     }
-    try appendCheckedNominalDeclarationFromPayload(allocator, store, declaration_root, backing, declared_record_fields);
+    try appendCheckedNominalDeclarationFromPayload(allocator, store, declaration_root, backing, declared_record_fields, @intCast(context_vars.len));
 }
 
 const DeclarationFormal = struct {
@@ -6596,7 +6635,21 @@ const DeclarationAnnoWalk = struct {
             .template => |var_| {
                 const generic_root = try self.appendRoot(var_);
                 if (actual_args.len == 0) return generic_root;
-                return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.names, self.store, generic_root, actual_args);
+                // A declaration in a function body keeps its context
+                // arguments: each is the enclosing variable itself.
+                const type_store = self.module.typeStoreConst();
+                const context_len = if (type_store.resolveVar(var_).desc.content.unwrapNominalType()) |nominal|
+                    type_store.nominalContextVars(nominal).len
+                else
+                    0;
+                if (context_len == 0) return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.names, self.store, generic_root, actual_args);
+                const generic_args = self.store.payload(generic_root).nominal.args;
+                std.debug.assert(generic_args.len == actual_args.len + context_len);
+                const all_args = try gpa.alloc(CheckedTypeId, generic_args.len);
+                defer gpa.free(all_args);
+                @memcpy(all_args[0..actual_args.len], actual_args);
+                @memcpy(all_args[actual_args.len..], generic_args[actual_args.len..]);
+                return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.names, self.store, generic_root, all_args);
             },
         }
     }
@@ -7067,6 +7120,7 @@ fn appendCheckedNominalDeclarationFromPayload(
     root: CheckedTypeId,
     backing: CheckedTypeId,
     declared_record_fields: []const CheckedNominalRecordField,
+    context_len: u32,
 ) Allocator.Error!void {
     const declarations = &store.nominal_declarations;
     const index: usize = @backingInt(root);
@@ -7083,6 +7137,7 @@ fn appendCheckedNominalDeclarationFromPayload(
     for (declarations.items) |existing| {
         if (canonicalNominalTypeKeyEql(existing.nominal, nominal_key)) {
             if (existing.backing == backing and
+                existing.context_len == context_len and
                 checkedTypeRootKeySliceEql(store, existing.formalArgs(store), nominal.args) and
                 checkedTypeRootKeySliceEql(store, existing.paddingFieldTypes(store), nominal.padding_field_types) and
                 checkedDeclaredFieldSliceEql(existing.declaredFields(store), nominal.declared_fields) and
@@ -7117,6 +7172,7 @@ fn appendCheckedNominalDeclarationFromPayload(
         .backing = backing,
         .fa_start = fa.start,
         .fa_len = fa.len,
+        .context_len = context_len,
         .pf_start = pf.start,
         .pf_len = pf.len,
         .df_start = df.start,
@@ -7426,7 +7482,7 @@ fn embedOneImportedNominalDecl(
     defer if (local_fields.len != 0) allocator.free(local_fields);
 
     const local_backing = try projector.project(owner_decl.backing);
-    try appendCheckedNominalDeclarationFromPayload(allocator, store, local_root, local_backing, local_fields);
+    try appendCheckedNominalDeclarationFromPayload(allocator, store, local_root, local_backing, local_fields, owner_decl.context_len);
 }
 
 /// Ensure the artifact's declaration table holds a copy of every IMPORTED
@@ -8211,7 +8267,10 @@ const SourceTypeGraphFactsContext = struct {
             .structure => |structure| switch (structure) {
                 .empty_record, .empty_tag_union => {},
                 .tuple => |tuple| try out.addAll(types_store.sliceVars(tuple.elems)),
-                .nominal_type => |nominal| try out.addAll(types_store.sliceNominalArgs(nominal)),
+                .nominal_type => |nominal| {
+                    try out.addAll(types_store.sliceNominalArgs(nominal));
+                    try out.addAll(types_store.nominalContextVars(nominal));
+                },
                 .fn_pure, .fn_effectful, .fn_unbound => |function| {
                     try out.addAll(types_store.sliceVars(function.args));
                     try out.add(function.ret);
@@ -8895,7 +8954,24 @@ const CheckedTypePublisher = struct {
                         };
                         return rangeStep(type_store.sliceNominalArgs(nominal));
                     },
-                    else => build.nominal.args = input.?.get(.ids),
+                    1 => {
+                        build.nominal.args = input.?.get(.ids);
+                        // A declaration in a function body lists the enclosing
+                        // type variables its identity depends on after its
+                        // own arguments (design.md "Body-Local Type Context").
+                        const context = type_store.nominalContextVars(nominal);
+                        if (context.len != 0) return rangeStep(context);
+                    },
+                    else => {
+                        const context_ids = input.?.get(.ids);
+                        defer self.allocator.free(context_ids);
+                        const own = build.nominal.args;
+                        const all = try self.allocator.alloc(CheckedTypeId, own.len + context_ids.len);
+                        @memcpy(all[0..own.len], own);
+                        @memcpy(all[own.len..], context_ids);
+                        if (own.len != 0) self.allocator.free(own);
+                        build.nominal.args = all;
+                    },
                 },
                 .fn_pure, .fn_unbound => |func| if (stepFunction(build, cursor, input, type_store, .pure, func)) |step| return step,
                 .fn_effectful => |func| if (stepFunction(build, cursor, input, type_store, .effectful, func)) |step| return step,
@@ -38697,7 +38773,7 @@ const CheckedTypeStoreImportProjector = struct {
         };
         defer if (local_fields.len != 0) self.allocator.free(local_fields);
 
-        try appendCheckedNominalDeclarationFromPayload(self.allocator, self.target_store, local_root, local_backing, local_fields);
+        try appendCheckedNominalDeclarationFromPayload(self.allocator, self.target_store, local_root, local_backing, local_fields, owner_decl.context_len);
     }
 
     fn remapModuleIdentity(
@@ -41470,9 +41546,9 @@ test "issue 11290: builtin backing declarations survive serialization with share
         } });
         try store.roots.append(gpa, .{ .id = root, .key = .{ .bytes = @splat(@backingInt(owner)) } });
         try store.payloads.append(gpa, payload);
-        try appendCheckedNominalDeclarationFromPayload(gpa, &store, root, empty, &.{});
+        try appendCheckedNominalDeclarationFromPayload(gpa, &store, root, empty, &.{}, 0);
         // Re-publication reuses both the template and its index entry.
-        try appendCheckedNominalDeclarationFromPayload(gpa, &store, root, empty, &.{});
+        try appendCheckedNominalDeclarationFromPayload(gpa, &store, root, empty, &.{}, 0);
     }
     try std.testing.expectEqual(@as(usize, 2), store.nominal_declarations.items.len);
 

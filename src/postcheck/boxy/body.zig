@@ -3439,7 +3439,7 @@ pub const Builder = struct {
             },
             .pending, .field_kind, .err, .flex, .rigid, .function, .record, .tuple, .empty_record, .tag_union, .empty_tag_union => invariant("a literal conversion's result is not a Try type"),
         };
-        const try_ty = try self.program.converter().nominalAt(self.module, ret, &.{ result_ty, try self.convert(row) }, self.env);
+        const try_ty = try self.program.converter().nominalAt(self.module, ret, &.{ result_ty, try self.convert(row) });
         try self.push(.{ .finish_literal_conversion = .{ .expr = expr_id, .kind = kind, .try_ty = try_ty, .result = result_ty } });
         try self.lowerDispatchAt(plan_id, try_ty);
     }
@@ -6725,10 +6725,15 @@ pub const Builder = struct {
                     const declaration_id = try self.program.store.declarationBySourceDecl(view, source_decl) orelse
                         invariant("a stored type names a declaration its module does not make");
                     const declaration = view.types().nominalDeclarationById(declaration_id);
-                    const args = try self.allocator.alloc(TypeId, named.args.len);
+                    // A declaration in a function body takes its context
+                    // arguments, which a stored type leaves out, from the
+                    // restoring scope.
+                    const context = declaration.contextFormalArgs(view.types());
+                    const args = try self.allocator.alloc(TypeId, named.args.len + context.len);
                     defer self.allocator.free(args);
-                    for (const_types.typeSpan(named.args), args) |child, *arg| arg.* = done.get(child).?;
-                    break :blk try self.program.converter().nominalAt(declaring, declaration.declaration_root, args, self.env);
+                    for (const_types.typeSpan(named.args), args[0..named.args.len]) |child, *arg| arg.* = done.get(child).?;
+                    for (context, args[named.args.len..]) |formal, *arg| arg.* = try self.program.converter().convert(declaring, formal, self.env);
+                    break :blk try self.program.converter().nominalAt(declaring, declaration.declaration_root, args);
                 },
                 // Only a closure's capture holds an erased function type, and
                 // its restore relates no such capture (`constTypeHasErased`).

@@ -51683,7 +51683,14 @@ const BodyContext = struct {
                     .generalized => |scope_id| .{ .generalized = scope_id },
                 };
             },
-            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => .root,
+            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated => .root,
+            // A codec runtime is built where its codec dispatch is, in that
+            // dispatch's lexical scope: inside a generalized local function
+            // when the format or shape depends on that function's evidence
+            // or a body-local type's context. The stored chain names that
+            // scope, and materializing it checked each frame against the
+            // owner's checked scope tree.
+            .parser_runtime, .encoder_for_runtime => head_chain.scope.lexical,
         };
         if (!std.meta.eql(head_chain.scope.lexical, expected_head)) {
             Common.invariant("stored function evidence head differed from its checked nested site scope");

@@ -212,10 +212,12 @@ const NominalDeclFrame = struct {
     reserved_idx: types_mod.NominalDecl.Idx,
     formals: []const Var,
     backing: Var,
+    context: []const Var,
     idx: u32 = 0,
     values_base: u32,
     formals_range: Var.SafeList.Range = Var.SafeList.Range.empty(),
-    stage: enum { formals, backing, finish } = .formals,
+    context_range: Var.SafeList.Range = Var.SafeList.Range.empty(),
+    stage: enum { formals, backing, context, finish } = .formals,
 };
 
 const FuncFrame = struct {
@@ -763,14 +765,28 @@ fn stepNominalDecl(ctx: *CopyContext, frame: *NominalDeclFrame) std.mem.Allocato
                 frame.stage = .backing;
             },
             .backing => {
-                frame.stage = .finish;
+                frame.stage = .context;
+                frame.idx = 0;
                 if (!try request(ctx, frame.backing)) return false;
+            },
+            .context => {
+                const context_base = frame.values_base + 1;
+                if (frame.idx < frame.context.len) {
+                    const context_var = frame.context[frame.idx];
+                    frame.idx += 1;
+                    if (!try request(ctx, context_var)) return false;
+                    continue;
+                }
+                frame.context_range = try ctx.dest_store.appendVars(machine.values.items[context_base..]);
+                machine.values.items.len = context_base;
+                frame.stage = .finish;
             },
             .finish => {
                 const dest_backing = machine.values.pop().?;
                 var dest_entry = ctx.dest_store.getNominalDecl(frame.reserved_idx);
                 dest_entry.formals = frame.formals_range;
                 dest_entry.backing = dest_backing;
+                dest_entry.context = frame.context_range;
                 ctx.dest_store.setNominalDecl(frame.reserved_idx, dest_entry);
                 return true;
             },
@@ -1069,6 +1085,7 @@ fn pushNominalDeclEntry(
         .reserved_idx = reserved_idx,
         .formals = ctx.source_store.sliceVars(source_entry.formals),
         .backing = source_entry.backing,
+        .context = ctx.source_store.sliceVars(source_entry.context),
         .values_base = @intCast(ctx.scratch.values.items.len),
     } });
 }
