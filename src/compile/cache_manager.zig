@@ -371,39 +371,6 @@ pub const CacheManager = struct {
         return .{ .allocated = bytes };
     }
 
-    const placement_pointer_magic = "roc-mod-latest-v1";
-    const placement_pointer_len = placement_pointer_magic.len + 32;
-
-    pub fn storePlacementPointer(self: *Self, placement: [32]u8, key: [32]u8) void {
-        var contents: [placement_pointer_len]u8 = undefined;
-        @memcpy(contents[0..placement_pointer_magic.len], placement_pointer_magic);
-        @memcpy(contents[placement_pointer_magic.len..], &key);
-        self.storeFamilyBytes(.placement, placement, &contents, "placement", "placement");
-    }
-
-    pub fn loadPlacementPointer(self: *Self, placement: [32]u8) ?[32]u8 {
-        const bytes = self.loadFamilyBytes(.placement, placement, "placement") orelse return null;
-        defer self.allocator.free(bytes);
-        if (bytes.len != placement_pointer_len or !std.mem.eql(u8, bytes[0..placement_pointer_magic.len], placement_pointer_magic)) return null;
-        return bytes[placement_pointer_magic.len..][0..32].*;
-    }
-
-    pub fn storeLiteralValues(self: *Self, placement: [32]u8, bytes: []const u8) void {
-        self.storeFamilyBytes(.literals, placement, bytes, "literals", "literals");
-    }
-
-    pub fn loadLiteralValues(self: *Self, placement: [32]u8) ?[]u8 {
-        return if (self.loadFamilyBytes(.literals, placement, "literals")) |bytes| @constCast(bytes) else null;
-    }
-
-    pub fn loadCheckedEntryUncounted(self: *Self, key: [32]u8) ?CacheModule.CacheData {
-        const directory = self.config.getCheckedArtifactCacheDir(self.allocator) catch return null;
-        defer self.allocator.free(directory);
-        // Read the entry even though this is a
-        // reuse probe rather than the ordinary current-key lookup.
-        return self.loadMapped(self.allocator, .checked, .checked, key, directory, false);
-    }
-
     pub fn getStats(self: *const Self) CacheStats {
         return self.stats;
     }

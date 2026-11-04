@@ -2715,7 +2715,13 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
         const view = &program.modules.views.items[module_position];
         files[file_index] = .{
             .name = view.view.module_env.module_name,
-            .qualified_name = view.view.module_env.qualifiedModuleName(),
+            // Persisted unit metadata must be identical across checkouts.
+            // In-process programs keep current workspace names for reporting;
+            // cached unit locations rebind through module_identity instead.
+            .qualified_name = switch (program.input.unit) {
+                .module => if (program.input.compile_time) view.view.module_env.qualifiedModuleName() else view.view.module_env.module_name,
+                .program => view.view.module_env.qualifiedModuleName(),
+            },
             .module_identity = program.modules.linkName(view.index),
         };
         program.source_files[module_position] = @intCast(file_index);

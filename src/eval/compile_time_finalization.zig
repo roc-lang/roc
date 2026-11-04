@@ -25,7 +25,6 @@ const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const FrozenRootTranscode = @import("frozen_root_transcode.zig");
 const CompileTimeHost = @import("compile_time_host.zig");
 const checked_root_graph = @import("checked_root_graph.zig");
-const LiteralValues = @import("literal_values.zig").LiteralValues;
 const Value = @import("value.zig").Value;
 const interpreter_mod = @import("interpreter.zig");
 const interpreter_static_data = @import("interpreter_static_data.zig");
@@ -73,9 +72,8 @@ pub const Options = struct {
     /// Runtime outcomes already supplied by the caller. Only their literal
     /// conversion obligations may specialize; these roots never execute.
     discovery_roots: lir.CheckedPipeline.RootRequestSet = .{},
-    /// Prior successful, silent validation; not a stored value. Every root
-    /// absent from this set is still demanded for validation in test/check.
-    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(lir.CheckedPipeline.ComptimeDemandRoot, void) = null,
+    /// Test/check commands must validate every pending compile-time root.
+    validate_all_comptime_roots: bool = false,
     max_threads: usize = 0,
     /// Borrow the coordinator's workers after all frontend tasks have finished.
     /// Standalone finalizers without a coordinator lower on their calling thread.
@@ -126,17 +124,6 @@ pub const Options = struct {
     /// evaluation failed by reading a member not yet evaluated is neither
     /// reported nor completed, so the group can run it again.
     retry: ?*const CycleRetry = null,
-    /// The literal values of the program's root module (design.md
-    /// "Compile-Time Value Reuse Across Edits"): those an earlier compilation
-    /// stored, which literal roots restore instead of converting, and those
-    /// this compilation stores.
-    literal_values: ?*LiteralValues = null,
-    /// With `literal_values`, evaluate the conversion of every restored
-    /// literal root and assert its outcome equals the stored value.
-    verify_literal_values: bool = false,
-    /// Where evaluation records the values of literal roots that have value
-    /// identities. Set by `finalizeProgram`.
-    literal_capture: ?*LiteralCapture = null,
     /// Set by an embedder that abandons the compilation. Finalization reads
     /// it between its phases and between evaluation levels, and fails with
     /// `error.Canceled` once it is set.
@@ -147,208 +134,6 @@ pub const Options = struct {
         if (request.load(.acquire)) return error.Canceled;
     }
 };
-
-/// The values and outcomes of the literal roots one finalization evaluates
-/// that have value identities, by literal root id.
-const LiteralCapture = struct {
-    allocator: Allocator,
-    store: check.ConstStore.ConstStore,
-    wanted: []bool,
-    nodes: []?check.ConstStore.ConstNodeId,
-    /// The evaluation made a `dbg` or `expect` observation, or failed.
-    unstorable: []bool,
-
-    fn init(allocator: Allocator, demand: *const lir.CheckedPipeline.ComptimeDemand) Allocator.Error!LiteralCapture {
-        const count = demand.literals.len;
-        const wanted = try allocator.alloc(bool, count);
-        errdefer allocator.free(wanted);
-        const nodes = try allocator.alloc(?check.ConstStore.ConstNodeId, count);
-        errdefer allocator.free(nodes);
-        const unstorable = try allocator.alloc(bool, count);
-        for (demand.literals, wanted) |literal, *want| want.* = literal.identity != null and literal.reuse != .restored;
-        @memset(nodes, null);
-        @memset(unstorable, false);
-        return .{ .allocator = allocator, .store = check.ConstStore.ConstStore.init(allocator), .wanted = wanted, .nodes = nodes, .unstorable = unstorable };
-    }
-
-    fn deinit(self: *LiteralCapture) void {
-        self.store.deinit();
-        self.allocator.free(self.wanted);
-        self.allocator.free(self.nodes);
-        self.allocator.free(self.unstorable);
-    }
-
-    /// Record a literal root's completed value.
-    fn value(self: *LiteralCapture, lowered: *const lir.CheckedPipeline.LoweredProgram, plan: LirProgram.LiteralRootPlan, completed: Value) ConstStoreWriter.Error!void {
-        const index = @backingInt(plan.id);
-        if (!self.wanted[index]) return;
-        var writer = ConstStoreWriter.Writer.initStore(self.allocator, &self.store, null, &lowered.lir_result);
-        defer writer.deinit();
-        self.nodes[index] = try writer.storeLiteral(plan.plan, plan.ret_layout, completed);
-    }
-
-    /// Record that a literal root's evaluation failed or made an observation
-    /// a stored value would have to replay.
-    fn observed(self: *LiteralCapture, plan: LirProgram.LiteralRootPlan) void {
-        self.unstorable[@backingInt(plan.id)] = true;
-    }
-};
-
-/// Fill the program root module's literal values with this finalization's:
-/// every converted literal root whose value is storable, and every restored
-/// one, whose stored entry carries over. A literal root whose conversion
-/// failed, made an observation, holds a value naming a type the root module
-/// declares, or read a root no edit-stable name covers is not stored; its
-/// next compilation converts it again. With `verify_literal_values`, each
-/// restored root's verifier must have completed with the stored value and
-/// read exactly the roots the stored value read.
-fn finishLiteralValues(
-    allocator: Allocator,
-    values: *LiteralValues,
-    capture: *const LiteralCapture,
-    demand: *const lir.CheckedPipeline.ComptimeDemand,
-    literal_roots: anytype,
-    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
-) Allocator.Error!void {
-    if (literal_roots.len != demand.literals.len) finalizationInvariant("the evaluated program's literal roots differ from its demand");
-    var top = try literalTopModules(allocator, lowering_modules);
-    defer top.deinit(allocator);
-    const verifiers = try allocator.alloc(?usize, demand.literals.len);
-    defer allocator.free(verifiers);
-    @memset(verifiers, null);
-    for (demand.literals, 0..) |literal, index| switch (literal.reuse) {
-        .verifies => |restored| verifiers[@backingInt(restored)] = index,
-        .converted, .restored => {},
-    };
-    var reads = std.ArrayList(lir.CheckedPipeline.LiteralValueRead).empty;
-    defer reads.deinit(allocator);
-    for (demand.literals, literal_roots, 0..) |literal, root, index| {
-        const id: lir.LIR.LiteralRootId = @fromBackingInt(@intCast(index));
-        var record: @import("literal_values.zig").Record = .{
-            .identity = literal.identity,
-            .outcome = if (literal.identity == null) .unnamed else .converted,
-            .stored = false,
-            .verified = false,
-            .text = &.{},
-        };
-        switch (literal.reuse) {
-            .verifies => continue,
-            .restored => {
-                const identity = literal.identity orelse finalizationInvariant("a restored literal root had no value identity");
-                if (verifiers[index]) |verifier| {
-                    try verifyRestoredLiteral(allocator, values, capture, demand, id, @fromBackingInt(@intCast(verifier)), identity);
-                    record.verified = true;
-                }
-                try values.keep(identity);
-                record.outcome = .restored;
-                record.stored = true;
-            },
-            .converted => if (literal.identity) |identity| store: {
-                const node = capture.nodes[index] orelse break :store;
-                if (capture.unstorable[index]) break :store;
-                for (top.keys()) |key| {
-                    if (!try capture.store.valuePortable(node, .{ .bytes = key })) break :store;
-                }
-                reads.clearRetainingCapacity();
-                for (demand.literalReads(id)) |read| {
-                    try reads.append(allocator, literalValueRead(lowering_modules, &top, read) orelse break :store);
-                }
-                try values.store(identity, &capture.store, node, reads.items);
-                record.stored = true;
-            },
-        }
-        record.text = try literalSourceText(allocator, lowering_modules, root);
-        values.addRecord(record) catch |err| {
-            allocator.free(record.text);
-            return err;
-        };
-    }
-}
-
-fn verifyRestoredLiteral(
-    allocator: Allocator,
-    values: *const LiteralValues,
-    capture: *const LiteralCapture,
-    demand: *const lir.CheckedPipeline.ComptimeDemand,
-    restored: lir.LIR.LiteralRootId,
-    verifier: lir.LIR.LiteralRootId,
-    identity: [32]u8,
-) Allocator.Error!void {
-    const index = @backingInt(verifier);
-    const node = capture.nodes[index] orelse finalizationInvariant("a restored literal value's conversion did not complete");
-    if (capture.unstorable[index]) finalizationInvariant("a restored literal value's conversion failed or made an observation its stored value does not replay");
-    const stored = values.previousEntry(identity) orelse finalizationInvariant("a restored literal value had no stored entry");
-    if (!try capture.store.graphEql(node, stored.store, stored.root)) finalizationInvariant("a restored literal value differs from the value its conversion computes");
-    const Key = struct { module: [32]u8, root: u32 };
-    var expected = std.AutoHashMap(Key, void).init(allocator);
-    defer expected.deinit();
-    for (demand.literalReads(restored)) |read| try expected.put(.{ .module = read.module.bytes, .root = @backingInt(read.root) }, {});
-    var actual = std.AutoHashMap(Key, void).init(allocator);
-    defer actual.deinit();
-    for (demand.literalReads(verifier)) |read| {
-        const key: Key = .{ .module = read.module.bytes, .root = @backingInt(read.root) };
-        if (!expected.contains(key)) finalizationInvariant("a restored literal value's conversion read a root the stored value did not");
-        try actual.put(key, {});
-    }
-    if (actual.count() != expected.count()) finalizationInvariant("a restored literal value read a root its conversion does not");
-}
-
-/// The modules of a lowering no other module of it imports, by key, each
-/// with its value context (design.md "Compile-Time Value Reuse Across
-/// Edits"). A module with no value context is left out; Monotype gives no
-/// literal root of such a program a value identity.
-pub fn literalTopModules(allocator: Allocator, lowering_modules: lir.CheckedPipeline.CheckedModuleSet) Allocator.Error!std.AutoArrayHashMapUnmanaged([32]u8, [32]u8) {
-    const root = checked.importedView(lowering_modules.root.module);
-    var imported = std.AutoHashMapUnmanaged([32]u8, void).empty;
-    defer imported.deinit(allocator);
-    for ([_][]const checked.ImportedModuleView{ &.{root}, lowering_modules.imports, lowering_modules.root.relation_modules }) |views| {
-        for (views) |view| for (view.direct_import_module_keys) |key| try imported.put(allocator, key.bytes, {});
-    }
-    var top = std.AutoArrayHashMapUnmanaged([32]u8, [32]u8).empty;
-    errdefer top.deinit(allocator);
-    for ([_][]const checked.ImportedModuleView{ &.{root}, lowering_modules.imports, lowering_modules.root.relation_modules }) |views| {
-        for (views) |view| {
-            if (imported.contains(view.key.bytes)) continue;
-            const context = view.compile_time_root_identities.valueContext() orelse continue;
-            try top.put(allocator, view.key.bytes, context);
-        }
-    }
-    return top;
-}
-
-/// The edit-stable name of a root a literal root read, or null when no
-/// value identity names everything the root depends on: its module
-/// publishes none, or it is a platform module, whose roots can read the
-/// definitions an app provides for its requirements, or a composition of one
-/// with an app.
-fn literalValueRead(
-    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
-    top: *const std.AutoArrayHashMapUnmanaged([32]u8, [32]u8),
-    read: lir.CheckedPipeline.ComptimeDemandRoot,
-) ?lir.CheckedPipeline.LiteralValueRead {
-    const view = loweringModuleView(lowering_modules, read.module) orelse finalizationInvariant("a literal root read a root of a module outside its lowering");
-    if (view.code_generation_key != null or view.module_env.requires_types.items.items.len != 0) return null;
-    const rows = view.compile_time_root_identities.rows;
-    if (@backingInt(read.root) >= rows.len) return null;
-    const identity = rows[@backingInt(read.root)];
-    const context = top.get(read.module.bytes);
-    return .{ .in_top_module = context != null, .module = context orelse read.module.bytes, .site = identity.site, .value = identity.value };
-}
-
-fn loweringModuleView(lowering_modules: lir.CheckedPipeline.CheckedModuleSet, key: checked.ModuleId) ?checked.ImportedModuleView {
-    if (moduleKeyBytesEqual(key.bytes, lowering_modules.root.module.key.bytes)) return checked.importedView(lowering_modules.root.module);
-    for (lowering_modules.imports) |view| if (moduleKeyBytesEqual(view.key.bytes, key.bytes)) return view;
-    for (lowering_modules.root.relation_modules) |view| if (moduleKeyBytesEqual(view.key.bytes, key.bytes)) return view;
-    return null;
-}
-
-/// A literal root's source, at most 96 bytes of it. Owned.
-fn literalSourceText(allocator: Allocator, lowering_modules: lir.CheckedPipeline.CheckedModuleSet, root: anytype) Allocator.Error![]u8 {
-    const view = loweringModuleView(lowering_modules, root.module) orelse finalizationInvariant("a literal root belonged to a module outside its lowering");
-    const region = view.checked_bodies.expr(@fromBackingInt(root.site.checked_expr)).source_region;
-    const text = view.module_env.getSourceAll()[region.start.offset..region.end.offset];
-    return allocator.dupe(u8, text[0..@min(text.len, 96)]);
-}
 
 /// The members of a group of compile-time roots that read each other
 /// (design.md "Dependency-Ordered Compile-Time Evaluation").
@@ -1149,7 +934,7 @@ pub fn finalizeProgram(
     defer debug_events.deinit();
 
     const lss_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
-    const demand_driven = options.validated_comptime_roots != null;
+    const demand_driven = options.validate_all_comptime_roots;
     const owned_imports = try allocator.dupe(checked.ImportedModuleView, lowering_modules.imports);
     errdefer allocator.free(owned_imports);
     const owned_relations = try allocator.dupe(checked.ImportedModuleView, lowering_modules.root.relation_modules);
@@ -1157,7 +942,7 @@ pub fn finalizeProgram(
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
-    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, options, &debug_events, true, lss_runtime, demand_driven, null);
+    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, options, &debug_events, lss_runtime, demand_driven, null);
     errdefer specialized.deinit();
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
     errdefer switch (runtime_stages) {
@@ -1195,8 +980,6 @@ pub fn finalizeProgram(
         // only the runtime program's own literal roots belong in this pass.
         quiet_options.discovery_roots = .{};
         quiet_options.unfinalized_reports = if (options.unfinalized_reports != null) quiet_unfinalized.reports() else null;
-        // The evaluation already verified the restored literal values.
-        quiet_options.verify_literal_values = false;
         var quiet_events = DebugEvents{ .allocator = allocator };
         defer quiet_events.deinit();
         if (options.timing) |timing| timing.respecialization_passes.add(1);
@@ -1209,7 +992,6 @@ pub fn finalizeProgram(
             runtime_target,
             quiet_options,
             &quiet_events,
-            false,
             lss_runtime,
             demand_driven,
             null,
@@ -1285,13 +1067,9 @@ const SpecializedProgram = struct {
     }
 };
 
-/// Specialize the modules' pending compile-time roots together with the
-/// program roots, and evaluate those roots and every literal root the
-/// specialization registers (see `finalizeProgram`). With
-/// `records_literal_values`, the values and outcomes of the literal roots
-/// that have value identities go into `Options.literal_values`; a
-/// specialization whose literal roots an earlier evaluation of the same
-/// program recorded restores from those values but records nothing.
+/// Specialize pending compile-time roots with the program roots, then evaluate
+/// them and the program's literal conversions. Finalized module constants are
+/// restored only through the exact checked-module cache entry.
 fn specializeAndEvaluate(
     allocator: Allocator,
     modules: []const ProgramModule,
@@ -1300,7 +1078,6 @@ fn specializeAndEvaluate(
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     options: Options,
     debug_events: *DebugEvents,
-    records_literal_values: bool,
     lss_runtime: bool,
     demand_driven: bool,
     /// The pending roots to specialize, or null for every pending root: the
@@ -1313,7 +1090,6 @@ fn specializeAndEvaluate(
     var source_modules = std.ArrayList(checked.ModuleId).empty;
     defer source_modules.deinit(allocator);
     for (modules) |entry| {
-        const module_start = requests.items.len;
         for (entry.module.root_requests.compile_time_requests) |request| {
             // A reopened artifact's roots that an earlier compilation
             // evaluated are read from its store like any other module's.
@@ -1326,7 +1102,6 @@ fn specializeAndEvaluate(
             try requests.append(allocator, request);
             try source_modules.append(allocator, entry.module.key.digest());
         }
-        if (base.dev_diagnostics.isSet(.ctfe_reuse_trace)) std.debug.print("ctfe-reuse pending {s}: {d} roots\n", .{ entry.module.moduleEnvConst().module_name, requests.items.len - module_start });
     }
     const requested_root_count = requests.items.len;
 
@@ -1427,11 +1202,8 @@ fn specializeAndEvaluate(
     const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
     var host_target = compileTimeTarget(options, solved_policy);
     host_target.demand_driven_comptime_roots = demand_driven;
-    host_target.validated_comptime_roots = options.validated_comptime_roots;
-    if (options.literal_values) |values| {
-        host_target.literal_values = values.lookup();
-        host_target.verify_literal_values = options.verify_literal_values;
-    }
+    host_target.validate_all_comptime_roots = options.validate_all_comptime_roots;
+
     const host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
     if (runtime_target) |target| {
         host_target.work_metrics = target.work_metrics;
@@ -1470,9 +1242,6 @@ fn specializeAndEvaluate(
         // the program roots; its literal roots join it.
         var evaluation_options = options;
         evaluation_options.debug_events = debug_events;
-        var literal_capture: ?LiteralCapture = if (records_literal_values and options.literal_values != null) try LiteralCapture.init(allocator, &demand.?) else null;
-        defer if (literal_capture) |*capture| capture.deinit();
-        if (literal_capture) |*capture| evaluation_options.literal_capture = capture;
         result.completed = try evaluateStaged(allocator, modules, &published, lowering_modules, &prepared, .{
             .target_usize = host_target.target_usize,
             .erased_capture_prefix = host_target.erased_capture_prefix,
@@ -1480,7 +1249,6 @@ fn specializeAndEvaluate(
             .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
             .lir_policy = host_lir_policy,
         }, compile_time_root_count, evaluation_options);
-        if (literal_capture) |*capture| try finishLiteralValues(allocator, options.literal_values.?, capture, &demand.?, prepared.program.lifted.literalRootsView(), lowering_modules);
     } else {
         for (modules) |entry| {
             if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
@@ -1582,8 +1350,8 @@ pub const BoxyObjectSource = struct {
 /// each once, which a module's compile-time program calls by symbol. Each
 /// object's `CodeLocations` say where a failure in its code happened, exactly
 /// as a whole program's own line table does. The evaluating thread loads
-/// objects while the programs being built on other threads bind their
-/// symbols, so the tables are read and grown under `mutex`.
+/// objects; program-building workers load the demanded images. Registration,
+/// loading, symbol lookup and reset use `mutex`.
 const BoxyLinkedImages = struct {
     allocator: Allocator,
     mutex: std.atomic.Mutex = .unlocked,
@@ -1594,8 +1362,8 @@ const BoxyLinkedImages = struct {
     /// image, owned for a composed object.
     locations: std.ArrayList(backend.dev.CodeLocations) = .empty,
     /// What every loaded unit image exports, by name. A procedure two units
-    /// define binds to the first image loaded, as a name lookup over the
-    /// images in load order finds it. Names borrow the images' bytes, which
+    /// define binds to the first registered provider, regardless of the
+    /// workers' load order. Names borrow the images' bytes, which
     /// the evaluation's object source keeps for the compilation.
     exports: switch (boxy_object_code) {
         .image => std.StringHashMapUnmanaged(ImageLoader.Binding),
@@ -1605,7 +1373,30 @@ const BoxyLinkedImages = struct {
         .pieces => {},
     },
     loaded: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
-    hosted: std.StringHashMapUnmanaged(void) = .empty,
+    hosted: std.StringHashMapUnmanaged(usize) = .empty,
+    registered: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    candidates: std.ArrayList(Candidate) = .empty,
+    providers: std.StringHashMapUnmanaged(usize) = .empty,
+    dirty: std.ArrayList(bool) = .empty,
+
+    const Candidate = struct {
+        object: BoxyImage,
+        view: backend.dev.UnitImage.View,
+        dependencies: []const usize,
+        loaded_index: ?usize = null,
+    };
+
+    /// Owned by one program. Neither array changes when other workers load
+    /// images, and every image reachable through code or data is included.
+    const Selection = struct {
+        indices: []const usize = &.{},
+        code: []const []const u8 = &.{},
+
+        fn deinit(self: Selection, allocator: Allocator) void {
+            allocator.free(self.indices);
+            allocator.free(self.code);
+        }
+    };
 
     const ImageLoader = backend.dev.UnitImageLoader;
     const LoadedObject = switch (boxy_object_code) {
@@ -1629,23 +1420,118 @@ const BoxyLinkedImages = struct {
         var names = self.hosted.keyIterator();
         while (names.next()) |name| self.allocator.free(name.*);
         self.hosted.deinit(self.allocator);
+        self.registered.deinit(self.allocator);
+        for (self.candidates.items) |candidate| self.allocator.free(candidate.dependencies);
+        self.candidates.deinit(self.allocator);
+        self.providers.deinit(self.allocator);
+        self.dirty.deinit(self.allocator);
     }
 
-    /// Return every loaded object's mutable data to its loaded state. An
+    /// Return reachable reused objects' mutable data to its loaded state. An
     /// object's composition sites (design.md "Runtime") publish entries of
     /// the composing program's state, which dies with that program, so a
     /// program finds the objects it shares with earlier ones holding no
     /// entry at all.
-    fn resetMutableData(self: *const BoxyLinkedImages) void {
+    fn resetMutableData(self: *BoxyLinkedImages, selection: Selection) void {
         if (comptime compilerHostMustUseInterpreterForCtfe()) return;
-        for (self.images.items) |*image| switch (boxy_object_code) {
-            .image => image.resetZeroFill(),
-            .pieces => image.resetZeroFilled(),
-        };
+        self.lock();
+        defer self.mutex.unlock();
+        switch (boxy_object_code) {
+            .image => for (selection.indices) |index| {
+                if (self.dirty.items[index]) self.images.items[index].resetZeroFill();
+                self.dirty.items[index] = true;
+            },
+            .pieces => for (self.images.items) |*image| image.resetZeroFilled(),
+        }
     }
 
     fn lock(self: *BoxyLinkedImages) void {
         while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+    }
+
+    /// Register imports-first producer records without mapping executable
+    /// memory. Provider choice is independent of which worker requests it.
+    fn prepare(self: *BoxyLinkedImages, objects: []const BoxyObject, timing: ?*Timing) FinalizeError!void {
+        if (comptime boxy_object_code == .pieces) return self.load(objects, timing);
+        self.lock();
+        defer self.mutex.unlock();
+        for (objects) |object| {
+            if (self.registered.contains(object.module)) continue;
+            for (object.hosted_symbols) |symbol| {
+                if (self.hosted.contains(symbol)) continue;
+                const owned = try self.allocator.dupe(u8, symbol);
+                errdefer self.allocator.free(owned);
+                try self.hosted.put(self.allocator, owned, self.candidates.items.len);
+            }
+            const view = backend.dev.UnitImage.View.init(object.code.image.bytes) catch finalizationInvariant("an admitted unit image does not read");
+            var dependencies = std.AutoArrayHashMapUnmanaged(usize, void).empty;
+            defer dependencies.deinit(self.allocator);
+            for (view.imports()) |import| {
+                const name = view.name(import.name);
+                if (backend.dev.HostSplice.hostFunction(name) != null) continue;
+                if (self.providers.get(name)) |provider| {
+                    try dependencies.put(self.allocator, provider, {});
+                } else if (!self.hosted.contains(name) and import.flags & backend.dev.UnitImage.symbol_weak == 0) {
+                    finalizationInvariantFmt("an imports-first CTFE image imports {s} before its provider", .{name});
+                }
+            }
+            const owned_dependencies = try self.allocator.dupe(usize, dependencies.keys());
+            self.candidates.append(self.allocator, .{ .object = object.code.image, .view = view, .dependencies = owned_dependencies }) catch |err| {
+                self.allocator.free(owned_dependencies);
+                return err;
+            };
+            const index = self.candidates.items.len - 1;
+            const symbols = view.symbols();
+            for (view.exports()) |export_index| {
+                const entry = try self.providers.getOrPut(self.allocator, view.name(symbols[export_index].name));
+                if (!entry.found_existing) entry.value_ptr.* = index;
+            }
+            try self.registered.put(self.allocator, object.module, {});
+        }
+    }
+
+    /// Load whole images in producer order, following every image import,
+    /// including data and callback references. No atom layout is rewritten.
+    fn select(self: *BoxyLinkedImages, allocator: Allocator, names: []const []const u8, timing: ?*Timing) FinalizeError!Selection {
+        self.lock();
+        defer self.mutex.unlock();
+        if (comptime boxy_object_code == .pieces) return .{ .code = try allocator.dupe([]const u8, self.code.items) };
+        var needed = std.AutoArrayHashMapUnmanaged(usize, void).empty;
+        defer needed.deinit(allocator);
+        for (names) |name| if (self.providers.get(name)) |index| {
+            try needed.put(allocator, index, {});
+        };
+        var cursor: usize = 0;
+        while (cursor < needed.count()) : (cursor += 1) {
+            const index = needed.keys()[cursor];
+            for (self.candidates.items[index].dependencies) |dependency| try needed.put(allocator, dependency, {});
+        }
+        // The producer supplied imports-first objects, so their registered
+        // indices are a topological order. Sorting needs no graph recovery.
+        const indices = try allocator.dupe(usize, needed.keys());
+        errdefer allocator.free(indices);
+        std.mem.sort(usize, indices, {}, std.sort.asc(usize));
+        const code = try allocator.alloc([]const u8, needed.count());
+        errdefer allocator.free(code);
+        var newly_loaded: usize = 0;
+        for (indices, code) |*loaded_index, *code_range| {
+            const index = loaded_index.*;
+            const candidate = &self.candidates.items[index];
+            if (candidate.loaded_index == null) {
+                try self.images.ensureUnusedCapacity(self.allocator, 1);
+                try self.code.ensureUnusedCapacity(self.allocator, 1);
+                try self.locations.ensureUnusedCapacity(self.allocator, 1);
+                try self.dirty.ensureUnusedCapacity(self.allocator, 1);
+                try self.loadImage(candidate, index, timing);
+                self.dirty.appendAssumeCapacity(false);
+                candidate.loaded_index = self.images.items.len - 1;
+                newly_loaded += 1;
+            }
+            loaded_index.* = candidate.loaded_index.?;
+            code_range.* = self.code.items[loaded_index.*];
+        }
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: CTFE images: {d} available, {d} reached, {d} newly loaded\n", .{ self.candidates.items.len, indices.len, newly_loaded });
+        return .{ .indices = indices, .code = code };
     }
 
     fn load(self: *BoxyLinkedImages, objects: []const BoxyObject, timing: ?*Timing) FinalizeError!void {
@@ -1655,13 +1541,15 @@ const BoxyLinkedImages = struct {
             if ((try self.loaded.getOrPut(self.allocator, object.module)).found_existing) continue;
             for (object.hosted_symbols) |symbol| {
                 if (self.hosted.contains(symbol)) continue;
-                try self.hosted.put(self.allocator, try self.allocator.dupe(u8, symbol), {});
+                const owned = try self.allocator.dupe(u8, symbol);
+                errdefer self.allocator.free(owned);
+                try self.hosted.put(self.allocator, owned, self.images.items.len);
             }
             try self.images.ensureUnusedCapacity(self.allocator, 1);
             try self.code.ensureUnusedCapacity(self.allocator, 1);
             try self.locations.ensureUnusedCapacity(self.allocator, 1);
             switch (boxy_object_code) {
-                .image => try self.loadImage(object.code.image, timing),
+                .image => unreachable, // image hosts register and select instead
                 .pieces => try self.loadPieces(object.code.pieces, timing),
             }
         }
@@ -1670,15 +1558,17 @@ const BoxyLinkedImages = struct {
     /// Load a unit image as the cache holds it. It holds every procedure of
     /// its unit: a module's roots may call any export, and each procedure is
     /// found by its symbol.
-    fn loadImage(self: *BoxyLinkedImages, object: BoxyImage, timing: ?*Timing) FinalizeError!void {
+    fn loadImage(self: *BoxyLinkedImages, candidate: *const Candidate, provider: usize, timing: ?*Timing) FinalizeError!void {
         const load_started_ns = if (timing) |active| nowNs(active.std_io) else 0;
+        const object = candidate.object;
         // The image and its code locations were read when their cache
         // entry was admitted, or built by this compilation; a library
         // unit's entry always files code locations.
         std.debug.assert(object.code_locations.len != 0);
-        const view = backend.dev.UnitImage.View.init(object.bytes) catch |err| finalizationInvariantFmt("an admitted unit image does not read: {s}", .{@errorName(err)});
+        const view = candidate.view;
         var diagnostic: ImageLoader.Diagnostic = .{};
-        var image = ImageLoader.load(self.allocator, view, .{ .context = self, .resolve = resolveImport }, &diagnostic) catch |err| switch (err) {
+        var binding_context = ImportContext{ .images = self, .provider = provider };
+        var image = ImageLoader.load(self.allocator, view, .{ .context = &binding_context, .resolve = resolveImport }, &diagnostic) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.UndefinedImport => finalizationInvariantFmt("a cached Boxy module's image imports {s}, which nothing loaded defines", .{diagnostic.name}),
             error.SiteOutOfRange => finalizationInvariantFmt("a cached Boxy module's image has a reference to '{s}' out of its field's reach", .{diagnostic.name}),
@@ -1688,6 +1578,7 @@ const BoxyLinkedImages = struct {
         try self.exports.ensureUnusedCapacity(self.allocator, @intCast(view.exports().len));
         for (view.exports()) |index| {
             const symbol = symbols[index];
+            if (self.providers.get(view.name(symbol.name)).? != provider) continue;
             const entry = self.exports.getOrPutAssumeCapacity(view.name(symbol.name));
             if (entry.found_existing) continue;
             entry.value_ptr.* = .{ .address = image.symbolAddress(symbol), .function = symbol.type == @backingInt(backend.dev.UnitImage.SymbolType.func) };
@@ -1764,13 +1655,21 @@ const BoxyLinkedImages = struct {
         return null;
     }
 
-    /// Bind an import of a unit image being loaded, under `load`'s lock, by
-    /// the same policy as `resolve`.
+    const ImportContext = struct { images: *BoxyLinkedImages, provider: usize };
+
+    /// Bind only providers present when this imports-first image was
+    /// registered. A weak import with no provider must not start binding to
+    /// an unrelated later image merely because another worker loaded it.
     fn resolveImport(context: *anyopaque, name: []const u8) ?ImageLoader.Binding {
-        const self: *BoxyLinkedImages = @ptrCast(@alignCast(context));
+        const binding: *const ImportContext = @ptrCast(@alignCast(context));
+        const self = binding.images;
         if (backend.dev.HostSplice.hostFunction(name)) |address| return .{ .address = address, .function = true };
-        if (self.exports.get(name)) |binding| return binding;
-        if (self.hosted.contains(name)) return .{ .address = @intFromPtr(&hostedCallAtCompileTime), .function = true };
+        if (self.providers.get(name)) |provider| {
+            if (provider < binding.provider) return self.exports.get(name) orelse finalizationInvariant("a demanded image's provider was not loaded first");
+        }
+        if (self.hosted.get(name)) |registered_at| {
+            if (registered_at <= binding.provider) return .{ .address = @intFromPtr(&hostedCallAtCompileTime), .function = true };
+        }
         return null;
     }
 
@@ -1875,7 +1774,6 @@ fn finalizeProgramBoxy(
             }
             try roots.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
         }
-        if (base.dev_diagnostics.isSet(.ctfe_reuse_trace)) std.debug.print("ctfe-reuse pending {s}: {d} roots\n", .{ entry.module.moduleEnvConst().module_name, roots.items.len });
     }
 
     try evaluateRootsBoxy(allocator, modules, lowering_modules, roots.items, options, &debug_events);
@@ -2205,7 +2103,7 @@ const ModuleEvaluation = struct {
         if ((comptime !compilerHostMustUseInterpreterForCtfe()) and self.links(shared)) {
             const source = shared.options.boxy_objects.?;
             if (try source.objects(source.context, module)) |set| {
-                try shared.images.load(set.objects, shared.options.timing);
+                try shared.images.prepare(set.objects, shared.options.timing);
                 run_options.boxy_linked_images = shared.images;
                 lowering_modules = .{ .root = checked.loweringViewWithRelations(module, &.{}), .imports = set.views };
                 target = boxyLinkedCompileTimeTarget(source, shared.options);
@@ -2326,7 +2224,9 @@ const ModuleEvaluation = struct {
         }
         // Every object's composition sites publish entries of the composing
         // program's state, which died with the earlier programs.
-        if (build.linked) shared.images.resetMutableData();
+        if (comptime !compilerHostMustUseInterpreterForCtfe()) {
+            if (build.linked) shared.images.resetMutableData(build.program.?.ptr().image_selection);
+        }
         const roots = shared.roots;
         const states = shared.states;
         const pending = build.pending;
@@ -4795,18 +4695,12 @@ fn evalInterpreterLiteralRoot(
         };
         defer interpreter.dropValue(result.value, plan.ret_layout);
         if (options.publish_shared_slots) try program.publishRoot(lowered, plan.site.owner, producer, plan.shape(), result.value);
-        if (options.literal_capture) |capture| capture.value(lowered, plan, result.value) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.RuntimeError => finalizationInvariant("a literal root's value held an unresolvable callable"),
-        };
         break :evaluated null;
     };
     // A failure that read a member of its group not yet evaluated
     // (`Options.retry`) leaves the root for the group to run again.
     if (failure) |failed| if (options.retry) |retry| if (retry.holds(failed.meaning)) return false;
-    if (options.literal_capture) |capture| {
-        if (failure != null or program.host.debugMessages().len != 0 or interpreter.getExpectFailures().len != 0) capture.observed(plan);
-    }
+
     for (program.host.debugMessages()) |message| try emitDebugMessage(allocator, options, false, message);
     for (interpreter.getExpectFailures()) |expect_failure| {
         try reportLiteralRootExpectFailure(owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc);
@@ -4866,12 +4760,7 @@ fn evalDevLiteralRoot(
     // A failure that read a member of its group not yet evaluated
     // (`Options.retry`) leaves the root for the group to run again.
     if (failure) |failed| if (options.retry) |retry| if (retry.holds(failed.meaning)) return false;
-    if (options.literal_capture) |capture| {
-        if (failure != null or host.events.items.len != 0) capture.observed(plan) else capture.value(lowered, plan, .{ .ptr = ret_buf.ptr }) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.RuntimeError => finalizationInvariant("a literal root's value held an unresolvable callable"),
-        };
-    }
+
     for (host.events.items) |event| switch (event) {
         .dbg => |message| try emitDebugMessage(allocator, options, false, message),
         .expect_failed => |expect_failure| {
@@ -5860,6 +5749,7 @@ const DevProgram = struct {
     composition: ?*BoxyInProcessState,
     /// The objects a linked program's code calls into.
     linked_images: ?*BoxyLinkedImages,
+    image_selection: BoxyLinkedImages.Selection,
     /// The program's LIR, whose source file table locations index.
     lir_store: *const lir.LirStore,
 
@@ -5936,6 +5826,13 @@ const DevProgram = struct {
             const entrypoint = try codegen.generateEntrypointWrapper(symbol_name, root.proc, &.{}, root.ret_layout);
             try entry_offsets.put(root.proc, entrypoint.offset);
         }
+        var image_selection: BoxyLinkedImages.Selection = .{};
+        errdefer image_selection.deinit(allocator);
+        if (options.boxy_linked_images) |images| {
+            const references = try splice.externalReferences(&codegen, materialized);
+            defer allocator.free(references);
+            image_selection = try images.select(allocator, references, options.timing);
+        }
         try splice.generateHostedStubs(&codegen);
         try codegen.finishImage();
         var executable = splice.link(&codegen) catch |err| switch (err) {
@@ -6001,6 +5898,7 @@ const DevProgram = struct {
             .capture_prefix = lowered.lir_result.erased_capture_prefix,
             .composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null,
             .linked_images = options.boxy_linked_images,
+            .image_selection = image_selection,
             .lir_store = &lowered.lir_result.store,
         };
     }
@@ -6061,8 +5959,7 @@ const DevProgram = struct {
     }
     /// The loaded objects this program's code calls into.
     fn linkedCode(self: *const DevProgram) []const []const u8 {
-        const images = self.linked_images orelse return &.{};
-        return images.code.items;
+        return self.image_selection.code;
     }
 
     /// Where a failure the host located in this program's generated code
@@ -6143,6 +6040,7 @@ const DevProgram = struct {
     }
 
     fn deinit(self: *DevProgram) void {
+        self.image_selection.deinit(self.allocator);
         if (self.composition) |composition| composition.destroy();
         self.entry_offsets.deinit();
         self.executable.deinit();
@@ -7467,6 +7365,112 @@ test "compile-time progress wait avoids timestamp wraparound" {
 
 test "compile-time finalization declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+/// A whole image with a callable, mutable zero-fill and, optionally, a data
+/// pointer to another image's callable. No executable instruction references
+/// that import: demand must follow the data relocation.
+fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []const u8, imported: ?[]const u8, weak: bool) backend.dev.UnitImage.BuildError![]align(16) u8 {
+    const Image = backend.dev.UnitImage;
+    const symbols = [_]Image.TestObject.TestSymbol{
+        .{ .name = name, .section = 1, .size = 6, .global = true, .func = true },
+        .{ .name = pointer, .section = 2, .size = 8, .global = true },
+        .{ .name = imported orelse name, .section = 0, .global = true, .func = true, .weak = weak },
+    };
+    const relocations = [_]Image.TestObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = 1, .addend = 0 }};
+    const object = try Image.TestObject.encode(allocator, &.{
+        .{ .name = ".text", .flags = 6, .bytes = &.{ 0xb8, 42, 0, 0, 0, 0xc3 } },
+        .{ .name = ".data", .flags = 3, .bytes = &@as([8]u8, @splat(0)), .addralign = 8 },
+        .{ .name = ".bss", .type = 8, .flags = 3, .size = 8, .addralign = 8 },
+    }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
+    defer allocator.free(object);
+    return Image.build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
+}
+
+fn ctfeSelectionTest(allocator: Allocator) (FinalizeError || backend.dev.UnitImage.BuildError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const leaf = try ctfeSelectionTestImage(allocator, "leaf", "leaf_pointer", null, false);
+    defer allocator.free(leaf);
+    const middle = try ctfeSelectionTestImage(allocator, "middle", "callback", "leaf", false);
+    defer allocator.free(middle);
+    const unused = try ctfeSelectionTestImage(allocator, "unused", "unused_pointer", null, false);
+    defer allocator.free(unused);
+    var images = BoxyLinkedImages{ .allocator = allocator };
+    defer images.deinit();
+    const objects = [_]BoxyObject{
+        .{ .module = @splat(1), .code = .{ .image = .{ .bytes = leaf, .code_locations = &.{0} } }, .hosted_symbols = &.{} },
+        .{ .module = @splat(2), .code = .{ .image = .{ .bytes = middle, .code_locations = &.{0} } }, .hosted_symbols = &.{} },
+        .{ .module = @splat(3), .code = .{ .image = .{ .bytes = unused, .code_locations = &.{0} } }, .hosted_symbols = &.{} },
+    };
+    try images.prepare(&objects, null);
+    try images.prepare(&objects, null);
+    try std.testing.expectEqual(@as(usize, 3), images.candidates.items.len);
+    try std.testing.expectEqual(@as(usize, 0), images.images.items.len);
+    const first = try images.select(allocator, &.{"callback"}, null);
+    defer first.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), first.indices.len);
+    try std.testing.expectEqual(@as(usize, 2), images.images.items.len);
+    try std.testing.expect(images.lookup("unused") == null);
+    const Fn = *const fn () callconv(.c) i32;
+    const callback: *const Fn = @ptrFromInt(images.lookup("callback").?);
+    try std.testing.expectEqual(@as(i32, 42), callback.*());
+    images.resetMutableData(first);
+    const leaf_index = images.candidates.items[0].loaded_index.?;
+    const leaf_image = &images.images.items[leaf_index];
+    const cell: *u64 = @ptrCast(@alignCast(leaf_image.memory.ptr + leaf_image.bss_offset));
+    cell.* = 73;
+    const second = try images.select(allocator, &.{"unused"}, null);
+    defer second.deinit(allocator);
+    images.resetMutableData(second);
+    try std.testing.expectEqual(@as(u64, 73), cell.*);
+    // Growing the shared arrays must not invalidate the first program's ranges.
+    try std.testing.expectEqual(@as(usize, 2), first.code.len);
+    try std.testing.expectEqual(@as(i32, 42), callback.*());
+    const again = try images.select(allocator, &.{"callback"}, null);
+    defer again.deinit(allocator);
+    try std.testing.expectEqualSlices(usize, first.indices, again.indices);
+    try std.testing.expectEqual(@as(usize, 3), images.images.items.len);
+    images.resetMutableData(again);
+    try std.testing.expectEqual(@as(u64, 0), cell.*);
+}
+
+test "CTFE image demand follows data callbacks and resets only reused reachable images" {
+    if (comptime boxy_object_code != .image) return error.SkipZigTest;
+    try ctfeSelectionTest(std.testing.allocator);
+}
+
+test "CTFE image demand releases partial registrations and mappings on allocation failure" {
+    if (comptime boxy_object_code != .image) return error.SkipZigTest;
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, ctfeSelectionTest, .{});
+}
+
+test "CTFE image demand keeps registration bindings independent of load order" {
+    if (comptime boxy_object_code != .image) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const weak = try ctfeSelectionTestImage(allocator, "weak_root", "weak_pointer", "shared", true);
+    defer allocator.free(weak);
+    const first = try ctfeSelectionTestImage(allocator, "shared", "first_pointer", null, false);
+    defer allocator.free(first);
+    const second = try ctfeSelectionTestImage(allocator, "shared", "second_pointer", null, false);
+    defer allocator.free(second);
+    var images = BoxyLinkedImages{ .allocator = allocator };
+    defer images.deinit();
+    try images.prepare(&.{
+        .{ .module = @splat(1), .code = .{ .image = .{ .bytes = weak, .code_locations = &.{0} } }, .hosted_symbols = &.{} },
+        .{ .module = @splat(2), .code = .{ .image = .{ .bytes = first, .code_locations = &.{0} } }, .hosted_symbols = &.{} },
+        .{ .module = @splat(3), .code = .{ .image = .{ .bytes = second, .code_locations = &.{0} } }, .hosted_symbols = &.{} },
+    }, null);
+    const later = try images.select(allocator, &.{"second_pointer"}, null);
+    defer later.deinit(allocator);
+    try std.testing.expect(images.lookup("shared") == null);
+    const earlier = try images.select(allocator, &.{"shared"}, null);
+    defer earlier.deinit(allocator);
+    const expected = images.images.items[images.candidates.items[1].loaded_index.?].regionAddress(.block);
+    try std.testing.expectEqual(expected, images.lookup("shared").?);
+    const weak_selection = try images.select(allocator, &.{"weak_pointer"}, null);
+    defer weak_selection.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), weak_selection.indices.len);
+    const pointer: *const usize = @ptrFromInt(images.lookup("weak_pointer").?);
+    try std.testing.expectEqual(@as(usize, 0), pointer.*);
 }
 
 test "CTFE native emission uses worker callbacks and retains reusable code without its image" {

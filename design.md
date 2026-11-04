@@ -2254,305 +2254,55 @@ later compilation's evaluation could contradict.
 Every command reports the compile-time failures of every root, including
 those a cache entry left unevaluated.
 
-### Compile-Time Value Reuse Across Edits
+### Content-Addressed Compile-Time Values
 
-A checked module cache entry is keyed by the module's whole source, so an
-edit anywhere in a module misses its entry. The compile-time values stored in
-the module's previous entry are reused anyway, root by root, whenever a root's
-value identity is unchanged: the edited module evaluates only the roots the
-edit can affect. Reuse is a cache optimization with no observable effect. A
-reused value is the value evaluation computes, its root reads are the reads
-evaluation records, and its `dbg` observations are the observations
-evaluation makes, so a compilation reports, stores and runs exactly what it
-would without the previous entry. Per-program literal roots, which belong to
-no checked module, are reused the same way from a file their program keeps
-(below).
+No persistent compiler cache may use a source file's filesystem path, checkout
+root, package directory, or workspace-qualified display name as identity or as
+an index selecting previous results. Hashing such a path does not make the
+identity content-addressed. Source-authored import names remain semantic inputs;
+filesystem paths remain available for discovery and current-workspace reporting.
+Test outcome files name reporting modules by the checked producer's test
+context; cached unit expect-site tables use explicit content-derived unit-link
+identities. Neither uses filesystem placement. Distinct modules sharing a
+reporting context are disambiguated by full content identity. Replay binds
+these identities to the current compilation's source environments and paths.
+A unit link interface is not a test reporting context: changing the former
+must not invalidate an observation whose checked test identity is unchanged.
+
+A checked module's cache entry stores its checking output and finalized
+compile-time constants together. Its identity covers the module's source and
+resolved dependencies, checking context and compatibility policy. Identical
+inputs share the entry across checkouts, independently of their source paths.
+An edit that changes this identity misses the entry and evaluates the new
+module's required roots. No source-location pointer selects an older module
+for transplantation, and no per-program literal bundle or root-validation
+certificate is persisted under a source placement.
+
+Restoration preserves every root's explicit state. A cached root that was never
+demanded remains unevaluated; a command that newly demands it evaluates it and
+may publish the more complete entry under the same checked identity. Stored
+root reads still name exact checked modules and roots, and stored debug
+observations replay in the ordinary demand order. A cache hit must not suppress
+required diagnostics or evaluate roots that the command does not demand.
+
+An expensive stable computation, such as parsing a database schema, belongs in
+a separate module with its input and parser dependencies. Application edits then
+leave that module's checked identity and stored constants unchanged. A schema
+or parser edit invalidates it naturally. There is no per-constant file or
+cross-version discovery index. Per-program literal conversions that have no
+checked-module owner are evaluated for the current program; they do not use a
+path-addressed cache.
+
+Semantic root, definition and literal identities remain available to other
+consumers, including test outcomes and specialization artifacts. They describe
+explicit checked inputs, not a predecessor module or a source placement. These
+identities do not authorize transplanting values between checked module versions.
 
 Restoring a stored constant's type into Monotype memoizes the immutable source
 type by its owning `ConstTypeStore` and type id. The memo belongs to the exact
-destination `Type.Store`: the coordinator and every specialization workspace
-own separate maps. Only successfully committed destination ids are committed;
-transaction-local ids and ids from another workspace never enter that map.
-This shares immutable type descriptions, not Lambda Solved's mutable row
-occurrences, which continue to follow the Row Joins contract.
-
-**Value identity.** Each compile-time root carries a value identity
-(`CompileTimeRootIdentity.value`), a digest computed when the checked module
-is written, before evaluation, from explicit checked data. Two roots with
-equal value identities compute equal values, read the same roots and make the
-same observations, because evaluation is a function of the checked program
-alone ("Compile-Time Evaluation And Static Storage"). The value identity
-covers:
-
-- The module context: the module's checking context
-  identity (its imports' names and checked module keys, the platform
-  requirement context, explicit root requests and validation mode), its direct
-  imports' checked module keys, its name and kind, and its file-import inputs
-  (each file's path, read state and content hash). Every other module's
-  content enters only through these keys, which cover the module's imports
-  transitively.
-- The module's type world: the source bytes of every top-level type, alias,
-  where-alias and import statement, and the definition identities of the
-  module's `is_eq`, `to_hash` and `to_inspect` methods, which a structural
-  derivation looks up on a type by name rather than through a dispatch plan.
-  Every other method a root's evaluation can select is a dispatch target of the
-  code that reaches it, which the root's own computation covers.
-- The root's own computation. For a top-level value or callable binding, its
-  definition identity. For a hoisted root, its expression's source bytes,
-  the definition identities of the definitions that expression names and of
-  the methods its dispatch sites resolve to, its resolved imported references
-  and dispatch targets, its hoisted body kind and extraction patterns,
-  and the checked type graph of every expression it contains, with sharing
-  preserved across those types. A lexical binding read additionally names the
-  enclosing declaration's full identity; that declaration supplies the binding.
-  The enclosing declaration's name identifies the site, but its unrelated code
-  is not a value dependency of a root without lexical reads. Local type
-  declarations retain the type digest's version-specific provenance, including
-  when a local type occurs only inside the computation. Two hoisted roots of one
-  declaration that agree in these results compute the same value. For a literal conversion root, the
-  literal's source bytes alone: the literal is closed, and the conversion it
-  runs is selected by its checked type. For a top-level `expect`, its
-  statement's source bytes and the definition identities of the definitions
-  its body names.
-- The root's checked type, digested with the module's own nominal types named
-  by declaration. A top-level declaration is named by its name, which the type
-  world resolves; a block-local declaration and a field default declared in
-  the module are named by version-specific data (the module's content identity
-  and the declaration's node), so a root whose type mentions one is never
-  reused. Imported, builtin and structural types are named by their checked
-  identity and structure.
-
-A definition identity (`value_identity.zig`) is the per-definition analogue of
-a module's content identity: a Merkle digest over the module's dependency
-graph, computed per strongly connected component in dependency order. The
-graph's nodes are the module's definitions and method bindings; its edges are
-the definitions a body names (`DependencyGraph.collectNameReferences`) and the
-methods the body's checked plans resolve to (`StaticDispatchPlanTable`): the
-target of each dispatch site and of each literal's conversion, the evidence
-each call's instantiation edge records for its callee's requirements, and every
-nested obligation those targets' instantiations resolve. A site dispatching on
-a scheme variable takes its target from the evidence of the instantiating call,
-whose plan resolves it. An edge whose nested obligations are derived from the
-concrete callable at lowering covers every method binding of the module and, in
-a module-independent identity, the version of each direct import. Each
-definition contributes its source bytes (pattern, annotation and body) and the
-type digest of its generalized scheme, which captures a type that a use
-elsewhere pinned. A component's identity folds its members' contributions and
-the identities of the components they reference; references are by name, which
-the source bytes spell, or by the checked resolution of a dispatch site, so the
-identity is independent of node ids and source positions. Whitespace inside a
-definition is part of its source bytes and changes its identity; that is a
-missed reuse, never a wrong one. A module-independent identity names an
-imported dispatch target by the identity its module published for the target's
-definition.
-
-A stored nominal value may retain a checked type occurrence in the module that
-stored it even when a different, unchanged module declares its nominal type.
-Across an edit, reuse admission can relocate that occurrence through the old
-checked root's normalized type key to a root committed by the new checked module.
-Every local occurrence in the value and its stored type must have this explicit
-correspondence before any copy is installed. The copy changes only the occurrence
-module and checked root id. A missing key rejects reuse; a type declared by the
-edited module, local defaults, functions and generated types retain their existing
-exclusions. This key relocation permits ordinary full-dependency value identities. Semantic
-reuse across imported edits uses the explicit producer fingerprints described below.
-
-Semantic literal-root identities hash the checked producer's existing operand:
-exact numeral digits, decoded quote bytes, or interpolation segments. They do not
-hash the literal owner's artifact key or expression index. Generated literals use
-the same checked operand contract. No extra per-literal identity is persisted.
-
-For reuse across imported edits, checking also publishes exact semantic fingerprints
-of named checked type occurrences. Every type declaration the module holds has
-one: the explicit declaration lists supply them, because a checked type can name
-a block-local declaration in code that canonicalization or checking replaced with
-a runtime error, which no expression reaches. A block-local declaration with no
-enclosing owner is named by version-specific data, since its source alone does
-not decide what it means. A committed value records each occurrence's source
-placement and fingerprint alongside its old declaration and occurrence ids.
-Admission resolves these records against the current checked producers before
-copying anything. Every named occurrence in a value and its stored type must resolve;
-copying replaces the declaring artifact, occurrence artifact and type id, and the
-stored declaration's module identity, name and statement id. Function values,
-generated named types and stored field defaults remain excluded. Matching root
-semantic identities and committed read identities remain mandatory: relocation
-never authorizes reuse after a computation's dependencies change.
-
-**Site.** Each root also carries a site (`CompileTimeRootIdentity.site`), the
-position-stable name of the root within its module: a top-level root's
-definition name, or, for a hoisted or literal root, its enclosing
-definition's name, its class (everything its value identity covers beyond the
-module context and type world) and its ordinal among the roots of that class.
-Roots of one class have equal value identities, so the order checking
-records them in never decides which value a site names. A reused root's
-reads of its own module's roots are translated by site: a reader's value
-identity covers every definition its evaluation reaches, so the root it read
-exists in the new version at the same site with the same value identity. A
-failure to find it is a compiler invariant.
-
-**Portability.** A stored value can move into a new version of its module
-only when nothing in it points back into the version that stored it. After
-finalization, each completed root's stored data is classified
-(`CompileTimeRootPortability`). A root is portable when its payload is a
-completed constant or a discarded validation and its ConstStore value and stored
-type contain no function value, no function, erased or generated named type,
-no named type or field default declared in the module itself, and nothing
-else carrying a module-version id. A `runtime` payload (a guarded root whose
-evaluation failed) and an `expect` root are never reused. A named type
-carries a checked occurrence: `named_type.ty`, an id in the type store of
-`named_type.ty_module`, the module whose checked types the occurrence is in,
-which is explicit and need not be `named_type.module`. Static data planning
-re-enters `ty_module`'s store at `ty`, and the occurrence takes part in a
-Monotype type's full and specialization digests. Monotype lowering names only
-occurrences inside the storing module's import closure ("Occurrence scope"),
-so the module's cache entry names only modules its own identity covers, and a
-stored type is restored with the occurrences it holds. An occurrence in the
-module's own store names a type of the version that stored it: after an edit
-the same id names another type of the new version, or none. A root holding
-one is therefore not portable without the key relocation above. An occurrence
-in another module's store stays valid, because the value identity covers that
-module's key. Compilers with runtime safety check, for every transplanted
-root, that each named type's occurrence re-enters a store of the compilation
-at the nominal type it names.
-A literal conversion stores no type, so its value is portable when its checked
-type mentions one of the module's own types only where the value holds nothing
-of it (a phantom parameter of an imported nominal); its value identity still
-covers that type's declaration and methods through the type world. A stored
-constant's type names every nominal it mentions, so a constant whose type
-mentions one of the module's own types is not portable.
-
-A completed value may also reuse the checked producer's module-independent
-identity (`test_rows`) when an imported entry changes. This identity includes
-the referenced implementations and dispatch targets, checked type contexts,
-checking policy, and file inputs. Admission requires the value and its stored
-type to hold no Monotype function value, erased or generated type or field
-default, every named type they hold to have an exact current counterpart under
-the checked producer fingerprints above, and every module a `.boxy` function
-value's recipe names to have a current version (`CompileTimeReuse.Relocations`),
-which the copied recipe then names. The copy replaces its declaration module, occurrence
-module and checked type id together, and updates a stored type's canonical
-identity and declaration location from that producer. This can relocate a nominal
-declaration across a comment edit to its own source as well as imported edits.
-Every recorded root read must also retain its producer-authored value identity.
-The ordinary full-identity copy path retains `CompileTimeReuse.Relocations` for
-modules re-checked from unchanged source: the coordinator records their previous
-entries as predecessors, imports first, and maps checked type roots by canonical
-key. That path never authorizes reuse across a changed semantic identity.
-When committing a checked module, the coordinator records each read's source
-placement, source root site and producer-authored value identity beside its exact
-module key and root id. Reuse resolves these placements and sites in the current
-checked program, checks every value identity, and installs the reads under the
-current module keys and root ids. This includes reads of roots in the same
-module, imported constants and transitive reads. Builtins and retained platform
-interfaces keep exact version keys in place of source placements.
-An absent producer, changed input or missing optional read identity makes the
-candidate a cache miss. These conditions are checked against the previous
-committed result, not guessed from source syntax. Debug observations are copied
-and replayed in the ordinary root order. Values carrying version-specific references require complete relocation proofs;
-checked equality alone does not authorize retaining an old checked-type occurrence
-or root id. Verification builds independently evaluate
-and compare these transplants just like other compile-time value reuse.
-
-**Transplant.** On a checked module cache miss, before evaluation, the
-coordinator locates the module's previous entry through a pointer filed under
-the module's placement (its package's URL or root directory, and its path
-within the package) in the `mod-latest` cache family, which every checked
-module store overwrites with the stored key. A missing, swept, corrupt or
-version-mismatched entry reuses nothing. Otherwise, for each root of the new
-version that is pending, the previous version's completed portable root with
-the same kind and value identity (preferring the same site) is copied into the
-new version (`compile_time_reuse.zig`): its ConstStore value is cloned into the new
-const store with names rebased by text and blobs re-added by content, a stored
-constant's type is cloned the same way (`cloneTypeFromTranslated`) and its
-const templates are filled, its read rows are translated (own reads by site,
-other modules' reads unchanged) and merged, and its `dbg` rows are copied under
-the new root id. Finalization then treats the root as a reopened entry's
-evaluated root: it requests only pending roots, restores the copied value for
-every reader, demands what the copy's reads name, and replays its `dbg` rows
-for the roots the compilation demands. Obsolete roots of the previous version
-are never copied, and the previous entry is left to the cache's sweep.
-
-Compilers with runtime safety verify every transplant: the transplanted roots
-stay pending, finalization evaluates them, and after finalization each
-evaluated root's fresh ConstStore value, read rows and `dbg` messages must equal the
-copy's structurally (`ConstStore.graphEql`, comparing named types by declaring
-module). A difference is a compiler invariant: the value identity missed an
-input. The copy is then installed in place of the fresh value, so the entry a
-compiler with runtime safety writes holds the transplanted data a release
-compiler writes. A root the compilation did not demand is installed from the
-copy directly. Optimized compilers perform no evaluation or comparison for a
-transplanted root.
-
-**Per-program literal roots.** A literal whose conversion depends on its
-instance is converted per program, as a literal root of the specialization
-that gives it a concrete type ("Demand-Driven Compile-Time Specialization"),
-so no checked module entry holds its value. The program keeps those values
-instead, in one literal values file filed in the `literals` cache family
-under the placements of the program's top modules, the modules of the
-lowering no other module of it imports (`eval/literal_values.zig`). Each entry
-holds a literal root's value identity, its ConstStore value, and the compile-time
-roots its evaluation read, each named by its module (a top module by its
-value context, any other by its checked key), its site, and the value
-identity it had.
-
-A literal root's value identity is computed by Monotype when the root
-commits, from the committed program alone:
-
-- The program context: every top module's value context
-  (`CompileTimeRootIdentityTable.valueContext`: its module context and its
-  type world), the checked key of every other module of the lowering, and
-  the definition identity of every definition a top module exports for a
-  platform requirement that code reachable from a module's methods, or from
-  an imported module's exports, looks up (`method_requires`,
-  `export_requires`). A module that some module of the program imports is
-  named by its key, which that importer's value context covers too. A top
-  module's code is reached only through dispatch on its types, which its type
-  world covers with every method and what each names, and through the
-  platform requirements it provides, which the export identities cover.
-- The literal: its module (a top module by its value context, any other by
-  key and expression), its kind, and its source bytes.
-- Its type: the committed Monotype type of the literal's value, with a top
-  module's types named by their top-level declaration, whose source that
-  module's type world covers, and every other type by its declaring module and
-  declaration. A type holding a function or an erased value, or naming a top
-  module's type or field default that is not a top-level declaration, has no
-  value identity, and the literal root is never stored.
-
-When a literal root commits with a value identity that names an entry, and
-every root the entry read still has the value identity it had at its site,
-the root's definition becomes the restore expression of the stored value,
-under a definition identity naming that value, and records the entry's reads
-as restored reads, so the program demands what the conversion demanded. The
-root keeps its id and slot: its reads, and their representation evidence,
-call the restored definition, and evaluation runs it in place of the
-conversion. The conversion's specializations, already requested, lower in
-Monotype, but no root reaches them, so no later stage lowers, compiles or
-runs them.
-
-After evaluation, the file is rewritten with this compilation's literal roots:
-each restored root's entry carries over, and each converted root with a value
-identity is stored when it completed without a `dbg` or `expect` observation,
-its ConstStore value names no type a top module declares (its stored named types
-would name a version of that module), and every root it read has a value
-identity naming everything that root depends on. A root of a platform module,
-which can read what the app provides for the platform's requirements, or of a
-platform/app composition has none. A failed literal root is never stored, so
-its next compilation converts and reports it again. A missing, swept,
-unreadable or version-mismatched file restores nothing.
-
-Compilers with runtime safety verify every restored literal root: the
-conversion stays the definition of a literal root of its own, a verifier,
-which evaluation runs beside the restored root; the verifier must complete
-without an observation, with a ConstStore value equal to the stored one, having
-read exactly the roots the stored value read. The program reads the restored
-root, so a compiler with runtime safety exercises the restore an optimized
-compiler performs.
-
-`ROC_CTFE_REUSE_TRACE` (a developer diagnostic) prints, for each module that
-found a previous entry, how many roots were transplanted, and one line per
-transplanted root; and, for each program evaluated with a literal values file,
-how many literal roots were restored, verified and stored, and one line per
-literal root.
+destination `Type.Store`: coordinator and specialization workspaces own separate
+maps. Only committed destination ids enter it. Mutable lambda-set row occurrences
+continue to follow the Row Joins contract.
 
 ## Builtins Build Their Own Tag Unions
 
@@ -4694,10 +4444,9 @@ relation; specialization keys use that identity while
 local checked references retain their immutable module owner. Any additional checked tables
 stored in the checked module cache must be deterministic output of those
 checked inputs and the checked modules they name. Such tables are serialized
-data, not new cache-id inputs. Compile-time values transplanted from a
-module's previous entry ("Compile-Time Value Reuse Across Edits") are such
-output: each is the value evaluation computes for the entry's own checked
-module, and the previous entry is consulted only after the cache id missed.
+data, not new cache-id inputs. Finalized compile-time values are such output:
+each belongs to this exact checked module and is restored with its checked entry
+("Content-Addressed Compile-Time Values").
 
 `module_identity` includes the module's name. Canonicalization output is not
 a function of source bytes alone—a type module's main type takes its name
@@ -14412,9 +14161,16 @@ A snapshot belongs to the program whose immortal table interned it. A cached
 module object is loaded once per compile-time evaluation and shared by every
 program of that evaluation, so its sites would otherwise hand a later program
 snapshots of a state that died with an earlier one. The evaluation therefore
-returns every loaded object's zero-filled data, where its sites live, to zero
-before each program runs (`BoxyLinkedImages.resetMutableData`), so a program
-finds the objects it shares holding no snapshot at all and publishes its own.
+returns each reused object's zero-filled data, where its sites live, to zero
+before a program that can reach it runs (`BoxyLinkedImages.resetMutableData`).
+On unit-image hosts, the program carries the complete transitive image-import
+closure of its emitted code and data references. Only those images are marked
+used and reset; newly loaded images are already zeroed. Unreached images may
+retain old snapshots but cannot execute until a later program resets them.
+Other hosts reset every loaded object. Evaluation is serial; image registration,
+loading and reset share a lock, and each program owns an immutable snapshot of
+its code ranges, so parallel program construction cannot invalidate an executing
+program's tables.
 
 A recursive-open operation can return a private, unfinished placeholder. It
 stores no site snapshot until it returns a completed descriptor from the
@@ -14743,8 +14499,9 @@ every value its roots read is complete and, where it links against its imports'
 objects, once those are known, so the programs of modules that read nothing of
 each other are built at the same time, and the evaluating thread runs each
 program as it is built, in the order the builds finish. The build of a program
-reads the checked modules and the loaded objects' symbols and writes nothing
-another thread reads; running it, which stores values and reports failures,
+reads the checked modules and loads its needed images under the shared image
+lock; its other writes belong to that program. Running it, which stores values
+and reports failures,
 stays on the evaluating thread, as do the programs of roots holding function
 values ("Stored Function Values"). A module's evaluation thus waits only for
 the values its roots read and the objects of its own import closure. The link
@@ -14777,10 +14534,14 @@ it already has without waiting while checking continues. A platform module with
 requirements has no object of its own, so a module importing one runs as the
 whole program. How an object is loaded depends only on the compiler's host,
 never on what a load finds: a Linux x86_64 host, whose units carry unit
-images (Fast Dev Link), loads each object's image as the cache mapping or
-the building unit holds it, copying its code and data into the process,
-binding its imports once (the compiler's own functions, then the objects
-already loaded, then the hosted-call trap) and filling its patch sites;
+images (Fast Dev Link), registers available images in imports-first order and
+loads only the whole images required by an evaluator's emitted relocations,
+including carried data and frozen callable pointers, and their transitive image
+imports. These are explicit producer records, not a reconstruction from LIR
+calls. Export providers are fixed by registration order, independent of worker
+load order. A selected image keeps its existing layout: the loader copies its
+code and data, binds its imports once (the compiler's own functions, then the
+registered image providers, then the hosted-call trap), and fills its patch sites;
 every other host composes the unit's pieces into a relocatable object and
 loads that. Either way an object holds every procedure of its unit. A
 Linux x86_64 compilation therefore decodes a unit's pieces only for a link
@@ -14791,6 +14552,13 @@ object's code is therefore found and reported exactly as one in a whole
 program's own code, and the two forms report identically. The table is read
 only when something fails, so the code that succeeds carries nothing extra. A
 compilation with no cache has no objects, and runs as the whole program.
+
+The coordinator memoizes a completed module's immutable object and diagnostic
+view lists by checked-module identity for the current naming epoch. Settling
+different link names invalidates these memos with the object records. Diagnostic
+view membership uses a key set, not repeated scans of the complete view list.
+These are compilation-local tables; they add no persistent cache or source-path
+identity and do not change the unit-image format.
 
 A root whose value holds a function value (anywhere in its type, or a
 callable binding) has no compile-time value slot, so it is evaluated by the
@@ -23481,7 +23249,7 @@ Each module with test roots has one outcome file in the direct file store
 (`compile.artifact_store`, the `test_outcomes` family; `cli/test_outcome_file.zig`).
 Like every direct file it is named by content, never by a path. Its identity
 covers what all of the module's outcomes share: the module's own source inputs
-(`CheckedModuleArtifact.source_hash`), its qualified name, the platform/app
+(`CheckedModuleArtifact.source_hash`), its semantic module name, the platform/app
 relation it was checked under, compiler compatibility, the native target, the
 specialization strategy and the execution mode. It deliberately excludes the
 module's imports: each test's own identity covers what that test reads from
@@ -24913,10 +24681,11 @@ own build graph, into a support image of the same format and embedded. A
 library unit's cache entry files the image's `CodeLocations` beside it, so
 compile-time evaluation loads the image itself into the compiler's process
 and reports failures in it without composing anything (Compile-Time
-Evaluation Strategy). The table stays out of the image because it names
-modules by their package-qualified names, which for a local package include
-the package's path, while the image's bytes, and so the link's placement and
-build id, are a function of the code alone.
+Evaluation Strategy). The table stays out of the image so the link's placement and build id are a
+function of code alone. Cached source tables contain semantic module names
+and content-derived module identities, never workspace-qualified display names.
+Compile-time failure locations and cached test observations bind those
+identities to the current compilation's source environments before reporting.
 
 **Wasm unit images.** Units are lowered and cached per target. A `.boxy`
 dev build of `wasm32` or `wasm32v1` with a cache restores or builds a unit
@@ -25532,7 +25301,7 @@ each phase's report.
 
 The compiler's developer-only environment variables (`ROC_LIR_DUMP`,
 `ROC_SPEC_CENSUS`, `ROC_FRESH_TYPE_ANALYSIS`, `ROC_CTFE_DEMAND_TRACE`,
-`ROC_CTFE_REUSE_TRACE`, the object-compile round-trip
+the object-compile round-trip
 variable and `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a
 compiler for which `build_options.dev_diagnostics` is true: every Debug compiler, and any
 other build made with `-Ddev-diagnostics`. Every read goes through

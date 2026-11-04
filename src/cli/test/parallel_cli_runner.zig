@@ -10885,7 +10885,7 @@ fn customBoxyBuildAndRunCacheWhatCheckCaches(
                 .boxy_object => true,
                 .prelinked_host => is_build,
                 .run_host => !is_build,
-                .checked, .canonicalized, .placement, .literals, .pairing, .local_discovery, .test_outcomes => false,
+                .checked, .canonicalized, .pairing, .test_outcomes => false,
             };
             if (!allowed) return customFailure(allocator, timer, "`roc {s} --specialize=no` left a cache entry `roc check` does not: {s} {x}", .{ args[0], @tagName(entry.family), entry.key });
             if (entry.family == .boxy_object) objects += 1;
