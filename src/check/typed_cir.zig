@@ -23,7 +23,7 @@ const OwnedCheckedModule = struct {
     owned_source: ?[]u8 = null,
 };
 
-const ModuleData = struct {
+pub const ModuleData = struct {
     env: *ModuleEnv,
     top_level_defs_by_ident: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx) = .{},
     ownership: union(enum) {
@@ -31,6 +31,16 @@ const ModuleData = struct {
         owned_checked: OwnedCheckedModule,
         owned_cached: CachedModule,
     },
+
+    /// The data of a module only read through `Module.readOnly`. A `Module`
+    /// reads its environment and never writes it, and nothing indexes the
+    /// module's top-level definitions by name.
+    pub fn readOnly(env: *const ModuleEnv) ModuleData {
+        return .{
+            .env = @constCast(env),
+            .ownership = .borrowed,
+        };
+    }
 
     fn initBorrowed(env: *ModuleEnv) ModuleData {
         return .{
@@ -223,6 +233,12 @@ pub const Module = struct {
 
     fn env(self: @This()) *ModuleEnv {
         return self.data_store.env;
+    }
+
+    /// A view over a sealed module outside a module set, at index
+    /// `module_idx`.
+    pub fn readOnly(allocator: Allocator, module_idx: u32, data: *ModuleData) Module {
+        return .{ .allocator = allocator, .module_idx = module_idx, .data_store = data };
     }
 
     pub fn moduleIndex(self: @This()) u32 {

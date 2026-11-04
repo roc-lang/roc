@@ -17,7 +17,7 @@ const type_roles = .{ "source_constructor_ty", "source_runtime_ty", "source_shap
 /// select candidates; exact comparison of the proof graph is the equality
 /// authority. A nested contract interned earlier in the order is reached
 /// through its identity, so a comparison never walks a nested chain again.
-pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: *dispatch.StaticDispatchPlanTable) Allocator.Error!void {
+pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: *dispatch.GeneratedCodecTable) Allocator.Error!void {
     var buckets = std.AutoHashMap(u64, u32).init(allocator);
     defer buckets.deinit();
     const next = try allocator.alloc(?u32, table.generated_codec_derivations.len);
@@ -64,7 +64,7 @@ pub fn digestContents(
     owner: checked.ModuleId,
     store: *const checked.CheckedTypeStore,
     names: *const canonical.CanonicalNameStore,
-    table: *dispatch.StaticDispatchPlanTable,
+    table: *dispatch.GeneratedCodecTable,
 ) Allocator.Error!void {
     const derivations = table.generated_codec_derivations;
     const own = try allocator.alloc(dispatch.GeneratedCodecContentDigest, derivations.len);
@@ -105,7 +105,7 @@ const ContentDigester = struct {
     owner: checked.ModuleId,
     store: *const checked.CheckedTypeStore,
     names: *const canonical.CanonicalNameStore,
-    table: *const dispatch.StaticDispatchPlanTable,
+    table: *const dispatch.GeneratedCodecTable,
     keys: checked.CheckedTypeKeys,
     /// Each contract's digest as the root of its own encoding.
     own: []dispatch.GeneratedCodecContentDigest,
@@ -223,7 +223,7 @@ const ContentDigester = struct {
         for (self.table.generated_codec_derivations[codec].callsSlice(self.table)) |call| switch (call.resolution) {
             .pending => unreachable, // every codec call is resolved before identities are digested
             .checked_error => {},
-            .callable => |node| try self.tasks.append(self.allocator, .{ .evidence = @backingInt(node) }),
+            .callable => |node| try self.tasks.append(self.allocator, .{ .evidence = node.index }),
             .structural => |nested| try self.appendNestedCodec(@backingInt(nested)),
         };
         while (self.tasks.pop()) |task| switch (task) {
@@ -239,7 +239,7 @@ const ContentDigester = struct {
             },
             .refs => |span| for (self.table.evidence_refs[span.start..][0..span.len]) |ref| {
                 switch (ref.resolution) {
-                    .direct => |node| try self.tasks.append(self.allocator, .{ .evidence = @backingInt(node) }),
+                    .direct => |node| try self.tasks.append(self.allocator, .{ .evidence = node.index }),
                     .structural => |structural| if (structural.generated_codec_derivation) |nested| try self.appendNestedCodec(@backingInt(nested)),
                     .constraint, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
                 }
@@ -314,7 +314,7 @@ const ContentDigester = struct {
             switch (call.resolution) {
                 .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before codec identities are computed
                 .checked_error => {},
-                .callable => |node| try self.children.append(self.allocator, .{ .evidence = @backingInt(node) }),
+                .callable => |node| try self.children.append(self.allocator, .{ .evidence = node.index }),
                 .structural => |nested| try self.children.append(self.allocator, .{ .codec = @backingInt(nested) }),
             }
         }
@@ -389,9 +389,10 @@ const ContentDigester = struct {
             try self.writeType(ref.dispatcher_ty);
             self.writeU8(@backingInt(std.meta.activeTag(ref.resolution)));
             switch (ref.resolution) {
-                .direct => |node| try self.children.append(self.allocator, .{ .evidence = @backingInt(node) }),
+                .direct => |node| try self.children.append(self.allocator, .{ .evidence = node.index }),
                 .constraint => |constraint| {
-                    self.writeOptionalU32(constraint.scheme_param);
+                    self.writeOptionalU32(if (constraint.scheme_param) |param| param.scheme else null);
+                    self.writeOptionalU32(if (constraint.scheme_param) |param| param.index else null);
                     self.writeU32(constraint.index.depth);
                     self.writeU32(constraint.index.index);
                     self.writeU8(@intFromBool(constraint.independent_callable));
@@ -476,7 +477,7 @@ const ContentDigester = struct {
 pub fn callsEquivalent(
     allocator: Allocator,
     types: checked.CheckedTypeStoreView,
-    table: *const dispatch.StaticDispatchPlanTable,
+    table: *const dispatch.GeneratedCodecTable,
     left: dispatch.GeneratedCodecCall,
     right: dispatch.GeneratedCodecCall,
 ) Allocator.Error!bool {
@@ -489,7 +490,7 @@ pub fn callsEquivalent(
     switch (left.resolution) {
         .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before calls are compared
         .checked_error => {},
-        .callable => |id| try comparer.work.append(allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(right.resolution.callable) }),
+        .callable => |id| try comparer.work.append(allocator, .{ .kind = .evidence, .left = id.index, .right = right.resolution.callable.index }),
         .structural => |id| if (!try comparer.codecs(id, right.resolution.structural)) return false,
     }
     return try comparer.run();
@@ -499,7 +500,7 @@ const Pair = struct { kind: enum { codec, evidence }, left: u32, right: u32 };
 const Comparer = struct {
     allocator: Allocator,
     types: checked.CheckedTypeStoreView,
-    table: *const dispatch.StaticDispatchPlanTable,
+    table: *const dispatch.GeneratedCodecTable,
     /// Specialization identity is exact; agreement between repeated
     /// occurrences of one role is modulo transparent aliases, like the role.
     types_eql: enum { exact, alias_transparent } = .exact,
@@ -568,7 +569,7 @@ const Comparer = struct {
             if (std.meta.activeTag(a.resolution) != std.meta.activeTag(b.resolution)) return false;
             try self.typesPair(a.dispatcher_ty, b.dispatcher_ty);
             switch (a.resolution) {
-                .direct => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(b.resolution.direct) }),
+                .direct => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = id.index, .right = b.resolution.direct.index }),
                 .constraint => |ref| if (!std.meta.eql(ref, b.resolution.constraint)) return false,
                 .structural => |value| {
                     const other = b.resolution.structural;
@@ -616,7 +617,7 @@ const Comparer = struct {
                         switch (ac.resolution) {
                             .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before codec identities are computed
                             .checked_error => {},
-                            .callable => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(bc.resolution.callable) }),
+                            .callable => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = id.index, .right = bc.resolution.callable.index }),
                             .structural => |id| if (!try self.codecs(id, bc.resolution.structural)) return false,
                         }
                     }
@@ -701,7 +702,7 @@ test "codec identity preserves cross-root sharing, method roles, and recursive s
     derivations[2].source_shape_ty = variables[2];
     calls[3].method_role = 1;
     calls[4].resolution = .checked_error;
-    var table = dispatch.StaticDispatchPlanTable{
+    var table = dispatch.GeneratedCodecTable{
         .generated_codec_derivations = &derivations,
         .generated_codec_calls = &calls,
     };
@@ -759,7 +760,7 @@ fn digestTestContract(padding: usize, shared: bool) (Allocator.Error || error{No
         .callable_ty = ty,
         .resolution = .checked_error,
     }};
-    var table = dispatch.StaticDispatchPlanTable{
+    var table = dispatch.GeneratedCodecTable{
         .generated_codec_derivations = &derivations,
         .generated_codec_calls = &calls,
     };
@@ -830,7 +831,7 @@ fn digestTestChain(order: []const u32, comptime method: []const u8, cyclic: bool
                 .checked_error,
         };
     }
-    var table = dispatch.StaticDispatchPlanTable{
+    var table = dispatch.GeneratedCodecTable{
         .generated_codec_derivations = &derivations,
         .generated_codec_calls = &calls,
     };
