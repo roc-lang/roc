@@ -7395,6 +7395,23 @@ fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []con
             .{ .segname = "__DATA", .sectname = "__data", .bytes = &@as([8]u8, @splat(0)), .@"align" = 3 },
             .{ .segname = "__DATA", .sectname = "__bss", .size = 8, .@"align" = 3, .flags = 1 },
         }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
+    } else if (builtin.os.tag == .windows) coff: {
+        const text: []const u8 = if (builtin.cpu.arch == .aarch64) &.{ 0x40, 0x05, 0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6 } else &.{ 0xb8, 42, 0, 0, 0, 0xc3, 0x90, 0x90 };
+        // A weak reference is a weak external whose tag is undefined too.
+        const symbols = [_]Image.TestCoffObject.TestSymbol{
+            .{ .name = name, .section = 1, .value = 0, .function = true },
+            .{ .name = pointer, .section = 2, .value = 0 },
+            if (weak) .{ .name = imported orelse name, .section = 0, .class = .weak_external, .tag = 3 } else .{ .name = imported orelse name, .section = 0 },
+            .{ .name = ".weak.default", .section = 0 },
+        };
+        const count: usize = if (imported == null) 2 else if (weak) 4 else 3;
+        // `IMAGE_REL_AMD64_ADDR64` or `IMAGE_REL_ARM64_ADDR64`.
+        const relocations = [_]Image.TestCoffObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 2, .type = if (builtin.cpu.arch == .aarch64) 0x000e else 0x0001 }};
+        break :coff try Image.TestCoffObject.encode(allocator, if (builtin.cpu.arch == .aarch64) 0xaa64 else 0x8664, &.{
+            .{ .name = ".text", .bytes = text, .characteristics = 0x6050_0020 },
+            .{ .name = ".data", .bytes = &@as([8]u8, @splat(0)), .characteristics = 0xc040_0040 },
+            .{ .name = ".bss", .size = 8, .characteristics = 0xc050_0080 },
+        }, symbols[0..count], if (imported != null) &relocations else &.{});
     } else elf: {
         const symbols = [_]Image.TestObject.TestSymbol{
             .{ .name = name, .section = 1, .size = 6, .global = true, .func = true },
