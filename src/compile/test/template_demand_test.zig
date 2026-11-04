@@ -131,3 +131,48 @@ test "demand propagates around recursion" {
         .{ "seek", &.{.full} },
     });
 }
+
+test "a nominal argument its backing extends a row with demands all of it" {
+    try expectDemands(
+        \\module [kind_of, label_of, count_of, links]
+        \\Ref(r) := { ..r }
+        \\Labeled(r) := { label : Str, ..r }
+        \\Outer(r) := { inner : Ref(r), n : U64 }
+        \\Chain(r) := [Link({ tag : Str, ..r }, Chain(r)), End]
+        \\kind_of : Ref(r) -> Str
+        \\kind_of = |_ref| "ref"
+        \\label_of : Labeled(r) -> Str
+        \\label_of = |item| item.label
+        \\count_of : Outer(r) -> U64
+        \\count_of = |outer| outer.n
+        \\links : Chain(r) -> U64
+        \\links = |chain| match chain {
+        \\    Chain.Link(_, rest) => 1 + links(rest)
+        \\    Chain.End => 0
+        \\}
+    , &.{
+        .{ "kind_of", &.{.full} },
+        .{ "label_of", &.{.full} },
+        .{ "count_of", &.{.full} },
+        .{ "links", &.{.full} },
+    });
+}
+
+test "a nominal argument demands what its backing does with it" {
+    try expectDemands(
+        \\module [held, ignore_tag, ignore_pair]
+        \\Wrap(a) := List(a)
+        \\Tagged(t) := U64
+        \\Pair(a, b) := (a, List(b))
+        \\held : Wrap(a), U64 -> U64
+        \\held = |_w, n| n
+        \\ignore_tag : Tagged(t), U64 -> U64
+        \\ignore_tag = |_t, n| n
+        \\ignore_pair : Pair(a, b), U64 -> U64
+        \\ignore_pair = |_p, n| n
+    , &.{
+        .{ "held", &.{.none} },
+        .{ "ignore_tag", &.{.none} },
+        .{ "ignore_pair", &.{ .layout, .none } },
+    });
+}
