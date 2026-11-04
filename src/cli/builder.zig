@@ -697,6 +697,10 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             // The unchecked leaf helpers behind that failure are pinned with
             // alwaysinline instead: they are tiny and non-recursive, so
             // inlining them is right at any caller size.
+            // The str concat wrapper is pinned for the same reason: its small-into-
+            // small path is a few word operations that only pay off in registers
+            // at the call site, and every other case is already a call to its
+            // noinline out-of-line half.
             const inlinehint_kind = externs.LLVMGetEnumAttributeKindForName("inlinehint", "inlinehint".len);
             const inlinehint_attr = externs.LLVMCreateEnumAttribute(externs.LLVMGetModuleContext(builtins_module), inlinehint_kind, 0);
             const alwaysinline_kind = externs.LLVMGetEnumAttributeKindForName("alwaysinline", "alwaysinline".len);
@@ -707,6 +711,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 "roc_builtins_list_slack_unique",
                 "roc_builtins_list_replace",
                 "roc_builtins_list_owned_unique",
+                "roc_builtins_str_concat",
             };
             var builtin_func = externs.LLVMGetFirstFunction(builtins_module);
             while (builtin_func) |fv| : (builtin_func = externs.LLVMGetNextFunction(fv)) {
