@@ -14826,7 +14826,7 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
 /// again inside the handback arm, as ARC's own variant-specific release does,
 /// and reads the list there. Certification must replay the handback only at
 /// the refining switch: the call restitutes its argument once.
-fn checkRestitutionReplaysOnlyAtRefiningSwitch(handback: u32) !void {
+fn checkRestitutionReplaysOnlyAtRefiningSwitch(handback: u32) (Allocator.Error || ResourceError || ArcTest.ExpectError)!void {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 

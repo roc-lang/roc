@@ -248,7 +248,6 @@ const max_wrapper_inline_stmts: usize = 32;
 /// loops exceeds the work it does.
 const max_leaf_inline_stmts: usize = 400;
 
-/// Lowers statement-only LIR procedures to LLVM bitcode.
 /// One crash block a function shares among the checked operations that fail
 /// with one message. A framed block reads each site's source frames from
 /// phis whose operands accumulate as sites branch to it.
@@ -270,6 +269,7 @@ const SharedCrash = struct {
     }
 };
 
+/// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
     pub const Entrypoint = struct {
         symbol_name: []const u8,
