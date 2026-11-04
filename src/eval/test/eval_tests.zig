@@ -1801,6 +1801,7 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2.0, 3.0, 4.0, 5.0, 6.0], [1.0, 2.0, 5.0, 6.0], [1.0, 2.0, 3.0, 4.0, 5.0], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [])" },
     },
+
     .{
         .name = "inspect: List.keep_oks and List.keep_errs with nothing to keep",
         .source =
@@ -1889,6 +1890,26 @@ const core_tests = [_]TestCase{
             .max_allocations = 3,
             .optimized = true,
         } },
+    },
+    .{
+        .name = "inspect: List.keep_until keeps order and works",
+        .source = "List.keep_until([1, 2, 3]), |item| item > 2)",
+        .expected = .{ .inspect_str = "[1.0, 2.0]" },
+    },
+    .{
+        .name = "inspect: List.keep_until keeps every item",
+        .source = "List.keep_until([1, 2, 3]), |_| Bool.False)",
+        .expected = .{ .inspect_str = "[1.0, 2.0, 3.0]" },
+    },
+    .{
+        .name = "inspect: List.keep_while keeps order and works",
+        .source = "List.keep_while([1, 2, 3]), |item| item < 3)",
+        .expected = .{ .inspect_str = "[1.0, 2.0]" },
+    },
+    .{
+        .name = "inspect: List.keep_while keeps every item",
+        .source = "List.keep_while([1, 2, 3]), |_| Bool.True)",
+        .expected = .{ .inspect_str = "[1.0, 2.0, 3.0]" },
     },
 
     // Basic expressions and control flow
