@@ -23036,7 +23036,6 @@ pub const NestedProcSiteTable = struct {
         checked_bodies: *const CheckedBodyStore,
         checked_types: *const CheckedTypeStore,
         static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-        method_registry: *const static_dispatch.MethodRegistry,
         entry_wrappers: *const EntryWrapperTable,
         templates: *CheckedProcedureTemplateTable,
         resolved_value_refs: *const ResolvedValueRefTable,
@@ -23049,7 +23048,6 @@ pub const NestedProcSiteTable = struct {
             checked_types,
             templates,
             static_dispatch_plans,
-            method_registry,
             templates.dispatch_scopes,
             &scope_by_checked_expr,
         );
@@ -23086,6 +23084,7 @@ pub const NestedProcSiteTable = struct {
 
         const sites = try builder.sites.toOwnedSlice(allocator);
         errdefer allocator.free(sites);
+        if (builtin.mode == .debug) try assertOneSitePerOwnerExpr(allocator, sites);
         try markSingleSourceCalls(allocator, checked_bodies, sites);
 
         const runtime_captures = try builder.publishRuntimeCaptures(sites);
@@ -23099,6 +23098,21 @@ pub const NestedProcSiteTable = struct {
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+
+    /// Each owner records a nested procedure expression at exactly one site:
+    /// post-check stages resolve a site from its owner and expression.
+    fn assertOneSitePerOwnerExpr(allocator: Allocator, sites: []const NestedProcSite) Allocator.Error!void {
+        const Key = struct { owner: NestedProcSiteOwner, expr: CheckedExprId };
+        var seen = std.AutoHashMap(Key, void).init(allocator);
+        defer seen.deinit();
+        for (sites) |site| {
+            const expr = site.checked_expr orelse continue;
+            const entry = try seen.getOrPut(.{ .owner = site.owner, .expr = expr });
+            if (entry.found_existing) {
+                checkedArtifactInvariant("a nested procedure expression was recorded at two sites of one owner", .{});
+            }
+        }
+    }
 
     /// Set `single_source_call` on each template-owned site whose function
     /// the module's source calls at one site and never otherwise uses. A
@@ -23850,7 +23864,6 @@ const NestedProcSiteBuilder = struct {
     templates: *const CheckedProcedureTemplateTable,
 
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-    method_registry: *const static_dispatch.MethodRegistry,
     dispatch_scopes: []const DispatchRefScope,
     scope_by_checked_expr: *const collections.DenseMap(CheckedExprId, DispatchScopeId),
     current_scope: DispatchScope,
@@ -23881,7 +23894,6 @@ const NestedProcSiteBuilder = struct {
         checked_types: *const CheckedTypeStore,
         templates: *const CheckedProcedureTemplateTable,
         static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-        method_registry: *const static_dispatch.MethodRegistry,
         dispatch_scopes: []const DispatchRefScope,
         scope_by_checked_expr: *const collections.DenseMap(CheckedExprId, DispatchScopeId),
     ) NestedProcSiteBuilder {
@@ -23891,7 +23903,6 @@ const NestedProcSiteBuilder = struct {
             .checked_types = checked_types,
             .templates = templates,
             .static_dispatch_plans = static_dispatch_plans,
-            .method_registry = method_registry,
             .dispatch_scopes = dispatch_scopes,
             .scope_by_checked_expr = scope_by_checked_expr,
             .current_scope = .root,
@@ -24296,10 +24307,13 @@ const NestedProcSiteBuilder = struct {
                 try self.pushExpr(while_.cond, owner);
                 try self.pushExpr(while_.body, owner);
             },
+            // A local type's associated values are declarations of the
+            // enclosing block in their own right (canonicalization adds each
+            // one as a block statement), so the walk reaches their procedures
+            // there.
             .alias_decl,
             .where_alias_decl,
             .nominal_decl,
-            => try self.pushAttachedLocalProcedures(statement_id, owner),
             .pending,
             .crash,
             .break_,
@@ -24310,24 +24324,6 @@ const NestedProcSiteBuilder = struct {
             => {},
         }
         self.endChildren(children);
-    }
-
-    fn pushAttachedLocalProcedures(
-        self: *NestedProcSiteBuilder,
-        statement_id: CheckedStatementId,
-        owner: NestedProcSiteOwner,
-    ) Allocator.Error!void {
-        for (self.method_registry.entries) |entry| {
-            const target = entry.target orelse continue;
-            switch (target.kind) {
-                .local_proc => |local| {
-                    if (local.context_anchor == statement_id) {
-                        try self.pushExpr(local.expr, owner);
-                    }
-                },
-                .procedure, .structural => {},
-            }
-        }
     }
 
     /// Enter the body of the site `addSite` just recorded.
@@ -39936,7 +39932,7 @@ pub fn publishFromTypedModule(
     );
     errdefer root_requests.deinit(allocator);
 
-    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, checked_bodies, checked_types, &static_dispatch_plans, &method_registry, &entry_wrappers, &checked_procedure_templates, &resolved_value_refs);
+    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, checked_bodies, checked_types, &static_dispatch_plans, &entry_wrappers, &checked_procedure_templates, &resolved_value_refs);
     errdefer nested_proc_sites.deinit(allocator);
 
     sealConstEvalTemplatesForRoots(
@@ -40442,7 +40438,7 @@ test "issue 12520 nested procedure publication uses linear allocation space" {
     // only one site per lambda. Allow ample room for linear scratch tables.
     var bytes = std.testing.FailingAllocator.init(allocator, .{});
     const gpa = bytes.allocator();
-    var sites = try NestedProcSiteTable.fromTemplates(gpa, &bodies, &.{}, &.{}, &.{}, &.{}, &templates, &.{});
+    var sites = try NestedProcSiteTable.fromTemplates(gpa, &bodies, &.{}, &.{}, &.{}, &templates, &.{});
     defer sites.deinit(gpa);
     try std.testing.expectEqual(depth, sites.sites.len);
     for (sites.sites, 0..) |site, i| {
