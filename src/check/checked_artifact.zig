@@ -29861,7 +29861,9 @@ pub const CheckedModuleArtifact = struct {
 
     /// Give a deserialized artifact its module's sealed source types and fresh
     /// key slots, which `io` waits on. Keys are never serialized, so every
-    /// slot starts empty.
+    /// slot starts empty. An artifact whose dispatch resolution reads other
+    /// modules (`dispatch_view_keys`) is also given them through
+    /// `attachDispatchImports`.
     pub fn attachSealedTypes(self: *CheckedModuleArtifact, gpa: Allocator, io: std.Io) Allocator.Error!void {
         const env = self.moduleEnvConst();
         const keys = try sealed_type_keys.SealedTypeKeys.create(gpa, io, env);
