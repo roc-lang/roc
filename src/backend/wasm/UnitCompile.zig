@@ -529,9 +529,6 @@ const Imports = struct {
 test "a switch on a 32-bit value compares against the branch value's bits" {
     const allocator = std.testing.allocator;
     const LIR = lir.LIR;
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
     var store = lir.LirStore.init(allocator);
     defer store.deinit();
     var layouts = try layout.Store.init(allocator, .u32);
@@ -557,11 +554,15 @@ test "a switch on a 32-bit value compares against the branch value's bits" {
     const image = try compileUnitImage(allocator, &store, &layouts, &entries, &.{}, .{ .cpu_level = .default, .stack_checks = false });
     defer allocator.free(image);
     const view = try WasmUnitImage.View.init(image);
-    const exported_index = view.findExport(try LIR.ProcIdentity.forTest(44).symbolName(arena)) orelse return error.TestUnexpectedResult;
-    const code = view.body(view.functions()[view.exports()[exported_index].function]);
-    // `i32.const -2147483648`: the same bits as the U32 branch value.
+    // `i32.const -2147483648` then `i32.eq`: the same bits as the U32 branch
+    // value. The exported function is the entry wrapper that calls the
+    // worker, so the compare is in exactly one of the unit's functions.
     const compare = [_]u8{ 0x41, 0x80, 0x80, 0x80, 0x80, 0x78, 0x46 };
-    try std.testing.expect(std.mem.indexOf(u8, code, &compare) != null);
+    var comparing: usize = 0;
+    for (view.functions()) |function| {
+        if (std.mem.find(u8, view.body(function), &compare) != null) comparing += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), comparing);
 }
 
 test "constants with one content name are one weak definition the unit names as an import" {
