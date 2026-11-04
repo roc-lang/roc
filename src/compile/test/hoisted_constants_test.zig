@@ -57,8 +57,7 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         OutOfMemory,
         PatternExtractionMissingCheckedRootPattern,
         PatternExtractionMissingSourcePattern,
-        PatternExtractionRootValueWasNotSyntheticLookup,
-        PatternExtractionRootWasNotSyntheticMatch,
+        PatternExtractionResultWasNotHoisted,
         PathOutsideWorkspace,
         RootDidNotStoreConstNode,
         StaticDataInitializerCountMismatch,
@@ -296,7 +295,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try expectRootRequestBefore(app_artifact, top_b.id, ordinary_call.root);
     try expectRootRequestBefore(app_artifact, top_b.id, block_value.root);
     try expectRootRequestBefore(app_artifact, indirect_local.root, indirect_top.id);
-    try expectPatternExtractionSyntheticRegions(app_artifact);
+    try expectPatternExtractionRoots(app_artifact);
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
@@ -2653,14 +2652,13 @@ fn rootSourceMatches(
         .statement => |statement| statement == b.statement,
         .required_binding => |required_binding| required_binding == b.required_binding,
         .hoisted => |hoisted| hoisted.index == b.hoisted.index and hoisted.expr == b.hoisted.expr,
+        .literal => |literal| std.meta.eql(literal, b.literal),
     };
 }
 
-fn expectPatternExtractionSyntheticRegions(
+fn expectPatternExtractionRoots(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) HoistedConstantsTestError!void {
-    const ModuleEnv = can.ModuleEnv;
-    const module_env = artifact.moduleEnvConst();
     var extraction_count: usize = 0;
 
     for (artifact.compile_time_roots.roots) |root| {
@@ -2675,149 +2673,23 @@ fn expectPatternExtractionSyntheticRegions(
 
         try std.testing.expectEqual(extraction.result_pattern, root.source_pattern orelse return error.PatternExtractionMissingSourcePattern);
         const checked_result_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedRootPattern;
+        try std.testing.expectEqual(extraction.result_pattern, checked_result_pattern);
 
-        const synthetic_match = artifact.checked_bodies.expr(root.expr);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern)),
-            synthetic_match.source_region,
-        );
+        // The root evaluates the match of its base expression against the
+        // scrutinee pattern that lowering builds from this description.
+        try std.testing.expectEqual(extraction.base_expr, root.rootExpr());
+        try std.testing.expectEqual(@as(?can.CIR.Expr.Idx, null), root.evaluatedExpr());
+        const parts = root.bodyParts();
+        try std.testing.expectEqual(@as(?can.CIR.Expr.Idx, extraction.base_expr), parts.expr);
+        try std.testing.expectEqual(@as(?can.CIR.Pattern.Idx, extraction.scrutinee_pattern), parts.pattern);
 
-        const match_data = switch (synthetic_match.data) {
-            .match_ => |match_| match_,
-            .pending,
-            .numeral,
-            .str_from_quote,
-            .str_segment,
-            .str,
-            .bytes_literal,
-            .lookup_local,
-            .lookup_external,
-            .lookup_required,
-            .list,
-            .empty_list,
-            .tuple,
-            .if_,
-            .call,
-            .record,
-            .empty_record,
-            .block,
-            .tag,
-            .nominal,
-            .zero_argument_tag,
-            .closure,
-            .lambda,
-            .binop,
-            .unary_minus,
-            .unary_not,
-            .field_access,
-            .dispatch_call,
-            .interpolation,
-            .structural_eq,
-            .structural_hash,
-            .method_eq,
-            .type_dispatch_call,
-            .tuple_access,
-            .runtime_error,
-            .crash,
-            .dbg,
-            .expect_err,
-            .expect,
-            .ellipsis,
-            .anno_only,
-            .break_,
-            .return_,
-            .row_coerce,
-            .for_,
-            .hosted_lambda,
-            .run_low_level,
-            => return error.PatternExtractionRootWasNotSyntheticMatch,
-        };
-        const checked_base_expr = artifact.checked_bodies.expr(match_data.cond);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.base_expr)),
-            checked_base_expr.source_region,
-        );
-        try std.testing.expectEqual(@as(usize, 1), match_data.branches.len);
-        try std.testing.expect(!match_data.is_try_suffix);
-        try std.testing.expect(!match_data.skip_exhaustiveness);
-
-        const branch = match_data.branches[0];
-        const branch_patterns = branch.patternsSlice(&artifact.checked_bodies);
-        try std.testing.expectEqual(@as(usize, 1), branch_patterns.len);
-        const checked_scrutinee_pattern = artifact.checked_bodies.pattern(branch_patterns[0].pattern);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern)),
-            checked_scrutinee_pattern.source_region,
-        );
-        try std.testing.expect(!branch_patterns[0].degenerate);
-        try std.testing.expectEqual(@as(usize, 0), branch_patterns[0].binderRemapsSlice(&artifact.checked_bodies).len);
-        try std.testing.expectEqual(@as(?check.CheckedArtifact.CheckedExprId, null), branch.guard);
-
-        const synthetic_lookup = artifact.checked_bodies.expr(branch.value);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.result_pattern)),
-            synthetic_lookup.source_region,
-        );
-        const lookup = switch (synthetic_lookup.data) {
-            .lookup_local => |lookup| lookup,
-            .pending,
-            .numeral,
-            .str_from_quote,
-            .str_segment,
-            .str,
-            .bytes_literal,
-            .lookup_external,
-            .lookup_required,
-            .list,
-            .empty_list,
-            .tuple,
-            .match_,
-            .if_,
-            .call,
-            .record,
-            .empty_record,
-            .block,
-            .tag,
-            .nominal,
-            .zero_argument_tag,
-            .closure,
-            .lambda,
-            .binop,
-            .unary_minus,
-            .unary_not,
-            .field_access,
-            .dispatch_call,
-            .interpolation,
-            .structural_eq,
-            .structural_hash,
-            .method_eq,
-            .type_dispatch_call,
-            .tuple_access,
-            .runtime_error,
-            .crash,
-            .dbg,
-            .expect_err,
-            .expect,
-            .ellipsis,
-            .anno_only,
-            .break_,
-            .return_,
-            .row_coerce,
-            .for_,
-            .hosted_lambda,
-            .run_low_level,
-            => return error.PatternExtractionRootValueWasNotSyntheticLookup,
-        };
-        try std.testing.expectEqual(checked_result_pattern, lookup.pattern);
-        try std.testing.expect(lookup.resolved != null);
+        // The extracted value is the hoisted constant of the result pattern.
+        const result_const = artifact.hoisted_constants.lookupByPattern(extraction.result_pattern) orelse
+            return error.PatternExtractionResultWasNotHoisted;
+        try std.testing.expectEqual(root.id, result_const.root);
     }
 
     try std.testing.expect(extraction_count >= 4);
-}
-
-fn expectRegionEqual(expected: base.Region, actual: base.Region) HoistedConstantsTestError!void {
-    try std.testing.expectEqual(expected.start.offset, actual.start.offset);
-    try std.testing.expectEqual(expected.end.offset, actual.end.offset);
 }
 
 fn writeEchoPlatform(dir: anytype) HoistedConstantsTestError!void {
@@ -2926,15 +2798,17 @@ fn countStoredHoistedI64(
     return count;
 }
 
+/// The hoisted constant roots that evaluate a match: a source `match`
+/// expression, or the match of a pattern extraction.
 fn countHoistedMatchRoots(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) usize {
+    const store = &artifact.moduleEnvConst().store;
     var count: usize = 0;
     for (artifact.compile_time_roots.roots) |root| {
         if (root.kind != .hoisted_constant) continue;
-        if (std.meta.activeTag(artifact.checked_bodies.expr(root.expr).data) == .match_) {
-            count += 1;
-        }
+        const evaluates_match = if (root.evaluatedExpr()) |evaluated| store.getExpr(evaluated) == .e_match else root.hoisted_body.? == .pattern_extraction;
+        if (evaluates_match) count += 1;
     }
     return count;
 }

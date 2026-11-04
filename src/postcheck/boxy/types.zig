@@ -42,7 +42,7 @@ pub const ModuleView = struct {
         return self.view.checked_types;
     }
 
-    pub fn bodies(self: *const ModuleView) checked.CheckedBodyStoreView {
+    pub fn bodies(self: *const ModuleView) checked.CheckedBodies {
         return self.view.checked_bodies;
     }
 

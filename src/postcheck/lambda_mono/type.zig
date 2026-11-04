@@ -58,7 +58,7 @@ pub const Field = struct {
 /// Capture record field entry.
 pub const CaptureField = struct {
     symbol: Common.Symbol,
-    binder: ?check.CheckedModule.PatternBinderId,
+    binder: ?check.CheckedBodies.BinderId,
     capture_id: ?check.CheckedModule.CaptureId = null,
     checked_capture_id: ?check.CheckedModule.CaptureId = null,
     capture_kind: check.CheckedModule.ConstCaptureKind = .lexical,

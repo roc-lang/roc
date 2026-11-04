@@ -17,6 +17,7 @@
 const std = @import("std");
 const collections = @import("collections");
 const base = @import("base");
+const can = @import("can");
 const check = @import("check");
 const layout = @import("layout");
 const lir_core = @import("lir_core");
@@ -28,9 +29,10 @@ const StoredFn = @import("stored_fn.zig");
 const Match = @import("match.zig");
 
 const Allocator = std.mem.Allocator;
+const CIR = can.CIR;
 const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
-const NumeralLiteral = @FieldType(checked.CheckedNumeralData, "literal");
+const NumeralLiteral = @FieldType(bodies_mod.NumeralData, "literal");
 const LIR = lir_core.LIR;
 const LirStore = lir_core.LirStore;
 const CheckedArithmetic = lir_core.CheckedArithmetic;
@@ -45,9 +47,11 @@ const WorkerId = lower.WorkerId;
 const invariant = types.invariant;
 const invariantFmt = types.invariantFmt;
 
-const CheckedExprId = checked.CheckedExprId;
-const CheckedPatternId = checked.CheckedPatternId;
-const CheckedStatementId = checked.CheckedStatementId;
+const bodies_mod = check.CheckedBodies;
+const ExprId = bodies_mod.ExprId;
+const PatternId = bodies_mod.PatternId;
+const StatementId = bodies_mod.StatementId;
+const BinderId = bodies_mod.BinderId;
 
 /// Lower worker `id`'s body into its procedure.
 pub fn lowerWorker(program: *Program, id: WorkerId) Allocator.Error!void {
@@ -63,10 +67,32 @@ pub fn lowerWorker(program: *Program, id: WorkerId) Allocator.Error!void {
 
 /// One unit of pending lowering work on the builder's task stack.
 pub const Task = union(enum) {
-    expr: CheckedExprId,
-    stmt: CheckedStatementId,
+    /// Lower an expression as its parent reads it: a row-coerced result
+    /// through its coercion (`lowerRowCoercion`).
+    expr: ExprId,
+    /// Lower an expression's own value: the value a row coercion converts,
+    /// or an expression a checked table names rather than a parent.
+    own_expr: ExprId,
+    stmt: StatementId,
+    /// Lower the body of compile-time root `root` of this body's module
+    /// (`lowerRootBody`).
+    root_body: checked.ComptimeRootId,
+    /// Pop the value of a hoisted pattern root's base expression, match it
+    /// against the root's pattern, and push the root's value
+    /// (`rootPatternMatch`).
+    root_pattern_match: checked.ComptimeRootId,
+    /// Push whether the value a custom literal pattern matches equals the
+    /// pattern's literal converted at its type
+    /// (`checked_bodies.LiteralPatternGuard`).
+    literal_pattern_guard: PatternId,
+    /// Push the value a custom literal pattern matches, which the pattern
+    /// binds.
+    literal_pattern_value: PatternId,
+    /// Push a custom literal pattern's literal converted at the pattern's
+    /// type.
+    literal_pattern_conversion: PatternId,
     /// Pop the value of a `decl` statement's expression and bind its pattern.
-    bind: struct { pattern: CheckedPatternId, ty: TypeId },
+    bind: struct { pattern: PatternId, ty: TypeId },
     /// Pop and drop one value.
     discard,
     /// Re-tag the popped ground value of type `from` into the open-row type
@@ -91,19 +117,19 @@ pub const Task = union(enum) {
     finish_low_level: struct { op: LIR.LowLevel, arg_count: u32, result: TypeId, arg_types: []const TypeId = &.{} },
     /// Return to the enclosing expression's source region.
     restore_region: base.Region,
-    finish_record: CheckedExprId,
-    finish_tuple: CheckedExprId,
-    finish_tag: CheckedExprId,
+    finish_record: ExprId,
+    finish_tuple: ExprId,
+    finish_tag: ExprId,
     /// `finish_tag` at the type of the nominal the tag constructs.
-    finish_tag_at: struct { expr: CheckedExprId, ty: TypeId },
-    finish_list: CheckedExprId,
+    finish_tag_at: struct { expr: ExprId, ty: TypeId },
+    finish_list: ExprId,
     finish_str: struct { count: u32 },
     finish_eq: struct { negated: bool, operand: TypeId },
     /// Pop a Bool and check it as an `expect`.
-    finish_expect: CheckedExprId,
+    finish_expect: ExprId,
     /// Pop the condition of if-branch `index` of `expr`.
     /// A null `join` is a construct in tail position: each branch returns.
-    if_test: struct { expr: CheckedExprId, index: u32, join: ?LIR.JoinPointId, merge: ?MergeId },
+    if_test: struct { expr: ExprId, index: u32, join: ?LIR.JoinPointId, merge: ?MergeId },
     /// Pop a value and jump to `join` with it.
     jump: LIR.JoinPointId,
     /// Jump to a join that carries no value (a loop's head or exit).
@@ -111,13 +137,13 @@ pub const Task = union(enum) {
     /// Push the `Numeral` argument of a `from_numeral` call.
     numeral_arg: struct { literal: NumeralLiteral, ty: TypeId },
     /// Pop a `for` loop's iterable and run the loop.
-    for_start: struct { pattern: CheckedPatternId, body: CheckedExprId, plan: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId },
+    for_start: struct { loop: u32, pattern: PatternId, body: ExprId, plan: static_dispatch.IteratorForPlanId },
     /// Rebind a merge's binders to their values before its construct.
     restore_merge: MergeId,
     /// Rebind a merge's binders to its join's parameters.
     enter_merge: MergeId,
     /// Pop a loop condition: enter the body or leave the loop.
-    loop_test: struct { body: CheckedExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId },
+    loop_test: struct { body: ExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId },
     end_loop,
     /// Leave the innermost scheme alias scope (`Builder.alias_scopes`).
     leave_alias_scope,
@@ -128,13 +154,13 @@ pub const Task = union(enum) {
     rejected_for: static_dispatch.IteratorForPlanId,
     /// Fill the slots of a recursive value declaration's binders, once the
     /// declaration's pattern bound them.
-    fill_recursive_slots: CheckedPatternId,
+    fill_recursive_slots: PatternId,
     /// Continue emitting at `hole`.
     resume_at: CFStmtId,
-    finish_field_access: CheckedExprId,
+    finish_field_access: ExprId,
     /// Pop a tag union value and compare its discriminant with `tag`'s.
     finish_discriminant_eq: struct { value_ty: TypeId, tag: check.CheckedNames.TagLabelId, negated: bool },
-    finish_tuple_access: CheckedExprId,
+    finish_tuple_access: ExprId,
     /// Pop a value of this type, report it through `dbg`, and push it back.
     finish_dbg: TypeId,
     /// Restore stored constant `node` at `ty`. `root` is the compile-time
@@ -163,27 +189,28 @@ pub const Task = union(enum) {
     /// call's arguments' types and `result` its result's.
     finish_local_call: struct { closure: LocalId, words: []const LocalId, params: []const TypeId, ret: TypeId, arg_types: []const TypeId, result: TypeId },
     /// Push an interpolation's literal segments as the `List(Str)` of `ty`.
-    segments_arg: struct { expr: CheckedExprId, ty: TypeId },
+    segments_arg: struct { expr: ExprId, ty: TypeId },
     /// Pop an interpolation's assembler and call it with the interpolated
     /// values.
-    finish_interpolation: CheckedExprId,
+    finish_interpolation: ExprId,
     /// Pop a literal conversion's `Try` result and push the literal's value.
     finish_literal_conversion: FinishLiteralConversion,
     finish_interpolation_call: struct { assembler: LocalId, assembler_ty: TypeId, values_ty: TypeId, count: u32, result: TypeId },
     /// Pop a value and a hasher and hash the value structurally.
     finish_hash: struct { value: TypeId, result: TypeId },
     /// Pop an `expect`'s failing `?` value and fail the expect with it.
-    finish_expect_err: struct { expr: CheckedExprId, value: TypeId },
-    /// Push a string literal of the checked bodies as a `Str` value.
-    push_value_str: checked.CheckedStringLiteralId,
+    finish_expect_err: struct { expr: ExprId, value: TypeId },
+    /// Push the text of the string literal at this CIR node (an
+    /// expression or a string literal pattern) as a `Str` value.
+    push_value_quote: u32,
     /// Push `local` as a value.
     push_value: LocalId,
     /// Pop a value; the enclosing procedure returns it.
     ret,
     /// Pop the left operand of a short-circuit operator.
-    short_circuit: struct { is_and: bool, rhs: CheckedExprId, join: LIR.JoinPointId },
+    short_circuit: struct { is_and: bool, rhs: ExprId, join: LIR.JoinPointId },
     /// Pop the scrutinee of a match and compile its branches.
-    match_start: CheckedExprId,
+    match_start: ExprId,
     /// Continue a match's decision-tree emission with the statement that
     /// answers its outstanding request (null on its first step).
     match_advance: struct { state: *Match.State, input: ?CFStmtId },
@@ -193,13 +220,28 @@ pub const Task = union(enum) {
 
 /// A literal conversion the compile-time evaluator runs where the literal
 /// is: the literal, its conversion's `Try` type, and the literal's type.
-pub const FinishLiteralConversion = struct { expr: CheckedExprId, kind: LIR.LiteralRejectionKind, try_ty: TypeId, result: TypeId };
+pub const FinishLiteralConversion = struct { node: u32, kind: LIR.LiteralRejectionKind, try_ty: TypeId, result: TypeId };
+
+/// A literal a body converts: a literal expression, converted at its own
+/// type, or a custom literal pattern's literal, converted at the pattern's.
+pub const LiteralAt = union(enum) {
+    expr: ExprId,
+    pattern: PatternId,
+
+    /// The literal's CIR node.
+    pub fn node(self: LiteralAt) u32 {
+        return switch (self) {
+            .expr => |expr| @backingInt(expr),
+            .pattern => |pattern| @backingInt(pattern),
+        };
+    }
+};
 
 /// A control-flow construct's merge of the binders it reassigns (a checked
 /// state merge plan): their values before it, and the join parameters that
 /// carry their values after it.
 pub const Merge = struct {
-    binders: []const checked.PatternBinderId,
+    binders: []const BinderId,
     pre: []LocalId,
     params: []LocalId,
 };
@@ -219,7 +261,7 @@ pub const JoinInfo = struct {
 pub const LoopExit = struct { join: LIR.JoinPointId, reached: bool };
 
 /// A value a pattern tests, with the value's type.
-pub const PatternItem = struct { pattern: CheckedPatternId, value: LocalId, ty: TypeId };
+pub const PatternItem = struct { pattern: PatternId, value: LocalId, ty: TypeId };
 
 /// The key and variable descriptors a recursive member's placeholder was
 /// opened with, which its close repeats.
@@ -295,7 +337,7 @@ const SavedScope = struct {
 /// requirements of the scope the alias owns.
 const AliasStep = struct {
     module: ModuleIndex,
-    lookup: CheckedExprId,
+    lookup: ExprId,
     vars: []const checked.CheckedTypeId,
     params: []const static_dispatch.EvidenceParamRecord,
     literal_requirements: []const checked.LiteralRequirement = &.{},
@@ -358,7 +400,7 @@ pub const Builder = struct {
     env: types.Env,
     store: *LirStore,
     frame_locals: std.ArrayList(LocalId) = .empty,
-    binders: collections.DenseMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
+    binders: collections.DenseMapUnmanaged(BinderId, LocalId) = .empty,
     /// The descriptor local of each scope variable (its hidden parameter).
     var_descs: []LocalId = &.{},
     /// The dictionaries in scope (`Worker.scope_dictionary_indices` order).
@@ -384,11 +426,11 @@ pub const Builder = struct {
     /// The slot of each recursive value binder in scope (design.md
     /// "Recursive values"): a `Box` of a one-item tuple holding the value,
     /// which callables capture in place of the value.
-    recursive_slots: collections.DenseMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
+    recursive_slots: collections.DenseMapUnmanaged(BinderId, LocalId) = .empty,
     /// What each lambda this body declares captured where it was declared:
     /// a `var`'s value then, whatever the `var` holds where the procedure is
     /// later used.
-    declared_captures: collections.DenseMapUnmanaged(CheckedExprId, []const LocalId) = .empty,
+    declared_captures: collections.DenseMapUnmanaged(ExprId, []const LocalId) = .empty,
     /// While lowering an exact procedure alias's forwarded lookup in the
     /// alias's own module (`aliasTargetHidden`): where that alias's scopes
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
@@ -426,10 +468,16 @@ pub const Builder = struct {
     recursive_boxes: collections.DenseMapUnmanaged(LocalId, LocalId) = .empty,
     opaque_word_desc: ?LocalId = null,
     /// Expressions whose value is built at a row coercion's destination
-    /// type rather than their own (design.md "Row Coercion Primitive").
-    destination_types: collections.DenseMapUnmanaged(CheckedExprId, TypeId) = .empty,
-    /// The expressions whose value is the procedure's result.
-    tail_exprs: collections.DenseMapUnmanaged(CheckedExprId, void) = .empty,
+    /// type rather than their own (design.md "Row Coercion Primitive"), as
+    /// their parents read them: for a row-coerced result, the destination of
+    /// its coercion.
+    destination_types: collections.DenseMapUnmanaged(ExprId, TypeId) = .empty,
+    /// The destination each row-coerced result's own value is built at: the
+    /// type its coercion produces (`lowerRowCoercion`).
+    coerced_destinations: collections.DenseMapUnmanaged(ExprId, TypeId) = .empty,
+    /// The expressions whose value is the procedure's result, as their
+    /// parents read them.
+    tail_exprs: collections.DenseMapUnmanaged(ExprId, void) = .empty,
     /// The procedure's calls and joins as emitted, for its tail calls.
     tail_calls: lir_core.TailCallBuilder,
     /// The statement emitted last, while nothing follows it.
@@ -489,6 +537,7 @@ pub const Builder = struct {
         self.join_points.deinit(self.allocator);
         self.join_infos.deinit(self.allocator);
         self.destination_types.deinit(self.allocator);
+        self.coerced_destinations.deinit(self.allocator);
         self.tail_exprs.deinit(self.allocator);
         self.tail_calls.deinit();
         self.merges.deinit(self.allocator);
@@ -501,7 +550,7 @@ pub const Builder = struct {
         return self.program.worker(self.worker_id);
     }
 
-    pub fn bodies(self: *const Builder) checked.CheckedBodyStoreView {
+    pub fn bodies(self: *const Builder) checked.CheckedBodies {
         return self.view.bodies();
     }
 
@@ -543,18 +592,48 @@ pub const Builder = struct {
         return self.program.converter().convert(self.module, ty, self.env);
     }
 
-    pub fn exprType(self: *Builder, expr: CheckedExprId) Allocator.Error!TypeId {
-        const own = try self.convert(self.bodies().expr(expr).ty);
+    /// The type of `expr`'s own value.
+    pub fn exprType(self: *Builder, expr: ExprId) Allocator.Error!TypeId {
+        const own = try self.convert(self.bodies().exprType(expr));
         // A value flowing to a destination of the same shape is built at the
         // destination's type; a diverging value's own type can differ in
         // shape, and it builds nothing. A value no construction builds
         // keeps its own type and is re-tagged into its destination
         // (`retagTarget`).
-        if (self.destination_types.get(expr)) |destination| {
+        if (self.ownDestination(expr)) |destination| {
             if (try self.retagTarget(expr, own) != null) return own;
             if (try types.compatible(self.allocator, &self.program.store, own, destination)) return destination;
         }
         return own;
+    }
+
+    /// The type `expr`'s parent reads its value at: the type its row
+    /// coercion produces when checking recorded one, which converts the
+    /// value as a read does (`retagInto`), and its own value's type
+    /// otherwise.
+    pub fn valueType(self: *Builder, expr: ExprId) Allocator.Error!TypeId {
+        const wide = self.bodies().rowCoercion(expr) orelse return try self.exprType(expr);
+        const own = try self.convert(wide);
+        if (self.destination_types.get(expr)) |destination| {
+            if (try self.retagInto(own, destination) != null) return own;
+            if (try types.compatible(self.allocator, &self.program.store, own, destination)) return destination;
+        }
+        return own;
+    }
+
+    /// The destination `expr`'s own value is built at, if any: its
+    /// coercion's type for a row-coerced result, and the destination its
+    /// parent gives it otherwise.
+    fn ownDestination(self: *Builder, expr: ExprId) ?TypeId {
+        if (self.bodies().rowCoercion(expr) != null) return self.coerced_destinations.get(expr);
+        return self.destination_types.get(expr);
+    }
+
+    /// Whether `expr`'s own value is the procedure's result. A row-coerced
+    /// result's value is its coercion's, never the procedure's directly.
+    pub fn isTail(self: *Builder, expr: ExprId) bool {
+        if (self.bodies().rowCoercion(expr) != null) return false;
+        return self.tail_exprs.contains(expr);
     }
 
     /// The destination a value of expression `expr` (of its own type `own`)
@@ -563,13 +642,20 @@ pub const Builder = struct {
     /// type, which differs from its destination's where the destination
     /// widens a row of it (design.md "Row Coercion Primitive", "Sealed
     /// Result Rows").
-    pub fn retagTarget(self: *Builder, expr: CheckedExprId, own: TypeId) Allocator.Error!?TypeId {
-        const destination = self.destination_types.get(expr) orelse return null;
+    pub fn retagTarget(self: *Builder, expr: ExprId, own: TypeId) Allocator.Error!?TypeId {
+        const destination = self.ownDestination(expr) orelse return null;
         if (destination == own) return null;
-        switch (self.bodies().expr(expr).data) {
+        switch (self.bodies().exprData(expr)) {
             .block, .if_, .match_, .nominal, .dbg, .tag, .zero_argument_tag, .record, .empty_record, .tuple, .list, .empty_list, .numeral, .str_from_quote, .str_segment, .str, .interpolation, .lambda, .closure, .runtime_error, .crash, .return_ => return null,
-            .pending, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .call, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .expect_err, .expect, .ellipsis, .anno_only, .break_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .call, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .expect_err, .expect, .ellipsis, .anno_only, .break_, .for_, .hosted_lambda, .run_low_level => {},
         }
+        return try self.retagInto(own, destination);
+    }
+
+    /// The destination a value of type `own` produced rather than built is
+    /// converted into, or null when the two need no conversion.
+    fn retagInto(self: *Builder, own: TypeId, destination: TypeId) Allocator.Error!?TypeId {
+        if (destination == own) return null;
         // Two closed types committing one layout need no conversion.
         if (try self.closed(own) and try self.closed(destination) and try self.program.layouts.layoutOf(own) == try self.program.layouts.layoutOf(destination)) return null;
         return destination;
@@ -578,14 +664,19 @@ pub const Builder = struct {
     /// The type a read of a stored constant restores its value at: the
     /// read's own, closed type, converted into its destination where that
     /// widens it, or else the type `exprType` gives it.
-    pub fn constReadType(self: *Builder, expr: CheckedExprId) Allocator.Error!TypeId {
-        const own = try self.convert(self.bodies().expr(expr).ty);
+    pub fn constReadType(self: *Builder, expr: ExprId) Allocator.Error!TypeId {
+        const own = try self.convert(self.bodies().exprType(expr));
         if (self.program.store.isClosed(own)) return own;
         return try self.exprType(expr);
     }
 
-    pub fn patternType(self: *Builder, pattern: CheckedPatternId) Allocator.Error!TypeId {
-        return self.convert(self.bodies().pattern(pattern).ty);
+    /// The source region of the CIR node `raw_node` of this body's module.
+    fn nodeRegion(self: *Builder, raw_node: u32) base.Region {
+        return self.bodies().env.store.getNodeRegion(@fromBackingInt(raw_node));
+    }
+
+    pub fn patternType(self: *Builder, pattern: PatternId) Allocator.Error!TypeId {
+        return self.convert(self.bodies().patternType(pattern));
     }
 
     // -- Statements --
@@ -742,11 +833,11 @@ pub const Builder = struct {
     pub const MergeEnd = enum { joined, tail };
 
     /// Start a merge of `binders`, recording their current values.
-    pub fn beginMerge(self: *Builder, plan_binders: []const checked.PatternBinderId, end: MergeEnd) Allocator.Error!?MergeId {
+    pub fn beginMerge(self: *Builder, plan_binders: []const BinderId, end: MergeEnd) Allocator.Error!?MergeId {
         // A binder the construct reassigns but that is not bound before it
         // is declared inside it, and goes out of scope with it.
         const arena = self.program.arena.allocator();
-        var in_scope: std.ArrayList(checked.PatternBinderId) = .empty;
+        var in_scope: std.ArrayList(BinderId) = .empty;
         for (plan_binders) |binder| {
             if (self.binders.contains(binder)) try in_scope.append(arena, binder);
         }
@@ -1318,10 +1409,8 @@ pub const Builder = struct {
         const body_start = try self.newHole();
         self.hole = body_start;
         switch (template.body) {
-            .checked_body => |body_id| {
-                const body = self.bodies().body(body_id);
-                const root = self.bodies().expr(body.root_expr);
-                switch (root.data) {
+            .checked_body => |root_expr| {
+                switch (self.bodies().exprData(root_expr)) {
                     .lambda => |lambda| {
                         if (lambda.args.len != params.len) invariant("a template's lambda arity differs from its signature");
                         for (lambda.args, params, worker.params) |pattern, param, param_ty| try self.bindIrrefutable(pattern, param, param_ty);
@@ -1355,10 +1444,10 @@ pub const Builder = struct {
                             try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message }, .checked_error = true } });
                         }
                     },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .run_low_level => {
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .run_low_level => {
                         if (params.len != 0) invariant("a non-lambda template body has parameters");
                         try self.tasks.append(self.allocator, .ret);
-                        try self.tasks.append(self.allocator, .{ .expr = body.root_expr });
+                        try self.tasks.append(self.allocator, .{ .own_expr = root_expr });
                     },
                 }
             },
@@ -1389,12 +1478,12 @@ pub const Builder = struct {
                         .const_node => |node| if (self.program.moduleUnit() != null)
                             try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = self.currentWorker().ret, .root = wrapper.root } })
                         else
-                            try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
+                            try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
                         .fn_value => |fn_id| if (self.program.moduleUnit() != null)
                             try self.restoreFn(.{ .module = self.module }, fn_id, self.currentWorker().ret)
                         else
-                            try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
-                        .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
+                            try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
+                        .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
                     },
                     // A literal argument's body is the conversion its root
                     // names, called on another module's literal.
@@ -1611,11 +1700,11 @@ pub const Builder = struct {
     /// A lambda worker in the uniform erased-callable ABI: its one argument
     /// is the packed argument record, and its captures hold the captured
     /// values followed by the outer worker's descriptors.
-    pub fn lowerLambdaBody(self: *Builder, lambda_expr: CheckedExprId) Allocator.Error!void {
+    pub fn lowerLambdaBody(self: *Builder, lambda_expr: ExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        const lambda = switch (self.bodies().expr(lambda_expr).data) {
+        const lambda = switch (self.bodies().exprData(lambda_expr)) {
             .lambda => |lambda| lambda,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
         };
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
@@ -1668,9 +1757,8 @@ pub const Builder = struct {
         }
         defer if (capture_count != 0) self.allocator.free(capture_values);
         for (worker.captures, worker.capture_types, 0..) |capture, capture_ty, index| {
-            const binder = self.bodies().pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
-                invariant("a closure capture named a pattern without a binder");
-            if (self.bodies().patternBinder(binder).recursive_value) {
+            const binder = capture.pattern;
+            if (self.bodies().binder(binder).recursive_value) {
                 // A recursive value's slot: the value is read from it on
                 // entry, and the slot stays in scope for the callables this
                 // body builds that capture the binder too.
@@ -2323,7 +2411,7 @@ pub const Builder = struct {
     }
 
     /// A default expression's worker: the expression, in no scope.
-    pub fn lowerDefaultBody(self: *Builder, expr: CheckedExprId) Allocator.Error!void {
+    pub fn lowerDefaultBody(self: *Builder, expr: ExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
@@ -2333,7 +2421,7 @@ pub const Builder = struct {
         const body_start = try self.newHole();
         self.hole = body_start;
         try self.tasks.append(self.allocator, .ret);
-        try self.tasks.append(self.allocator, .{ .expr = expr });
+        try self.tasks.append(self.allocator, .{ .own_expr = expr });
         try self.run();
         try self.finishProc(entry, body_start, &.{}, ret_layout);
     }
@@ -2649,9 +2737,38 @@ pub const Builder = struct {
             // lowered, and an expression there stands for a value no
             // execution produces.
             .expr => |expr| if (self.hole == null) {
-                const checked_ty = self.bodies().expr(expr).ty;
-                try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.exprType(expr), .frame));
+                const checked_ty = self.bodies().valueType(expr);
+                try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.valueType(expr), .frame));
             } else try self.stepExpr(expr),
+            .own_expr => |expr| if (self.hole == null) {
+                const checked_ty = self.bodies().exprType(expr);
+                try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.exprType(expr), .frame));
+            } else try self.stepOwnExpr(expr),
+            .root_body => |root| try self.lowerRootBody(root),
+            .root_pattern_match => |root| try self.rootPatternMatch(root),
+            .literal_pattern_guard => |pattern| if (self.hole == null) {
+                const checked_ty = self.bodies().literalPatternGuard(pattern).?.equality_ty;
+                try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.convert(checked_ty), .frame));
+            } else {
+                try self.push(.{ .restore_region = self.region });
+                try self.lowerLiteralPatternGuard(pattern);
+            },
+            .literal_pattern_value => |pattern| if (self.hole == null) {
+                try self.pushValue(try self.literalPatternDeadValue(pattern));
+            } else {
+                try self.pushValue(self.binders.get(pattern) orelse invariant("a custom literal pattern's guard read a value the pattern never bound"));
+            },
+            .literal_pattern_conversion => |pattern| if (self.hole == null) {
+                try self.pushValue(try self.literalPatternDeadValue(pattern));
+            } else {
+                try self.push(.{ .restore_region = self.region });
+                self.region = self.nodeRegion(@backingInt(pattern));
+                const conversion = self.bodies().literalConversion(@backingInt(pattern));
+                switch (conversion.literal) {
+                    .numeral => |literal| try self.lowerNumeral(.{ .pattern = pattern }, literal, conversion.plan, conversion.conversion_root),
+                    .quote => |text| try self.lowerQuote(.{ .pattern = pattern }, text, conversion.plan, conversion.conversion_root),
+                }
+            },
             .stmt => |stmt| if (self.hole != null) try self.stepStmt(stmt),
             .bind => |bind| try self.bindIrrefutable(bind.pattern, self.popValue(), bind.ty),
             .discard => _ = self.popValue(),
@@ -2672,13 +2789,13 @@ pub const Builder = struct {
             .unreachable_value => |ty| try self.pushValue(try self.localOf(ty, .frame)),
             .unreachable_or_unit => try self.pushValue(try self.unitValue()),
             .segments_arg => |arg| {
-                const interpolation = self.bodies().expr(arg.expr).data.interpolation;
-                const elems = try self.allocator.alloc(LocalId, interpolation.segments.len);
+                const interpolation = self.bodies().exprData(arg.expr).interpolation;
+                const elems = try self.allocator.alloc(LocalId, interpolation.segmentCount());
                 defer self.allocator.free(elems);
-                for (interpolation.segments, elems) |segment, *elem| {
-                    elem.* = switch (self.bodies().expr(segment).data) {
-                        .str_segment => |literal| try self.strLiteral(self.bodies().stringLiteral(literal)),
-                        .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("an interpolation segment is not a string segment"),
+                for (elems, 0..) |*elem, index| {
+                    elem.* = switch (self.bodies().exprData(interpolation.segment(index))) {
+                        .str_segment => |literal| try self.strLiteral(self.bodies().text(literal)),
+                        .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("an interpolation segment is not a string segment"),
                     };
                 }
                 const list = try self.localOf(arg.ty, .frame);
@@ -2701,7 +2818,7 @@ pub const Builder = struct {
                 try self.emitDyn(target, .{ .hash = .{ .hasher = hasher, .value = value, .desc = try self.descOf(hash.value) } });
                 try self.pushValue(target);
             },
-            .push_value_str => |literal| try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(literal))),
+            .push_value_quote => |node| try self.pushValue(try self.textLiteral(self.bodies().quoteText(node))),
 
             .resume_at => |hole| self.hole = hole,
             .ret => {
@@ -2755,7 +2872,7 @@ pub const Builder = struct {
                 const loop = self.loops.pop().?;
                 if (!loop.reached) try self.emitTerminal(.runtime_error);
             },
-            .for_start => |for_| try self.forStart(for_.pattern, for_.body, for_.plan, for_.mutations),
+            .for_start => |for_| try self.forStart(for_.loop, for_.pattern, for_.body, for_.plan),
             .numeral_arg => |arg| try self.pushValue(try self.numeralArgument(arg.literal, arg.ty)),
             .finish_call => |call| {
                 defer self.allocator.free(call.hidden);
@@ -2834,9 +2951,9 @@ pub const Builder = struct {
             .finish_field_access => |expr| try self.finishFieldAccess(expr),
             .finish_discriminant_eq => |eq| try self.finishDiscriminantEq(eq.value_ty, eq.tag, eq.negated),
             .finish_tuple_access => |expr| {
-                const access = self.bodies().expr(expr).data.tuple_access;
+                const access = self.bodies().exprData(expr).tuple_access;
                 const tuple = self.popValue();
-                const tuple_ty = try self.structuralType(try self.exprType(access.tuple));
+                const tuple_ty = try self.structuralType(try self.valueType(access.tuple));
                 const elems = switch (self.program.store.get(tuple_ty)) {
                     .tuple => |span| self.program.store.span(span),
                     .primitive, .empty_record, .record, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a tuple access's receiver is not a tuple"),
@@ -2850,7 +2967,7 @@ pub const Builder = struct {
                 const expr = self.bodies().expr(fail.expr);
                 const rendered = try self.closedLocal(.str);
                 try self.emitDyn(rendered, .{ .inspect = .{ .value = value, .desc = try self.descOf(fail.value) } });
-                const prefix_text = try std.fmt.allocPrint(self.allocator, "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(", .{self.bodies().stringLiteral(expr.data.expect_err.snippet)});
+                const prefix_text = try std.fmt.allocPrint(self.allocator, "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(", .{self.bodies().text(expr.data.expect_err.snippet)});
                 defer self.allocator.free(prefix_text);
                 const with_value = try self.closedLocal(.str);
                 try self.emitLowLevel(with_value, .str_concat, &.{ try self.strLiteral(prefix_text), rendered });
@@ -2934,9 +3051,9 @@ pub const Builder = struct {
 
     /// Lower `expr` now, at the current statement position, and return its
     /// value: the tasks it pushes run before this returns.
-    pub fn lowerExprNow(self: *Builder, expr: CheckedExprId) Allocator.Error!LocalId {
+    pub fn lowerNow(self: *Builder, task: Task) Allocator.Error!LocalId {
         const base_tasks = self.tasks.items.len;
-        try self.push(.{ .expr = expr });
+        try self.push(task);
         while (self.tasks.items.len > base_tasks) try self.step(self.tasks.pop().?);
         return self.popValue();
     }
@@ -2947,7 +3064,7 @@ pub const Builder = struct {
     /// reads it instead of computing it: not the root this body computes,
     /// not a root whose evaluation failed (it runs in place), and not a
     /// guarded binding's root, whose declaration keeps its right-hand side.
-    fn storedHoisted(self: *Builder, expr_id: CheckedExprId) Allocator.Error!?HoistedRead {
+    fn storedHoisted(self: *Builder, expr_id: ExprId) Allocator.Error!?HoistedRead {
         const entry = self.view.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.own_root) |own| if (own == entry.root) return null;
         const root = self.view.view.compile_time_roots.root(entry.root);
@@ -2972,7 +3089,7 @@ pub const Builder = struct {
     fn hoistedRootOfConstRef(self: *Builder, const_ref: checked.ConstRef) ?checked.ComptimeRootId {
         if (!std.mem.eql(u8, &const_ref.artifact.bytes, &self.view.key.bytes)) return null;
         return switch (const_ref.owner) {
-            .hoisted_expr => |hoisted| (self.view.view.hoisted_constants.lookupByExpr(hoisted.expr) orelse return null).root,
+            .hoisted_root => |hoisted| hoisted.root,
             .top_level_binding => |top_level| self.view.view.compile_time_roots.lookupIdByPattern(top_level.pattern),
         };
     }
@@ -3013,16 +3130,42 @@ pub const Builder = struct {
     /// Lower an expression. What its enclosing expression emits after it,
     /// such as the call taking it as an argument, belongs to the enclosing
     /// expression's region.
-    pub fn stepExpr(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn stepExpr(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         try self.push(.{ .restore_region = self.region });
         try self.lowerExpr(expr_id);
     }
 
-    fn lowerExpr(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    /// Lower an expression's own value. What its enclosing expression emits
+    /// after it belongs to the enclosing expression's region.
+    pub fn stepOwnExpr(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        try self.push(.{ .restore_region = self.region });
+        try self.lowerOwnExpr(expr_id);
+    }
+
+    /// Lower an expression as its parent reads it.
+    fn lowerExpr(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        if (self.bodies().rowCoercion(expr_id)) |wide| return try self.lowerRowCoercion(expr_id, wide);
+        try self.lowerOwnExpr(expr_id);
+    }
+
+    /// The coercion of a row-coerced result into the widened type its
+    /// parent reads it at: the value is built straight at the coercion's
+    /// row (design.md "Row Coercion Primitive").
+    fn lowerRowCoercion(self: *Builder, expr_id: ExprId, wide: checked.CheckedTypeId) Allocator.Error!void {
+        self.region = self.nodeRegion(@backingInt(expr_id));
+        if (self.destination_types.get(expr_id)) |destination| if (!try self.program.converter().hasError(self.module, wide)) {
+            const own = try self.convert(wide);
+            if (try self.retagInto(own, destination)) |to| try self.push(.{ .retag = .{ .from = own, .to = to } });
+        };
+        try self.coerced_destinations.put(self.allocator, expr_id, try self.valueType(expr_id));
+        try self.push(.{ .own_expr = expr_id });
+    }
+
+    fn lowerOwnExpr(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const expr = self.bodies().expr(expr_id);
-        if (self.destination_types.get(expr_id)) |destination| try self.passDestination(expr.data, destination);
+        if (self.ownDestination(expr_id)) |destination| try self.passDestination(expr.data, destination);
         self.region = expr.source_region;
-        if (self.destination_types.contains(expr_id) and !try self.program.converter().hasError(self.module, expr.ty)) {
+        if (self.ownDestination(expr_id) != null and !try self.program.converter().hasError(self.module, expr.ty)) {
             const own = try self.convert(expr.ty);
             if (try self.retagTarget(expr_id, own)) |destination| try self.push(.{ .retag = .{ .from = own, .to = destination } });
         }
@@ -3033,40 +3176,40 @@ pub const Builder = struct {
             .pending => |root| return try self.pendingValueRead(self.module, root, try self.exprType(expr_id)),
         };
         switch (expr.data) {
-            .numeral => |numeral| try self.lowerNumeral(expr_id, numeral),
-            .str_segment => |literal| try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(literal))),
+            .numeral => |numeral| try self.lowerNumeral(.{ .expr = expr_id }, numeral.literal, numeral.plan, numeral.conversion_root),
+            .str_segment => |literal| try self.pushValue(try self.strLiteral(self.bodies().text(literal))),
             .str => |parts| {
-                try self.push(.{ .finish_str = .{ .count = @intCast(parts.len) } });
-                var index = parts.len;
+                try self.push(.{ .finish_str = .{ .count = @intCast(parts.len()) } });
+                var index = parts.len();
                 while (index > 0) {
                     index -= 1;
-                    try self.push(.{ .expr = parts[index] });
+                    try self.push(.{ .expr = parts.at(index) });
                 }
             },
             .lookup_local => |lookup| try self.lowerLookupLocal(expr_id, lookup.pattern, lookup.resolved),
             .lookup_external => |resolved| try self.lowerLookupExternal(expr_id, resolved orelse invariant("an external lookup had no resolved reference")),
             .lookup_required => |resolved| try self.lowerLookupExternal(expr_id, resolved orelse invariant("a platform requirement lookup had no resolved reference")),
             .block => |block| {
-                if (self.tail_exprs.contains(expr_id)) try self.tail_exprs.put(self.allocator, block.final_expr, {});
+                if (self.isTail(expr_id)) try self.tail_exprs.put(self.allocator, block.final_expr, {});
                 // A divergent statement leaves the rest of the block
                 // unreachable: nothing after it is lowered, and the block's
                 // value is never produced.
                 const mode = self.inlineExpectMode();
                 const diverges_at: ?usize = for (block.statements, 0..) |stmt, position| {
-                    if (self.bodies().statementDiverges(stmt, mode)) break position;
+                    if (try self.bodies().statementDiverges(stmt, mode)) break position;
                     // A declaration whose value diverges binds nothing, so
                     // nothing after it is reached either.
-                    switch (self.bodies().statement(stmt).data) {
-                        .decl => |decl| if (self.bodies().exprDiverges(decl.expr, mode)) break position,
-                        .var_ => |var_| if (self.bodies().exprDiverges(var_.expr, mode)) break position,
-                        .pending, .promoted_proc, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
+                    switch (self.bodies().statementData(stmt)) {
+                        .decl => |decl| if (try self.bodies().exprDiverges(decl.expr, mode)) break position,
+                        .var_ => |var_| if (try self.bodies().exprDiverges(var_.expr, mode)) break position,
+                        .promoted_proc, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .rejected_method_decl, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
                     }
                 } else null;
                 var index = if (diverges_at) |position| position + 1 else block.statements.len;
                 if (diverges_at == null) {
                     try self.push(.{ .expr = block.final_expr });
                 } else {
-                    const block_ty = self.bodies().expr(expr_id).ty;
+                    const block_ty = self.bodies().exprType(expr_id);
                     try self.push(.{ .diverged = if (try self.program.converter().hasError(self.module, block_ty)) null else try self.exprType(expr_id) });
                 }
                 while (index > 0) {
@@ -3081,7 +3224,7 @@ pub const Builder = struct {
             .run_low_level => |run_ll| {
                 const args = run_ll.args[0 .. run_ll.args.len - run_ll.op.typeOnlyOperands()];
                 const arg_types = try self.program.arena.allocator().alloc(TypeId, args.len);
-                for (args, arg_types) |arg, *arg_ty| arg_ty.* = try self.exprType(arg);
+                for (args, arg_types) |arg, *arg_ty| arg_ty.* = try self.valueType(arg);
                 try self.push(.{ .finish_low_level = .{ .op = run_ll.op, .arg_count = @intCast(args.len), .result = try self.exprType(expr_id), .arg_types = arg_types } });
                 try self.pushExprsReversed(args);
             },
@@ -3093,7 +3236,7 @@ pub const Builder = struct {
                 var index = record.fields.len;
                 while (index > 0) {
                     index -= 1;
-                    try self.push(.{ .expr = record.fields[index].value });
+                    try self.push(.{ .expr = self.bodies().recordField(record.fields[index]).value });
                 }
                 // An update evaluates its base first.
                 if (record.ext) |base_expr| try self.push(.{ .expr = base_expr });
@@ -3116,16 +3259,16 @@ pub const Builder = struct {
                 // A tag constructing a nominal is built at the nominal's
                 // declared backing row (design.md "Nominal Constructor
                 // Backing Relation"), not at the tag's own narrower row.
-                const backing = self.bodies().expr(nominal.backing_expr);
-                switch (backing.data) {
+                const backing = self.bodies().exprData(nominal.backing_expr);
+                switch (backing) {
                     .tag => |tag| {
                         const nominal_ty = try self.exprType(expr_id);
-                        try self.passDestination(self.bodies().expr(nominal.backing_expr).data, nominal_ty);
+                        try self.passDestination(backing, nominal_ty);
                         try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = nominal_ty } });
                         try self.pushExprsReversed(tag.args);
                     },
                     .zero_argument_tag => try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = try self.exprType(expr_id) } }),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
                         // The operand is the nominal's own backing, which a
                         // padded declaration lays out differently from the
                         // operand's record row.
@@ -3136,19 +3279,13 @@ pub const Builder = struct {
             },
             .lambda => try self.lowerClosure(expr_id, expr_id, try self.program.siteCaptures(self.module, expr_id)),
             .closure => |closure| try self.lowerClosure(expr_id, closure.lambda, try self.program.siteCaptures(self.module, expr_id)),
-            .row_coerce => |coerce| {
-                // The coerced value is built straight at its destination's
-                // row (design.md "Row Coercion Primitive").
-                try self.destination_types.put(self.allocator, coerce.value, try self.exprType(expr_id));
-                try self.push(.{ .expr = coerce.value });
-            },
             .structural_eq => |eq| {
                 if (eq.discriminant) |discriminant| {
-                    try self.push(.{ .finish_discriminant_eq = .{ .value_ty = try self.exprType(discriminant.value), .tag = discriminant.tag, .negated = eq.negated } });
+                    try self.push(.{ .finish_discriminant_eq = .{ .value_ty = try self.valueType(discriminant.value), .tag = discriminant.tag, .negated = eq.negated } });
                     try self.push(.{ .expr = discriminant.value });
                     return;
                 }
-                try self.push(.{ .finish_eq = .{ .negated = eq.negated, .operand = try self.exprType(eq.lhs) } });
+                try self.push(.{ .finish_eq = .{ .negated = eq.negated, .operand = try self.valueType(eq.lhs) } });
                 try self.push(.{ .expr = eq.rhs });
                 try self.push(.{ .expr = eq.lhs });
             },
@@ -3156,11 +3293,11 @@ pub const Builder = struct {
                 try self.push(.{ .finish_expect = expr_id });
                 try self.push(.{ .expr = cond });
             },
-            .crash => |literal| try self.crashValue(self.bodies().stringLiteral(literal), try self.exprType(expr_id)),
+            .crash => |literal| try self.crashValue(self.bodies().text(literal), try self.exprType(expr_id)),
             .runtime_error => |runtime_error| {
                 // A retired expression evaluates the operands it still
                 // evaluates, each for its effects, then crashes.
-                const checked_ty = self.bodies().expr(expr_id).ty;
+                const checked_ty = self.bodies().exprType(expr_id);
                 try self.push(.{ .runtime_error = if (try self.program.converter().hasError(self.module, checked_ty)) null else try self.exprType(expr_id) });
                 var index = runtime_error.evaluated.len;
                 while (index > 0) {
@@ -3170,28 +3307,29 @@ pub const Builder = struct {
                 }
             },
             .if_ => |if_| {
-                if (self.tail_exprs.contains(expr_id)) {
-                    for (if_.branches) |branch| try self.tail_exprs.put(self.allocator, branch.body, {});
+                const first_cond = self.bodies().ifBranch(if_.branches[0]).cond;
+                if (self.isTail(expr_id)) {
+                    for (if_.branches) |branch| try self.tail_exprs.put(self.allocator, self.bodies().ifBranch(branch).body, {});
                     try self.tail_exprs.put(self.allocator, if_.final_else, {});
                     // Each branch returns; nothing reads the construct's
                     // own value, and each branch starts from the binder
                     // values the construct started with.
-                    const merge = try self.beginMerge(if (if_.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{}, .tail);
+                    const merge = try self.beginMerge(try self.bodies().stateMergeBinders(expr_id), .tail);
                     try self.push(.unreachable_or_unit);
                     try self.push(.{ .if_test = .{ .expr = expr_id, .index = 0, .join = null, .merge = merge } });
-                    try self.push(.{ .expr = if_.branches[0].cond });
+                    try self.push(.{ .expr = first_cond });
                     return;
                 }
                 const result_ty = try self.exprType(expr_id);
                 const result = try self.localOf(result_ty, .frame);
                 const join = self.freshJoin();
-                const merge = try self.beginMerge(if (if_.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{}, .joined);
+                const merge = try self.beginMerge(try self.bodies().stateMergeBinders(expr_id), .joined);
                 const after = try self.declareMergeJoin(join, result, merge);
                 try self.push(.{ .push_value = result });
                 if (merge) |m| try self.push(.{ .enter_merge = m });
                 try self.push(.{ .resume_at = after });
                 try self.push(.{ .if_test = .{ .expr = expr_id, .index = 0, .join = join, .merge = merge } });
-                try self.push(.{ .expr = if_.branches[0].cond });
+                try self.push(.{ .expr = first_cond });
             },
             .match_ => |match| {
                 // A match on a layout-resolved low-level whose answer is
@@ -3207,7 +3345,7 @@ pub const Builder = struct {
                 .@"and", .@"or" => try self.lowerShortCircuit(binop.op == .@"and", binop.lhs, binop.rhs),
                 .add, .sub, .mul, .div, .rem, .lt, .gt, .le, .ge, .eq, .ne, .div_trunc, .range_exclusive, .range_inclusive => invariantFmt("binary operator {s} reached Boxy lowering outside a dispatch", .{@tagName(binop.op)}),
             },
-            .for_ => |for_| try self.pushForLoop(for_.pattern, for_.expr, for_.body, for_.plan, for_.mutations),
+            .for_ => |for_| try self.pushForLoop(@backingInt(expr_id), for_.pattern, for_.expr, for_.body, for_.plan),
             .field_access => |access| {
                 try self.push(.{ .finish_field_access = expr_id });
                 try self.push(.{ .expr = access.receiver });
@@ -3217,25 +3355,15 @@ pub const Builder = struct {
                 try self.push(.{ .expr = access.tuple });
             },
             .dbg => |inner| {
-                try self.push(.{ .finish_dbg = try self.exprType(inner) });
+                try self.push(.{ .finish_dbg = try self.valueType(inner) });
                 try self.push(.{ .expr = inner });
             },
             .interpolation => |interpolation| try self.lowerInterpolation(expr_id, interpolation),
             .expect_err => |expect_err| {
-                try self.push(.{ .finish_expect_err = .{ .expr = expr_id, .value = try self.exprType(expect_err.expr) } });
+                try self.push(.{ .finish_expect_err = .{ .expr = expr_id, .value = try self.valueType(expect_err.expr) } });
                 try self.push(.{ .expr = expect_err.expr });
             },
-            .str_from_quote => |quote| {
-                if (quote.conversion_root) |root| return try self.restoreConversionRoot(root, expr_id, .quote, quote.plan);
-                if (quote.plan) |plan| return try self.lowerPlannedLiteral(expr_id, .quote, plan, try self.exprType(expr_id));
-                const ty = try self.exprType(expr_id);
-                const is_str = switch (self.program.store.get(ty)) {
-                    .primitive => |primitive| primitive == .str,
-                    .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => false,
-                };
-                if (!is_str) return try self.rejectedLiteralValue(ty);
-                try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(quote.literal)));
-            },
+            .str_from_quote => |quote| try self.lowerQuote(.{ .expr = expr_id }, quote.literal, quote.plan, quote.conversion_root),
             .return_ => |ret| {
                 // The expression itself never produces a value; its successor
                 // is unreachable.
@@ -3244,17 +3372,13 @@ pub const Builder = struct {
                 try self.destination_types.put(self.allocator, ret.expr, self.currentWorker().ret);
                 try self.push(.{ .expr = ret.expr });
             },
-            .unary_not => |operand| {
-                try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = try self.exprType(expr_id) } });
-                try self.push(.{ .expr = operand });
-            },
             .structural_hash => |hash| {
-                try self.push(.{ .finish_hash = .{ .value = try self.exprType(hash.value), .result = try self.exprType(expr_id) } });
+                try self.push(.{ .finish_hash = .{ .value = try self.valueType(hash.value), .result = try self.exprType(expr_id) } });
                 try self.push(.{ .expr = hash.hasher });
                 try self.push(.{ .expr = hash.value });
             },
             .bytes_literal => |literal| {
-                const bytes = self.bodies().stringLiteral(literal);
+                const bytes = self.bodies().text(literal);
                 const local = try self.localOf(try self.exprType(expr_id), .frame);
                 const backing = try self.store.insertStringAligned(bytes, 16);
                 try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .bytes_literal = .{
@@ -3271,7 +3395,6 @@ pub const Builder = struct {
                 try self.emitJump(loop.join, null);
                 try self.push(.{ .unreachable_value = try self.exprType(expr_id) });
             },
-            .pending => invariant("a pending checked expression reached Boxy lowering, which reads only completed checking"),
             .unary_minus => invariant("a unary minus reached Boxy lowering without its checked dispatch"),
             .anno_only => invariant("an annotation-only declaration is read, which resolves to what it requests instead"),
             .hosted_lambda => invariant("a hosted lambda is a hosted template's body root, never a nested expression"),
@@ -3280,14 +3403,14 @@ pub const Builder = struct {
 
     /// Hand an expression's destination type to the subexpressions whose
     /// value is its value.
-    pub fn passDestination(self: *Builder, data: checked.CheckedExprData, destination: TypeId) Allocator.Error!void {
+    pub fn passDestination(self: *Builder, data: bodies_mod.ExprData, destination: TypeId) Allocator.Error!void {
         switch (data) {
             .block => |block| try self.destination_types.put(self.allocator, block.final_expr, destination),
             .if_ => |if_| {
-                for (if_.branches) |branch| try self.destination_types.put(self.allocator, branch.body, destination);
+                for (if_.branches) |branch| try self.destination_types.put(self.allocator, self.bodies().ifBranch(branch).body, destination);
                 try self.destination_types.put(self.allocator, if_.final_else, destination);
             },
-            .match_ => |match| for (match.branches) |branch| try self.destination_types.put(self.allocator, branch.value, destination),
+            .match_ => |match| for (match.branches) |branch| try self.destination_types.put(self.allocator, self.bodies().matchBranch(branch).value, destination),
             .nominal => |nominal| try self.destination_types.put(self.allocator, nominal.backing_expr, try self.structuralType(destination)),
             // A tag's payloads are reached positions of its destination's
             // row (design.md "Row Coercion Primitive").
@@ -3304,11 +3427,11 @@ pub const Builder = struct {
                     return;
                 }
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
     }
 
-    pub fn pushExprsReversed(self: *Builder, exprs: []const CheckedExprId) Allocator.Error!void {
+    pub fn pushExprsReversed(self: *Builder, exprs: []const ExprId) Allocator.Error!void {
         var index = exprs.len;
         while (index > 0) {
             index -= 1;
@@ -3340,15 +3463,49 @@ pub const Builder = struct {
         try self.pushValue(acc);
     }
 
-    pub fn lowerNumeral(self: *Builder, expr_id: CheckedExprId, numeral: checked.CheckedNumeralData) Allocator.Error!void {
-        if (numeral.conversion_root) |root| return try self.restoreConversionRoot(root, expr_id, .numeral, numeral.plan);
-        if (numeral.plan) |plan| return try self.lowerPlannedLiteral(expr_id, .numeral, plan, try self.exprType(expr_id));
-        const ty = try self.exprType(expr_id);
+    /// A numeric literal at `at`: its conversion root's value, its
+    /// conversion `plan`'s result, or a builtin number.
+    pub fn lowerNumeral(self: *Builder, at: LiteralAt, literal: NumeralLiteral, plan: ?static_dispatch.StaticDispatchPlanId, conversion_root: ?checked.ComptimeRootId) Allocator.Error!void {
+        if (conversion_root) |root| return try self.restoreConversionRoot(root, at, .numeral, plan);
+        if (plan) |plan_id| return try self.lowerPlannedLiteral(at.node(), .numeral, plan_id, try self.literalType(at));
+        const ty = try self.literalType(at);
         // A numeral at a non-builtin type with no conversion plan is one
         // whose conversion checking rejected and reported: the checked
         // module records no plan for it, and reaching it is a checked error.
         if (self.program.store.get(ty) != .primitive) return try self.rejectedLiteralValue(ty);
-        try self.pushValue(try self.builtinNumeral(numeral.literal, ty));
+        try self.pushValue(try self.builtinNumeral(literal, ty));
+    }
+
+    /// A literal-only string at `at` whose target is custom or open: its
+    /// conversion root's value, its conversion `plan`'s result, or the
+    /// string itself at a `Str` target.
+    pub fn lowerQuote(self: *Builder, at: LiteralAt, literal: bodies_mod.Text, plan: ?static_dispatch.StaticDispatchPlanId, conversion_root: ?checked.ComptimeRootId) Allocator.Error!void {
+        if (conversion_root) |root| return try self.restoreConversionRoot(root, at, .quote, plan);
+        if (plan) |plan_id| return try self.lowerPlannedLiteral(at.node(), .quote, plan_id, try self.literalType(at));
+        const ty = try self.literalType(at);
+        const is_str = switch (self.program.store.get(ty)) {
+            .primitive => |primitive| primitive == .str,
+            .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => false,
+        };
+        if (!is_str) return try self.rejectedLiteralValue(ty);
+        try self.pushValue(try self.textLiteral(literal));
+    }
+
+    /// The type a literal converts to: a literal expression's own, or a
+    /// custom literal pattern's.
+    fn literalType(self: *Builder, at: LiteralAt) Allocator.Error!TypeId {
+        return switch (at) {
+            .expr => |expr| try self.exprType(expr),
+            .pattern => |pattern| try self.patternType(pattern),
+        };
+    }
+
+    /// A `Str` value of `text`'s bytes.
+    pub fn textLiteral(self: *Builder, text: bodies_mod.Text) Allocator.Error!LocalId {
+        var bytes: std.ArrayList(u8) = .empty;
+        defer bytes.deinit(self.allocator);
+        try self.bodies().appendText(self.allocator, text, &bytes);
+        return try self.strLiteral(bytes.items);
     }
 
     /// A literal whose conversion checking rejected: the crash a
@@ -3363,10 +3520,10 @@ pub const Builder = struct {
     /// by its instance's literal argument where the plan is open, in place
     /// where it is closed, and a crash where checking rejected the plan or
     /// found its value unreachable.
-    fn lowerPlannedLiteral(self: *Builder, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, plan_id: static_dispatch.StaticDispatchPlanId, lit_ty: TypeId) Allocator.Error!void {
+    fn lowerPlannedLiteral(self: *Builder, node: u32, kind: LIR.LiteralRejectionKind, plan_id: static_dispatch.StaticDispatchPlanId, lit_ty: TypeId) Allocator.Error!void {
         switch (self.dispatchPlan(plan_id).resolution) {
-            .direct_closed => try self.lowerLiteralConversion(expr_id, kind, plan_id, lit_ty),
-            .direct_parametric, .evidence_dependent => try self.lowerInstanceLiteral(expr_id, lit_ty),
+            .direct_closed => try self.lowerLiteralConversion(node, kind, plan_id, lit_ty),
+            .direct_parametric, .evidence_dependent => try self.lowerInstanceLiteral(node, lit_ty),
             .checked_error => {
                 try self.emitDispatchCrash(.checked_error);
                 try self.pushValue(try self.localOf(lit_ty, .frame));
@@ -3423,7 +3580,7 @@ pub const Builder = struct {
     /// produces `Try(result_ty, row)`: checking unifies the plan's `Ok`
     /// payload with the literal's type, which is `result_ty` here, and fixes
     /// its error row to closed tags carrying the message.
-    fn lowerLiteralConversion(self: *Builder, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, plan_id: static_dispatch.StaticDispatchPlanId, result_ty: TypeId) Allocator.Error!void {
+    fn lowerLiteralConversion(self: *Builder, node: u32, kind: LIR.LiteralRejectionKind, plan_id: static_dispatch.StaticDispatchPlanId, result_ty: TypeId) Allocator.Error!void {
         const call_plan = self.dispatchPlan(plan_id);
         if (call_plan.result_mode != .value) invariant("a literal conversion plan has a non-value result mode");
         const checked_types = self.view.types();
@@ -3440,7 +3597,7 @@ pub const Builder = struct {
             .pending, .field_kind, .err, .flex, .rigid, .function, .record, .tuple, .empty_record, .tag_union, .empty_tag_union => invariant("a literal conversion's result is not a Try type"),
         };
         const try_ty = try self.program.converter().nominalAt(self.module, ret, &.{ result_ty, try self.convert(row) }, self.env);
-        try self.push(.{ .finish_literal_conversion = .{ .expr = expr_id, .kind = kind, .try_ty = try_ty, .result = result_ty } });
+        try self.push(.{ .finish_literal_conversion = .{ .node = node, .kind = kind, .try_ty = try_ty, .result = result_ty } });
         try self.lowerDispatchAt(plan_id, try_ty);
     }
 
@@ -3496,7 +3653,7 @@ pub const Builder = struct {
         if (tags.len == 0) invariant("a literal conversion's error row has no tag");
         const site: LIR.LiteralRejectionSite = .{
             .owner = self.program.lowering_module_ids[@backingInt(self.module)],
-            .checked_expr = @backingInt(conversion.expr),
+            .node = conversion.node,
             .kind = conversion.kind,
         };
         // Each tag of the row carries the message as its one payload.
@@ -3722,15 +3879,16 @@ pub const Builder = struct {
     /// A literal whose conversion depends on the instance the body runs at:
     /// the value its literal argument produces (design.md "Literal
     /// Arguments"). An interpolation's argument produces its assembler.
-    pub fn lowerInstanceLiteral(self: *Builder, expr_id: CheckedExprId, lit_ty: TypeId) Allocator.Error!void {
-        const index = self.ownLiteralRequirementIndex(expr_id) orelse invariantFmt("a literal whose conversion depends on its instance has no literal_requirement in its scope (worker {s} #{d}, module {d}, expr {d}, alias scopes {d}, foreign {?}, literal scopes {d}, frames {?})", .{ @tagName(self.currentWorker().key), @backingInt(self.worker_id), @backingInt(self.module), @backingInt(expr_id), self.alias_scopes.items.len, self.foreign_scopes, self.currentWorker().literal_scopes.len, self.thunk_frames });
+    pub fn lowerInstanceLiteral(self: *Builder, node: u32, lit_ty: TypeId) Allocator.Error!void {
+        const index = self.ownLiteralRequirementIndex(node) orelse invariantFmt("a literal whose conversion depends on its instance has no literal_requirement in its scope (worker {s} #{d}, module {d}, expr {d}, alias scopes {d}, foreign {?}, literal scopes {d}, frames {?})", .{ @tagName(self.currentWorker().key), @backingInt(self.worker_id), @backingInt(self.module), node, self.alias_scopes.items.len, self.foreign_scopes, self.currentWorker().literal_scopes.len, self.thunk_frames });
         const thunk = try self.scopeLiteral(.{ .depth = 0, .index = index });
         const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = lit_ty, .effectful = false } });
         try self.pushValue(try self.emitErasedCall(thunk, fn_ty, &.{}, lit_ty));
     }
 
-    /// The literal requirement of the innermost scope whose literal is `expr`.
-    fn ownLiteralRequirementIndex(self: *Builder, expr: CheckedExprId) ?u32 {
+    /// The literal requirement of the innermost scope whose literal is at
+    /// CIR node `node`.
+    fn ownLiteralRequirementIndex(self: *Builder, node: u32) ?u32 {
         const literal_requirements: []const checked.LiteralRequirement = if (self.foreign_scopes != null or self.alias_scopes.items.len != 0)
             self.alias_scopes.items[self.alias_scopes.items.len - 1].literal_requirements
         else if (self.currentWorker().literal_scopes.len != 0)
@@ -3738,9 +3896,72 @@ pub const Builder = struct {
         else
             &.{};
         for (literal_requirements, 0..) |literal_requirement, index| {
-            if (literal_requirement.edge == .literal and literal_requirement.site.expr == expr and literal_requirement.site.module.eql(self.view.key)) return @intCast(index);
+            if (literal_requirement.edge == .literal and literal_requirement.site.node == node and literal_requirement.site.module.eql(self.view.key)) return @intCast(index);
         }
         return null;
+    }
+
+    /// The body of compile-time root `root_id`'s entry wrapper, where it
+    /// computes the root's value: the root's expression; for a literal
+    /// conversion root, the conversion of its literal; or, for a hoisted
+    /// pattern root, the construct its `hoisted_body` describes. A rejected
+    /// destructure binder's root crashes; an extraction or validation root
+    /// matches its base expression against its pattern, crashing where the
+    /// pattern does not match (`rootPatternMatch`).
+    fn lowerRootBody(self: *Builder, root_id: checked.ComptimeRootId) Allocator.Error!void {
+        const root = self.view.view.compile_time_roots.root(root_id);
+        if (root.literalNode()) |literal| return switch (literal) {
+            .expr => |expr| try self.push(.{ .own_expr = expr }),
+            .pattern => |pattern| try self.push(.{ .literal_pattern_conversion = pattern }),
+        };
+        if (root.evaluatedExpr()) |evaluated| return try self.push(.{ .own_expr = evaluated });
+        const body = root.hoisted_body orelse invariant("a compile-time root that evaluates no expression has no hoisted body");
+        switch (body) {
+            .expr, .valueless_binding => invariant("a hoisted root evaluating its expression reached its pattern construct"),
+            .pattern_error => |pattern| {
+                try self.push(.{ .restore_region = self.region });
+                self.region = self.nodeRegion(@backingInt(pattern));
+                try self.push(.{ .runtime_error = if (try self.program.converter().hasError(self.module, root.checked_type)) null else try self.convert(root.checked_type) });
+            },
+            .pattern_extraction => |extraction| try self.pushRootPatternMatch(root_id, extraction.scrutinee_pattern, extraction.base_expr),
+            .pattern_validation => |validation| try self.pushRootPatternMatch(root_id, validation.scrutinee_pattern, validation.base_expr),
+        }
+    }
+
+    /// Lower a hoisted pattern root's base expression, then match it
+    /// against the root's pattern (`rootPatternMatch`).
+    fn pushRootPatternMatch(self: *Builder, root_id: checked.ComptimeRootId, scrutinee_pattern: PatternId, base_expr: ExprId) Allocator.Error!void {
+        try self.push(.{ .restore_region = self.region });
+        self.region = self.nodeRegion(@backingInt(scrutinee_pattern));
+        try self.push(.{ .root_pattern_match = root_id });
+        try self.push(.{ .own_expr = base_expr });
+    }
+
+    /// Pop a hoisted pattern root's base value and match it against the
+    /// root's pattern: where it matches, an extraction root's value is its
+    /// result binder's, and a validation root's is `{}`; where it does not,
+    /// the root crashes.
+    fn rootPatternMatch(self: *Builder, root_id: checked.ComptimeRootId) Allocator.Error!void {
+        const root = self.view.view.compile_time_roots.root(root_id);
+        const body = root.hoisted_body orelse invariant("a hoisted pattern root has no hoisted body");
+        const scrutinee_pattern, const base_expr, const result_pattern: ?PatternId = switch (body) {
+            .pattern_extraction => |extraction| .{ extraction.scrutinee_pattern, extraction.base_expr, extraction.result_pattern },
+            .pattern_validation => |validation| .{ validation.scrutinee_pattern, validation.base_expr, null },
+            .expr, .valueless_binding, .pattern_error => invariant("a hoisted root without a pattern match reached its pattern match"),
+        };
+        const scrutinee = self.popValue();
+        if (self.hole == null) {
+            try self.pushValue(if (try self.program.converter().hasError(self.module, root.checked_type)) try self.closedLocal(.zst) else try self.localOf(try self.convert(root.checked_type), .frame));
+            return;
+        }
+        // A miss crashes: a hole is a runtime error until it is filled.
+        const miss = try self.newHole();
+        try self.testPattern(scrutinee_pattern, scrutinee, try self.exprType(base_expr), miss);
+        if (result_pattern) |pattern| {
+            try self.pushValue(self.binders.get(pattern) orelse invariant("a hoisted extraction root's pattern never bound its result binder"));
+        } else {
+            try self.pushValue(try self.unitValue());
+        }
     }
 
     /// The body of a `literal_argument` root's entry wrapper: the stored
@@ -3855,12 +4076,22 @@ pub const Builder = struct {
             switch (literal_requirement.edge) {
                 .literal => {
                     if (!literal_requirement.site.module.eql(self.view.key)) invariant("a literal literal_requirement's literal is in another module than its scheme");
-                    const expr = literal_requirement.site.expr;
-                    return switch (self.bodies().expr(expr).data) {
-                        .numeral => |numeral| try self.lowerLiteralConversion(expr, .numeral, numeral.plan orelse invariant("a literal literal_requirement's numeral has no conversion plan"), result_ty),
-                        .str_from_quote => |quote| try self.lowerLiteralConversion(expr, .quote, quote.plan orelse invariant("a literal literal_requirement's quote has no conversion plan"), result_ty),
-                        .interpolation => |interpolation| try self.lowerLiteralConversion(expr, .interpolation, interpolation.plan orelse invariant("a literal literal_requirement's interpolation has no conversion plan"), result_ty),
-                        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a literal literal_requirement's literal is not a literal expression"),
+                    const node = literal_requirement.site.node;
+                    // A custom literal pattern's literal converts at the
+                    // pattern's type.
+                    if (self.bodies().index().nodeKind(node) == .pattern) {
+                        const conversion = self.bodies().literalConversion(node);
+                        const kind: LIR.LiteralRejectionKind = switch (conversion.literal) {
+                            .numeral => .numeral,
+                            .quote => .quote,
+                        };
+                        return try self.lowerLiteralConversion(node, kind, conversion.plan orelse invariant("a literal literal_requirement's pattern literal has no conversion plan"), result_ty);
+                    }
+                    return switch (self.bodies().exprData(@fromBackingInt(node))) {
+                        .numeral => |numeral| try self.lowerLiteralConversion(node, .numeral, numeral.plan orelse invariant("a literal literal_requirement's numeral has no conversion plan"), result_ty),
+                        .str_from_quote => |quote| try self.lowerLiteralConversion(node, .quote, quote.plan orelse invariant("a literal literal_requirement's quote has no conversion plan"), result_ty),
+                        .interpolation => |interpolation| try self.lowerLiteralConversion(node, .interpolation, interpolation.plan orelse invariant("a literal literal_requirement's interpolation has no conversion plan"), result_ty),
+                        .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a literal literal_requirement's literal is not a literal expression"),
                     };
                 },
                 .node, .use => {
@@ -3905,7 +4136,7 @@ pub const Builder = struct {
                 return try self.enterWorkerFrame(callee, instance, if (deferred) edge else null);
             },
             .use => |expr| {
-                if (self.view.view.resolved_value_refs.by_checked_expr[@backingInt(expr)].get()) |ref_id| {
+                if (self.view.view.resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {
                     const record = self.view.view.resolved_value_refs.records[@backingInt(ref_id)];
                     switch (record.ref) {
                         .local_proc => |local| {
@@ -3922,7 +4153,7 @@ pub const Builder = struct {
                                 },
                                 .callable_eval => invariant("a literal argument's edge uses a computed callable"),
                             };
-                            const use_ty = try self.convert(self.bodies().expr(expr).ty);
+                            const use_ty = try self.convert(self.bodies().exprType(expr));
                             self.chain_frame = true;
                             defer self.chain_frame = false;
                             const instance = if (tag == .platform_required_proc)
@@ -3977,7 +4208,7 @@ pub const Builder = struct {
     /// Enter the scope of exact procedure alias `alias` as the site `site`
     /// of this body's module instantiates it. Its literal requirements are
     /// those its forwarded lookup's scheme gives it.
-    fn enterAliasFrame(self: *Builder, alias: AliasCallee, site: CheckedExprId) Allocator.Error![]const checked.LiteralRequirement {
+    fn enterAliasFrame(self: *Builder, alias: AliasCallee, site: ExprId) Allocator.Error![]const checked.LiteralRequirement {
         const alias_step = self.callableEvalAliasStep(alias.module, alias.template);
         const bound = try self.aliasScopeBound(alias_step, self.siteSubstitution(site), try self.exprType(site));
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(site) orelse &.{};
@@ -4002,7 +4233,7 @@ pub const Builder = struct {
 
     /// Enter the frame of the generalized local scope `scope_id` of this
     /// body's module as the site `site` instantiates it.
-    fn enterLocalScopeFrame(self: *Builder, scope_id: checked.DispatchScopeId, site: CheckedExprId) Allocator.Error![]const checked.LiteralRequirement {
+    fn enterLocalScopeFrame(self: *Builder, scope_id: checked.DispatchScopeId, site: ExprId) Allocator.Error![]const checked.LiteralRequirement {
         const arena = self.program.arena.allocator();
         const scheme = try self.localScheme(scope_id);
         const subst = self.siteSubstitution(site);
@@ -4053,23 +4284,23 @@ pub const Builder = struct {
         });
     }
 
-    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, at: LiteralAt, kind: LIR.LiteralRejectionKind, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         switch (self.view.view.compile_time_roots.root(root_id).payload) {
-            .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.exprType(expr_id), .root = root_id } }),
+            .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.literalType(at), .root = root_id } }),
             // The literal converts where it is reached: as the root's own
             // evaluation, or at a site no evaluation converts (a literal in
             // a branch). Any other body of the compile-time program
             // evaluating the root reads the value from the root's slot once
             // it completes.
             .pending, .unevaluated => if ((self.own_root != null and self.own_root.? == root_id) or !self.program.evaluatesRoot(self.module, root_id))
-                try self.lowerLiteralConversion(expr_id, kind, plan_id orelse invariant("a literal with a conversion root has no conversion plan"), try self.exprType(expr_id))
+                try self.lowerLiteralConversion(at.node(), kind, plan_id orelse invariant("a literal with a conversion root has no conversion plan"), try self.literalType(at))
             else
-                try self.pendingValueRead(self.module, root_id, try self.exprType(expr_id)),
+                try self.pendingValueRead(self.module, root_id, try self.literalType(at)),
             inline .fn_value, .discarded, .expect, .runtime => |_, tag| invariantFmt("a literal conversion root holding {s} reached runtime lowering", .{@tagName(tag)}),
         }
     }
 
-    pub fn lowerInterpolation(self: *Builder, expr_id: CheckedExprId, interpolation: checked.CheckedInterpolation) Allocator.Error!void {
+    pub fn lowerInterpolation(self: *Builder, expr_id: ExprId, interpolation: bodies_mod.InterpolationData) Allocator.Error!void {
         const plan_id = interpolation.plan orelse invariant("an interpolation has no checked conversion plan");
         const plan = self.dispatchPlan(plan_id);
         switch (plan.resolution) {
@@ -4094,8 +4325,8 @@ pub const Builder = struct {
         const assembler_ty = try self.tryOkPayload(try_ty);
         try self.push(.{ .finish_interpolation = expr_id });
         switch (plan.resolution) {
-            .direct_closed => try self.lowerLiteralConversion(expr_id, .interpolation, plan_id, assembler_ty),
-            .direct_parametric, .evidence_dependent => try self.lowerInstanceLiteral(expr_id, assembler_ty),
+            .direct_closed => try self.lowerLiteralConversion(@backingInt(expr_id), .interpolation, plan_id, assembler_ty),
+            .direct_parametric, .evidence_dependent => try self.lowerInstanceLiteral(@backingInt(expr_id), assembler_ty),
             .checked_error, .@"unreachable", .structural, .direct_pending => unreachable, // handled above
         }
     }
@@ -4114,9 +4345,9 @@ pub const Builder = struct {
         invariant("a conversion's Try type has no Ok payload");
     }
 
-    pub fn finishInterpolation(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn finishInterpolation(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const assembler = self.popValue();
-        const interpolation = self.bodies().expr(expr_id).data.interpolation;
+        const interpolation = self.bodies().exprData(expr_id).interpolation;
         const assembler_ty = try self.convert(interpolation.assembler_ty);
         const values_ty = switch (self.program.store.get(assembler_ty)) {
             .function => |function| blk: {
@@ -4127,8 +4358,12 @@ pub const Builder = struct {
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an interpolation assembler is not a function"),
         };
         // The values are lowered after the assembler, in order.
-        try self.push(.{ .finish_interpolation_call = .{ .assembler = assembler, .assembler_ty = assembler_ty, .values_ty = values_ty, .count = @intCast(interpolation.values.len), .result = try self.exprType(expr_id) } });
-        try self.pushExprsReversed(interpolation.values);
+        try self.push(.{ .finish_interpolation_call = .{ .assembler = assembler, .assembler_ty = assembler_ty, .values_ty = values_ty, .count = @intCast(interpolation.valueCount()), .result = try self.exprType(expr_id) } });
+        var index = interpolation.valueCount();
+        while (index > 0) {
+            index -= 1;
+            try self.push(.{ .expr = interpolation.value(index) });
+        }
     }
 
     /// The `Numeral` value `from_numeral` receives for `literal`, at the
@@ -4199,18 +4434,17 @@ pub const Builder = struct {
         return self.view.view.resolved_value_refs.records[@backingInt(id)];
     }
 
-    pub fn lowerLookupLocal(self: *Builder, expr_id: CheckedExprId, pattern: CheckedPatternId, resolved: ?checked.ResolvedValueRefId) Allocator.Error!void {
+    pub fn lowerLookupLocal(self: *Builder, expr_id: ExprId, pattern: PatternId, resolved: ?checked.ResolvedValueRefId) Allocator.Error!void {
         if (resolved) |id| return try self.lowerResolvedValue(expr_id, self.resolvedRef(id).ref);
-        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse invariant("a local lookup named a pattern without a binder");
-        try self.pushValue(self.binders.get(binder) orelse invariant("a local lookup named a binder this body never bound"));
+        try self.pushValue(self.binders.get(pattern) orelse invariant("a local lookup named a binder this body never bound"));
     }
 
-    pub fn lowerLookupExternal(self: *Builder, expr_id: CheckedExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
+    pub fn lowerLookupExternal(self: *Builder, expr_id: ExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
         try self.lowerResolvedValue(expr_id, self.resolvedRef(resolved).ref);
     }
 
     /// The value a lookup `expr_id` resolved to `ref` reads.
-    fn lowerResolvedValue(self: *Builder, expr_id: CheckedExprId, ref: checked.ResolvedValueRef) Allocator.Error!void {
+    fn lowerResolvedValue(self: *Builder, expr_id: ExprId, ref: checked.ResolvedValueRef) Allocator.Error!void {
         switch (ref) {
             .local_param, .local_value, .pattern_binder, .local_mutable_version => |binding| {
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
@@ -4242,7 +4476,7 @@ pub const Builder = struct {
     /// lowered in the alias's scope as this use instantiates it (its
     /// variables bound to the use's types, its dictionaries to the use's
     /// evidence).
-    fn lowerAliasUse(self: *Builder, expr_id: CheckedExprId, local: checked.LocalProcedureBinding) Allocator.Error!void {
+    fn lowerAliasUse(self: *Builder, expr_id: ExprId, local: checked.LocalProcedureBinding) Allocator.Error!void {
         if (self.binders.get(local.binder)) |value| return try self.pushValue(value);
         const scope_id = local.dispatch_scope orelse invariant("an alias without a generalized scheme is bound where it is declared");
         const scheme = try self.localScheme(scope_id);
@@ -4252,7 +4486,7 @@ pub const Builder = struct {
         defer self.allocator.free(generic_bound);
         for (generic_bound[0..scheme.scheme_vars.len], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(outer_count + index));
         for (generic_bound[scheme.scheme_vars.len..], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-        const alias_ty = self.bodies().expr(local.expr).ty;
+        const alias_ty = self.bodies().exprType(local.expr);
         const generic_fn = try self.program.converter().convert(self.module, alias_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
         const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.exprType(expr_id) }}, outer_count + scheme.scheme_vars.len);
         defer self.allocator.free(related);
@@ -4281,14 +4515,14 @@ pub const Builder = struct {
         try self.alias_scopes.append(self.allocator, .{ .params = scheme.dictionaries, .dicts = dicts, .literals = literals, .literal_requirements = scheme.literal_requirements, .saved_env = self.env });
         self.env = .{ .module = self.module, .vars = vars, .bound = bound };
         try self.push(.leave_alias_scope);
-        try self.push(.{ .expr = local.expr });
+        try self.push(.{ .own_expr = local.expr });
     }
 
     /// The function value a use `expr_id` of a local procedure denotes. A
     /// generalized local procedure whose calls pass its own scheme's
     /// instantiation is, as a value, instantiated where it is used: the
     /// value captures the use's descriptors and dictionaries of its scheme.
-    pub fn localProcUseValue(self: *Builder, expr_id: CheckedExprId, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
+    pub fn localProcUseValue(self: *Builder, expr_id: ExprId, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
         // A use checking recorded no evidence for (one inside a rejected
         // expression, evaluated only for its effects) resolves the
         // procedure's dictionaries from its types.
@@ -4311,10 +4545,10 @@ pub const Builder = struct {
     /// checked instantiation of the procedure's scheme, when it recorded one,
     /// for the variables its type does not relate.
     pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId) Allocator.Error!LocalId {
-        const lambda_expr = switch (self.bodies().expr(local.expr).data) {
+        const lambda_expr = switch (self.bodies().exprData(local.expr)) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }) orelse
             return try self.localProcValue(local);
@@ -4329,7 +4563,7 @@ pub const Builder = struct {
         const generic_bound = try self.allocator.alloc(TypeId, vars.len);
         defer self.allocator.free(generic_bound);
         for (generic_bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-        const lambda_ty = self.bodies().expr(lambda_expr).ty;
+        const lambda_ty = self.bodies().exprType(lambda_expr);
         const generic_fn = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
         // The procedure's own variables take the types the use's
         // instantiation gives them.
@@ -4444,7 +4678,7 @@ pub const Builder = struct {
         const lambda_expr = switch (closure_expr.data) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const captures = try self.program.siteCaptures(self.module, local.expr);
         var scope_worker = self.worker_id;
@@ -4472,26 +4706,22 @@ pub const Builder = struct {
         const fn_ty = try self.program.converter().convert(self.module, closure_expr.ty, env);
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
-        for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.capturedType(capture.pattern, try self.program.converter().convert(self.module, self.bodies().pattern(capture.pattern).ty, env));
+        for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.capturedType(capture.pattern, try self.program.converter().convert(self.module, self.bodies().patternType(capture.pattern), env));
         return .{ scope_worker, try self.program.lambdaWorker(scope_worker, lambda_expr, captures, capture_types, fn_ty, own) };
     }
 
     /// The type a callable captures `pattern`'s binder at: its value's type
     /// `ty`, or for a recursive value, the slot's.
-    fn capturedType(self: *Builder, pattern: CheckedPatternId, ty: TypeId) Allocator.Error!TypeId {
-        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse
-            invariant("a closure capture named a pattern without a binder");
-        if (!self.bodies().patternBinder(binder).recursive_value) return ty;
+    fn capturedType(self: *Builder, pattern: PatternId, ty: TypeId) Allocator.Error!TypeId {
+        if (!self.bodies().binder(pattern).recursive_value) return ty;
         return try self.recursiveSlotType(ty);
     }
 
     /// What a callable captures for `pattern`'s binder: its value, or for a
     /// recursive value, its slot.
-    fn capturedValue(self: *Builder, pattern: CheckedPatternId) ?LocalId {
-        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse
-            invariant("a closure capture named a pattern without a binder");
-        if (self.bodies().patternBinder(binder).recursive_value) return self.recursive_slots.get(binder);
-        return self.binders.get(binder);
+    fn capturedValue(self: *Builder, pattern: PatternId) ?LocalId {
+        if (self.bodies().binder(pattern).recursive_value) return self.recursive_slots.get(pattern);
+        return self.binders.get(pattern);
     }
 
     /// The slot type of a recursive value of type `ty`: a `Box` of the
@@ -4519,20 +4749,20 @@ pub const Builder = struct {
     }
 
     /// The recursive value binders `pattern` binds.
-    fn recursiveBinders(self: *Builder, pattern: CheckedPatternId, out: *std.ArrayList(checked.PatternBinderId)) Allocator.Error!void {
-        var stack: std.ArrayList(CheckedPatternId) = .empty;
+    fn recursiveBinders(self: *Builder, pattern: PatternId, out: *std.ArrayList(BinderId)) Allocator.Error!void {
+        var stack: std.ArrayList(PatternId) = .empty;
         defer stack.deinit(self.allocator);
         try stack.append(self.allocator, pattern);
         while (stack.pop()) |current| {
-            switch (self.bodies().pattern(current).data) {
-                .assign => |binder| if (self.bodies().patternBinder(binder).recursive_value) try out.append(self.allocator, binder),
+            switch (self.bodies().patternData(current)) {
+                .assign => if (self.bodies().binder(current).recursive_value) try out.append(self.allocator, current),
                 .as => |as| {
-                    if (self.bodies().patternBinder(as.binder).recursive_value) try out.append(self.allocator, as.binder);
+                    if (self.bodies().binder(current).recursive_value) try out.append(self.allocator, current);
                     try stack.append(self.allocator, as.pattern);
                 },
                 .applied_tag => |tag| try stack.appendSlice(self.allocator, tag.args),
                 .nominal => |nominal| try stack.append(self.allocator, nominal.backing_pattern),
-                .record_destructure => |destructs| for (destructs) |destruct| switch (destruct.kind) {
+                .record_destructure => |destructs| for (destructs) |destruct| switch (self.bodies().recordDestruct(destruct).kind) {
                     .required, .sub_pattern, .rest => |sub| try stack.append(self.allocator, sub),
                 },
                 .list => |list| {
@@ -4540,19 +4770,19 @@ pub const Builder = struct {
                     if (list.rest) |rest| if (rest.pattern) |sub| try stack.append(self.allocator, sub);
                 },
                 .tuple => |items| try stack.appendSlice(self.allocator, items),
-                .pending, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {},
+                .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {},
             }
         }
     }
 
     /// Allocate a zeroed slot for each recursive value binder `pattern`
     /// binds.
-    fn allocRecursiveSlots(self: *Builder, pattern: CheckedPatternId) Allocator.Error!void {
-        var binders: std.ArrayList(checked.PatternBinderId) = .empty;
+    fn allocRecursiveSlots(self: *Builder, pattern: PatternId) Allocator.Error!void {
+        var binders: std.ArrayList(BinderId) = .empty;
         defer binders.deinit(self.allocator);
         try self.recursiveBinders(pattern, &binders);
         for (binders.items) |binder| {
-            const value_ty = try self.patternType(self.bodies().patternBinder(binder).pattern);
+            const value_ty = try self.patternType(binder);
             const slot_ty = try self.recursiveSlotType(value_ty);
             const tuple_ty = try self.program.store.intern(.{ .tuple = &.{value_ty} });
             const slot = try self.localOf(slot_ty, .frame);
@@ -4562,13 +4792,13 @@ pub const Builder = struct {
     }
 
     /// Store each recursive value binder's value, now bound, in its slot.
-    fn fillRecursiveSlots(self: *Builder, pattern: CheckedPatternId) Allocator.Error!void {
-        var binders: std.ArrayList(checked.PatternBinderId) = .empty;
+    fn fillRecursiveSlots(self: *Builder, pattern: PatternId) Allocator.Error!void {
+        var binders: std.ArrayList(BinderId) = .empty;
         defer binders.deinit(self.allocator);
         try self.recursiveBinders(pattern, &binders);
         for (binders.items) |binder| {
             const value = self.binders.get(binder) orelse invariant("a recursive value's binder was not bound by its declaration");
-            const value_ty = try self.patternType(self.bodies().patternBinder(binder).pattern);
+            const value_ty = try self.patternType(binder);
             const tuple_ty = try self.program.store.intern(.{ .tuple = &.{value_ty} });
             const tuple = try self.buildStruct(tuple_ty, &.{value});
             const filled = try self.localOf(try self.recursiveSlotType(value_ty), .frame);
@@ -4594,9 +4824,9 @@ pub const Builder = struct {
         // procedure's function value from its captures, which the checker
         // makes visible wherever the procedure is, and the scope it was
         // declared in, whose descriptors and dictionaries this body holds.
-        switch (self.bodies().expr(local.expr).data) {
+        switch (self.bodies().exprData(local.expr)) {
             .lambda, .closure => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         }
         const scope_worker, const target = try self.localProcWorker(local);
         const declaring = self.program.worker(scope_worker).*;
@@ -4661,16 +4891,16 @@ pub const Builder = struct {
     /// with an argument record of the call's instantiation of the
     /// procedure's own scheme (descriptors, then dictionaries) followed by
     /// the explicit arguments.
-    pub fn lowerGeneralizedLocalCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call"), local: checked.LocalProcedureBinding, scheme: lower.LocalScheme) Allocator.Error!void {
+    pub fn lowerGeneralizedLocalCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call"), local: checked.LocalProcedureBinding, scheme: lower.LocalScheme) Allocator.Error!void {
         const closure = try self.localProcValue(local);
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{};
         // The procedure's own variables take the types the call's
         // instantiation of its type gives them; the enclosing scope's stay as
         // they are here.
-        const lambda_expr = switch (self.bodies().expr(local.expr).data) {
+        const lambda_expr = switch (self.bodies().exprData(local.expr)) {
             .lambda => local.expr,
             .closure => |closure_expr| closure_expr.lambda,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const outer_count = self.env.vars.len;
         const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ scheme.scheme_vars, self.env.vars });
@@ -4679,9 +4909,9 @@ pub const Builder = struct {
         defer self.allocator.free(generic_bound);
         for (generic_bound[0..scheme.scheme_vars.len], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(outer_count + index));
         for (generic_bound[scheme.scheme_vars.len..], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-        const lambda_ty = self.bodies().expr(lambda_expr).ty;
+        const lambda_ty = self.bodies().exprType(lambda_expr);
         const generic_fn = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
-        const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.exprType(call.func) }}, outer_count + scheme.scheme_vars.len);
+        const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.valueType(call.func) }}, outer_count + scheme.scheme_vars.len);
         defer self.allocator.free(related);
         const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
         defer self.allocator.free(own_types);
@@ -4707,7 +4937,7 @@ pub const Builder = struct {
         defer self.allocator.free(params);
         if (params.len != call.args.len) invariant("a local procedure call's arity differs from its type");
         const arg_types = try self.program.arena.allocator().alloc(TypeId, call.args.len);
-        for (call.args, arg_types) |arg, *arg_ty| arg_ty.* = try self.exprType(arg);
+        for (call.args, arg_types) |arg, *arg_ty| arg_ty.* = try self.valueType(arg);
         // The procedure's own scheme's descriptors, dictionaries and
         // literal arguments, which the call passes with its arguments.
         const own_words = scheme.scheme_vars.len + scheme.dictionaries.len + scheme.literal_requirements.len;
@@ -4758,7 +4988,7 @@ pub const Builder = struct {
 
     /// A procedure used as a function value: an immortal callable of its
     /// dictionary entry, capturing the use site's hidden arguments.
-    pub fn procedureValue(self: *Builder, expr_id: CheckedExprId, use: checked.ProcedureUseTemplate, required: ?checked.PlatformRequiredProcedureResolvedRef) Allocator.Error!void {
+    pub fn procedureValue(self: *Builder, expr_id: ExprId, use: checked.ProcedureUseTemplate, required: ?checked.PlatformRequiredProcedureResolvedRef) Allocator.Error!void {
         const callee = try self.procedureUseCallee(use);
         if (callee == .callable_eval) return try self.push(.{ .restore_callable_eval = .{ .module = callee.callable_eval.module, .template = callee.callable_eval.template, .ty = try self.exprType(expr_id) } });
         const use_ty = try self.exprType(expr_id);
@@ -4779,7 +5009,7 @@ pub const Builder = struct {
     /// when it is one, whose call checking recorded no edge for, so its
     /// literal arguments derive from the use's instantiation as its
     /// dictionaries do.
-    fn procedureUseInstance(self: *Builder, callee: Callee, expr_id: CheckedExprId, required: ?checked.PlatformRequiredProcedureResolvedRef, use_ty: TypeId) Allocator.Error!CallInstance {
+    fn procedureUseInstance(self: *Builder, callee: Callee, expr_id: ExprId, required: ?checked.PlatformRequiredProcedureResolvedRef, use_ty: TypeId) Allocator.Error!CallInstance {
         const subst = self.siteSubstitution(expr_id);
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
         return switch (callee) {
@@ -4810,12 +5040,12 @@ pub const Builder = struct {
     /// The compile-time root whose value a stored constant reference is.
     fn rootOfConstRef(owner: *const types.ModuleView, const_ref: checked.ConstRef) ?checked.ComptimeRootId {
         return switch (const_ref.owner) {
-            .hoisted_expr => |hoisted| (owner.view.hoisted_constants.lookupByExpr(hoisted.expr) orelse return null).root,
+            .hoisted_root => |hoisted| hoisted.root,
             .top_level_binding => |top_level| owner.view.compile_time_roots.lookupIdByPattern(top_level.pattern),
         };
     }
 
-    pub fn restoreConstUse(self: *Builder, expr_id: CheckedExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
+    pub fn restoreConstUse(self: *Builder, expr_id: ExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
         const owner = self.program.moduleByKey(use.const_ref.artifact);
         const template = owner.view.const_templates.get(use.const_ref);
         if (rootOfConstRef(owner, use.const_ref)) |root_id| if (owner.view.compile_time_roots.root(root_id).boxy_value) |stored| {
@@ -4844,7 +5074,7 @@ pub const Builder = struct {
                 if (!self.program.input.compile_time) invariant("a constant read at runtime was not stored by compile-time evaluation");
                 const root = switch (use.const_ref.owner) {
                     .top_level_binding => |top_level| owner.view.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse invariant("a reserved constant has no compile-time root"),
-                    .hoisted_expr => |hoisted| (owner.view.hoisted_constants.lookupByExpr(hoisted.expr) orelse invariant("a reserved hoisted constant has no hoisted entry")).root,
+                    .hoisted_root => |hoisted| hoisted.root,
                 };
                 try self.pendingValueRead(owner.index, root, ty);
             },
@@ -5045,7 +5275,7 @@ pub const Builder = struct {
                 const lambda_expr = switch (expr.data) {
                     .lambda => site_expr,
                     .closure => |closure| closure.lambda,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a stored closure's site is not a lambda or closure"),
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored closure's site is not a lambda or closure"),
                 };
                 const captures = try self.program.runtimeCaptures(owner_view, @backingInt(nested.site));
                 // The closure in its owner's scope (and, for a generalized
@@ -5076,7 +5306,7 @@ pub const Builder = struct {
                 defer relations.deinit(self.allocator);
                 try relations.append(self.allocator, .{ generic_fn, fn_ty });
                 for (captures, capture_types, stored_captures) |capture, *capture_ty, *stored_capture| {
-                    capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().pattern(capture.pattern).ty, generic);
+                    capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), generic);
                     stored_capture.* = for (stored.captures) |candidate| {
                         if (std.meta.eql(candidate.id, capture.capture_id)) break candidate;
                     } else invariant("a stored closure lacks one of its site's captures");
@@ -5144,7 +5374,7 @@ pub const Builder = struct {
                 const concrete_capture_types = try self.allocator.alloc(TypeId, captures.len);
                 defer self.allocator.free(concrete_capture_types);
                 for (captures, concrete_capture_types) |capture, *concrete_ty| {
-                    concrete_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().pattern(capture.pattern).ty, concrete);
+                    concrete_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), concrete);
                 }
                 const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
                 const descs = try self.program.arena.allocator().alloc(LocalId, bound.len);
@@ -5228,7 +5458,7 @@ pub const Builder = struct {
     /// `owner_worker`, as a stored function names it: the closure's scheme
     /// and capture types in its owner's variables, which every construction
     /// of it shares.
-    pub fn storedLambdaWorker(self: *Builder, owner_worker: WorkerId, lambda_expr: CheckedExprId, captured_scheme: bool) Allocator.Error!WorkerId {
+    pub fn storedLambdaWorker(self: *Builder, owner_worker: WorkerId, lambda_expr: ExprId, captured_scheme: bool) Allocator.Error!WorkerId {
         const owner = self.program.worker(owner_worker).*;
         const owner_view = self.program.module(owner.module);
         const expr = owner_view.bodies().expr(lambda_expr);
@@ -5249,7 +5479,7 @@ pub const Builder = struct {
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
         for (captures, capture_types) |capture, *capture_ty| {
-            capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().pattern(capture.pattern).ty, generic);
+            capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), generic);
         }
         return try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
     }
@@ -5573,7 +5803,7 @@ pub const Builder = struct {
         const owner = self.program.module(module);
         const template = owner.view.callable_eval_templates.templates[@backingInt(template_id)];
         const forwarded = template.forwarded_lookup orelse invariant("a callable-eval template that is no alias forwards nothing");
-        const ref_id = owner.view.resolved_value_refs.by_checked_expr[@backingInt(forwarded)].get() orelse
+        const ref_id = owner.view.resolved_value_refs.lookupIdByExpr(forwarded) orelse
             invariant("a procedure alias's lookup has no resolved reference");
         var ref = owner.view.resolved_value_refs.records[@backingInt(ref_id)].ref;
         while (true) switch (ref) {
@@ -5591,13 +5821,13 @@ pub const Builder = struct {
         };
     }
 
-    pub fn lowerCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call")) Allocator.Error!void {
+    pub fn lowerCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call")) Allocator.Error!void {
         const func = self.bodies().expr(call.func);
         const resolved: ?checked.ResolvedValueRefId = switch (func.data) {
             .lookup_external => |r| r orelse invariant("a call's external callee was unresolved"),
             .lookup_required => |r| r orelse invariant("a call's platform requirement callee was unresolved"),
             .lookup_local => |lookup| lookup.resolved,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
         };
         const callee: Callee = if (resolved) |id| switch (self.resolvedRef(id).ref) {
             inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc, .platform_required_proc => |ref, tag| try self.procedureUseCallee(if (tag == .platform_required_proc) ref.procedure else ref),
@@ -5612,7 +5842,7 @@ pub const Builder = struct {
             .local_param, .local_value, .pattern_binder, .local_mutable_version, .platform_required_const, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_checked_error => return try self.lowerValueCall(expr_id, call),
             .platform_required_declaration => invariant("a platform requirement reached lowering unpaired with its app binding"),
         } else return try self.lowerValueCall(expr_id, call);
-        const call_fn = try self.exprType(call.func);
+        const call_fn = try self.valueType(call.func);
         if (callee == .callable_eval) {
             const eval = callee.callable_eval;
             try self.push(.{ .finish_erased_call = .{ .fn_ty = call_fn, .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
@@ -5639,8 +5869,8 @@ pub const Builder = struct {
 
     /// A call of a function value: evaluate the function, then its
     /// arguments, then call through the erased-callable ABI.
-    pub fn lowerValueCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call")) Allocator.Error!void {
-        try self.push(.{ .finish_erased_call = .{ .fn_ty = try self.exprType(call.func), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
+    pub fn lowerValueCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call")) Allocator.Error!void {
+        try self.push(.{ .finish_erased_call = .{ .fn_ty = try self.valueType(call.func), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
         try self.pushExprsReversed(call.args);
         try self.push(.{ .expr = call.func });
     }
@@ -6407,7 +6637,7 @@ pub const Builder = struct {
             }
             const lookup_subst = self.siteSubstitution(alias_step.lookup);
             const evidence = self.view.view.static_dispatch_plans.siteEvidence(alias_step.lookup) orelse &.{};
-            const ref_id = self.view.view.resolved_value_refs.by_checked_expr[@backingInt(alias_step.lookup)].get() orelse
+            const ref_id = self.view.view.resolved_value_refs.lookupIdByExpr(alias_step.lookup) orelse
                 invariant("a forwarded procedure alias lookup has no resolved reference");
             const lookup_ref = self.view.view.resolved_value_refs.records[@backingInt(ref_id)].ref;
             const next: AliasStep = switch (lookup_ref) {
@@ -6495,7 +6725,7 @@ pub const Builder = struct {
     /// The step of an alias chain through a local exact procedure alias of
     /// `module`, which owns generalized scope `dispatch_scope` when its
     /// scheme has one.
-    fn localAliasStep(self: *Builder, module: ModuleIndex, lookup: CheckedExprId, dispatch_scope: ?checked.DispatchScopeId) AliasStep {
+    fn localAliasStep(self: *Builder, module: ModuleIndex, lookup: ExprId, dispatch_scope: ?checked.DispatchScopeId) AliasStep {
         const scope_id = dispatch_scope orelse return .{ .module = module, .lookup = lookup, .vars = &.{}, .params = &.{} };
         const templates = self.program.module(module).view.checked_procedure_templates;
         const scope = templates.dispatch_scopes[@backingInt(scope_id)];
@@ -6932,7 +7162,7 @@ pub const Builder = struct {
         });
     }
 
-    pub fn siteSubstitution(self: *Builder, site: CheckedExprId) []const checked.CheckedTypeId {
+    pub fn siteSubstitution(self: *Builder, site: ExprId) []const checked.CheckedTypeId {
         return self.view.view.static_dispatch_plans.siteSubstitution(site) orelse &.{};
     }
 
@@ -7130,19 +7360,47 @@ pub const Builder = struct {
         return self.view.view.static_dispatch_plans.plans[@backingInt(id)];
     }
 
-    pub fn lowerDispatch(self: *Builder, expr_id: CheckedExprId, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+    pub fn lowerDispatch(self: *Builder, expr_id: ExprId, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         try self.lowerDispatchAt(plan_id, try self.exprType(expr_id));
     }
 
-    /// Push a dispatch operand: a checked expression, or a value the checker
-    /// generated for a literal conversion.
+    /// The equality test of a custom literal pattern: its `is_eq` dispatch
+    /// on the value the pattern matches and the pattern's literal converted
+    /// at its type (`checked_bodies.LiteralPatternGuard`).
+    fn lowerLiteralPatternGuard(self: *Builder, pattern: PatternId) Allocator.Error!void {
+        const guard = self.bodies().literalPatternGuard(pattern) orelse invariant("a literal guard was asked of a pattern compared directly");
+        self.region = self.nodeRegion(@backingInt(pattern));
+        try self.lowerDispatchAt(guard.equality_plan orelse invariant("a custom literal pattern had no checked equality plan"), try self.convert(guard.equality_ty));
+    }
+
+    /// The value of a custom literal pattern's guard operand where no
+    /// execution reaches it: a value of the pattern's type.
+    fn literalPatternDeadValue(self: *Builder, pattern: PatternId) Allocator.Error!LocalId {
+        if (try self.program.converter().hasError(self.module, self.bodies().patternType(pattern))) return try self.closedLocal(.zst);
+        return try self.localOf(try self.patternType(pattern), .frame);
+    }
+
+    /// Push a dispatch operand: a checked expression, a value the checker
+    /// generated for a literal conversion, or an operand of a custom
+    /// literal pattern's equality.
     pub fn pushOperand(self: *Builder, operand: static_dispatch.StaticDispatchOperand, ty: TypeId) Allocator.Error!void {
         switch (operand) {
-            .checked_expr => |expr| try self.push(.{ .expr = expr }),
+            .checked_expr => |expr| try self.push(.{ .own_expr = expr }),
             .generated_numeral => |literal| try self.push(.{ .numeral_arg = .{ .literal = literal, .ty = ty } }),
-            .generated_quote => |literal| try self.push(.{ .push_value_str = literal }),
+            .generated_quote => |node| try self.push(.{ .push_value_quote = node }),
             .generated_interpolation_segments => |expr| try self.push(.{ .segments_arg = .{ .expr = expr, .ty = ty } }),
+            .literal_pattern_value => |pattern| try self.push(.{ .literal_pattern_value = pattern }),
+            .literal_pattern_conversion => |pattern| try self.push(.{ .literal_pattern_conversion = pattern }),
         }
+    }
+
+    /// The type of a structural equality's operand.
+    fn operandType(self: *Builder, operand: static_dispatch.StaticDispatchOperand) Allocator.Error!TypeId {
+        return switch (operand) {
+            .checked_expr => |expr| try self.exprType(expr),
+            .literal_pattern_value, .literal_pattern_conversion => |pattern| try self.patternType(pattern),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => invariant("structural equality operand is not an expression"),
+        };
     }
 
     pub fn operandTypes(self: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error![]const TypeId {
@@ -7224,17 +7482,13 @@ pub const Builder = struct {
                         .value, .hash, .parser_for, .encoder_for, .map, .map_effectful => false,
                     };
                     if (operands.len != 2) invariant("structural equality has two operands");
-                    const lhs = switch (operands[0]) {
-                        .checked_expr => |operand| operand,
+                    switch (operands[1]) {
+                        .checked_expr, .literal_pattern_value, .literal_pattern_conversion => {},
                         .generated_interpolation_segments, .generated_numeral, .generated_quote => invariant("structural equality operand is not an expression"),
-                    };
-                    const rhs = switch (operands[1]) {
-                        .checked_expr => |operand| operand,
-                        .generated_interpolation_segments, .generated_numeral, .generated_quote => invariant("structural equality operand is not an expression"),
-                    };
-                    try self.push(.{ .finish_eq = .{ .negated = negated, .operand = try self.exprType(lhs) } });
-                    try self.push(.{ .expr = rhs });
-                    try self.push(.{ .expr = lhs });
+                    }
+                    try self.push(.{ .finish_eq = .{ .negated = negated, .operand = try self.operandType(operands[0]) } });
+                    try self.pushOperand(operands[1], operand_types[1]);
+                    try self.pushOperand(operands[0], operand_types[0]);
                 },
                 .parser, .encoder => try Codec.dispatch(self, call_plan, operands, operand_types, result_ty),
                 .map, .map_effectful => |plan| {
@@ -7399,15 +7653,15 @@ pub const Builder = struct {
     /// Builtin wrapper of `list_map_can_reuse` with local arguments, every
     /// branch tests an integer literal or nothing, and the answer is the
     /// same on every pointer width.
-    fn layoutResolvedBranch(self: *Builder, cond: CheckedExprId, branches: []const checked.CheckedMatchBranch) Allocator.Error!?CheckedExprId {
-        const call = switch (self.bodies().expr(cond).data) {
+    fn layoutResolvedBranch(self: *Builder, cond: ExprId, branches: []const CIR.Expr.Match.Branch.Idx) Allocator.Error!?ExprId {
+        const call = switch (self.bodies().exprData(cond)) {
             .call => |call| call,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
-        const resolved = switch (self.bodies().expr(call.func).data) {
+        const resolved = switch (self.bodies().exprData(call.func)) {
             .lookup_external => |r| r orelse return null,
             .lookup_local => |lookup| lookup.resolved orelse return null,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const use = switch (self.resolvedRef(resolved).ref) {
             .top_level_proc, .imported_proc => |use| use,
@@ -7420,21 +7674,22 @@ pub const Builder = struct {
         };
         const owner = self.program.moduleByKey(.{ .bytes = template_ref.artifact.bytes });
         const op = (owner.view.checked_procedure_templates.templates.items[@backingInt(template_ref.template)].provided_low_level orelse return null).layoutResolved() orelse return null;
-        for (call.args) |arg| switch (self.bodies().expr(arg).data) {
+        for (call.args) |arg| switch (self.bodies().exprData(arg)) {
             .lookup_local => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
-        for (branches) |branch| {
+        for (branches) |branch_idx| {
+            const branch = self.bodies().matchBranch(branch_idx);
             if (branch.guard != null) return null;
-            for (branch.patternsSlice(self.bodies())) |pattern| switch (self.bodies().pattern(pattern.pattern).data) {
+            for (branch.patterns) |pattern| switch (self.bodies().patternData(self.bodies().matchBranchPattern(pattern).pattern)) {
                 .underscore => {},
-                .numeral_literal => |numeral| if (numeral.guard != null) return null,
-                .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => return null,
+                .numeral_literal => |numeral| if (numeral.custom) return null,
+                .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => return null,
             };
         }
         const arg_types = try self.allocator.alloc(TypeId, call.args.len);
         defer self.allocator.free(arg_types);
-        for (call.args, arg_types) |arg, *ty| ty.* = try self.exprType(arg);
+        for (call.args, arg_types) |arg, *ty| ty.* = try self.valueType(arg);
         const answer: u8 = switch (op) {
             .list_map_can_reuse => blk: {
                 const decision = try self.listMapInterchangeable(arg_types);
@@ -7444,8 +7699,9 @@ pub const Builder = struct {
             // Its answer is computed where it runs.
             .list_item_size_at_most => return null,
         };
-        for (branches) |branch| {
-            for (branch.patternsSlice(self.bodies())) |pattern| switch (self.bodies().pattern(pattern.pattern).data) {
+        for (branches) |branch_idx| {
+            const branch = self.bodies().matchBranch(branch_idx);
+            for (branch.patterns) |pattern| switch (self.bodies().patternData(self.bodies().matchBranchPattern(pattern).pattern)) {
                 .underscore => return branch.value,
                 .numeral_literal => |numeral| {
                     const bits = checked.exact_numeral.intBits(self.view.view.module_env.exactNumeral(numeral.literal), .u8) orelse continue;
@@ -7455,7 +7711,7 @@ pub const Builder = struct {
                     };
                     if (value == answer) return branch.value;
                 },
-                .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => unreachable, // only literal and wildcard branches reach here
+                .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => unreachable, // only literal and wildcard branches reach here
             };
         }
         return null;
@@ -7517,7 +7773,7 @@ pub const Builder = struct {
 
     /// A function value: an erased callable of the lambda's worker, whose
     /// captures hold the captured values and this worker's descriptors.
-    pub fn lowerClosure(self: *Builder, expr_id: CheckedExprId, lambda_expr: CheckedExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
+    pub fn lowerClosure(self: *Builder, expr_id: ExprId, lambda_expr: ExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
         // A generalized local procedure's type is converted with its own
         // scheme's variables in scope.
         const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr })) |scope_id|
@@ -7531,7 +7787,7 @@ pub const Builder = struct {
             const bound = try self.allocator.alloc(TypeId, vars.len);
             defer self.allocator.free(bound);
             for (bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-            break :blk try self.program.converter().convert(self.module, self.bodies().expr(expr_id).ty, .{ .module = self.module, .vars = vars, .bound = bound });
+            break :blk try self.program.converter().convert(self.module, self.bodies().exprType(expr_id), .{ .module = self.module, .vars = vars, .bound = bound });
         } else try self.exprType(expr_id);
         const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) null else scheme) else null;
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
@@ -7570,7 +7826,7 @@ pub const Builder = struct {
                 else
                     try self.program.converter().sealedScheme(self.module, variable);
             }
-            try self.resolveOwnKinds(self.bodies().expr(expr_id).ty, scheme, own_types);
+            try self.resolveOwnKinds(self.bodies().exprType(expr_id), scheme, own_types);
             for (own_types) |own_ty| try own_descs.append(self.allocator, try self.descOf(own_ty));
             const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }).?;
             const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
@@ -7752,7 +8008,7 @@ pub const Builder = struct {
 
     /// `a and b` evaluates `b` only when `a` is true; `a or b` only when
     /// `a` is false.
-    pub fn lowerShortCircuit(self: *Builder, is_and: bool, lhs: CheckedExprId, rhs: CheckedExprId) Allocator.Error!void {
+    pub fn lowerShortCircuit(self: *Builder, is_and: bool, lhs: ExprId, rhs: ExprId) Allocator.Error!void {
         const result = try self.closedLocal(.bool);
         const join = self.freshJoin();
         const after = try self.declareMergeJoin(join, result, null);
@@ -7762,7 +8018,7 @@ pub const Builder = struct {
         try self.push(.{ .expr = lhs });
     }
 
-    pub fn shortCircuit(self: *Builder, is_and: bool, rhs: CheckedExprId, join: LIR.JoinPointId) Allocator.Error!void {
+    pub fn shortCircuit(self: *Builder, is_and: bool, rhs: ExprId, join: LIR.JoinPointId) Allocator.Error!void {
         const holes = try self.emitBoolSwitch(self.popValue());
         // The side that decides the result alone jumps with the constant.
         self.hole = if (is_and) holes.otherwise else holes.then;
@@ -7774,11 +8030,11 @@ pub const Builder = struct {
 
     // -- Aggregates --
 
-    pub fn finishRecord(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
-        const record: @FieldType(checked.CheckedExprData, "record") = switch (self.bodies().expr(expr_id).data) {
+    pub fn finishRecord(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        const record: @FieldType(bodies_mod.ExprData, "record") = switch (self.bodies().exprData(expr_id)) {
             .record => |record| record,
             .empty_record => .{ .fields = &.{}, .unsets = &.{}, .ext = null },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a record construction is not a record expression"),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a record construction is not a record expression"),
         };
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(record.fields.len));
@@ -7798,7 +8054,8 @@ pub const Builder = struct {
         defer self.allocator.free(ordered);
         @memset(ordered, null);
         const name_store = self.view.nameStore();
-        for (record.fields, values) |field, value| {
+        for (record.fields, values) |field_id, value| {
+            const field = self.bodies().recordField(field_id);
             const name = try self.program.store.internName(name_store.recordFieldLabelText(field.label));
             const position = for (fields, 0..) |candidate, index| {
                 if (candidate.name == name) break index;
@@ -7815,7 +8072,8 @@ pub const Builder = struct {
             };
         }
         // Unset fields (`name: _`) are missing.
-        for (record.unsets) |label| {
+        for (record.unsets) |unset| {
+            const label = self.bodies().unsetField(unset);
             const name = try self.program.store.internName(name_store.recordFieldLabelText(label));
             for (fields, ordered) |field, *slot| {
                 if (field.name != name) continue;
@@ -7840,14 +8098,14 @@ pub const Builder = struct {
                 const result = try self.localOf(ty, .frame);
                 try self.emitDyn(result, .{ .record_update = .{
                     .base = base_value,
-                    .base_desc = try self.descOf(try self.exprType(record.ext.?)),
+                    .base_desc = try self.descOf(try self.valueType(record.ext.?)),
                     .desc = try self.descOf(ty),
                     .names = try self.store.addLocalSpan(names.items),
                     .values = try self.store.addLocalSpan(updated.items),
                 } });
                 return try self.pushValue(result);
             }
-            const base_ty = try self.structuralType(try self.exprType(record.ext.?));
+            const base_ty = try self.structuralType(try self.valueType(record.ext.?));
             const base_record = switch (self.program.store.get(base_ty)) {
                 .record => |value| value,
                 .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a record update's base is not a record"),
@@ -7905,20 +8163,20 @@ pub const Builder = struct {
         return target;
     }
 
-    pub fn finishTuple(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
-        const items = self.bodies().expr(expr_id).data.tuple;
+    pub fn finishTuple(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        const items = self.bodies().exprData(expr_id).tuple;
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(items.len));
         defer self.allocator.free(values);
         try self.pushValue(try self.buildStruct(ty, values));
     }
 
-    pub fn finishTag(self: *Builder, expr_id: CheckedExprId, at_ty: ?TypeId) Allocator.Error!void {
+    pub fn finishTag(self: *Builder, expr_id: ExprId, at_ty: ?TypeId) Allocator.Error!void {
         const expr = self.bodies().expr(expr_id);
         const label, const arg_count: usize = switch (expr.data) {
             .tag => |tag| .{ tag.name, tag.args.len },
             .zero_argument_tag => |tag| .{ tag.name, 0 },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // only tag expressions finish as tags
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable, // only tag expressions finish as tags
         };
         const ty = at_ty orelse try self.exprType(expr_id);
         const values = try self.popValues(@intCast(arg_count));
@@ -7970,12 +8228,12 @@ pub const Builder = struct {
         return target;
     }
 
-    pub fn finishList(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn finishList(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const expr = self.bodies().expr(expr_id);
         const count: usize = switch (expr.data) {
             .list => |items| items.len,
             .empty_list => 0,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // only list expressions finish as lists
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable, // only list expressions finish as lists
         };
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(count));
@@ -8000,8 +8258,8 @@ pub const Builder = struct {
 
     // -- Control flow --
 
-    pub fn ifTest(self: *Builder, expr_id: CheckedExprId, index: u32, join: ?LIR.JoinPointId, merge: ?MergeId) Allocator.Error!void {
-        const if_ = self.bodies().expr(expr_id).data.if_;
+    pub fn ifTest(self: *Builder, expr_id: ExprId, index: u32, join: ?LIR.JoinPointId, merge: ?MergeId) Allocator.Error!void {
+        const if_ = self.bodies().exprData(expr_id).if_;
         const cond = self.popValue();
         const holes = try self.emitBoolSwitch(cond);
         // Pushed in reverse execution order: the then-branch runs first, then
@@ -8009,7 +8267,7 @@ pub const Builder = struct {
         // binder values the construct started with.
         if (index + 1 < if_.branches.len) {
             try self.push(.{ .if_test = .{ .expr = expr_id, .index = index + 1, .join = join, .merge = merge } });
-            try self.push(.{ .expr = if_.branches[index + 1].cond });
+            try self.push(.{ .expr = self.bodies().ifBranch(if_.branches[index + 1]).cond });
         } else {
             try self.pushBranchEnd(join);
             try self.push(.{ .expr = if_.final_else });
@@ -8017,7 +8275,7 @@ pub const Builder = struct {
         if (merge) |m| try self.push(.{ .restore_merge = m });
         try self.push(.{ .resume_at = holes.otherwise });
         try self.pushBranchEnd(join);
-        try self.push(.{ .expr = if_.branches[index].body });
+        try self.push(.{ .expr = self.bodies().ifBranch(if_.branches[index]).body });
         if (merge) |m| try self.restoreMerge(m);
         self.hole = holes.then;
     }
@@ -8028,11 +8286,11 @@ pub const Builder = struct {
         try self.push(if (join) |id| .{ .jump = id } else .ret);
     }
 
-    pub fn matchStart(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn matchStart(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const scrutinee = self.popValue();
-        const match = self.bodies().expr(expr_id).data.match_;
-        const scrutinee_ty = try self.exprType(match.cond);
-        const tail = self.tail_exprs.contains(expr_id);
+        const match = self.bodies().exprData(expr_id).match_;
+        const scrutinee_ty = try self.valueType(match.cond);
+        const tail = self.isTail(expr_id);
         const state = try self.program.arena.allocator().create(Match.State);
         state.* = .{
             .arena = std.heap.ArenaAllocator.init(self.allocator),
@@ -8041,12 +8299,12 @@ pub const Builder = struct {
             .merge = null,
             .remainder = undefined,
         };
-        const merge_binders: []const checked.PatternBinderId = if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{};
+        const merge_binders = try self.bodies().stateMergeBinders(expr_id);
         if (tail) {
             // Each branch returns; nothing reads the construct's own value,
             // and each branch starts from the binder values the construct
             // started with.
-            for (match.branches) |branch| try self.tail_exprs.put(self.allocator, branch.value, {});
+            for (match.branches) |branch| try self.tail_exprs.put(self.allocator, self.bodies().matchBranch(branch).value, {});
             state.merge = try self.beginMerge(merge_binders, .tail);
             try self.push(.unreachable_or_unit);
         } else {
@@ -8065,16 +8323,26 @@ pub const Builder = struct {
         const arena = state.arena.allocator();
         const ctx: Match.Ctx = .{ .b = self, .state = state };
         var rows: std.ArrayList(Match.Compiler.Branch) = .empty;
-        for (match.branches, 0..) |branch, index| {
-            const patterns = branch.patternsSlice(self.bodies());
-            try state.alternatives.put(arena, branch.value, @intCast(patterns.len));
-            for (patterns) |alternative| {
-                for (alternative.binderRemapsSlice(self.bodies())) |remap| {
-                    try state.representatives.put(arena, remap.candidate_binder, remap.representative_binder);
+        var remaps: std.ArrayList(checked.AlternativeBinderRemap) = .empty;
+        for (match.branches, 0..) |branch_idx, index| {
+            const branch = self.bodies().matchBranch(branch_idx);
+            try state.alternatives.put(arena, branch.value, @intCast(branch.patterns.len));
+            // A later alternative's binders read the locals of the
+            // branch's first pattern's binders of the same names.
+            if (branch.patterns.len > 1) {
+                const representative = self.bodies().matchBranchPattern(branch.patterns[0]).pattern;
+                for (branch.patterns[1..]) |alternative_idx| {
+                    const alternative = self.bodies().matchBranchPattern(alternative_idx);
+                    if (alternative.degenerate) continue;
+                    remaps.clearRetainingCapacity();
+                    try self.bodies().appendAlternativeBinderRemaps(arena, representative, alternative.pattern, &remaps);
+                    for (remaps.items) |remap| {
+                        try state.representatives.put(arena, remap.candidate_binder, remap.representative_binder);
+                    }
                 }
             }
-            for (patterns) |alternative| try rows.append(arena, .{
-                .pat = alternative.pattern,
+            for (branch.patterns) |alternative_idx| try rows.append(arena, .{
+                .pat = self.bodies().matchBranchPattern(alternative_idx).pattern,
                 .guard = branch.guard,
                 .body = branch.value,
                 .branch_index = @intCast(index),
@@ -8126,19 +8394,12 @@ pub const Builder = struct {
                 },
                 .literal_guard => |guard| {
                     // The literal's checked equality reads the matched value
-                    // through the pattern's binder.
-                    const binder = self.bodies().pattern_binder_by_pattern[@backingInt(guard.pat)].get() orelse
-                        invariant("a converted literal pattern has no binder for its guard");
-                    try self.binders.put(self.allocator, binder, guard.value);
-                    const expr = switch (self.bodies().pattern(guard.pat).data) {
-                        .numeral_literal => |numeral| numeral.guard.?,
-                        .str_literal => |literal| literal.guard.?,
-                        .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .underscore, .runtime_error => invariant("a literal guard was asked of a non-literal pattern"),
-                    };
+                    // through the pattern itself, its binder.
+                    try self.binders.put(self.allocator, guard.pat, guard.value);
                     const guard_hole = try self.newHole();
                     try self.push(.{ .match_advance = .{ .state = state, .input = guard_hole } });
                     try self.push(.{ .match_guard_done = .{ .cond = guard.cond, .next = guard.next } });
-                    try self.push(.{ .expr = expr });
+                    try self.push(.{ .literal_pattern_guard = guard.pat });
                     try self.push(.{ .resume_at = guard_hole });
                 },
                 // Checked branches bind nothing beyond their patterns.
@@ -8207,17 +8468,16 @@ pub const Builder = struct {
     /// does not, and bind the pattern's binders: a destructuring pattern
     /// outside a match (a parameter, a declaration, a loop's pattern).
     /// Continues in the matched path.
-    pub fn testPattern(self: *Builder, root_pattern: CheckedPatternId, root_value: LocalId, root_ty: TypeId, miss: CFStmtId) Allocator.Error!void {
+    pub fn testPattern(self: *Builder, root_pattern: PatternId, root_value: LocalId, root_ty: TypeId, miss: CFStmtId) Allocator.Error!void {
         var pending: std.ArrayList(PatternItem) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, .{ .pattern = root_pattern, .value = root_value, .ty = root_ty });
         while (pending.pop()) |item| {
-            const pattern = self.bodies().pattern(item.pattern);
-            switch (pattern.data) {
-                .assign => |binder| try self.binders.put(self.allocator, binder, item.value),
+            switch (self.bodies().patternData(item.pattern)) {
+                .assign => try self.binders.put(self.allocator, item.pattern, item.value),
                 .underscore => {},
                 .as => |as| {
-                    try self.binders.put(self.allocator, as.binder, item.value);
+                    try self.binders.put(self.allocator, item.pattern, item.value);
                     try pending.append(self.allocator, .{ .pattern = as.pattern, .value = item.value, .ty = item.ty });
                 },
                 .nominal => |nominal| try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern, .value = item.value, .ty = try self.structuralType(item.ty) }),
@@ -8283,21 +8543,22 @@ pub const Builder = struct {
                         try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = elems[index] });
                     }
                 },
-                .record_destructure => |destructs| {
+                .record_destructure => |destruct_ids| {
                     const ty = try self.structuralType(item.ty);
                     const record = switch (self.program.store.get(ty)) {
                         .record => |record| record,
-                        .empty_record => if (destructs.len == 0) continue else invariant("a record pattern names a field of the empty record"),
+                        .empty_record => if (destruct_ids.len == 0) continue else invariant("a record pattern names a field of the empty record"),
                         .primitive, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a record pattern's type is not a record"),
                     };
                     const fields = self.program.store.fieldSpan(record.fields);
-                    for (destructs) |destruct| {
+                    for (destruct_ids) |destruct_id| {
+                        const destruct = self.bodies().recordDestruct(destruct_id);
                         const name = try self.program.store.internName(self.view.nameStore().recordFieldLabelText(destruct.label));
                         const sub = switch (destruct.kind) {
                             .required, .sub_pattern => |p| p,
                             .rest => |rest| {
                                 // `..` with nothing to bind reads nothing.
-                                if (self.bodies().pattern(rest).data == .underscore) continue;
+                                if (self.bodies().patternData(rest) == .underscore) continue;
                                 // The rest is the fields the pattern does
                                 // not name, read by name.
                                 const rest_ty = try self.patternType(rest);
@@ -8336,8 +8597,8 @@ pub const Builder = struct {
                 },
                 .list => |list| try self.testListPattern(item, list.patterns, list.rest, miss, &pending),
                 .numeral_literal => |numeral| {
-                    if (numeral.guard) |guard| {
-                        try self.literalPatternGuard(item, guard, miss);
+                    if (numeral.custom) {
+                        try self.literalPatternGuard(item, miss);
                     } else {
                         const expected = try self.builtinNumeral(numeral.literal, item.ty);
                         const matches = try self.closedLocal(.bool);
@@ -8346,10 +8607,10 @@ pub const Builder = struct {
                     }
                 },
                 .str_literal => |literal| {
-                    if (literal.guard) |guard| {
-                        try self.literalPatternGuard(item, guard, miss);
+                    if (literal.custom) {
+                        try self.literalPatternGuard(item, miss);
                     } else {
-                        const expected = try self.strLiteral(self.bodies().stringLiteral(literal.literal));
+                        const expected = try self.strLiteral(self.bodies().text(literal.literal));
                         const matches = try self.closedLocal(.bool);
                         try self.emitLowLevel(matches, .str_is_eq, &.{ item.value, expected });
                         try self.branchOrMiss(matches, miss);
@@ -8359,10 +8620,11 @@ pub const Builder = struct {
                     // The match binds each captured span as a `Str` view of
                     // the matched string.
                     const str_ty = try self.program.store.primitive(.str);
-                    const steps = try self.allocator.alloc(LIR.StrMatchStep, str.steps.len);
+                    const steps = try self.allocator.alloc(LIR.StrMatchStep, str.steps.span.len);
                     defer self.allocator.free(steps);
-                    for (steps, str.steps) |*out, str_step| {
-                        const delimiter = self.bodies().stringLiteral(str_step.delimiter);
+                    for (steps, 0..) |*out, step_index| {
+                        const str_step = self.bodies().strPatternStep(str.steps, @intCast(step_index));
+                        const delimiter = self.bodies().text(str_step.delimiter);
                         const capture: LIR.StrMatchCapture = if (str_step.capture) |capture_pattern| blk: {
                             const local = try self.closedLocal(.str);
                             try pending.append(self.allocator, .{ .pattern = capture_pattern, .value = local, .ty = str_ty });
@@ -8370,7 +8632,7 @@ pub const Builder = struct {
                         } else .discard;
                         out.* = .{ .capture = capture, .delimiter = .{ .backing = try self.store.insertString(delimiter), .offset = 0, .len = @intCast(delimiter.len) } };
                     }
-                    const prefix = self.bodies().stringLiteral(str.prefix);
+                    const prefix = self.bodies().text(str.prefix);
                     const then = try self.newHole();
                     try self.emitTerminal(.{ .str_match = .{
                         .source = item.value,
@@ -8387,14 +8649,14 @@ pub const Builder = struct {
                     } });
                     self.hole = then;
                 },
-                .runtime_error, .pending => invariant("an erroneous pattern reached Boxy pattern lowering, which code holding one never reaches"),
+                .runtime_error => invariant("an erroneous pattern reached Boxy pattern lowering, which code holding one never reaches"),
             }
         }
     }
 
     /// A list pattern: the length test (exact, or at least the items' count
     /// with a rest), then each item and the rest's sublist.
-    pub fn testListPattern(self: *Builder, item: PatternItem, items: []const CheckedPatternId, rest: ?checked.CheckedListRestPattern, miss: CFStmtId, pending: *std.ArrayList(PatternItem)) Allocator.Error!void {
+    pub fn testListPattern(self: *Builder, item: PatternItem, items: []const PatternId, rest: ?checked.CheckedListRestPattern, miss: CFStmtId, pending: *std.ArrayList(PatternItem)) Allocator.Error!void {
         const store = &self.program.store;
         const list_ty = try self.structuralType(item.ty);
         const elem_ty = switch (store.get(list_ty)) {
@@ -8421,7 +8683,7 @@ pub const Builder = struct {
             try pending.append(self.allocator, .{ .pattern = sub, .value = elem, .ty = elem_ty });
         }
         if (rest) |rest_info| if (rest_info.pattern) |rest_pattern| {
-            if (self.bodies().pattern(rest_pattern).data == .underscore) return;
+            if (self.bodies().patternData(rest_pattern) == .underscore) return;
             const rest_len = try self.closedLocal(.u64);
             try self.emitLowLevel(rest_len, .num_int_sub_wrap, &.{ len, count });
             // `{ len, start }` in field-name order.
@@ -8453,13 +8715,11 @@ pub const Builder = struct {
     }
 
     /// A literal pattern at a type whose literals convert through a method:
-    /// the pattern's binder holds the tested value, and the checked equality
-    /// against the converted literal decides the match.
-    pub fn literalPatternGuard(self: *Builder, item: PatternItem, guard: CheckedExprId, miss: CFStmtId) Allocator.Error!void {
-        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(item.pattern)].get() orelse
-            invariant("a converted literal pattern has no binder for its guard");
-        try self.binders.put(self.allocator, binder, item.value);
-        const matches = try self.lowerExprNow(guard);
+    /// the pattern, its own binder, holds the tested value, and the checked
+    /// equality against the converted literal decides the match.
+    pub fn literalPatternGuard(self: *Builder, item: PatternItem, miss: CFStmtId) Allocator.Error!void {
+        try self.binders.put(self.allocator, item.pattern, item.value);
+        const matches = try self.lowerNow(.{ .literal_pattern_guard = item.pattern });
         try self.branchOrMiss(matches, miss);
     }
 
@@ -8522,17 +8782,18 @@ pub const Builder = struct {
 
     /// A record field access: each segment reads one field of the record
     /// the previous segment produced.
-    pub fn finishFieldAccess(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
-        const access = self.bodies().expr(expr_id).data.field_access;
+    pub fn finishFieldAccess(self: *Builder, expr_id: ExprId) Allocator.Error!void {
+        const access = self.bodies().exprData(expr_id).field_access;
         var value = self.popValue();
-        var record_ty = try self.exprType(access.receiver);
+        var record_ty = try self.valueType(access.receiver);
         var misses: std.ArrayList(CFStmtId) = .empty;
         defer misses.deinit(self.allocator);
         const present = try self.program.store.internName(@import("layouts.zig").present_label);
         // A path with a `.?` segment is one flat `Try(value, [MissingField])`,
         // which every exit of the path delivers to one join.
-        const optional = for (access.segments) |segment| {
-            if (segment.mode == .optional) break true;
+        const segment_count = access.segments.len;
+        const optional = for (0..segment_count) |position| {
+            if (self.bodies().fieldAccessSegment(access.segments, @intCast(position)).mode == .optional) break true;
         } else false;
         var result_join: ?struct { join: LIR.JoinPointId, after: CFStmtId, result: LocalId } = null;
         if (optional) {
@@ -8541,7 +8802,8 @@ pub const Builder = struct {
             const after = try self.declareMergeJoin(join, result, null);
             result_join = .{ .join = join, .after = after, .result = result };
         }
-        for (access.segments) |segment| {
+        for (0..segment_count) |segment_position| {
+            const segment = self.bodies().fieldAccessSegment(access.segments, @intCast(segment_position));
             const name = try self.program.store.internName(self.view.nameStore().recordFieldLabelText(segment.field_name));
             const structural = try self.structuralType(record_ty);
             const record = switch (self.program.store.get(structural)) {
@@ -8660,7 +8922,7 @@ pub const Builder = struct {
 
     /// Test that the dynamic tag union `value` holds tag `name`, and queue
     /// its payloads against `args`.
-    pub fn testDynamicTag(self: *Builder, nominal_ty: TypeId, name: types.NameId, args: []const CheckedPatternId, value: LocalId, miss: CFStmtId, pending: anytype) Allocator.Error!void {
+    pub fn testDynamicTag(self: *Builder, nominal_ty: TypeId, name: types.NameId, args: []const PatternId, value: LocalId, miss: CFStmtId, pending: anytype) Allocator.Error!void {
         const store = &self.program.store;
         const ty = try self.structuralType(nominal_ty);
         const union_ty = switch (store.get(ty)) {
@@ -8697,7 +8959,7 @@ pub const Builder = struct {
 
     // -- Statements --
 
-    pub fn stepStmt(self: *Builder, stmt_id: CheckedStatementId) Allocator.Error!void {
+    pub fn stepStmt(self: *Builder, stmt_id: StatementId) Allocator.Error!void {
         const stmt = self.bodies().statement(stmt_id);
         self.region = stmt.source_region;
         switch (stmt.data) {
@@ -8705,7 +8967,7 @@ pub const Builder = struct {
                 // An annotation-only declaration (a method requesting its
                 // derivation) has no value, and every use of it resolves to
                 // what it requests.
-                if (self.bodies().expr(decl.expr).data == .anno_only) return;
+                if (self.bodies().exprData(decl.expr) == .anno_only) return;
                 // A recursive value's binders get slots before its value is
                 // built, which the callables in the value capture, and the
                 // slots are filled once the value is bound.
@@ -8716,32 +8978,30 @@ pub const Builder = struct {
                 // A scheme alias with a generalized scheme binds nothing:
                 // each use lowers its right-hand side at the use's
                 // instantiation (`lowerAliasUse`).
-                if (self.bodies().pattern_binder_by_pattern[@backingInt(decl.pattern)].get()) |binder| {
-                    if (self.bodies().patternBinder(binder).is_scheme_alias) {
-                        if (self.program.local_scopes.get(.{ .module = self.module, .expr = decl.expr })) |scope_id| {
-                            const scheme = try self.localScheme(scope_id);
-                            if (scheme.scheme_vars.len != 0 or scheme.dictionaries.len != 0) return;
-                        }
+                if (self.bodies().binder(decl.pattern).is_scheme_alias) {
+                    if (self.program.local_scopes.get(.{ .module = self.module, .expr = decl.expr })) |scope_id| {
+                        const scheme = try self.localScheme(scope_id);
+                        if (scheme.scheme_vars.len != 0 or scheme.dictionaries.len != 0) return;
                     }
                 }
                 // A value that diverges binds nothing.
-                if (self.bodies().exprDiverges(decl.expr, self.inlineExpectMode())) {
+                if (try self.bodies().exprDiverges(decl.expr, self.inlineExpectMode())) {
                     try self.push(.discard);
                 } else {
-                    try self.push(.{ .bind = .{ .pattern = decl.pattern, .ty = try self.exprType(decl.expr) } });
+                    try self.push(.{ .bind = .{ .pattern = decl.pattern, .ty = try self.valueType(decl.expr) } });
                 }
                 try self.push(.{ .expr = decl.expr });
             },
             .var_ => |var_| {
-                if (self.bodies().exprDiverges(var_.expr, self.inlineExpectMode())) {
+                if (try self.bodies().exprDiverges(var_.expr, self.inlineExpectMode())) {
                     try self.push(.discard);
                 } else {
-                    try self.push(.{ .bind = .{ .pattern = var_.pattern, .ty = try self.exprType(var_.expr) } });
+                    try self.push(.{ .bind = .{ .pattern = var_.pattern, .ty = try self.valueType(var_.expr) } });
                 }
                 try self.push(.{ .expr = var_.expr });
             },
             .reassign => |reassign| {
-                try self.push(.{ .bind = .{ .pattern = reassign.pattern, .ty = try self.exprType(reassign.expr) } });
+                try self.push(.{ .bind = .{ .pattern = reassign.pattern, .ty = try self.valueType(reassign.expr) } });
                 try self.push(.{ .expr = reassign.expr });
             },
             .var_uninitialized => |var_| {
@@ -8749,13 +9009,13 @@ pub const Builder = struct {
                 try self.emitLinear(.{ .init_uninitialized = .{ .target = local, .next = undefined } });
                 try self.bindIrrefutable(var_.pattern, local, try self.patternType(var_.pattern));
             },
-            .while_ => |loop| try self.lowerLoop(loop, true),
+            .while_ => |loop| try self.lowerLoop(@backingInt(stmt_id), loop, true),
             // `while True`: the body runs unconditionally, and only a break
             // (in a breakable loop) leaves it.
-            .infinite_loop, .breakable_loop => |loop| try self.lowerLoop(loop, false),
+            .infinite_loop, .breakable_loop => |loop| try self.lowerLoop(@backingInt(stmt_id), loop, false),
             .for_ => |for_| {
                 try self.push(.discard);
-                try self.pushForLoop(for_.pattern, for_.expr, for_.body, for_.plan, for_.mutations);
+                try self.pushForLoop(@backingInt(stmt_id), for_.pattern, for_.expr, for_.body, for_.plan);
             },
             .break_ => {
                 if (self.loops.items.len == 0) invariant("a break outside every loop reached Boxy lowering");
@@ -8773,7 +9033,7 @@ pub const Builder = struct {
                 try self.push(.{ .expr = cond });
             },
             .crash => |literal| {
-                const message = try self.store.insertString(self.bodies().stringLiteral(literal));
+                const message = try self.store.insertString(self.bodies().text(literal));
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message } } });
             },
             .runtime_error => {
@@ -8782,11 +9042,13 @@ pub const Builder = struct {
             },
             .dbg => |expr| {
                 try self.push(.discard);
-                try self.push(.{ .finish_dbg = try self.exprType(expr) });
+                try self.push(.{ .finish_dbg = try self.valueType(expr) });
                 try self.push(.{ .expr = expr });
             },
             .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias => {},
             .promoted_proc => {},
+            // A method declaration checking rejected evaluates nothing.
+            .rejected_method_decl => {},
             .return_ => |ret| {
                 // The enclosing function returns the value; nothing after the
                 // statement is reached.
@@ -8794,18 +9056,15 @@ pub const Builder = struct {
                 try self.destination_types.put(self.allocator, ret.expr, self.currentWorker().ret);
                 try self.push(.{ .expr = ret.expr });
             },
-            .pending => invariant("a pending checked statement reached Boxy lowering, which reads only completed checking"),
         }
     }
 
     /// A condition-driven loop: a head join carrying the loop's mutated
     /// binders, entered first with their current values, and an exit join
     /// carrying them out.
-    pub fn lowerLoop(self: *Builder, loop: checked.CheckedConditionLoop, tests_condition: bool) Allocator.Error!void {
-        const binders: []const checked.PatternBinderId = if (loop.mutations) |plan| blk: {
-            const range = self.bodies().loopMutations(plan).binders;
-            break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
-        } else &.{};
+    /// A condition loop, the statement at CIR node `loop_node`.
+    pub fn lowerLoop(self: *Builder, loop_node: u32, loop: bodies_mod.ConditionLoop, tests_condition: bool) Allocator.Error!void {
+        const binders = try self.bodies().loopMutationBinders(loop_node);
         const exit_merge = try self.beginMerge(binders, .joined);
         const head_merge = try self.beginMerge(binders, .joined);
         const exit = self.freshJoin();
@@ -8831,25 +9090,26 @@ pub const Builder = struct {
         }
     }
 
-    pub fn pushForLoop(self: *Builder, pattern: CheckedPatternId, iterable: CheckedExprId, body: CheckedExprId, plan: ?static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
+    /// A `for` loop, the expression or statement at CIR node `loop_node`.
+    pub fn pushForLoop(self: *Builder, loop_node: u32, pattern: PatternId, iterable: ExprId, body: ExprId, plan: ?static_dispatch.IteratorForPlanId) Allocator.Error!void {
         const plan_id = plan orelse invariant("a for loop has no checked iterator plan");
         // A loop whose pattern checking rejected evaluates its iterable,
         // then crashes where it would begin: its pattern binds nothing.
         const item_ty = self.view.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)].item_ty;
-        if (try self.program.converter().hasError(self.module, item_ty) or try self.program.converter().hasError(self.module, self.bodies().pattern(pattern).ty)) {
+        if (try self.program.converter().hasError(self.module, item_ty) or try self.program.converter().hasError(self.module, self.bodies().patternType(pattern))) {
             try self.push(.{ .rejected_for = plan_id });
             try self.push(.{ .expr = iterable });
             return;
         }
         try self.push(.{ .unreachable_or_unit = {} });
-        try self.push(.{ .for_start = .{ .pattern = pattern, .body = body, .plan = plan_id, .mutations = mutations } });
+        try self.push(.{ .for_start = .{ .loop = loop_node, .pattern = pattern, .body = body, .plan = plan_id } });
         try self.push(.{ .expr = iterable });
     }
 
     /// `for pattern in iterable { body }`: the iterable's iterator is the
     /// loop's state; each step calls `next` and matches its Done, Skip, or
     /// One tag (design.md "Iterator `for`").
-    pub fn forStart(self: *Builder, pattern: CheckedPatternId, body: CheckedExprId, plan_id: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
+    pub fn forStart(self: *Builder, loop_node: u32, pattern: PatternId, body: ExprId, plan_id: static_dispatch.IteratorForPlanId) Allocator.Error!void {
         const table = self.view.view.static_dispatch_plans;
         const plan = table.iterator_for_plans[@backingInt(plan_id)];
         const iterable = self.popValue();
@@ -8857,10 +9117,7 @@ pub const Builder = struct {
         const step_ty = try self.convert(plan.step_ty);
         const iterator = try self.emitDispatch(plan.iter.resolution, plan.iter.callable_ty, &.{iterable}, iterator_ty);
 
-        const binders: []const checked.PatternBinderId = if (mutations) |id| blk: {
-            const range = self.bodies().loopMutations(id).binders;
-            break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
-        } else &.{};
+        const binders = try self.bodies().loopMutationBinders(loop_node);
         const exit_merge = try self.beginMerge(binders, .joined);
         const head_merge = try self.beginMerge(binders, .joined);
         const exit = self.freshJoin();
@@ -9123,7 +9380,7 @@ pub const Builder = struct {
         }
     }
 
-    pub fn loopTest(self: *Builder, body: CheckedExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId) Allocator.Error!void {
+    pub fn loopTest(self: *Builder, body: ExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId) Allocator.Error!void {
         const holes = try self.emitBoolSwitch(self.popValue());
         self.hole = holes.otherwise;
         try self.emitJump(exit, null);
@@ -9136,7 +9393,7 @@ pub const Builder = struct {
     /// Bind an irrefutable pattern (a parameter or a `decl`) to `value`.
     /// Destructuring binds through the same tests a match uses; an
     /// irrefutable pattern never takes their miss path.
-    pub fn bindIrrefutable(self: *Builder, pattern_id: CheckedPatternId, value: LocalId, ty: TypeId) Allocator.Error!void {
+    pub fn bindIrrefutable(self: *Builder, pattern_id: PatternId, value: LocalId, ty: TypeId) Allocator.Error!void {
         const miss = try self.newHole();
         try self.testPattern(pattern_id, value, ty, miss);
     }

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const can = @import("can");
 const collections = @import("collections");
 
 const checked_ids = @import("checked_ids.zig");
@@ -595,11 +596,11 @@ pub const FnDef = union(enum) {
     checked_generated: names.ProcTemplate,
     parser_runtime: struct {
         owner: names.ProcTemplate,
-        expr: checked_ids.CheckedExprId,
+        expr: can.CIR.Expr.Idx,
     },
     encoder_for_runtime: struct {
         owner: names.ProcTemplate,
-        expr: checked_ids.CheckedExprId,
+        expr: can.CIR.Expr.Idx,
     },
 };
 

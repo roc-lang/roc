@@ -30,6 +30,7 @@ const layouts_mod = @import("layouts.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
+const ExprId = check.CheckedBodies.ExprId;
 const static_dispatch = check.StaticDispatchRegistry;
 const LIR = lir_core.LIR;
 const LocalId = LIR.LocalId;
@@ -829,13 +830,13 @@ fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge
 /// Restore a stored generated runtime: its family's runtime callable over
 /// the stored encoding and renamed names. Compile-time evaluation numbered
 /// those captures in the family's name order after the encoding.
-pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.ConstStore.ConstFnId, owner: check.CheckedNames.ProcTemplate, expr: checked.CheckedExprId, fn_ty: TypeId) Allocator.Error!void {
+pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.ConstStore.ConstFnId, owner: check.CheckedNames.ProcTemplate, expr: ExprId, fn_ty: TypeId) Allocator.Error!void {
     const program = b.program;
     const stored = program.constStore(source).getFn(fn_id);
     const owner_view = program.moduleByKey(.{ .bytes = owner.artifact.bytes });
-    const plan_id = switch (owner_view.bodies().expr(expr).data) {
+    const plan_id = switch (owner_view.bodies().exprData(expr)) {
         .dispatch_call, .type_dispatch_call => |maybe| maybe orelse invariant("a stored generated codec runtime's dispatch has no plan"),
-        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a stored generated codec runtime does not name a dispatch"),
+        .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored generated codec runtime does not name a dispatch"),
     };
     const plan = owner_view.view.static_dispatch_plans.plans[@backingInt(plan_id)];
     // A dispatch on a constrained variable reaches its derivation through

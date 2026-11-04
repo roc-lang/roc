@@ -250,11 +250,11 @@ pub const FnDef = union(enum(u8)) {
     checked_generated: names.ProcTemplate,
     parser_runtime: struct {
         owner: names.ProcTemplate,
-        expr: checked.CheckedExprId,
+        expr: can.CIR.Expr.Idx,
     },
     encoder_for_runtime: struct {
         owner: names.ProcTemplate,
-        expr: checked.CheckedExprId,
+        expr: can.CIR.Expr.Idx,
     },
 };
 
@@ -1115,7 +1115,7 @@ pub const LocalIdentity = struct {
         _: u5 = 0,
     } = .{},
 
-    pub fn init(binder_id: ?checked.PatternBinderId, capture_id: ?checked.CaptureId, checked_capture_id: ?checked.CaptureId) LocalIdentity {
+    pub fn init(binder_id: ?check.CheckedBodies.BinderId, capture_id: ?checked.CaptureId, checked_capture_id: ?checked.CaptureId) LocalIdentity {
         var result: LocalIdentity = .{};
         result.setBinder(binder_id);
         result.setCaptureId(capture_id);
@@ -1123,7 +1123,7 @@ pub const LocalIdentity = struct {
         return result;
     }
 
-    pub fn binder(self: LocalIdentity) ?checked.PatternBinderId {
+    pub fn binder(self: LocalIdentity) ?check.CheckedBodies.BinderId {
         return if (self.present.binder) @fromBackingInt(self.binder_raw) else null;
     }
 
@@ -1142,7 +1142,7 @@ pub const LocalIdentity = struct {
         return if (self.present.checked_capture) @fromBackingInt(self.checked_capture_raw) else null;
     }
 
-    pub fn setBinder(self: *LocalIdentity, value: ?checked.PatternBinderId) void {
+    pub fn setBinder(self: *LocalIdentity, value: ?check.CheckedBodies.BinderId) void {
         self.present.binder = value != null;
         self.binder_raw = if (value) |id| @backingInt(id) else 0;
     }
@@ -2630,7 +2630,7 @@ pub const ProgramBuilder = struct {
         self: *ProgramBuilder,
         symbol: Common.Symbol,
         ty: Type.TypeId,
-        binder: ?checked.PatternBinderId,
+        binder: ?check.CheckedBodies.BinderId,
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(self.locals.len()))));
         const checked_capture_id = if (binder) |b| checked.CaptureId.fromBinder(b) else null;
@@ -2914,7 +2914,7 @@ test "final Monotype capture identities preserve direct aliases" {
     defer program.deinit();
 
     const unit_ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(7));
+    const binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(7));
     const first = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), unit_ty, binder);
     const second = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), unit_ty, binder);
     const uncaptured = try program.addLocal(@fromBackingInt(@intCast(3)), unit_ty);
@@ -3387,7 +3387,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     root_b.module.bytes[0] = 1;
     root_b.const_locator = .{
         .artifact = root_b.module,
-        .owner = .{ .hoisted_expr = .{ .module_idx = 1, .expr = @fromBackingInt(@intCast(2)) } },
+        .owner = .{ .hoisted_root = .{ .module_idx = 1, .root = @fromBackingInt(@intCast(2)) } },
         .template = @fromBackingInt(@intCast(3)),
         .source_scheme = std.mem.zeroes(@FieldType(check.CheckedModule.ConstLocator, "source_scheme")),
     };

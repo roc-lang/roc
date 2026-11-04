@@ -3655,13 +3655,10 @@ const RootCompletionState = struct {
                 .local_proc, .structural => {},
             },
             .use => |expr| {
-                const raw = @backingInt(expr);
-                if (raw < self.module.resolved_value_refs.by_checked_expr.len) {
-                    if (self.module.resolved_value_refs.by_checked_expr[raw].get()) |ref_id| {
-                        switch (self.resolvedRefDependency(self.module.resolved_value_refs.records[@backingInt(ref_id)].ref)) {
-                            .complete => |complete| if (!complete) return false,
-                            .template => |dependency| try self.pending_templates.append(self.allocator, dependency),
-                        }
+                if (self.module.resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {
+                    switch (self.resolvedRefDependency(self.module.resolved_value_refs.records[@backingInt(ref_id)].ref)) {
+                        .complete => |complete| if (!complete) return false,
+                        .template => |dependency| try self.pending_templates.append(self.allocator, dependency),
                     }
                 }
             },
@@ -3776,9 +3773,9 @@ const RootCompletionState = struct {
                     dependent_def,
                     dependency_def,
                 ),
-                .expr, .statement, .required_binding, .hoisted => true,
+                .expr, .statement, .required_binding, .hoisted, .literal => true,
             },
-            .expr, .statement, .required_binding, .hoisted => true,
+            .expr, .statement, .required_binding, .hoisted, .literal => true,
         };
         if (!is_strict) return true;
 
@@ -3797,11 +3794,11 @@ const RootCompletionState = struct {
                 return self.module.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse
                     finalizationInvariant("local const dependency had no compile-time root");
             },
-            .hoisted_expr => |hoisted| {
+            .hoisted_root => |hoisted| {
                 if (hoisted.module_idx != self.module.module_identity.module_idx) {
                     finalizationInvariant("local hoisted const dependency had mismatched module index");
                 }
-                const entry = self.module.hoisted_constants.lookupByExpr(hoisted.expr) orelse
+                const entry = self.module.hoisted_constants.lookupByRoot(hoisted.root) orelse
                     finalizationInvariant("local hoisted const dependency had no hoisted const entry");
                 return entry.root;
             },
@@ -4544,7 +4541,7 @@ fn reportLiteralRootFailure(
     var targets = try owners.reportTargets(plan.site.owner);
     while (targets.nextTarget()) |owner| {
         const store = owner.problem_store orelse continue;
-        const literal_region = owner.module.checked_bodies.expr(@fromBackingInt(@intCast(plan.site.checked_expr))).source_region;
+        const literal_region = literalSourceRegion(owner.module, plan.site.node);
         const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, literal_region, failure.region, failure.loc);
         const message_idx = try store.putExtraString(failure.message);
         _ = try store.appendProblem(.{ .comptime_crash = .{
@@ -4566,7 +4563,7 @@ fn reportLiteralRootExpectFailure(
     var targets = try owners.reportTargets(plan.site.owner);
     while (targets.nextTarget()) |owner| {
         const store = owner.problem_store orelse continue;
-        const literal_region = owner.module.checked_bodies.expr(@fromBackingInt(@intCast(plan.site.checked_expr))).source_region;
+        const literal_region = literalSourceRegion(owner.module, plan.site.node);
         const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, literal_region, region, loc);
         const message_idx = try store.putExtraString(message);
         _ = try store.appendProblem(.{ .comptime_expect_failed = .{
@@ -6125,8 +6122,34 @@ fn devRootSourceRegion(
         .expr => |expr_idx| env.store.getExprRegion(expr_idx),
         .statement => |stmt_idx| env.store.getStatementRegion(stmt_idx),
         .hoisted => |hoisted| env.store.getExprRegion(hoisted.expr),
-        .required_binding => module.checked_bodies.expr(root.expr).source_region,
+        .literal => |literal| literalSourceRegion(module, literal.node()),
+        .required_binding => rootBodySourceRegion(module, root),
     };
+}
+
+/// The source region of a compile-time root's body: its expression's; for a
+/// literal conversion root, its literal's; or, for a hoisted pattern root,
+/// its binding pattern's when the root rejects that binder, and otherwise the
+/// pattern's it matches.
+fn rootBodySourceRegion(
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+) base.Region {
+    const store = &module.moduleEnvConst().store;
+    if (root.literalNode()) |literal| return literalSourceRegion(module, literal.node());
+    const body = root.hoisted_body orelse return store.getExprRegion(root.rootExpr());
+    return switch (body) {
+        .expr, .valueless_binding => store.getExprRegion(root.rootExpr()),
+        .pattern_error => store.getPatternRegion(root.pattern orelse finalizationInvariant("pattern-error hoisted root had no binding pattern")),
+        .pattern_extraction => |extraction| store.getPatternRegion(extraction.scrutinee_pattern),
+        .pattern_validation => |validation| store.getPatternRegion(validation.scrutinee_pattern),
+    };
+}
+
+/// The source region of a literal's CIR node: an expression, or a custom
+/// literal pattern.
+fn literalSourceRegion(module: *const checked.CheckedModuleArtifact, node: u32) base.Region {
+    return module.moduleEnvConst().store.getNodeRegion(@fromBackingInt(node));
 }
 
 fn truncateSnippet(allocator: Allocator, bytes: []const u8, max_bytes: usize) Allocator.Error![]u8 {
@@ -6225,7 +6248,7 @@ fn reportDevHostEvents(
     events: []const CompileTimeHost.HostEvent,
 ) FinalizeError!bool {
     var had_problem = false;
-    const root_region = module.checked_bodies.expr(root.expr).source_region;
+    const root_region = rootBodySourceRegion(module, root);
     for (events) |event| {
         switch (event) {
             .dbg => |msg| try reportDebugMessage(allocator, options, module.key.digest(), root, msg),
@@ -6290,7 +6313,7 @@ fn failedLiteralRejection(lir_result: *const lir.Program.Result, meaning: ?lir.L
     return switch (meaning orelse return null) {
         .literal_rejection => |literal| .{
             .owner = lir_result.loweringModuleId(loweredModuleOfKey(lir_result, literal.module)).?,
-            .checked_expr = literal.checked_expr,
+            .node = literal.node,
             .kind = literal.kind,
         },
         .checked_error, .failed_value, .exhaustiveness => null,
@@ -6309,7 +6332,7 @@ fn reportLiteralRejection(
     var targets = try owners.reportTargets(site.owner);
     while (targets.nextTarget()) |owner| {
         const store = owner.problem_store orelse continue;
-        const region = owner.module.checked_bodies.expr(@fromBackingInt(@intCast(site.checked_expr))).source_region;
+        const region = literalSourceRegion(owner.module, site.node);
         if (literalRejectionReported(store, site.kind, region)) continue;
         const failure_site = comptimeFailureSiteFrom(owner.module, region, null, null, null);
         const message_idx = try store.putExtraString(message);
@@ -6390,7 +6413,7 @@ fn reportCompileTimeExpectFailures(
 ) FinalizeError!bool {
     if (failures.len == 0) return false;
     const problem_store = maybe_problem_store orelse return false;
-    const root_region = module.checked_bodies.expr(root.expr).source_region;
+    const root_region = rootBodySourceRegion(module, root);
     for (failures) |failure| {
         const message_idx = try problem_store.putExtraString(failure.message);
         const site = comptimeFailureSiteFromLoc(
@@ -6610,7 +6633,7 @@ fn reportCompileTimeCrash(
     lir_result: *const lir.Program.Result,
     message: []const u8,
 ) FinalizeError!checked.CompileTimeRootPayload {
-    const root_region = module.checked_bodies.expr(root.expr).source_region;
+    const root_region = rootBodySourceRegion(module, root);
     switch (try reportEmbeddedFailure(maybe_problem_store, module, root_region, owners, lir_result, failed_at, message)) {
         .reported, .reported_elsewhere => return try failedRootPayload(module, root, message, RootFailure.of(failed_at.meaning)),
         .none => {},
@@ -6944,7 +6967,7 @@ pub fn finishConstRoot(
         .constant => blk: {
             const def_idx = switch (root.source) {
                 .def => |def| def,
-                .expr, .statement, .required_binding, .hoisted => finalizationInvariant("constant root source was not a top-level definition"),
+                .expr, .statement, .required_binding, .hoisted, .literal => finalizationInvariant("constant root source was not a top-level definition"),
             };
             const top_level = module.top_level_values.lookupByDef(def_idx) orelse
                 finalizationInvariant("constant root had no top-level value");
@@ -6986,6 +7009,7 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
         .statement => |left| left == b.statement,
         .required_binding => |left| left == b.required_binding,
         .hoisted => |left| left.index == b.hoisted.index and left.expr == b.hoisted.expr,
+        .literal => |left| std.meta.eql(left, b.literal),
     };
 }
 

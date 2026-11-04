@@ -354,9 +354,7 @@ const Walker = struct {
                 .local_proc, .structural => {},
             },
             .use => |expr| {
-                const raw = @backingInt(expr);
-                if (raw >= artifact.resolved_value_refs.by_checked_expr.len) return;
-                const ref_id = artifact.resolved_value_refs.by_checked_expr[raw].get() orelse return;
+                const ref_id = artifact.resolved_value_refs.lookupIdByExpr(expr) orelse return;
                 try self.walkRef(artifact.resolved_value_refs.records[@backingInt(ref_id)].ref);
             },
         }
@@ -395,7 +393,7 @@ const Walker = struct {
         }
         const root: checked.ComptimeRootId = switch (const_ref.owner) {
             .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
-            .hoisted_expr => |hoisted| (artifact.hoisted_constants.lookupByExpr(hoisted.expr) orelse return).root,
+            .hoisted_root => |hoisted| (artifact.hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
         };
         try self.readRoot(module, root);
     }

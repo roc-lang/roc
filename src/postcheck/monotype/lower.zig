@@ -1371,7 +1371,7 @@ pub fn run(
         var finalization_timing_scope = TimingPhaseScope.begin(options.timing, .finalization);
         defer finalization_timing_scope.end();
         program.next_symbol = builder.symbols.coordinator.next;
-        builder.stampSingleSourceCalls();
+        try builder.stampSingleSourceCalls();
         try builder.stampSiteIdentities();
         try program.sealRemainingCaptureIdentities();
         try recordComptimeValueReads(allocator, &program);
@@ -1464,7 +1464,7 @@ const ModuleViewData = struct {
     module_identity: checked.ModuleIdentity,
     names: *const names.NameStore,
     types: checked.CheckedTypeStoreView,
-    bodies: checked.CheckedBodyStoreView,
+    bodies: checked.CheckedBodies,
     exhaustiveness_sites: *const checked.CheckedExhaustivenessSiteTable,
     checked_const_bodies: *const checked.CheckedConstBodyTable,
     templates: *const checked.CheckedProcedureTemplateTable,
@@ -1492,6 +1492,582 @@ const ModuleViewData = struct {
     /// once with the program's module tables.
     lowering_module: ?Common.LoweringModuleId = null,
 };
+
+/// The reader over a checked module's bodies (`check.CheckedBodies`).
+const checked_bodies = check.CheckedBodies;
+const CIR = can.CIR;
+/// A binder: the pattern that introduces it.
+const BinderId = checked_bodies.BinderId;
+
+/// An expression Monotype lowers. Monotype walks the module's CIR bodies
+/// through `CheckedBodies` and builds its own constructs around some nodes:
+///
+/// - `read`: a body node as its parent reads it. For a node checking recorded
+///   a row coercion for (`CheckedBodies.rowCoercion`), that is the coercion,
+///   at the widened type, whose value is the node's `coerced_value`.
+/// - `coerced_value`: a row-coerced node's own value, at its own type.
+/// - `hoisted_root`: what a hoisted compile-time pattern root evaluates
+///   (`CompileTimeRoot.hoisted_body`): a crash for a rejected destructure
+///   binder, or a match of its base expression against its pattern.
+/// - `hoisted_result`: what that match yields: the extracted binder's value,
+///   or unit for a validation.
+/// - `literal_guard`: the equality test of a custom literal pattern
+///   (`CheckedBodies.literalPatternGuard`), whose operands are the
+///   pattern's `literal_value` and `literal_conversion`.
+/// - `literal_value`: the value a custom literal pattern matches, read
+///   through the pattern itself as its binder.
+/// - `literal_conversion`: a custom literal pattern's literal converted at
+///   the pattern's type.
+const ExprSite = enum(u32) {
+    _,
+
+    const Kind = enum(u3) { read, coerced_value, hoisted_root, hoisted_result, literal_guard, literal_value, literal_conversion };
+    const kind_bits = 3;
+
+    fn make(ref_kind: Kind, ref_payload: u32) ExprSite {
+        if (ref_payload >= (@as(u32, 1) << (32 - kind_bits))) Common.invariant("Monotype expression reference exceeded its id range");
+        return @fromBackingInt((ref_payload << kind_bits) | @as(u32, @backingInt(ref_kind)));
+    }
+
+    fn read(source: CIR.Expr.Idx) ExprSite {
+        return make(.read, @backingInt(source));
+    }
+
+    fn coercedValue(source: CIR.Expr.Idx) ExprSite {
+        return make(.coerced_value, @backingInt(source));
+    }
+
+    /// A body node evaluated in place, at its own type: the node a table
+    /// names (a dispatch plan's expression, a compile-time root's
+    /// expression), as opposed to a parent's read of it.
+    fn own(view: ModuleView, source: CIR.Expr.Idx) ExprSite {
+        return if (view.bodies.rowCoercion(source) != null) coercedValue(source) else read(source);
+    }
+
+    fn hoistedRoot(root_id: checked.ComptimeRootId) ExprSite {
+        return make(.hoisted_root, @backingInt(root_id));
+    }
+
+    fn hoistedResult(root_id: checked.ComptimeRootId) ExprSite {
+        return make(.hoisted_result, @backingInt(root_id));
+    }
+
+    fn literalGuard(pattern: CIR.Pattern.Idx) ExprSite {
+        return make(.literal_guard, @backingInt(pattern));
+    }
+
+    fn literalValue(pattern: CIR.Pattern.Idx) ExprSite {
+        return make(.literal_value, @backingInt(pattern));
+    }
+
+    fn literalConversion(pattern: CIR.Pattern.Idx) ExprSite {
+        return make(.literal_conversion, @backingInt(pattern));
+    }
+
+    /// The literal a literal-conversion root converts: a literal expression,
+    /// or a custom literal pattern's literal.
+    fn conversionLiteral(view: ModuleView, literal: checked.LiteralNode) ExprSite {
+        return switch (literal) {
+            .expr => |expr| own(view, expr),
+            .pattern => |pattern| literalConversion(pattern),
+        };
+    }
+
+    fn kind(self: ExprSite) Kind {
+        return @fromBackingInt(@as(u3, @truncate(@backingInt(self))));
+    }
+
+    /// The raw CIR node a reference is about: its body node, or its custom
+    /// literal pattern. Null for a hoisted root construct.
+    fn rawNode(self: ExprSite) ?u32 {
+        return switch (self.kind()) {
+            .read, .coerced_value, .literal_guard, .literal_value, .literal_conversion => self.payload(),
+            .hoisted_root, .hoisted_result => null,
+        };
+    }
+
+    /// The custom literal pattern a literal reference belongs to.
+    fn literalPattern(self: ExprSite) CIR.Pattern.Idx {
+        return switch (self.kind()) {
+            .literal_guard, .literal_value, .literal_conversion => @fromBackingInt(self.payload()),
+            .read, .coerced_value, .hoisted_root, .hoisted_result => Common.invariant("a reference that belongs to no custom literal pattern was read as one"),
+        };
+    }
+
+    fn payload(self: ExprSite) u32 {
+        return @backingInt(self) >> kind_bits;
+    }
+
+    /// The body node a `read` or `coerced_value` reference names.
+    fn node(self: ExprSite) CIR.Expr.Idx {
+        return switch (self.kind()) {
+            .read, .coerced_value => @fromBackingInt(self.payload()),
+            .hoisted_root, .hoisted_result, .literal_guard, .literal_value, .literal_conversion => Common.invariant("a Monotype construct has no body node"),
+        };
+    }
+
+    /// The compile-time root a `hoisted_root` or `hoisted_result` reference
+    /// belongs to.
+    fn root(self: ExprSite) checked.ComptimeRootId {
+        return switch (self.kind()) {
+            .hoisted_root, .hoisted_result => @fromBackingInt(self.payload()),
+            .read, .coerced_value, .literal_guard, .literal_value, .literal_conversion => Common.invariant("a reference that belongs to no hoisted root was read as one"),
+        };
+    }
+};
+
+/// An expression Monotype lowers, normalized.
+const CheckedExpr = struct {
+    id: ExprSite,
+    ty: checked.CheckedTypeId,
+    source_region: base.Region,
+    data: ExprData,
+};
+
+fn SourceExprData(comptime tag: std.meta.Tag(checked_bodies.ExprData)) type {
+    return @FieldType(checked_bodies.ExprData, @tagName(tag));
+}
+
+/// The shape of an expression Monotype lowers: a body node's shape, or one
+/// of Monotype's own constructs.
+const ExprData = union(enum) {
+    numeral: SourceExprData(.numeral),
+    str_from_quote: SourceExprData(.str_from_quote),
+    str_segment: SourceExprData(.str_segment),
+    str: SourceExprData(.str),
+    bytes_literal: SourceExprData(.bytes_literal),
+    lookup_local: struct { pattern: CIR.Pattern.Idx, resolved: ?ResolvedUse },
+    lookup_external: ?ResolvedUse,
+    lookup_required: ?ResolvedUse,
+    list: SourceExprData(.list),
+    empty_list,
+    tuple: SourceExprData(.tuple),
+    match_: Match,
+    if_: SourceExprData(.if_),
+    call: SourceExprData(.call),
+    record: SourceExprData(.record),
+    empty_record,
+    block: SourceExprData(.block),
+    tag: SourceExprData(.tag),
+    nominal: SourceExprData(.nominal),
+    zero_argument_tag: SourceExprData(.zero_argument_tag),
+    closure: SourceExprData(.closure),
+    lambda: SourceExprData(.lambda),
+    binop: SourceExprData(.binop),
+    unary_minus: SourceExprData(.unary_minus),
+    field_access: SourceExprData(.field_access),
+    dispatch_call: SourceExprData(.dispatch_call),
+    interpolation: SourceExprData(.interpolation),
+    structural_eq: SourceExprData(.structural_eq),
+    structural_hash: SourceExprData(.structural_hash),
+    method_eq: SourceExprData(.method_eq),
+    type_dispatch_call: SourceExprData(.type_dispatch_call),
+    tuple_access: SourceExprData(.tuple_access),
+    runtime_error: SourceExprData(.runtime_error),
+    crash: SourceExprData(.crash),
+    dbg: SourceExprData(.dbg),
+    expect_err: SourceExprData(.expect_err),
+    expect: SourceExprData(.expect),
+    ellipsis,
+    anno_only,
+    break_,
+    return_: SourceExprData(.return_),
+    for_: SourceExprData(.for_),
+    hosted_lambda: SourceExprData(.hosted_lambda),
+    run_low_level: SourceExprData(.run_low_level),
+    /// The row coercion of a value to this expression's wider row
+    /// (design.md "Row Coercion Primitive"): lowering joins the two rows
+    /// (design.md "Row Joins") and lowers `value` into this expression's
+    /// destination.
+    row_coerce: struct { value: ExprSite },
+
+    fn fromSource(data: checked_bodies.ExprData) ExprData {
+        return switch (data) {
+            .lookup_local => |lookup| .{ .lookup_local = .{ .pattern = lookup.pattern, .resolved = ResolvedUse.fromSource(lookup.resolved) } },
+            .lookup_external => |resolved| .{ .lookup_external = ResolvedUse.fromSource(resolved) },
+            .lookup_required => |resolved| .{ .lookup_required = ResolvedUse.fromSource(resolved) },
+            .match_ => |match| .{ .match_ = .{
+                .cond = ExprSite.read(match.cond),
+                .branches = .{ .source = match.branches },
+                .is_try_suffix = match.is_try_suffix,
+                .skip_exhaustiveness = match.skip_exhaustiveness,
+                .site_kind = .match,
+            } },
+            inline .numeral,
+            .str_from_quote,
+            .str_segment,
+            .str,
+            .bytes_literal,
+            .list,
+            .empty_list,
+            .tuple,
+            .if_,
+            .call,
+            .record,
+            .empty_record,
+            .block,
+            .tag,
+            .nominal,
+            .zero_argument_tag,
+            .closure,
+            .lambda,
+            .binop,
+            .unary_minus,
+            .field_access,
+            .dispatch_call,
+            .interpolation,
+            .structural_eq,
+            .structural_hash,
+            .method_eq,
+            .type_dispatch_call,
+            .tuple_access,
+            .runtime_error,
+            .crash,
+            .dbg,
+            .expect_err,
+            .expect,
+            .ellipsis,
+            .anno_only,
+            .break_,
+            .return_,
+            .for_,
+            .hosted_lambda,
+            .run_low_level,
+            => |source_payload, tag| @unionInit(ExprData, @tagName(tag), source_payload),
+        };
+    }
+};
+
+/// A `match`: a source `match` expression, or the match of a hoisted
+/// pattern root's base expression against its pattern.
+const Match = struct {
+    cond: ExprSite,
+    branches: MatchBranches,
+    is_try_suffix: bool,
+    skip_exhaustiveness: bool,
+    site_kind: checked.CheckedComptimeSiteKind,
+};
+
+/// The branches of a `match`.
+const MatchBranches = union(enum) {
+    source: []const CIR.Expr.Match.Branch.Idx,
+    /// A hoisted pattern root's one branch: its pattern, yielding the root's
+    /// result.
+    hoisted: struct { pattern: CIR.Pattern.Idx, value: ExprSite },
+
+    fn count(self: MatchBranches) usize {
+        return switch (self) {
+            .source => |branches| branches.len,
+            .hoisted => 1,
+        };
+    }
+};
+
+/// One branch of a `match`.
+const MatchBranch = struct {
+    patterns: MatchBranchPatterns,
+    value: ExprSite,
+    guard: ?ExprSite,
+};
+
+/// The alternative patterns of one `match` branch.
+const MatchBranchPatterns = union(enum) {
+    source: []const CIR.Expr.Match.BranchPattern.Idx,
+    hoisted: CIR.Pattern.Idx,
+
+    fn len(self: MatchBranchPatterns) usize {
+        return switch (self) {
+            .source => |patterns| patterns.len,
+            .hoisted => 1,
+        };
+    }
+
+    fn at(self: MatchBranchPatterns, view: ModuleView, index: usize) checked_bodies.MatchBranchPattern {
+        return switch (self) {
+            .source => |patterns| view.bodies.matchBranchPattern(patterns[index]),
+            .hoisted => |pattern| .{ .pattern = pattern, .degenerate = false },
+        };
+    }
+};
+
+fn matchBranchAt(view: ModuleView, branches: MatchBranches, index: usize) MatchBranch {
+    return switch (branches) {
+        .source => |source| blk: {
+            const branch = view.bodies.matchBranch(source[index]);
+            break :blk .{
+                .patterns = .{ .source = branch.patterns },
+                .value = ExprSite.read(branch.value),
+                .guard = if (branch.guard) |guard| ExprSite.read(guard) else null,
+            };
+        },
+        .hoisted => |hoisted| .{ .patterns = .{ .hoisted = hoisted.pattern }, .value = hoisted.value, .guard = null },
+    };
+}
+
+/// The resolved value reference of a lookup Monotype lowers: a lookup
+/// expression's record in the resolved value reference table, a hoisted extraction root's read of its
+/// result binder, or a custom literal pattern's read of its matched value.
+const ResolvedUse = union(enum) {
+    source: checked.ResolvedValueRefId,
+    hoisted_result: checked.ComptimeRootId,
+    literal_value: CIR.Pattern.Idx,
+
+    fn fromSource(source: ?checked.ResolvedValueRefId) ?ResolvedUse {
+        return if (source) |id| .{ .source = id } else null;
+    }
+};
+
+/// A lookup's resolved value reference and what checking recorded with it.
+const ResolvedRecord = struct {
+    /// The lookup expression; null for a read Monotype builds.
+    expr: ?CIR.Expr.Idx,
+    ref: checked.ResolvedValueRef,
+    checked_ty: checked.CheckedTypeId,
+    scope_depth: u32,
+    recursive_reference: bool,
+
+    /// The lookup expression of a record that belongs to one.
+    fn lookupExpr(self: ResolvedRecord) CIR.Expr.Idx {
+        return self.expr orelse Common.invariant("a read Monotype builds was lowered as a use site");
+    }
+};
+
+fn resolvedRecord(view: ModuleView, resolved: ResolvedUse) ResolvedRecord {
+    switch (resolved) {
+        .source => |id| {
+            const raw = @backingInt(id);
+            if (raw >= view.resolved_refs.records.len) Common.invariant("checked lookup referenced a missing resolved value ref");
+            const record = view.resolved_refs.records[raw];
+            return .{
+                .expr = record.expr,
+                .ref = record.ref,
+                .checked_ty = record.checked_ty,
+                .scope_depth = record.scope_depth,
+                .recursive_reference = record.recursive_reference,
+            };
+        },
+        .hoisted_result => |root_id| {
+            const root = view.compile_time_roots.root(root_id);
+            const body = root.hoisted_body orelse Common.invariant("hoisted result read had no hoisted root body");
+            const result_pattern = switch (body) {
+                .pattern_extraction => |extraction| extraction.result_pattern,
+                .expr, .pattern_error, .pattern_validation, .valueless_binding => Common.invariant("hoisted result read belonged to a root that extracts no binder"),
+            };
+            const local: checked.LocalBindingRef = .{ .binder = result_pattern };
+            // The root's own binder is bound by its match while the root is
+            // evaluated. A selected callable reads that binder; a selected
+            // constant reads it through its const.
+            const ref: checked.ResolvedValueRef = switch (root.kind) {
+                .callable_binding => .{ .pattern_binder = local },
+                .hoisted_constant => .{ .selected_hoisted_const = .{
+                    .local = local,
+                    .const_use = .{ .const_ref = (view.hoisted_constants.lookupByPattern(result_pattern) orelse
+                        Common.invariant("hoisted extraction root had no hoisted constant")).const_ref },
+                } },
+                .constant, .hoisted_validation, .expect, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => Common.invariant("hoisted extraction root was neither a constant nor a callable binding"),
+            };
+            return .{
+                .expr = null,
+                .ref = ref,
+                .checked_ty = root.checked_type,
+                .scope_depth = 0,
+                .recursive_reference = false,
+            };
+        },
+        // A custom literal pattern is itself the binder of the value it
+        // matches.
+        .literal_value => |pattern| return .{
+            .expr = null,
+            .ref = .{ .pattern_binder = .{ .binder = pattern } },
+            .checked_ty = view.bodies.literalConversion(@backingInt(pattern)).ty,
+            .scope_depth = 0,
+            .recursive_reference = false,
+        },
+    }
+}
+
+/// The body node an expression reference evaluates in place, which the
+/// module's per-expression tables are keyed by: null for a row coercion and
+/// for a hoisted root construct.
+fn exprSourceNode(view: ModuleView, ref: ExprSite) ?CIR.Expr.Idx {
+    return switch (ref.kind()) {
+        .read => if (view.bodies.rowCoercion(ref.node()) != null) null else ref.node(),
+        .coerced_value => ref.node(),
+        .hoisted_root, .hoisted_result, .literal_guard, .literal_value, .literal_conversion => null,
+    };
+}
+
+fn patternRegion(view: ModuleView, pattern: CIR.Pattern.Idx) base.Region {
+    return view.module_env.store.getNodeRegion(can.ModuleEnv.nodeIdxFrom(pattern));
+}
+
+/// The normalized expression `ref` names in `view`.
+fn checkedExpr(view: ModuleView, ref: ExprSite) CheckedExpr {
+    switch (ref.kind()) {
+        .read => {
+            const source = ref.node();
+            if (view.bodies.rowCoercion(source)) |wide| {
+                return .{
+                    .id = ref,
+                    .ty = wide,
+                    .source_region = view.module_env.store.getNodeRegion(can.ModuleEnv.nodeIdxFrom(source)),
+                    .data = .{ .row_coerce = .{ .value = ExprSite.coercedValue(source) } },
+                };
+            }
+            const expr = view.bodies.expr(source);
+            return .{ .id = ref, .ty = expr.ty, .source_region = expr.source_region, .data = ExprData.fromSource(expr.data) };
+        },
+        .coerced_value => {
+            const expr = view.bodies.expr(ref.node());
+            return .{ .id = ref, .ty = expr.ty, .source_region = expr.source_region, .data = ExprData.fromSource(expr.data) };
+        },
+        .hoisted_root => {
+            const root = view.compile_time_roots.root(ref.root());
+            const body = root.hoisted_body orelse Common.invariant("hoisted root construct had no hoisted root body");
+            return switch (body) {
+                .pattern_error => .{
+                    .id = ref,
+                    .ty = root.checked_type,
+                    .source_region = patternRegion(view, root.source_pattern orelse Common.invariant("pattern-error hoisted root had no binding pattern")),
+                    .data = .{ .runtime_error = .{} },
+                },
+                inline .pattern_extraction, .pattern_validation => |pattern_body| .{
+                    .id = ref,
+                    .ty = root.checked_type,
+                    .source_region = patternRegion(view, pattern_body.scrutinee_pattern),
+                    .data = .{ .match_ = .{
+                        .cond = ExprSite.read(pattern_body.base_expr),
+                        .branches = .{ .hoisted = .{ .pattern = pattern_body.scrutinee_pattern, .value = ExprSite.hoistedResult(ref.root()) } },
+                        .is_try_suffix = false,
+                        .skip_exhaustiveness = false,
+                        .site_kind = .destructure,
+                    } },
+                },
+                .expr, .valueless_binding => Common.invariant("a root that evaluates its expression was read as a hoisted root construct"),
+            };
+        },
+        .hoisted_result => {
+            const root = view.compile_time_roots.root(ref.root());
+            const body = root.hoisted_body orelse Common.invariant("hoisted result had no hoisted root body");
+            return switch (body) {
+                .pattern_extraction => |extraction| .{
+                    .id = ref,
+                    .ty = root.checked_type,
+                    .source_region = patternRegion(view, extraction.result_pattern),
+                    .data = .{ .lookup_local = .{ .pattern = extraction.result_pattern, .resolved = .{ .hoisted_result = ref.root() } } },
+                },
+                .pattern_validation => |validation| .{
+                    .id = ref,
+                    .ty = root.checked_type,
+                    .source_region = patternRegion(view, validation.scrutinee_pattern),
+                    .data = .empty_record,
+                },
+                .expr, .pattern_error, .valueless_binding => Common.invariant("a root with no match was read as a hoisted result"),
+            };
+        },
+        .literal_guard => {
+            const pattern = ref.literalPattern();
+            const guard = view.bodies.literalPatternGuard(pattern) orelse Common.invariant("a literal guard belonged to a pattern compared directly");
+            return .{ .id = ref, .ty = guard.equality_ty, .source_region = patternRegion(view, pattern), .data = .{ .method_eq = guard.equality_plan } };
+        },
+        .literal_value => {
+            const pattern = ref.literalPattern();
+            const conversion = view.bodies.literalConversion(@backingInt(pattern));
+            return .{ .id = ref, .ty = conversion.ty, .source_region = patternRegion(view, pattern), .data = .{ .lookup_local = .{ .pattern = pattern, .resolved = .{ .literal_value = pattern } } } };
+        },
+        .literal_conversion => {
+            const pattern = ref.literalPattern();
+            const conversion = view.bodies.literalConversion(@backingInt(pattern));
+            return .{
+                .id = ref,
+                .ty = conversion.ty,
+                .source_region = patternRegion(view, pattern),
+                .data = switch (conversion.literal) {
+                    .numeral => |literal| .{ .numeral = .{ .literal = literal, .plan = conversion.plan, .conversion_root = conversion.conversion_root } },
+                    .quote => |text| .{ .str_from_quote = .{ .plan = conversion.plan, .literal = text, .conversion_root = conversion.conversion_root } },
+                },
+            };
+        },
+    }
+}
+
+/// A dispatch operand as Monotype lowers it. A custom literal pattern's
+/// matched value and converted literal are expressions Monotype builds
+/// (`ExprSite.literalValue`, `ExprSite.literalConversion`).
+const DispatchOperand = union(enum) {
+    checked_expr: ExprSite,
+    generated_interpolation_segments: CIR.Expr.Idx,
+    generated_numeral: can.ModuleEnv.NumeralLiteral,
+    generated_quote: u32,
+
+    fn of(operand: static_dispatch.StaticDispatchOperand) DispatchOperand {
+        return switch (operand) {
+            .checked_expr => |expr| .{ .checked_expr = ExprSite.read(expr) },
+            .literal_pattern_value => |pattern| .{ .checked_expr = ExprSite.literalValue(pattern) },
+            .literal_pattern_conversion => |pattern| .{ .checked_expr = ExprSite.literalConversion(pattern) },
+            .generated_interpolation_segments => |expr| .{ .generated_interpolation_segments = expr },
+            .generated_numeral => |numeral| .{ .generated_numeral = numeral },
+            .generated_quote => |node| .{ .generated_quote = node },
+        };
+    }
+
+    /// The expression of an operand that is a checked expression, a custom
+    /// literal pattern's matched value or its converted literal.
+    fn exprOf(operand: static_dispatch.StaticDispatchOperand) ExprSite {
+        return switch (of(operand)) {
+            .checked_expr => |expr| expr,
+            .generated_interpolation_segments,
+            .generated_numeral,
+            .generated_quote,
+            => Common.invariant("a compiler-generated dispatch operand was read as an expression"),
+        };
+    }
+};
+
+/// The expression a dispatch plan dispatches for: its expression node, or,
+/// for a plan at a custom literal pattern, that pattern's equality test or
+/// literal conversion.
+fn dispatchPlanSite(view: ModuleView, plan_id: static_dispatch.StaticDispatchPlanId) ExprSite {
+    const node = view.static_dispatch_plans.plans[@backingInt(plan_id)].node;
+    return switch (view.bodies.index().nodeKind(node)) {
+        .expr => ExprSite.own(view, @fromBackingInt(node)),
+        .pattern => if (view.static_dispatch_plans.lookupByNode(node) == plan_id)
+            ExprSite.literalGuard(@fromBackingInt(node))
+        else
+            ExprSite.literalConversion(@fromBackingInt(node)),
+        .statement, .unreached => Common.invariant("a dispatch plan belonged to neither an expression nor a pattern"),
+    };
+}
+
+/// The expression node of a plan that dispatches for an expression.
+fn dispatchPlanExpr(plan: static_dispatch.StaticDispatchCallPlan) CIR.Expr.Idx {
+    return @fromBackingInt(plan.node);
+}
+
+/// Whether a pattern introduces a binder of its own: an assign, var-assign,
+/// or as pattern.
+fn patternIntroducesBinder(view: ModuleView, pattern: CIR.Pattern.Idx) bool {
+    return switch (view.module_env.store.getPattern(pattern)) {
+        .assign, .var_assign, .as => true,
+        .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .str_interpolation, .underscore, .runtime_error, .deferred_import_ref => false,
+    };
+}
+
+/// The compile-time root that evaluates a literal's conversion, when its
+/// conversion is independent of specialization.
+fn literalConversionRootOf(data: ExprData) ?checked.ComptimeRootId {
+    return switch (data) {
+        .numeral => |numeral| numeral.conversion_root,
+        .str_from_quote => |quote| quote.conversion_root,
+        .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => null,
+    };
+}
+
+/// The expression a compile-time root's entry evaluates: its own expression,
+/// or the construct its hoisted body describes.
+fn rootBodyExpr(view: ModuleView, root: checked.CompileTimeRoot) ExprSite {
+    return if (root.evaluatedExpr()) |evaluated| ExprSite.own(view, evaluated) else ExprSite.hoistedRoot(root.id);
+}
 
 const ConstNode = struct {
     module: ModuleView,
@@ -2197,7 +2773,7 @@ fn enterEvidenceScope(
     builder: *Builder,
     evidence: EvidenceChain,
     scope_id: checked.DispatchScopeId,
-    checked_expr: checked.CheckedExprId,
+    checked_expr: CIR.Expr.Idx,
     edge: EdgeEvidence,
 ) Allocator.Error!EvidenceChain {
     const vector = edge.vector;
@@ -4068,7 +4644,7 @@ const TypeSpanReader = struct {
 /// to its local, and which local each binder was related to.
 const NestedRelationBase = struct {
     ctx: BodyContext,
-    related: collections.DenseMap(checked.PatternBinderId, DraftLocalId),
+    related: collections.DenseMap(BinderId, DraftLocalId),
     /// Every variable node the relations instantiated, in instantiation
     /// order; `ctx` records them through `relation_variables`.
     variables: std.ArrayList(InstantiatedVariable) = .empty,
@@ -4088,12 +4664,12 @@ const InstantiatedVariable = struct {
 /// Each lexical environment has its own version. Forks share inherited bindings;
 /// the active indexed view replays only changes when retained branches switch.
 const BinderMap = struct {
-    const Map = collections.VersionedDenseMap(checked.PatternBinderId, DraftLocalId);
+    const Map = collections.VersionedDenseMap(BinderId, DraftLocalId);
     values: Map,
     binder_count: usize,
 
     const Entry = struct {
-        binder: checked.PatternBinderId,
+        binder: BinderId,
         local: DraftLocalId,
 
         fn binderLessThan(_: void, left: Entry, right: Entry) bool {
@@ -4120,31 +4696,31 @@ const BinderMap = struct {
         return .{ .values = self.values.fork(), .binder_count = self.binder_count };
     }
 
-    fn checkBinder(self: *const BinderMap, binder: checked.PatternBinderId) void {
-        if (@backingInt(binder) >= self.binder_count) Common.invariant("pattern binder was outside its checked body store");
+    fn checkBinder(self: *const BinderMap, binder: BinderId) void {
+        if (@backingInt(binder) >= self.binder_count) Common.invariant("pattern binder was outside its module's nodes");
     }
 
-    fn get(self: *const BinderMap, binder: checked.PatternBinderId) ?DraftLocalId {
+    fn get(self: *const BinderMap, binder: BinderId) ?DraftLocalId {
         self.checkBinder(binder);
         return self.values.get(binder);
     }
 
-    fn put(self: *BinderMap, binder: checked.PatternBinderId, local: DraftLocalId) Allocator.Error!void {
+    fn put(self: *BinderMap, binder: BinderId, local: DraftLocalId) Allocator.Error!void {
         self.checkBinder(binder);
         try self.values.put(binder, local);
     }
 
-    fn restore(self: *BinderMap, binder: checked.PatternBinderId, previous: ?DraftLocalId) void {
+    fn restore(self: *BinderMap, binder: BinderId, previous: ?DraftLocalId) void {
         self.checkBinder(binder);
         self.values.restore(binder, previous);
     }
 
-    fn remove(self: *BinderMap, binder: checked.PatternBinderId) bool {
+    fn remove(self: *BinderMap, binder: BinderId) bool {
         self.checkBinder(binder);
         return self.values.remove(binder);
     }
 
-    fn contains(self: *const BinderMap, binder: checked.PatternBinderId) bool {
+    fn contains(self: *const BinderMap, binder: BinderId) bool {
         return self.get(binder) != null;
     }
 
@@ -4165,7 +4741,7 @@ const BinderMap = struct {
     }
 };
 const TypedBinder = struct {
-    binder: checked.PatternBinderId,
+    binder: BinderId,
     type_digest: names.TypeDigest,
 };
 const TypedBinders = collections.VersionedHashMap(TypedBinder, DraftLocalId);
@@ -4178,9 +4754,9 @@ const LexicalBinderEntry = struct {
 };
 const DraftLocalProcDeclaration = struct {
     module: [32]u8,
-    binder: checked.PatternBinderId,
-    expr: checked.CheckedExprId,
-    context_anchor: ?checked.CheckedStatementId,
+    binder: BinderId,
+    expr: CIR.Expr.Idx,
+    context_anchor: ?CIR.Statement.Idx,
 
     fn address(self: DraftLocalProcDeclaration) DraftLocalProcAddress {
         return .{ .module = self.module, .binder = self.binder, .expr = self.expr };
@@ -4188,8 +4764,8 @@ const DraftLocalProcDeclaration = struct {
 };
 const DraftLocalProcAddress = struct {
     module: [32]u8,
-    binder: checked.PatternBinderId,
-    expr: checked.CheckedExprId,
+    binder: BinderId,
+    expr: CIR.Expr.Idx,
 };
 const LocalProcContext = struct {
     declaration: DraftLocalProcDeclaration,
@@ -5063,7 +5639,7 @@ const LambdaArgLet = struct {
 };
 
 const MergeBinder = struct {
-    binder: checked.PatternBinderId,
+    binder: BinderId,
     before: DraftLocalId,
     ty: DraftTypeCell,
 };
@@ -5354,7 +5930,7 @@ const Builder = struct {
     /// Worklists of `BodyContext.patternNeedsExplicitBinding`.
     explicit_binding_scratch: struct {
         visits: ScratchSlot(BodyContext.ExplicitBindingVisit) = .{},
-        children: ScratchSlot(checked.CheckedPatternId) = .{},
+        children: ScratchSlot(CIR.Pattern.Idx) = .{},
     } = .{},
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     counters: ?*SpecializationCounters,
@@ -7129,7 +7705,7 @@ const Builder = struct {
                 const view = self.moduleForId(checked.constModuleId(request.const_locator));
                 const root_id = switch (request.const_locator.owner) {
                     .top_level_binding => |owner| view.compile_time_roots.lookupIdByPattern(owner.pattern),
-                    .hoisted_expr => |owner| if (view.hoisted_constants.lookupByExpr(owner.expr)) |entry| entry.root else null,
+                    .hoisted_root => |owner| owner.root,
                 };
                 if (root_id) |root| {
                     if (self.comptimeValueReadDeclared(view, root)) {
@@ -7587,9 +8163,9 @@ const Builder = struct {
                 hasher.update("top-level-binding");
                 hashU32(&hasher, @backingInt(owner.pattern));
             },
-            .hoisted_expr => |owner| {
-                hasher.update("hoisted-expr");
-                hashU32(&hasher, @backingInt(owner.expr));
+            .hoisted_root => |owner| {
+                hasher.update("hoisted-root");
+                hashU32(&hasher, @backingInt(owner.root));
             },
         }
         hashU32(&hasher, @backingInt(request.const_locator.template));
@@ -7676,7 +8252,7 @@ const Builder = struct {
 
     /// The callable-eval binding of a top-level exact procedure alias, by its
     /// checked binding pattern.
-    fn callableEvalForAliasBinding(_: *Builder, view: ModuleView, binding: checked.CheckedPatternId) CallableEvalUse {
+    fn callableEvalForAliasBinding(_: *Builder, view: ModuleView, binding: CIR.Pattern.Idx) CallableEvalUse {
         for (view.callable_eval_templates.templates) |template| {
             if (template.pattern == binding) return .{ .view = view, .template = template.id };
         }
@@ -11313,11 +11889,11 @@ const Builder = struct {
         return filling;
     }
 
-    fn stampSingleSourceCalls(self: *Builder) void {
+    fn stampSingleSourceCalls(self: *Builder) Allocator.Error!void {
         for (0..self.program.fnCount()) |raw| {
             const id: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
             var source = self.program.getFn(id).source;
-            if (self.singleSourceCall(source)) {
+            if (try self.singleSourceCall(source)) {
                 source.single_source_call = true;
                 self.program.setFnSource(id, source);
             }
@@ -11326,7 +11902,7 @@ const Builder = struct {
             const id: Ast.DefId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
             var def = self.program.getDef(id);
             var fn_def = def.fn_def orelse continue;
-            if (!self.singleSourceCall(fn_def)) continue;
+            if (!try self.singleSourceCall(fn_def)) continue;
             fn_def.single_source_call = true;
             def.fn_def = fn_def;
             self.program.setDef(id, def);
@@ -11334,7 +11910,7 @@ const Builder = struct {
         for (0..self.program.nestedDefCount()) |raw| {
             const id: Ast.NestedDefId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
             var source = self.program.getNestedDef(id).fn_def;
-            if (!self.singleSourceCall(source)) continue;
+            if (!try self.singleSourceCall(source)) continue;
             source.single_source_call = true;
             self.program.setNestedDefSource(id, source);
         }
@@ -11465,18 +12041,18 @@ const Builder = struct {
         return .{ .bytes = hasher.finalResult() };
     }
 
-    fn singleSourceCall(self: *Builder, template: Ast.FnTemplate) bool {
+    fn singleSourceCall(self: *Builder, template: Ast.FnTemplate) Allocator.Error!bool {
         const checked_template = switch (template.fn_def) {
             .local_template, .imported_template => |checked_template| checked_template,
             .nested => |nested| {
                 if (nested.default_root != null) return false;
                 const view = self.moduleForDigest(names.procTemplateModuleDigest(nested.owner));
-                return view.nested_proc_sites.sites[@backingInt(nested.site)].single_source_call;
+                return try view.bodies.nestedProcSiteIsSingleSourceCall(nested.site);
             },
             .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => return false,
         };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(checked_template));
-        return view.templates.templateHasSingleSourceCall(checked_template.template);
+        return try view.bodies.templateHasSingleSourceCall(checked_template.template);
     }
 
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
@@ -12686,7 +13262,7 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         owner: names.ProcTemplate,
-        expr_id: checked.CheckedExprId,
+        expr_id: CIR.Expr.Idx,
         context_fn_key: names.TypeDigest,
         local_proc_context_digest: ?names.TypeDigest,
         in_default_expr: bool,
@@ -12713,7 +13289,7 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         owner: names.ProcTemplate,
-        expr_id: checked.CheckedExprId,
+        expr_id: CIR.Expr.Idx,
         in_default_expr: bool,
     ) Allocator.Error!names.NestedProcSiteId {
         const address = NestedSiteAddress.from(view.key, owner, expr_id);
@@ -12749,7 +13325,7 @@ const Builder = struct {
         self: *Builder,
         source_ctx: *BodyContext,
         request_owner: DraftOwner,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         nested: Ast.NestedFn,
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
@@ -12795,7 +13371,7 @@ const Builder = struct {
         self: *Builder,
         source_ctx: *BodyContext,
         request_owner: DraftOwner,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         nested: Ast.NestedFn,
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
@@ -15385,7 +15961,7 @@ const Builder = struct {
     }
 
     const RestoredConstSourceCapture = struct {
-        binder: checked.PatternBinderId,
+        binder: BinderId,
         previous: ?DraftLocalId,
         previous_typed: ?DraftLocalId,
         local: DraftLocalId,
@@ -15623,7 +16199,7 @@ const Builder = struct {
         const draft = FinalBodyOutputGuard.begin(self);
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
-        const lambda_expr = fn_view.bodies.expr(lambda_expr_id);
+        const lambda_expr = checkedExpr(fn_view, lambda_expr_id);
         for (fn_value.captures) |capture| _ = constCaptureBinder(capture.id);
         var bound_captures = try self.bindConstSourceCaptures(&fn_ctx, store_view, fn_view, fn_value, static_data_const_locator, false);
         defer self.releaseConstSourceCaptures(&fn_ctx, &bound_captures);
@@ -15725,7 +16301,7 @@ const Builder = struct {
         var source_captures = try self.bindConstSourceCaptures(&fn_ctx, store_view, fn_view, fn_value, static_data_const_locator, false);
         defer self.releaseConstSourceCaptures(&fn_ctx, &source_captures);
 
-        const expr = fn_view.bodies.expr(runtime.expr);
+        const expr = checkedExpr(fn_view, ExprSite.own(fn_view, runtime.expr));
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
         try fn_ctx.restoreGeneratedRuntimeEvidence(store_view, fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
@@ -16294,7 +16870,7 @@ const CompletedDirectCallee = struct {
 /// and one callee selection instead of instantiating the callee's checked
 /// type again for each read.
 const RelatedConstructor = struct {
-    expr: checked.CheckedExprId,
+    expr: ExprSite,
     node: NodeId,
 };
 
@@ -17468,7 +18044,7 @@ const DraftDeferredStructuralSerialization = struct {
 /// callable's result node live; emission lowers the intrinsic body under the
 /// frozen final-type sealer.
 const CheckedIntrinsicOperands = union(enum) {
-    direct_call: []const checked.CheckedExprId,
+    direct_call: []const CIR.Expr.Idx,
     dispatch: []const static_dispatch.StaticDispatchOperand,
 };
 
@@ -17478,7 +18054,7 @@ const DraftDeferredCallsiteIntrinsic = struct {
     owner: DraftOwner,
     expr: DraftExprId,
     intrinsic: checked.IntrinsicId,
-    checked_expr_id: checked.CheckedExprId,
+    checked_expr_id: ExprSite,
     source_fn_ty: checked.CheckedTypeId,
     operands: CheckedIntrinsicOperands,
     pre_lowered_args: ?DraftSpan(DraftExprId),
@@ -18220,7 +18796,7 @@ fn nestedSpecReusableAt(draft: *const BodyDraftStore, spec: *const DraftNestedSp
 const DraftNestedSpec = struct {
     state: DraftSpecState,
     nested: Ast.NestedFn,
-    expr_id: checked.CheckedExprId,
+    expr_id: ExprSite,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_node: NodeId,
@@ -18417,8 +18993,15 @@ const DraftOwnerRun = struct {
 
 const CheckedStringLiteralAddress = struct {
     module_bytes: [32]u8,
-    literal: checked.CheckedStringLiteralId,
+    literal: CheckedStringLiteral,
     owner: DraftOwner,
+};
+
+/// A string literal of a checked module's bodies: one of the module's string
+/// literals, or the text of the literal-only string expression at a node.
+const CheckedStringLiteral = union(enum) {
+    literal: base.StringLiteral.Idx,
+    quote: u32,
 };
 
 const StaticDataCandidateAddress = struct {
@@ -19325,7 +19908,7 @@ const BodyDraftStore = struct {
         self: *BodyDraftStore,
         symbol: Common.Symbol,
         ty: DraftTypeCell,
-        binder: ?checked.PatternBinderId,
+        binder: ?BinderId,
         inherited_capture_id: ?checked.CaptureId,
     ) Allocator.Error!DraftLocalId {
         const id: DraftLocalId = @fromBackingInt(@intCast(@as(u32, @intCast(self.locals.items.len))));
@@ -19533,7 +20116,7 @@ const BodyDraftStore = struct {
     fn addCheckedStringLiteral(
         self: *BodyDraftStore,
         checked_module_bytes: [32]u8,
-        literal: checked.CheckedStringLiteralId,
+        literal: CheckedStringLiteral,
         text: []const u8,
     ) Allocator.Error!DraftStringLiteralId {
         const address: CheckedStringLiteralAddress = .{
@@ -21128,12 +21711,12 @@ fn allRuntimeImpossibilityProof(
 }
 
 const BinderRestore = struct {
-    binder: checked.PatternBinderId,
+    binder: BinderId,
     previous: ?DraftLocalId,
 };
 
 const ActiveReturnTarget = struct {
-    lambda: checked.CheckedExprId,
+    lambda: ExprSite,
     cell: DraftTypeCell,
 };
 
@@ -21142,7 +21725,7 @@ const ActiveConstBindingId = enum(u32) { _ };
 const ActiveConstBinding = struct {
     parent: ?ActiveConstBindingId,
     const_use: checked.ConstLocator,
-    binder: checked.PatternBinderId,
+    binder: BinderId,
     local: DraftLocalId,
     cell: DraftTypeCell,
     owner: DraftOwner,
@@ -21155,7 +21738,7 @@ const ActiveConstBinding = struct {
 const ActiveConstBindingScope = struct {
     active: ActiveConstBindingId = undefined,
     previous_active: ?ActiveConstBindingId = null,
-    binder: checked.PatternBinderId = undefined,
+    binder: BinderId = undefined,
     previous_local: ?DraftLocalId = null,
     bound_in_current_view: bool = false,
     entered: bool = false,
@@ -21626,10 +22209,10 @@ const TypeInstantiationContext = struct {
     /// A direct call's request belongs to the same instantiation as its checked
     /// argument cells. Default materializations must not reuse a caller's or
     /// another materialization's request, even for the same checked expression.
-    direct_call_requests: collections.DenseMap(checked.CheckedExprId, DirectCallRequest),
+    direct_call_requests: collections.DenseMap(ExprSite, DirectCallRequest),
     /// Result-type reads belong to this checked-type instantiation. Imported
     /// defaults and other instantiations use independent expression-read maps.
-    expr_type_reads: collections.DenseMap(checked.CheckedExprId, NodeId),
+    expr_type_reads: collections.DenseMap(ExprSite, NodeId),
     /// Innermost-last stack of nominal-instance instantiation scopes; see
     /// instNominalBackingNode.
     decl_scopes: std.ArrayList(*InstantiatingNodeMap) = .empty,
@@ -21655,8 +22238,8 @@ const TypeInstantiationContext = struct {
             .module_bytes = module_bytes,
             .node_map = InstantiatingNodeMap.init(allocator),
             .field_kind_map = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(allocator),
-            .direct_call_requests = collections.DenseMap(checked.CheckedExprId, DirectCallRequest).init(allocator),
-            .expr_type_reads = collections.DenseMap(checked.CheckedExprId, NodeId).init(allocator),
+            .direct_call_requests = collections.DenseMap(ExprSite, DirectCallRequest).init(allocator),
+            .expr_type_reads = collections.DenseMap(ExprSite, NodeId).init(allocator),
             .pure_nodes = collections.DenseMap(NodeId, void).init(allocator),
         };
     }
@@ -21724,7 +22307,7 @@ const BodyContext = struct {
     current_fn_key: names.TypeDigest,
     comptime_exhaustiveness_context: ExhaustivenessContext.Context,
     generated_encoder_source_fn_ty: ?checked.CheckedTypeId,
-    generated_encoder_source_expr: ?checked.CheckedExprId,
+    generated_encoder_source_expr: ?CIR.Expr.Idx,
     generated_encoder_lambda_index: u64,
     binders: BinderMap,
     typed_binders: TypedBinders,
@@ -21807,7 +22390,7 @@ const BodyContext = struct {
     reuse_pre_registered_pattern_binders: bool = false,
     /// `patternNeedsExplicitBinding` answers, memoized per pattern: pattern
     /// lowering asks it at every level of a pattern tree.
-    explicit_binding_memo: collections.DenseMapUnmanaged(checked.CheckedPatternId, bool) = .empty,
+    explicit_binding_memo: collections.DenseMapUnmanaged(CIR.Pattern.Idx, bool) = .empty,
     /// Match branches have their own complete pattern engine. Other callers
     /// must route recursive materialization through the shell/plan lowering.
     allow_recursive_pattern_lowering_for_match: bool = false,
@@ -21881,7 +22464,7 @@ const BodyContext = struct {
     /// An expression statement whose expression is a guarded hoisted root. Its
     /// value is discarded, so the root has nothing to restore there; the
     /// statement lowers its original expression, keeping its failure in place.
-    in_place_statement_expr: ?checked.CheckedExprId = null,
+    in_place_statement_expr: ?ExprSite = null,
     /// Generated local for the top-level constant root currently being
     /// restored. Recursive references to that exact checked const identity
     /// consume this local so the restored value becomes an explicit recursive
@@ -21916,6 +22499,11 @@ const BodyContext = struct {
     /// the complete expression and statement divergence columns consumed below.
     specialization_dispatch_crashes: ?[]bool = null,
     owns_specialization_dispatch_crashes: bool = false,
+    /// Per dispatch plan of a custom literal pattern (its `is_eq` or its
+    /// literal's conversion): whether this specialization's evidence resolves
+    /// that plan to a checked error or unreachable value.
+    specialization_pattern_plan_crashes: ?[]bool = null,
+    owns_specialization_pattern_plan_crashes: bool = false,
     specialization_dispatch_divergence: ?checked.DispatchDivergence = null,
     borrowed_specialization_dispatch_divergence: ?*const checked.DispatchDivergence = null,
     /// While recursively restoring a stored constant, the concrete type of the
@@ -21924,7 +22512,7 @@ const BodyContext = struct {
     const PatternLiteralGuard = union(enum) {
         /// The checker-produced comparison, including conversion and exact
         /// equality dispatch, reads the bound pattern value.
-        condition: checked.CheckedExprId,
+        condition: ExprSite,
         /// This literal is unrepresentable at the specialized builtin type.
         never,
     };
@@ -22429,13 +23017,13 @@ const BodyContext = struct {
     }
 
     const MaterializedArg = struct {
-        pattern: checked.CheckedPatternId,
+        pattern: CIR.Pattern.Idx,
         value: DraftExprId,
         ty: DraftTypeCell,
     };
 
     const PendingMaterializedPattern = struct {
-        pattern: checked.CheckedPatternId,
+        pattern: CIR.Pattern.Idx,
         local: DraftLocalId,
         cell: DraftTypeCell,
     };
@@ -22461,12 +23049,12 @@ const BodyContext = struct {
     };
 
     const PatternSuccessGuard = struct {
-        root_pattern: checked.CheckedPatternId,
+        root_pattern: CIR.Pattern.Idx,
         root_node: NodeId,
     };
 
     const PatternNodeVisit = struct {
-        pattern: checked.CheckedPatternId,
+        pattern: CIR.Pattern.Idx,
         node: NodeId,
     };
 
@@ -22528,11 +23116,11 @@ const BodyContext = struct {
         materialized_args: struct {
             args: []const MaterializedArg,
             index: usize,
-            lambda: checked.CheckedExprId,
-            body: checked.CheckedExprId,
+            lambda: ExprSite,
+            body: ExprSite,
         },
         iterator_body: struct {
-            body: checked.CheckedExprId,
+            body: ExprSite,
             result_cell: DraftTypeCell,
             rest_expr: DraftExprId,
             carries: []const LoopCarry,
@@ -22540,11 +23128,11 @@ const BodyContext = struct {
     };
 
     const CurrentLocal = struct {
-        binder: checked.PatternBinderId,
+        binder: BinderId,
         local: DraftLocalId,
     };
 
-    fn typedBinder(self: *BodyContext, binder: checked.PatternBinderId, ty: Type.TypeId) TypedBinder {
+    fn typedBinder(self: *BodyContext, binder: BinderId, ty: Type.TypeId) TypedBinder {
         return .{
             .binder = binder,
             .type_digest = self.typeStore().typeDigest(self.nameStore(), ty),
@@ -22553,7 +23141,7 @@ const BodyContext = struct {
 
     fn putTypedBinder(
         self: *BodyContext,
-        binder: checked.PatternBinderId,
+        binder: BinderId,
         ty: Type.TypeId,
         local: DraftLocalId,
     ) Allocator.Error!?DraftLocalId {
@@ -22565,7 +23153,7 @@ const BodyContext = struct {
 
     /// Put `binder` back to the local it named before a scoped rebinding, or
     /// unbind it when it named none.
-    fn restoreBinder(self: *BodyContext, binder: checked.PatternBinderId, previous: ?DraftLocalId) void {
+    fn restoreBinder(self: *BodyContext, binder: BinderId, previous: ?DraftLocalId) void {
         if (previous) |local| {
             self.binders.restore(binder, local);
         } else {
@@ -22588,7 +23176,7 @@ const BodyContext = struct {
 
     fn restoreTypedBinder(
         self: *BodyContext,
-        binder: checked.PatternBinderId,
+        binder: BinderId,
         ty: Type.TypeId,
         previous: ?DraftLocalId,
     ) void {
@@ -22640,7 +23228,7 @@ const BodyContext = struct {
             .generated_encoder_source_fn_ty = null,
             .generated_encoder_source_expr = null,
             .generated_encoder_lambda_index = 0,
-            .binders = try BinderMap.init(allocator, view.bodies.patternBinderCount()),
+            .binders = try BinderMap.init(allocator, view.bodies.nodeCount()),
             .typed_binders = TypedBinders.init(allocator),
             .local_proc_contexts = LocalProcContexts.init(allocator),
             .graph = graph,
@@ -22673,6 +23261,9 @@ const BodyContext = struct {
         if (self.specialization_dispatch_divergence) |*divergence| divergence.deinit(self.allocator);
         if (self.owns_specialization_dispatch_crashes) {
             self.allocator.free(self.specialization_dispatch_crashes.?);
+        }
+        if (self.owns_specialization_pattern_plan_crashes) {
+            self.allocator.free(self.specialization_pattern_plan_crashes.?);
         }
         self.parser_defs.deinit();
         self.encoder_defs.deinit();
@@ -23396,7 +23987,7 @@ const BodyContext = struct {
         self: *BodyContext,
         symbol: Common.Symbol,
         ty: Type.TypeId,
-        binder: ?checked.PatternBinderId,
+        binder: ?BinderId,
     ) Allocator.Error!DraftLocalId {
         return try self.addLocalWithBinderCell(symbol, try self.draftTypeCell(ty), binder);
     }
@@ -23405,7 +23996,7 @@ const BodyContext = struct {
         self: *BodyContext,
         symbol: Common.Symbol,
         ty: DraftTypeCell,
-        binder: ?checked.PatternBinderId,
+        binder: ?BinderId,
     ) Allocator.Error!DraftLocalId {
         switch (ty) {
             .sealed => |sealed| if (@backingInt(sealed) >= self.typeStore().epochBoundary().types) {
@@ -23430,7 +24021,7 @@ const BodyContext = struct {
         self: *BodyContext,
         symbol: Common.Symbol,
         ty: DraftTypeCell,
-        binder: checked.PatternBinderId,
+        binder: BinderId,
     ) Allocator.Error!DraftLocalId {
         switch (ty) {
             .sealed => |sealed| if (@backingInt(sealed) >= self.typeStore().epochBoundary().types) {
@@ -23625,7 +24216,7 @@ const BodyContext = struct {
         self.draft.setLocalType(id, try self.draftTypeCell(ty));
     }
 
-    fn bindLocalName(self: *BodyContext, local: DraftLocalId, binder: checked.PatternBinderId) Allocator.Error!void {
+    fn bindLocalName(self: *BodyContext, local: DraftLocalId, binder: BinderId) Allocator.Error!void {
         return try self.bindLocalNameFromView(self.view, local, binder);
     }
 
@@ -23633,10 +24224,9 @@ const BodyContext = struct {
         self: *BodyContext,
         source_view: ModuleView,
         local: DraftLocalId,
-        binder: checked.PatternBinderId,
+        binder: BinderId,
     ) Allocator.Error!void {
-        const entry = source_view.bodies.patternBinder(binder);
-        const pattern = source_view.bodies.pattern(entry.pattern);
+        const pattern = source_view.bodies.pattern(binder);
         if (pattern.data != .assign) return;
         const source = source_view.module_env.common.source;
         const start = pattern.source_region.start.offset;
@@ -24590,7 +25180,7 @@ const BodyContext = struct {
         errdefer self.allocator.destroy(relation_base);
         relation_base.* = .{
             .ctx = try self.childContextWithTypeCells(self.current_fn_key, false),
-            .related = collections.DenseMap(checked.PatternBinderId, DraftLocalId).init(self.allocator),
+            .related = collections.DenseMap(BinderId, DraftLocalId).init(self.allocator),
         };
         self.nested_relation_base = relation_base;
         relation_base.ctx.relation_variables = &relation_base.variables;
@@ -24713,6 +25303,8 @@ const BodyContext = struct {
         child.in_default_expr = self.in_default_expr;
         child.specialization_dispatch_crashes = self.specialization_dispatch_crashes;
         child.owns_specialization_dispatch_crashes = false;
+        child.specialization_pattern_plan_crashes = self.specialization_pattern_plan_crashes;
+        child.owns_specialization_pattern_plan_crashes = false;
         child.borrowed_specialization_dispatch_divergence = self.specializationDispatchDivergence();
 
         child.binders.deinit();
@@ -24871,7 +25463,7 @@ const BodyContext = struct {
         for (context.entries) |entry| {
             switch (entry.kind) {
                 0 => {
-                    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(entry.binder));
+                    const binder: BinderId = @fromBackingInt(@intCast(entry.binder));
                     _ = self.binders.get(binder) orelse
                         Common.invariant("local procedure use was missing a declaration-context binder");
                 },
@@ -24934,7 +25526,7 @@ const BodyContext = struct {
 
     const InstalledLocalProcContext = struct {
         ctx: *BodyContext,
-        binders: []checked.PatternBinderId,
+        binders: []BinderId,
         binder_count: usize,
         /// Binders whose declaration-context local replaced the requesting
         /// body's local, with the local to restore.
@@ -24943,7 +25535,7 @@ const BodyContext = struct {
         typed_binders: []TypedBinder,
         typed_binder_count: usize,
 
-        const ReplacedBinder = struct { binder: checked.PatternBinderId, local: DraftLocalId };
+        const ReplacedBinder = struct { binder: BinderId, local: DraftLocalId };
 
         fn deinit(self: *InstalledLocalProcContext) void {
             for (self.binders[0..self.binder_count]) |binder| {
@@ -24970,7 +25562,7 @@ const BodyContext = struct {
         self: *BodyContext,
         context: LocalProcContext,
     ) Allocator.Error!InstalledLocalProcContext {
-        const binders = try self.allocator.alloc(checked.PatternBinderId, context.entries.len);
+        const binders = try self.allocator.alloc(BinderId, context.entries.len);
         const typed_binders = self.allocator.alloc(TypedBinder, context.entries.len) catch |err| {
             self.allocator.free(binders);
             return err;
@@ -24998,7 +25590,7 @@ const BodyContext = struct {
             }
             switch (entry.kind) {
                 0 => {
-                    const binder: checked.PatternBinderId = @fromBackingInt(entry.binder);
+                    const binder: BinderId = @fromBackingInt(entry.binder);
                     if (self.binders.get(binder)) |requesting| {
                         // A captured reassignable binder's value is its
                         // snapshot at the declaration
@@ -25931,7 +26523,7 @@ const BodyContext = struct {
 
     /// The per-body memo maps the builder pools across body contexts.
     const Memos = struct {
-        explicit_binding_memo: collections.DenseMapUnmanaged(checked.CheckedPatternId, bool) = .empty,
+        explicit_binding_memo: collections.DenseMapUnmanaged(CIR.Pattern.Idx, bool) = .empty,
 
         /// The chunk-directory span past which a released map gives up its
         /// pages instead of keeping them for the next body.
@@ -26937,21 +27529,19 @@ const BodyContext = struct {
         self.function_entry_demand_guards = fn_nodes.args;
         const ret_cell = DraftTypeCell.fromGraphNode(fn_nodes.ret);
         return switch (template.body) {
-            .checked_body => |body_id| blk: {
-                const body = self.view.bodies.body(body_id);
-                const root = self.view.bodies.expr(body.root_expr);
+            .checked_body => |root_expr| blk: {
+                const root = checkedExpr(self.view, ExprSite.read(root_expr));
                 break :blk switch (root.data) {
-                    .lambda => |lambda| try self.lowerLambdaTemplateAtNode(body.root_expr, lambda, fn_node),
+                    .lambda => |lambda| try self.lowerLambdaTemplateAtNode(ExprSite.read(root_expr), lambda, fn_node),
                     .closure => |closure| closure_blk: {
                         if (closure.captures.len != 0) {
                             Common.invariant("checked procedure template root closure had captures");
                         }
-                        const lambda_expr = self.view.bodies.expr(closure.lambda);
+                        const lambda_expr = checkedExpr(self.view, ExprSite.read(closure.lambda));
                         if (lambda_expr.data != .lambda) Common.invariant("checked procedure template root closure did not point at a lambda");
-                        break :closure_blk try self.lowerLambdaTemplateAtNode(closure.lambda, lambda_expr.data.lambda, fn_node);
+                        break :closure_blk try self.lowerLambdaTemplateAtNode(ExprSite.read(closure.lambda), lambda_expr.data.lambda, fn_node);
                     },
                     .hosted_lambda => Common.invariant("hosted lambda template must lower through hosted metadata, not source lambda body"),
-                    .pending,
                     .numeral,
                     .str_from_quote,
                     .str_segment,
@@ -26974,7 +27564,6 @@ const BodyContext = struct {
                     .zero_argument_tag,
                     .binop,
                     .unary_minus,
-                    .unary_not,
                     .field_access,
                     .dispatch_call,
                     .interpolation,
@@ -26997,7 +27586,7 @@ const BodyContext = struct {
                     .run_low_level,
                     => .{
                         .args = .empty(),
-                        .body = try self.lowerExprAtTypeCell(body.root_expr, ret_cell),
+                        .body = try self.lowerExprAtTypeCell(ExprSite.read(root_expr), ret_cell),
                         .ret = ret_cell,
                     },
                 };
@@ -27191,7 +27780,7 @@ const BodyContext = struct {
                     }
                 },
                 .local_proc_use => |ref_id| {
-                    const record = self.view.resolved_refs.records[@backingInt(ref_id)];
+                    const record = resolvedRecord(self.view, .{ .source = ref_id });
                     const local = switch (record.ref) {
                         .local_proc => |local| local,
                         .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => Common.invariant("checked local specialization relation targeted a non-local procedure"),
@@ -27233,7 +27822,7 @@ const BodyContext = struct {
                     local_ctx.owner_context_fn_key = self.owner_context_fn_key;
                     local_ctx.current_fn_key = self.current_fn_key;
                     const use_evidence = try self.evidenceForUseSiteForPurposeAtNode(
-                        record.expr,
+                        record.lookupExpr(),
                         .specialization_interface,
                         request_node,
                     );
@@ -27880,8 +28469,8 @@ const BodyContext = struct {
             .literal_argument,
             => saved_source_region_override,
         };
-        const body = if (root.literalConversionKind() != null)
-            try self.lowerLiteralConversionRootBody(wrapper.body_expr, ret_cell)
+        const body = if (root.literalNode()) |literal|
+            try self.lowerLiteralConversionRootBody(ExprSite.conversionLiteral(self.view, literal), ret_cell)
         else switch (root.kind) {
             // A literal argument root is the `.boxy` evaluator's: its value
             // is passed at runtime by address, so it is never a Solved
@@ -27892,13 +28481,13 @@ const BodyContext = struct {
             .hoisted_validation,
             .expect,
             .repl_expr,
-            => try self.lowerComptimeRootExprAtCell(wrapper.body_expr, ret_cell),
+            => try self.lowerComptimeRootExprAtCell(rootBodyExpr(self.view, root), ret_cell),
             .callable_binding => blk: {
                 // The canonical evaluator owns its recursive closure binding.
                 // Reads inside its construction must refer to this binding,
                 // before the completed value can be published to a root slot.
                 const local = try self.reserveCallableEvalBinding(self.view, wrapper.root, try ret_cell.toGraphNode(self.graph));
-                const lowered = try self.lowerComptimeRootExprAtCell(wrapper.body_expr, ret_cell);
+                const lowered = try self.lowerComptimeRootExprAtCell(rootBodyExpr(self.view, root), ret_cell);
                 break :blk try self.finishCallableEvalBinding(self.view, wrapper.root, ret_cell, local, lowered);
             },
             .numeral_conversion,
@@ -27944,8 +28533,12 @@ const BodyContext = struct {
             const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
             switch (self.dispatchRuntimePlan(plan)) {
                 .callable => {},
-                .crash => {
-                    added_crash = (try self.recordSpecializationDispatchCrash(plan.expr)) or added_crash;
+                .crash => switch (self.view.bodies.index().nodeKind(plan.node)) {
+                    .expr => added_crash = (try self.recordSpecializationDispatchCrash(plan.node)) or added_crash,
+                    // A custom literal pattern's plans are evaluated by no
+                    // body expression, so no expression's divergence changes.
+                    .pattern => try self.recordSpecializationPatternPlanCrash(plan_id),
+                    .statement, .unreached => Common.invariant("a dispatch plan belonged to neither an expression nor a pattern"),
                 },
             }
         }
@@ -27954,16 +28547,25 @@ const BodyContext = struct {
         for (refs, scopes, kinds) |plan_id, dispatch_scope, relation_kind| {
             if (!dispatchRefBelongsToScope(dispatch_scope, scope_id)) continue;
             const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
-            if (self.checkedExprDivergesInLoweredRuntime(plan.expr)) continue;
+            if (try self.checkedExprDivergesInLoweredRuntime(dispatchPlanSite(self.view, plan_id))) continue;
             if (relation_kind == .conversion) continue;
             const callable_plan = switch (self.dispatchRuntimePlan(plan)) {
                 .callable => |value| value,
                 .crash => Common.invariant("non-divergent dispatch relation resolved to a crash"),
             };
-            const expr = self.view.bodies.expr(plan.expr);
-            // An interpolation's conversion returns the `Try` of the
-            // assembler whose result is the interpolation's value.
-            const ret_ty = if (expr.data == .interpolation) self.literalConversionTryType(plan_id) else expr.ty;
+            const ret_ty = switch (self.view.bodies.index().nodeKind(plan.node)) {
+                .expr => blk: {
+                    const expr = checkedExpr(self.view, ExprSite.own(self.view, @fromBackingInt(plan.node)));
+                    // An interpolation's conversion returns the `Try` of the
+                    // assembler whose result is the interpolation's value.
+                    break :blk if (expr.data == .interpolation) self.literalConversionTryType(plan_id) else expr.ty;
+                },
+                // A custom literal pattern's `is_eq` returns its equality's
+                // result.
+                .pattern => (self.view.bodies.literalPatternGuard(@fromBackingInt(plan.node)) orelse
+                    Common.invariant("a pattern's dispatch plan belonged to no custom literal pattern")).equality_ty,
+                .statement, .unreached => Common.invariant("a dispatch plan belonged to neither an expression nor a pattern"),
+            };
             self.builder.count("template_dispatch_relation_replays");
             _ = try self.callableDispatchResultTypeNodeInPhase(
                 ret_ty,
@@ -27972,6 +28574,34 @@ const BodyContext = struct {
                 .template_relation_replay,
             );
         }
+    }
+
+    /// Whether a custom literal pattern's dispatch plan cannot run: its
+    /// resolution is a checked error or unreachable, or this specialization's
+    /// evidence resolves it to one.
+    fn patternPlanCrashes(self: *const BodyContext, maybe_plan: ?static_dispatch.StaticDispatchPlanId) bool {
+        const plan_id = maybe_plan orelse Common.invariant("custom literal pattern dispatch reached Monotype without a dispatch plan");
+        switch (self.view.static_dispatch_plans.plans[@backingInt(plan_id)].resolution) {
+            .checked_error, .@"unreachable" => return true,
+            .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .structural => {},
+        }
+        const crashes = self.specialization_pattern_plan_crashes orelse return false;
+        return crashes[@backingInt(plan_id)];
+    }
+
+    fn recordSpecializationPatternPlanCrash(self: *BodyContext, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+        if (!self.owns_specialization_pattern_plan_crashes) {
+            const previous = self.specialization_pattern_plan_crashes orelse &.{};
+            const crashes = try self.allocator.alloc(bool, self.view.static_dispatch_plans.plans.len);
+            @memset(crashes, false);
+            if (previous.len != 0) {
+                if (previous.len != crashes.len) Common.invariant("specialization pattern plan crash column length differed from the plan count");
+                @memcpy(crashes, previous);
+            }
+            self.specialization_pattern_plan_crashes = crashes;
+            self.owns_specialization_pattern_plan_crashes = true;
+        }
+        self.specialization_pattern_plan_crashes.?[@backingInt(plan_id)] = true;
     }
 
     fn dispatchRefBelongsToScope(
@@ -27991,11 +28621,11 @@ const BodyContext = struct {
 
     fn recordSpecializationDispatchCrash(
         self: *BodyContext,
-        expr: checked.CheckedExprId,
+        raw: u32,
     ) Allocator.Error!bool {
         if (!self.owns_specialization_dispatch_crashes) {
             const previous = self.specialization_dispatch_crashes orelse &.{};
-            const crashes = try self.allocator.alloc(bool, self.view.bodies.exprCount());
+            const crashes = try self.allocator.alloc(bool, self.view.bodies.nodeCount());
             @memset(crashes, false);
             if (previous.len != 0) {
                 if (previous.len != crashes.len) {
@@ -28007,7 +28637,6 @@ const BodyContext = struct {
             self.owns_specialization_dispatch_crashes = true;
         }
         const crashes = self.specialization_dispatch_crashes.?;
-        const raw = @backingInt(expr);
         if (raw >= crashes.len) Common.invariant("specialization dispatch crash referenced a missing checked expression");
         if (crashes[raw]) return false;
         crashes[raw] = true;
@@ -28019,7 +28648,6 @@ const BodyContext = struct {
         self.specialization_dispatch_divergence = try checked.dispatchDivergenceForEvidence(
             self.allocator,
             self.view.bodies,
-            self.view.static_dispatch_plans,
             self.specialization_dispatch_crashes.?,
         );
         self.borrowed_specialization_dispatch_divergence = null;
@@ -29109,8 +29737,8 @@ const BodyContext = struct {
         /// Saved by a nested lambda's lowering: the binders its arguments shadow.
         saved_binders: ?std.ArrayList(BinderRestore) = null,
         saved_propagation: bool,
-        lambda_id: checked.CheckedExprId,
-        checked_body: checked.CheckedExprId,
+        lambda_id: ExprSite,
+        checked_body: ExprSite,
         ret_cell: DraftTypeCell,
         saved_return_target: ?ActiveReturnTarget,
         saved_loc: base.SourceLoc,
@@ -29135,8 +29763,8 @@ const BodyContext = struct {
 
     fn lowerLambdaTemplateAtNode(
         self: *BodyContext,
-        lambda_id: checked.CheckedExprId,
-        lambda: @FieldType(checked.CheckedExprData, "lambda"),
+        lambda_id: ExprSite,
+        lambda: @FieldType(ExprData, "lambda"),
         fn_node: NodeId,
     ) Allocator.Error!LoweredTemplateBody {
         var lowering = try self.beginLambdaLowering(lambda_id, lambda, fn_node);
@@ -29146,7 +29774,7 @@ const BodyContext = struct {
 
     fn lowerNestedFunctionAtNode(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         fn_node: NodeId,
         capture_entry_guards: []const NodeId,
     ) Allocator.Error!LoweredTemplateBody {
@@ -29168,7 +29796,7 @@ const BodyContext = struct {
     /// arguments shadow, then the lambda itself.
     fn beginNestedLambdaLowering(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         fn_node: NodeId,
         capture_entry_guards: []const NodeId,
     ) Allocator.Error!LambdaLowering {
@@ -29179,15 +29807,15 @@ const BodyContext = struct {
         @memcpy(entry_guards[fn_nodes.args.len..], capture_entry_guards);
         self.function_entry_demand_guards = entry_guards;
         errdefer self.function_entry_demand_guards = saved_function_entry_demand_guards;
-        const expr = self.view.bodies.expr(expr_id);
+        const expr = checkedExpr(self.view, expr_id);
         const lambda_id, const lambda = switch (expr.data) {
             .lambda => |lambda| .{ expr_id, lambda },
             .closure => |closure| blk: {
-                const lambda_expr = self.view.bodies.expr(closure.lambda);
+                const lambda_expr = checkedExpr(self.view, ExprSite.read(closure.lambda));
                 if (lambda_expr.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
-                break :blk .{ closure.lambda, lambda_expr.data.lambda };
+                break :blk .{ ExprSite.read(closure.lambda), lambda_expr.data.lambda };
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("local procedure site did not point at a lambda or closure"),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("local procedure site did not point at a lambda or closure"),
         };
 
         var saved = std.ArrayList(BinderRestore).empty;
@@ -29204,8 +29832,8 @@ const BodyContext = struct {
     /// how its body lowers.
     fn beginLambdaLowering(
         self: *BodyContext,
-        lambda_id: checked.CheckedExprId,
-        lambda: @FieldType(checked.CheckedExprData, "lambda"),
+        lambda_id: ExprSite,
+        lambda: @FieldType(ExprData, "lambda"),
         fn_node: NodeId,
     ) Allocator.Error!LambdaLowering {
         const fn_nodes = try self.graph.functionNodes(fn_node);
@@ -29224,7 +29852,7 @@ const BodyContext = struct {
         var lowering = LambdaLowering{
             .saved_propagation = saved_propagation,
             .lambda_id = lambda_id,
-            .checked_body = checked_body,
+            .checked_body = ExprSite.read(checked_body),
             .ret_cell = ret_cell,
             .saved_return_target = self.current_return_target,
             .saved_loc = self.builder.current_loc,
@@ -29235,7 +29863,7 @@ const BodyContext = struct {
         errdefer self.current_return_target = lowering.saved_return_target;
         errdefer self.builder.current_loc = lowering.saved_loc;
         errdefer self.builder.current_region = lowering.saved_region;
-        const body_expr = self.view.bodies.expr(checked_body);
+        const body_expr = checkedExpr(self.view, ExprSite.read(checked_body));
         const body_region = self.sourceRegionForExpr(body_expr);
         self.builder.current_loc = try self.sourceLocFor(body_region);
         self.builder.current_region = body_region;
@@ -29321,9 +29949,9 @@ const BodyContext = struct {
         // A runtime error body produces no value, and its checked type can
         // contain the error it was retired for, so it takes the declared
         // result's cell like any other consumer's representation.
-        lowering.body_ret_cell = if (self.view.bodies.expr(checked_body).data != .runtime_error and
+        lowering.body_ret_cell = if (checkedExpr(self.view, ExprSite.read(checked_body)).data != .runtime_error and
             try self.nodeIsProvenUninhabited(lowering.declared_ret_node))
-            DraftTypeCell.fromGraphNode(try self.lowerTypeNode(self.view.bodies.expr(checked_body).ty))
+            DraftTypeCell.fromGraphNode(try self.lowerTypeNode(checkedExpr(self.view, ExprSite.read(checked_body)).ty))
         else
             ret_cell;
         const body_ret_cell = lowering.body_ret_cell;
@@ -29333,7 +29961,7 @@ const BodyContext = struct {
                 lowering.materialized_args.items,
                 0,
                 lambda_id,
-                checked_body,
+                ExprSite.read(checked_body),
                 body_ret_cell,
             ) };
             return lowering;
@@ -29345,14 +29973,14 @@ const BodyContext = struct {
         // row, or a construction—it is lowered at the result's cell; otherwise
         // it is lowered at its own type's cell and returned across the
         // function's return boundary.
-        if (self.checkedExprDivergesInLoweredRuntime(checked_body)) {
+        if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(checked_body))) {
             lowering.body = .{ .child = .{ .cell = body_ret_cell, .return_boundary = false } };
             return lowering;
         }
-        const body_ty = self.view.bodies.expr(checked_body).ty;
-        const fn_ret_ty = self.checkedFunctionType(self.view.bodies.expr(lambda_id).ty).ret;
+        const body_ty = checkedExpr(self.view, ExprSite.read(checked_body)).ty;
+        const fn_ret_ty = self.checkedFunctionType(checkedExpr(self.view, lambda_id).ty).ret;
         if (resolvedPayload(self.view, body_ty).root == resolvedPayload(self.view, fn_ret_ty).root or
-            try self.coercedValueTakesRow(checked_body, lowering.declared_ret_node))
+            try self.coercedValueTakesRow(ExprSite.read(checked_body), lowering.declared_ret_node))
         {
             lowering.body = .{ .child = .{ .cell = body_ret_cell, .return_boundary = false } };
             return lowering;
@@ -29542,9 +30170,9 @@ const BodyContext = struct {
     /// A lambda or closure whose nested function body lowers as a child task,
     /// so nested functions never nest native lowering calls.
     const NestedFnTask = struct {
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         request_fn_node: NodeId,
-        closure: ?@FieldType(checked.CheckedExprData, "closure") = null,
+        closure: ?@FieldType(ExprData, "closure") = null,
         /// A value lowers the function expression; a draft only makes its
         /// specialization exist at the request node.
         purpose: enum { value, draft } = .value,
@@ -29572,19 +30200,19 @@ const BodyContext = struct {
                 const request_fn_node = task.request_fn_node;
                 var capture_nodes: []NodeId = &.{};
                 const source_fn_ty = switch (task.purpose) {
-                    .draft => switch (self.view.bodies.expr(expr_id).data) {
+                    .draft => switch (checkedExpr(self.view, expr_id).data) {
                         .lambda => ty: {
                             self.builder.countBodyDiagnostic("nested_lambdas_prepared");
-                            break :ty self.view.bodies.expr(expr_id).ty;
+                            break :ty checkedExpr(self.view, expr_id).ty;
                         },
                         .closure => |closure| ty: {
                             self.builder.countBodyDiagnostic("nested_closures_prepared");
                             capture_nodes = try self.closureCaptureEntryNodes(closure);
-                            const lambda = self.view.bodies.expr(closure.lambda);
+                            const lambda = checkedExpr(self.view, ExprSite.read(closure.lambda));
                             if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
                             break :ty lambda.ty;
                         },
-                        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("nested callable draft named a non-callable expression"),
+                        .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("nested callable draft named a non-callable expression"),
                     },
                     .value => if (task.closure) |closure| ty: {
                         task.capture_span = try self.lowerClosureCaptureExprSpan(closure.captures);
@@ -29592,15 +30220,15 @@ const BodyContext = struct {
                         for (self.fnDefCaptureSpan(task.capture_span), capture_nodes) |capture, *node| {
                             node.* = try self.exprTypeCell(capture.value).toGraphNode(self.graph);
                         }
-                        const lambda = self.view.bodies.expr(closure.lambda);
+                        const lambda = checkedExpr(self.view, ExprSite.read(closure.lambda));
                         if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
                         break :ty lambda.ty;
-                    } else self.view.bodies.expr(expr_id).ty,
+                    } else checkedExpr(self.view, expr_id).ty,
                 };
                 const nested = try self.builder.nestedFnForExpr(
                     self.view,
                     self.owner_template,
-                    expr_id,
+                    expr_id.node(),
                     self.current_fn_key,
                     try self.localProcContextsDigest(),
                     self.in_default_expr,
@@ -29676,8 +30304,8 @@ const BodyContext = struct {
     // exact body context the direct computation used, and every graph relation
     // happens in the same order.
 
-    const CheckedCall = @FieldType(checked.CheckedExprData, "call");
-    const CheckedFieldAccess = @FieldType(checked.CheckedExprData, "field_access");
+    const CheckedCall = @FieldType(ExprData, "call");
+    const CheckedFieldAccess = @FieldType(ExprData, "field_access");
 
     const EvidenceResult = union(enum) {
         none,
@@ -29701,11 +30329,11 @@ const BodyContext = struct {
 
     const EvidenceTask = union(enum) {
         /// `lowerExprTypeNode`
-        type_node: struct { expr: checked.CheckedExprId, timing: BodyWorkTimingScope = .{} },
+        type_node: struct { expr: ExprSite, timing: BodyWorkTimingScope = .{} },
         /// `exprCallResultEvidenceNode`
-        call_evidence: struct { expr: checked.CheckedExprId, expected_ty: ?Type.TypeId },
+        call_evidence: struct { expr: ExprSite, expected_ty: ?Type.TypeId },
         /// `exprCallArgumentEvidenceNode`
-        argument_evidence: struct { expr: checked.CheckedExprId, argument_node: NodeId = undefined },
+        argument_evidence: struct { expr: ExprSite, argument_node: NodeId = undefined },
         /// `exprProducedValueEvidenceNode`
         produced_value: ProducedValueTask,
         /// `dispatchResultTypeNodeInPhase`, including its callable relation.
@@ -29728,7 +30356,7 @@ const BodyContext = struct {
         /// `fieldAccessTypeNode`
         field_access: struct { checked_ty: checked.CheckedTypeId, access: CheckedFieldAccess, expected_ty: ?Type.TypeId },
         /// `tupleAccessTypeNode`
-        tuple_access: struct { checked_ty: checked.CheckedTypeId, tuple: checked.CheckedExprId, elem_index: usize, expected_ty: ?Type.TypeId },
+        tuple_access: struct { checked_ty: checked.CheckedTypeId, tuple: ExprSite, elem_index: usize, expected_ty: ?Type.TypeId },
         /// `directCallCompletedResultNode`
         completed_result: CompletedResultTask,
         /// A direct call's arguments related to its request node.
@@ -29740,7 +30368,7 @@ const BodyContext = struct {
     };
 
     const ProducedValueTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         request_node: NodeId,
         index: usize = 0,
         requires_distinct_witness: bool = false,
@@ -29774,7 +30402,7 @@ const BodyContext = struct {
     };
 
     const CallResultTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         checked_ret_ty: checked.CheckedTypeId,
         call: CheckedCall,
         expected_ret_ty: ?Type.TypeId,
@@ -29783,7 +30411,7 @@ const BodyContext = struct {
     };
 
     const DirectCallTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         target: checked.ResolvedValueId,
         call: CheckedCall,
         checked_ret_ty: checked.CheckedTypeId,
@@ -29796,7 +30424,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
-        checked_args: []const checked.CheckedExprId,
+        checked_args: []const CIR.Expr.Idx,
         expected_ret_node: ?NodeId,
         capture_constructor_argument_evidence: bool,
         /// The callee is a value of the caller's: an indirect call.
@@ -29822,7 +30450,7 @@ const BodyContext = struct {
     };
 
     const CompletedResultTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         target: checked.ResolvedValueId,
         call: CheckedCall,
         source_fn_ty: checked.CheckedTypeId,
@@ -29830,15 +30458,15 @@ const BodyContext = struct {
     };
 
     const PrepareArgsTask = struct {
-        expr: checked.CheckedExprId = undefined,
+        expr: ExprSite = undefined,
         fn_node: NodeId = undefined,
-        checked_exprs: []const checked.CheckedExprId,
+        checked_exprs: []const CIR.Expr.Idx,
         nodes: []const NodeId,
         index: usize = 0,
     };
 
     const RelateTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         expected_node: NodeId,
         timing: BodyWorkTimingScope = .{},
         index: usize = 0,
@@ -29869,7 +30497,7 @@ const BodyContext = struct {
     /// evidence that needs it continues.
     const DraftNestedCallable = struct {
         ctx: *BodyContext,
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         request_fn_node: NodeId,
     };
 
@@ -30028,21 +30656,21 @@ const BodyContext = struct {
     /// shared by every later result-type read carrying no expected cell, as a
     /// direct call's request interface is. A result carrying generated-private
     /// evidence depends on the read and is never shared.
-    fn sharedExprTypeRead(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?NodeId {
+    fn sharedExprTypeRead(self: *BodyContext, expr_id: ExprSite) Allocator.Error!?NodeId {
         const node = self.instantiation.expr_type_reads.get(expr_id) orelse return null;
         if (try self.graph.containsGeneratedPrivate(node)) return null;
         return node;
     }
 
-    fn recordExprTypeRead(self: *BodyContext, expr_id: checked.CheckedExprId, node: NodeId) Allocator.Error!void {
+    fn recordExprTypeRead(self: *BodyContext, expr_id: ExprSite, node: NodeId) Allocator.Error!void {
         if (try self.graph.containsGeneratedPrivate(node)) return;
         try self.instantiation.expr_type_reads.put(expr_id, node);
     }
 
-    fn isDispatchExpr(expr: checked.CheckedExpr) bool {
+    fn isDispatchExpr(expr: CheckedExpr) bool {
         return switch (expr.data) {
             .dispatch_call, .interpolation, .type_dispatch_call, .method_eq => true,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => false,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => false,
         };
     }
 
@@ -30061,7 +30689,7 @@ const BodyContext = struct {
         task.timing = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         frame.cursor = 1;
         const expr_id = task.expr;
-        const expr = self.view.bodies.expr(expr_id);
+        const expr = checkedExpr(self.view, expr_id);
         if (try self.sharedExprTypeRead(expr_id)) |node| {
             task.timing.end();
             return .{ .ret = .{ .node = node } };
@@ -30072,12 +30700,12 @@ const BodyContext = struct {
             .interpolation => |interpolation| .{ .interpolation_result = .{ .maybe_plan = interpolation.plan, .expected_ret_node = null } },
             .type_dispatch_call, .method_eq => |plan| .{ .dispatch_result = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_node = null, .phase = .expression_lowering } },
             .field_access => |field| .{ .field_access = .{ .checked_ty = expr.ty, .access = field, .expected_ty = null } },
-            .tuple_access => |access| .{ .tuple_access = .{ .checked_ty = expr.ty, .tuple = access.tuple, .elem_index = access.elem_index, .expected_ty = null } },
+            .tuple_access => |access| .{ .tuple_access = .{ .checked_ty = expr.ty, .tuple = ExprSite.read(access.tuple), .elem_index = access.elem_index, .expected_ty = null } },
             .lookup_local => |lookup| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, lookup.resolved)),
             .lookup_external, .lookup_required => |resolved| return try self.finishTypeNodeLeaf(task, try self.lookupExprTypeNode(expr.ty, resolved)),
             .lambda => |lambda| return try self.finishTypeNodeLeaf(task, try self.lambdaFunctionNode(expr.ty, lambda)),
             .closure => |closure| return try self.finishTypeNodeLeaf(task, try self.closureFunctionNode(closure)),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return try self.finishTypeNodeLeaf(task, try self.lowerTypeNode(expr.ty)),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return try self.finishTypeNodeLeaf(task, try self.lowerTypeNode(expr.ty)),
         };
         return evidenceCall(self, next);
     }
@@ -30085,11 +30713,11 @@ const BodyContext = struct {
     fn stepCallEvidence(
         self: *BodyContext,
         frame: *EvidenceFrame,
-        checked_arg: checked.CheckedExprId,
+        checked_arg: ExprSite,
         expected_ty: ?Type.TypeId,
         input: ?EvidenceResult,
     ) Allocator.Error!EvidenceStep {
-        const expr = self.view.bodies.expr(checked_arg);
+        const expr = checkedExpr(self.view, checked_arg);
         switch (frame.cursor) {
             0 => {},
             // A direct call's shared request interface.
@@ -30116,7 +30744,7 @@ const BodyContext = struct {
             },
             else => return .{ .ret = .{ .maybe_node = input.?.maybeNodeValue() } },
         }
-        if (self.checkedExprDivergesInLoweredRuntime(checked_arg)) return .{ .ret = .{ .maybe_node = null } };
+        if (try self.checkedExprDivergesInLoweredRuntime(checked_arg)) return .{ .ret = .{ .maybe_node = null } };
         if (expected_ty == null and isDispatchExpr(expr)) {
             if (try self.sharedExprTypeRead(checked_arg)) |node| return .{ .ret = .{ .maybe_node = node } };
         }
@@ -30159,11 +30787,11 @@ const BodyContext = struct {
             },
             .tuple_access => |access| {
                 frame.cursor = 2;
-                return evidenceCall(self, .{ .tuple_access = .{ .checked_ty = expr.ty, .tuple = access.tuple, .elem_index = access.elem_index, .expected_ty = expected_ty } });
+                return evidenceCall(self, .{ .tuple_access = .{ .checked_ty = expr.ty, .tuple = ExprSite.read(access.tuple), .elem_index = access.elem_index, .expected_ty = expected_ty } });
             },
             .lookup_local => |lookup| return .{ .ret = .{ .maybe_node = try self.lookupCallArgumentEvidenceNode(expr.ty, lookup.resolved, expected_ty) } },
             .lookup_external, .lookup_required => |resolved| return .{ .ret = .{ .maybe_node = try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty) } },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (expected_ty) |ty| {
             try self.constrainTypeToMono(expr.ty, ty);
@@ -30182,10 +30810,10 @@ const BodyContext = struct {
                 if (input.?.maybeNodeValue()) |produced| {
                     return .{ .ret = .{ .maybe_node = if (try self.graph.containsGeneratedPrivate(produced)) produced else null } };
                 }
-                const expr = self.view.bodies.expr(task.expr);
+                const expr = checkedExpr(self.view, task.expr);
                 switch (expr.data) {
                     .tuple, .record, .tag, .nominal, .list => {},
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return .{ .ret = .{ .maybe_node = null } },
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return .{ .ret = .{ .maybe_node = null } },
                 }
                 task.argument_node = try self.freshInstNode(expr.ty);
                 frame.cursor = 2;
@@ -30203,7 +30831,7 @@ const BodyContext = struct {
     /// positional slot and creates a distinct container witness when needed.
     fn stepProducedValue(self: *BodyContext, frame: *EvidenceFrame, task: *ProducedValueTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
         const request_node = task.request_node;
-        const expr = self.view.bodies.expr(task.expr);
+        const expr = checkedExpr(self.view, task.expr);
         switch (frame.cursor) {
             0 => {
                 frame.cursor = 1;
@@ -30233,8 +30861,8 @@ const BodyContext = struct {
                             // The base evidence is requested before any field.
                             frame.cursor = 3;
                             return evidenceCall(self, .{ .produced_value = .{
-                                .expr = base_expr,
-                                .request_node = try self.freshInstNode(self.view.bodies.expr(base_expr).ty),
+                                .expr = ExprSite.read(base_expr),
+                                .request_node = try self.freshInstNode(checkedExpr(self.view, ExprSite.read(base_expr)).ty),
                             } });
                         }
                     },
@@ -30248,9 +30876,9 @@ const BodyContext = struct {
                         const backing = named.backing orelse
                             Common.invariant("nominal value evidence graph node had no backing");
                         task.current_child_node = backing.node;
-                        return evidenceCall(self, .{ .produced_value = .{ .expr = nominal.backing_expr, .request_node = backing.node } });
+                        return evidenceCall(self, .{ .produced_value = .{ .expr = ExprSite.read(nominal.backing_expr), .request_node = backing.node } });
                     },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return .{ .ret = .{ .maybe_node = null } },
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return .{ .ret = .{ .maybe_node = null } },
                 }
                 return try self.nextProducedValueChild(task, expr);
             },
@@ -30326,7 +30954,7 @@ const BodyContext = struct {
                         const witness = try self.graph.namedValueNodeWithBacking(representation_node, backing_witness.slot);
                         return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(representation_node, witness) } };
                     },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // cursor 1 returns for every expression that is not a tuple, tag, record, list, or nominal constructor
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // cursor 1 returns for every expression that is not a tuple, tag, record, list, or nominal constructor
                 }
                 task.index += 1;
                 return try self.nextProducedValueChild(task, expr);
@@ -30336,13 +30964,13 @@ const BodyContext = struct {
 
     /// Request the next constructor child's produced evidence, or finish the
     /// constructor's witness once every child has contributed.
-    fn nextProducedValueChild(self: *BodyContext, task: *ProducedValueTask, expr: checked.CheckedExpr) Allocator.Error!EvidenceStep {
+    fn nextProducedValueChild(self: *BodyContext, task: *ProducedValueTask, expr: CheckedExpr) Allocator.Error!EvidenceStep {
         const request_node = task.request_node;
         switch (expr.data) {
             .tuple => |items| {
                 if (task.index < items.len) {
                     task.current_child_node = task.child_nodes[task.index];
-                    return evidenceCall(self, .{ .produced_value = .{ .expr = items[task.index], .request_node = task.current_child_node } });
+                    return evidenceCall(self, .{ .produced_value = .{ .expr = ExprSite.read(items[task.index]), .request_node = task.current_child_node } });
                 }
                 if (!task.requires_distinct_witness) return .{ .ret = .{ .maybe_node = null } };
                 const structural_node = try self.graph.newNode(.{
@@ -30354,7 +30982,7 @@ const BodyContext = struct {
             .tag => |tag| {
                 if (task.index < tag.args.len) {
                     task.current_child_node = try self.graph.tagConstructionPayloadNode(request_node, task.name, task.index);
-                    return evidenceCall(self, .{ .produced_value = .{ .expr = tag.args[task.index], .request_node = task.current_child_node } });
+                    return evidenceCall(self, .{ .produced_value = .{ .expr = ExprSite.read(tag.args[task.index]), .request_node = task.current_child_node } });
                 }
                 if (!task.requires_distinct_witness) return .{ .ret = .{ .maybe_node = null } };
                 const structural_node = try self.graph.tagValueNodeWithPayloads(request_node, task.name, task.produced_nodes);
@@ -30392,14 +31020,14 @@ const BodyContext = struct {
             },
             .list => |items| {
                 if (task.index < items.len) {
-                    return evidenceCall(self, .{ .produced_value = .{ .expr = items[task.index], .request_node = task.current_child_node } });
+                    return evidenceCall(self, .{ .produced_value = .{ .expr = ExprSite.read(items[task.index]), .request_node = task.current_child_node } });
                 }
                 const element_witness = task.produced_element orelse return .{ .ret = .{ .maybe_node = null } };
                 const structural_node = try self.graph.newNode(.{ .list = element_witness });
                 const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
                 return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(request_node, witness) } };
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable, // only tuple, tag, record, and list constructors request their next child; nominal finishes in stepProducedValue
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable, // only tuple, tag, record, and list constructors request their next child; nominal finishes in stepProducedValue
         }
     }
 
@@ -30520,7 +31148,7 @@ const BodyContext = struct {
         const expected_ret_ty = task.expected_ret_ty;
         const checked_ret_ty = task.checked_ret_ty;
         if (call.direct_target == null) {
-            if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {
+            if (try self.indirectCalleeMonoType(ExprSite.read(call.func), call.args, expected_ret_ty)) |fn_ty| {
                 const ret_ty = self.functionReturnType(fn_ty);
                 if (expected_ret_ty) |expected| {
                     self.assertSameType(expected, ret_ty, "checked indirect call result type differed from its expected Monotype type");
@@ -30659,7 +31287,7 @@ const BodyContext = struct {
             const index = task.index;
             const formal_node = task.formal_nodes[index];
             const checked_arg = task.checked_args[index];
-            const arg_ty = caller.view.bodies.expr(checked_arg).ty;
+            const arg_ty = checkedExpr(caller.view, ExprSite.read(checked_arg)).ty;
             if (input.?.maybeNodeValue()) |evidence| {
                 if (try self.graph.containsGeneratedPrivate(evidence)) {
                     const public_node = try caller.freshInstNode(arg_ty);
@@ -30680,9 +31308,9 @@ const BodyContext = struct {
         if (task.index < task.checked_args.len) {
             const checked_arg = task.checked_args[task.index];
             return evidenceCall(caller, if (task.capture_constructor_argument_evidence or caller.propagate_constructor_value_evidence)
-                .{ .argument_evidence = .{ .expr = checked_arg } }
+                .{ .argument_evidence = .{ .expr = ExprSite.read(checked_arg) } }
             else
-                .{ .call_evidence = .{ .expr = checked_arg, .expected_ty = null } });
+                .{ .call_evidence = .{ .expr = ExprSite.read(checked_arg), .expected_ty = null } });
         }
 
         const fn_node = task.fn_node;
@@ -30778,8 +31406,7 @@ const BodyContext = struct {
         } else {
             // An operand's type node.
             const formal_node = task.formal_nodes[task.index];
-            const checked_arg = operands[task.index].checked_expr;
-            const arg_ty = caller.view.bodies.expr(checked_arg).ty;
+            const arg_ty = checkedExpr(caller.view, DispatchOperand.exprOf(operands[task.index])).ty;
             const evidence_node = input.?.nodeValue();
             if (try self.graph.containsGeneratedPrivate(evidence_node)) {
                 const public_node = try caller.freshInstNode(arg_ty);
@@ -30797,12 +31424,12 @@ const BodyContext = struct {
         while (task.index < operands.len) : (task.index += 1) {
             const formal_node = task.formal_nodes[task.index];
             task.request_args[task.index] = formal_node;
-            switch (operands[task.index]) {
+            switch (DispatchOperand.of(operands[task.index])) {
                 .checked_expr => |checked_arg| {
                     if (task.phase == .expression_lowering) {
                         return evidenceCall(caller, .{ .type_node = .{ .expr = checked_arg } });
                     }
-                    const arg_ty = caller.view.bodies.expr(checked_arg).ty;
+                    const arg_ty = checkedExpr(caller.view, checked_arg).ty;
                     try relateRequestComponent(self.graph, formal_node, try caller.instNode(arg_ty));
                 },
                 .generated_interpolation_segments,
@@ -30848,11 +31475,12 @@ const BodyContext = struct {
         if (frame.cursor == 0) {
             if (access.segments.len == 0) Common.invariant("checked field access path had no segments");
             frame.cursor = 1;
-            return evidenceCall(self, .{ .type_node = .{ .expr = access.receiver } });
+            return evidenceCall(self, .{ .type_node = .{ .expr = ExprSite.read(access.receiver) } });
         }
         var saw_optional = false;
         var field_node = input.?.nodeValue();
-        for (access.segments, 0..) |segment, index| {
+        for (0..access.segments.len) |index| {
+            const segment = self.view.bodies.fieldAccessSegment(access.segments, @intCast(index));
             const is_last = index + 1 == access.segments.len;
             const mono_field_name = try recordFieldName(self.nameStoreMut(), self.view, segment.field_name);
             switch (segment.mode) {
@@ -30909,7 +31537,7 @@ const BodyContext = struct {
         self: *BodyContext,
         frame: *EvidenceFrame,
         checked_ty: checked.CheckedTypeId,
-        tuple: checked.CheckedExprId,
+        tuple: ExprSite,
         elem_index: usize,
         expected_ty: ?Type.TypeId,
         input: ?EvidenceResult,
@@ -30950,9 +31578,9 @@ const BodyContext = struct {
                 return .{ .ret = .{ .node = (try self.graph.functionNodes(callable_node)).ret } };
             }
             const fn_nodes = try self.graph.functionNodes(fn_node);
-            if (self.checkedExprDivergesInLoweredRuntime(call.func)) return .{ .ret = .{ .node = fn_nodes.ret } };
+            if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(call.func))) return .{ .ret = .{ .node = fn_nodes.ret } };
             for (call.args) |arg| {
-                if (self.checkedExprDivergesInLoweredRuntime(arg)) return .{ .ret = .{ .node = fn_nodes.ret } };
+                if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(arg))) return .{ .ret = .{ .node = fn_nodes.ret } };
             }
             frame.cursor = 1;
             return evidenceCall(self, .{ .prepare_direct_args = .{
@@ -30995,13 +31623,13 @@ const BodyContext = struct {
         }
         if (frame.cursor == 1) {
             if (task.index < task.checked_exprs.len) {
-                return evidenceCall(self, .{ .relate = .{ .expr = task.checked_exprs[task.index], .expected_node = task.nodes[task.index] } });
+                return evidenceCall(self, .{ .relate = .{ .expr = ExprSite.read(task.checked_exprs[task.index]), .expected_node = task.nodes[task.index] } });
             }
             frame.cursor = 2;
             task.index = 0;
         }
         while (task.index < task.checked_exprs.len) {
-            const expr = task.checked_exprs[task.index];
+            const expr = ExprSite.read(task.checked_exprs[task.index]);
             const request_fn_node = task.nodes[task.index];
             task.index += 1;
             if (self.isNestedCallableExpr(expr)) return .{ .draft_nested = .{ .ctx = self, .expr = expr, .request_fn_node = request_fn_node } };
@@ -31017,7 +31645,7 @@ const BodyContext = struct {
         return .{ .ret = .none };
     }
 
-    fn directCallArgsRelated(self: *const BodyContext, checked_expr: checked.CheckedExprId, fn_node: NodeId) bool {
+    fn directCallArgsRelated(self: *const BodyContext, checked_expr: ExprSite, fn_node: NodeId) bool {
         const request = self.instantiation.direct_call_requests.get(checked_expr) orelse return false;
         return request.fn_node == fn_node and request.args_related;
     }
@@ -31026,7 +31654,7 @@ const BodyContext = struct {
     fn stepRelate(self: *BodyContext, frame: *EvidenceFrame, task: *RelateTask, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
         const checked_expr = task.expr;
         const expected_node = task.expected_node;
-        const expr = self.view.bodies.expr(checked_expr);
+        const expr = checkedExpr(self.view, checked_expr);
         if (frame.cursor == 0) {
             task.timing = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
             self.builder.countBodyDiagnostic("expr_relation_requests");
@@ -31034,13 +31662,13 @@ const BodyContext = struct {
             // request. In particular, checking may replace a failed callee
             // with `runtime_error`, which emits a crash, while its unused call
             // type contains `.err`.
-            if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) return self.finishRelate(task);
+            if (try self.checkedExprDivergesInLoweredRuntime(checked_expr)) return self.finishRelate(task);
             switch (expr.data) {
                 .tag, .nominal, .tuple, .list, .record => {
                     const key = RelatedConstructor{ .expr = checked_expr, .node = self.graph.rootNode(expected_node) };
                     if ((try self.related_constructors.getOrPut(self.allocator, key)).found_existing) return self.finishRelate(task);
                 },
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .call, .empty_record, .block, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .call, .empty_record, .block, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
             }
             frame.cursor = 1;
             switch (expr.data) {
@@ -31065,7 +31693,7 @@ const BodyContext = struct {
                     const backing_node = (named.backing orelse
                         Common.invariant("nominal constructor graph node had no backing")).node;
                     task.index = 1;
-                    return evidenceCall(self, .{ .relate = .{ .expr = nominal.backing_expr, .expected_node = backing_node } });
+                    return evidenceCall(self, .{ .relate = .{ .expr = ExprSite.read(nominal.backing_expr), .expected_node = backing_node } });
                 },
                 .tuple => |items| {
                     const item_nodes = try self.graph.tupleItemNodes(expected_node);
@@ -31090,7 +31718,7 @@ const BodyContext = struct {
                 // branches.
                 .block, .match_, .if_, .runtime_error => {},
                 .lambda, .closure => _ = try self.graph.functionNodes(expected_node),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return evidenceCall(self, .{ .type_node = .{ .expr = checked_expr } }),
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return evidenceCall(self, .{ .type_node = .{ .expr = checked_expr } }),
             }
             return self.finishRelate(task);
         }
@@ -31100,7 +31728,7 @@ const BodyContext = struct {
                 try relateRequestComponent(self.graph, input.?.nodeValue(), expected_node);
                 return self.finishRelate(task);
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
                 try self.graph.unify(expected_node, input.?.nodeValue());
                 return self.finishRelate(task);
             },
@@ -31120,38 +31748,38 @@ const BodyContext = struct {
     }
 
     /// Relate the next constructor child to its slot of the request.
-    fn nextRelateChild(self: *BodyContext, task: *RelateTask, expr: checked.CheckedExpr) Allocator.Error!EvidenceStep {
+    fn nextRelateChild(self: *BodyContext, task: *RelateTask, expr: CheckedExpr) Allocator.Error!EvidenceStep {
         const expected_node = task.expected_node;
         switch (expr.data) {
             .tag => |tag| {
                 if (task.index < tag.args.len) {
                     return evidenceCall(self, .{ .relate = .{
-                        .expr = tag.args[task.index],
+                        .expr = ExprSite.read(tag.args[task.index]),
                         .expected_node = try self.graph.tagConstructionPayloadNode(expected_node, task.name, task.index),
                     } });
                 }
             },
             .tuple => |items| {
                 if (task.index < items.len) {
-                    return evidenceCall(self, .{ .relate = .{ .expr = items[task.index], .expected_node = task.child_nodes[task.index] } });
+                    return evidenceCall(self, .{ .relate = .{ .expr = ExprSite.read(items[task.index]), .expected_node = task.child_nodes[task.index] } });
                 }
             },
             .list => |items| {
                 if (task.index < items.len) {
-                    return evidenceCall(self, .{ .relate = .{ .expr = items[task.index], .expected_node = task.fn_node } });
+                    return evidenceCall(self, .{ .relate = .{ .expr = ExprSite.read(items[task.index]), .expected_node = task.fn_node } });
                 }
             },
             .record => |record| {
                 if (task.index < record.fields.len) {
-                    const field = record.fields[task.index];
+                    const field = self.view.bodies.recordField(record.fields[task.index]);
                     const construction_field = task.construction.?.get(try recordFieldName(self.nameStoreMut(), self.view, field.label));
                     return evidenceCall(self, .{ .relate = .{
-                        .expr = field.value,
+                        .expr = ExprSite.read(field.value),
                         .expected_node = self.graph.rootNode(construction_field.value_ty.get() orelse construction_field.ty),
                     } });
                 }
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable, // nextRelateChild is called only for tag, tuple, list, and record expressions
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable, // nextRelateChild is called only for tag, tuple, list, and record expressions
         }
         return self.finishRelate(task);
     }
@@ -31221,7 +31849,7 @@ const BodyContext = struct {
             },
         }
         if (task.index < call.args.len) {
-            return evidenceCall(self, .{ .relate = .{ .expr = call.args[task.index], .expected_node = task.child_nodes[task.index] } });
+            return evidenceCall(self, .{ .relate = .{ .expr = ExprSite.read(call.args[task.index]), .expected_node = task.child_nodes[task.index] } });
         }
         if (frame.cursor == 4) {
             if (self.instantiation.direct_call_requests.getPtr(task.expr)) |request| {
@@ -31230,19 +31858,19 @@ const BodyContext = struct {
         }
         if (frame.cursor == 5 and call.direct_target == null) {
             frame.cursor = 6;
-            return evidenceCall(self, .{ .relate = .{ .expr = call.func, .expected_node = task.fn_node } });
+            return evidenceCall(self, .{ .relate = .{ .expr = ExprSite.read(call.func), .expected_node = task.fn_node } });
         }
         if (task.call_ctx) |call_ctx| self.destroyCallContext(call_ctx);
         task.call_ctx = null;
         return self.finishRelate(task);
     }
 
-    fn lowerExprTypeNode(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!NodeId {
+    fn lowerExprTypeNode(self: *BodyContext, expr_id: ExprSite) Allocator.Error!NodeId {
         return (try self.runEvidence(.{ .type_node = .{ .expr = expr_id } })).nodeValue();
     }
 
-    fn lowerExprType(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
-        const expr = self.view.bodies.expr(expr_id);
+    fn lowerExprType(self: *BodyContext, expr_id: ExprSite) Allocator.Error!Type.TypeId {
+        const expr = checkedExpr(self.view, expr_id);
         return switch (expr.data) {
             // A checked runtime error emits a crash and never returns a value,
             // so an unconstrained occurrence uses unit while contextual lowering
@@ -31257,8 +31885,8 @@ const BodyContext = struct {
             .lambda => |lambda| try self.lambdaFunctionType(expr.ty, lambda),
             .closure => |closure| try self.closureFunctionType(closure),
             .field_access => |field| try self.activeTypeFromNode(try self.fieldAccessTypeNode(expr.ty, field, null)),
-            .tuple_access => |access| try self.activeTypeFromNode(try self.tupleAccessTypeNode(expr.ty, access.tuple, access.elem_index, null)),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.lowerTypeView(expr.ty),
+            .tuple_access => |access| try self.activeTypeFromNode(try self.tupleAccessTypeNode(expr.ty, ExprSite.read(access.tuple), access.elem_index, null)),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .structural_eq, .structural_hash, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.lowerTypeView(expr.ty),
         };
     }
 
@@ -31292,7 +31920,7 @@ const BodyContext = struct {
         };
     }
 
-    fn sourceRegionForExpr(self: *const BodyContext, expr: checked.CheckedExpr) base.Region {
+    fn sourceRegionForExpr(self: *const BodyContext, expr: CheckedExpr) base.Region {
         return self.source_region_override orelse expr.source_region;
     }
 
@@ -31302,10 +31930,10 @@ const BodyContext = struct {
     /// consumer's: a consumer of a value that never materializes continues at
     /// its own type, and a control-flow expression's branches still produce
     /// values of the expression's own type up to wherever it diverges.
-    fn divergentEffectExprStep(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?LowerStep {
-        if (!self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
+    fn divergentEffectExprStep(self: *BodyContext, expr_id: ExprSite) Allocator.Error!?LowerStep {
+        if (!try self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
 
-        const expr = self.view.bodies.expr(expr_id);
+        const expr = checkedExpr(self.view, expr_id);
         // A runtime error produces no value, and its checked type can contain
         // the error it was retired for. Every other divergent expression
         // retains its checked result variable as an unobservable continuation
@@ -31407,25 +32035,27 @@ const BodyContext = struct {
     const LowerTask = union(enum) {
         /// `lowerExprAtTypeCellWithKnownDivergence`
         at_type_cell: struct {
-            expr: checked.CheckedExprId,
+            expr: ExprSite,
             cell: DraftTypeCell,
             demand: LoweringDemand,
-            diverges: bool,
+            /// Whether the expression always diverges; null when the step
+            /// decides it.
+            diverges: ?bool,
             saved: ?SavedSourceLocation = null,
         },
         /// `lowerExprAtTypeCellInner`
         cell_inner: struct {
-            expr: checked.CheckedExprId,
+            expr: ExprSite,
             cell: DraftTypeCell,
             expected_node: NodeId,
             tuple_node: NodeId = undefined,
         },
         /// `lowerExprAtTypeWithDemandInner`
-        type_inner: struct { expr: checked.CheckedExprId, ty: Type.TypeId },
+        type_inner: struct { expr: ExprSite, ty: Type.TypeId },
         /// `lowerExpr`
-        expr: struct { expr: checked.CheckedExprId },
+        expr: struct { expr: ExprSite },
         /// `lowerExprInner`
-        expr_inner: struct { expr: checked.CheckedExprId, saved: ?SavedSourceLocation = null },
+        expr_inner: struct { expr: ExprSite, saved: ?SavedSourceLocation = null },
         /// An expression lowered at a sealed type.
         with_type: WithTypeTask,
         /// `lowerRecordExpr` at a sealed record type.
@@ -31468,9 +32098,9 @@ const BodyContext = struct {
         /// `lowerCallAtExpectedNode`
         call: CallLowerTask,
         /// `lowerCallExprAtNode`
-        call_expr_at_node: struct { expr: checked.CheckedExprId, expected_node: NodeId, producer_request: ?NodeId = null },
+        call_expr_at_node: struct { expr: ExprSite, expected_node: NodeId, producer_request: ?NodeId = null },
         /// `lowerCallExpr`
-        call_expr: struct { expr: checked.CheckedExprId, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall },
+        call_expr: struct { expr: ExprSite, checked_ret_ty: checked.CheckedTypeId, call: CheckedCall },
         constructor: ConstructorTask,
         /// A block.
         /// Stored by pointer, like `loop`.
@@ -31531,7 +32161,7 @@ const BodyContext = struct {
     };
 
     const InterpolationLowerTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         value_node: NodeId,
         try_node: NodeId = undefined,
@@ -31544,7 +32174,7 @@ const BodyContext = struct {
     /// argument order, before its generated body.
     const CallsiteIntrinsicTask = struct {
         intrinsic: checked.IntrinsicId,
-        checked_expr_id: checked.CheckedExprId,
+        checked_expr_id: ExprSite,
         source_fn_ty: checked.CheckedTypeId,
         operands: CheckedIntrinsicOperands,
         /// The callable request node: at a call site, the initial node the
@@ -31556,7 +32186,7 @@ const BodyContext = struct {
         deferred_body: ?struct { pre_lowered_args: ?DraftSpan(DraftExprId) } = null,
         stage: enum { start, deferred_prepared, deferred_args, args } = .start,
         /// The checked arguments. Owned.
-        args: []checked.CheckedExprId = &.{},
+        args: []CIR.Expr.Idx = &.{},
         arg_tys: [checked.IntrinsicId.max_callsite_arity]Type.TypeId = undefined,
         ret_ty: Type.TypeId = undefined,
         lowered_args: [checked.IntrinsicId.max_callsite_arity]DraftExprId = undefined,
@@ -31569,7 +32199,7 @@ const BodyContext = struct {
     /// and declaration-context tables remain shared with the enclosing body.
     const SchemeAliasTask = struct {
         alias: checked.LocalProcedureBinding,
-        use_expr: checked.CheckedExprId,
+        use_expr: CIR.Expr.Idx,
         expected_node: NodeId,
         /// The enclosing scope's instantiation and evidence, restored once
         /// the aliased callable is lowered. Boxed: an instantiation context
@@ -31585,14 +32215,14 @@ const BodyContext = struct {
     /// A function value `Str.inspect` renders without consuming: the source
     /// expression still runs as a child, and its value is discarded.
     const InspectOnlyTask = struct {
-        arg: checked.CheckedExprId,
+        arg: ExprSite,
         str_ty: Type.TypeId,
     };
 
     /// A structural equality or hash expression whose operands lower as
     /// child tasks.
     const DirectStructuralTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         /// The context type the result is lowered at, checked against the
         /// result, or the checked result type lowered when the task starts.
         ret: union(enum) { context: Type.TypeId, checked: checked.CheckedTypeId },
@@ -31607,7 +32237,7 @@ const BodyContext = struct {
 
     /// A string whose segments lower as child tasks, concatenated in order.
     const StrTask = struct {
-        segments: []const checked.CheckedExprId,
+        segments: checked_bodies.StrParts,
         /// The cell the string's expression is built at; without one the
         /// task produces the string's expression data.
         cell: ?DraftTypeCell = null,
@@ -31618,7 +32248,7 @@ const BodyContext = struct {
     /// A field access whose receiver lowers as a child task, so nested
     /// receivers never nest native lowering calls.
     const FieldAccessTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         /// The node the access is lowered at, or, for an optional chain at a
         /// sealed type, its `Try` type.
         target: union(enum) { node: NodeId, try_ty: Type.TypeId },
@@ -31633,8 +32263,8 @@ const BodyContext = struct {
     /// A block whose statements and final expression lower as child tasks,
     /// so nested blocks never nest native lowering calls.
     const BlockTask = struct {
-        statements: []const checked.CheckedStatementId,
-        final_expr: checked.CheckedExprId,
+        statements: []const CIR.Statement.Idx,
+        final_expr: ExprSite,
         /// The cell the block's own expression is built at.
         result_cell: DraftTypeCell,
         /// What the block produces after its statements.
@@ -31650,7 +32280,7 @@ const BodyContext = struct {
         lowered: LoweredStatements = .{ .items = &.{}, .len = 0, .termination = .none },
         index: usize = 0,
         /// The statement whose value is lowering as a child.
-        statement: checked.CheckedStatementId = undefined,
+        statement: CIR.Statement.Idx = undefined,
         statement_start: usize = 0,
         statement_diverges: bool = false,
         statement_saved: ?SavedSourceLocation = null,
@@ -31658,7 +32288,7 @@ const BodyContext = struct {
         expanded: ExpandedPatternStatement = undefined,
         /// The binders an expanded stateful pattern statement reassigns. Owned.
         expanded_merge_binders: []MergeBinder = &.{},
-        recursive_binders: []checked.PatternBinderId = &.{},
+        recursive_binders: []BinderId = &.{},
         recursive_locals: []DraftLocalId = &.{},
         recursive_direct_pat: DraftPatId = undefined,
         recursive_direct_cell: DraftTypeCell = undefined,
@@ -31688,13 +32318,13 @@ const BodyContext = struct {
     /// an optional field.
     const ExpandedPatternStatement = union(enum) {
         stateful: struct {
-            pattern: checked.CheckedPatternId,
+            pattern: CIR.Pattern.Idx,
             value_cell: DraftTypeCell,
             state_cell: DraftTypeCell,
         },
         record: struct {
-            pattern: checked.CheckedPatternId,
-            destructs: []const checked.CheckedRecordDestruct,
+            pattern: CIR.Pattern.Idx,
+            destructs: []const CIR.Pattern.RecordDestruct.Idx,
             value_node: NodeId,
             value_cell: DraftTypeCell,
         },
@@ -31703,8 +32333,8 @@ const BodyContext = struct {
     /// An `if` whose conditions and branch bodies lower as child tasks, so
     /// nested conditionals never nest native lowering calls.
     const IfTask = struct {
-        expr_id: checked.CheckedExprId,
-        if_: @FieldType(checked.CheckedExprData, "if_"),
+        expr_id: ExprSite,
+        if_: @FieldType(ExprData, "if_"),
         result_cell: DraftTypeCell,
         /// What each branch produces; null lowers the `if` as a value,
         /// merging any state it reassigns. A value output selects one
@@ -31752,7 +32382,7 @@ const BodyContext = struct {
     }
 
     /// Lower a branch body in `branch_ctx` for its output, as a child task.
-    fn branchBodyStep(branch_ctx: *BodyContext, body: checked.CheckedExprId, output: BranchOutput) LowerStep {
+    fn branchBodyStep(branch_ctx: *BodyContext, body: ExprSite, output: BranchOutput) LowerStep {
         return requestLowerTask(branch_ctx, .{ .branch_body = .{ .body = body, .output = output } });
     }
 
@@ -31767,13 +32397,13 @@ const BodyContext = struct {
     /// surrounding binders, as a state tuple unwrapped into the value.
     fn beginControlFlowValueOutput(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         result_cell: DraftTypeCell,
         merge_binders: *[]MergeBinder,
         select: *bool,
         unwrap_state: *?DraftTypeCell,
     ) Allocator.Error!BranchOutput {
-        merge_binders.* = try self.stateMergeBinders(self.view.bodies.exprStateMerge(expr_id));
+        merge_binders.* = try self.stateMergeBinders(try self.exprStateMergeBinders(expr_id));
         if (merge_binders.len == 0) return .{ .value = result_cell };
         const state_cell = try self.stateResultTypeCell(merge_binders.*, result_cell);
         select.* = false;
@@ -31806,10 +32436,10 @@ const BodyContext = struct {
                     // Conditions do not bind names visible in branch bodies, so all result
                     // producers can contribute their representation evidence up front.
                     // Branch emission below then consumes one settled request.
-                    for (if_.branches) |branch| {
-                        try self.prepareControlFlowResultSelection(&task.selection, branch.body);
+                    for (if_.branches) |branch_idx| {
+                        try self.prepareControlFlowResultSelection(&task.selection, ExprSite.read(self.view.bodies.ifBranch(branch_idx).body));
                     }
-                    try self.prepareControlFlowResultSelection(&task.selection, if_.final_else);
+                    try self.prepareControlFlowResultSelection(&task.selection, ExprSite.read(if_.final_else));
                 }
                 task.branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
             },
@@ -31819,7 +32449,7 @@ const BodyContext = struct {
                 task.stage = .body;
                 return branchBodyStep(
                     task.branch_ctx.?,
-                    if_.branches[task.index].body,
+                    ExprSite.read(self.view.bodies.ifBranch(if_.branches[task.index]).body),
                     controlFlowBranchOutput(task.output.?, task.select, task.selection),
                 );
             },
@@ -31829,13 +32459,13 @@ const BodyContext = struct {
 
         if (task.index < if_.branches.len) {
             task.stage = .cond;
-            return requestLowerTask(self, .{ .expr = .{ .expr = if_.branches[task.index].cond } });
+            return requestLowerTask(self, .{ .expr = .{ .expr = ExprSite.read(self.view.bodies.ifBranch(if_.branches[task.index]).cond) } });
         }
         task.branch_ctx = try self.createBranchContext();
         task.stage = .else_body;
         return branchBodyStep(
             task.branch_ctx.?,
-            if_.final_else,
+            ExprSite.read(if_.final_else),
             controlFlowBranchOutput(task.output.?, task.select, task.selection),
         );
     }
@@ -31892,8 +32522,8 @@ const BodyContext = struct {
     /// A `match` whose guards, branch bodies, and scrutinee lower as child
     /// tasks, so nested matches never nest native lowering calls.
     const MatchTask = struct {
-        expr_id: checked.CheckedExprId,
-        match: @FieldType(checked.CheckedExprData, "match_"),
+        expr_id: ExprSite,
+        match: @FieldType(ExprData, "match_"),
         result_cell: DraftTypeCell,
         /// What each branch produces; null lowers the `match` as a value,
         /// merging any state it reassigns. A value output selects one
@@ -31915,9 +32545,11 @@ const BodyContext = struct {
 
     const MatchPendingBranch = struct {
         ctx: *BodyContext,
-        pattern: checked.CheckedMatchBranchPattern,
-        checked_guard: ?checked.CheckedExprId,
-        checked_body: checked.CheckedExprId,
+        pattern: checked_bodies.MatchBranchPattern,
+        /// The branch's first pattern, whose binders the branch body reads.
+        representative: CIR.Pattern.Idx,
+        checked_guard: ?ExprSite,
+        checked_body: ExprSite,
         source_index: usize,
         user_guard: ?DraftExprId = null,
         body: DraftExprId = undefined,
@@ -32026,10 +32658,12 @@ const BodyContext = struct {
         // a nested iterator payload is not projected from the checked-public
         // tag or record shape and permanently loses the callee's witness.
         task.scrutinee_node = try self.matchScrutineeTypeNode(match.cond);
-        task.branches = try self.allocator.alloc(DraftBranch, branchCount(match.branches));
+        task.branches = try self.allocator.alloc(DraftBranch, branchCount(self.view, match.branches));
         var source_index: usize = 0;
-        for (match.branches) |branch| {
-            for (branch.patternsSlice(self.view.bodies)) |pattern| {
+        for (0..match.branches.count()) |branch_index| {
+            const branch = matchBranchAt(self.view, match.branches, branch_index);
+            for (0..branch.patterns.len()) |pattern_index| {
+                const pattern = branch.patterns.at(self.view, pattern_index);
                 defer source_index += 1;
                 if (try self.checkedPatternIsProvenUninhabited(pattern.pattern)) continue;
                 try task.pending.ensureUnusedCapacity(self.allocator, 1);
@@ -32037,6 +32671,7 @@ const BodyContext = struct {
                 task.pending.appendAssumeCapacity(.{
                     .ctx = branch_ctx,
                     .pattern = pattern,
+                    .representative = branch.patterns.at(self.view, 0).pattern,
                     .checked_guard = branch.guard,
                     .checked_body = branch.value,
                     .source_index = source_index,
@@ -32054,7 +32689,14 @@ const BodyContext = struct {
         // without allocating a checked-type approximation and rebinding it later.
         for (task.pending.items) |*entry| {
             try entry.ctx.preRegisterPatternBindersAtNode(entry.pattern.pattern, task.scrutinee_node);
-            try entry.ctx.applyAlternativeBinderRemaps(entry.pattern.binderRemapsSlice(self.view.bodies));
+            // Each alternative's binders are the branch's first pattern's
+            // binders of the same names.
+            if (!entry.pattern.degenerate) {
+                var remaps: std.ArrayList(checked.AlternativeBinderRemap) = .empty;
+                defer remaps.deinit(self.allocator);
+                try self.view.bodies.appendAlternativeBinderRemaps(self.allocator, entry.representative, entry.pattern.pattern, &remaps);
+                try entry.ctx.applyAlternativeBinderRemaps(remaps.items);
+            }
         }
 
         // Select the shared result representation from every inhabited branch
@@ -32137,18 +32779,18 @@ const BodyContext = struct {
         return step;
     }
 
-    fn uninhabitedScrutineeStep(ctx: *BodyContext, expr: checked.CheckedExprId, cell: DraftTypeCell) LowerStep {
+    fn uninhabitedScrutineeStep(ctx: *BodyContext, expr: ExprSite, cell: DraftTypeCell) LowerStep {
         return requestLowerTask(ctx, .{ .at_type_cell = .{
             .expr = expr,
             .cell = cell,
             .demand = .uninhabited_result,
-            .diverges = ctx.checkedExprDivergesInLoweredRuntime(expr),
+            .diverges = null,
         } });
     }
 
     /// A control-flow branch body lowered for its output.
     const BranchBodyTask = struct {
-        body: checked.CheckedExprId,
+        body: ExprSite,
         output: BranchOutput,
         /// The cell of the zero-branch match consuming a proven-uninhabited
         /// result's scrutinee.
@@ -32163,7 +32805,7 @@ const BodyContext = struct {
         }
         frame.cursor = 1;
         const body = task.body;
-        const diverges = self.checkedExprDivergesInLoweredRuntime(body);
+        const diverges = try self.checkedExprDivergesInLoweredRuntime(body);
         switch (task.output) {
             .value => |result_cell| {
                 if (diverges) return divergentStep(self, body, .{ .at_cell = result_cell });
@@ -32182,14 +32824,14 @@ const BodyContext = struct {
             .state_result => |state| {
                 if (diverges) return divergentStep(self, body, .{ .at_cell = state.state_cell });
                 const result_node = try state.result_cell.toGraphNode(self.graph);
-                switch (self.view.bodies.expr(body).data) {
+                switch (checkedExpr(self.view, body).data) {
                     .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                         .statements = block.statements,
-                        .final_expr = block.final_expr,
+                        .final_expr = ExprSite.read(block.final_expr),
                         .result_cell = state.state_cell,
                         .tail = .{ .state_result = .{ .state = state, .result_node = result_node } },
                     }) }),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
                 }
                 if (try self.nodeIsProvenUninhabited(result_node)) {
                     task.zero_branch_cell = state.state_cell;
@@ -32212,19 +32854,19 @@ const BodyContext = struct {
     /// A body lowered as statements whose final expression is discarded: a
     /// block's statements and final expression, or any other expression as
     /// the final expression of an empty statement list.
-    fn boxDiscardingBlockTask(self: *BodyContext, body: checked.CheckedExprId, result_cell: DraftTypeCell, tail: BlockTail) Allocator.Error!*BlockTask {
+    fn boxDiscardingBlockTask(self: *BodyContext, body: ExprSite, result_cell: DraftTypeCell, tail: BlockTail) Allocator.Error!*BlockTask {
         return self.boxLowerTask(BlockTask, self.discardingBlockTask(body, result_cell, tail));
     }
 
-    fn discardingBlockTask(self: *BodyContext, body: checked.CheckedExprId, result_cell: DraftTypeCell, tail: BlockTail) BlockTask {
-        return switch (self.view.bodies.expr(body).data) {
+    fn discardingBlockTask(self: *BodyContext, body: ExprSite, result_cell: DraftTypeCell, tail: BlockTail) BlockTask {
+        return switch (checkedExpr(self.view, body).data) {
             .block => |block| .{
                 .statements = block.statements,
-                .final_expr = block.final_expr,
+                .final_expr = ExprSite.read(block.final_expr),
                 .result_cell = result_cell,
                 .tail = tail,
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => .{
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => .{
                 .statements = &.{},
                 .final_expr = body,
                 .result_cell = result_cell,
@@ -32241,7 +32883,7 @@ const BodyContext = struct {
     /// as an ordinary value would let the outer tuple refer to a local
     /// outside the `let` that defines it.
     const ValueThenStateTask = struct {
-        body: checked.CheckedExprId,
+        body: ExprSite,
         result_cell: DraftTypeCell,
         state_cell: DraftTypeCell,
         merge_binders: []const MergeBinder,
@@ -32283,13 +32925,13 @@ const BodyContext = struct {
             )),
         }
         const body = task.body;
-        switch (self.view.bodies.expr(body).data) {
+        switch (checkedExpr(self.view, body).data) {
             .for_ => |for_| {
                 task.stage = .loop;
-                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) });
+                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(@backingInt(body.node()), for_) } }) });
             },
             .if_, .match_ => {
-                task.nested_merge_binders = try self.stateMergeBinders(self.view.bodies.exprStateMerge(body));
+                task.nested_merge_binders = try self.stateMergeBinders(try self.exprStateMergeBinders(body));
                 const output: BranchOutput = if (task.nested_merge_binders.len == 0) blk: {
                     task.stage = .value;
                     break :blk .{ .value = task.result_cell };
@@ -32304,7 +32946,7 @@ const BodyContext = struct {
                 };
                 return self.controlFlowOutputStep(body, task.result_cell, output);
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => {
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => {
                 task.stage = .value;
                 return branchBodyStep(self, body, .{ .value = task.result_cell });
             },
@@ -32313,8 +32955,8 @@ const BodyContext = struct {
 
     /// Lower a checked `if` or `match` for an explicit output, without
     /// selecting a shared value representation.
-    fn controlFlowOutputStep(self: *BodyContext, expr_id: checked.CheckedExprId, result_cell: DraftTypeCell, output: BranchOutput) LowerStep {
-        return switch (self.view.bodies.expr(expr_id).data) {
+    fn controlFlowOutputStep(self: *BodyContext, expr_id: ExprSite, result_cell: DraftTypeCell, output: BranchOutput) LowerStep {
+        return switch (checkedExpr(self.view, expr_id).data) {
             .if_ => |if_| requestLowerTask(self, .{ .if_task = .{
                 .expr_id = expr_id,
                 .if_ = if_,
@@ -32329,13 +32971,13 @@ const BodyContext = struct {
                 .output = output,
                 .select = false,
             } }),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // every caller passes an if or match expression
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // every caller passes an if or match expression
         };
     }
 
     /// An expression lowered as a statement whose value is discarded.
     const DiscardedTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         stage: enum { start, passthrough, state_only, divergent, uninhabited, value } = .start,
         /// The binders a stateful `if`/`match` reassigns. Owned.
         merge_binders: []MergeBinder = &.{},
@@ -32372,14 +33014,14 @@ const BodyContext = struct {
             }),
         }
         const expr_id = task.expr;
-        const checked_expr = self.view.bodies.expr(expr_id);
-        if (checked_expr.data == .for_ and !self.checkedExprDivergesInLoweredRuntime(expr_id)) {
+        const checked_expr = checkedExpr(self.view, expr_id);
+        if (checked_expr.data == .for_ and !try self.checkedExprDivergesInLoweredRuntime(expr_id)) {
             task.stage = .passthrough;
-            return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(checked_expr.data.for_) } }) });
+            return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(@backingInt(expr_id.node()), checked_expr.data.for_) } }) });
         }
         switch (checked_expr.data) {
             .if_, .match_ => {
-                task.merge_binders = try self.stateMergeBinders(self.view.bodies.exprStateMerge(expr_id));
+                task.merge_binders = try self.stateMergeBinders(try self.exprStateMergeBinders(expr_id));
                 if (task.merge_binders.len != 0) {
                     task.state_cell = try self.stateOnlyTypeCell(task.merge_binders);
                     task.stage = .state_only;
@@ -32389,7 +33031,7 @@ const BodyContext = struct {
                     } });
                 }
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
 
         // A divergent discarded expression never yields the value this
@@ -32417,12 +33059,12 @@ const BodyContext = struct {
 
     /// One block statement whose expressions lower as child tasks. Its source location stays current until the statement is built.
     const StatementTask = struct {
-        statement: checked.CheckedStatementId,
+        statement: CIR.Statement.Idx,
         diverges: bool,
         saved: ?SavedSourceLocation = null,
         /// `in_place_statement_expr` before an expression statement's value
         /// lowered, restored once it has.
-        saved_in_place: ?checked.CheckedExprId = null,
+        saved_in_place: ?ExprSite = null,
         stage: enum { start, pattern_value, divergent_value, expr_value, state_only, dbg, expect, loop, return_value } = .start,
         requested_cell: DraftTypeCell = undefined,
         /// The binders a stateful statement reassigns. Owned.
@@ -32443,7 +33085,7 @@ const BodyContext = struct {
             .pattern_value => {
                 const pattern = switch (statement.data) {
                     inline .decl, .var_, .reassign => |decl| decl.pattern,
-                    .pending, .promoted_proc, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => unreachable, // only beginPatternStatementStep sets this stage, for decl, var, and reassign statements
+                    .promoted_proc, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .rejected_method_decl, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => unreachable, // only beginPatternStatementStep sets this stage, for decl, var, and reassign statements
                 };
                 const lowered = try self.finishPatternStatement(pattern, statement.source_region, task.requested_cell, input.?.exprValue());
                 const stmt = lowered.stmt orelse {
@@ -32476,7 +33118,6 @@ const BodyContext = struct {
 
         task.saved = try self.enterStatementSourceLocation(statement.source_region);
         switch (statement.data) {
-            .pending,
             .import_,
             .alias_decl,
             .where_alias_decl,
@@ -32484,31 +33125,32 @@ const BodyContext = struct {
             .type_anno,
             .type_var_alias,
             .promoted_proc,
+            .rejected_method_decl,
             => Common.invariant("non-runtime checked statement reached Monotype lowering"),
             .runtime_error => return self.finishStatement(task, .{ .checked_error = try self.addStringLiteral("runtime error") }, .none),
             .decl => |decl| {
                 if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) {
                     Common.invariant("local procedure declaration reached statement lowering instead of its block");
                 }
-                return self.beginPatternStatementStep(task, decl.pattern, decl.expr);
+                return self.beginPatternStatementStep(task, decl.pattern, ExprSite.read(decl.expr));
             },
-            .var_ => |decl| return self.beginPatternStatementStep(task, decl.pattern, decl.expr),
+            .var_ => |decl| return self.beginPatternStatementStep(task, decl.pattern, ExprSite.read(decl.expr)),
             .var_uninitialized => |decl| return self.finishStatement(task, .{ .uninitialized = try self.lowerUninitializedPatternStatement(decl.pattern) }, .none),
-            .reassign => |decl| return self.beginPatternStatementStep(task, decl.pattern, decl.expr),
+            .reassign => |decl| return self.beginPatternStatementStep(task, decl.pattern, ExprSite.read(decl.expr)),
             .crash => |msg| return self.finishStatement(task, .{ .crash = try self.lowerStringLiteral(msg) }, .none),
             .dbg => |child| {
                 task.stage = .dbg;
-                return requestLowerTask(self, .{ .inspected = .{ .expr = child } });
+                return requestLowerTask(self, .{ .inspected = .{ .expr = ExprSite.read(child) } });
             },
             .expr => |child| {
-                task.merge_binders = try self.stateMergeBinders(self.view.bodies.exprStatementStateMerge(task.statement));
+                task.merge_binders = try self.stateMergeBinders(try self.view.bodies.statementStateMergeBinders(task.statement));
                 if (task.merge_binders.len == 0) {
                     task.stage = .expr_value;
                     task.saved_in_place = self.in_place_statement_expr;
                     if (self.view.hoisted_constants.lookupByExpr(child)) |entry| {
-                        if (self.view.compile_time_roots.root(entry.root).guarded) self.in_place_statement_expr = child;
+                        if (self.view.compile_time_roots.root(entry.root).guarded) self.in_place_statement_expr = ExprSite.read(child);
                     }
-                    return requestLowerTask(self, .{ .expr = .{ .expr = child } });
+                    return requestLowerTask(self, .{ .expr = .{ .expr = ExprSite.read(child) } });
                 }
                 task.state_cell = try self.stateOnlyTypeCell(task.merge_binders);
                 task.stage = .state_only;
@@ -32516,9 +33158,9 @@ const BodyContext = struct {
                     .state_cell = task.state_cell,
                     .merge_binders = task.merge_binders,
                 } };
-                return switch (self.view.bodies.expr(child).data) {
-                    .if_, .match_ => self.controlFlowOutputStep(child, task.state_cell, output),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => branchBodyStep(self, child, output),
+                return switch (checkedExpr(self.view, ExprSite.read(child)).data) {
+                    .if_, .match_ => self.controlFlowOutputStep(ExprSite.read(child), task.state_cell, output),
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => branchBodyStep(self, ExprSite.read(child), output),
                 };
             },
             .expect => |child| {
@@ -32526,24 +33168,24 @@ const BodyContext = struct {
                     const unit_ty = try self.unitType();
                     return self.finishStatement(task, .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) }, .none);
                 }
-                return self.beginExpectStatement(task, child);
+                return self.beginExpectStatement(task, ExprSite.read(child));
             },
             .for_ => |for_| {
                 task.stage = .loop;
-                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) });
+                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(@backingInt(task.statement), for_) } }) });
             },
             .while_ => |loop| {
                 task.stage = .loop;
-                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .condition = .{ .loop = loop, .condition = .checked } } }) });
+                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .condition = .{ .loop = loop, .statement = task.statement, .condition = .checked } } }) });
             },
             .infinite_loop, .breakable_loop => |loop| {
                 task.stage = .loop;
-                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .condition = .{ .loop = loop, .condition = .always_true } } }) });
+                return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .condition = .{ .loop = loop, .statement = task.statement, .condition = .always_true } } }) });
             },
             .break_ => return self.finishStatement(task, .{ .expr = try self.breakCurrentLoopExpr() }, .none),
             .return_ => |ret| {
                 task.stage = .return_value;
-                return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = .return_expr } });
+                return requestLowerTask(self, .{ .return_value = .{ .expr = ExprSite.read(ret.expr), .lambda = ExprSite.read(ret.lambda), .context = .return_expr } });
             },
         }
     }
@@ -32561,8 +33203,8 @@ const BodyContext = struct {
     fn beginPatternStatementStep(
         self: *BodyContext,
         task: *StatementTask,
-        pattern: checked.CheckedPatternId,
-        expr: checked.CheckedExprId,
+        pattern: CIR.Pattern.Idx,
+        expr: ExprSite,
     ) Allocator.Error!LowerStep {
         if (task.diverges) {
             task.stage = .divergent_value;
@@ -32579,7 +33221,7 @@ const BodyContext = struct {
         } });
     }
 
-    fn beginExpectStatement(self: *BodyContext, task: *StatementTask, child: checked.CheckedExprId) Allocator.Error!LowerStep {
+    fn beginExpectStatement(self: *BodyContext, task: *StatementTask, child: ExprSite) Allocator.Error!LowerStep {
         task.stage = .expect;
         return requestLowerTask(self, .{ .expr = .{ .expr = child } });
     }
@@ -32587,8 +33229,8 @@ const BodyContext = struct {
     /// A return's value lowered as a child task, producing the return's
     /// expression data.
     const ReturnTask = struct {
-        expr: checked.CheckedExprId,
-        lambda: checked.CheckedExprId,
+        expr: ExprSite,
+        lambda: ExprSite,
         context: checked.CheckedReturnContext,
         target: DraftTypeCell = undefined,
     };
@@ -32621,9 +33263,9 @@ const BodyContext = struct {
     /// their exact graph cells until the shared final snapshot drives
     /// inspect-helper emission.
     const InspectedTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         /// The `expect_err` snippet whose failure message wraps the rendering.
-        expect_err_snippet: ?checked.CheckedStringLiteralId = null,
+        expect_err_snippet: ?base.StringLiteral.Idx = null,
         str_ty: Type.TypeId = undefined,
         value_node: NodeId = undefined,
     };
@@ -32632,7 +33274,7 @@ const BodyContext = struct {
         const rendered = switch (frame.cursor) {
             0 => {
                 task.str_ty = try self.primitiveType(.str);
-                if (self.view.bodies.expr(task.expr).data == .runtime_error) {
+                if (checkedExpr(self.view, task.expr).data == .runtime_error) {
                     frame.cursor = 2;
                     return requestLowerTask(self, .{ .with_type = .{ .expr = task.expr, .ty = task.str_ty } });
                 }
@@ -32653,14 +33295,10 @@ const BodyContext = struct {
     fn expectErrMessage(
         self: *BodyContext,
         rendered: DraftExprId,
-        snippet: checked.CheckedStringLiteralId,
+        snippet: base.StringLiteral.Idx,
         str_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const snippet_index = @backingInt(snippet);
-        if (snippet_index >= self.view.bodies.stringLiteralCount()) {
-            Common.invariant("checked string literal id outside checked body string store");
-        }
-        const snippet_text = self.view.bodies.stringLiteral(@fromBackingInt(@intCast(snippet_index)));
+        const snippet_text = self.view.bodies.text(snippet);
         const prefix_text = try std.fmt.allocPrint(
             self.builder.allocator,
             "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(",
@@ -32678,7 +33316,7 @@ const BodyContext = struct {
     /// own expression data. Each nested divergent operand lowers as a child
     /// task.
     const DivergentTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         form: DivergentForm,
         saved: ?SavedSourceLocation = null,
         finish: union(enum) {
@@ -32705,14 +33343,14 @@ const BodyContext = struct {
         data: Type.TypeId,
     };
 
-    fn divergentStep(ctx: *BodyContext, expr: checked.CheckedExprId, form: DivergentForm) LowerStep {
+    fn divergentStep(ctx: *BodyContext, expr: ExprSite, form: DivergentForm) LowerStep {
         return requestLowerTask(ctx, .{ .divergent = .{ .expr = expr, .form = form } });
     }
 
     /// Lower a divergent expression at its own source location, so a failure
     /// in it is reported there and not at the construct around it.
     fn stepDivergent(self: *BodyContext, frame: *LowerFrame, task: *DivergentTask, input: ?LowerResult) Allocator.Error!LowerStep {
-        if (frame.cursor == 0) task.saved = try self.saveSourceLocation(self.view.bodies.expr(task.expr));
+        if (frame.cursor == 0) task.saved = try self.saveSourceLocation(checkedExpr(self.view, task.expr));
         const step = try self.stepDivergentExpr(frame, task, input);
         if (step == .ret) self.restoreSourceLocation(&task.saved);
         return step;
@@ -32751,7 +33389,7 @@ const BodyContext = struct {
         }
         frame.cursor = 1;
         const expr_id = task.expr;
-        const checked_expr = self.view.bodies.expr(expr_id);
+        const checked_expr = checkedExpr(self.view, expr_id);
         switch (task.form) {
             // A control-flow expression produces values of its own type on
             // every path that does not diverge, so it lowers at its cell;
@@ -32761,25 +33399,25 @@ const BodyContext = struct {
             // even have the continuation's shape.
             .at_cell => |cell| switch (checked_expr.data) {
                 .match_ => |match| {
-                    if (self.checkedExprDivergesInLoweredRuntime(match.cond)) {
+                    if (try self.checkedExprDivergesInLoweredRuntime(match.cond)) {
                         task.finish = .{ .effect_at_cell = cell };
                         return divergentStep(self, match.cond, .{ .at_type = try self.unitType() });
                     }
                     return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = cell } });
                 },
                 .if_ => |if_| {
-                    if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
+                    if (if_.branches.len > 0 and try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(self.view.bodies.ifBranch(if_.branches[0]).cond))) {
                         task.finish = .{ .effect_at_cell = cell };
-                        return divergentStep(self, if_.branches[0].cond, .{ .at_type = try self.unitType() });
+                        return divergentStep(self, ExprSite.read(self.view.bodies.ifBranch(if_.branches[0]).cond), .{ .at_type = try self.unitType() });
                     }
                     return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = cell } });
                 },
                 .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                     .statements = block.statements,
-                    .final_expr = block.final_expr,
+                    .final_expr = ExprSite.read(block.final_expr),
                     .result_cell = cell,
                 }) }),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {
                     task.finish = .{ .effect_at_cell = cell };
                     return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
                 },
@@ -32787,20 +33425,20 @@ const BodyContext = struct {
             .at_type => |ty| {
                 switch (checked_expr.data) {
                     .match_ => |match| {
-                        if (self.checkedExprDivergesInLoweredRuntime(match.cond)) {
+                        if (try self.checkedExprDivergesInLoweredRuntime(match.cond)) {
                             task.finish = .{ .add_expr = ty };
                             return divergentStep(self, match.cond, .{ .effect_data = ty });
                         }
                         return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = .{ .sealed = ty } } });
                     },
                     .if_ => |if_| {
-                        if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
+                        if (if_.branches.len > 0 and try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(self.view.bodies.ifBranch(if_.branches[0]).cond))) {
                             task.finish = .{ .add_expr = ty };
-                            return divergentStep(self, if_.branches[0].cond, .{ .effect_data = ty });
+                            return divergentStep(self, ExprSite.read(self.view.bodies.ifBranch(if_.branches[0]).cond), .{ .effect_data = ty });
                         }
                         return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } });
                     },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
                 }
                 task.finish = .{ .add_expr = ty };
                 return divergentStep(self, expr_id, .{ .data = ty });
@@ -32825,7 +33463,7 @@ const BodyContext = struct {
     /// including the first divergent one are listed: nothing after it runs.
     const OperandSequenceTask = struct {
         /// The operand expressions in evaluation order. Owned.
-        operands: []const checked.CheckedExprId,
+        operands: []const ExprSite,
         ty: Type.TypeId,
         tail: OperandSequenceTail,
         index: usize = 0,
@@ -32852,12 +33490,25 @@ const BodyContext = struct {
     /// The operands of a divergent expression whose evaluation diverges at
     /// one of them: every operand up to and including the first divergent
     /// one, in evaluation order.
-    fn divergentOperandsStep(self: *BodyContext, operands: []const checked.CheckedExprId, ty: Type.TypeId) Allocator.Error!LowerStep {
+    fn divergentOperandsStep(self: *BodyContext, operands: []const CIR.Expr.Idx, ty: Type.TypeId) Allocator.Error!LowerStep {
+        const refs = try self.exprRefsOf(operands);
+        defer self.allocator.free(refs);
+        return try self.divergentOperandRefsStep(refs, ty);
+    }
+
+    /// Body expressions as their parents read them. Owned.
+    fn exprRefsOf(self: *BodyContext, exprs: []const CIR.Expr.Idx) Allocator.Error![]ExprSite {
+        const refs = try self.allocator.alloc(ExprSite, exprs.len);
+        for (exprs, refs) |expr, *ref| ref.* = ExprSite.read(expr);
+        return refs;
+    }
+
+    fn divergentOperandRefsStep(self: *BodyContext, operands: []const ExprSite, ty: Type.TypeId) Allocator.Error!LowerStep {
         const len = for (operands, 0..) |operand, index| {
-            if (self.checkedExprDivergesInLoweredRuntime(operand)) break index + 1;
+            if (try self.checkedExprDivergesInLoweredRuntime(operand)) break index + 1;
         } else Common.invariant("checked expression was marked divergent but no divergent operand was found");
         return requestLowerTask(self, .{ .operand_sequence = .{
-            .operands = try self.allocator.dupe(checked.CheckedExprId, operands[0..len]),
+            .operands = try self.allocator.dupe(ExprSite, operands[0..len]),
             .ty = ty,
             .tail = .diverges,
         } });
@@ -32870,15 +33521,15 @@ const BodyContext = struct {
     fn dispatchOperandExprs(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
-    ) Allocator.Error![]const checked.CheckedExprId {
-        var exprs: std.ArrayList(checked.CheckedExprId) = .empty;
+    ) Allocator.Error![]const ExprSite {
+        var exprs: std.ArrayList(ExprSite) = .empty;
         errdefer exprs.deinit(self.allocator);
-        for (plan.argsSlice(self.view.static_dispatch_plans)) |operand| switch (operand) {
+        for (plan.argsSlice(self.view.static_dispatch_plans)) |operand| switch (DispatchOperand.of(operand)) {
             .checked_expr => |expr| try exprs.append(self.allocator, expr),
             .generated_interpolation_segments => |expr| {
-                const interpolation = switch (self.view.bodies.expr(expr).data) {
+                const interpolation = switch (checkedExpr(self.view, ExprSite.read(expr)).data) {
                     .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("dispatch interpolation segments referenced a non-interpolation expression"),
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("dispatch interpolation segments referenced a non-interpolation expression"),
                 };
                 try appendInterpolationOperands(self.allocator, &exprs, interpolation);
             },
@@ -32889,14 +33540,11 @@ const BodyContext = struct {
 
     fn appendInterpolationOperands(
         allocator: Allocator,
-        exprs: *std.ArrayList(checked.CheckedExprId),
-        interpolation: checked.CheckedInterpolation,
+        exprs: *std.ArrayList(ExprSite),
+        interpolation: checked_bodies.InterpolationData,
     ) Allocator.Error!void {
-        try exprs.append(allocator, interpolation.segments[0]);
-        for (interpolation.values, interpolation.segments[1..]) |value, segment| {
-            try exprs.append(allocator, value);
-            try exprs.append(allocator, segment);
-        }
+        try exprs.append(allocator, ExprSite.read(interpolation.first));
+        for (interpolation.parts) |part| try exprs.append(allocator, ExprSite.read(part));
     }
 
     fn stepOperandSequence(self: *BodyContext, task: *OperandSequenceTask, input: ?LowerResult) Allocator.Error!LowerStep {
@@ -32934,11 +33582,11 @@ const BodyContext = struct {
         } } } };
     }
 
-    fn divergentEffectStep(self: *BodyContext, child: checked.CheckedExprId, ty: Type.TypeId) LowerStep {
+    fn divergentEffectStep(self: *BodyContext, child: ExprSite, ty: Type.TypeId) LowerStep {
         return divergentStep(self, child, .{ .effect_data = ty });
     }
 
-    fn divergentDataStep(self: *BodyContext, task: *DivergentTask, checked_expr: checked.CheckedExpr, ty: Type.TypeId) Allocator.Error!LowerStep {
+    fn divergentDataStep(self: *BodyContext, task: *DivergentTask, checked_expr: CheckedExpr, ty: Type.TypeId) Allocator.Error!LowerStep {
         const expr_id = task.expr;
         const data: BodyExprData = switch (checked_expr.data) {
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
@@ -32946,7 +33594,7 @@ const BodyContext = struct {
                 // A retired expression evaluates the operands it still
                 // evaluates, each for its effects, then crashes.
                 return requestLowerTask(self, .{ .operand_sequence = .{
-                    .operands = try self.allocator.dupe(checked.CheckedExprId, runtime_error.evaluated),
+                    .operands = try self.exprRefsOf(runtime_error.evaluated),
                     .ty = ty,
                     .tail = .runtime_error,
                 } })
@@ -32954,15 +33602,22 @@ const BodyContext = struct {
                 .{ .checked_error = try self.addStringLiteral("runtime error") },
             .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
+            .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ExprSite.read(ret.expr), .lambda = ExprSite.read(ret.lambda), .context = ret.context } }),
             .expect_err => |expect_err| {
                 task.finish = .{ .expect_err = checked_expr.source_region };
-                return requestLowerTask(self, .{ .inspected = .{ .expr = expect_err.expr, .expect_err_snippet = expect_err.snippet } });
+                return requestLowerTask(self, .{ .inspected = .{ .expr = ExprSite.read(expect_err.expr), .expect_err_snippet = expect_err.snippet } });
             },
-            .str, .list, .tuple => |items| return try self.divergentOperandsStep(items, ty),
+            .list, .tuple => |items| return try self.divergentOperandsStep(items, ty),
+            .str => |parts| {
+                var operands: std.ArrayList(CIR.Expr.Idx) = .empty;
+                defer operands.deinit(self.allocator);
+                if (parts.first) |first| try operands.append(self.allocator, first);
+                try operands.appendSlice(self.allocator, parts.rest);
+                return try self.divergentOperandsStep(operands.items, ty);
+            },
             .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                 .statements = block.statements,
-                .final_expr = block.final_expr,
+                .final_expr = ExprSite.read(block.final_expr),
                 .result_cell = .{ .sealed = ty },
                 .typed = ty,
                 .as_data = true,
@@ -32976,39 +33631,38 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } });
             },
             .call => |call| {
-                var operands: std.ArrayList(checked.CheckedExprId) = .empty;
+                var operands: std.ArrayList(CIR.Expr.Idx) = .empty;
                 defer operands.deinit(self.allocator);
                 try operands.append(self.allocator, call.func);
                 try operands.appendSlice(self.allocator, call.args);
                 return try self.divergentOperandsStep(operands.items, ty);
             },
             .record => |record| {
-                var operands: std.ArrayList(checked.CheckedExprId) = .empty;
+                var operands: std.ArrayList(CIR.Expr.Idx) = .empty;
                 defer operands.deinit(self.allocator);
                 if (record.ext) |ext| try operands.append(self.allocator, ext);
-                for (record.fields) |field| try operands.append(self.allocator, field.value);
+                for (record.fields) |field| try operands.append(self.allocator, self.view.bodies.recordField(field).value);
                 return try self.divergentOperandsStep(operands.items, ty);
             },
             .tag => |tag| return try self.divergentOperandsStep(tag.args, ty),
-            .nominal => |nominal| return self.divergentEffectStep(nominal.backing_expr, ty),
+            .nominal => |nominal| return self.divergentEffectStep(ExprSite.read(nominal.backing_expr), ty),
             .row_coerce => |coerce| return self.divergentEffectStep(coerce.value, ty),
             .binop => |binop| return try self.divergentOperandsStep(&.{ binop.lhs, binop.rhs }, ty),
             .unary_minus,
-            .unary_not,
             .dbg,
-            => |child| return self.divergentEffectStep(child, ty),
+            => |child| return self.divergentEffectStep(ExprSite.read(child), ty),
             .expect => |child| if (self.builder.inline_expects == .run)
-                return self.divergentEffectStep(child, ty)
+                return self.divergentEffectStep(ExprSite.read(child), ty)
             else
                 Common.invariant("omitted checked expect reached divergent runtime lowering"),
-            .field_access => |field| return self.divergentEffectStep(field.receiver, ty),
+            .field_access => |field| return self.divergentEffectStep(ExprSite.read(field.receiver), ty),
             .structural_eq => |eq| return try self.divergentOperandsStep(&.{ eq.lhs, eq.rhs }, ty),
             .structural_hash => |hash| return try self.divergentOperandsStep(&.{ hash.value, hash.hasher }, ty),
-            .tuple_access => |access| return self.divergentEffectStep(access.tuple, ty),
-            .for_ => |for_| return self.divergentEffectStep(for_.expr, ty),
+            .tuple_access => |access| return self.divergentEffectStep(ExprSite.read(access.tuple), ty),
+            .for_ => |for_| return self.divergentEffectStep(ExprSite.read(for_.expr), ty),
             .run_low_level => |low_level| {
                 for (low_level.args) |arg| {
-                    if (self.checkedExprDivergesInLoweredRuntime(arg)) return try self.divergentOperandsStep(low_level.args, ty);
+                    if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(arg))) return try self.divergentOperandsStep(low_level.args, ty);
                 }
                 if (low_level.op != .crash) {
                     Common.invariant("checked low-level expression was marked divergent but no divergent argument was found");
@@ -33022,16 +33676,15 @@ const BodyContext = struct {
                 // can crash once its operands, the segments and values, have
                 // evaluated.
                 if (interpolation.plan) |plan| return try self.divergentDispatchStep(plan, ty);
-                var operands: std.ArrayList(checked.CheckedExprId) = .empty;
+                var operands: std.ArrayList(ExprSite) = .empty;
                 defer operands.deinit(self.allocator);
                 try appendInterpolationOperands(self.allocator, &operands, interpolation);
-                return try self.divergentOperandsStep(operands.items, ty);
+                return try self.divergentOperandRefsStep(operands.items, ty);
             },
             .method_eq, .type_dispatch_call => |plan| return try self.divergentDispatchStep(plan, ty),
             .numeral => |numeral| return try self.divergentDispatchStep(numeral.plan, ty),
             .str_from_quote => |quote| return try self.divergentDispatchStep(quote.plan, ty),
-            inline .pending,
-            .str_segment,
+            inline .str_segment,
             .bytes_literal,
             .lookup_local,
             .lookup_external,
@@ -33044,7 +33697,7 @@ const BodyContext = struct {
             .anno_only,
             .hosted_lambda,
             => |_, kind| {
-                checked.assertCheckedExprNeverDiverges(kind);
+                checked.assertExprNeverDiverges(@field(check.BodyAnalyses.ExprKind, @tagName(kind)));
                 Common.invariant("non-divergent checked expression reached divergent lowering");
             },
         };
@@ -33061,9 +33714,9 @@ const BodyContext = struct {
         const operands = try self.dispatchOperandExprs(plan);
         defer self.allocator.free(operands);
         return switch (self.dispatchRuntimePlan(plan)) {
-            .callable => try self.divergentOperandsStep(operands, ty),
+            .callable => try self.divergentOperandRefsStep(operands, ty),
             .crash => |reason| requestLowerTask(self, .{ .operand_sequence = .{
-                .operands = try self.allocator.dupe(checked.CheckedExprId, operands),
+                .operands = try self.allocator.dupe(ExprSite, operands),
                 .ty = ty,
                 .tail = .{ .dispatch_crash = reason },
             } }),
@@ -33073,20 +33726,21 @@ const BodyContext = struct {
     /// A `for` loop's checked fields, shared by its statement and expression
     /// forms.
     const CheckedForLoop = struct {
-        pattern: checked.CheckedPatternId,
-        expr: checked.CheckedExprId,
-        body: checked.CheckedExprId,
+        pattern: CIR.Pattern.Idx,
+        expr: ExprSite,
+        body: ExprSite,
         plan: ?static_dispatch.IteratorForPlanId,
-        mutations: ?checked.LoopMutationPlanId,
+        /// The loop's node: its `for` expression or statement.
+        loop: u32,
     };
 
-    fn checkedForLoop(for_: anytype) CheckedForLoop {
+    fn checkedForLoop(loop: u32, for_: anytype) CheckedForLoop {
         return .{
             .pattern = for_.pattern,
-            .expr = for_.expr,
-            .body = for_.body,
+            .expr = ExprSite.read(for_.expr),
+            .body = ExprSite.read(for_.body),
             .plan = for_.plan,
-            .mutations = for_.mutations,
+            .loop = loop,
         };
     }
 
@@ -33097,7 +33751,7 @@ const BodyContext = struct {
     const LoopTask = struct {
         kind: union(enum) {
             for_: CheckedForLoop,
-            condition: struct { loop: checked.CheckedConditionLoop, condition: WhileCondition },
+            condition: struct { loop: checked_bodies.ConditionLoop, statement: CIR.Statement.Idx, condition: WhileCondition },
         },
         stage: union(enum) { start, crashing_iter: DispatchCrashReason, initial_iterator, step_expr, one_body, cond, body } = .start,
         carries: []LoopCarry = &.{},
@@ -33168,8 +33822,8 @@ const BodyContext = struct {
         switch (task.stage) {
             .start => {
                 const mutations = switch (task.kind) {
-                    .for_ => |for_| for_.mutations,
-                    .condition => |condition| condition.loop.mutations,
+                    .for_ => |for_| for_.loop,
+                    .condition => |condition| @backingInt(condition.statement),
                 };
                 task.carries = try self.prepareLoopCarries(mutations);
                 task.loop_cell = try self.loopStateTypeCell(try self.unitType(), task.carries);
@@ -33184,7 +33838,7 @@ const BodyContext = struct {
                         // (`initial_iterator`).
                         if (self.dispatchCrashReason(task.plan.iter.resolution)) |reason| {
                             task.stage = .{ .crashing_iter = reason };
-                            return requestLowerTask(self, .{ .discarded = .{ .expr = task.plan.iterable } });
+                            return requestLowerTask(self, .{ .discarded = .{ .expr = ExprSite.read(task.plan.iterable) } });
                         }
                         task.stage = .initial_iterator;
                         return self.iteratorDispatchStep(.{
@@ -33202,7 +33856,7 @@ const BodyContext = struct {
                         switch (condition.condition) {
                             .checked => {
                                 task.stage = .cond;
-                                return requestLowerTask(self, .{ .expr = .{ .expr = condition.loop.cond } });
+                                return requestLowerTask(self, .{ .expr = .{ .expr = ExprSite.read(condition.loop.cond) } });
                             },
                             .always_true => return try self.beginConditionLoopBody(task),
                         }
@@ -33285,7 +33939,7 @@ const BodyContext = struct {
 
     /// A loop body lowered as statements whose final expression is
     /// discarded, then the loop's continue edge.
-    fn loopBodyStep(self: *BodyContext, body: checked.CheckedExprId, result_cell: DraftTypeCell, rest_expr: ?DraftExprId, carries: []const LoopCarry) Allocator.Error!LowerStep {
+    fn loopBodyStep(self: *BodyContext, body: ExprSite, result_cell: DraftTypeCell, rest_expr: ?DraftExprId, carries: []const LoopCarry) Allocator.Error!LowerStep {
         return requestLowerTask(self, .{ .block = try self.boxDiscardingBlockTask(body, result_cell, .{ .loop_continue = .{
             .rest_expr = rest_expr,
             .carries = carries,
@@ -33367,7 +34021,7 @@ const BodyContext = struct {
 
     fn beginConditionLoopBody(self: *BodyContext, task: *LoopTask) Allocator.Error!LowerStep {
         task.stage = .body;
-        return try self.loopBodyStep(task.kind.condition.loop.body, task.loop_cell, null, task.carries);
+        return try self.loopBodyStep(ExprSite.read(task.kind.condition.loop.body), task.loop_cell, null, task.carries);
     }
 
     fn finishConditionLoop(self: *BodyContext, task: *LoopTask, continue_body: DraftExprId) Allocator.Error!LowerStep {
@@ -33603,7 +34257,7 @@ const BodyContext = struct {
         node: NodeId,
     ) Allocator.Error!union(enum) { now: DraftExprId, child: LowerStep } {
         return switch (operand) {
-            .checked_expr => |expr| .{ .child = requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(node)) },
+            .checked_expr => |expr| .{ .child = requestLowerChild(self, ExprSite.read(expr), DraftTypeCell.fromGraphNode(node)) },
             .loop_iterator_state => blk: {
                 const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
                 const iterator_node = try iterator.ty.toGraphNode(self.graph);
@@ -33615,7 +34269,7 @@ const BodyContext = struct {
     }
 
     const WithTypeTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         ty: Type.TypeId,
         saved: ?SavedSourceLocation = null,
         field_access_start: u32 = 0,
@@ -33681,7 +34335,7 @@ const BodyContext = struct {
     const UninhabitedArgumentTask = struct {
         /// Dispatch operands, or checked call arguments as operands.
         operands: []const static_dispatch.StaticDispatchOperand = &.{},
-        checked_args: []const checked.CheckedExprId = &.{},
+        checked_args: []const CIR.Expr.Idx = &.{},
         arg_nodes: []const NodeId,
         ret_cell: DraftTypeCell,
         uninhabited_index: usize = 0,
@@ -33692,7 +34346,9 @@ const BodyContext = struct {
     };
 
     const SpanTask = struct {
-        exprs: []const checked.CheckedExprId,
+        /// The expressions, every `stride`th one from the first.
+        exprs: []const CIR.Expr.Idx,
+        stride: usize = 1,
         nodes: []const NodeId = &.{},
         /// Each child's sealed type, as a span of the graph's type store.
         types: Type.Span = .empty(),
@@ -33709,7 +34365,7 @@ const BodyContext = struct {
     };
 
     const CallLowerTask = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         checked_ret_ty: checked.CheckedTypeId,
         call: CheckedCall,
         expected_ret_node: ?NodeId,
@@ -33794,7 +34450,7 @@ const BodyContext = struct {
         }
     }
 
-    fn saveSourceLocation(self: *BodyContext, expr: checked.CheckedExpr) Allocator.Error!SavedSourceLocation {
+    fn saveSourceLocation(self: *BodyContext, expr: CheckedExpr) Allocator.Error!SavedSourceLocation {
         const saved: SavedSourceLocation = .{
             .loc = self.builder.current_loc,
             .region = self.builder.current_region,
@@ -33814,7 +34470,7 @@ const BodyContext = struct {
 
     /// Release what a frame still owns. Idempotent, so a frame that already
     /// released its state on its normal path is unaffected.
-    const CheckedRecordConstruction = @FieldType(checked.CheckedExprData, "record");
+    const CheckedRecordConstruction = @FieldType(ExprData, "record");
 
     /// A constructor lowered at its graph node: every child is related to its
     /// slot first, then each lowers at its slot, then the constructor is
@@ -33822,18 +34478,18 @@ const BodyContext = struct {
     /// witness.
     const ConstructorTask = struct {
         kind: union(enum) {
-            tag: @FieldType(@FieldType(checked.CheckedExprData, "tag"), "name"),
+            tag: @FieldType(@FieldType(ExprData, "tag"), "name"),
             /// The backing expression.
-            nominal: checked.CheckedExprId,
+            nominal: CIR.Expr.Idx,
             tuple,
             list,
-            record: struct { expr: checked.CheckedExprId, record: CheckedRecordConstruction },
+            record: struct { expr: ExprSite, record: CheckedRecordConstruction },
         },
         /// The constructor's graph node; for a nominal, its representation node.
         node: NodeId,
         /// A tag's, tuple's, or list's checked children. A nominal's backing
         /// and a record's extension base and fields live in `kind`.
-        children: []const checked.CheckedExprId,
+        children: []const CIR.Expr.Idx,
         name: names.TagNameId = undefined,
         /// Each child's slot node. Owned.
         slots: []NodeId = &.{},
@@ -33867,7 +34523,7 @@ const BodyContext = struct {
 
     fn recordConstructorStep(
         ctx: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         record: CheckedRecordConstruction,
         record_node: NodeId,
     ) LowerStep {
@@ -33912,9 +34568,9 @@ const BodyContext = struct {
             const slot_cell = DraftTypeCell.fromGraphNode(slot);
             if (try self.nodeIsProvenUninhabited(slot)) {
                 task.uninhabited_slot = slot_cell;
-                return uninhabitedScrutineeStep(self, child, slot_cell);
+                return uninhabitedScrutineeStep(self, ExprSite.read(child), slot_cell);
             }
-            return requestLowerChild(self, child, slot_cell);
+            return requestLowerChild(self, ExprSite.read(child), slot_cell);
         }
         const lowered = try self.finishConstructor(task);
         self.releaseConstructorTask(task);
@@ -33924,12 +34580,12 @@ const BodyContext = struct {
     /// The constructor task's cursor while its lambda children are drafted.
     const constructor_drafts_cursor: u8 = 2;
 
-    fn constructorChild(_: *BodyContext, task: *const ConstructorTask, index: usize) checked.CheckedExprId {
+    fn constructorChild(self: *BodyContext, task: *const ConstructorTask, index: usize) CIR.Expr.Idx {
         return switch (task.kind) {
             .record => |record| if (record.record.ext) |ext|
-                if (index == 0) ext else record.record.fields[index - 1].value
+                if (index == 0) ext else self.view.bodies.recordField(record.record.fields[index - 1]).value
             else
-                record.record.fields[index].value,
+                self.view.bodies.recordField(record.record.fields[index]).value,
             .nominal => |backing| backing,
             .tag, .tuple, .list => task.children[index],
         };
@@ -33970,19 +34626,20 @@ const BodyContext = struct {
             .record => |record| {
                 var slot_index: usize = 0;
                 if (record.record.ext) |ext| {
-                    task.slots[slot_index] = try self.instNode(self.view.bodies.expr(ext).ty);
+                    task.slots[slot_index] = try self.instNode(checkedExpr(self.view, ExprSite.read(ext)).ty);
                     slot_index += 1;
                 }
                 var construction = try self.constructionFields(task.node);
                 defer construction.deinit(self.allocator);
-                for (record.record.fields) |field| {
+                for (record.record.fields) |field_idx| {
+                    const field = self.view.bodies.recordField(field_idx);
                     const construction_field = construction.get(try recordFieldName(self.nameStoreMut(), self.view, field.label));
                     task.slots[slot_index] = self.graph.rootNode(construction_field.value_ty.get() orelse construction_field.ty);
                     slot_index += 1;
                 }
             },
         }
-        const children = try self.allocator.alloc(checked.CheckedExprId, child_count);
+        const children = try self.allocator.alloc(CIR.Expr.Idx, child_count);
         defer self.allocator.free(children);
         for (children, 0..) |*child, index| child.* = self.constructorChild(task, index);
         const drafts = try self.relateConstructorChildrenAtNodes(children, task.slots);
@@ -34109,7 +34766,7 @@ const BodyContext = struct {
                 const children = try self.allocator.alloc(PreLoweredChild, task.lowered.len);
                 defer self.allocator.free(children);
                 for (children, task.lowered, 0..) |*child, lowered, index| {
-                    child.* = .{ .checked_expr = self.constructorChild(task, index), .expr = lowered };
+                    child.* = .{ .checked_expr = ExprSite.read(self.constructorChild(task, index)), .expr = lowered };
                 }
                 return try self.lowerRecordExprAtNode(record.expr, record.record, task.node, children);
             },
@@ -34276,12 +34933,12 @@ const BodyContext = struct {
                     .list => |elem| elem,
                     .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("interpolation assembler did not take a values list"),
                 };
-                const interpolation = switch (self.view.bodies.expr(task.expr).data) {
+                const interpolation = switch (checkedExpr(self.view, task.expr).data) {
                     .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
                 };
-                for (interpolation.values) |value| {
-                    try relateRequestComponent(self.graph, item_node, try self.lowerExprTypeNode(value));
+                for (0..interpolation.valueCount()) |index| {
+                    try relateRequestComponent(self.graph, item_node, try self.lowerExprTypeNode(ExprSite.read(interpolation.value(index))));
                 }
                 frame.cursor = 1;
                 // The conversion runs during compile-time evaluation; see
@@ -34302,13 +34959,14 @@ const BodyContext = struct {
                     try self.literalRootRead(task.expr, site, assembler, task.assembler_node)
                 else
                     assembler;
-                const interpolation = switch (self.view.bodies.expr(task.expr).data) {
+                const interpolation = switch (checkedExpr(self.view, task.expr).data) {
                     .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
                 };
                 task.values_ty = try self.activeTypeFromNode((try self.graph.functionNodes(task.assembler_node)).args[0]);
                 frame.cursor = 2;
-                return requestLowerTask(self, .{ .list_span = .{ .exprs = interpolation.values, .list_ty = task.values_ty } });
+                // The values are the even positions of the parts.
+                return requestLowerTask(self, .{ .list_span = .{ .exprs = interpolation.parts, .stride = 2, .list_ty = task.values_ty } });
             },
             else => {
                 const values = try self.addExpr(.{ .ty = task.values_ty, .data = .{ .list = input.?.spanValue() } });
@@ -34320,18 +34978,18 @@ const BodyContext = struct {
         }
     }
 
-    fn requestLowerChild(ctx: *BodyContext, expr: checked.CheckedExprId, cell: DraftTypeCell) LowerStep {
+    fn requestLowerChild(ctx: *BodyContext, expr: ExprSite, cell: DraftTypeCell) LowerStep {
         return requestLowerTask(ctx, .{ .at_type_cell = .{
             .expr = expr,
             .cell = cell,
             .demand = .runtime_value,
-            .diverges = ctx.checkedExprDivergesInLoweredRuntime(expr),
+            .diverges = null,
         } });
     }
 
     fn stepAtTypeCell(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
         const checked_expr = task.expr;
-        const expr = self.view.bodies.expr(checked_expr);
+        const expr = checkedExpr(self.view, checked_expr);
         if (frame.cursor == 1) {
             const lowered = input.?.exprValue();
             const result = switch (task.cell) {
@@ -34343,12 +35001,13 @@ const BodyContext = struct {
         }
         task.saved = try self.saveSourceLocation(expr);
         frame.cursor = 1;
+        const diverges = task.diverges orelse try self.checkedExprDivergesInLoweredRuntime(checked_expr);
         return switch (task.cell) {
-            .sealed => |ty| if (task.diverges)
+            .sealed => |ty| if (diverges)
                 divergentStep(self, checked_expr, .{ .at_cell = task.cell })
             else
                 requestLowerTask(self, .{ .type_inner = .{ .expr = checked_expr, .ty = ty } }),
-            .graph_node => |expected_node| if (task.diverges)
+            .graph_node => |expected_node| if (diverges)
                 divergentStep(self, checked_expr, .{ .at_cell = task.cell })
             else
                 requestLowerTask(self, .{ .cell_inner = .{ .expr = checked_expr, .cell = task.cell, .expected_node = expected_node } }),
@@ -34362,7 +35021,7 @@ const BodyContext = struct {
         }
         const lowered = input.?.exprValue();
         return .{ .ret = .{ .expr = try self.requireLoweredExpr(
-            self.view.bodies.expr(task.expr),
+            checkedExpr(self.view, task.expr),
             try self.exprTypeCell(lowered).toGraphNode(self.graph),
             .runtime_value,
             lowered,
@@ -34377,7 +35036,7 @@ const BodyContext = struct {
         const checked_expr = task.expr;
         const cell = task.cell;
         const expected_node = task.expected_node;
-        const expr = self.view.bodies.expr(checked_expr);
+        const expr = checkedExpr(self.view, checked_expr);
         switch (frame.cursor) {
             0 => {},
             // A tuple access's tuple.
@@ -34481,7 +35140,7 @@ const BodyContext = struct {
             },
             .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                 .statements = block.statements,
-                .final_expr = block.final_expr,
+                .final_expr = ExprSite.read(block.final_expr),
                 .result_cell = cell,
             }) }),
             .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = checked_expr, .match = match, .result_cell = cell } }),
@@ -34493,18 +35152,18 @@ const BodyContext = struct {
             .anno_only => Common.invariant("non-runtime checked expression reached Monotype lowering"),
             // A row coercion is lowered below, once the demanded node relates
             // to the coercion's own type.
-            .pending, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .str_segment, .str, .bytes_literal, .binop, .unary_minus, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         switch (expr.data) {
             .tuple_access => |access| {
                 if (try self.checkedTypeContainsError(expr.ty)) {
                     return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .checked_error = try self.addStringLiteral("runtime error") }));
                 }
-                if (try self.checkedTypeContainsError(self.view.bodies.expr(access.tuple).ty)) {
+                if (try self.checkedTypeContainsError(checkedExpr(self.view, ExprSite.read(access.tuple)).ty)) {
                     return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .checked_error = try self.addStringLiteral("runtime error") }));
                 }
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         try relateRequestComponent(
             self.graph,
@@ -34513,14 +35172,14 @@ const BodyContext = struct {
         );
         switch (expr.data) {
             .tuple_access => |access| {
-                const tuple_node = try self.lowerExprTypeNode(access.tuple);
+                const tuple_node = try self.lowerExprTypeNode(ExprSite.read(access.tuple));
                 const item_nodes = try self.graph.tupleItemNodes(tuple_node);
                 if (access.elem_index >= item_nodes.len) Common.invariant("tuple access index was outside its graph tuple type");
                 const item_node = item_nodes[access.elem_index];
                 try relateRequestComponent(self.graph, expected_node, item_node);
                 task.tuple_node = tuple_node;
                 frame.cursor = 2;
-                return requestLowerChild(self, access.tuple, DraftTypeCell.fromGraphNode(tuple_node));
+                return requestLowerChild(self, ExprSite.read(access.tuple), DraftTypeCell.fromGraphNode(tuple_node));
             },
             .run_low_level => |low_level| {
                 frame.cursor = 3;
@@ -34541,7 +35200,7 @@ const BodyContext = struct {
                 frame.cursor = 6;
                 return requestLowerChild(self, coerce.value, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(coerce.value)));
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => {},
         }
         frame.cursor = 4;
         return requestLowerTask(self, .{ .expr_inner = .{ .expr = checked_expr } });
@@ -34550,7 +35209,7 @@ const BodyContext = struct {
     fn stepTypeInner(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
         const checked_expr = task.expr;
         const ty = task.ty;
-        const expr = self.view.bodies.expr(checked_expr);
+        const expr = checkedExpr(self.view, checked_expr);
         switch (frame.cursor) {
             0 => {},
             // A call lowered at the context type.
@@ -34578,7 +35237,7 @@ const BodyContext = struct {
                 if (@import("builtin").mode == .debug and !self.sameType(ty, lowered_ty)) {
                     switch (expr.data) {
                         .lambda, .closure => Common.invariant("checked function expression lowered at a type different from its context type"),
-                        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("checked expression lowered at a type different from its call operand type"),
+                        .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("checked expression lowered at a type different from its call operand type"),
                     }
                 }
                 return loweredExprStep(lowered);
@@ -34594,7 +35253,7 @@ const BodyContext = struct {
                 frame.cursor = 3;
                 return step;
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         if (try self.restoredHoistedExprAtType(checked_expr, ty)) |restored| return loweredExprStep(restored);
         switch (expr.data) {
@@ -34663,7 +35322,7 @@ const BodyContext = struct {
                 } });
             },
             .lambda, .closure => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.constrainKnownType(expr.ty, ty),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.constrainKnownType(expr.ty, ty),
         }
         frame.cursor = 4;
         return requestLowerTask(self, .{ .with_type = .{ .expr = checked_expr, .ty = ty } });
@@ -34671,7 +35330,7 @@ const BodyContext = struct {
 
     fn stepExprInner(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
         const expr_id = task.expr;
-        const expr = self.view.bodies.expr(expr_id);
+        const expr = checkedExpr(self.view, expr_id);
         if (frame.cursor != 0) {
             self.restoreSourceLocation(&task.saved);
             return .{ .ret = input.? };
@@ -34699,20 +35358,20 @@ const BodyContext = struct {
                 if (runtime_error.evaluated.len != 0) return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
                 return requestLowerTask(self, .{ .with_type = .{ .expr = expr_id, .ty = try self.unitType() } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         switch (expr.data) {
             .call => |call| {
-                if (self.view.hoisted_constants.lookupByExpr(expr_id) != null) {
+                if (exprSourceNode(self.view, expr_id) != null and self.view.hoisted_constants.lookupByExpr(expr_id.node()) != null) {
                     const expr_ty = try self.lowerExprType(expr_id);
                     if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return self.exprInnerDone(task, restored);
                 }
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .call_expr = .{ .expr = expr_id, .checked_ret_ty = expr.ty, .call = call } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
-        if (self.view.hoisted_constants.lookupByExpr(expr_id) != null) {
+        if (exprSourceNode(self.view, expr_id) != null and self.view.hoisted_constants.lookupByExpr(expr_id.node()) != null) {
             const expr_node = try self.lowerExprTypeNode(expr_id);
             if (try self.restoredHoistedExprAtNode(expr_id, expr_node)) |restored| return self.exprInnerDone(task, restored);
         }
@@ -34723,7 +35382,7 @@ const BodyContext = struct {
             // requesting an active view of their still-unresolved payload.
             .numeral, .str_from_quote => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                if (checked.literalConversionRootOf(expr.data)) |root_id| {
+                if (literalConversionRootOf(expr.data)) |root_id| {
                     return self.exprInnerDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, expr_node));
                 }
                 // Only an unpinned target variable takes the checked literal
@@ -34814,9 +35473,9 @@ const BodyContext = struct {
                 // DEFAULTED fields materialize their defaults into the
                 // inline slots (design.md "Defaulted Fields").
                 return self.exprInnerDone(task, try self.lowerRecordExprAtNode(expr_id, .{
-                    .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                    .fields = @as([]const CIR.RecordField.Idx, &.{}),
                     .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
-                    .ext = @as(?checked.CheckedExprId, null),
+                    .ext = @as(?ExprSite, null),
                 }, expr_node, &.{}));
             },
             .field_access => {
@@ -34824,7 +35483,7 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .field_access = .{ .expr = expr_id, .target = .{ .node = expr_node } } });
             },
-            .pending, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .match_, .if_, .call, .block, .closure, .lambda, .binop, .unary_minus, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_node = try self.lowerExprTypeNode(expr_id);
         switch (expr.data) {
@@ -34848,7 +35507,7 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_ty = try self.lowerExprType(expr_id);
         if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return self.exprInnerDone(task, restored);
@@ -34857,7 +35516,7 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .direct_structural = .{ .expr = expr_id, .ret = .{ .checked = expr.ty } } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         frame.cursor = 1;
         return requestLowerTask(self, .{ .with_type = .{ .expr = expr_id, .ty = expr_ty } });
@@ -34881,7 +35540,7 @@ const BodyContext = struct {
     fn stepWithType(self: *BodyContext, frame: *LowerFrame, task: *WithTypeTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const expr_id = task.expr;
         const ty = task.ty;
-        const expr = self.view.bodies.expr(expr_id);
+        const expr = checkedExpr(self.view, expr_id);
         if (frame.cursor != 0) {
             const child = input.?;
             return switch (expr.data) {
@@ -34898,7 +35557,7 @@ const BodyContext = struct {
                         try self.zeroBranchMatch(child.exprValue(), backing_ty)
                     else
                         child.exprValue() } })),
-                .field_access => |field| if (fieldAccessAnySegmentOptional(field.segments))
+                .field_access => |field| if (fieldAccessAnySegmentOptional(self.view, field.segments))
                     self.withTypeDone(task, child.exprValue())
                 else
                     try self.withTypeData(task, .{ .field_access = .{
@@ -34928,13 +35587,12 @@ const BodyContext = struct {
                 } }),
                 .run_low_level => |low_level| try self.withTypeData(task, .{ .low_level = .{ .op = low_level.op, .args = child.spanValue() } }),
                 .match_, .if_, .block, .closure, .lambda, .record, .lookup_local, .lookup_external, .lookup_required, .runtime_error => self.withTypeDone(task, child.exprValue()),
-                .pending, .numeral, .str_from_quote, .str_segment, .bytes_literal, .empty_list, .call, .empty_record, .zero_argument_tag, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .crash, .ellipsis, .anno_only, .break_, .hosted_lambda => unreachable, // these kinds finish at cursor 0 without requesting a child lowering
+                .numeral, .str_from_quote, .str_segment, .bytes_literal, .empty_list, .call, .empty_record, .zero_argument_tag, .binop, .unary_minus, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .crash, .ellipsis, .anno_only, .break_, .hosted_lambda => unreachable, // these kinds finish at cursor 0 without requesting a child lowering
             };
         }
         task.saved = try self.saveSourceLocation(expr);
         frame.cursor = 1;
         const data: BodyExprData = switch (expr.data) {
-            .pending,
             .anno_only,
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
             .runtime_error => |runtime_error| {
@@ -34954,7 +35612,7 @@ const BodyContext = struct {
                 const literal = try self.lowerStringLiteral(str);
                 break :blk .{ .bytes_lit = .{
                     .literal = literal,
-                    .len = @intCast(self.view.bodies.stringLiteral(str).len),
+                    .len = @intCast(self.view.bodies.text(str).len),
                     .element = .u8,
                 } };
             },
@@ -34965,9 +35623,9 @@ const BodyContext = struct {
             // inline slots (design.md "Defaulted Fields"). With no defaulted
             // fields demanded this produces the empty record constructor.
             .empty_record => return self.withTypeDone(task, try self.lowerRecordExpr(.{
-                .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                .fields = @as([]const CIR.RecordField.Idx, &.{}),
                 .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
-                .ext = @as(?checked.CheckedExprId, null),
+                .ext = @as(?ExprSite, null),
             }, ty, &.{})),
             .str => |segments| return requestLowerTask(self, .{ .str = .{ .segments = segments } }),
             .lookup_local => |lookup| return switch (try self.lookupExprAtTypeStep(expr.ty, lookup.resolved, ty)) {
@@ -35006,9 +35664,9 @@ const BodyContext = struct {
                 task.nominal_named = ty;
                 if (try self.typeIsProvenUninhabited(backing_ty)) {
                     task.uninhabited_backing = backing_ty;
-                    return uninhabitedScrutineeStep(self, nominal.backing_expr, .{ .sealed = backing_ty });
+                    return uninhabitedScrutineeStep(self, ExprSite.read(nominal.backing_expr), .{ .sealed = backing_ty });
                 }
-                return requestLowerChild(self, nominal.backing_expr, .{ .sealed = backing_ty });
+                return requestLowerChild(self, ExprSite.read(nominal.backing_expr), .{ .sealed = backing_ty });
             },
             .closure => |closure| return requestLowerTask(self, .{ .nested_fn = try self.boxLowerTask(NestedFnTask, .{ .expr_id = expr_id, .request_fn_node = try self.activeNodeFromType(ty), .closure = closure }) }),
             .lambda => return requestLowerTask(self, .{ .nested_fn = try self.boxLowerTask(NestedFnTask, .{ .expr_id = expr_id, .request_fn_node = try self.activeNodeFromType(ty) }) }),
@@ -35022,59 +35680,59 @@ const BodyContext = struct {
             .structural_hash => Common.invariant("structural hash reached ordinary expression lowering after explicit hash lowering"),
             .field_access => |field| {
                 if (field.segments.len == 0) Common.invariant("checked field access path had no segments");
-                if (fieldAccessAnySegmentOptional(field.segments)) {
+                if (fieldAccessAnySegmentOptional(self.view, field.segments)) {
                     return requestLowerTask(self, .{ .field_access = .{ .expr = expr_id, .target = .{ .try_ty = ty } } });
                 }
-                const receiver_ty = try self.lowerExprType(field.receiver);
+                const receiver_ty = try self.lowerExprType(ExprSite.read(field.receiver));
                 const start: u32 = @intCast(self.draft.field_access_segments.items.len);
                 try self.draft.field_access_segments.ensureUnusedCapacity(self.allocator, field.segments.len);
 
                 var prefix_ty = receiver_ty;
-                for (field.segments) |segment| {
+                for (0..field.segments.len) |segment_index| {
+                    const segment = self.view.bodies.fieldAccessSegment(field.segments, @intCast(segment_index));
                     const field_name = try recordFieldName(self.nameStoreMut(), self.view, segment.field_name);
                     prefix_ty = self.recordFieldType(prefix_ty, field_name);
                     self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
                 }
                 self.assertSameType(ty, prefix_ty, "Monotype field access path type differed from its final receiver field type");
                 task.field_access_start = start;
-                return requestLowerChild(self, field.receiver, .{ .sealed = receiver_ty });
+                return requestLowerChild(self, ExprSite.read(field.receiver), .{ .sealed = receiver_ty });
             },
             .tuple_access => |access| {
                 // The receiver stays attached to the specialization graph
                 // through its tuple node: a receiver such as a `match` may
                 // still carry an open row that only the whole program settles,
                 // so it has no standalone Monotype to lower at yet.
-                const tuple_node = try self.lowerExprTypeNode(access.tuple);
+                const tuple_node = try self.lowerExprTypeNode(ExprSite.read(access.tuple));
                 const item_nodes = try self.graph.tupleItemNodes(tuple_node);
                 if (access.elem_index >= item_nodes.len) Common.invariant("tuple access index was outside its graph tuple type");
                 try relateRequestComponent(self.graph, try self.graph.importMono(ty), item_nodes[access.elem_index]);
-                return requestLowerChild(self, access.tuple, DraftTypeCell.fromGraphNode(tuple_node));
+                return requestLowerChild(self, ExprSite.read(access.tuple), DraftTypeCell.fromGraphNode(tuple_node));
             },
             .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = expr_id, .match = match, .result_cell = .{ .sealed = ty } } }),
             .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = expr_id, .if_ = if_, .result_cell = .{ .sealed = ty } } }),
             .block => |block| return requestLowerTask(self, .{ .block = try self.boxLowerTask(BlockTask, .{
                 .statements = block.statements,
-                .final_expr = block.final_expr,
+                .final_expr = ExprSite.read(block.final_expr),
                 .result_cell = .{ .sealed = ty },
                 .typed = ty,
             }) }),
             .binop,
             .unary_minus,
-            .unary_not,
             => Common.invariant("desugared operator expression reached Monotype without checked dispatch or low-level form"),
             .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
-            .dbg => |child| return requestLowerTask(self, .{ .inspected = .{ .expr = child } }),
+            .dbg => |child| return requestLowerTask(self, .{ .inspected = .{ .expr = ExprSite.read(child) } }),
             .expect_err => |expect_err| return requestLowerTask(self, .{ .inspected = .{
-                .expr = expect_err.expr,
+                .expr = ExprSite.read(expect_err.expr),
                 .expect_err_snippet = expect_err.snippet,
             } }),
             .expect => |child| if (self.builder.inline_expects == .omit)
                 .unit
             else
-                return requestLowerTask(self, .{ .expr = .{ .expr = child } }),
+                return requestLowerTask(self, .{ .expr = .{ .expr = ExprSite.read(child) } }),
             .break_ => try self.breakCurrentLoopExprData(),
-            .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
+            .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ExprSite.read(ret.expr), .lambda = ExprSite.read(ret.lambda), .context = ret.context } }),
             // A value whose calls take the row is lowered at the coercion's
             // row, so each callee is specialized at the row its result flows
             // into (design.md "Closed Result Rows At Template Boundaries").
@@ -35091,12 +35749,12 @@ const BodyContext = struct {
                 }
                 return requestLowerTask(self, .{ .at_type_cell = .{
                     .expr = coerce.value,
-                    .cell = try self.lowerTypeCell(self.view.bodies.expr(coerce.value).ty),
+                    .cell = try self.lowerTypeCell(checkedExpr(self.view, coerce.value).ty),
                     .demand = .runtime_value,
                     .diverges = false,
                 } });
             },
-            .for_ => |for_| return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) }),
+            .for_ => |for_| return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(@backingInt(expr_id.node()), for_) } }) }),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } }),
         };
@@ -35281,7 +35939,7 @@ const BodyContext = struct {
             frame.cursor = 4;
             return requestLowerTask(self, .{ .callsite_intrinsic = .{
                 .intrinsic = intrinsic,
-                .checked_expr_id = plan.expr,
+                .checked_expr_id = dispatchPlanSite(self.view, plan_id),
                 .source_fn_ty = plan.callable_ty,
                 .operands = .{ .dispatch = plan_args },
                 .callable_node = callable_node,
@@ -35295,7 +35953,7 @@ const BodyContext = struct {
         task.callable_node = callable_node;
         task.callable_args = callable_graph.args;
         task.callable_ret = callable_graph.ret;
-        for (plan_args, 0..) |operand, index| switch (operand) {
+        for (plan_args, 0..) |operand, index| switch (DispatchOperand.of(operand)) {
             .checked_expr => |expr| {
                 try self.relateExprAtNode(expr, callable_graph.args[index]);
             },
@@ -35314,7 +35972,7 @@ const BodyContext = struct {
         while (task.draft_index < task.plan_args.len) {
             const index = task.draft_index;
             task.draft_index += 1;
-            switch (task.plan_args[index]) {
+            switch (DispatchOperand.of(task.plan_args[index])) {
                 .checked_expr => |expr| if (self.isNestedCallableExpr(expr)) {
                     return requestLowerTask(self, .{ .nested_fn = try self.boxLowerTask(NestedFnTask, .{
                         .expr_id = expr,
@@ -35343,7 +36001,7 @@ const BodyContext = struct {
     /// finish the dispatch once every checked operand is lowered.
     fn nextDispatchOperand(self: *BodyContext, frame: *LowerFrame, task: *DispatchLowerTask, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!LowerStep {
         while (task.index < task.plan_args.len) : (task.index += 1) {
-            switch (task.plan_args[task.index]) {
+            switch (DispatchOperand.of(task.plan_args[task.index])) {
                 .checked_expr => |expr| {
                     frame.cursor = 2;
                     return requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(task.callable_args[task.index]));
@@ -35494,7 +36152,7 @@ const BodyContext = struct {
             0 => {
                 for (0..task.arg_types.len) |uninhabited_index| {
                     if (!try self.typeIsProvenUninhabited(self.spanTypeAt(task.arg_types, uninhabited_index))) continue;
-                    switch (operands[uninhabited_index]) {
+                    switch (DispatchOperand.of(operands[uninhabited_index])) {
                         .checked_expr => {},
                         .generated_interpolation_segments,
                         .generated_numeral,
@@ -35534,7 +36192,7 @@ const BodyContext = struct {
             return .{ .ret = .{ .closed_operands = .{ .args = task.reserved.span } } };
         };
         frame.cursor = 2;
-        return uninhabitedScrutineeStep(self, operands[uninhabited_index].checked_expr, .{ .sealed = self.spanTypeAt(task.arg_types, uninhabited_index) });
+        return uninhabitedScrutineeStep(self, DispatchOperand.exprOf(operands[uninhabited_index]), .{ .sealed = self.spanTypeAt(task.arg_types, uninhabited_index) });
     }
 
     fn releaseClosedOperandsAtTypes(self: *BodyContext, task: *ClosedOperandsAtTypesTask) void {
@@ -35768,7 +36426,7 @@ const BodyContext = struct {
             }
             const operand = operands[task.index];
             const node = nodes[task.index];
-            return switch (operand) {
+            return switch (DispatchOperand.of(operand)) {
                 .checked_expr => |expr| requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(node)),
                 .generated_interpolation_segments,
                 .generated_numeral,
@@ -35782,14 +36440,14 @@ const BodyContext = struct {
 
     fn stepOperandAtType(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
         if (frame.cursor == 1) return .{ .ret = input.? };
-        return switch (task.operand) {
+        return switch (DispatchOperand.of(task.operand)) {
             .checked_expr => |expr| blk: {
                 frame.cursor = 1;
                 break :blk requestLowerChild(self, expr, .{ .sealed = task.ty });
             },
-            .generated_interpolation_segments => |expr| loweredExprStep(try self.lowerInterpolationSegments(expr, task.ty)),
+            .generated_interpolation_segments => |expr| loweredExprStep(try self.lowerInterpolationSegments(ExprSite.read(expr), task.ty)),
             .generated_numeral => |literal| loweredExprStep(try self.lowerNumeralValue(literal, task.ty)),
-            .generated_quote => |literal| loweredExprStep(try self.lowerQuoteValue(literal, task.ty)),
+            .generated_quote => |node| loweredExprStep(try self.lowerQuoteValue(node, self.view.bodies.quoteText(node), task.ty)),
         };
     }
 
@@ -35806,7 +36464,7 @@ const BodyContext = struct {
             const uninhabited_index = for (arg_nodes, 0..) |arg_node, index| {
                 if (try self.nodeIsProvenUninhabited(arg_node)) break index;
             } else return .{ .ret = .{ .maybe_expr = null } };
-            switch (operands[uninhabited_index]) {
+            switch (DispatchOperand.of(operands[uninhabited_index])) {
                 .checked_expr => {},
                 .generated_interpolation_segments,
                 .generated_numeral,
@@ -35823,7 +36481,7 @@ const BodyContext = struct {
 
         if (task.index < task.uninhabited_index) {
             const prior_node = arg_nodes[task.index];
-            return switch (operands[task.index]) {
+            return switch (DispatchOperand.of(operands[task.index])) {
                 .checked_expr => |expr| requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(prior_node)),
                 .generated_interpolation_segments,
                 .generated_numeral,
@@ -35835,7 +36493,7 @@ const BodyContext = struct {
         if (!task.scrutinee_requested) {
             task.scrutinee_requested = true;
             const arg_cell = DraftTypeCell.fromGraphNode(arg_nodes[task.uninhabited_index]);
-            return uninhabitedScrutineeStep(self, operands[task.uninhabited_index].checked_expr, arg_cell);
+            return uninhabitedScrutineeStep(self, DispatchOperand.exprOf(operands[task.uninhabited_index]), arg_cell);
         }
         defer {
             self.allocator.free(task.prior);
@@ -35876,13 +36534,13 @@ const BodyContext = struct {
         }
 
         if (task.index < task.uninhabited_index) {
-            return requestLowerChild(self, task.checked_args[task.index], DraftTypeCell.fromGraphNode(arg_nodes[task.index]));
+            return requestLowerChild(self, ExprSite.read(task.checked_args[task.index]), DraftTypeCell.fromGraphNode(arg_nodes[task.index]));
         }
 
         if (!task.scrutinee_requested) {
             task.scrutinee_requested = true;
             const uninhabited_cell = DraftTypeCell.fromGraphNode(arg_nodes[task.uninhabited_index]);
-            return uninhabitedScrutineeStep(self, task.checked_args[task.uninhabited_index], uninhabited_cell);
+            return uninhabitedScrutineeStep(self, ExprSite.read(task.checked_args[task.uninhabited_index]), uninhabited_cell);
         }
         defer {
             self.allocator.free(task.prior);
@@ -35924,23 +36582,23 @@ const BodyContext = struct {
     };
 
     /// A span task lowering each child at its sealed type.
-    fn spanAtTypesTask(exprs: []const checked.CheckedExprId, tys: Type.Span) LowerTask {
+    fn spanAtTypesTask(exprs: []const CIR.Expr.Idx, tys: Type.Span) LowerTask {
         if (exprs.len != tys.len) Common.invariant("call argument arity differs from concrete function type");
         return .{ .span_at_types = .{ .exprs = exprs, .types = tys } };
     }
 
     fn stepSpan(self: *BodyContext, frame: *LowerFrame, task: *SpanTask, input: ?LowerResult, mode: SpanMode) Allocator.Error!LowerStep {
-        const exprs = task.exprs;
+        const count = (task.exprs.len + task.stride - 1) / task.stride;
         if (frame.cursor == 0) {
             switch (mode) {
                 .typed_by_expr, .at_types => {},
-                .at_nodes => if (exprs.len != task.nodes.len) Common.invariant("checked call argument count differed from graph function arity"),
+                .at_nodes => if (count != task.nodes.len) Common.invariant("checked call argument count differed from graph function arity"),
                 .list_elements => task.elem_ty = switch (shapeContent(self.typeStore(), task.list_ty)) {
                     .list => |elem| elem,
                     .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("list expression had a non-list monotype"),
                 },
             }
-            task.reserved = try self.reserveExprSpan(exprs.len);
+            task.reserved = try self.reserveExprSpan(count);
             task.reserving = true;
             frame.cursor = 1;
         } else {
@@ -35952,17 +36610,17 @@ const BodyContext = struct {
             self.draft.setReservedExprSpanItem(task.reserved, task.index, lowered);
             task.index += 1;
         }
-        if (task.index < exprs.len) {
-            const child = exprs[task.index];
+        if (task.index < count) {
+            const child = task.exprs[task.index * task.stride];
             const ty = switch (mode) {
-                .typed_by_expr => return requestLowerChild(self, child, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(child))),
-                .at_nodes => return requestLowerChild(self, child, DraftTypeCell.fromGraphNode(task.nodes[task.index])),
+                .typed_by_expr => return requestLowerChild(self, ExprSite.read(child), DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(ExprSite.read(child)))),
+                .at_nodes => return requestLowerChild(self, ExprSite.read(child), DraftTypeCell.fromGraphNode(task.nodes[task.index])),
                 .at_types => self.spanTypeAt(task.types, task.index),
                 .list_elements => task.elem_ty,
             };
-            if (!try self.typeIsProvenUninhabited(ty)) return requestLowerChild(self, child, .{ .sealed = ty });
+            if (!try self.typeIsProvenUninhabited(ty)) return requestLowerChild(self, ExprSite.read(child), .{ .sealed = ty });
             task.uninhabited_ty = ty;
-            return uninhabitedScrutineeStep(self, child, .{ .sealed = ty });
+            return uninhabitedScrutineeStep(self, ExprSite.read(child), .{ .sealed = ty });
         }
         task.reserving = false;
         self.releaseSpanTask(task);
@@ -36015,7 +36673,7 @@ const BodyContext = struct {
                 const expected_ret_ty = task.expected_ret_ty;
                 task.timing = BodyWorkTimingScope.begin(self.builder.timing, .call_dispatch);
                 self.builder.countBodyDiagnostic("call_expressions");
-                if (self.divergentCallOperand(call)) |operand| {
+                if (try self.divergentCallOperand(call)) |operand| {
                     task.divergent_ret_cell = if (expected_ret_node) |expected|
                         DraftTypeCell.fromGraphNode(expected)
                     else
@@ -36048,7 +36706,7 @@ const BodyContext = struct {
                     } }));
                 }
 
-                if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {
+                if (try self.indirectCalleeMonoType(ExprSite.read(call.func), call.args, expected_ret_ty)) |fn_ty| {
                     const fn_data = functionShape(self.typeStore(), fn_ty, "checked call function type was not a function");
                     try self.constrainTypeToMono(checked_ret_ty, fn_data.ret);
                     if (expected_ret_ty) |expected| {
@@ -36056,7 +36714,7 @@ const BodyContext = struct {
                     }
                     task.fn_ty = fn_ty;
                     frame.cursor = 4;
-                    return requestLowerChild(self, call.func, .{ .sealed = fn_ty });
+                    return requestLowerChild(self, ExprSite.read(call.func), .{ .sealed = fn_ty });
                 }
 
                 const call_ctx = try self.createCallContext();
@@ -36088,7 +36746,7 @@ const BodyContext = struct {
             },
             indirect_args_prepared_cursor => {
                 frame.cursor = 6;
-                return requestLowerChild(self, call.func, DraftTypeCell.fromGraphNode(task.fn_node));
+                return requestLowerChild(self, ExprSite.read(call.func), DraftTypeCell.fromGraphNode(task.fn_node));
             },
             // A direct call's uninhabited-argument check.
             1 => {
@@ -36186,10 +36844,10 @@ const BodyContext = struct {
     fn stepCallExprAtNode(self: *BodyContext, frame: *LowerFrame, task: anytype, input: ?LowerResult) Allocator.Error!LowerStep {
         const checked_expr = task.expr;
         const expected_node = task.expected_node;
-        const expr = self.view.bodies.expr(checked_expr);
+        const expr = checkedExpr(self.view, checked_expr);
         const call = switch (expr.data) {
             .call => |call| call,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("call-at-node lowering received a non-call expression"),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("call-at-node lowering received a non-call expression"),
         };
         switch (frame.cursor) {
             0 => {},
@@ -36248,7 +36906,7 @@ const BodyContext = struct {
     /// call to one keeps its own row.
     fn directCallWidensClosedResult(
         self: *BodyContext,
-        call_expr: checked.CheckedExprId,
+        call_expr: ExprSite,
         call: CheckedCall,
         expected_node: NodeId,
     ) Allocator.Error!bool {
@@ -36256,7 +36914,7 @@ const BodyContext = struct {
         if (self.directCallTargetIsLocalProc(target)) return false;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
         const declared_row = closedResultRowOrNull(self.view, source_fn_ty) orelse return false;
-        const call_ret_node = try self.instNode(self.view.bodies.expr(call_expr).ty);
+        const call_ret_node = try self.instNode(checkedExpr(self.view, call_expr).ty);
         return (try resultRowWideningOrNull(self.graph, declared_row, call_ret_node, expected_node)) != null;
     }
 
@@ -36269,33 +36927,33 @@ const BodyContext = struct {
     /// else—a read of a value, a restored compile-time constant, a call
     /// through a function value—keeps its own row, which every use of that
     /// value shares, and is widened into the coercion's.
-    fn coercedValueTakesRow(self: *BodyContext, value: checked.CheckedExprId, expected_node: NodeId) Allocator.Error!bool {
-        const RowDemand = struct { expr: checked.CheckedExprId, expected: NodeId };
+    fn coercedValueTakesRow(self: *BodyContext, value: ExprSite, expected_node: NodeId) Allocator.Error!bool {
+        const RowDemand = struct { expr: ExprSite, expected: NodeId };
         var pending: std.ArrayListUnmanaged(RowDemand) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, .{ .expr = value, .expected = expected_node });
         while (pending.pop()) |demand| {
             const expr_id = demand.expr;
             if (self.restoredHoistedConstEntry(expr_id) != null) return false;
-            const expr = self.view.bodies.expr(expr_id);
+            const expr = checkedExpr(self.view, expr_id);
             switch (expr.data) {
                 .call => |call| if (!try self.directCallWidensClosedResult(expr_id, call, demand.expected)) return false,
-                .block => |block| try pending.append(self.allocator, .{ .expr = block.final_expr, .expected = demand.expected }),
+                .block => |block| try pending.append(self.allocator, .{ .expr = ExprSite.read(block.final_expr), .expected = demand.expected }),
                 .if_ => |if_| {
-                    for (if_.branches) |branch| try pending.append(self.allocator, .{ .expr = branch.body, .expected = demand.expected });
-                    try pending.append(self.allocator, .{ .expr = if_.final_else, .expected = demand.expected });
+                    for (if_.branches) |branch_idx| try pending.append(self.allocator, .{ .expr = ExprSite.read(self.view.bodies.ifBranch(branch_idx).body), .expected = demand.expected });
+                    try pending.append(self.allocator, .{ .expr = ExprSite.read(if_.final_else), .expected = demand.expected });
                 },
-                .match_ => |match| for (match.branches) |branch| try pending.append(self.allocator, .{ .expr = branch.value, .expected = demand.expected }),
+                .match_ => |match| for (0..match.branches.count()) |index| try pending.append(self.allocator, .{ .expr = matchBranchAt(self.view, match.branches, index).value, .expected = demand.expected }),
                 .tag => |tag| {
                     const name = try tagName(self.nameStoreMut(), self.view, tag.name);
                     for (tag.args, 0..) |arg, index| {
                         const slot = try self.graph.tagConstructionPayloadNode(demand.expected, name, index);
-                        if (self.graph.sameClass(try self.instNode(self.view.bodies.expr(arg).ty), slot)) continue;
-                        try pending.append(self.allocator, .{ .expr = arg, .expected = slot });
+                        if (self.graph.sameClass(try self.instNode(checkedExpr(self.view, ExprSite.read(arg)).ty), slot)) continue;
+                        try pending.append(self.allocator, .{ .expr = ExprSite.read(arg), .expected = slot });
                     }
                 },
                 .zero_argument_tag, .crash, .runtime_error => {},
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .record, .empty_record, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return false,
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .record, .empty_record, .nominal, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return false,
             }
         }
         return true;
@@ -36366,13 +37024,13 @@ const BodyContext = struct {
         ));
     }
 
-    fn lowerExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!DraftExprId {
+    fn lowerExpr(self: *BodyContext, expr_id: ExprSite) Allocator.Error!DraftExprId {
         return (try self.runLower(.{ .expr = .{ .expr = expr_id } })).exprValue();
     }
 
     fn lowerComptimeRootExprAtCell(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
         const exhaustiveness_scope = self.comptime_exhaustiveness_context.enterCompileTimeRoot();
@@ -36479,12 +37137,12 @@ const BodyContext = struct {
         if (entry.pattern) |pattern| {
             return self.view.bodies.pattern(pattern).source_region;
         }
-        return self.view.bodies.expr(entry.expr).source_region;
+        return checkedExpr(self.view, ExprSite.own(self.view, entry.expr)).source_region;
     }
 
     fn restoredHoistedExprAtType(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         ty: Type.TypeId,
     ) Allocator.Error!?DraftExprId {
         const entry = self.restoredHoistedConstEntry(expr_id) orelse return null;
@@ -36493,7 +37151,7 @@ const BodyContext = struct {
 
     fn restoredHoistedExprAtNode(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         request_node: NodeId,
     ) Allocator.Error!?DraftExprId {
         const entry = self.restoredHoistedConstEntry(expr_id) orelse return null;
@@ -36504,9 +37162,9 @@ const BodyContext = struct {
     /// lowering its own checked body.
     fn restoredHoistedConstEntry(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
     ) ?checked.HoistedConstEntry {
-        const entry = self.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
+        const entry = self.view.hoisted_constants.lookupByExpr(exprSourceNode(self.view, expr_id) orelse return null) orelse return null;
         if (self.loweringOwnHoistedConstRoot(entry)) return null;
         if (hoistedConstRunsAtRuntime(self.view, entry)) return null;
         // A guarded binding root's declaration stays in the runtime body with
@@ -36532,13 +37190,13 @@ const BodyContext = struct {
             Common.invariant("selected hoisted local const ref referenced a different checked module");
         }
         const hoisted = switch (const_ref.owner) {
-            .hoisted_expr => |owner| owner,
+            .hoisted_root => |owner| owner,
             .top_level_binding => Common.invariant("selected hoisted local const ref did not reference a hoisted const"),
         };
         if (hoisted.module_idx != self.view.module_identity.module_idx) {
             Common.invariant("selected hoisted local const ref had mismatched module index");
         }
-        return self.view.hoisted_constants.lookupByExpr(hoisted.expr) orelse
+        return self.view.hoisted_constants.lookupByRoot(hoisted.root) orelse
             Common.invariant("selected hoisted local const ref had no hoisted const table entry");
     }
 
@@ -36583,7 +37241,7 @@ const BodyContext = struct {
 
     fn requireLoweredExpr(
         self: *BodyContext,
-        expr: checked.CheckedExpr,
+        expr: CheckedExpr,
         node: NodeId,
         demand: LoweringDemand,
         lowered: DraftExprId,
@@ -36591,7 +37249,7 @@ const BodyContext = struct {
         if (demand != .runtime_value) return lowered;
         switch (expr.data) {
             .runtime_error, .crash, .ellipsis => return lowered,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect_err, .expect, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect_err, .expect, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_proof = self.exprImpossibilityProof(lowered);
         const entry_guard_proof = if (self.function_entry_demand_guards.len != 0)
@@ -36609,7 +37267,7 @@ const BodyContext = struct {
 
     fn requireLoweredExprAtCell(
         self: *BodyContext,
-        expr: checked.CheckedExpr,
+        expr: CheckedExpr,
         cell: DraftTypeCell,
         demand: LoweringDemand,
         lowered: DraftExprId,
@@ -36709,7 +37367,7 @@ const BodyContext = struct {
         });
     }
 
-    fn checkedPatternIsProvenUninhabited(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
+    fn checkedPatternIsProvenUninhabited(self: *BodyContext, pattern_id: CIR.Pattern.Idx) Allocator.Error!bool {
         var scan = PatternUninhabitedScan{ .body = self };
         return try PatternUninhabitedScan.Evaluation.runWith(self.allocator, &self.pattern_uninhabited_scratch, &scan, pattern_id);
     }
@@ -36722,11 +37380,11 @@ const BodyContext = struct {
             else
                 try self.concatExpr(task.out, lowered.exprValue(), str_ty);
             task.index += 1;
-        } else if (task.segments.len == 0) {
+        } else if (task.segments.len() == 0) {
             return try self.finishStr(task, try self.stringExpr("", str_ty));
         }
-        if (task.index < task.segments.len) {
-            return requestLowerChild(self, task.segments[task.index], .{ .sealed = str_ty });
+        if (task.index < task.segments.len()) {
+            return requestLowerChild(self, ExprSite.read(task.segments.at(task.index)), .{ .sealed = str_ty });
         }
         return try self.finishStr(task, task.out);
     }
@@ -36737,16 +37395,8 @@ const BodyContext = struct {
         return loweredExprStep(try self.addExprWithTypeCell(cell, data));
     }
 
-    fn lowerStringLiteral(self: *BodyContext, id: checked.CheckedStringLiteralId) Allocator.Error!DraftStringLiteralId {
-        const index = @backingInt(id);
-        if (index >= self.view.bodies.stringLiteralCount()) {
-            Common.invariant("checked string literal id outside checked body string store");
-        }
-        return try self.draft.addCheckedStringLiteral(
-            self.view.key.bytes,
-            id,
-            self.view.bodies.stringLiteral(@fromBackingInt(@intCast(index))),
-        );
+    fn lowerStringLiteral(self: *BodyContext, id: base.StringLiteral.Idx) Allocator.Error!DraftStringLiteralId {
+        return try self.draft.addCheckedStringLiteral(self.view.key.bytes, .{ .literal = id }, self.view.bodies.text(id));
     }
 
     fn producedResultCell(
@@ -36777,7 +37427,7 @@ const BodyContext = struct {
     /// when the call's target is not one.
     fn callsiteIntrinsicCallTask(
         self: *BodyContext,
-        checked_expr_id: checked.CheckedExprId,
+        checked_expr_id: ExprSite,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_node: ?NodeId,
@@ -36804,8 +37454,8 @@ const BodyContext = struct {
         _: *BodyContext,
         intrinsic: checked.IntrinsicId,
         operands: CheckedIntrinsicOperands,
-        storage: *[checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId,
-    ) []const checked.CheckedExprId {
+        storage: *[checked.IntrinsicId.max_callsite_arity]CIR.Expr.Idx,
+    ) []const CIR.Expr.Idx {
         const expected_arity: usize = intrinsic.callsiteArity() orelse
             Common.invariant("non-call-site intrinsic reached call-site lowering");
         const actual_arity = switch (operands) {
@@ -36818,8 +37468,8 @@ const BodyContext = struct {
             .direct_call => |args| args,
             .dispatch => |args| blk: {
                 for (args, storage.*[0..expected_arity]) |operand, *checked_arg| {
-                    checked_arg.* = switch (operand) {
-                        .checked_expr => |expr| expr,
+                    checked_arg.* = switch (DispatchOperand.of(operand)) {
+                        .checked_expr => |expr| expr.node(),
                         .generated_interpolation_segments,
                         .generated_numeral,
                         .generated_quote,
@@ -36857,8 +37507,8 @@ const BodyContext = struct {
     fn stepCallsiteIntrinsic(self: *BodyContext, task: *CallsiteIntrinsicTask, input: ?LowerResult) Allocator.Error!LowerStep {
         switch (task.stage) {
             .start => {
-                var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
-                task.args = try self.allocator.dupe(checked.CheckedExprId, self.checkedCallsiteIntrinsicArgs(task.intrinsic, task.operands, &checked_arg_storage));
+                var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]CIR.Expr.Idx = undefined;
+                task.args = try self.allocator.dupe(CIR.Expr.Idx, self.checkedCallsiteIntrinsicArgs(task.intrinsic, task.operands, &checked_arg_storage));
                 if (task.deferred_body) |deferred| {
                     if (deferred.pre_lowered_args) |span| {
                         const lowered = self.exprSpan(span);
@@ -36989,7 +37639,7 @@ const BodyContext = struct {
     /// callable reference; the body follows the last argument.
     fn nextCallsiteIntrinsicArg(self: *BodyContext, task: *CallsiteIntrinsicTask) Allocator.Error!LowerStep {
         while (task.index < task.args.len) {
-            switch (try self.callsiteIntrinsicArgStep(task.args[task.index], task.arg_tys[task.index])) {
+            switch (try self.callsiteIntrinsicArgStep(ExprSite.read(task.args[task.index]), task.arg_tys[task.index])) {
                 .ret => |lowered| {
                     task.lowered_args[task.index] = lowered.exprValue();
                     task.index += 1;
@@ -37041,14 +37691,14 @@ const BodyContext = struct {
 
     fn callsiteIntrinsicArgStep(
         self: *BodyContext,
-        checked_arg: checked.CheckedExprId,
+        checked_arg: ExprSite,
         ty: Type.TypeId,
     ) Allocator.Error!LowerStep {
-        const expr = self.view.bodies.expr(checked_arg);
-        const maybe_ref: ?checked.ResolvedValueId = switch (expr.data) {
+        const expr = checkedExpr(self.view, checked_arg);
+        const maybe_ref: ?ResolvedUse = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
             .lookup_external, .lookup_required => |ref_id| ref_id,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
         if (maybe_ref) |ref_id| {
             if (try self.currentLocalForResolvedValue(ref_id)) |local_id| {
@@ -37057,13 +37707,13 @@ const BodyContext = struct {
                 return loweredExprStep(try self.addExpr(.{ .ty = local_ty, .data = .{ .local = local_id } }));
             }
 
-            const record = self.view.resolved_refs.records[@backingInt(ref_id)];
+            const record = resolvedRecord(self.view, ref_id);
             switch (record.ref) {
                 .local_proc => |local| {
                     const request_fn_node = try self.activeNodeFromType(ty);
                     if (local.is_alias) return requestLowerTask(self, .{ .scheme_alias = .{
                         .alias = local,
-                        .use_expr = record.expr,
+                        .use_expr = record.lookupExpr(),
                         .expected_node = request_fn_node,
                     } });
                     const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
@@ -37074,7 +37724,7 @@ const BodyContext = struct {
                         expr.ty,
                         try self.view.types.rootKey(expr.ty),
                         request_fn_node,
-                        try self.evidenceForUseSiteAtNode(record.expr, request_fn_node),
+                        try self.evidenceForUseSiteAtNode(record.lookupExpr(), request_fn_node),
                         record.recursive_reference,
                         .inherit,
                     );
@@ -37094,8 +37744,8 @@ const BodyContext = struct {
                 .imported_proc,
                 .hosted_proc,
                 .promoted_top_level_proc,
-                => |proc| return loweredExprStep(try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), record.expr, null, record.recursive_reference)),
-                .platform_required_proc => |proc| return loweredExprStep(try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.expr, proc.root_evidence, record.recursive_reference)),
+                => |proc| return loweredExprStep(try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), record.lookupExpr(), null, record.recursive_reference)),
+                .platform_required_proc => |proc| return loweredExprStep(try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.lookupExpr(), proc.root_evidence, record.recursive_reference)),
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
             }
         }
@@ -37145,7 +37795,7 @@ const BodyContext = struct {
         return try body_ctx.lowerPendingCallableEvalRoot(
             view,
             template.root,
-            wrapper.body_expr,
+            rootBodyExpr(view, root),
             try body_ctx.activeNodeFromType(mono_fn_ty),
         );
     }
@@ -37215,7 +37865,7 @@ const BodyContext = struct {
         return try body_ctx.lowerPendingCallableEvalRoot(
             view,
             template.root,
-            wrapper.body_expr,
+            rootBodyExpr(view, root),
             request_fn_node,
         );
     }
@@ -37247,7 +37897,7 @@ const BodyContext = struct {
         self: *BodyContext,
         view: ModuleView,
         root_id: checked.ComptimeRootId,
-        body_expr: checked.CheckedExprId,
+        body_expr: ExprSite,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftExprId {
         if (try self.activeCallableEvalBindingExpr(view, root_id, request_fn_node)) |active| return active;
@@ -37296,8 +37946,8 @@ const BodyContext = struct {
         const root = view.compile_time_roots.root(root_id);
         const pattern = root.pattern orelse Common.invariant("callable eval binding omitted its checked pattern");
         const binder = switch (view.bodies.pattern(pattern).data) {
-            .assign => |binder| binder,
-            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("callable eval binding pattern was not a binder"),
+            .assign => pattern,
+            .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("callable eval binding pattern was not a binder"),
         };
         const local = try self.addLocalWithBinderCell(
             self.builder.symbols.fresh(),
@@ -37559,17 +38209,17 @@ const BodyContext = struct {
         if (demand != .inspect_only) return null;
         if (call.args.len != 1) Common.invariant("Str.inspect call did not have exactly one argument");
 
-        const value_expr = self.view.bodies.expr(call.args[0]);
+        const value_expr = checkedExpr(self.view, ExprSite.read(call.args[0]));
         switch (resolvedPayload(self.view, value_expr.ty).payload) {
             .function => {},
             .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
         }
 
         try self.constrainTypeToMono(checked_ret_ty, str_ty);
-        if (self.view.bodies.exprEvaluationMayBeElidedForInspect(call.args[0])) {
+        if (try self.view.bodies.exprEvaluationMayBeElidedForInspect(call.args[0])) {
             return loweredExprStep(try self.stringExpr(inspect_text.function, str_ty));
         }
-        return requestLowerTask(self, .{ .inspect_only = .{ .arg = call.args[0], .str_ty = str_ty } });
+        return requestLowerTask(self, .{ .inspect_only = .{ .arg = ExprSite.read(call.args[0]), .str_ty = str_ty } });
     }
 
     /// Function rendering does not consume the function value, but the
@@ -37622,11 +38272,11 @@ const BodyContext = struct {
     fn iteratorCallNeedsConstructorArgumentEvidence(
         self: *BodyContext,
         procedure: ?checked.IteratorProcedureId,
-        args: []const checked.CheckedExprId,
+        args: []const CIR.Expr.Idx,
     ) Allocator.Error!bool {
         if (procedure != .custom) return false;
         if (args.len != 3) Common.invariant("custom iterator call did not have three arguments");
-        return try self.graph.containsIteratorInterface(try self.instNode(self.view.bodies.expr(args[0]).ty));
+        return try self.graph.containsIteratorInterface(try self.instNode(checkedExpr(self.view, ExprSite.read(args[0])).ty));
     }
 
     fn iteratorProcedureForMethodTarget(
@@ -37670,7 +38320,7 @@ const BodyContext = struct {
 
     fn lowerFieldNamesRenameFieldNames(
         self: *BodyContext,
-        args: []const checked.CheckedExprId,
+        args: []const CIR.Expr.Idx,
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
         lowered_args: []const DraftExprId,
@@ -37866,7 +38516,7 @@ const BodyContext = struct {
 
     fn lowerFieldNamesNameBound(
         self: *BodyContext,
-        args: []const checked.CheckedExprId,
+        args: []const CIR.Expr.Idx,
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
         bound: FieldNameBound,
@@ -37941,7 +38591,7 @@ const BodyContext = struct {
 
     fn lowerFieldName(
         self: *BodyContext,
-        args: []const checked.CheckedExprId,
+        args: []const CIR.Expr.Idx,
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
         lowered_args: []const DraftExprId,
@@ -38201,9 +38851,9 @@ const BodyContext = struct {
 
     fn lowerFieldNamesIter(
         self: *BodyContext,
-        checked_expr_id: checked.CheckedExprId,
+        checked_expr_id: ExprSite,
         checked_source_ty: checked.CheckedTypeId,
-        args: []const checked.CheckedExprId,
+        args: []const CIR.Expr.Idx,
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
         mode: FieldNamesIterMode,
@@ -38428,7 +39078,7 @@ const BodyContext = struct {
         procedure: checked.IteratorProcedureId,
         public_fn_node: NodeId,
         request_fn_node: NodeId,
-        checked_args: []const checked.CheckedExprId,
+        checked_args: []const CIR.Expr.Idx,
     ) Allocator.Error!?NodeId {
         const public_fn = try self.graph.functionNodes(public_fn_node);
         const request_fn = try self.graph.functionNodes(request_fn_node);
@@ -38476,7 +39126,7 @@ const BodyContext = struct {
                 }
                 const state_is_private = try self.graph.containsGeneratedPrivate(request_fn.args[0]);
                 const advance_node = if (state_is_private)
-                    try self.iterCustomAdvanceRequestNode(checked_args[2], request_fn.args[0])
+                    try self.iterCustomAdvanceRequestNode(ExprSite.read(checked_args[2]), request_fn.args[0])
                 else
                     request_fn.args[2];
                 return try self.graphFunctionNode(
@@ -38485,7 +39135,7 @@ const BodyContext = struct {
                         mintedProducerKind(procedure),
                         public_fn.ret,
                         &.{ request_fn.args[0], advance_node },
-                        try self.callableArgumentEvidenceDigest(checked_args[2]),
+                        try self.callableArgumentEvidenceDigest(ExprSite.read(checked_args[2])),
                     ),
                 );
             },
@@ -38570,10 +39220,10 @@ const BodyContext = struct {
     /// Monotype or reconstructing a type path.
     fn iterCustomAdvanceRequestNode(
         self: *BodyContext,
-        checked_advance: checked.CheckedExprId,
+        checked_advance: ExprSite,
         state_node: NodeId,
     ) Allocator.Error!NodeId {
-        const checked_fn_ty = self.view.bodies.expr(checked_advance).ty;
+        const checked_fn_ty = checkedExpr(self.view, checked_advance).ty;
         const checked_fn = self.checkedFunctionType(checked_fn_ty);
         if (checked_fn.args.len != 1) {
             Common.invariant("custom iterator advance callable did not have exactly one state argument");
@@ -38635,7 +39285,7 @@ const BodyContext = struct {
         kind: Type.IteratorKind,
         public_ret: NodeId,
         args: []const NodeId,
-        checked_args: []const checked.CheckedExprId,
+        checked_args: []const CIR.Expr.Idx,
         expected_ret: ?NodeId,
         callable_index: ?usize,
     ) Allocator.Error!?NodeId {
@@ -38647,7 +39297,7 @@ const BodyContext = struct {
         if (try self.generatedIteratorExpectedProducerFunctionNode(kind, args, expected_ret)) |expected_fn| return expected_fn;
         if (!(try self.isGeneratedIteratorEvidenceNode(args[0]))) return null;
         const callable_evidence = if (callable_index) |index|
-            try self.callableArgumentEvidenceDigest(checked_args[index])
+            try self.callableArgumentEvidenceDigest(ExprSite.read(checked_args[index]))
         else
             null;
         return try self.graphFunctionNode(
@@ -39050,25 +39700,25 @@ const BodyContext = struct {
 
     fn callableArgumentEvidenceDigest(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
     ) Allocator.Error!?names.TypeDigest {
-        const expr = self.view.bodies.expr(expr_id);
+        const expr = checkedExpr(self.view, expr_id);
         return switch (expr.data) {
             .closure => |closure| try self.closureArgumentEvidenceDigest(expr_id, closure),
             .lambda => |lambda| self.lambdaArgumentEvidenceDigest(expr_id, lambda.args.len),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
     }
 
     fn lambdaArgumentEvidenceDigest(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         arg_count: usize,
     ) names.TypeDigest {
         var hasher = TypeDigestHasher.init();
         hasher.update("roc.generated_iterator.callable.lambda");
         hasher.update(self.view.key.bytes[0..]);
-        hashU32(&hasher, @backingInt(expr_id));
+        hashU32(&hasher, @backingInt(expr_id.node()));
         hashU32(&hasher, @intCast(arg_count));
         hashU32(&hasher, 0);
         return .{ .bytes = hasher.finalResult() };
@@ -39076,19 +39726,20 @@ const BodyContext = struct {
 
     fn closureArgumentEvidenceDigest(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         closure: anytype,
     ) Allocator.Error!names.TypeDigest {
         var hasher = TypeDigestHasher.init();
         hasher.update("roc.generated_iterator.callable.closure");
         hasher.update(self.view.key.bytes[0..]);
-        hashU32(&hasher, @backingInt(expr_id));
+        hashU32(&hasher, @backingInt(expr_id.node()));
         hashU32(&hasher, @backingInt(closure.lambda));
         hashU32(&hasher, @intCast(closure.captures.len));
-        for (closure.captures) |capture| {
+        for (closure.captures) |capture_idx| {
+            const capture = self.view.bodies.capture(capture_idx);
             hashU32(&hasher, @backingInt(capture.capture_id));
             hashU32(&hasher, capture.scope_depth);
-            const binder = checkedCaptureBinder(self.view, capture.pattern);
+            const binder = capture.pattern;
             const checked_type_key = try self.view.types.rootKey(checkedBinderType(self.view, binder));
             hasher.update(&checked_type_key.bytes);
         }
@@ -39135,7 +39786,7 @@ const BodyContext = struct {
         size_local: ?DraftLocalId,
         arg_tys: []const Type.TypeId,
         checked_source_ty: checked.CheckedTypeId,
-        source_expr_id: checked.CheckedExprId,
+        source_expr_id: ExprSite,
     ) Allocator.Error!DraftExprId {
         const fields_backing_ty = namedBackingType(self.typeStore(), fields_ty) orelse
             Common.invariant("generated FieldNames value expected a named backing type");
@@ -39205,7 +39856,7 @@ const BodyContext = struct {
         step_ret_ty: Type.TypeId,
         size_filter: ?FieldNamesSizeFilter,
         checked_source_ty: checked.CheckedTypeId,
-        source_expr_id: checked.CheckedExprId,
+        source_expr_id: ExprSite,
     ) Allocator.Error!DraftExprId {
         const mode: FieldNamesIterMode = if (size_filter == null) .all else .for_size;
         const Level = struct { index: usize, len: DraftExprId };
@@ -39275,7 +39926,7 @@ const BodyContext = struct {
         size_local: DraftLocalId,
         size_ty: Type.TypeId,
         checked_source_ty: checked.CheckedTypeId,
-        source_expr_id: checked.CheckedExprId,
+        source_expr_id: ExprSite,
     ) Allocator.Error!DraftExprId {
         var body = try self.lowerFieldNamesIterForLen(
             fields,
@@ -39381,7 +40032,7 @@ const BodyContext = struct {
     fn lowerFieldNamesDoneStep(
         self: *BodyContext,
         checked_source_ty: checked.CheckedTypeId,
-        source_expr_id: checked.CheckedExprId,
+        source_expr_id: ExprSite,
         index: usize,
         mode: FieldNamesIterMode,
         step_fn_ty: Type.TypeId,
@@ -39401,7 +40052,7 @@ const BodyContext = struct {
     fn lowerFieldNamesOneStep(
         self: *BodyContext,
         checked_source_ty: checked.CheckedTypeId,
-        source_expr_id: checked.CheckedExprId,
+        source_expr_id: ExprSite,
         index: usize,
         item_expr: DraftExprId,
         rest_expr: DraftExprId,
@@ -39428,7 +40079,7 @@ const BodyContext = struct {
     fn lowerFieldNamesSizeFilteredStep(
         self: *BodyContext,
         checked_source_ty: checked.CheckedTypeId,
-        source_expr_id: checked.CheckedExprId,
+        source_expr_id: ExprSite,
         index: usize,
         item_expr: DraftExprId,
         rest_expr: DraftExprId,
@@ -39617,7 +40268,7 @@ const BodyContext = struct {
     fn lowerFieldNamesStepLambda(
         self: *BodyContext,
         checked_source_ty: checked.CheckedTypeId,
-        source_expr_id: checked.CheckedExprId,
+        source_expr_id: ExprSite,
         index: usize,
         mode: FieldNamesIterMode,
         step_fn_ty: Type.TypeId,
@@ -43287,7 +43938,7 @@ const BodyContext = struct {
 
     fn lowerParseTagUnionDecode(
         self: *BodyContext,
-        args: []const checked.CheckedExprId,
+        args: []const CIR.Expr.Idx,
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
         lowered_args: []const DraftExprId,
@@ -43914,15 +44565,15 @@ const BodyContext = struct {
     fn generatedIteratorNextOperand(
         self: *BodyContext,
         procedure: checked.IteratorProcedureId,
-        checked_args: []const checked.CheckedExprId,
+        checked_args: []const CIR.Expr.Idx,
         fn_nodes: FunctionNodes,
-    ) Allocator.Error!?checked.CheckedExprId {
+    ) Allocator.Error!?ExprSite {
         if (procedure != .next) return null;
         if (checked_args.len != 1 or fn_nodes.args.len != 1) {
             Common.invariant("iterator next reached Monotype with an unexpected arity");
         }
         if (!(try self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0]))) return null;
-        return checked_args[0];
+        return ExprSite.read(checked_args[0]);
     }
 
     fn lowerGeneratedIteratorNextData(
@@ -43953,31 +44604,31 @@ const BodyContext = struct {
     /// retain their graph nodes until their call request supplies every cell.
     fn indirectCalleeMonoType(
         self: *BodyContext,
-        checked_func: checked.CheckedExprId,
-        checked_args: []const checked.CheckedExprId,
+        checked_func: ExprSite,
+        checked_args: []const CIR.Expr.Idx,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
-        const expr = self.view.bodies.expr(checked_func);
+        const expr = checkedExpr(self.view, checked_func);
         return switch (expr.data) {
             .lookup_local,
             .lookup_external,
             .lookup_required,
             => try self.localCalleeMonoType(checked_func, checked_args, expected_ret_ty),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
     }
 
     fn localCalleeMonoType(
         self: *BodyContext,
-        checked_func: checked.CheckedExprId,
-        checked_args: []const checked.CheckedExprId,
+        checked_func: ExprSite,
+        checked_args: []const CIR.Expr.Idx,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
-        const expr = self.view.bodies.expr(checked_func);
+        const expr = checkedExpr(self.view, checked_func);
         const maybe_ref = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
             .lookup_external, .lookup_required => |resolved| resolved,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const ref_id = maybe_ref orelse Common.invariant("checked callee lookup reached Monotype without resolved value ref");
         const local_id = (try self.currentLocalForResolvedValue(ref_id)) orelse return null;
@@ -43992,7 +44643,7 @@ const BodyContext = struct {
             if (!self.sameType(expected, fn_data.ret)) return null;
         }
         for (checked_args) |checked_arg| {
-            if (try self.argumentMayCarryGeneratedPrivateEvidence(checked_arg)) return null;
+            if (try self.argumentMayCarryGeneratedPrivateEvidence(ExprSite.read(checked_arg))) return null;
         }
         return fn_ty;
     }
@@ -44007,9 +44658,9 @@ const BodyContext = struct {
     /// predicate whose caller may then discard the answer.
     fn argumentMayCarryGeneratedPrivateEvidence(
         self: *BodyContext,
-        checked_arg: checked.CheckedExprId,
+        checked_arg: ExprSite,
     ) Allocator.Error!bool {
-        const argument_node = try self.instNode(self.view.bodies.expr(checked_arg).ty);
+        const argument_node = try self.instNode(checkedExpr(self.view, checked_arg).ty);
         if (try self.graph.containsGeneratedPrivate(argument_node)) return true;
         return try self.graph.containsIteratorInterface(argument_node);
     }
@@ -44043,10 +44694,10 @@ const BodyContext = struct {
 
     /// A call whose callee or argument diverges never reaches the callee:
     /// the first divergent operand, whose effect the call lowers to.
-    fn divergentCallOperand(self: *BodyContext, call: anytype) ?checked.CheckedExprId {
-        if (self.checkedExprDivergesInLoweredRuntime(call.func)) return call.func;
+    fn divergentCallOperand(self: *BodyContext, call: anytype) Allocator.Error!?ExprSite {
+        if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(call.func))) return ExprSite.read(call.func);
         for (call.args) |arg| {
-            if (self.checkedExprDivergesInLoweredRuntime(arg)) return arg;
+            if (try self.checkedExprDivergesInLoweredRuntime(ExprSite.read(arg))) return ExprSite.read(arg);
         }
         return null;
     }
@@ -44079,7 +44730,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
-        checked_args: []const checked.CheckedExprId,
+        checked_args: []const CIR.Expr.Idx,
         expected_ret_node: ?NodeId,
         capture_constructor_argument_evidence: bool,
     ) Allocator.Error!NodeId {
@@ -44168,7 +44819,7 @@ const BodyContext = struct {
     /// the lookup path retains its TypeId edge.
     fn exprCallResultEvidenceNode(
         self: *BodyContext,
-        checked_arg: checked.CheckedExprId,
+        checked_arg: ExprSite,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
         return (try self.runEvidence(.{ .call_evidence = .{ .expr = checked_arg, .expected_ty = expected_ty } })).maybeNodeValue();
@@ -44181,7 +44832,7 @@ const BodyContext = struct {
     /// the callee request without refining the checked-public cached cell.
     fn exprCallArgumentEvidenceNode(
         self: *BodyContext,
-        checked_arg: checked.CheckedExprId,
+        checked_arg: ExprSite,
     ) Allocator.Error!?NodeId {
         return (try self.runEvidence(.{ .argument_evidence = .{ .expr = checked_arg } })).maybeNodeValue();
     }
@@ -44192,7 +44843,7 @@ const BodyContext = struct {
     /// positional slot and create a distinct container witness when needed.
     fn exprProducedValueEvidenceNode(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         request_node: NodeId,
     ) Allocator.Error!?NodeId {
         return (try self.runEvidence(.{ .produced_value = .{ .expr = checked_expr, .request_node = request_node } })).maybeNodeValue();
@@ -44201,11 +44852,11 @@ const BodyContext = struct {
     fn lookupCallArgumentEvidenceNode(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        maybe_ref: ?checked.ResolvedValueId,
+        maybe_ref: ?ResolvedUse,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
-        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
+        const record = resolvedRecord(self.view, ref_id);
         local: {
             switch (record.ref) {
                 // A selected hoisted constant has a local binder only while
@@ -44244,11 +44895,11 @@ const BodyContext = struct {
     fn lookupCallArgumentMonoType(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        maybe_ref: ?checked.ResolvedValueId,
+        maybe_ref: ?ResolvedUse,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
-        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
+        const record = resolvedRecord(self.view, ref_id);
         switch (record.ref) {
             .selected_hoisted_const => |selected| {
                 // A selected hoisted constant's binder has a local only while
@@ -44282,7 +44933,7 @@ const BodyContext = struct {
     fn localCallArgumentEvidenceType(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        ref_id: checked.ResolvedValueId,
+        ref_id: ResolvedUse,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         const node = (try self.localCallArgumentEvidenceNode(checked_ty, ref_id, expected_ty)) orelse
@@ -44296,7 +44947,7 @@ const BodyContext = struct {
     fn localCallArgumentEvidenceNode(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        ref_id: checked.ResolvedValueId,
+        ref_id: ResolvedUse,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
         const local_id = (try self.currentLocalForResolvedValue(ref_id)) orelse
@@ -44314,7 +44965,7 @@ const BodyContext = struct {
     fn lookupExprTypeNode(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        maybe_ref: ?checked.ResolvedValueId,
+        maybe_ref: ?ResolvedUse,
     ) Allocator.Error!NodeId {
         const ref_id = maybe_ref orelse
             Common.invariant("checked lookup reached Monotype without a resolved value ref");
@@ -44327,7 +44978,7 @@ const BodyContext = struct {
             try self.constrainCheckedInterfaceToCell(checked_ty, self.localTypeCell(local_id));
             return node;
         }
-        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
+        const record = resolvedRecord(self.view, ref_id);
         switch (record.ref) {
             .selected_hoisted_const => |selected| return try self.constUseTypeNode(checked_ty, selected.const_use),
             .top_level_const, .imported_const => |const_use| return try self.constUseTypeNode(checked_ty, const_use),
@@ -44340,10 +44991,10 @@ const BodyContext = struct {
     fn lookupExprMonoType(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        maybe_ref: ?checked.ResolvedValueId,
+        maybe_ref: ?ResolvedUse,
     ) Allocator.Error!Type.TypeId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
-        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
+        const record = resolvedRecord(self.view, ref_id);
         switch (record.ref) {
             .local_value,
             .pattern_binder,
@@ -44407,7 +45058,7 @@ const BodyContext = struct {
     fn tupleAccessTypeNode(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        tuple: checked.CheckedExprId,
+        tuple: ExprSite,
         elem_index: usize,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!NodeId {
@@ -44435,7 +45086,7 @@ const BodyContext = struct {
 
     fn callResultMonoType(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
@@ -44447,7 +45098,7 @@ const BodyContext = struct {
 
     fn callResultTypeNode(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         checked_ret_ty: checked.CheckedTypeId,
         call: anytype,
         expected_ret_ty: ?Type.TypeId,
@@ -44466,7 +45117,7 @@ const BodyContext = struct {
     /// evidence becomes the request's own result.
     fn directCallRequestNode(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         target: checked.ResolvedValueId,
         call: anytype,
         checked_ret_ty: checked.CheckedTypeId,
@@ -44492,7 +45143,7 @@ const BodyContext = struct {
     /// interface, once per shared request.
     fn completedDirectCalleeAtNode(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         target: checked.ResolvedValueId,
         source_fn_ty: checked.CheckedTypeId,
         fn_node: NodeId,
@@ -44590,7 +45241,7 @@ const BodyContext = struct {
     fn forwardedLocalAliasCalleeAtNode(
         self: *BodyContext,
         alias: checked.LocalProcedureBinding,
-        use_expr: checked.CheckedExprId,
+        use_expr: CIR.Expr.Idx,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnSlot {
         const scope_id = alias.dispatch_scope orelse
@@ -44618,7 +45269,7 @@ const BodyContext = struct {
     fn forwardedCallableEvalCalleeAtNode(
         self: *BodyContext,
         alias: Builder.CallableEvalUse,
-        use_expr: checked.CheckedExprId,
+        use_expr: CIR.Expr.Idx,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnSlot {
         const view = alias.view;
@@ -44666,12 +45317,12 @@ const BodyContext = struct {
     /// call's own interface. A lookup of another alias forwards again.
     fn forwardedLookupCalleeAtNode(
         self: *BodyContext,
-        lookup: checked.CheckedExprId,
+        lookup: CIR.Expr.Idx,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnSlot {
-        const target = self.view.resolved_refs.lookupIdByCheckedExpr(lookup) orelse
+        const target = self.view.resolved_refs.lookupIdByExpr(lookup) orelse
             Common.invariant("forwarded procedure alias lookup had no resolved value");
-        const lookup_ty = self.view.bodies.expr(lookup).ty;
+        const lookup_ty = checkedExpr(self.view, ExprSite.read(lookup)).ty;
         try relateFunctionRequestInterface(self.graph, try self.instNode(lookup_ty), request_fn_node);
         return try self.fnTemplateForDirectCallAtNode(
             target,
@@ -44712,7 +45363,7 @@ const BodyContext = struct {
                 => |proc| if (self.builder.forwardingCallableEvalForProcedureUse(proc)) |alias| {
                     view = alias.view;
                     const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
-                    const lookup = view.resolved_refs.lookupIdByCheckedExpr(template.forwarded_lookup.?) orelse
+                    const lookup = view.resolved_refs.lookupIdByExpr(template.forwarded_lookup.?) orelse
                         Common.invariant("forwarded procedure alias lookup had no resolved value");
                     record = view.resolved_refs.records[@backingInt(lookup)];
                     continue;
@@ -44720,7 +45371,7 @@ const BodyContext = struct {
                 .platform_required_proc => |required| if (self.builder.forwardingCallableEvalForProcedureUse(required.procedure)) |alias| {
                     view = alias.view;
                     const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
-                    const lookup = view.resolved_refs.lookupIdByCheckedExpr(template.forwarded_lookup.?) orelse
+                    const lookup = view.resolved_refs.lookupIdByExpr(template.forwarded_lookup.?) orelse
                         Common.invariant("forwarded procedure alias lookup had no resolved value");
                     record = view.resolved_refs.records[@backingInt(lookup)];
                     continue;
@@ -44782,7 +45433,7 @@ const BodyContext = struct {
         }
         const crosses_module = !moduleBytesEqual(previous_view.key.bytes, local_view.key.bytes);
         const saved_binders = if (crosses_module)
-            try self.enterFreshBinderEnvironment(local_view.bodies.patternBinderCount())
+            try self.enterFreshBinderEnvironment(local_view.bodies.nodeCount())
         else
             null;
         defer if (saved_binders) |saved| self.restoreBinderEnvironment(saved);
@@ -44825,7 +45476,7 @@ const BodyContext = struct {
         return try self.builder.lowerDraftNestedFromContext(
             self,
             lexical_owner_scope.previous,
-            local.expr,
+            ExprSite.read(local.expr),
             nested,
             source_fn_ty,
             source_fn_key,
@@ -44879,9 +45530,9 @@ const BodyContext = struct {
         self: *BodyContext,
         context_id: DraftLocalProcContextId,
         module: [32]u8,
-        binder: checked.PatternBinderId,
-        expr: checked.CheckedExprId,
-        context_anchor: ?checked.CheckedStatementId,
+        binder: BinderId,
+        expr: CIR.Expr.Idx,
+        context_anchor: ?CIR.Statement.Idx,
     ) Allocator.Error!DraftSpan(DraftFnDefCapture) {
         const context = self.validateLocalProcContext(
             context_id,
@@ -44913,9 +45564,9 @@ const BodyContext = struct {
         self: *BodyContext,
         context_id: DraftLocalProcContextId,
         module: [32]u8,
-        binder: checked.PatternBinderId,
-        expr: checked.CheckedExprId,
-        context_anchor: ?checked.CheckedStatementId,
+        binder: BinderId,
+        expr: CIR.Expr.Idx,
+        context_anchor: ?CIR.Statement.Idx,
     ) Allocator.Error!DraftSpan(DraftExprId) {
         const context = self.validateLocalProcContext(
             context_id,
@@ -44981,12 +45632,8 @@ const BodyContext = struct {
         };
     }
 
-    fn currentLocalBindingForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?CurrentLocal {
-        const raw = @backingInt(ref_id);
-        if (raw >= self.view.resolved_refs.records.len) {
-            Common.invariant("checked lookup resolved value id was outside resolved value table");
-        }
-        const record = self.view.resolved_refs.records[raw];
+    fn currentLocalBindingForResolvedValue(self: *BodyContext, ref_id: ResolvedUse) ?CurrentLocal {
+        const record = resolvedRecord(self.view, ref_id);
         return switch (record.ref) {
             .local_param,
             .local_value,
@@ -45016,14 +45663,10 @@ const BodyContext = struct {
         };
     }
 
-    fn currentConstLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) Allocator.Error!?DraftLocalId {
+    fn currentConstLocalForResolvedValue(self: *BodyContext, ref_id: ResolvedUse) Allocator.Error!?DraftLocalId {
         var active_id = self.active_const_binding;
         if (active_id == null) return null;
-        const raw = @backingInt(ref_id);
-        if (raw >= self.view.resolved_refs.records.len) {
-            Common.invariant("checked lookup resolved value id was outside resolved value table");
-        }
-        const record = self.view.resolved_refs.records[raw];
+        const record = resolvedRecord(self.view, ref_id);
         const const_use = switch (record.ref) {
             .top_level_const, .imported_const => |value| value,
             .platform_required_const => |required| required.const_use,
@@ -45043,7 +45686,7 @@ const BodyContext = struct {
         return null;
     }
 
-    fn markActiveConstBinderUsed(self: *BodyContext, binder: checked.PatternBinderId) Allocator.Error!void {
+    fn markActiveConstBinderUsed(self: *BodyContext, binder: BinderId) Allocator.Error!void {
         var active_id = self.active_const_binding;
         while (active_id) |id| {
             const index = @backingInt(id);
@@ -45061,7 +45704,7 @@ const BodyContext = struct {
     /// The binder a top-level constant's recursive binding is keyed by, and the
     /// compile-time root that binding belongs to.
     const TopLevelConstBinding = struct {
-        binder: checked.PatternBinderId,
+        binder: BinderId,
         root: checked.ComptimeRootId,
     };
 
@@ -45072,18 +45715,14 @@ const BodyContext = struct {
             // to that binder from a lambda inside the root's own scrutinee
             // recurses through it the way a top-level constant's lambda
             // recurses through the constant.
-            .hoisted_expr => |hoisted| {
+            .hoisted_root => |hoisted| {
                 if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
                     Common.invariant("hoisted const template referenced a different checked module");
                 }
-                const entry = store_view.hoisted_constants.lookupByExpr(hoisted.expr) orelse return null;
+                const entry = store_view.hoisted_constants.lookupByRoot(hoisted.root) orelse return null;
                 const pattern = entry.pattern orelse return null;
-                const raw_pattern = @backingInt(pattern);
-                if (raw_pattern >= store_view.bodies.pattern_binder_by_pattern.len) {
-                    Common.invariant("hoisted const result pattern was outside the binder index");
-                }
-                const binder = store_view.bodies.pattern_binder_by_pattern[raw_pattern].get() orelse return null;
-                return .{ .binder = binder, .root = entry.root };
+                if (!patternIntroducesBinder(store_view, pattern)) return null;
+                return .{ .binder = pattern, .root = entry.root };
             },
         };
         if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
@@ -45104,8 +45743,8 @@ const BodyContext = struct {
             Common.invariant("top-level const template root had a mismatched checked pattern");
         }
         return switch (store_view.bodies.pattern(pattern).data) {
-            .assign => |binder| .{ .binder = binder, .root = root_id },
-            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("top-level const root pattern was not a binder"),
+            .assign => .{ .binder = pattern, .root = root_id },
+            .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("top-level const root pattern was not a binder"),
         };
     }
 
@@ -45252,21 +45891,17 @@ const BodyContext = struct {
         self.active_const_binding = scope.previous_active;
     }
 
-    fn currentLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) Allocator.Error!?DraftLocalId {
+    fn currentLocalForResolvedValue(self: *BodyContext, ref_id: ResolvedUse) Allocator.Error!?DraftLocalId {
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| return binding.local;
         return try self.currentConstLocalForResolvedValue(ref_id);
     }
 
     fn currentTypedLocalBindingForResolvedValue(
         self: *BodyContext,
-        ref_id: checked.ResolvedValueId,
+        ref_id: ResolvedUse,
         ty: Type.TypeId,
     ) ?CurrentLocal {
-        const raw = @backingInt(ref_id);
-        if (raw >= self.view.resolved_refs.records.len) {
-            Common.invariant("checked lookup resolved value id was outside resolved value table");
-        }
-        const record = self.view.resolved_refs.records[raw];
+        const record = resolvedRecord(self.view, ref_id);
         const binder = switch (record.ref) {
             .local_param,
             .local_value,
@@ -45295,7 +45930,7 @@ const BodyContext = struct {
 
     fn currentLocalBindingAtType(
         self: *BodyContext,
-        ref_id: checked.ResolvedValueId,
+        ref_id: ResolvedUse,
         ty: Type.TypeId,
     ) Allocator.Error!?CurrentLocal {
         const current = self.currentLocalBindingForResolvedValue(ref_id);
@@ -45331,11 +45966,11 @@ const BodyContext = struct {
     fn lowerLookupExprAtType(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        maybe_ref: ?checked.ResolvedValueId,
+        maybe_ref: ?ResolvedUse,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
-        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
+        const record = resolvedRecord(self.view, ref_id);
         switch (record.ref) {
             .platform_required_checked_error => return try self.addExpr(.{ .ty = ty, .data = .{ .checked_error = try self.addStringLiteral("platform requirement failed checking") } }),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
@@ -45415,17 +46050,17 @@ const BodyContext = struct {
             .top_level_const => |const_use| return try self.restoreConstUseAtType(
                 const_use,
                 ty,
-                (try self.evidenceForUseSite(record.expr)).vector,
+                (try self.evidenceForUseSite(record.lookupExpr())).vector,
             ),
             .imported_const => |const_use| return try self.restoreConstUseAtType(
                 const_use,
                 ty,
-                (try self.evidenceForUseSite(record.expr)).vector,
+                (try self.evidenceForUseSite(record.lookupExpr())).vector,
             ),
             .platform_required_const => |required| return try self.restoreConstUseAtType(
                 required.const_use,
                 ty,
-                (try self.evidenceForUseSite(record.expr)).vector,
+                (try self.evidenceForUseSite(record.lookupExpr())).vector,
             ),
             .local_param,
             .local_value,
@@ -45467,7 +46102,7 @@ const BodyContext = struct {
                     checked_ty,
                     try self.view.types.rootKey(checked_ty),
                     request_fn_node,
-                    try self.evidenceForUseSiteAtNode(record.expr, request_fn_node),
+                    try self.evidenceForUseSiteAtNode(record.lookupExpr(), request_fn_node),
                     record.recursive_reference,
                     .inherit,
                 );
@@ -45487,8 +46122,8 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), record.expr, null, record.recursive_reference),
-            .platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.expr, proc.root_evidence, record.recursive_reference),
+            => |proc| try self.lowerProcedureUseValueAtNode(proc, try self.activeNodeFromType(ty), record.lookupExpr(), null, record.recursive_reference),
+            .platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.lookupExpr(), proc.root_evidence, record.recursive_reference),
             .top_level_const,
             .imported_const,
             .platform_required_const,
@@ -45504,13 +46139,13 @@ const BodyContext = struct {
 
     /// The scheme alias task a lookup of `maybe_ref` lowers through at
     /// `expected_node`, when it names a generalized callable alias.
-    fn schemeAliasLookupTask(self: *BodyContext, maybe_ref: ?checked.ResolvedValueId, expected_node: NodeId) ?LowerTask {
+    fn schemeAliasLookupTask(self: *BodyContext, maybe_ref: ?ResolvedUse, expected_node: NodeId) ?LowerTask {
         const ref_id = maybe_ref orelse return null;
-        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
+        const record = resolvedRecord(self.view, ref_id);
         return switch (record.ref) {
             .local_proc => |local| if (local.is_alias) .{ .scheme_alias = .{
                 .alias = local,
-                .use_expr = record.expr,
+                .use_expr = record.lookupExpr(),
                 .expected_node = expected_node,
             } } else null,
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => null,
@@ -45519,8 +46154,8 @@ const BodyContext = struct {
 
     fn lookupExprAtNodeStep(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        maybe_ref: ?checked.ResolvedValueId,
+        checked_expr: ExprSite,
+        maybe_ref: ?ResolvedUse,
         expected_node: NodeId,
     ) Allocator.Error!LowerStep {
         if (self.schemeAliasLookupTask(maybe_ref, expected_node)) |task| return requestLowerTask(self, task);
@@ -45530,10 +46165,10 @@ const BodyContext = struct {
     fn lookupExprAtTypeStep(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
-        maybe_ref: ?checked.ResolvedValueId,
+        maybe_ref: ?ResolvedUse,
         ty: Type.TypeId,
     ) Allocator.Error!LowerStep {
-        if (maybe_ref) |ref_id| switch (self.view.resolved_refs.records[@backingInt(ref_id)].ref) {
+        if (maybe_ref) |ref_id| switch (resolvedRecord(self.view, ref_id).ref) {
             .local_proc => |local| if (local.is_alias) {
                 return requestLowerTask(self, self.schemeAliasLookupTask(maybe_ref, try self.activeNodeFromType(ty)).?);
             },
@@ -45560,7 +46195,7 @@ const BodyContext = struct {
         self.evidence = evidence;
         try self.seedSubstitution(evidence.schema.?, edge.subst);
         try relateFunctionRequestInterface(self.graph, try self.instNode(scope.scheme_root), task.expected_node);
-        return requestLowerChild(self, alias.expr, DraftTypeCell.fromGraphNode(task.expected_node));
+        return requestLowerChild(self, ExprSite.read(alias.expr), DraftTypeCell.fromGraphNode(task.expected_node));
     }
 
     fn restoreSchemeAliasScope(self: *BodyContext, task: *SchemeAliasTask) void {
@@ -45641,21 +46276,21 @@ const BodyContext = struct {
 
     fn lowerLookupExprAtNode(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        maybe_ref: ?checked.ResolvedValueId,
+        checked_expr: ExprSite,
+        maybe_ref: ?ResolvedUse,
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
-        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
+        const record = resolvedRecord(self.view, ref_id);
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
             return try self.lowerLocalBindingAtNode(
                 binding,
-                self.view.bodies.expr(checked_expr).ty,
+                checkedExpr(self.view, checked_expr).ty,
                 expected_node,
             );
         }
         if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
-            const checked_ty = self.view.bodies.expr(checked_expr).ty;
+            const checked_ty = checkedExpr(self.view, checked_expr).ty;
             const local_cell = self.localTypeCell(local_id);
             try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
             return try self.lowerLocalAtRequestedNode(local_id, local_cell, expected_node);
@@ -45665,44 +46300,44 @@ const BodyContext = struct {
                 const entry = self.selectedHoistedConstEntry(selected);
                 if (!self.loweringOwnHoistedConstRoot(entry)) {
                     return try self.deferConstUseAtNode(
-                        self.view.bodies.expr(checked_expr).ty,
+                        checkedExpr(self.view, checked_expr).ty,
                         selected.const_use,
                         expected_node,
-                        (try self.evidenceForUseSite(record.expr)).vector,
+                        (try self.evidenceForUseSite(record.lookupExpr())).vector,
                         .{ .hoisted = entry },
                     );
                 }
             },
             .top_level_const => |const_use| {
                 return try self.deferConstUseAtNode(
-                    self.view.bodies.expr(checked_expr).ty,
+                    checkedExpr(self.view, checked_expr).ty,
                     const_use,
                     expected_node,
-                    (try self.evidenceForUseSite(record.expr)).vector,
+                    (try self.evidenceForUseSite(record.lookupExpr())).vector,
                     .declared,
                 );
             },
             .imported_const => |const_use| {
                 return try self.deferConstUseAtNode(
-                    self.view.bodies.expr(checked_expr).ty,
+                    checkedExpr(self.view, checked_expr).ty,
                     const_use,
                     expected_node,
-                    (try self.evidenceForUseSite(record.expr)).vector,
+                    (try self.evidenceForUseSite(record.lookupExpr())).vector,
                     .declared,
                 );
             },
             .platform_required_const => |required| {
                 return try self.deferConstUseAtNode(
-                    self.view.bodies.expr(checked_expr).ty,
+                    checkedExpr(self.view, checked_expr).ty,
                     required.const_use,
                     expected_node,
-                    (try self.evidenceForUseSite(record.expr)).vector,
+                    (try self.evidenceForUseSite(record.lookupExpr())).vector,
                     .declared,
                 );
             },
             .local_proc => |local| {
                 if (local.is_alias) Common.invariant("callable alias lookup reached value lookup lowering");
-                const checked_ty = self.view.bodies.expr(checked_expr).ty;
+                const checked_ty = checkedExpr(self.view, checked_expr).ty;
                 const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                 const fn_id = try self.lowerDraftLocalProcAtNode(
                     local,
@@ -45711,7 +46346,7 @@ const BodyContext = struct {
                     checked_ty,
                     try self.view.types.rootKey(checked_ty),
                     expected_node,
-                    try self.evidenceForUseSiteAtNode(record.expr, expected_node),
+                    try self.evidenceForUseSiteAtNode(record.lookupExpr(), expected_node),
                     record.recursive_reference,
                     .inherit,
                 );
@@ -45737,14 +46372,14 @@ const BodyContext = struct {
             => |proc| return try self.lowerProcedureUseValueAtNode(
                 proc,
                 expected_node,
-                record.expr,
+                record.lookupExpr(),
                 null,
                 record.recursive_reference,
             ),
             .platform_required_proc => |proc| return try self.lowerProcedureUseValueAtNode(
                 proc.procedure,
                 expected_node,
-                record.expr,
+                record.lookupExpr(),
                 proc.root_evidence,
                 record.recursive_reference,
             ),
@@ -45754,7 +46389,7 @@ const BodyContext = struct {
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_declaration => {},
         }
         const ty = try self.activeTypeFromNode(expected_node);
-        return try self.lowerLookupExprAtType(self.view.bodies.expr(checked_expr).ty, maybe_ref, ty);
+        return try self.lowerLookupExprAtType(checkedExpr(self.view, checked_expr).ty, maybe_ref, ty);
     }
 
     fn deferConstUseAtNode(
@@ -45771,13 +46406,13 @@ const BodyContext = struct {
                 // An exposed name bound by a top-level destructure is a
                 // hoisted extraction root in its own module and a declared
                 // value to every importer.
-                .hoisted_expr => if (moduleBytesEqual(checked.constModuleId(const_use.const_ref).bytes, self.view.key.bytes)) {
+                .hoisted_root => if (moduleBytesEqual(checked.constModuleId(const_use.const_ref).bytes, self.view.key.bytes)) {
                     Common.invariant("hoisted const use reached a declared deferred boundary");
                 },
             },
             .hoisted => |entry| {
                 switch (const_use.const_ref.owner) {
-                    .hoisted_expr => {},
+                    .hoisted_root => {},
                     .top_level_binding => Common.invariant("declared const use reached a hoisted deferred boundary"),
                 }
                 if (!std.meta.eql(entry.const_ref, const_use.const_ref)) {
@@ -45821,7 +46456,7 @@ const BodyContext = struct {
         self: *BodyContext,
         proc: checked.ProcedureUseTemplate,
         request_fn_node: NodeId,
-        site_expr: checked.CheckedExprId,
+        site_expr: CIR.Expr.Idx,
         root_evidence: ?checked.CheckedEvidenceSpan,
         recursive_reference: bool,
     ) Allocator.Error!DraftExprId {
@@ -46360,7 +46995,7 @@ const BodyContext = struct {
         try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
 
         const evaluated = try body_ctx.lowerComptimeRootExprAtCell(
-            body.body_expr,
+            rootBodyExpr(store_view, store_view.compile_time_roots.root(body.root)),
             DraftTypeCell.fromGraphNode(request_node),
         );
         try self.draft.recordEvaluatedRootRead(evaluated, store_view.key, body.root);
@@ -47496,7 +48131,7 @@ const BodyContext = struct {
         }
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
-        const lambda_expr = fn_view.bodies.expr(lambda_expr_id);
+        const lambda_expr = checkedExpr(fn_view, lambda_expr_id);
 
         for (fn_value.captures) |capture| _ = constCaptureBinder(capture.id);
         var bound_captures = try self.builder.bindConstSourceCaptures(
@@ -47545,7 +48180,7 @@ const BodyContext = struct {
                     .inherit,
                 );
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
         };
 
         const capture_values = try self.allocator.alloc(DraftFnDefCapture, captures.len);
@@ -47835,7 +48470,7 @@ const BodyContext = struct {
         };
         defer self.builder.releaseConstSourceCaptures(&fn_ctx, &source_captures);
 
-        const expr = fn_view.bodies.expr(runtime.expr);
+        const expr = checkedExpr(fn_view, ExprSite.own(fn_view, runtime.expr));
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
         try fn_ctx.restoreGeneratedRuntimeEvidence(store_view, fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
@@ -48009,12 +48644,12 @@ const BodyContext = struct {
 
     fn relateLookupExprAtNode(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
-        maybe_ref: ?checked.ResolvedValueId,
+        checked_expr: ExprSite,
+        maybe_ref: ?ResolvedUse,
         expected_node: NodeId,
     ) Allocator.Error!void {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
-        const expr = self.view.bodies.expr(checked_expr);
+        const expr = checkedExpr(self.view, checked_expr);
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
             const local_cell = self.localTypeCell(binding.local);
             const local_node = try local_cell.toGraphNode(self.graph);
@@ -48030,7 +48665,7 @@ const BodyContext = struct {
             try relateRequestComponent(self.graph, local_node, expected_node);
             return;
         }
-        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
+        const record = resolvedRecord(self.view, ref_id);
         const const_use: ?checked.ConstUseTemplate = switch (record.ref) {
             .selected_hoisted_const => |selected| selected.const_use,
             .top_level_const, .imported_const => |value| value,
@@ -48065,7 +48700,7 @@ const BodyContext = struct {
 
     fn relateExprAtNode(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         expected_node: NodeId,
     ) Allocator.Error!void {
         _ = try self.runEvidence(.{ .relate = .{ .expr = checked_expr, .expected_node = expected_node } });
@@ -48075,17 +48710,17 @@ const BodyContext = struct {
     /// closure children to draft at their slots. The list is owned.
     fn relateConstructorChildrenAtNodes(
         self: *BodyContext,
-        checked_exprs: []const checked.CheckedExprId,
+        checked_exprs: []const CIR.Expr.Idx,
         nodes: []const NodeId,
     ) Allocator.Error![]DraftNestedCallable {
         if (checked_exprs.len != nodes.len) Common.invariant("constructor child count differed from graph construction arity");
         for (checked_exprs, nodes) |checked_expr, node| {
-            try self.relateExprAtNode(checked_expr, node);
+            try self.relateExprAtNode(ExprSite.read(checked_expr), node);
         }
         var drafts = std.ArrayList(DraftNestedCallable).empty;
         errdefer drafts.deinit(self.allocator);
         for (checked_exprs, nodes) |checked_expr, node| {
-            if (self.isNestedCallableExpr(checked_expr)) try drafts.append(self.allocator, .{ .ctx = self, .expr = checked_expr, .request_fn_node = node });
+            if (self.isNestedCallableExpr(ExprSite.read(checked_expr))) try drafts.append(self.allocator, .{ .ctx = self, .expr = ExprSite.read(checked_expr), .request_fn_node = node });
         }
         return try drafts.toOwnedSlice(self.allocator);
     }
@@ -48096,12 +48731,12 @@ const BodyContext = struct {
     };
 
     const PreLoweredChild = struct {
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         expr: DraftExprId,
     };
 
     /// Pre-lowered constructor children by their checked expression.
-    const PreLoweredIndex = collections.DenseMapUnmanaged(checked.CheckedExprId, DraftExprId);
+    const PreLoweredIndex = collections.DenseMapUnmanaged(ExprSite, DraftExprId);
 
     fn preLoweredIndex(self: *BodyContext, children: []const PreLoweredChild) Allocator.Error!PreLoweredIndex {
         var index: PreLoweredIndex = .empty;
@@ -48142,7 +48777,7 @@ const BodyContext = struct {
     const RecordExprLabels = struct {
         /// The graph-owned name of each supplied field, in `record.fields` order.
         field_names: []names.RecordFieldNameId,
-        values: collections.DenseMapUnmanaged(names.RecordFieldNameId, checked.CheckedExprId),
+        values: collections.DenseMapUnmanaged(names.RecordFieldNameId, ExprSite),
         unsets: collections.DenseMapUnmanaged(names.RecordFieldNameId, void),
 
         fn deinit(self: *RecordExprLabels, allocator: Allocator) void {
@@ -48155,18 +48790,19 @@ const BodyContext = struct {
     fn recordExprLabels(self: *BodyContext, record: anytype) Allocator.Error!RecordExprLabels {
         const field_names = try self.allocator.alloc(names.RecordFieldNameId, record.fields.len);
         errdefer self.allocator.free(field_names);
-        var values: collections.DenseMapUnmanaged(names.RecordFieldNameId, checked.CheckedExprId) = .empty;
+        var values: collections.DenseMapUnmanaged(names.RecordFieldNameId, ExprSite) = .empty;
         errdefer values.deinit(self.allocator);
         var unsets: collections.DenseMapUnmanaged(names.RecordFieldNameId, void) = .empty;
         errdefer unsets.deinit(self.allocator);
         try values.ensureTotalCapacity(self.allocator, @intCast(record.fields.len));
-        for (record.fields, field_names) |field, *name| {
+        for (record.fields, field_names) |field_idx, *name| {
+            const field = self.view.bodies.recordField(field_idx);
             name.* = try recordFieldName(self.nameStoreMut(), self.view, field.label);
             const entry = try values.getOrPut(self.allocator, name.*);
-            if (!entry.found_existing) entry.value_ptr.* = field.value;
+            if (!entry.found_existing) entry.value_ptr.* = ExprSite.read(field.value);
         }
         try unsets.ensureTotalCapacity(self.allocator, @intCast(record.unsets.len));
-        for (record.unsets) |label| try unsets.put(self.allocator, try recordFieldName(self.nameStoreMut(), self.view, label), {});
+        for (record.unsets) |label| try unsets.put(self.allocator, try recordFieldName(self.nameStoreMut(), self.view, self.view.bodies.unsetField(label)), {});
         return .{ .field_names = field_names, .values = values, .unsets = unsets };
     }
 
@@ -48196,7 +48832,7 @@ const BodyContext = struct {
                 );
                 continue;
             }
-            switch (operand) {
+            switch (DispatchOperand.of(operand)) {
                 .checked_expr => |expr| try self.relateExprAtNode(expr, node),
                 .generated_interpolation_segments,
                 .generated_numeral,
@@ -48208,7 +48844,7 @@ const BodyContext = struct {
         errdefer drafts.deinit(self.allocator);
         for (operands, nodes, 0..) |operand, node, index| {
             if (self.preLoweredOperandAt(pre_lowered, index) != null) continue;
-            switch (operand) {
+            switch (DispatchOperand.of(operand)) {
                 .checked_expr => |expr| if (self.isNestedCallableExpr(expr)) {
                     try drafts.append(self.allocator, .{ .ctx = self, .expr = expr, .request_fn_node = node });
                 },
@@ -48273,7 +48909,7 @@ const BodyContext = struct {
 
     fn lowerExprAtTypeCell(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
         return try self.lowerExprAtTypeCellWithDemand(checked_expr, cell, .runtime_value);
@@ -48281,7 +48917,7 @@ const BodyContext = struct {
 
     fn lowerExprAtTypeCellWithDemand(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         cell: DraftTypeCell,
         demand: LoweringDemand,
     ) Allocator.Error!DraftExprId {
@@ -48289,13 +48925,13 @@ const BodyContext = struct {
             checked_expr,
             cell,
             demand,
-            self.checkedExprDivergesInLoweredRuntime(checked_expr),
+            try self.checkedExprDivergesInLoweredRuntime(checked_expr),
         );
     }
 
     fn lowerExprAtTypeCellWithKnownDivergence(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         cell: DraftTypeCell,
         demand: LoweringDemand,
         expr_diverges: bool,
@@ -48305,7 +48941,7 @@ const BodyContext = struct {
 
     fn selectExprRepresentationAtNode(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         expected_node: NodeId,
     ) Allocator.Error!void {
         try selectRequestRepresentation(
@@ -48316,7 +48952,7 @@ const BodyContext = struct {
     }
 
     fn stepFieldAccessLower(self: *BodyContext, task: *FieldAccessTask, input: ?LowerResult) Allocator.Error!LowerStep {
-        const field = self.view.bodies.expr(task.expr).data.field_access;
+        const field = checkedExpr(self.view, task.expr).data.field_access;
         if (task.started) {
             const receiver = input.?.exprValue();
             return loweredExprStep(switch (task.target) {
@@ -48338,36 +48974,37 @@ const BodyContext = struct {
         const expected_node = switch (task.target) {
             .node => |node| node,
             .try_ty => {
-                task.receiver_ty = try self.lowerExprType(field.receiver);
-                return requestLowerChild(self, field.receiver, .{ .sealed = task.receiver_ty });
+                task.receiver_ty = try self.lowerExprType(ExprSite.read(field.receiver));
+                return requestLowerChild(self, ExprSite.read(field.receiver), .{ .sealed = task.receiver_ty });
             },
         };
-        if (fieldAccessAnySegmentOptional(field.segments)) {
+        if (fieldAccessAnySegmentOptional(self.view, field.segments)) {
             // A `.?` chain compiles to runtime slot tests producing the
             // chain's checked `Try` (design.md "Field Kinds (All-Dynamic
             // Optional Fields)"). Both the receiver and result stay attached
             // to the specialization graph until their active Monotypes are
             // needed by the runtime chain lowering.
-            const checked_ty = self.view.bodies.expr(task.expr).ty;
-            task.receiver_node = try self.lowerExprTypeNode(field.receiver);
+            const checked_ty = checkedExpr(self.view, task.expr).ty;
+            task.receiver_node = try self.lowerExprTypeNode(ExprSite.read(field.receiver));
             const observable = try self.fieldAccessTypeNode(checked_ty, field, null);
             try relateRequestComponent(self.graph, expected_node, observable);
             task.result_node = if (try self.graph.containsGeneratedPrivate(observable)) observable else expected_node;
             task.optional = true;
-            return requestLowerChild(self, field.receiver, DraftTypeCell.fromGraphNode(task.receiver_node));
+            return requestLowerChild(self, ExprSite.read(field.receiver), DraftTypeCell.fromGraphNode(task.receiver_node));
         }
-        task.receiver_node = try self.lowerExprTypeNode(field.receiver);
+        task.receiver_node = try self.lowerExprTypeNode(ExprSite.read(field.receiver));
         task.segments_start = @intCast(self.draft.field_access_segments.items.len);
         try self.draft.field_access_segments.ensureUnusedCapacity(self.allocator, field.segments.len);
         var prefix_node = task.receiver_node;
-        for (field.segments) |segment| {
+        for (0..field.segments.len) |segment_index| {
+            const segment = self.view.bodies.fieldAccessSegment(field.segments, @intCast(segment_index));
             const field_name = try recordFieldName(self.nameStoreMut(), self.view, segment.field_name);
             prefix_node = try self.graph.requiredRecordFieldNode(prefix_node, field_name);
             self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
         }
         try relateRequestComponent(self.graph, expected_node, prefix_node);
         task.result_node = if (try self.graph.containsGeneratedPrivate(prefix_node)) prefix_node else expected_node;
-        return requestLowerChild(self, field.receiver, DraftTypeCell.fromGraphNode(task.receiver_node));
+        return requestLowerChild(self, ExprSite.read(field.receiver), DraftTypeCell.fromGraphNode(task.receiver_node));
     }
 
     /// Debug-only assertion that two monotypes are `sameType`. The
@@ -48630,14 +49267,14 @@ const BodyContext = struct {
             // one body would capture the first's (or the consuming body's)
             // lexical binder entries into its local-procedure declaration
             // contexts and trip the one-context-per-binder invariant.
-            const saved_binders = try self.enterFreshBinderEnvironment(self.view.bodies.patternBinderCount());
+            const saved_binders = try self.enterFreshBinderEnvironment(self.view.bodies.nodeCount());
             defer {
                 self.restoreBinderEnvironment(saved_binders);
                 self.in_default_expr = previous_in_default_expr;
                 self.instantiation.deinit();
                 self.instantiation = previous_instantiation;
             }
-            return try self.lowerExprAtTypeCell(default_expr, field_cell);
+            return try self.lowerExprAtTypeCell(ExprSite.read(default_expr), field_cell);
         }
         const declaring_view = self.builder.moduleForIdentityHash(origin_hash) orelse
             Common.invariant("defaulted field's declaring module was not present in the lowering input");
@@ -48662,14 +49299,14 @@ const BodyContext = struct {
         // The default is a closed expression: it binds nothing from the
         // consuming body, so foreign lowering gets fresh binder state
         // exactly like a cross-module local procedure.
-        const saved_binders = try self.enterFreshBinderEnvironment(declaring_view.bodies.patternBinderCount());
+        const saved_binders = try self.enterFreshBinderEnvironment(declaring_view.bodies.nodeCount());
         const previous_in_default_expr = self.in_default_expr;
         self.in_default_expr = true;
         defer {
             self.in_default_expr = previous_in_default_expr;
             self.restoreBinderEnvironment(saved_binders);
         }
-        return try self.lowerExprAtTypeCell(default_expr, field_cell);
+        return try self.lowerExprAtTypeCell(ExprSite.read(default_expr), field_cell);
     }
 
     /// The explicit `??` identity carried by a field in `record_ty`.
@@ -48714,7 +49351,7 @@ const BodyContext = struct {
     fn recordDestructFieldKind(
         self: *BodyContext,
         record_checked_ty: checked.CheckedTypeId,
-        destruct: checked.CheckedRecordDestruct,
+        destruct: checked_bodies.RecordDestruct,
     ) Allocator.Error!checked.CheckedFieldKind.Tag {
         const target = try recordFieldName(self.nameStoreMut(), self.view, destruct.label);
         return recordDestructKindFromResolution(try self.checkedRecordFieldByName(record_checked_ty, target)) orelse
@@ -48725,9 +49362,10 @@ const BodyContext = struct {
     fn recordDestructsHaveOptionalField(
         self: *BodyContext,
         record_checked_ty: checked.CheckedTypeId,
-        destructs: []const checked.CheckedRecordDestruct,
+        destructs: []const CIR.Pattern.RecordDestruct.Idx,
     ) Allocator.Error!bool {
-        for (destructs) |destruct| {
+        for (destructs) |destruct_idx| {
+            const destruct = self.view.bodies.recordDestruct(destruct_idx);
             switch (destruct.kind) {
                 .required, .sub_pattern => {
                     if ((try self.recordDestructFieldKind(record_checked_ty, destruct)) == .optional) return true;
@@ -48812,7 +49450,7 @@ const BodyContext = struct {
     /// local materialized as Try.
     fn queueOptionalDestructSlotBind(
         self: *BodyContext,
-        binder: checked.PatternBinderId,
+        binder: BinderId,
         slot_local: DraftLocalId,
         slot_node: NodeId,
         result_node: NodeId,
@@ -48834,7 +49472,7 @@ const BodyContext = struct {
     /// bind the constant error value.
     fn queueOptionalDestructErrPayloadBinds(
         self: *BodyContext,
-        root_pattern: checked.CheckedPatternId,
+        root_pattern: CIR.Pattern.Idx,
         err_node: NodeId,
     ) Allocator.Error!void {
         var pattern_id = root_pattern;
@@ -48842,7 +49480,8 @@ const BodyContext = struct {
             const pattern = self.view.bodies.pattern(pattern_id);
             switch (pattern.data) {
                 .underscore => return,
-                .assign => |binder| {
+                .assign => {
+                    const binder = pattern_id;
                     const binder_local = try self.materializePatternBinderAtCell(binder, DraftTypeCell.fromGraphNode(err_node));
                     try self.optional_destruct_binds.append(self.allocator, .{
                         .binder_local = binder_local,
@@ -48851,7 +49490,7 @@ const BodyContext = struct {
                     return;
                 },
                 .as => |as| {
-                    const binder_local = try self.materializePatternBinderAtCell(as.binder, DraftTypeCell.fromGraphNode(err_node));
+                    const binder_local = try self.materializePatternBinderAtCell(pattern_id, DraftTypeCell.fromGraphNode(err_node));
                     try self.optional_destruct_binds.append(self.allocator, .{
                         .binder_local = binder_local,
                         .value = .{ .missing_err = .{ .err_node = err_node } },
@@ -48866,7 +49505,6 @@ const BodyContext = struct {
                     }
                     return;
                 },
-                .pending,
                 .nominal,
                 .record_destructure,
                 .list,
@@ -49056,7 +49694,7 @@ const BodyContext = struct {
 
     fn optionalChainRestAtNode(
         self: *BodyContext,
-        segments: []const checked.CheckedFieldAccessSegment,
+        segments: CIR.Expr.FieldAccessSegment.Span,
         start: usize,
         receiver: DraftExprId,
         receiver_node: NodeId,
@@ -49066,7 +49704,8 @@ const BodyContext = struct {
         defer pending.deinit(self.allocator);
         var current = receiver;
         var current_node = receiver_node;
-        for (segments[start..]) |segment| {
+        for (start..segments.len) |segment_index| {
+            const segment = self.view.bodies.fieldAccessSegment(segments, @intCast(segment_index));
             const field_name = try recordFieldName(self.nameStoreMut(), self.view, segment.field_name);
             switch (segment.mode) {
                 .required => {
@@ -49153,7 +49792,7 @@ const BodyContext = struct {
 
     fn optionalChainRest(
         self: *BodyContext,
-        segments: []const checked.CheckedFieldAccessSegment,
+        segments: CIR.Expr.FieldAccessSegment.Span,
         start: usize,
         receiver: DraftExprId,
         receiver_ty: Type.TypeId,
@@ -49163,7 +49802,8 @@ const BodyContext = struct {
         defer pending.deinit(self.allocator);
         var current = receiver;
         var current_ty = receiver_ty;
-        for (segments[start..]) |segment| {
+        for (start..segments.len) |segment_index| {
+            const segment = self.view.bodies.fieldAccessSegment(segments, @intCast(segment_index));
             const field_name = try recordFieldName(self.nameStoreMut(), self.view, segment.field_name);
             const slot_ty = self.recordFieldType(current_ty, field_name);
             switch (segment.mode) {
@@ -49226,7 +49866,7 @@ const BodyContext = struct {
     /// tasks, in the order a direct walk lowers them, and the record is built
     /// from them once all are lowered.
     const RecordAtTypeTask = struct {
-        record: @FieldType(checked.CheckedExprData, "record"),
+        record: @FieldType(ExprData, "record"),
         ty: Type.TypeId,
         /// The child expressions to lower, each with its target, in order.
         requests: []const RecordChildRequest,
@@ -49242,7 +49882,7 @@ const BodyContext = struct {
     };
 
     const RecordChildRequest = struct {
-        expr: checked.CheckedExprId,
+        expr: ExprSite,
         target: union(enum) {
             /// The record update's base, lowered at its own type.
             base,
@@ -49255,21 +49895,22 @@ const BodyContext = struct {
 
     fn beginRecordAtType(
         self: *BodyContext,
-        record: @FieldType(checked.CheckedExprData, "record"),
+        record: @FieldType(ExprData, "record"),
         ty: Type.TypeId,
     ) Allocator.Error!LowerStep {
         var requests = std.ArrayList(RecordChildRequest).empty;
         errdefer requests.deinit(self.allocator);
         if (record.ext) |ext| {
-            try requests.append(self.allocator, .{ .expr = ext, .target = .base });
-            for (record.fields) |field| {
+            try requests.append(self.allocator, .{ .expr = ExprSite.read(ext), .target = .base });
+            for (record.fields) |field_idx| {
+                const field = self.view.bodies.recordField(field_idx);
                 const name = try recordFieldName(self.nameStoreMut(), self.view, field.label);
                 const target_field = self.recordField(ty, name);
                 const target_ty = if (self.monotypeFieldKindTag(target_field) == .optional)
                     (try self.optionalSlotInfo(target_field.ty)).payload_ty
                 else
                     target_field.ty;
-                try requests.append(self.allocator, .{ .expr = field.value, .target = .{ .at_type = target_ty } });
+                try requests.append(self.allocator, .{ .expr = ExprSite.read(field.value), .target = .{ .at_type = target_ty } });
             }
         } else {
             const target_fields = switch (shapeContent(self.typeStore(), ty)) {
@@ -49317,7 +49958,7 @@ const BodyContext = struct {
                     .expr = request.expr,
                     .cell = .{ .sealed = ty },
                     .demand = .runtime_value,
-                    .diverges = self.checkedExprDivergesInLoweredRuntime(request.expr),
+                    .diverges = try self.checkedExprDivergesInLoweredRuntime(request.expr),
                 } }),
                 .uninhabited => |ty| uninhabitedScrutineeStep(self, request.expr, .{ .sealed = ty }),
             };
@@ -49336,11 +49977,12 @@ const BodyContext = struct {
         var pre_by_expr = try self.preLoweredIndex(pre_lowered);
         defer pre_by_expr.deinit(self.allocator);
         if (record.ext) |ext| {
-            const base_expr = pre_by_expr.get(ext) orelse
+            const base_expr = pre_by_expr.get(ExprSite.read(ext)) orelse
                 Common.invariant("record update lost its pre-lowered base child");
             const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len + record.unsets.len);
             defer self.allocator.free(fields);
-            for (record.fields, 0..) |field, index| {
+            for (record.fields, 0..) |field_idx, index| {
+                const field = self.view.bodies.recordField(field_idx);
                 const name = labels.field_names[index];
                 const target_field = self.recordField(ty, name);
                 const slot_ty = target_field.ty;
@@ -49352,13 +49994,13 @@ const BodyContext = struct {
                         // Supplied optional values enter the slot through #Present.
                         if (field_kind == .optional) {
                             const slot = try self.optionalSlotInfo(slot_ty);
-                            const payload = if (pre_by_expr.get(field.value)) |pre| pre_blk: {
+                            const payload = if (pre_by_expr.get(ExprSite.read(field.value))) |pre| pre_blk: {
                                 self.assertSameType(slot.payload_ty, try self.exprType(pre), "record update child lowered at a type different from its finalized field type");
                                 break :pre_blk pre;
                             } else Common.invariant("record update lost its pre-lowered field child");
                             break :value try self.optionalSlotPresentExpr(slot_ty, slot, payload);
                         }
-                        break :value pre_by_expr.get(field.value) orelse
+                        break :value pre_by_expr.get(ExprSite.read(field.value)) orelse
                             Common.invariant("record update lost its pre-lowered field child");
                     },
                 };
@@ -49369,7 +50011,7 @@ const BodyContext = struct {
             // an Optional Field"). The backend keeps copying unlisted slots
             // and writing listed ones.
             for (record.unsets, 0..) |label, unset_index| {
-                const name = try recordFieldName(self.nameStoreMut(), self.view, label);
+                const name = try recordFieldName(self.nameStoreMut(), self.view, self.view.bodies.unsetField(label));
                 const target_field = self.recordField(ty, name);
                 if (self.monotypeFieldKindTag(target_field) != .optional) {
                     Common.invariant("record update unset field was not optional after checking");
@@ -49392,7 +50034,7 @@ const BodyContext = struct {
         // it, an unset of a defaulted field would silently take the
         // defaulted arm and materialize the default.
         for (record.unsets) |label| {
-            const name = try recordFieldName(self.nameStoreMut(), self.view, label);
+            const name = try recordFieldName(self.nameStoreMut(), self.view, self.view.bodies.unsetField(label));
             if (self.monotypeFieldKindTag(self.recordField(ty, name)) != .optional) {
                 Common.invariant("record constructor unset field was not optional after checking");
             }
@@ -49406,7 +50048,7 @@ const BodyContext = struct {
         const lowered = try self.allocator.alloc(DraftFieldExpr, target_field_count);
         defer self.allocator.free(lowered);
         const base_record = if (record.ext) |ext|
-            pre_by_expr.get(ext) orelse
+            pre_by_expr.get(ExprSite.read(ext)) orelse
                 Common.invariant("record constructor lost its pre-lowered base child")
         else
             null;
@@ -49497,7 +50139,7 @@ const BodyContext = struct {
 
     fn lowerRecordExprAtNode(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         record: anytype,
         record_node: NodeId,
         pre_lowered: []const PreLoweredChild,
@@ -49509,13 +50151,14 @@ const BodyContext = struct {
         var construction = try self.constructionFields(record_node);
         defer construction.deinit(self.allocator);
         if (record.ext) |ext| {
-            const base_expr = pre_by_expr.get(ext) orelse
+            const base_expr = pre_by_expr.get(ExprSite.read(ext)) orelse
                 Common.invariant("record graph update lost its pre-lowered base child");
             const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len + record.unsets.len);
             defer self.allocator.free(fields);
-            for (record.fields, 0..) |field, index| {
+            for (record.fields, 0..) |field_idx, index| {
+                const field = self.view.bodies.recordField(field_idx);
                 const name = labels.field_names[index];
-                const pre = pre_by_expr.get(field.value) orelse
+                const pre = pre_by_expr.get(ExprSite.read(field.value)) orelse
                     Common.invariant("record graph update lost its pre-lowered field child");
                 const field_kind = try self.graph.recordConstructionFieldKindOf(construction.get(name));
                 // A SUPPLIED OPTIONAL field's child was lowered at the slot's
@@ -49540,7 +50183,7 @@ const BodyContext = struct {
             // slot's own graph node, so unset fields keep the checked
             // representation and take no part in witness selection below.
             for (record.unsets, 0..) |label, unset_index| {
-                const name = try recordFieldName(self.nameStoreMut(), self.view, label);
+                const name = try recordFieldName(self.nameStoreMut(), self.view, self.view.bodies.unsetField(label));
                 const field_kind = try self.graph.recordConstructionFieldKindOf(construction.get(name));
                 if (field_kind != .optional) {
                     Common.invariant("record graph update unset field was not optional after checking");
@@ -49606,7 +50249,7 @@ const BodyContext = struct {
         // below then constructs its Missing slot. Without this, an unset of
         // a defaulted field would silently materialize the default.
         for (record.unsets) |label| {
-            const name = try recordFieldName(self.nameStoreMut(), self.view, label);
+            const name = try recordFieldName(self.nameStoreMut(), self.view, self.view.bodies.unsetField(label));
             if ((try self.graph.recordConstructionFieldKindOf(construction.get(name))) != .optional) {
                 Common.invariant("record graph constructor unset field was not optional after checking");
             }
@@ -49620,7 +50263,7 @@ const BodyContext = struct {
         var requires_distinct_witness = false;
 
         const base_record = if (record.ext) |ext|
-            pre_by_expr.get(ext) orelse
+            pre_by_expr.get(ExprSite.read(ext)) orelse
                 Common.invariant("record constructor lost its pre-lowered base child")
         else
             null;
@@ -49912,12 +50555,15 @@ const BodyContext = struct {
 
     fn omittedRecordFieldDefault(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
         field_name: names.RecordFieldNameId,
     ) ?checked.CheckedFieldDefault {
         const wanted = self.nameStore().recordFieldLabelText(field_name);
-        for (self.view.bodies.record_omitted_defaults) |entry| {
-            if (entry.expr != checked_expr) continue;
+        // A hoisted validation's unit result omits no field.
+        const record_expr = exprSourceNode(self.view, checked_expr) orelse return null;
+        for (self.view.bodies.recordOmittedDefaults()) |omitted| {
+            if (omitted.expr != record_expr) continue;
+            const entry = self.view.bodies.recordOmittedDefault(omitted);
             if (Ident.textEql(self.view.names.recordFieldLabelText(entry.field_name), wanted)) {
                 return entry.default;
             }
@@ -49927,12 +50573,12 @@ const BodyContext = struct {
 
     fn ensureClosureAtNode(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         closure: anytype,
         request_fn_node: NodeId,
         capture_entry_guards: []const NodeId,
     ) Allocator.Error!DraftFnTarget {
-        const lambda = self.view.bodies.expr(closure.lambda);
+        const lambda = checkedExpr(self.view, ExprSite.read(closure.lambda));
         if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
         return try self.ensureNestedFnAtNode(expr_id, lambda.ty, request_fn_node, capture_entry_guards);
     }
@@ -49941,7 +50587,7 @@ const BodyContext = struct {
     /// `source_fn_ty`, as a draft function requested at `request_fn_node`.
     fn ensureNestedFnAtNode(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         source_fn_ty: checked.CheckedTypeId,
         request_fn_node: NodeId,
         capture_entry_guards: []const NodeId,
@@ -49949,7 +50595,7 @@ const BodyContext = struct {
         const nested = try self.builder.nestedFnForExpr(
             self.view,
             self.owner_template,
-            expr_id,
+            expr_id.node(),
             self.current_fn_key,
             try self.localProcContextsDigest(),
             self.in_default_expr,
@@ -49972,14 +50618,14 @@ const BodyContext = struct {
         );
     }
 
-    fn lowerClosureCaptureExprSpan(self: *BodyContext, captures: []const checked.CheckedCapture) Allocator.Error!DraftSpan(DraftFnDefCapture) {
+    fn lowerClosureCaptureExprSpan(self: *BodyContext, captures: []const CIR.Expr.Capture.Idx) Allocator.Error!DraftSpan(DraftFnDefCapture) {
         if (captures.len == 0) return DraftSpan(DraftFnDefCapture).empty();
 
         var capture_values = std.ArrayList(DraftFnDefCapture).empty;
         defer capture_values.deinit(self.allocator);
 
-        for (captures) |capture| {
-            const binder = checkedCaptureBinder(self.view, capture.pattern);
+        for (captures) |capture_idx| {
+            const binder = self.view.bodies.capture(capture_idx).pattern;
             const local = self.binders.get(binder) orelse continue;
             try self.markActiveConstBinderUsed(binder);
             const cell = self.localTypeCell(local);
@@ -49988,7 +50634,7 @@ const BodyContext = struct {
                 cell,
                 .{ .local = local },
             );
-            try capture_values.append(self.allocator, .{ .id = capture.capture_id, .value = value });
+            try capture_values.append(self.allocator, .{ .id = self.view.bodies.capture(capture_idx).capture_id, .value = value });
         }
 
         return try self.addFnDefCaptureSpan(capture_values.items);
@@ -49999,7 +50645,7 @@ const BodyContext = struct {
     }
 
     fn closureFunctionNode(self: *BodyContext, closure: anytype) Allocator.Error!NodeId {
-        const lambda = self.view.bodies.expr(closure.lambda);
+        const lambda = checkedExpr(self.view, ExprSite.read(closure.lambda));
         if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
         return try self.lambdaFunctionNode(lambda.ty, lambda.data.lambda);
     }
@@ -50022,11 +50668,12 @@ const BodyContext = struct {
     }
 
     /// The type nodes of the captured locals a closure draft enters with.
-    fn closureCaptureEntryNodes(self: *BodyContext, closure: @FieldType(checked.CheckedExprData, "closure")) Allocator.Error![]NodeId {
+    fn closureCaptureEntryNodes(self: *BodyContext, closure: @FieldType(ExprData, "closure")) Allocator.Error![]NodeId {
         var capture_nodes = std.ArrayList(NodeId).empty;
         defer capture_nodes.deinit(self.allocator);
-        for (closure.captures) |capture| {
-            const binder = checkedCaptureBinder(self.view, capture.pattern);
+        for (closure.captures) |capture_idx| {
+            const capture = self.view.bodies.capture(capture_idx);
+            const binder = capture.pattern;
             const local = self.binders.get(binder) orelse continue;
             try self.markActiveConstBinderUsed(binder);
             const cell = self.localTypeCell(local);
@@ -50038,20 +50685,20 @@ const BodyContext = struct {
 
     /// Whether an expression is a lambda or closure, which is drafted at its
     /// request node before evidence that needs the request continues.
-    fn isNestedCallableExpr(self: *BodyContext, expr_id: checked.CheckedExprId) bool {
+    fn isNestedCallableExpr(self: *BodyContext, expr_id: ExprSite) bool {
         self.builder.countBodyDiagnostic("nested_callable_checks");
-        return switch (self.view.bodies.expr(expr_id).data) {
+        return switch (checkedExpr(self.view, expr_id).data) {
             .lambda, .closure => true,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => false,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => false,
         };
     }
 
     fn ensureNestedCallableAtNode(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         request_fn_node: NodeId,
     ) Allocator.Error!void {
-        switch (self.view.bodies.expr(expr_id).data) {
+        switch (checkedExpr(self.view, expr_id).data) {
             .lambda => {
                 self.builder.countBodyDiagnostic("nested_lambdas_prepared");
                 _ = try self.ensureLambdaAtNode(expr_id, request_fn_node);
@@ -50060,27 +50707,27 @@ const BodyContext = struct {
                 self.builder.countBodyDiagnostic("nested_closures_prepared");
                 _ = try self.ensureClosureAtNode(expr_id, closure, request_fn_node, try self.closureCaptureEntryNodes(closure));
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
     }
 
     fn ensureNestedCallablesAtNodes(
         self: *BodyContext,
-        expr_ids: []const checked.CheckedExprId,
+        expr_ids: []const CIR.Expr.Idx,
         request_fn_nodes: []const NodeId,
     ) Allocator.Error!void {
         if (expr_ids.len != request_fn_nodes.len) Common.invariant("nested callable argument count differed from graph function arity");
         for (expr_ids, request_fn_nodes) |expr_id, request_fn_node| {
-            if (self.isNestedCallableExpr(expr_id)) try self.ensureNestedCallableAtNode(expr_id, request_fn_node);
+            if (self.isNestedCallableExpr(ExprSite.read(expr_id))) try self.ensureNestedCallableAtNode(ExprSite.read(expr_id), request_fn_node);
         }
     }
 
     fn ensureLambdaAtNode(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnTarget {
-        return try self.ensureNestedFnAtNode(expr_id, self.view.bodies.expr(expr_id).ty, request_fn_node, &.{});
+        return try self.ensureNestedFnAtNode(expr_id, checkedExpr(self.view, expr_id).ty, request_fn_node, &.{});
     }
 
     const NestedSiteEvidence = struct {
@@ -50094,7 +50741,7 @@ const BodyContext = struct {
     fn evidenceForNestedSiteAtNode(
         self: *BodyContext,
         nested: Ast.NestedFn,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         request_fn_node: NodeId,
     ) Allocator.Error!NestedSiteEvidence {
         const raw_site = @backingInt(nested.site);
@@ -50107,7 +50754,7 @@ const BodyContext = struct {
                 names.procedureTemplateRefEql(site_owner, self.owner_template),
             .default_root => self.in_default_expr,
         };
-        if (!owner_matches or site.checked_expr == null or site.checked_expr.? != expr_id) {
+        if (!owner_matches or site.checked_expr == null or site.checked_expr.? != expr_id.node()) {
             Common.invariant("nested function site did not match its checked expression owner");
         }
 
@@ -50122,7 +50769,7 @@ const BodyContext = struct {
                 if (raw_scope >= self.view.templates.dispatch_scopes.len) {
                     Common.invariant("nested function site referenced an unknown checked dispatch scope");
                 }
-                break :blk if (self.view.templates.dispatch_scopes[raw_scope].checked_expr == expr_id)
+                break :blk if (self.view.templates.dispatch_scopes[raw_scope].checked_expr == expr_id.node())
                     scope_id
                 else
                     null;
@@ -50173,7 +50820,7 @@ const BodyContext = struct {
             },
         };
         return .{
-            .chain = try enterEvidenceScope(self.builder, self.evidence, scope_id, expr_id, edge),
+            .chain = try enterEvidenceScope(self.builder, self.evidence, scope_id, expr_id.node(), edge),
             .owned_scope = scope_id,
         };
     }
@@ -50252,7 +50899,7 @@ const BodyContext = struct {
     /// conversion call at this specialization's target, unwrapped to its value.
     fn lowerSpecializedLiteralConversion(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         value_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const plan = self.literalConversionPlan(expr_id);
@@ -50338,7 +50985,7 @@ const BodyContext = struct {
     /// root's completed value.
     fn literalRootRead(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         site: Common.LiteralRejectionSite,
         value: DraftExprId,
         value_node: NodeId,
@@ -50372,25 +51019,25 @@ const BodyContext = struct {
     }
 
     /// The source literal a rejected conversion of this literal reports.
-    fn literalRejectionSite(self: *BodyContext, expr_id: checked.CheckedExprId) Common.LiteralRejectionSite {
+    fn literalRejectionSite(self: *BodyContext, expr_id: ExprSite) Common.LiteralRejectionSite {
         return .{
             .owner = self.builder.loweringModuleId(self.view.key),
-            .checked_expr = @backingInt(expr_id),
-            .kind = switch (self.view.bodies.expr(expr_id).data) {
+            .node = expr_id.rawNode() orelse Common.invariant("a literal rejection site's literal had no CIR node"),
+            .kind = switch (checkedExpr(self.view, expr_id).data) {
                 .numeral => .numeral,
                 .str_from_quote => .quote,
                 .interpolation => .interpolation,
-                .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("literal rejection site did not point at a literal conversion expression"),
+                .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("literal rejection site did not point at a literal conversion expression"),
             },
         };
     }
 
     /// The checked conversion plan of a literal expression.
-    fn literalConversionPlan(self: *BodyContext, expr_id: checked.CheckedExprId) ?static_dispatch.StaticDispatchPlanId {
-        return switch (self.view.bodies.expr(expr_id).data) {
+    fn literalConversionPlan(self: *BodyContext, expr_id: ExprSite) ?static_dispatch.StaticDispatchPlanId {
+        return switch (checkedExpr(self.view, expr_id).data) {
             .numeral => |numeral| numeral.plan,
             .str_from_quote => |quote| quote.plan,
-            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion did not point at a conversion expression"),
+            .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("literal conversion did not point at a conversion expression"),
         };
     }
 
@@ -50407,7 +51054,7 @@ const BodyContext = struct {
     /// the `Ok` payload; `Err` terminates with the literal's own rejection.
     fn lowerLiteralConversionRootBody(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
         const plan = self.literalConversionPlan(expr_id);
@@ -50426,7 +51073,7 @@ const BodyContext = struct {
     /// checked conversion call.
     fn lowerLiteralConversionAtNode(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         root_id: checked.ComptimeRootId,
         request_node: NodeId,
     ) Allocator.Error!DraftExprId {
@@ -50529,8 +51176,8 @@ const BodyContext = struct {
     /// real user-defined `from_numeral` dispatch call instead.
     fn lowerNumeralExpr(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        numeral: checked.CheckedNumeralData,
+        expr_id: ExprSite,
+        numeral: checked_bodies.NumeralData,
         target_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const primitive = switch (shapeContent(self.typeStore(), target_ty)) {
@@ -50554,8 +51201,8 @@ const BodyContext = struct {
     /// every custom target follows the explicit from_quote dispatch plan.
     fn lowerQuoteExpr(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        quote: checked.CheckedQuoteData,
+        expr_id: ExprSite,
+        quote: checked_bodies.QuoteData,
         target_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         switch (shapeContent(self.typeStore(), target_ty)) {
@@ -50569,7 +51216,7 @@ const BodyContext = struct {
                         .data = .{ .crash = try self.addStringLiteral("invalid string literal") },
                     });
                 }
-                return try self.lowerQuoteValue(quote.literal, target_ty);
+                return try self.lowerQuoteValue(expr_id.rawNode() orelse Common.invariant("a quote literal had no CIR node"), quote.literal, target_ty);
             },
             .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
         }
@@ -50626,7 +51273,7 @@ const BodyContext = struct {
     /// that fact before allocating per-element IR, using the same exact scalar
     /// conversion as ordinary numeral lowering. Custom conversion roots and
     /// dispatch plans remain computations and are not consumed here.
-    fn lowerPackedNumeralList(self: *BodyContext, items: []const checked.CheckedExprId, primitive: Type.Primitive) Allocator.Error!?BodyExprData {
+    fn lowerPackedNumeralList(self: *BodyContext, items: []const CIR.Expr.Idx, primitive: Type.Primitive) Allocator.Error!?BodyExprData {
         if (items.len == 0) return null;
         const scalar: check.ConstStore.ConstPackedScalar = switch (primitive) {
             .u8 => .u8,
@@ -50645,7 +51292,7 @@ const BodyContext = struct {
             .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
         };
         for (items) |item| {
-            const expr = self.view.bodies.expr(item);
+            const expr = checkedExpr(self.view, ExprSite.read(item));
             if (expr.data != .numeral) return null;
             if (expr.data.numeral.plan != null or expr.data.numeral.conversion_root != null) return null;
         }
@@ -50654,7 +51301,7 @@ const BodyContext = struct {
         const bytes = try self.allocator.alloc(u8, items.len * width);
         defer self.allocator.free(bytes);
         for (items, 0..) |item, index| {
-            const numeral = self.view.bodies.expr(item).data.numeral;
+            const numeral = checkedExpr(self.view, ExprSite.read(item)).data.numeral;
             const bits = (try self.numeralScalarBits(numeral.literal, primitive)) orelse return null;
             var encoded: [16]u8 = undefined;
             switch (bits) {
@@ -50694,45 +51341,54 @@ const BodyContext = struct {
     /// receives: the first segment, then each part's following segment.
     fn lowerInterpolationSegments(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         list_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const interpolation = switch (self.view.bodies.expr(expr_id).data) {
+        const interpolation = switch (checkedExpr(self.view, expr_id).data) {
             .interpolation => |value| value,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation segments operand referenced a non-interpolation expression"),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation segments operand referenced a non-interpolation expression"),
         };
         const str_ty = switch (shapeContent(self.typeStore(), list_ty)) {
             .list => |elem| elem,
             .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("interpolation segments operand had a non-list monotype"),
         };
-        const segments = try self.allocator.alloc(DraftExprId, interpolation.segments.len);
+        const segments = try self.allocator.alloc(DraftExprId, interpolation.segmentCount());
         defer self.allocator.free(segments);
-        for (interpolation.segments, segments) |checked_segment, *segment| {
-            segment.* = try self.lowerInterpolationSegment(checked_segment, str_ty);
+        for (segments, 0..) |*segment, index| {
+            segment.* = try self.lowerInterpolationSegment(ExprSite.read(interpolation.segment(index)), str_ty);
         }
         return try self.addExpr(.{ .ty = list_ty, .data = .{ .list = try self.addExprSpan(segments) } });
     }
 
     fn lowerInterpolationSegment(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
         str_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        return switch (self.view.bodies.expr(expr_id).data) {
-            .str_segment => |literal| try self.lowerQuoteValue(literal, str_ty),
-            .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation segment was not a checked string segment"),
+        return switch (checkedExpr(self.view, expr_id).data) {
+            .str_segment => |literal| try self.addExpr(.{ .ty = str_ty, .data = .{ .str_lit = try self.lowerStringLiteral(literal) } }),
+            .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation segment was not a checked string segment"),
         };
     }
 
+    /// The text of the quote literal at `raw_node`: a string expression's
+    /// segments, or a string literal pattern's literal.
     fn lowerQuoteValue(
         self: *BodyContext,
-        literal: checked.CheckedStringLiteralId,
+        raw_node: u32,
+        text: checked_bodies.Text,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        return try self.addExpr(.{
-            .ty = ty,
-            .data = .{ .str_lit = try self.lowerStringLiteral(literal) },
-        });
+        const literal = switch (text) {
+            .literal => |literal| try self.lowerStringLiteral(literal),
+            .quote => blk: {
+                var bytes: std.ArrayList(u8) = .empty;
+                defer bytes.deinit(self.allocator);
+                try self.view.bodies.appendText(self.allocator, text, &bytes);
+                break :blk try self.draft.addCheckedStringLiteral(self.view.key.bytes, .{ .quote = raw_node }, bytes.items);
+            },
+        };
+        return try self.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
     }
 
     fn lowerNumeralValue(
@@ -51194,17 +51850,17 @@ const BodyContext = struct {
         };
     }
 
-    fn graphFreeResultTypeForExpr(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!?Type.TypeId {
+    fn graphFreeResultTypeForExpr(self: *BodyContext, expr_id: ExprSite) Allocator.Error!?Type.TypeId {
         // A restored hoisted const never performs its checked dispatch, so
         // that dispatch's graph-free classification does not describe the
         // restored value's type cell.
         if (self.restoredHoistedConstEntry(expr_id) != null) return null;
-        const expr = self.view.bodies.expr(expr_id);
+        const expr = checkedExpr(self.view, expr_id);
         const plan_id = switch (expr.data) {
             .dispatch_call => |plan| plan,
             .type_dispatch_call, .method_eq => |plan| plan,
             // An interpolation's value is its conversion result's `Ok` payload.
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
         } orelse return null;
         const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
         return try self.closedDirectGraphFreeResultType(expr.ty, plan);
@@ -51570,7 +52226,7 @@ const BodyContext = struct {
     fn evidenceForProcedureUseAtNode(
         self: *BodyContext,
         proc: checked.ProcedureUseTemplate,
-        expr: checked.CheckedExprId,
+        expr: CIR.Expr.Idx,
         root_evidence: ?checked.CheckedEvidenceSpan,
         request_fn_node: NodeId,
         purpose: EvidenceMaterializationPurpose,
@@ -51798,20 +52454,20 @@ const BodyContext = struct {
     /// The substitution and evidence the scheme instantiated at `expr` (a
     /// value use resolved in this context's module) receives, or an empty
     /// edge when the use instantiates nothing.
-    fn evidenceForUseSite(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error!EdgeEvidence {
+    fn evidenceForUseSite(self: *BodyContext, expr: CIR.Expr.Idx) Allocator.Error!EdgeEvidence {
         return self.evidenceForSite(self.view, expr, try self.useSiteSchema(expr), .body_lowering, null);
     }
 
     /// `evidenceForUseSite` for a use whose request interface is live at
     /// `request_node`: a use checking recorded no instantiation for derives
     /// its edge from that request.
-    fn evidenceForUseSiteAtNode(self: *BodyContext, expr: checked.CheckedExprId, request_node: NodeId) Allocator.Error!EdgeEvidence {
+    fn evidenceForUseSiteAtNode(self: *BodyContext, expr: CIR.Expr.Idx, request_node: NodeId) Allocator.Error!EdgeEvidence {
         return self.evidenceForUseSiteForPurposeAtNode(expr, .body_lowering, request_node);
     }
 
     fn evidenceForUseSiteForPurposeAtNode(
         self: *BodyContext,
-        expr: checked.CheckedExprId,
+        expr: CIR.Expr.Idx,
         purpose: EvidenceMaterializationPurpose,
         request_node: NodeId,
     ) Allocator.Error!EdgeEvidence {
@@ -51822,11 +52478,9 @@ const BodyContext = struct {
     /// instantiates: the referenced procedure template's, the local
     /// procedure's declaration scope's, or the const's evaluation entry
     /// template's.
-    fn useSiteSchema(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error!SchemeRequirements {
-        const raw_expr = @backingInt(expr);
-        if (raw_expr >= self.view.resolved_refs.by_checked_expr.len) return emptySchema(self.view);
-        const ref_id = self.view.resolved_refs.by_checked_expr[raw_expr].get() orelse return emptySchema(self.view);
-        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
+    fn useSiteSchema(self: *BodyContext, expr: CIR.Expr.Idx) Allocator.Error!SchemeRequirements {
+        const ref_id = self.view.resolved_refs.lookupIdByExpr(expr) orelse return emptySchema(self.view);
+        const record = resolvedRecord(self.view, .{ .source = ref_id });
         return switch (record.ref) {
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| self.procedureUseSchema(proc),
             .platform_required_proc => |proc| self.procedureUseSchema(proc.procedure),
@@ -51899,7 +52553,7 @@ const BodyContext = struct {
     fn recordedSiteSubstitution(
         self: *BodyContext,
         site_view: ModuleView,
-        expr: checked.CheckedExprId,
+        expr: CIR.Expr.Idx,
         schema: SchemeRequirements,
     ) Allocator.Error!?SpecSubstitution {
         const recorded = site_view.static_dispatch_plans.siteSubstitution(expr);
@@ -51923,7 +52577,7 @@ const BodyContext = struct {
     fn evidenceForSite(
         self: *BodyContext,
         site_view: ModuleView,
-        expr: checked.CheckedExprId,
+        expr: CIR.Expr.Idx,
         schema: SchemeRequirements,
         purpose: EvidenceMaterializationPurpose,
         request_node: ?NodeId,
@@ -51946,7 +52600,7 @@ const BodyContext = struct {
     fn siteEvidenceVector(
         self: *BodyContext,
         site_view: ModuleView,
-        expr: checked.CheckedExprId,
+        expr: CIR.Expr.Idx,
         schema: SchemeRequirements,
         subst: SpecSubstitution,
         purpose: EvidenceMaterializationPurpose,
@@ -53427,7 +54081,7 @@ const BodyContext = struct {
     ) Allocator.Error!AliasComposition {
         const Step = union(enum) {
             callable_eval: Builder.CallableEvalUse,
-            local: struct { view: ModuleView, lookup: checked.CheckedExprId, dispatch_scope: ?checked.DispatchScopeId },
+            local: struct { view: ModuleView, lookup: CIR.Expr.Idx, dispatch_scope: ?checked.DispatchScopeId },
         };
         var step: Step = switch (target_alias.alias) {
             .top_level => |binding| .{ .callable_eval = self.builder.callableEvalForAliasBinding(target_alias.view, binding) },
@@ -53482,7 +54136,7 @@ const BodyContext = struct {
                 try alias_ctx.siteEvidenceVector(view, lookup, lookup_schema, next, purpose)
             else
                 null;
-            const ref_id = view.resolved_refs.lookupIdByCheckedExpr(lookup) orelse
+            const ref_id = view.resolved_refs.lookupIdByExpr(lookup) orelse
                 Common.invariant("forwarded procedure alias lookup had no resolved value");
             const done: AliasComposition = .{ .subst = next, .vector = next_vector };
             step = switch (view.resolved_refs.records[@backingInt(ref_id)].ref) {
@@ -53902,8 +54556,8 @@ const BodyContext = struct {
     fn checkedExprDispatchOperands(
         self: *BodyContext,
         operands: []const static_dispatch.StaticDispatchOperand,
-    ) Allocator.Error!?[]checked.CheckedExprId {
-        const checked_args = try self.allocator.alloc(checked.CheckedExprId, operands.len);
+    ) Allocator.Error!?[]CIR.Expr.Idx {
+        const checked_args = try self.allocator.alloc(CIR.Expr.Idx, operands.len);
         errdefer self.allocator.free(checked_args);
         for (operands, checked_args) |operand, *checked_arg| {
             checked_arg.* = switch (operand) {
@@ -53911,6 +54565,8 @@ const BodyContext = struct {
                 .generated_interpolation_segments,
                 .generated_numeral,
                 .generated_quote,
+                .literal_pattern_value,
+                .literal_pattern_conversion,
                 => {
                     self.allocator.free(checked_args);
                     return null;
@@ -53923,8 +54579,8 @@ const BodyContext = struct {
     fn checkedExprIteratorDispatchOperands(
         self: *BodyContext,
         operands: []const static_dispatch.IteratorDispatchOperand,
-    ) Allocator.Error!?[]checked.CheckedExprId {
-        const checked_args = try self.allocator.alloc(checked.CheckedExprId, operands.len);
+    ) Allocator.Error!?[]CIR.Expr.Idx {
+        const checked_args = try self.allocator.alloc(CIR.Expr.Idx, operands.len);
         errdefer self.allocator.free(checked_args);
         for (operands, checked_args) |operand, *checked_arg| {
             checked_arg.* = switch (operand) {
@@ -53995,9 +54651,9 @@ const BodyContext = struct {
         self: *BodyContext,
         context_id: DraftLocalProcContextId,
         module: [32]u8,
-        binder: checked.PatternBinderId,
-        expr: checked.CheckedExprId,
-        context_anchor: ?checked.CheckedStatementId,
+        binder: BinderId,
+        expr: CIR.Expr.Idx,
+        context_anchor: ?CIR.Statement.Idx,
     ) LocalProcContext {
         const raw_context = @backingInt(context_id);
         if (raw_context >= self.draft.local_proc_contexts.items.len) {
@@ -55080,10 +55736,10 @@ const BodyContext = struct {
         const fn_id = try self.addFn(.{
             .fn_def = .{ .parser_runtime = .{
                 .owner = self.owner_template,
-                .expr = plan.expr,
+                .expr = dispatchPlanExpr(plan),
             } },
             .source_fn_ty = plan.callable_ty,
-            .source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_parser_runtime", self.current_fn_key, plan.expr),
+            .source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_parser_runtime", self.current_fn_key, dispatchPlanExpr(plan)),
             .mono_fn_ty = ret_ty,
             .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
@@ -55152,14 +55808,14 @@ const BodyContext = struct {
             str_ty,
         );
 
-        const runtime_source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_encoder_for_runtime", self.current_fn_key, plan.expr);
+        const runtime_source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_encoder_for_runtime", self.current_fn_key, dispatchPlanExpr(plan));
         const saved_current_fn_key = self.current_fn_key;
         const saved_encoder_source_fn_ty = self.generated_encoder_source_fn_ty;
         const saved_encoder_source_expr = self.generated_encoder_source_expr;
         const saved_encoder_lambda_index = self.generated_encoder_lambda_index;
         self.current_fn_key = runtime_source_fn_key;
         self.generated_encoder_source_fn_ty = plan.callable_ty;
-        self.generated_encoder_source_expr = plan.expr;
+        self.generated_encoder_source_expr = dispatchPlanExpr(plan);
         self.generated_encoder_lambda_index = 0;
         defer {
             self.current_fn_key = saved_current_fn_key;
@@ -55189,7 +55845,7 @@ const BodyContext = struct {
         const fn_id = try self.addFn(.{
             .fn_def = .{ .encoder_for_runtime = .{
                 .owner = self.owner_template,
-                .expr = plan.expr,
+                .expr = dispatchPlanExpr(plan),
             } },
             .source_fn_ty = plan.callable_ty,
             .source_fn_key = runtime_source_fn_key,
@@ -60313,7 +60969,7 @@ const BodyContext = struct {
     }
 
     fn stepDirectStructural(self: *BodyContext, task: *DirectStructuralTask, input: ?LowerResult) Allocator.Error!LowerStep {
-        const data = self.view.bodies.expr(task.expr).data;
+        const data = checkedExpr(self.view, task.expr).data;
         switch (task.stage) {
             .start => {
                 task.ret_ty = switch (task.ret) {
@@ -60328,10 +60984,10 @@ const BodyContext = struct {
                         }
                         if (eq.discriminant) |discriminant| {
                             task.stage = .discriminant;
-                            return requestLowerChild(self, discriminant.value, self.directStructuralOperandCell(task));
+                            return requestLowerChild(self, ExprSite.read(discriminant.value), self.directStructuralOperandCell(task));
                         }
                         task.stage = .lhs;
-                        return requestLowerChild(self, eq.lhs, self.directStructuralOperandCell(task));
+                        return requestLowerChild(self, ExprSite.read(eq.lhs), self.directStructuralOperandCell(task));
                     },
                     .structural_hash => |h| {
                         switch (try self.structuralHashOperandType(h)) {
@@ -60339,9 +60995,9 @@ const BodyContext = struct {
                             .deferred => |operand_node| task.operand_node = operand_node,
                         }
                         task.stage = .hash_value;
-                        return requestLowerChild(self, h.value, self.directStructuralOperandCell(task));
+                        return requestLowerChild(self, ExprSite.read(h.value), self.directStructuralOperandCell(task));
                     },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("direct structural task reached a non-structural expression"),
+                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("direct structural task reached a non-structural expression"),
                 }
             },
             .discriminant => {
@@ -60372,7 +61028,7 @@ const BodyContext = struct {
             .lhs => {
                 task.lhs = input.?.exprValue();
                 task.stage = .rhs;
-                return requestLowerChild(self, data.structural_eq.rhs, self.directStructuralOperandCell(task));
+                return requestLowerChild(self, ExprSite.read(data.structural_eq.rhs), self.directStructuralOperandCell(task));
             },
             .rhs => {
                 const eq = data.structural_eq;
@@ -60391,7 +61047,7 @@ const BodyContext = struct {
             .hash_value => {
                 task.lhs = input.?.exprValue();
                 task.stage = .hash_hasher;
-                return requestLowerChild(self, data.structural_hash.hasher, .{ .sealed = task.ret_ty });
+                return requestLowerChild(self, ExprSite.read(data.structural_hash.hasher), .{ .sealed = task.ret_ty });
             },
             .hash_hasher => {
                 const hasher = input.?.exprValue();
@@ -60472,16 +61128,16 @@ const BodyContext = struct {
     };
 
     fn structuralEqualityOperandType(self: *BodyContext, eq: anytype) Allocator.Error!StructuralDerivationOperand {
-        const lhs_checked_ty = self.view.bodies.expr(eq.lhs).ty;
-        const rhs_checked_ty = self.view.bodies.expr(eq.rhs).ty;
+        const lhs_checked_ty = checkedExpr(self.view, ExprSite.read(eq.lhs)).ty;
+        const rhs_checked_ty = checkedExpr(self.view, ExprSite.read(eq.rhs)).ty;
 
         try self.constrainCheckedTypeRelations(lhs_checked_ty, self, rhs_checked_ty);
 
-        if (try self.structuralDerivationExprResultNode(eq.lhs)) |lhs_node| {
-            return try self.constrainStructuralEqualityOperandNode(lhs_node, eq.rhs, rhs_checked_ty);
+        if (try self.structuralDerivationExprResultNode(ExprSite.read(eq.lhs))) |lhs_node| {
+            return try self.constrainStructuralEqualityOperandNode(lhs_node, ExprSite.read(eq.rhs), rhs_checked_ty);
         }
-        if (try self.structuralDerivationExprResultNode(eq.rhs)) |rhs_node| {
-            return try self.constrainStructuralEqualityOperandNode(rhs_node, eq.lhs, lhs_checked_ty);
+        if (try self.structuralDerivationExprResultNode(ExprSite.read(eq.rhs))) |rhs_node| {
+            return try self.constrainStructuralEqualityOperandNode(rhs_node, ExprSite.read(eq.lhs), lhs_checked_ty);
         }
 
         const operand_node = try self.instNode(lhs_checked_ty);
@@ -60493,8 +61149,8 @@ const BodyContext = struct {
     /// sealed type only when the graph already resolved it and otherwise
     /// defers the derivation to final graph sealing.
     fn structuralHashOperandType(self: *BodyContext, h: anytype) Allocator.Error!StructuralDerivationOperand {
-        const value_node = (try self.structuralDerivationExprResultNode(h.value)) orelse
-            try self.instNode(self.view.bodies.expr(h.value).ty);
+        const value_node = (try self.structuralDerivationExprResultNode(ExprSite.read(h.value))) orelse
+            try self.instNode(checkedExpr(self.view, ExprSite.read(h.value)).ty);
         return try self.structuralDerivationOperandFromNode(value_node);
     }
 
@@ -60558,10 +61214,10 @@ const BodyContext = struct {
     /// instead, so this must not materialize a Monotype view.
     fn structuralDerivationExprResultNode(
         self: *BodyContext,
-        expr_id: checked.CheckedExprId,
+        expr_id: ExprSite,
     ) Allocator.Error!?NodeId {
-        if (self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
-        const expr = self.view.bodies.expr(expr_id);
+        if (try self.checkedExprDivergesInLoweredRuntime(expr_id)) return null;
+        const expr = checkedExpr(self.view, expr_id);
         return switch (expr.data) {
             .call => |call| try self.callResultTypeNode(expr_id, expr.ty, call, null),
             .dispatch_call => |plan| try self.dispatchResultTypeNode(expr.ty, plan, null),
@@ -60570,14 +61226,14 @@ const BodyContext = struct {
             .lookup_local => |lookup| try self.lookupExprTypeNode(expr.ty, lookup.resolved),
             .lookup_external, .lookup_required => |resolved| try self.lookupExprTypeNode(expr.ty, resolved),
             .field_access => |field| try self.fieldAccessTypeNode(expr.ty, field, null),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
     }
 
     fn constrainStructuralEqualityOperandNode(
         self: *BodyContext,
         operand_node: NodeId,
-        other_expr_id: checked.CheckedExprId,
+        other_expr_id: ExprSite,
         other_checked_ty: checked.CheckedTypeId,
     ) Allocator.Error!StructuralDerivationOperand {
         try self.graph.unify(operand_node, try self.instNode(other_checked_ty));
@@ -61296,9 +61952,9 @@ const BodyContext = struct {
     /// Whether any node of the pattern must materialize on its own. Each
     /// pattern's answer is memoized, computed after its subpatterns' from an
     /// explicit work list.
-    const ExplicitBindingVisit = struct { pattern: checked.CheckedPatternId, children_done: bool };
+    const ExplicitBindingVisit = struct { pattern: CIR.Pattern.Idx, children_done: bool };
 
-    fn patternNeedsExplicitBinding(self: *BodyContext, root: checked.CheckedPatternId) Allocator.Error!bool {
+    fn patternNeedsExplicitBinding(self: *BodyContext, root: CIR.Pattern.Idx) Allocator.Error!bool {
         if (self.explicit_binding_memo.get(root)) |known| return known;
         const scratch = &self.builder.explicit_binding_scratch;
         var pending = scratch.visits.take();
@@ -61331,11 +61987,12 @@ const BodyContext = struct {
     /// The subpatterns whose explicit-binding need a pattern inherits.
     fn appendExplicitBindingChildren(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        children: *std.ArrayListUnmanaged(checked.CheckedPatternId),
+        pattern_id: CIR.Pattern.Idx,
+        children: *std.ArrayListUnmanaged(CIR.Pattern.Idx),
     ) Allocator.Error!void {
         switch (self.view.bodies.pattern(pattern_id).data) {
-            .record_destructure => |destructs| for (destructs) |destruct| {
+            .record_destructure => |destructs| for (destructs) |destruct_idx| {
+                const destruct = self.view.bodies.recordDestruct(destruct_idx);
                 try children.append(self.allocator, switch (destruct.kind) {
                     .required, .sub_pattern => |child| child,
                     .rest => |rest| rest,
@@ -61351,13 +62008,12 @@ const BodyContext = struct {
             .str_literal,
             .str_interpolation,
             .underscore,
-            .pending,
             .runtime_error,
             => {},
         }
     }
 
-    fn patternRequiresOwnMaterialization(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
+    fn patternRequiresOwnMaterialization(self: *BodyContext, pattern_id: CIR.Pattern.Idx) Allocator.Error!bool {
         const pattern = self.view.bodies.pattern(pattern_id);
         return switch (pattern.data) {
             .list => true,
@@ -61372,21 +62028,19 @@ const BodyContext = struct {
             .str_literal,
             .str_interpolation,
             .underscore,
-            .pending,
             .runtime_error,
             => false,
         };
     }
 
     const CheckedPatternRefutabilityAdapter = struct {
-        pub const PatternId = checked.CheckedPatternId;
+        pub const PatternId = CIR.Pattern.Idx;
 
         ctx: *BodyContext,
 
         pub fn patternClass(self: @This(), pattern_id: PatternId) PatternRefutability.PatternClass {
             const pattern = self.ctx.view.bodies.pattern(pattern_id);
             return switch (pattern.data) {
-                .pending,
                 .assign,
                 .underscore,
                 .runtime_error,
@@ -61410,7 +62064,6 @@ const BodyContext = struct {
             return switch (pattern.data) {
                 .as => |as| as.pattern,
                 .nominal => |nominal| nominal.backing_pattern,
-                .pending,
                 .assign,
                 .applied_tag,
                 .record_destructure,
@@ -61445,7 +62098,7 @@ const BodyContext = struct {
 
         pub fn recordChild(self: @This(), pattern_id: PatternId, index: usize) PatternId {
             const pattern = self.ctx.view.bodies.pattern(pattern_id);
-            return switch (pattern.data.record_destructure[index].kind) {
+            return switch (self.ctx.view.bodies.recordDestruct(pattern.data.record_destructure[index]).kind) {
                 .required, .sub_pattern, .rest => |child_pattern| child_pattern,
             };
         }
@@ -61469,12 +62122,13 @@ const BodyContext = struct {
         }
     };
 
-    fn patternCanMiss(self: *BodyContext, pattern_id: checked.CheckedPatternId) Allocator.Error!bool {
+    fn patternCanMiss(self: *BodyContext, pattern_id: CIR.Pattern.Idx) Allocator.Error!bool {
         return PatternRefutability.canMiss(CheckedPatternRefutabilityAdapter, .{ .ctx = self }, self.allocator, pattern_id);
     }
 
-    fn recordDestructsNeedExplicitRest(self: *BodyContext, destructs: []const checked.CheckedRecordDestruct) bool {
-        for (destructs) |destruct| {
+    fn recordDestructsNeedExplicitRest(self: *BodyContext, destructs: []const CIR.Pattern.RecordDestruct.Idx) bool {
+        for (destructs) |destruct_idx| {
+            const destruct = self.view.bodies.recordDestruct(destruct_idx);
             switch (destruct.kind) {
                 .rest => |child| if (!self.patternIsIgnored(child)) return true,
                 .required, .sub_pattern => {},
@@ -61522,8 +62176,8 @@ const BodyContext = struct {
         self: *BodyContext,
         args: []const MaterializedArg,
         index: usize,
-        lambda: checked.CheckedExprId,
-        body: checked.CheckedExprId,
+        lambda: ExprSite,
+        body: ExprSite,
         result_cell: DraftTypeCell,
     ) Allocator.Error!MaterializeRequest {
         const arg = args[index];
@@ -61547,7 +62201,7 @@ const BodyContext = struct {
 
     /// One pattern to bind against a value before a continuation.
     const MaterializeRequest = struct {
-        pattern: checked.CheckedPatternId,
+        pattern: CIR.Pattern.Idx,
         value: DraftExprId,
         value_cell: DraftTypeCell,
         result_cell: DraftTypeCell,
@@ -61575,7 +62229,7 @@ const BodyContext = struct {
         /// Match `value` against `pat`, continuing on success.
         wrap: struct { value: DraftExprId, cell: DraftTypeCell, pat: DraftPatId },
         /// Guard the continuation on a list pattern's length condition.
-        list_cond: struct { value: DraftExprId, pattern: checked.CheckedPatternId },
+        list_cond: struct { value: DraftExprId, pattern: CIR.Pattern.Idx },
         /// Bind a fresh local to the value before the continuation.
         let_value: struct { local: DraftLocalId, value: DraftExprId, cell: DraftTypeCell },
         /// Replace the continuation with this request's binding.
@@ -61629,7 +62283,7 @@ const BodyContext = struct {
 
     fn lowerMaterializedPatternValueThen(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         value: DraftExprId,
         value_cell: DraftTypeCell,
         result_cell: DraftTypeCell,
@@ -61841,15 +62495,15 @@ const BodyContext = struct {
     fn materializedLambdaBodyStep(
         self: *BodyContext,
         task: *MaterializeTask,
-        lambda_id: checked.CheckedExprId,
-        checked_body: checked.CheckedExprId,
+        lambda_id: ExprSite,
+        checked_body: ExprSite,
         ret_cell: DraftTypeCell,
     ) Allocator.Error!LowerStep {
-        if (self.checkedExprDivergesInLoweredRuntime(checked_body)) {
+        if (try self.checkedExprDivergesInLoweredRuntime(checked_body)) {
             return requestLowerChild(self, checked_body, ret_cell);
         }
-        const body_ty = self.view.bodies.expr(checked_body).ty;
-        const fn_ret_ty = self.checkedFunctionType(self.view.bodies.expr(lambda_id).ty).ret;
+        const body_ty = checkedExpr(self.view, checked_body).ty;
+        const fn_ret_ty = self.checkedFunctionType(checkedExpr(self.view, lambda_id).ty).ret;
         if (resolvedPayload(self.view, body_ty).root == resolvedPayload(self.view, fn_ret_ty).root) {
             return requestLowerChild(self, checked_body, ret_cell);
         }
@@ -61953,7 +62607,6 @@ const BodyContext = struct {
             .str_literal,
             .str_interpolation,
             .underscore,
-            .pending,
             .runtime_error,
             => .value,
             .as,
@@ -62145,7 +62798,8 @@ const BodyContext = struct {
         }
         for (prepared) |*entry| entry.* = null;
 
-        for (destructs, 0..) |destruct, index| {
+        for (destructs, 0..) |destruct_idx, index| {
+            const destruct = self.view.bodies.recordDestruct(destruct_idx);
             var pending = std.ArrayList(PendingMaterializedPattern).empty;
             var pending_owned = true;
             defer if (pending_owned) pending.deinit(self.allocator);
@@ -62292,21 +62946,24 @@ const BodyContext = struct {
     fn recordRestNodeForPattern(
         self: *BodyContext,
         source_node: NodeId,
-        destructs: []const checked.CheckedRecordDestruct,
-        rest_pattern: checked.CheckedPatternId,
+        destructs: []const CIR.Pattern.RecordDestruct.Idx,
+        rest_pattern: CIR.Pattern.Idx,
     ) Allocator.Error!NodeId {
         const source_fields = (try self.graph.recordNodes(source_node)).fields;
         var remaining = std.ArrayList(InstField).empty;
         defer remaining.deinit(self.allocator);
         for (source_fields) |field| {
             var consumed = false;
-            for (destructs) |destruct| switch (destruct.kind) {
-                .required, .sub_pattern => {
-                    const name = try recordFieldName(self.nameStoreMut(), self.view, destruct.label);
-                    if (field.name == name) consumed = true;
-                },
-                .rest => {},
-            };
+            for (destructs) |destruct_idx| {
+                const destruct = self.view.bodies.recordDestruct(destruct_idx);
+                switch (destruct.kind) {
+                    .required, .sub_pattern => {
+                        const name = try recordFieldName(self.nameStoreMut(), self.view, destruct.label);
+                        if (field.name == name) consumed = true;
+                    },
+                    .rest => {},
+                }
+            }
             if (!consumed) try remaining.append(self.allocator, field);
         }
 
@@ -62355,26 +63012,26 @@ const BodyContext = struct {
         return try self.draft.addComptimeSite(kind, self.builder.loweringModuleId(self.view.key), region, checked_site);
     }
 
-    fn matchComptimeSite(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype) Allocator.Error!?DraftComptimeSiteId {
+    fn matchComptimeSite(self: *BodyContext, expr_id: ExprSite, match: anytype) Allocator.Error!?DraftComptimeSiteId {
         if (match.skip_exhaustiveness) return null;
-        const shared_site_kind: ExhaustivenessContext.SiteKind = switch (match.comptime_site_kind) {
+        const shared_site_kind: ExhaustivenessContext.SiteKind = switch (match.site_kind) {
             .match => .match,
             .destructure => .destructure,
         };
         if (!self.shouldRecordComptimeSite(shared_site_kind)) return null;
-        const expr = self.view.bodies.expr(expr_id);
+        const expr = checkedExpr(self.view, expr_id);
         const site_kind: Ast.ComptimeSiteKind = switch (shared_site_kind) {
             .match => .match,
             .destructure => .destructure,
         };
         const checked_site = if (ExhaustivenessContext.siteHasPendingStaticDiagnostic(shared_site_kind))
             switch (shared_site_kind) {
-                .match => self.view.exhaustiveness_sites.lookupByMatchExpr(expr_id),
+                .match => self.view.exhaustiveness_sites.lookupByMatchExpr(expr_id.node()),
                 .destructure => blk: {
-                    if (match.branches.len != 1) break :blk null;
-                    const patterns = match.branches[0].patternsSlice(self.view.bodies);
-                    if (patterns.len != 1) break :blk null;
-                    break :blk self.view.exhaustiveness_sites.lookupByDestructurePattern(patterns[0].pattern);
+                    if (match.branches.count() != 1) break :blk null;
+                    const patterns = matchBranchAt(self.view, match.branches, 0).patterns;
+                    if (patterns.len() != 1) break :blk null;
+                    break :blk self.view.exhaustiveness_sites.lookupByDestructurePattern(patterns.at(self.view, 0).pattern);
                 },
             }
         else
@@ -62384,9 +63041,9 @@ const BodyContext = struct {
 
     fn matchScrutineeTypeNode(
         self: *BodyContext,
-        checked_expr: checked.CheckedExprId,
+        checked_expr: ExprSite,
     ) Allocator.Error!NodeId {
-        const expr = self.view.bodies.expr(checked_expr);
+        const expr = checkedExpr(self.view, checked_expr);
         const public_node = try self.instNode(expr.ty);
         if (!try self.graph.containsIteratorInterface(public_node)) {
             return try self.lowerExprTypeNode(checked_expr);
@@ -62404,13 +63061,13 @@ const BodyContext = struct {
             .method_eq,
             => (try self.exprCallResultEvidenceNode(checked_expr, null)) orelse
                 try self.lowerExprTypeNode(checked_expr),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.lowerExprTypeNode(checked_expr),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.lowerExprTypeNode(checked_expr),
         };
     }
 
     fn runtimeDemandGuardFrameAddress(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         kind: RuntimeDemandGuardFrameKind,
     ) RuntimeDemandGuardFrameAddress {
         return self.runtimeDemandGuardFrameAddressRaw(@backingInt(pattern_id), kind);
@@ -62433,7 +63090,7 @@ const BodyContext = struct {
 
     fn withMatchBranchRuntimeDemandGuardFrame(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
     ) Allocator.Error!RuntimeDemandGuardFrameStack {
         const address = self.runtimeDemandGuardFrameAddress(pattern_id, .match_branch);
@@ -62468,7 +63125,7 @@ const BodyContext = struct {
 
     fn withIteratorOneRuntimeDemandGuardFrame(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         step: IterStepShape,
     ) Allocator.Error!RuntimeDemandGuardFrameStack {
         const address = self.runtimeDemandGuardFrameAddress(pattern_id, .iterator_one);
@@ -62490,7 +63147,7 @@ const BodyContext = struct {
 
     fn withStatementSuccessRuntimeDemandGuardFrame(
         self: *BodyContext,
-        statement_id: checked.CheckedStatementId,
+        statement_id: CIR.Statement.Idx,
         proof: RuntimeImpossibilityProofId,
     ) Allocator.Error!RuntimeDemandGuardFrameStack {
         // Checked statement IDs are unique within the module, and the owner
@@ -62524,7 +63181,7 @@ const BodyContext = struct {
 
     fn runtimeDemandGuardsForPattern(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
     ) Allocator.Error![]const NodeId {
         var guards = std.ArrayList(NodeId).empty;
@@ -62559,7 +63216,7 @@ const BodyContext = struct {
     /// with the graph nodes they inspect.
     fn collectRuntimeDemandGuardsStep(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
         guards: *std.ArrayList(NodeId),
         seen: *collections.DenseMap(NodeId, void),
@@ -62595,7 +63252,8 @@ const BodyContext = struct {
                     if (backing.node == node) Common.invariant("nominal record demand guard backing did not advance");
                     return try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
                 }
-                for (destructs) |destruct| {
+                for (destructs) |destruct_idx| {
+                    const destruct = self.view.bodies.recordDestruct(destruct_idx);
                     const child = switch (destruct.kind) {
                         .required, .sub_pattern => |child| child,
                         .rest => |rest| {
@@ -62647,13 +63305,12 @@ const BodyContext = struct {
             },
             .as => |as| try self.queuePatternBinderVisit(pending, as.pattern, node),
             .str_interpolation => |str| {
-                for (str.steps) |step| {
-                    if (step.capture) |capture| {
+                for (0..str.steps.span.len) |offset| {
+                    if (self.view.bodies.strPatternStep(str.steps, @intCast(offset)).capture) |capture| {
                         try self.queuePatternBinderVisit(pending, capture, node);
                     }
                 }
             },
-            .pending,
             .assign,
             .numeral_literal,
             .str_literal,
@@ -62667,10 +63324,10 @@ const BodyContext = struct {
     /// an `as` binder after its subpattern's.
     fn savePatternBinders(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         saved: *std.ArrayList(BinderRestore),
     ) Allocator.Error!void {
-        const Step = union(enum) { pattern: checked.CheckedPatternId, binder: checked.PatternBinderId };
+        const Step = union(enum) { pattern: CIR.Pattern.Idx, binder: BinderId };
         var pending: std.ArrayListUnmanaged(Step) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, .{ .pattern = pattern_id });
@@ -62684,15 +63341,16 @@ const BodyContext = struct {
             };
             const start = pending.items.len;
             switch (self.view.bodies.pattern(next_pattern).data) {
-                .assign => |binder| try self.saveBinder(binder, saved),
+                .assign => try self.saveBinder(next_pattern, saved),
                 .as => |as| {
                     try pending.append(self.allocator, .{ .pattern = as.pattern });
-                    try pending.append(self.allocator, .{ .binder = as.binder });
+                    try pending.append(self.allocator, .{ .binder = next_pattern });
                 },
                 .applied_tag => |tag| for (tag.args) |arg| try pending.append(self.allocator, .{ .pattern = arg }),
                 .nominal => |nominal| try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern }),
                 .record_destructure => |destructs| {
-                    for (destructs) |destruct| {
+                    for (destructs) |destruct_idx| {
+                        const destruct = self.view.bodies.recordDestruct(destruct_idx);
                         const child = switch (destruct.kind) {
                             .required, .sub_pattern, .rest => |child_pattern| child_pattern,
                         };
@@ -62705,11 +63363,10 @@ const BodyContext = struct {
                 },
                 .tuple => |items| for (items) |child| try pending.append(self.allocator, .{ .pattern = child }),
                 .str_interpolation => |str| {
-                    for (str.steps) |str_step| {
-                        if (str_step.capture) |capture| try pending.append(self.allocator, .{ .pattern = capture });
+                    for (0..str.steps.span.len) |offset| {
+                        if (self.view.bodies.strPatternStep(str.steps, @intCast(offset)).capture) |capture| try pending.append(self.allocator, .{ .pattern = capture });
                     }
                 },
-                .pending,
                 .numeral_literal,
                 .str_literal,
                 .underscore,
@@ -62722,7 +63379,7 @@ const BodyContext = struct {
 
     fn saveBinder(
         self: *BodyContext,
-        binder: checked.PatternBinderId,
+        binder: BinderId,
         saved: *std.ArrayList(BinderRestore),
     ) Allocator.Error!void {
         for (saved.items) |item| {
@@ -62736,7 +63393,7 @@ const BodyContext = struct {
 
     fn applyAlternativeBinderRemaps(
         self: *BodyContext,
-        remaps: []const checked.CheckedAlternativeBinderRemap,
+        remaps: []const checked.AlternativeBinderRemap,
     ) Allocator.Error!void {
         for (remaps) |remap| {
             const local = self.binders.get(remap.candidate_binder) orelse
@@ -62778,7 +63435,7 @@ const BodyContext = struct {
     fn prepareControlFlowResultSelection(
         self: *BodyContext,
         selection: *ControlFlowResultSelection,
-        checked_value: checked.CheckedExprId,
+        checked_value: ExprSite,
     ) Allocator.Error!void {
         const selected_node = try selection.selected.toGraphNode(self.graph);
         const produced_node = (try self.controlFlowResultEvidenceNode(checked_value, selected_node)) orelse return;
@@ -62802,24 +63459,24 @@ const BodyContext = struct {
     /// emission.
     fn controlFlowResultEvidenceNode(
         self: *BodyContext,
-        value: checked.CheckedExprId,
+        value: ExprSite,
         expected_node: NodeId,
     ) Allocator.Error!?NodeId {
         // A block without statements produces its final expression's value.
         var checked_value = value;
         while (true) {
-            if (self.checkedExprDivergesInLoweredRuntime(checked_value)) return null;
-            const expr = self.view.bodies.expr(checked_value);
+            if (try self.checkedExprDivergesInLoweredRuntime(checked_value)) return null;
+            const expr = checkedExpr(self.view, checked_value);
             switch (expr.data) {
                 .block => |block| if (block.statements.len == 0) {
-                    checked_value = block.final_expr;
+                    checked_value = ExprSite.read(block.final_expr);
                     continue;
                 },
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
             }
             break;
         }
-        const expr = self.view.bodies.expr(checked_value);
+        const expr = checkedExpr(self.view, checked_value);
         return switch (expr.data) {
             .call => |call| blk: {
                 const target = call.direct_target orelse break :blk null;
@@ -62875,7 +63532,7 @@ const BodyContext = struct {
                 try self.exprProducedValueEvidenceNode(checked_value, expected_node)
             else
                 null,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .empty_list, .match_, .if_, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .empty_list, .match_, .if_, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
     }
 
@@ -62928,10 +63585,10 @@ const BodyContext = struct {
 
     /// The binders a construct threads as explicit state: those its checked
     /// state merge plan names that are bound before it.
-    fn stateMergeBinders(self: *BodyContext, plan: checked.StateMergePlanId) Allocator.Error![]MergeBinder {
+    fn stateMergeBinders(self: *BodyContext, binders: []const BinderId) Allocator.Error![]MergeBinder {
         var merge_binders = std.ArrayList(MergeBinder).empty;
         errdefer merge_binders.deinit(self.allocator);
-        for (self.view.bodies.stateMergeBinders(plan)) |binder| {
+        for (binders) |binder| {
             const before = self.binders.get(binder) orelse continue;
             try merge_binders.append(self.allocator, .{
                 .binder = binder,
@@ -62940,6 +63597,16 @@ const BodyContext = struct {
             });
         }
         return try merge_binders.toOwnedSlice(self.allocator);
+    }
+
+    /// The binders an `if`, `match`, or `for` expression reassigns. A hoisted
+    /// root's match reassigns none: a top-level pattern binds no vars.
+    fn exprStateMergeBinders(self: *BodyContext, expr_id: ExprSite) Allocator.Error![]const BinderId {
+        return switch (expr_id.kind()) {
+            .read, .coerced_value => try self.view.bodies.stateMergeBinders(expr_id.node()),
+            .hoisted_root => &.{},
+            .hoisted_result, .literal_guard, .literal_value, .literal_conversion => Common.invariant("state merge binders requested for an expression that is not control flow"),
+        };
     }
 
     fn stateResultTypeCell(
@@ -63193,12 +63860,12 @@ const BodyContext = struct {
             // here: a divergent statement transfers control, which makes it
             // observable however little else the statement does, and leaves
             // the rest of the block unreachable.
-            const statement_diverges = self.checkedStatementDivergesInLoweredRuntime(statement);
+            const statement_diverges = try self.checkedStatementDivergesInLoweredRuntime(statement);
             if (!statement_diverges and !self.checkedStatementHasRuntimeEffect(statement)) continue;
             if (self.blockStatementLocalProcDecl(statement)) |decl| {
                 // Declaring a local procedure runs nothing but the snapshots
                 // of its reassignable captures.
-                if (!self.view.bodies.patternBinder(self.localProcBinder(decl.pattern)).is_scheme_alias) {
+                if (!self.view.bodies.binder(self.localProcBinder(decl.pattern)).is_scheme_alias) {
                     snapshots.clearRetainingCapacity();
                     try self.registerLocalProc(decl.pattern, decl.expr, statement, &snapshots);
                     for (snapshots.items) |stmt| try task.lowered.append(self.allocator, stmt);
@@ -63264,7 +63931,7 @@ const BodyContext = struct {
                 .checked_control_transfer => return self.finishBlockValue(task, try self.unreachableAfterTerminatingStatementExpr(ty)),
                 .uninhabited => |scrutinee| return self.finishBlockValue(task, try self.zeroBranchMatch(scrutinee, ty)),
                 .none => {
-                    if (self.checkedExprDivergesInLoweredRuntime(task.final_expr)) {
+                    if (try self.checkedExprDivergesInLoweredRuntime(task.final_expr)) {
                         return divergentStep(self, task.final_expr, .{ .at_type = ty });
                     }
                     if (try self.typeIsProvenUninhabited(ty)) {
@@ -63285,7 +63952,7 @@ const BodyContext = struct {
                 .comptime_site = null,
             } })),
             .none => {
-                if (!self.checkedExprDivergesInLoweredRuntime(task.final_expr) and try self.nodeIsProvenUninhabited(result_node)) {
+                if (!try self.checkedExprDivergesInLoweredRuntime(task.final_expr) and try self.nodeIsProvenUninhabited(result_node)) {
                     task.final_wrap = task.result_cell;
                     return uninhabitedScrutineeStep(self, task.final_expr, task.result_cell);
                 }
@@ -63429,7 +64096,7 @@ const BodyContext = struct {
     /// statement.
     fn uninhabitedStatementScrutineeStep(
         self: *BodyContext,
-        statement_id: checked.CheckedStatementId,
+        statement_id: CIR.Statement.Idx,
     ) Allocator.Error!?LowerStep {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
@@ -63440,19 +64107,19 @@ const BodyContext = struct {
             inline .var_, .reassign => |decl| decl.expr,
             .expr, .dbg => |expr| expr,
             .expect => |expr| if (self.builder.inline_expects == .run) expr else return null,
-            .pending, .var_uninitialized, .crash, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
+            .var_uninitialized, .crash, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .rejected_method_decl, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
         };
         // An explicit checked runtime error emits a crash and has a deliberately
         // erroneous source type. Probing its type node here would demand an
         // instantiation checking intentionally did not produce.
-        if (self.view.bodies.expr(expr_id).data == .runtime_error) return null;
-        if (try self.graphFreeResultTypeForExpr(expr_id)) |ty| {
+        if (checkedExpr(self.view, ExprSite.read(expr_id)).data == .runtime_error) return null;
+        if (try self.graphFreeResultTypeForExpr(ExprSite.read(expr_id))) |ty| {
             if (!try self.typeIsProvenUninhabited(ty)) return null;
-            return uninhabitedScrutineeStep(self, expr_id, .{ .sealed = ty });
+            return uninhabitedScrutineeStep(self, ExprSite.read(expr_id), .{ .sealed = ty });
         }
-        const node = try self.lowerExprTypeNode(expr_id);
+        const node = try self.lowerExprTypeNode(ExprSite.read(expr_id));
         if (!try self.nodeIsProvenUninhabited(node)) return null;
-        return uninhabitedScrutineeStep(self, expr_id, DraftTypeCell.fromGraphNode(node));
+        return uninhabitedScrutineeStep(self, ExprSite.read(expr_id), DraftTypeCell.fromGraphNode(node));
     }
 
     fn statementTerminationIsNone(termination: StatementTermination) bool {
@@ -63467,7 +64134,7 @@ const BodyContext = struct {
         const statement = self.view.bodies.statement(task.statement);
         const decl = switch (statement.data) {
             .decl => |decl| decl,
-            .pending, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
+            .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .rejected_method_decl, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
         };
         if (!decl.recursive or self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null;
         const saved_loc = self.builder.current_loc;
@@ -63476,30 +64143,30 @@ const BodyContext = struct {
         defer self.builder.current_region = saved_region;
         self.builder.current_loc = try self.sourceLocFor(statement.source_region);
         self.builder.current_region = statement.source_region;
-        const merge_binders: []MergeBinder = switch (self.view.bodies.expr(decl.expr).data) {
-            .if_, .match_, .for_ => try self.stateMergeBinders(self.view.bodies.exprStateMerge(decl.expr)),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level, .row_coerce => try self.allocator.alloc(MergeBinder, 0),
+        const merge_binders: []MergeBinder = switch (checkedExpr(self.view, ExprSite.read(decl.expr)).data) {
+            .if_, .match_, .for_ => try self.stateMergeBinders(try self.exprStateMergeBinders(ExprSite.read(decl.expr))),
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level, .row_coerce => try self.allocator.alloc(MergeBinder, 0),
         };
         defer self.allocator.free(merge_binders);
         if (merge_binders.len == 0 and self.view.bodies.pattern(decl.pattern).data == .assign) {
             const pattern = decl.pattern;
             const expr = decl.expr;
-            const requested_cell: DraftTypeCell = if (try self.graphFreeResultTypeForExpr(expr)) |ty|
+            const requested_cell: DraftTypeCell = if (try self.graphFreeResultTypeForExpr(ExprSite.read(expr))) |ty|
                 .{ .sealed = ty }
             else
-                DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr));
+                DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(ExprSite.read(expr)));
             if (requested_cell == .graph_node) {
                 try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, requested_cell);
             }
             const pat = try self.lowerShapeFreePatternAtCell(pattern, requested_cell);
             task.recursive_direct_pat = pat;
             task.recursive_direct_cell = requested_cell;
-            return requestLowerChild(self, expr, requested_cell);
+            return requestLowerChild(self, ExprSite.read(expr), requested_cell);
         }
         var pattern_binders = std.ArrayList(BinderRestore).empty;
         defer pattern_binders.deinit(self.allocator);
         try self.savePatternBinders(decl.pattern, &pattern_binders);
-        task.recursive_binders = try self.allocator.alloc(checked.PatternBinderId, pattern_binders.items.len + merge_binders.len);
+        task.recursive_binders = try self.allocator.alloc(BinderId, pattern_binders.items.len + merge_binders.len);
         const binders = task.recursive_binders;
         task.recursive_locals = try self.allocator.alloc(DraftLocalId, binders.len);
         const recursive_locals = task.recursive_locals;
@@ -63581,16 +64248,16 @@ const BodyContext = struct {
             },
             .promoted_proc => return null,
             inline .var_, .reassign => |decl| .{ decl.pattern, decl.expr },
-            .pending, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
+            .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .rejected_method_decl, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => return null,
         };
         task.statement_saved = try self.enterStatementSourceLocation(statement.source_region);
         errdefer self.restoreSourceLocation(&task.statement_saved);
 
-        if (try self.beginStatefulControlPatternStatement(task, pattern, expr)) |step| return step;
+        if (try self.beginStatefulControlPatternStatement(task, pattern, ExprSite.read(expr))) |step| return step;
 
         const destructs = switch (self.view.bodies.pattern(pattern).data) {
             .record_destructure => |destructs| destructs,
-            .pending, .assign, .as, .applied_tag, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {
+            .assign, .as, .applied_tag, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {
                 self.restoreSourceLocation(&task.statement_saved);
                 return null;
             },
@@ -63606,7 +64273,7 @@ const BodyContext = struct {
             return null;
         }
 
-        const value_node = try self.lowerExprTypeNode(expr);
+        const value_node = try self.lowerExprTypeNode(ExprSite.read(expr));
         const value_cell = DraftTypeCell.fromGraphNode(value_node);
         try self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(pattern).ty, value_cell);
         task.expanded = .{ .record = .{
@@ -63615,7 +64282,7 @@ const BodyContext = struct {
             .value_node = value_node,
             .value_cell = value_cell,
         } };
-        return requestLowerChild(self, expr, value_cell);
+        return requestLowerChild(self, ExprSite.read(expr), value_cell);
     }
 
     /// A statement-position `if`/`match`/`for` can both produce the
@@ -63627,15 +64294,15 @@ const BodyContext = struct {
     fn beginStatefulControlPatternStatement(
         self: *BodyContext,
         task: *BlockTask,
-        pattern: checked.CheckedPatternId,
-        expr_id: checked.CheckedExprId,
+        pattern: CIR.Pattern.Idx,
+        expr_id: ExprSite,
     ) Allocator.Error!?LowerStep {
-        switch (self.view.bodies.expr(expr_id).data) {
+        switch (checkedExpr(self.view, expr_id).data) {
             .if_, .match_, .for_ => {},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => return null,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => return null,
         }
 
-        task.expanded_merge_binders = try self.stateMergeBinders(self.view.bodies.exprStateMerge(expr_id));
+        task.expanded_merge_binders = try self.stateMergeBinders(try self.exprStateMergeBinders(expr_id));
         const merge_binders = task.expanded_merge_binders;
         if (merge_binders.len == 0) {
             self.allocator.free(task.expanded_merge_binders);
@@ -63651,7 +64318,7 @@ const BodyContext = struct {
             .value_cell = value_cell,
             .state_cell = state_cell,
         } };
-        if (self.view.bodies.expr(expr_id).data == .for_) {
+        if (checkedExpr(self.view, expr_id).data == .for_) {
             return requestLowerTask(self, .{ .value_then_state = .{
                 .body = expr_id,
                 .result_cell = value_cell,
@@ -63763,21 +64430,24 @@ const BodyContext = struct {
     /// `let` statements: it, or a record pattern nested in one of its fields,
     /// has an explicit rest binder or an optional field. A nested record
     /// pattern means what it means on its own, so it expands the same way.
-    fn recordPatternNeedsFieldStatements(self: *BodyContext, root: checked.CheckedPatternId) Allocator.Error!bool {
-        var pending: std.ArrayListUnmanaged(checked.CheckedPatternId) = .empty;
+    fn recordPatternNeedsFieldStatements(self: *BodyContext, root: CIR.Pattern.Idx) Allocator.Error!bool {
+        var pending: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, root);
         while (pending.pop()) |pattern_id| {
             const pattern = self.view.bodies.pattern(pattern_id);
             const destructs = switch (pattern.data) {
                 .record_destructure => |destructs| destructs,
-                .pending, .assign, .as, .applied_tag, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => continue,
+                .assign, .as, .applied_tag, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => continue,
             };
             if (self.recordDestructsNeedExplicitRest(destructs) or try self.recordDestructsHaveOptionalField(pattern.ty, destructs)) return true;
-            for (destructs) |destruct| switch (destruct.kind) {
-                .required, .sub_pattern => |child| try pending.append(self.allocator, child),
-                .rest => {},
-            };
+            for (destructs) |destruct_idx| {
+                const destruct = self.view.bodies.recordDestruct(destruct_idx);
+                switch (destruct.kind) {
+                    .required, .sub_pattern => |child| try pending.append(self.allocator, child),
+                    .rest => {},
+                }
+            }
         }
         return false;
     }
@@ -63786,7 +64456,7 @@ const BodyContext = struct {
         value: DraftExprId,
         value_node: NodeId,
         record_checked_ty: checked.CheckedTypeId,
-        destructs: []const checked.CheckedRecordDestruct,
+        destructs: []const CIR.Pattern.RecordDestruct.Idx,
     };
 
     fn appendRecordRestPatternStatements(
@@ -63794,7 +64464,7 @@ const BodyContext = struct {
         root_value: DraftExprId,
         root_value_node: NodeId,
         root_record_checked_ty: checked.CheckedTypeId,
-        root_destructs: []const checked.CheckedRecordDestruct,
+        root_destructs: []const CIR.Pattern.RecordDestruct.Idx,
         lowered: *LoweredStatements,
         comptime_site: ?DraftComptimeSiteId,
     ) Allocator.Error!void {
@@ -63819,7 +64489,8 @@ const BodyContext = struct {
         const value_node = frame.value_node;
         const record_checked_ty = frame.record_checked_ty;
         const destructs = frame.destructs;
-        for (destructs) |destruct| {
+        for (destructs) |destruct_idx| {
+            const destruct = self.view.bodies.recordDestruct(destruct_idx);
             switch (destruct.kind) {
                 .required, .sub_pattern => |child| {
                     const name = try recordFieldName(self.nameStoreMut(), self.view, destruct.label);
@@ -63889,25 +64560,20 @@ const BodyContext = struct {
     /// than bound by lowering the declaration. A guarded root's declaration
     /// always stays and evaluates its original right-hand side, so a failure
     /// surfaces at the declaration just as it does without the root.
-    fn hoistedBindingRestored(self: *const BodyContext, pattern: checked.CheckedPatternId) bool {
+    fn hoistedBindingRestored(self: *const BodyContext, pattern: CIR.Pattern.Idx) bool {
         const entry = self.view.hoisted_constants.lookupByPattern(pattern) orelse return false;
         return !self.view.compile_time_roots.root(entry.root).guarded;
     }
 
-    fn checkedStatementHasRuntimeEffect(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
+    fn checkedStatementHasRuntimeEffect(self: *BodyContext, statement_id: CIR.Statement.Idx) bool {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
-        const raw = @backingInt(statement_id);
-        if (raw >= self.view.bodies.statementCount()) {
-            Common.invariant("checked runtime statement filter referenced a missing statement");
-        }
-        return switch (self.view.bodies.statement(@fromBackingInt(@intCast(raw))).data) {
-            .decl => |decl| switch (self.view.bodies.expr(decl.expr).data) {
+        return switch (self.view.bodies.statement(statement_id).data) {
+            .decl => |decl| switch (checkedExpr(self.view, ExprSite.read(decl.expr)).data) {
                 // A dangling annotation carries diagnostics and checked type
                 // information but has no runtime value to bind.
                 .anno_only => false,
-                .pending => Common.invariant("pending checked declaration reached Monotype runtime statement filter"),
-                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => !self.hoistedBindingRestored(decl.pattern) and
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => !self.hoistedBindingRestored(decl.pattern) and
                     !self.view.compile_time_roots.validationResolvedByPattern(decl.pattern),
             },
             .var_,
@@ -63934,8 +64600,9 @@ const BodyContext = struct {
             .nominal_decl,
             .type_anno,
             .type_var_alias,
+            // A rejected method declaration evaluates nothing.
+            .rejected_method_decl,
             => false,
-            .pending => Common.invariant("pending checked statement reached Monotype runtime statement filter"),
         };
     }
 
@@ -63954,7 +64621,7 @@ const BodyContext = struct {
         return self.builder.inline_expects.continuationMode();
     }
 
-    fn checkedStatementDivergesInLoweredRuntime(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
+    fn checkedStatementDivergesInLoweredRuntime(self: *BodyContext, statement_id: CIR.Statement.Idx) Allocator.Error!bool {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
         if (self.specializationDispatchDivergence()) |divergence| {
@@ -63965,10 +64632,41 @@ const BodyContext = struct {
                 .omit => divergence.statements_without_inline_expects[raw],
             };
         }
-        return self.view.bodies.statementDiverges(statement_id, self.checkedInlineExpectMode());
+        return try self.view.bodies.statementDiverges(statement_id, self.checkedInlineExpectMode());
     }
 
-    fn checkedExprDivergesInLoweredRuntime(self: *BodyContext, expr_id: checked.CheckedExprId) bool {
+    /// Whether evaluating an expression always diverges. A row coercion
+    /// diverges exactly when its value does. A hoisted root's crash always
+    /// diverges, its match diverges exactly when its base expression does,
+    /// and the match's result never does. A custom literal pattern's read of
+    /// its matched value never diverges; its literal's conversion diverges
+    /// when that conversion's dispatch cannot run, and its equality test
+    /// when its own dispatch cannot run or its conversion diverges.
+    fn checkedExprDivergesInLoweredRuntime(self: *BodyContext, expr_ref: ExprSite) Allocator.Error!bool {
+        const expr_id = switch (expr_ref.kind()) {
+            .read, .coerced_value => expr_ref.node(),
+            .hoisted_root => blk: {
+                const root = self.view.compile_time_roots.root(expr_ref.root());
+                const body = root.hoisted_body orelse Common.invariant("hoisted root construct had no hoisted root body");
+                break :blk switch (body) {
+                    .pattern_error => return true,
+                    .pattern_extraction => |extraction| extraction.base_expr,
+                    .pattern_validation => |validation| validation.base_expr,
+                    .expr, .valueless_binding => Common.invariant("a root that evaluates its expression was read as a hoisted root construct"),
+                };
+            },
+            .hoisted_result, .literal_value => return false,
+            // A custom literal pattern's literal conversion diverges when its
+            // dispatch cannot run; its equality test also diverges when its
+            // conversion operand does.
+            .literal_conversion => return self.patternPlanCrashes(self.view.bodies.literalConversion(@backingInt(expr_ref.literalPattern())).plan),
+            .literal_guard => {
+                const pattern = expr_ref.literalPattern();
+                const guard = self.view.bodies.literalPatternGuard(pattern) orelse Common.invariant("a literal guard belonged to a pattern compared directly");
+                return self.patternPlanCrashes(guard.equality_plan) or
+                    try self.checkedExprDivergesInLoweredRuntime(ExprSite.literalConversion(pattern));
+            },
+        };
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
         if (self.specializationDispatchDivergence()) |divergence| {
@@ -63979,11 +64677,11 @@ const BodyContext = struct {
                 .omit => divergence.exprs_without_inline_expects[raw],
             };
         }
-        return self.view.bodies.exprDiverges(expr_id, self.checkedInlineExpectMode());
+        return try self.view.bodies.exprDiverges(expr_id, self.checkedInlineExpectMode());
     }
 
     const LoopCarry = struct {
-        binder: checked.PatternBinderId,
+        binder: BinderId,
         initial_local: DraftLocalId,
         param_local: DraftLocalId,
         ty: DraftTypeCell,
@@ -64053,13 +64751,13 @@ const BodyContext = struct {
         for (function_nodes.args, operands, request_args) |formal_node, operand, *request_arg| {
             switch (operand) {
                 .checked_expr => |checked_arg| {
-                    const arg_ty = caller.view.bodies.expr(checked_arg).ty;
+                    const arg_ty = checkedExpr(caller.view, ExprSite.read(checked_arg)).ty;
                     const public_node = try caller.instNode(arg_ty);
                     try relateRequestComponent(self.graph, formal_node, public_node);
                     const evidence_node = if (caller.propagate_constructor_value_evidence)
-                        try caller.exprCallArgumentEvidenceNode(checked_arg)
+                        try caller.exprCallArgumentEvidenceNode(ExprSite.read(checked_arg))
                     else
-                        try caller.exprCallResultEvidenceNode(checked_arg, null);
+                        try caller.exprCallResultEvidenceNode(ExprSite.read(checked_arg), null);
                     if (evidence_node) |evidence| {
                         request_arg.* = try checkedMonoRequestNode(
                             self.graph,
@@ -64102,7 +64800,7 @@ const BodyContext = struct {
         loop_iterator: ?DraftTypedLocal,
     ) Allocator.Error!NodeId {
         return switch (operand) {
-            .checked_expr => |expr| try self.lowerExprTypeNode(expr),
+            .checked_expr => |expr| try self.lowerExprTypeNode(ExprSite.read(expr)),
             .loop_iterator_state => if (loop_iterator) |iterator|
                 try iterator.ty.toGraphNode(self.graph)
             else
@@ -64152,7 +64850,7 @@ const BodyContext = struct {
 
     fn iteratorOnePayloadPattern(
         self: *BodyContext,
-        item_pattern: checked.CheckedPatternId,
+        item_pattern: CIR.Pattern.Idx,
         step: IterStepShape,
         iterator_cell: DraftTypeCell,
         rest_local: DraftLocalId,
@@ -64320,16 +65018,12 @@ const BodyContext = struct {
         return try self.typeStore().internRecord(self.nameStore(), &.{});
     }
 
-    /// The published binders a loop carries.
-    fn loopMutationBinders(self: *BodyContext, plan: ?checked.LoopMutationPlanId) []const checked.PatternBinderId {
-        const range = self.view.bodies.loopMutations(plan orelse Common.invariant("checked loop omitted its mutation plan")).binders;
-        return self.view.bodies.patternBinderIdPool()[range.start..][0..range.len];
-    }
-
-    fn prepareLoopCarries(self: *BodyContext, plan: ?checked.LoopMutationPlanId) Allocator.Error![]LoopCarry {
+    /// The binders a loop carries: those its condition and body reassign.
+    /// `loop` is a `for` expression or a loop statement.
+    fn prepareLoopCarries(self: *BodyContext, loop: u32) Allocator.Error![]LoopCarry {
         var carries = std.ArrayList(LoopCarry).empty;
         errdefer carries.deinit(self.allocator);
-        for (self.loopMutationBinders(plan)) |binder| {
+        for (try self.view.bodies.loopMutationBinders(loop)) |binder| {
             const initial = self.binders.get(binder) orelse continue;
             const ty = self.localTypeCell(initial);
             // The loop parameter is an ordinary version of the binder's local:
@@ -64464,7 +65158,7 @@ const BodyContext = struct {
 
     fn lowerUninitializedPatternStatement(
         self: *BodyContext,
-        pattern: checked.CheckedPatternId,
+        pattern: CIR.Pattern.Idx,
     ) Allocator.Error!DraftPatId {
         const checked_pattern = self.view.bodies.pattern(pattern);
         if (checked_pattern.data != .assign) {
@@ -64478,8 +65172,8 @@ const BodyContext = struct {
     /// checked pattern's type.
     fn beginPatternStatementValue(
         self: *BodyContext,
-        pattern: checked.CheckedPatternId,
-        expr: checked.CheckedExprId,
+        pattern: CIR.Pattern.Idx,
+        expr: ExprSite,
     ) Allocator.Error!DraftTypeCell {
         const requested_cell: DraftTypeCell = if (try self.graphFreeResultTypeForExpr(expr)) |ty|
             .{ .sealed = ty }
@@ -64498,7 +65192,7 @@ const BodyContext = struct {
     /// Bind a pattern statement's lowered value.
     fn finishPatternStatement(
         self: *BodyContext,
-        pattern: checked.CheckedPatternId,
+        pattern: CIR.Pattern.Idx,
         source_region: base.Region,
         requested_cell: DraftTypeCell,
         value: DraftExprId,
@@ -64559,18 +65253,18 @@ const BodyContext = struct {
         };
     }
 
-    fn patternIsShapeFree(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
+    fn patternIsShapeFree(self: *BodyContext, pattern_id: CIR.Pattern.Idx) bool {
         var current = pattern_id;
         while (true) switch (self.view.bodies.pattern(current).data) {
             .assign, .underscore => return true,
             .as => |as| current = as.pattern,
-            .pending, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => return false,
+            .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => return false,
         };
     }
 
     fn lowerShapeFreePatternAtCell(
         self: *BodyContext,
-        root_pattern: checked.CheckedPatternId,
+        root_pattern: CIR.Pattern.Idx,
         ty_cell: DraftTypeCell,
     ) Allocator.Error!DraftPatId {
         // An `as` chain binds each layer before the pattern beneath it.
@@ -64591,13 +65285,13 @@ const BodyContext = struct {
                 },
             }
             switch (pattern.data) {
-                .assign => |binder| break .{ .bind = try self.materializePatternBinderAtCell(binder, ty_cell) },
+                .assign => break .{ .bind = try self.materializePatternBinderAtCell(pattern_id, ty_cell) },
                 .as => |as| {
-                    try as_locals.append(self.allocator, try self.materializePatternBinderAtCell(as.binder, ty_cell));
+                    try as_locals.append(self.allocator, try self.materializePatternBinderAtCell(pattern_id, ty_cell));
                     pattern_id = as.pattern;
                 },
                 .underscore => break .wildcard,
-                .pending, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => Common.invariant("shape-dependent pattern reached shape-free graph-cell lowering"),
+                .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => Common.invariant("shape-dependent pattern reached shape-free graph-cell lowering"),
             }
         };
         var pat = try self.addPatWithTypeCell(ty_cell, data);
@@ -64609,7 +65303,7 @@ const BodyContext = struct {
 
     fn currentOwnerPatternBinderLocal(
         self: *BodyContext,
-        binder: checked.PatternBinderId,
+        binder: BinderId,
     ) ?DraftLocalId {
         const local = self.binders.get(binder) orelse return null;
         return if (self.draft.currentOwnerOwnsCore(.locals, @backingInt(local))) local else null;
@@ -64617,7 +65311,7 @@ const BodyContext = struct {
 
     fn materializePatternBinderAtCell(
         self: *BodyContext,
-        binder: checked.PatternBinderId,
+        binder: BinderId,
         cell: DraftTypeCell,
     ) Allocator.Error!DraftLocalId {
         if (self.reuse_pre_registered_pattern_binders) {
@@ -64656,9 +65350,9 @@ const BodyContext = struct {
 
     fn registerLocalProc(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        expr: checked.CheckedExprId,
-        context_anchor: checked.CheckedStatementId,
+        pattern_id: CIR.Pattern.Idx,
+        expr: CIR.Expr.Idx,
+        context_anchor: CIR.Statement.Idx,
         snapshots: *std.ArrayList(DraftStmtId),
     ) Allocator.Error!void {
         try self.registerLocalProcDeclaration(.{
@@ -64671,7 +65365,7 @@ const BodyContext = struct {
 
     fn registerLocalAssociatedProcedures(
         self: *BodyContext,
-        statement_id: checked.CheckedStatementId,
+        statement_id: CIR.Statement.Idx,
         snapshots: *std.ArrayList(DraftStmtId),
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .local_proc_context);
@@ -64735,14 +65429,14 @@ const BodyContext = struct {
 
     /// Whether the declared closure `expr` captures the reassignable
     /// `binder`, whose declaration-time value it then reads from a snapshot.
-    fn localProcSnapshotsBinder(self: *BodyContext, expr: checked.CheckedExprId, binder: checked.PatternBinderId) bool {
-        if (!self.view.bodies.patternBinder(binder).reassignable) return false;
-        const captures = switch (self.view.bodies.expr(expr).data) {
+    fn localProcSnapshotsBinder(self: *BodyContext, expr: CIR.Expr.Idx, binder: BinderId) bool {
+        if (!self.view.bodies.binder(binder).reassignable) return false;
+        const captures = switch (checkedExpr(self.view, ExprSite.read(expr)).data) {
             .closure => |closure| closure.captures,
-            .lambda, .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => return false,
+            .lambda, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => return false,
         };
-        for (captures) |capture| {
-            if (checkedCaptureBinder(self.view, capture.pattern) == binder) return true;
+        for (captures) |capture_idx| {
+            if (self.view.bodies.capture(capture_idx).pattern == binder) return true;
         }
         return false;
     }
@@ -64754,14 +65448,14 @@ const BodyContext = struct {
     /// lowering recorded (`existing`).
     fn snapshotReassignableCaptures(
         self: *BodyContext,
-        expr: checked.CheckedExprId,
+        expr: CIR.Expr.Idx,
         entries: []LexicalBinderEntry,
         existing: ?[]const LexicalBinderEntry,
         snapshots: *std.ArrayList(DraftStmtId),
     ) Allocator.Error!void {
         for (entries, 0..) |*entry, index| {
             if (entry.kind != 0) continue;
-            const binder: checked.PatternBinderId = @fromBackingInt(entry.binder);
+            const binder: BinderId = @fromBackingInt(entry.binder);
             if (!self.localProcSnapshotsBinder(expr, binder)) continue;
 
             const current: DraftLocalId = @fromBackingInt(entry.local);
@@ -64787,15 +65481,15 @@ const BodyContext = struct {
     fn localProcContextId(
         self: *BodyContext,
         view: ModuleView,
-        binder: checked.PatternBinderId,
-        expr: checked.CheckedExprId,
+        binder: BinderId,
+        expr: CIR.Expr.Idx,
     ) Allocator.Error!DraftLocalProcContextId {
         const address = DraftLocalProcAddress{ .module = view.key.bytes, .binder = binder, .expr = expr };
         if (self.local_proc_contexts.get(address)) |context| return context;
 
         const restored = self.restored_local_proc_scope orelse
             Common.invariant("local procedure use reached Monotype before its declaration context");
-        var context_anchor: ?checked.CheckedStatementId = null;
+        var context_anchor: ?CIR.Statement.Idx = null;
         for (view.method_registry.entries) |entry| switch ((entry.target orelse continue).kind) {
             .local_proc => |local| {
                 if (local.binder != binder or local.expr != expr) continue;
@@ -64835,7 +65529,7 @@ const BodyContext = struct {
     fn restoredLocalProcDeclarationEvidence(
         self: *BodyContext,
         view: ModuleView,
-        expr: checked.CheckedExprId,
+        expr: CIR.Expr.Idx,
     ) EvidenceChain {
         var site: ?checked.NestedProcSite = null;
         for (view.nested_proc_sites.sites) |candidate| {
@@ -64873,17 +65567,17 @@ const BodyContext = struct {
         }) orelse Common.invariant("restored local procedure evidence omitted its checked lexical parent");
     }
 
-    fn localProcBinder(self: *BodyContext, pattern_id: checked.CheckedPatternId) checked.PatternBinderId {
+    fn localProcBinder(self: *BodyContext, pattern_id: CIR.Pattern.Idx) BinderId {
         const pattern = self.view.bodies.pattern(pattern_id);
         return switch (pattern.data) {
-            .assign => |binder| binder,
-            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("local procedure declaration pattern was not a binder"),
+            .assign => pattern_id,
+            .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("local procedure declaration pattern was not a binder"),
         };
     }
 
     /// The declaration a block statement makes, when it declares a local
     /// procedure.
-    fn blockStatementLocalProcDecl(self: *BodyContext, statement_id: checked.CheckedStatementId) ?@FieldType(checked.CheckedStatementData, "decl") {
+    fn blockStatementLocalProcDecl(self: *BodyContext, statement_id: CIR.Statement.Idx) ?@FieldType(checked_bodies.StatementData, "decl") {
         const statement = self.view.bodies.statement(statement_id);
         if (statement.data != .decl) return null;
         const decl = statement.data.decl;
@@ -64893,17 +65587,17 @@ const BodyContext = struct {
 
     fn statementDeclIsLocalProc(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        expr_id: checked.CheckedExprId,
+        pattern_id: CIR.Pattern.Idx,
+        expr_id: CIR.Expr.Idx,
     ) bool {
         // A local procedure declaration has a named binder. A lambda assigned
         // to an ignored or erroneous pattern remains an ordinary value.
         const pattern = self.view.bodies.pattern(pattern_id);
         if (pattern.data != .assign) return false;
-        if (self.view.bodies.patternBinder(pattern.data.assign).is_scheme_alias) return true;
-        return switch (self.view.bodies.expr(expr_id).data) {
+        if (self.view.bodies.binder(pattern_id).is_scheme_alias) return true;
+        return switch (checkedExpr(self.view, ExprSite.read(expr_id)).data) {
             .lambda, .closure => true,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => false,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => false,
         };
     }
 
@@ -64913,7 +65607,7 @@ const BodyContext = struct {
 
     /// A typed subpattern still to lower, at an explicit target or at the
     /// pat_run's target for its type.
-    const PatTypeOp = struct { pattern: checked.CheckedPatternId, ty: Type.TypeId, target: ?PatTarget = null };
+    const PatTypeOp = struct { pattern: CIR.Pattern.Idx, ty: Type.TypeId, target: ?PatTarget = null };
 
     /// A typed pattern whose subpatterns are still lowering. Its ops occupy
     /// `ops[ops_start..]`; each subpattern's result lands in `results`.
@@ -64946,13 +65640,13 @@ const BodyContext = struct {
         }
     };
 
-    fn lowerPatternAtType(self: *BodyContext, pattern_id: checked.CheckedPatternId, ty: Type.TypeId) Allocator.Error!DraftPatId {
+    fn lowerPatternAtType(self: *BodyContext, pattern_id: CIR.Pattern.Idx, ty: Type.TypeId) Allocator.Error!DraftPatId {
         return try self.lowerPatternAtTypeCell(pattern_id, try self.draftTypeCell(ty), ty);
     }
 
     fn lowerPatternAtTypeCell(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         ty_cell: DraftTypeCell,
         ty: Type.TypeId,
     ) Allocator.Error!DraftPatId {
@@ -65002,7 +65696,7 @@ const BodyContext = struct {
     fn appendPatTypeChildren(
         self: *BodyContext,
         pat_run: *PatTypeRun,
-        checked_patterns: []const checked.CheckedPatternId,
+        checked_patterns: []const CIR.Pattern.Idx,
         tys: anytype,
     ) Allocator.Error!void {
         if (checked_patterns.len != GuardedList.borrowLen(tys)) Common.invariant("pattern arity differs from concrete checked type");
@@ -65019,22 +65713,21 @@ const BodyContext = struct {
     fn enterPatType(
         self: *BodyContext,
         pat_run: *PatTypeRun,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         ty: Type.TypeId,
         target: PatTarget,
     ) Allocator.Error!?DraftPatId {
         const pattern = self.view.bodies.pattern(pattern_id);
         switch (pattern.data) {
             .assign => {},
-            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => try self.constrainCheckedInterfaceToCell(pattern.ty, target.cell),
+            .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => try self.constrainCheckedInterfaceToCell(pattern.ty, target.cell),
         }
         const data: BodyPatData = switch (pattern.data) {
-            .pending,
             .runtime_error,
             => Common.invariant("non-runtime checked pattern reached Monotype lowering"),
-            .assign => |binder| .{ .bind = try self.materializePatternBinderAtCell(binder, target.cell) },
+            .assign => .{ .bind = try self.materializePatternBinderAtCell(pattern_id, target.cell) },
             .as => |as| {
-                const local = try self.materializePatternBinderAtCell(as.binder, target.cell);
+                const local = try self.materializePatternBinderAtCell(pattern_id, target.cell);
                 try self.pushPatTypeFrame(pat_run, .{ .as = .{ .target = target, .local = local } });
                 try pat_run.ops.append(self.allocator, .{ .pattern = as.pattern, .ty = ty, .target = target });
                 return null;
@@ -65085,7 +65778,7 @@ const BodyContext = struct {
     fn enterConstructorPatWrapped(
         self: *BodyContext,
         pat_run: *PatTypeRun,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         ty: Type.TypeId,
     ) Allocator.Error!void {
         var current = ty;
@@ -65095,7 +65788,7 @@ const BodyContext = struct {
         }
         switch (self.view.bodies.pattern(pattern_id).data) {
             .applied_tag, .record_destructure, .tuple => {},
-            .pending, .assign, .as, .nominal, .list, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("nominal constructor pattern lowering reached a non-constructor checked pattern"),
+            .assign, .as, .nominal, .list, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("nominal constructor pattern lowering reached a non-constructor checked pattern"),
         }
         try self.enterStructuralPatType(pat_run, pattern_id, current, .{ .ty = current });
     }
@@ -65103,7 +65796,7 @@ const BodyContext = struct {
     fn enterStructuralPatType(
         self: *BodyContext,
         pat_run: *PatTypeRun,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         ty: Type.TypeId,
         target: PatTarget,
     ) Allocator.Error!void {
@@ -65120,7 +65813,8 @@ const BodyContext = struct {
             },
             .record_destructure => |destructs| {
                 try self.pushPatTypeFrame(pat_run, .{ .record = target });
-                for (destructs) |destruct| {
+                for (destructs) |destruct_idx| {
+                    const destruct = self.view.bodies.recordDestruct(destruct_idx);
                     const child = switch (destruct.kind) {
                         .required, .sub_pattern => |child_pattern| child_pattern,
                         .rest => |rest_pattern| {
@@ -65139,7 +65833,7 @@ const BodyContext = struct {
                     try pat_run.ops.append(self.allocator, .{ .pattern = child, .ty = self.recordFieldType(ty, name) });
                 }
             },
-            .pending, .assign, .as, .nominal, .list, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => unreachable, // both callers pass only applied_tag, record_destructure, and tuple patterns
+            .assign, .as, .nominal, .list, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => unreachable, // both callers pass only applied_tag, record_destructure, and tuple patterns
         }
     }
 
@@ -65186,7 +65880,7 @@ const BodyContext = struct {
     /// pattern node that the materialized pattern will inspect at runtime.
     fn preRegisterPatternBindersAtNode(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
     ) Allocator.Error!void {
         try self.registerPatternBindersAtNodeInMap(pattern_id, node, &self.binders, false);
@@ -65198,7 +65892,7 @@ const BodyContext = struct {
     /// descent must advance.
     fn registerPatternBindersAtNodeInMap(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
         binders: *BinderMap,
         rebind_existing: bool,
@@ -65231,7 +65925,7 @@ const BodyContext = struct {
 
     fn preRegisterPatternBinderAtNode(
         self: *BodyContext,
-        binder: checked.PatternBinderId,
+        binder: BinderId,
         node: NodeId,
         binders: *BinderMap,
         rebind_existing: bool,
@@ -65262,7 +65956,7 @@ const BodyContext = struct {
     /// with the graph nodes they bind at.
     fn preRegisterPatternBindersAtNodeStep(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
         binders: *BinderMap,
         rebind_existing: bool,
@@ -65270,9 +65964,9 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         const pattern = self.view.bodies.pattern(pattern_id);
         switch (pattern.data) {
-            .assign => |binder| try self.preRegisterPatternBinderAtNode(binder, node, binders, rebind_existing),
+            .assign => try self.preRegisterPatternBinderAtNode(pattern_id, node, binders, rebind_existing),
             .as => |as| {
-                try self.preRegisterPatternBinderAtNode(as.binder, node, binders, rebind_existing);
+                try self.preRegisterPatternBinderAtNode(pattern_id, node, binders, rebind_existing);
                 try self.queuePatternBinderVisit(pending, as.pattern, node);
             },
             .applied_tag => |tag| {
@@ -65301,26 +65995,29 @@ const BodyContext = struct {
                     if (backing.node == node) Common.invariant("nominal record pattern backing did not advance");
                     try self.queuePatternBinderVisit(pending, pattern_id, backing.node);
                 } else {
-                    for (destructs) |destruct| switch (destruct.kind) {
-                        .required, .sub_pattern => |child| {
-                            // A destructured OPTIONAL field's binders hold the
-                            // slot materialized as Try, so they register at
-                            // the sub-pattern's own checked-type node, not
-                            // the record's tagged slot node (design.md
-                            // "Field Kinds").
-                            if ((try self.recordDestructFieldKind(pattern.ty, destruct)) == .optional) {
-                                try self.queuePatternBinderVisit(pending, child, try self.instNode(self.view.bodies.pattern(child).ty));
-                                continue;
-                            }
-                            const name = try recordFieldName(self.nameStoreMut(), self.view, destruct.label);
-                            try self.queuePatternBinderVisit(pending, child, try self.graph.recordFieldNode(node, name));
-                        },
-                        .rest => |rest| {
-                            if (self.patternIsIgnored(rest)) continue;
-                            const rest_node = try self.recordRestNodeForPattern(node, destructs, rest);
-                            try self.queuePatternBinderVisit(pending, rest, rest_node);
-                        },
-                    };
+                    for (destructs) |destruct_idx| {
+                        const destruct = self.view.bodies.recordDestruct(destruct_idx);
+                        switch (destruct.kind) {
+                            .required, .sub_pattern => |child| {
+                                // A destructured OPTIONAL field's binders hold the
+                                // slot materialized as Try, so they register at
+                                // the sub-pattern's own checked-type node, not
+                                // the record's tagged slot node (design.md
+                                // "Field Kinds").
+                                if ((try self.recordDestructFieldKind(pattern.ty, destruct)) == .optional) {
+                                    try self.queuePatternBinderVisit(pending, child, try self.instNode(self.view.bodies.pattern(child).ty));
+                                    continue;
+                                }
+                                const name = try recordFieldName(self.nameStoreMut(), self.view, destruct.label);
+                                try self.queuePatternBinderVisit(pending, child, try self.graph.recordFieldNode(node, name));
+                            },
+                            .rest => |rest| {
+                                if (self.patternIsIgnored(rest)) continue;
+                                const rest_node = try self.recordRestNodeForPattern(node, destructs, rest);
+                                try self.queuePatternBinderVisit(pending, rest, rest_node);
+                            },
+                        }
+                    }
                 }
             },
             .list => |list| {
@@ -65347,11 +66044,10 @@ const BodyContext = struct {
                 }
             },
             .str_interpolation => |str| {
-                for (str.steps) |step| {
-                    if (step.capture) |capture| try self.queuePatternBinderVisit(pending, capture, node);
+                for (0..str.steps.span.len) |offset| {
+                    if (self.view.bodies.strPatternStep(str.steps, @intCast(offset)).capture) |capture| try self.queuePatternBinderVisit(pending, capture, node);
                 }
             },
-            .pending,
             .numeral_literal,
             .str_literal,
             .underscore,
@@ -65363,7 +66059,7 @@ const BodyContext = struct {
     fn queuePatternBinderVisit(
         self: *BodyContext,
         pending: *std.ArrayListUnmanaged(PatternBinderVisit),
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
     ) Allocator.Error!void {
         try pending.append(self.allocator, .{ .visit = .{ .pattern = pattern_id, .node = node } });
@@ -65374,7 +66070,7 @@ const BodyContext = struct {
     /// become compiler-local binders and explicit pending plans.
     fn lowerPatternShellAtNode(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
         pending: *std.ArrayList(PendingMaterializedPattern),
     ) Allocator.Error!DraftPatId {
@@ -65387,7 +66083,7 @@ const BodyContext = struct {
     /// wrappers are applied around the backing's shell afterward.
     fn lowerPatternShellAtNodeInner(
         self: *BodyContext,
-        root_pattern: checked.CheckedPatternId,
+        root_pattern: CIR.Pattern.Idx,
         root_node: NodeId,
         pending: *std.ArrayList(PendingMaterializedPattern),
         active: *std.AutoHashMap(PatternNodeVisit, void),
@@ -65421,12 +66117,12 @@ const BodyContext = struct {
     /// nominal backing the shell continues into.
     fn lowerPatternShellLevel(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
         pending: *std.ArrayList(PendingMaterializedPattern),
     ) Allocator.Error!union(enum) {
         shell: DraftPatId,
-        nominal: struct { representation_node: NodeId, pattern: checked.CheckedPatternId, backing: NodeId },
+        nominal: struct { representation_node: NodeId, pattern: CIR.Pattern.Idx, backing: NodeId },
     } {
         const cell = DraftTypeCell.fromGraphNode(node);
         if (try self.patternRequiresOwnMaterialization(pattern_id)) {
@@ -65438,7 +66134,7 @@ const BodyContext = struct {
         const data: BodyPatData = switch (pattern.data) {
             .as => |as| .{ .as = .{
                 .pattern = try self.lowerPatternPlanPlaceholderAtNode(as.pattern, node, pending),
-                .local = self.currentOwnerPatternBinderLocal(as.binder) orelse
+                .local = self.currentOwnerPatternBinderLocal(pattern_id) orelse
                     Common.invariant("materialized as-pattern binder was not pre-registered"),
             } },
             .applied_tag => |tag| blk: {
@@ -65478,7 +66174,8 @@ const BodyContext = struct {
                 }
                 var lowered = std.ArrayList(DraftRecordDestruct).empty;
                 defer lowered.deinit(self.allocator);
-                for (destructs) |destruct| {
+                for (destructs) |destruct_idx| {
+                    const destruct = self.view.bodies.recordDestruct(destruct_idx);
                     const child = switch (destruct.kind) {
                         .required, .sub_pattern => |child| child,
                         .rest => |rest| {
@@ -65521,7 +66218,6 @@ const BodyContext = struct {
             .underscore,
             => return .{ .shell = try self.lowerPatternAtNode(pattern_id, node) },
             .list => unreachable, // patternRequiresOwnMaterialization returned above for list patterns
-            .pending,
             .runtime_error,
             => Common.invariant("non-runtime checked pattern reached materialization shell lowering"),
         };
@@ -65530,7 +66226,7 @@ const BodyContext = struct {
 
     fn lowerPatternPlanPlaceholderAtNode(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
         pending: *std.ArrayList(PendingMaterializedPattern),
     ) Allocator.Error!DraftPatId {
@@ -65546,7 +66242,7 @@ const BodyContext = struct {
     /// patterns project only the children they explicitly mention.
     fn lowerPatternAtNode(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
     ) Allocator.Error!DraftPatId {
         return try self.lowerPatternAtNodeInner(pattern_id, node, null);
@@ -65554,7 +66250,7 @@ const BodyContext = struct {
 
     fn lowerMatchPatternAtNode(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
         guard: ?DraftExprId,
         body: DraftExprId,
@@ -65572,17 +66268,17 @@ const BodyContext = struct {
     /// or a record rest to bind in its place among the fields.
     const PatNodeOp = union(enum) {
         at_node: struct {
-            pattern: checked.CheckedPatternId,
+            pattern: CIR.Pattern.Idx,
             node: NodeId,
             /// Whether the subpattern lowers under the pat_run's match lowering.
             in_match: bool,
         },
         optional_slot: struct {
-            pattern: checked.CheckedPatternId,
+            pattern: CIR.Pattern.Idx,
             slot_node: NodeId,
             result_node: NodeId,
         },
-        record_rest: checked.CheckedPatternId,
+        record_rest: CIR.Pattern.Idx,
     };
 
     /// A pattern whose subpatterns are still lowering. Its ops occupy
@@ -65596,7 +66292,7 @@ const BodyContext = struct {
             list: struct { cell: DraftTypeCell, count: usize, rest: ?list_rest.Rest },
             tuple: DraftTypeCell,
             record: struct {
-                pattern: checked.CheckedPatternId,
+                pattern: CIR.Pattern.Idx,
                 cell: DraftTypeCell,
                 node: NodeId,
                 /// The record local a needed rest binding captures.
@@ -65633,7 +66329,7 @@ const BodyContext = struct {
 
     fn lowerPatternAtNodeInner(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
         match_lowering: ?*MatchPatternLowering,
     ) Allocator.Error!DraftPatId {
@@ -65682,7 +66378,7 @@ const BodyContext = struct {
         });
     }
 
-    fn appendPatNodeChild(self: *BodyContext, pat_run: *PatNodeRun, pattern: checked.CheckedPatternId, node: NodeId, in_match: bool) Allocator.Error!void {
+    fn appendPatNodeChild(self: *BodyContext, pat_run: *PatNodeRun, pattern: CIR.Pattern.Idx, node: NodeId, in_match: bool) Allocator.Error!void {
         try pat_run.ops.append(self.allocator, .{ .at_node = .{ .pattern = pattern, .node = node, .in_match = in_match } });
     }
 
@@ -65699,7 +66395,7 @@ const BodyContext = struct {
     fn enterPatNodeAtNode(
         self: *BodyContext,
         pat_run: *PatNodeRun,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         node: NodeId,
         in_match: bool,
     ) Allocator.Error!?DraftPatId {
@@ -65712,12 +66408,11 @@ const BodyContext = struct {
         const cell = DraftTypeCell.fromGraphNode(node);
         const representation_node = (try self.constructorRepresentationNode(node));
         const data: BodyPatData = switch (pattern.data) {
-            .pending,
             .runtime_error,
             => Common.invariant("non-runtime checked pattern reached graph-native Monotype lowering"),
-            .assign => |binder| .{ .bind = try self.materializePatternBinderAtCell(binder, cell) },
+            .assign => .{ .bind = try self.materializePatternBinderAtCell(pattern_id, cell) },
             .as => |as| {
-                const local = try self.materializePatternBinderAtCell(as.binder, cell);
+                const local = try self.materializePatternBinderAtCell(pattern_id, cell);
                 try self.pushPatNodeFrame(pat_run, .{ .as = .{ .cell = cell, .local = local } });
                 try self.appendPatNodeChild(pat_run, as.pattern, node, in_match);
                 return null;
@@ -65758,7 +66453,8 @@ const BodyContext = struct {
                 }
                 try self.pushPatNodeFrame(pat_run, .{ .record = .{ .pattern = pattern_id, .cell = cell, .node = node } });
                 const record_checked_ty = pattern.ty;
-                for (destructs) |destruct| {
+                for (destructs) |destruct_idx| {
+                    const destruct = self.view.bodies.recordDestruct(destruct_idx);
                     switch (destruct.kind) {
                         .required, .sub_pattern => |child| {
                             const name = try recordFieldName(self.nameStoreMut(), self.view, destruct.label);
@@ -65830,7 +66526,7 @@ const BodyContext = struct {
     fn enterPatNodeOptionalSlot(
         self: *BodyContext,
         pat_run: *PatNodeRun,
-        root_child: checked.CheckedPatternId,
+        root_child: CIR.Pattern.Idx,
         slot_node: NodeId,
         root_result_node: NodeId,
     ) Allocator.Error!?DraftPatId {
@@ -65845,20 +66541,21 @@ const BodyContext = struct {
                     child = nominal.backing_pattern;
                     result_node = (try self.optionalTryBackingNode(result_node));
                 },
-                .pending, .assign, .as, .applied_tag, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => break pattern,
+                .assign, .as, .applied_tag, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => break pattern,
             }
         };
         const data: BodyPatData = switch (pattern.data) {
             .nominal => unreachable, // the loop above advances past every nominal pattern
             .underscore => .wildcard,
-            .assign => |binder| blk: {
+            .assign => blk: {
+                const binder = child;
                 const slot_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), slot_cell, null);
                 try self.queueOptionalDestructSlotBind(binder, slot_local, slot_node, result_node);
                 break :blk .{ .bind = slot_local };
             },
             .as => |as| {
                 const slot_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), slot_cell, null);
-                try self.queueOptionalDestructSlotBind(as.binder, slot_local, slot_node, result_node);
+                try self.queueOptionalDestructSlotBind(child, slot_local, slot_node, result_node);
                 try self.pushPatNodeFrame(pat_run, .{ .optional_as = .{ .cell = slot_cell, .local = slot_local } });
                 try pat_run.ops.append(self.allocator, .{ .optional_slot = .{ .pattern = as.pattern, .slot_node = slot_node, .result_node = result_node } });
                 return null;
@@ -65892,7 +66589,6 @@ const BodyContext = struct {
                 }
                 Common.invariant("optional destructure Try pattern used a tag other than Ok or Err");
             },
-            .pending,
             .runtime_error,
             .record_destructure,
             .tuple,
@@ -65907,14 +66603,13 @@ const BodyContext = struct {
 
     /// Bind a named record rest in place among its record's fields, when the
     /// guard or body reads it.
-    fn bindPatNodeRecordRest(self: *BodyContext, pat_run: *PatNodeRun, index: usize, rest: checked.CheckedPatternId) Allocator.Error!void {
+    fn bindPatNodeRecordRest(self: *BodyContext, pat_run: *PatNodeRun, index: usize, rest: CIR.Pattern.Idx) Allocator.Error!void {
         const record = &pat_run.frames.items[index].kind.record;
         const lowering = pat_run.match_lowering orelse
             Common.invariant("record rest pattern must be lowered to explicit rest-record construction before Monotype output");
         const rest_data = self.view.bodies.pattern(rest).data;
         if (rest_data != .assign) Common.invariant("named record rest was not an assignment pattern");
-        const rest_binder = rest_data.assign;
-        const rest_local = self.currentOwnerPatternBinderLocal(rest_binder) orelse
+        const rest_local = self.currentOwnerPatternBinderLocal(rest) orelse
             Common.invariant("record rest binder was not pre-registered at its exact graph node");
         const needed_by_guard = if (lowering.guard) |guard|
             try self.exprDependsOnFreeLocal(guard, rest_local)
@@ -66029,11 +66724,12 @@ const BodyContext = struct {
         str: anytype,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
-        const steps = try self.allocator.alloc(DraftStrPatternStep, str.steps.len);
+        const steps = try self.allocator.alloc(DraftStrPatternStep, str.steps.span.len);
         defer self.allocator.free(steps);
 
-        for (str.steps, 0..) |step, i| {
-            steps[i] = .{
+        for (steps, 0..) |*lowered_step, i| {
+            const step = self.view.bodies.strPatternStep(str.steps, @intCast(i));
+            lowered_step.* = .{
                 .capture = if (step.capture) |capture| try self.lowerPatternAtType(capture, ty) else null,
                 .delimiter = try self.lowerStringLiteral(step.delimiter),
             };
@@ -66049,10 +66745,10 @@ const BodyContext = struct {
         } };
     }
 
-    fn patternIsIgnored(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
+    fn patternIsIgnored(self: *BodyContext, pattern_id: CIR.Pattern.Idx) bool {
         return switch (self.view.bodies.pattern(pattern_id).data) {
             .underscore => true,
-            .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => false,
+            .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => false,
         };
     }
 
@@ -66062,14 +66758,14 @@ const BodyContext = struct {
     /// checker-selected conversion and equality guard.
     fn lowerNumeralLiteralPattern(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         numeral: anytype,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
         return switch (shapeContent(self.typeStore(), ty)) {
             .primitive => try self.numeralPatBits(numeral.literal, ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (numeral.guard) |guard|
-                try self.bindLiteralGuardPattern(pattern_id, guard, ty)
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (numeral.custom)
+                try self.bindLiteralGuardPattern(pattern_id, ty)
             else
                 Common.invariant("custom numeral pattern had no checked conversion"),
         };
@@ -66080,7 +66776,7 @@ const BodyContext = struct {
     /// can never match, and a custom target uses the checked conversion guard.
     fn lowerStringLiteralPattern(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
+        pattern_id: CIR.Pattern.Idx,
         str: anytype,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
@@ -66089,8 +66785,8 @@ const BodyContext = struct {
                 .{ .str_lit = try self.lowerStringLiteral(str.literal) }
             else
                 try self.bindNeverMatchPattern(ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (str.guard) |guard|
-                try self.bindLiteralGuardPattern(pattern_id, guard, ty)
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (str.custom)
+                try self.bindLiteralGuardPattern(pattern_id, ty)
             else
                 Common.invariant("custom string pattern had no checked conversion"),
         };
@@ -66100,11 +66796,13 @@ const BodyContext = struct {
     /// recording an equality condition for the enclosing match branch.
     fn bindLiteralGuardPattern(
         self: *BodyContext,
-        pattern_id: checked.CheckedPatternId,
-        condition: checked.CheckedExprId,
+        pattern_id: CIR.Pattern.Idx,
         ty: Type.TypeId,
     ) Allocator.Error!BodyPatData {
-        const binder = self.view.bodies.literalPatternBinder(pattern_id);
+        // The pattern itself is the binder its equality test reads the
+        // matched value through.
+        const binder = pattern_id;
+        const condition = ExprSite.literalGuard(pattern_id);
         const local = if (self.currentOwnerPatternBinderLocal(binder)) |existing| existing else blk: {
             const new_local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
             try self.bindLocalName(new_local, binder);
@@ -68626,7 +69324,7 @@ fn unsignedIntLiteral(value: anytype) can.CIR.IntValue {
 fn generatedCodecRuntimeKey(
     comptime domain: []const u8,
     current_fn_key: names.TypeDigest,
-    source_expr_id: checked.CheckedExprId,
+    source_expr_id: CIR.Expr.Idx,
 ) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
     hasher.update(domain);
@@ -68638,7 +69336,7 @@ fn generatedCodecRuntimeKey(
 
 fn generatedEncoderCallbackKey(
     current_fn_key: names.TypeDigest,
-    source_expr_id: checked.CheckedExprId,
+    source_expr_id: CIR.Expr.Idx,
     index: u64,
 ) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
@@ -68668,7 +69366,7 @@ fn restoredConstFnContextKey(
 fn restoredLocalProcUseContextKey(
     restored_fn_key: names.TypeDigest,
     source_contexts: names.TypeDigest,
-    binder: checked.PatternBinderId,
+    binder: BinderId,
 ) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
     hasher.update("roc.monotype.restored_local_proc_context");
@@ -68692,7 +69390,7 @@ fn encoderForFirstFieldCaptureId() usize {
 
 fn generatedFieldNamesIterStepKey(
     current_fn_key: names.TypeDigest,
-    source_expr_id: checked.CheckedExprId,
+    source_expr_id: ExprSite,
     index: usize,
     mode: FieldNamesIterMode,
 ) names.TypeDigest {
@@ -68713,8 +69411,9 @@ fn generatedFieldNamesIterStepKey(
 
 /// Whether any segment of a checked field-access path is a `.?` access, which
 /// routes the whole chain through the optional-chain lowering (one flat Try).
-fn fieldAccessAnySegmentOptional(segments: []const checked.CheckedFieldAccessSegment) bool {
-    for (segments) |segment| {
+fn fieldAccessAnySegmentOptional(view: ModuleView, segments: CIR.Expr.FieldAccessSegment.Span) bool {
+    for (0..segments.len) |segment_index| {
+        const segment = view.bodies.fieldAccessSegment(segments, @intCast(segment_index));
         if (segment.mode == .optional) return true;
     }
     return false;
@@ -68724,16 +69423,16 @@ fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.C
     return view.types.payload(checked_ty);
 }
 
-fn checkedLambdaExprIdForConstFn(view: ModuleView, fn_def: anytype) checked.CheckedExprId {
+fn checkedLambdaExprIdForConstFn(view: ModuleView, fn_def: anytype) ExprSite {
     return switch (fn_def) {
         .nested => |nested| blk: {
             const site = checkedNestedSite(view, nested);
             const expr_id = site.checked_expr orelse Common.invariant("stored nested function had no checked expression site");
-            const expr = view.bodies.expr(expr_id);
+            const expr = checkedExpr(view, ExprSite.read(expr_id));
             break :blk switch (expr.data) {
-                .lambda => expr_id,
-                .closure => |closure| closure.lambda,
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored nested function site did not point at a lambda or closure"),
+                .lambda => ExprSite.read(expr_id),
+                .closure => |closure| ExprSite.read(closure.lambda),
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored nested function site did not point at a lambda or closure"),
             };
         },
         .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("capturing stored function must reference a checked nested function"),
@@ -68800,20 +69499,9 @@ fn checkedNestedSite(view: ModuleView, nested: anytype) checked.NestedProcSite {
     Common.invariant("stored nested function referenced a missing checked nested site");
 }
 
-fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.CheckedTypeId {
-    const raw = @backingInt(binder);
-    if (raw >= view.bodies.patternBinderCount()) Common.invariant("stored function capture binder is outside checked body store");
-    const pattern = view.bodies.patternBinder(@fromBackingInt(@intCast(raw))).pattern;
-    const pattern_raw = @backingInt(pattern);
-    if (pattern_raw >= view.bodies.patternCount()) Common.invariant("stored function capture pattern is outside checked body store");
-    return view.bodies.pattern(@fromBackingInt(@intCast(pattern_raw))).ty;
-}
-
-fn checkedCaptureBinder(view: ModuleView, pattern: checked.CheckedPatternId) checked.PatternBinderId {
-    const raw = @backingInt(pattern);
-    if (raw >= view.bodies.pattern_binder_by_pattern.len) Common.invariant("checked closure capture pattern was outside the binder index");
-    return view.bodies.pattern_binder_by_pattern[raw].get() orelse
-        Common.invariant("checked closure capture pattern had no binder");
+fn checkedBinderType(view: ModuleView, binder: BinderId) checked.CheckedTypeId {
+    if (@backingInt(binder) >= view.bodies.nodeCount()) Common.invariant("stored function capture binder was outside its module's nodes");
+    return view.bodies.patternType(binder);
 }
 
 /// Whether a stored capture fills a slot of the restored function's capture
@@ -68826,7 +69514,7 @@ fn constCaptureFillsSlot(capture: check.ConstStore.ConstCapture) bool {
     };
 }
 
-fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {
+fn constCaptureBinder(id: check.ConstStore.CaptureId) BinderId {
     if (!id.isCanonical()) Common.invariant("generated capture reached source lambda restore");
     return id.binder();
 }
@@ -68882,17 +69570,17 @@ fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
     };
 }
 
-fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchCallPlan {
+fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: CIR.Expr.Idx) static_dispatch.StaticDispatchCallPlan {
     const plan_id = dispatchPlanIdForRuntimeExpr(view, expr_id);
     return view.static_dispatch_plans.plans[@backingInt(plan_id)];
 }
 
-fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchPlanId {
-    const expr = view.bodies.expr(expr_id);
+fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: CIR.Expr.Idx) static_dispatch.StaticDispatchPlanId {
+    const expr = checkedExpr(view, ExprSite.read(expr_id));
     const plan_id = switch (expr.data) {
         .dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization dispatch expression had no dispatch plan"),
         .type_dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization type dispatch expression had no dispatch plan"),
-        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored serialization runtime function did not reference a dispatch expression"),
+        .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored serialization runtime function did not reference a dispatch expression"),
     };
     const plan_raw = @backingInt(plan_id);
     if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");
@@ -68908,11 +69596,11 @@ fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
 /// procedure binding's declared function type key.
 /// The literal a literal root converts; its return type joins the
 /// definition's identity when the definition seals.
-fn literalRootIdentity(module: checked.ModuleId, expr_id: checked.CheckedExprId) [32]u8 {
+fn literalRootIdentity(module: checked.ModuleId, expr_id: ExprSite) [32]u8 {
     var hasher = TypeDigestHasher.init();
     hasher.update("roc.monotype.literal-root.v1");
     hasher.update(&module.bytes);
-    hashU32(&hasher, @backingInt(expr_id));
+    hashU32(&hasher, expr_id.rawNode() orelse Common.invariant("a literal root's literal had no CIR node"));
     return hasher.finalResult();
 }
 
@@ -68935,6 +69623,10 @@ fn procedureUseRootIdentity(request: checked.RootRequest, source_fn_key: names.T
         .expr => |expr| hashU32(&hasher, @backingInt(expr)),
         .statement => |statement| hashU32(&hasher, @backingInt(statement)),
         .required_binding => |binding| hashU32(&hasher, binding),
+        .literal => |literal| {
+            hasher.update(@tagName(literal));
+            hashU32(&hasher, literal.node());
+        },
         .hoisted => {},
     }
     if (request.compile_time_root) |root| {
@@ -69065,9 +69757,9 @@ const NodeUninhabitedScan = struct {
 const PatternUninhabitedScan = struct {
     body: *BodyContext,
 
-    const Evaluation = AnyAll.Evaluation(checked.CheckedPatternId, PatternUninhabitedScan);
+    const Evaluation = AnyAll.Evaluation(CIR.Pattern.Idx, PatternUninhabitedScan);
 
-    pub fn enter(self: *PatternUninhabitedScan, items: Evaluation.Items, pattern_id: checked.CheckedPatternId) Allocator.Error!Evaluation.Expansion {
+    pub fn enter(self: *PatternUninhabitedScan, items: Evaluation.Items, pattern_id: CIR.Pattern.Idx) Allocator.Error!Evaluation.Expansion {
         const body = self.body;
         const pattern = body.view.bodies.pattern(pattern_id);
         if (try body.nodeIsProvenUninhabited(try body.instNode(pattern.ty))) return .{ .value = true };
@@ -69075,7 +69767,8 @@ const PatternUninhabitedScan = struct {
             .as => |as| try items.add(as.pattern),
             .applied_tag => |tag| for (tag.args) |arg| try items.add(arg),
             .nominal => |nominal| try items.add(nominal.backing_pattern),
-            .record_destructure => |destructs| for (destructs) |destruct| {
+            .record_destructure => |destructs| for (destructs) |destruct_idx| {
+                const destruct = body.view.bodies.recordDestruct(destruct_idx);
                 try items.add(switch (destruct.kind) {
                     .required, .sub_pattern, .rest => |child| child,
                 });
@@ -69087,10 +69780,9 @@ const PatternUninhabitedScan = struct {
                 }
             },
             .tuple => |children| for (children) |child| try items.add(child),
-            .str_interpolation => |str| for (str.steps) |step| {
-                if (step.capture) |capture| try items.add(capture);
+            .str_interpolation => |str| for (0..str.steps.span.len) |offset| {
+                if (body.view.bodies.strPatternStep(str.steps, @intCast(offset)).capture) |capture| try items.add(capture);
             },
-            .pending,
             .assign,
             .numeral_literal,
             .str_literal,
@@ -69101,7 +69793,7 @@ const PatternUninhabitedScan = struct {
         return .{ .group = .any };
     }
 
-    pub fn exit(_: *PatternUninhabitedScan, _: checked.CheckedPatternId, _: ?bool) std.mem.Allocator.Error!void {}
+    pub fn exit(_: *PatternUninhabitedScan, _: CIR.Pattern.Idx, _: ?bool) std.mem.Allocator.Error!void {}
 };
 
 fn instRecordFieldLessThan(
@@ -69184,9 +69876,9 @@ fn resolvedPayload(view: ModuleView, ty: checked.CheckedTypeId) ResolvedPayload 
     Common.invariant("checked type alias chain was cyclic");
 }
 
-fn branchCount(branches: anytype) usize {
+fn branchCount(view: ModuleView, branches: MatchBranches) usize {
     var count: usize = 0;
-    for (branches) |branch| count += branch.pt_len;
+    for (0..branches.count()) |index| count += matchBranchAt(view, branches, index).patterns.len();
     return count;
 }
 
@@ -69222,9 +69914,9 @@ fn constOwnerEql(a: checked.ConstOwner, b: checked.ConstOwner) bool {
             const right = b.top_level_binding;
             break :blk left.module_idx == right.module_idx and left.pattern == right.pattern;
         },
-        .hoisted_expr => |left| blk: {
-            const right = b.hoisted_expr;
-            break :blk left.module_idx == right.module_idx and left.expr == right.expr;
+        .hoisted_root => |left| blk: {
+            const right = b.hoisted_root;
+            break :blk left.module_idx == right.module_idx and left.root == right.root;
         },
     };
 }
@@ -69319,7 +70011,7 @@ const NestedSiteAddress = struct {
     fn from(
         module_key: checked.ModuleId,
         owner: names.ProcTemplate,
-        expr_id: checked.CheckedExprId,
+        expr_id: CIR.Expr.Idx,
     ) NestedSiteAddress {
         return .{
             .module_bytes = module_key.bytes,
@@ -70642,7 +71334,7 @@ test "body draft comptime roots relocate independent shards and survive source d
             .root = .{ .checked = @fromBackingInt(@intCast(7)) },
             .const_locator = .{
                 .artifact = .{ .bytes = @splat(0x41) },
-                .owner = .{ .hoisted_expr = .{ .module_idx = 19, .expr = @fromBackingInt(@intCast(23)) } },
+                .owner = .{ .hoisted_root = .{ .module_idx = 19, .root = @fromBackingInt(@intCast(23)) } },
                 .template = @fromBackingInt(@intCast(29)),
                 .source_scheme = @fromBackingInt(0x51),
             },
@@ -70981,7 +71673,7 @@ test "binder map initializes only touched IDs in a large checked module" {
     var binders = try BinderMap.init(std.testing.allocator, 1_000_000);
     defer binders.deinit();
 
-    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(2));
+    const binder: BinderId = @fromBackingInt(@intCast(2));
     const local: DraftLocalId = @fromBackingInt(@intCast(7));
     try std.testing.expect(binders.values.store == null);
     try std.testing.expectEqual(@as(?DraftLocalId, null), binders.get(binder));
@@ -70997,7 +71689,7 @@ test "binder map initializes only touched IDs in a large checked module" {
 test "issue 11322: independent binder versions never initialize the checked module domain" {
     var parent = try BinderMap.init(std.testing.allocator, 1_000_000);
     defer parent.deinit();
-    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(999_999));
+    const binder: BinderId = @fromBackingInt(@intCast(999_999));
     try parent.put(binder, @fromBackingInt(@intCast(1)));
     const store = parent.values.store.?;
     try std.testing.expectEqual(@as(usize, 1), store.index.sparse_chunks.items.len);
@@ -71063,7 +71755,7 @@ test "checked string literal cache is shared only within one draft owner" {
     var draft = BodyDraftStore.init(std.testing.allocator);
     defer draft.deinit();
 
-    const literal: checked.CheckedStringLiteralId = @fromBackingInt(@intCast(3));
+    const literal: CheckedStringLiteral = .{ .literal = @fromBackingInt(@intCast(3)) };
     const first_module = @as([32]u8, @splat(1));
     const other_module = @as([32]u8, @splat(2));
 

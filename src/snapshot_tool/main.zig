@@ -3732,7 +3732,7 @@ fn snapshotProvidedEntrypointName(
 ) []const u8 {
     const def_idx = switch (root.source) {
         .def => |def| def,
-        .expr, .statement, .required_binding, .hoisted => {
+        .expr, .statement, .required_binding, .hoisted, .literal => {
             base.invariant("snapshot invariant violated: exported platform root is not a definition", .{});
         },
     };

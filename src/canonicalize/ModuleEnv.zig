@@ -831,9 +831,9 @@ pub const RecordOmittedDefault = extern struct {
 /// closed tag union where the annotation leaves the union open (design.md
 /// "Row Subsumption"). The expression keeps its own type; the function's
 /// result relates to `wide_var`, a copy of that type with each such closed
-/// row re-opened. Checked-body construction keeps the expression's own node
-/// and adds a `row_coerce` of it at the wide type, which is the node the
-/// expression's parent refers to.
+/// row re-opened. The checked body reader reports the coercion on the
+/// expression's own node (`CheckedBodies.rowCoercion`), and each lowering
+/// coerces the value to the wide type where the expression's parent reads it.
 pub const RowCoercedResult = extern struct {
     /// The value expression node (`Node.Idx`).
     node_idx: u32,
@@ -1104,7 +1104,8 @@ dispatch_relation_merges: DispatchRelationMerge.SafeList,
 /// Sorted by source node for allocation-free cross-module lookup.
 binding_schemes: BindingScheme.SafeList,
 /// Value expressions whose checked type is a widening copy of their own
-/// type, lowered as a `row_coerce` of the expression. Sorted by source node.
+/// type, which lowering coerces the expression's value to. Sorted by source
+/// node.
 row_coerced_results: RowCoercedResult.SafeList,
 /// Nodes whose own checked state is erroneous: an expression or pattern
 /// whose type contains an error, a runtime error node, or a dispatch whose

@@ -444,7 +444,7 @@ const Builder = struct {
         }
         const root_id = switch (const_ref.owner) {
             .top_level_binding => |top_level| view.compile_time_roots.lookupIdByPattern(top_level.pattern),
-            .hoisted_expr => |hoisted| if (view.hoisted_constants.lookupByExpr(hoisted.expr)) |entry| entry.root else null,
+            .hoisted_root => |hoisted| hoisted.root,
         } orelse return true;
         return !self.declared.contains(.{ .module = view.key.digest(), .root = root_id });
     }
@@ -488,7 +488,7 @@ const Builder = struct {
             const plan = plans.plans[@backingInt(plan_id)];
             try self.addTypeEdge(node, view, plan.callable_ty);
             try self.addTypeEdge(node, view, plan.dispatcher_ty);
-            self.markOwn(node, self.literalFlags(view, plan));
+            self.markOwn(node, self.literalFlags(view, plan_id, plan));
             switch (plan.resolution) {
                 .direct_closed, .direct_parametric => |direct| try self.addEvidenceNode(node, plans, direct.evidence),
                 .direct_pending => |evidence| try self.addEvidenceNode(node, plans, evidence),
@@ -536,67 +536,78 @@ const Builder = struct {
     }
 
     /// A plan's own contribution when it is a literal conversion.
-    fn literalFlags(self: *Builder, view: checked.ImportedModuleView, plan: static_dispatch.StaticDispatchCallPlan) Flags {
+    fn literalFlags(self: *Builder, view: checked.ImportedModuleView, plan_id: static_dispatch.StaticDispatchPlanId, plan: static_dispatch.StaticDispatchCallPlan) Flags {
         if (plan.resolution == .checked_error) return .{};
-        const expr = view.checked_bodies.stored_exprs[@backingInt(plan.expr)];
-        const conversion_root, const dependent: Flags = switch (expr.data) {
-            .numeral => |numeral| .{ numeral.conversion_root, .{ .dependent_numeral = true } },
-            .str_from_quote => |quote| .{ quote.conversion_root, .{ .dependent_quote = true } },
-            .interpolation => {
-                if (traceEnabled()) std.debug.print("ctfe-demand unbounded interpolation {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), expr.source_region.start.offset });
-                return .{ .strict = true };
+        const bodies = view.checked_bodies;
+        const region = view.module_env.store.getNodeRegion(@fromBackingInt(plan.node));
+        const conversion_root, const dependent: Flags = switch (bodies.index().nodeKind(plan.node)) {
+            // A custom literal pattern's node keys both its conversion plan
+            // and its equality plan.
+            .pattern => blk: {
+                const conversion = bodies.literalConversion(plan.node);
+                if (conversion.plan != plan_id) return .{};
+                break :blk switch (conversion.literal) {
+                    .numeral => .{ conversion.conversion_root, .{ .dependent_numeral = true } },
+                    .quote => .{ conversion.conversion_root, .{ .dependent_quote = true } },
+                };
             },
-            .pending,
-            .str_segment,
-            .str,
-            .bytes_literal,
-            .lookup_local,
-            .lookup_external,
-            .lookup_required,
-            .list,
-            .empty_list,
-            .tuple,
-            .match_,
-            .if_,
-            .call,
-            .record,
-            .empty_record,
-            .block,
-            .tag,
-            .nominal,
-            .zero_argument_tag,
-            .closure,
-            .lambda,
-            .binop,
-            .unary_minus,
-            .unary_not,
-            .field_access,
-            .dispatch_call,
-            .structural_eq,
-            .structural_hash,
-            .method_eq,
-            .type_dispatch_call,
-            .tuple_access,
-            .runtime_error,
-            .crash,
-            .dbg,
-            .expect_err,
-            .expect,
-            .ellipsis,
-            .anno_only,
-            .break_,
-            .return_,
-            .row_coerce,
-            .for_,
-            .hosted_lambda,
-            .run_low_level,
-            => return .{},
+            .expr => switch (bodies.exprData(@fromBackingInt(plan.node))) {
+                .numeral => |numeral| .{ numeral.conversion_root, .{ .dependent_numeral = true } },
+                .str_from_quote => |quote| .{ quote.conversion_root, .{ .dependent_quote = true } },
+                .interpolation => {
+                    if (traceEnabled()) std.debug.print("ctfe-demand unbounded interpolation {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), region.start.offset });
+                    return .{ .strict = true };
+                },
+                .str_segment,
+                .str,
+                .bytes_literal,
+                .lookup_local,
+                .lookup_external,
+                .lookup_required,
+                .list,
+                .empty_list,
+                .tuple,
+                .match_,
+                .if_,
+                .call,
+                .record,
+                .empty_record,
+                .block,
+                .tag,
+                .nominal,
+                .zero_argument_tag,
+                .closure,
+                .lambda,
+                .binop,
+                .unary_minus,
+                .field_access,
+                .dispatch_call,
+                .structural_eq,
+                .structural_hash,
+                .method_eq,
+                .type_dispatch_call,
+                .tuple_access,
+                .runtime_error,
+                .crash,
+                .dbg,
+                .expect_err,
+                .expect,
+                .ellipsis,
+                .anno_only,
+                .break_,
+                .return_,
+                .for_,
+                .hosted_lambda,
+                .run_low_level,
+                => return .{},
+            },
+            .statement, .unreached => Common.invariant("a dispatch plan's node is neither a reached expression nor a reached pattern"),
         };
         // A conversion with no root of its own depends on its instance.
         const root_id = conversion_root orelse return dependent;
         return switch (view.compile_time_roots.root(root_id).payload) {
             .pending => if (self.declared.contains(.{ .module = view.key.digest(), .root = root_id })) .{} else unrequested: {
-                if (traceEnabled()) std.debug.print("ctfe-demand unbounded unrequested-root {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), expr.source_region.start.offset });
+                if (traceEnabled()) std.debug.print("ctfe-demand unbounded unrequested-root {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), region.start.offset });
                 break :unrequested .{ .strict = true };
             },
             // A root an earlier compilation left unevaluated is requested by

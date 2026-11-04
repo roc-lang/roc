@@ -32,6 +32,10 @@ pub const HoistRoots = @import("hoist_roots.zig");
 pub const RequirementSolution = @import("requirement_solution.zig");
 pub const ConstStore = @import("const_store.zig");
 pub const CheckedArtifact = @import("checked_artifact.zig");
+/// The reader over a checked module's bodies.
+pub const CheckedBodies = @import("checked_bodies.zig");
+/// The body facts a checked module computes on first demand.
+pub const BodyAnalyses = @import("body_analyses.zig");
 /// Import-facing checking identities and explicit binding to current owners.
 pub const CheckingDependencies = @import("checking_dependencies.zig");
 pub const CheckingInterface = @import("checking_interface.zig");
@@ -74,6 +78,8 @@ test "check tests" {
     std.testing.refAllDecls(@import("const_store.zig"));
     std.testing.refAllDecls(@import("artifact_serialize.zig"));
     std.testing.refAllDecls(@import("checked_artifact.zig"));
+    std.testing.refAllDecls(@import("checked_bodies.zig"));
+    std.testing.refAllDecls(@import("body_analyses.zig"));
     std.testing.refAllDecls(@import("sealed_type_view.zig"));
     std.testing.refAllDecls(@import("checked_type_ids.zig"));
     std.testing.refAllDecls(@import("evaluation_diagnostics.zig"));

@@ -938,7 +938,7 @@ const FnPlan = struct {
 /// transparent alias at equivalent local sites. See `Builder.sameLocalIdentity`
 /// in monotype/lower.zig.
 const BinderIdentity = struct {
-    binder: check.CheckedModule.PatternBinderId,
+    binder: check.CheckedBodies.BinderId,
     digest: names.TypeDigest,
 };
 
@@ -5328,7 +5328,7 @@ const Subst = struct {
     loop_carried_binders: collections.DenseMap(BinderSlot, u32),
     /// The slot of each binder identity met so far: each binder heads a chain
     /// of the slots for the types it was met at, almost always one.
-    binder_heads: collections.DenseMap(check.CheckedModule.PatternBinderId, u32),
+    binder_heads: collections.DenseMap(check.CheckedBodies.BinderId, u32),
     binder_slots: std.ArrayList(SlotNode),
     changes: std.ArrayList(BindingChange),
     allocator: Allocator,
@@ -5342,7 +5342,7 @@ const Subst = struct {
             .binder_subst = collections.DenseMap(BinderSlot, Value).init(allocator),
             .binder_aliases = collections.DenseMap(BinderSlot, Value).init(allocator),
             .loop_carried_binders = collections.DenseMap(BinderSlot, u32).init(allocator),
-            .binder_heads = collections.DenseMap(check.CheckedModule.PatternBinderId, u32).init(allocator),
+            .binder_heads = collections.DenseMap(check.CheckedBodies.BinderId, u32).init(allocator),
             .binder_slots = .empty,
             .changes = .empty,
             .allocator = allocator,
@@ -16966,7 +16966,7 @@ test "compile-time root reads remain opaque through specialization and cloning" 
         .root = .{ .checked = @fromBackingInt(@intCast(1)) },
         .const_locator = .{
             .artifact = .{},
-            .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @fromBackingInt(@intCast(1)) } },
+            .owner = .{ .hoisted_root = .{ .module_idx = 0, .root = @fromBackingInt(@intCast(1)) } },
             .template = @fromBackingInt(@intCast(1)),
             .source_scheme = @fromBackingInt(0),
         },
@@ -17013,7 +17013,7 @@ test "a constant read counts as one expression in either form" {
         .root = .{ .checked = @fromBackingInt(@intCast(1)) },
         .const_locator = .{
             .artifact = .{},
-            .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @fromBackingInt(@intCast(1)) } },
+            .owner = .{ .hoisted_root = .{ .module_idx = 0, .root = @fromBackingInt(@intCast(1)) } },
             .template = @fromBackingInt(@intCast(1)),
             .source_scheme = @fromBackingInt(0),
         },
@@ -19027,7 +19027,7 @@ test "issue 10168 SpecConstr clones every capture when nested cloning grows the 
     } });
     const fn_list_ty = try program.types.add(.{ .list = fn_ty });
     const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
-    const nested_binder: check.CheckedModule.PatternBinderId = @fromBackingInt(@intCast(1));
+    const nested_binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(1));
     const nested_capture_local = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), unit_ty, nested_binder);
     const nested_capture_slots = try program.addTypedLocalSpan(&.{.{
         .local = nested_capture_local,
@@ -19549,7 +19549,7 @@ test "whole-body normalization resolves binder-equivalent argument locals" {
     defer program.deinit();
 
     const ty = try program.types.add(.{ .primitive = .u8 });
-    const binder: check.CheckedModule.PatternBinderId = @fromBackingInt(@intCast(1));
+    const binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(1));
     const argument = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
     const equivalent = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), ty, binder);
     const equivalent_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = equivalent } });
@@ -19597,7 +19597,7 @@ fn substituteNamedForTest(
         .args = Type.Span.empty(),
         .backing = .{ .ty = second_backing, .use = .inspectable },
     } });
-    const binder: check.CheckedModule.PatternBinderId = @fromBackingInt(@intCast(1));
+    const binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(1));
     const first = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), first_ty, binder);
     const second = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), second_ty, binder);
     const replacement = try program.addLocal(@fromBackingInt(@intCast(3)), first_ty);
@@ -20087,7 +20087,7 @@ test "SpecConstr operand sequencing preserves nested mutable versions" {
         defer program.deinit();
         const ty = try program.types.add(.{ .primitive = .u8 });
         const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ty}) });
-        const binder: check.CheckedModule.PatternBinderId = @fromBackingInt(@intCast(1));
+        const binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(1));
         const initial = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
         const version = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), ty, binder);
         const initial_pat = try program.addPat(.{ .ty = ty, .data = .{ .bind = initial } });

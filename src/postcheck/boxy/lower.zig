@@ -29,6 +29,8 @@ const ConstSchema = const_schema.ConstSchema;
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
+const ExprId = check.CheckedBodies.ExprId;
+const PatternId = check.CheckedBodies.PatternId;
 const checked_names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const LIR = lir_core.LIR;
@@ -204,14 +206,14 @@ pub const WorkerKey = union(enum) {
     adapter: struct { outer: WorkerId, from: TypeId, to: TypeId },
     /// The `??` default expression `expr` of `module`, evaluated where a
     /// construction omits its field (design.md "Defaulted Fields").
-    default: struct { module: ModuleIndex, expr: checked.CheckedExprId },
+    default: struct { module: ModuleIndex, expr: ExprId },
     /// A lambda or closure expression of the worker `outer`, whose scope
     /// (its type variables and their descriptors) it shares through its
     /// captures.
     /// `captured_scheme` is set for a local procedure's function value whose
     /// own scheme's instantiation it captures (a value compile-time
     /// evaluation stored) rather than taking per call.
-    lambda: struct { module: ModuleIndex, expr: checked.CheckedExprId, outer: WorkerId, captured_scheme: bool = false },
+    lambda: struct { module: ModuleIndex, expr: ExprId, outer: WorkerId, captured_scheme: bool = false },
     /// The erased-callable entry of a template worker that a dictionary
     /// names: it takes the method's arguments as its argument record, the
     /// target's hidden descriptors and dictionaries as its captures, and
@@ -271,7 +273,7 @@ fn descFormatIsVector(primitive: types.Primitive) bool {
 }
 
 /// An exported procedure binding's identity within its module.
-pub const ExportedBindingKey = struct { module: ModuleIndex, def: @FieldType(checked.ImportedProcedureBindingRef, "def"), pattern: checked.CheckedPatternId };
+pub const ExportedBindingKey = struct { module: ModuleIndex, def: @FieldType(checked.ImportedProcedureBindingRef, "def"), pattern: PatternId };
 
 /// The structural methods a dictionary can denote.
 pub const StructuralMethod = enum { is_eq, to_hash, to_inspect };
@@ -496,10 +498,10 @@ pub const DictionaryRoot = union(enum) {
 pub const NominalOverrides = [3]?NominalOverride;
 
 /// A field a record construction omits.
-pub const OmittedField = struct { module: ModuleIndex, expr: checked.CheckedExprId, name: types.NameId };
+pub const OmittedField = struct { module: ModuleIndex, expr: ExprId, name: types.NameId };
 
 /// A checked expression by its module in this lowering.
-pub const ExprKey = struct { module: ModuleIndex, expr: checked.CheckedExprId };
+pub const ExprKey = struct { module: ModuleIndex, expr: ExprId };
 
 /// A procedure template by its module in this lowering.
 pub const TemplateKey = struct { module: ModuleIndex, template: checked_names.CheckedProcedureTemplateId };
@@ -542,7 +544,7 @@ pub const Program = struct {
     /// The Builtin `Hasher` type, once asked for (`defaultHasher`).
     default_hasher: ?TypeId = null,
     /// Each module's callable-eval templates, by their binding pattern.
-    callable_eval_by_pattern: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, pattern: checked.CheckedPatternId }, checked.CallableEvalTemplateId) = .empty,
+    callable_eval_by_pattern: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, pattern: PatternId }, checked.CallableEvalTemplateId) = .empty,
     /// Each module's entry wrappers, by the compile-time root they wrap.
     wrapper_by_root: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, root: checked.ComptimeRootId }, checked_names.ProcedureTemplateRef) = .empty,
     /// Each module's exported procedure bindings, by their definition.
@@ -620,9 +622,9 @@ pub const Program = struct {
 
     /// The position of default expression `expr` among its module's, which
     /// an edit elsewhere in the module leaves alone.
-    fn defaultOrdinal(self: *const Program, module_index: ModuleIndex, expr: checked.CheckedExprId) u32 {
-        for (self.module(module_index).bodies().default_exprs, 0..) |default, ordinal| {
-            if (default.checked_expr == expr) return @intCast(ordinal);
+    fn defaultOrdinal(self: *const Program, module_index: ModuleIndex, expr: ExprId) u32 {
+        for (self.module(module_index).bodies().defaultExprs(), 0..) |default, ordinal| {
+            if (default == @backingInt(expr)) return @intCast(ordinal);
         }
         invariant("a default worker's expression is no default expression of its module");
     }
@@ -928,7 +930,7 @@ pub const Program = struct {
     pub fn lambdaWorker(
         self: *Program,
         outer: WorkerId,
-        lambda_expr: checked.CheckedExprId,
+        lambda_expr: ExprId,
         captures: []const checked.CheckedCapture,
         capture_types: []const TypeId,
         fn_ty: TypeId,
@@ -1962,7 +1964,7 @@ pub const Program = struct {
     /// captures: the binders of enclosing bodies whose values it needs,
     /// which are its own captures and those of the local procedures its
     /// body uses (`NestedProcSite.runtime_captures`).
-    pub fn siteCaptures(self: *Program, module_index: ModuleIndex, expr: checked.CheckedExprId) Allocator.Error![]const checked.CheckedCapture {
+    pub fn siteCaptures(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error![]const checked.CheckedCapture {
         const site_index = self.sites_by_expr.get(.{ .module = module_index, .expr = expr }) orelse
             invariant("a lambda or closure has no nested procedure site");
         return try self.runtimeCaptures(self.module(module_index), site_index);
@@ -1978,20 +1980,18 @@ pub const Program = struct {
         const bodies = view.bodies();
         var kept: std.ArrayList(checked.CheckedCapture) = .empty;
         for (listed) |capture| {
-            const binder = bodies.pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
-                invariant("a closure capture named a pattern without a binder");
-            if (bodies.patternBinder(binder).is_scheme_alias) continue;
+            if (bodies.binder(capture.pattern).is_scheme_alias) continue;
             try kept.append(self.arena.allocator(), capture);
         }
         return kept.items;
     }
 
     /// The worker evaluating default expression `expr` of `module_index`.
-    pub fn defaultWorker(self: *Program, module_index: ModuleIndex, expr: checked.CheckedExprId) Allocator.Error!WorkerId {
+    pub fn defaultWorker(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .default = .{ .module = module_index, .expr = expr } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
-        const ret = try self.converter().convert(module_index, view.bodies().expr(expr).ty, .{ .module = module_index, .vars = &.{}, .bound = &.{} });
+        const ret = try self.converter().convert(module_index, view.bodies().exprType(expr), .{ .module = module_index, .vars = &.{}, .bound = &.{} });
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const identity = self.workerIdentity(key);
         const imported = !self.ownsModule(module_index);
@@ -2464,9 +2464,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         for (view.view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
             const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
-            switch (bodies.expr(scope.checked_expr).data) {
+            switch (bodies.exprData(scope.checked_expr)) {
                 .closure => |closure| try program.local_scopes.put(allocator, .{ .module = view.index, .expr = closure.lambda }, id),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
         try program.by_identity.put(allocator, view.view.module_identity.stable_hash, view.index);
@@ -2474,10 +2474,11 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             const site_expr = site.checked_expr orelse continue;
             try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
             // A closure's site is also its lambda's, which names its worker.
-            const site_data = view.bodies().expr(site_expr).data;
+            const site_data = view.bodies().exprData(site_expr);
             if (site_data == .closure) try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_data.closure.lambda }, @intCast(site_index));
         }
-        for (bodies.record_omitted_defaults) |omitted| {
+        for (bodies.recordOmittedDefaults()) |source_omitted| {
+            const omitted = bodies.recordOmittedDefault(source_omitted);
             const name = try program.store.internName(view.nameStore().recordFieldLabelText(omitted.field_name));
             try program.omitted_defaults.put(allocator, .{ .module = view.index, .expr = omitted.expr, .name = name }, omitted.default);
         }
@@ -2488,9 +2489,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             switch (target.kind) {
                 .local_proc => |local| {
                     try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
-                    switch (bodies.expr(local.expr).data) {
+                    switch (bodies.exprData(local.expr)) {
                         .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
-                        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+                        .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
                     }
                 },
                 .procedure, .structural => {},
@@ -2504,9 +2505,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => continue,
             };
             try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
-            switch (bodies.expr(local.expr).data) {
+            switch (bodies.exprData(local.expr)) {
                 .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
     }
@@ -2660,8 +2661,8 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
             if (program.worker(worker).imported) continue;
             _ = try program.methodEntryWorker(worker);
         }
-        for (view.bodies().default_exprs) |default| {
-            _ = try program.defaultWorker(view.index, default.checked_expr);
+        for (view.bodies().defaultExprs()) |default| {
+            _ = try program.defaultWorker(view.index, @fromBackingInt(default));
         }
     }
     try program.drain();

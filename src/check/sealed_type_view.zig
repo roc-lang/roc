@@ -651,11 +651,11 @@ fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
 
     var names = canonical.CanonicalNameStore.init(allocator);
     defer names.deinit();
-    var source_nodes = try checked_artifact.CheckedSourceNodes.init(allocator, module);
-    defer source_nodes.deinit(allocator);
+    var module_index = try checked_artifact.ModuleIndex.build(allocator, module.moduleEnvConst(), &.{});
+    defer module_index.deinit(allocator);
     const publication_keys = try checked_artifact.SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
     defer publication_keys.destroy();
-    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, ModuleId{}, &imports, &.{}, &source_nodes, &.{}, &.{}, publication_keys);
+    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, ModuleId{}, &imports, &.{}, &module_index, &.{}, &.{}, publication_keys);
     defer publication.deinit(allocator);
 
     const view = publication.store.sealedView(module.moduleEnvConst());

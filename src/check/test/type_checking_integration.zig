@@ -40,33 +40,17 @@ const MethodRegistryTestCheckedTypes = struct {
     }
 };
 
-const MethodRegistryTestCheckedBodies = struct {
-    pub fn patternBinderForSource(
-        _: *const @This(),
-        _: can.CIR.Pattern.Idx,
-    ) ?checked_ids.PatternBinderId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
+const MethodRegistryTestModuleIndex = struct {
+    pub fn reachesExpr(_: *const @This(), _: can.CIR.Expr.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
     }
 
-    pub fn exprIdForSource(
-        _: *const @This(),
-        _: can.CIR.Expr.Idx,
-    ) ?checked_ids.CheckedExprId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
+    pub fn reachesPattern(_: *const @This(), _: can.CIR.Pattern.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
     }
 
-    pub fn patternIdForSource(
-        _: *const @This(),
-        _: can.CIR.Pattern.Idx,
-    ) ?checked_ids.CheckedPatternId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
-    }
-
-    pub fn statementIdForSource(
-        _: *const @This(),
-        _: can.CIR.Statement.Idx,
-    ) ?checked_ids.CheckedStatementId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
+    pub fn reachesStatement(_: *const @This(), _: can.CIR.Statement.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
     }
 };
 
@@ -3831,7 +3815,7 @@ test "checked artifact method registry skips nominal associated values" {
         .by_def = &.{},
     };
     const checked_types = MethodRegistryTestCheckedTypes{};
-    const checked_bodies = MethodRegistryTestCheckedBodies{};
+    const module_index = MethodRegistryTestModuleIndex{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
@@ -3842,7 +3826,7 @@ test "checked artifact method registry skips nominal associated values" {
         &names,
         &template_lookup,
         &checked_types,
-        &checked_bodies,
+        &module_index,
     );
     defer registry.deinit(testing.allocator);
 

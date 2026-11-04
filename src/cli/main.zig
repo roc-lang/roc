@@ -11010,7 +11010,7 @@ fn buildCliTestPlan(
         defer checking_results.deinit(ctx.gpa);
         for (artifact.compile_time_roots.roots) |root| {
             if (root.kind != .expect or root.request_eligibility != .ineligible) continue;
-            std.debug.assert(artifact.checked_bodies.exprContainsDiagnosticError(root.expr));
+            if (std.debug.runtime_safety) std.debug.assert(try artifact.bodies().exprContainsDiagnosticError(root.rootExpr()));
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
                 .order = @backingInt(root.id),
@@ -11095,7 +11095,7 @@ fn testRootRegion(
 ) base.Region {
     return switch (source) {
         .statement => |statement| env.store.getStatementRegion(statement),
-        .def, .expr, .required_binding, .hoisted => {
+        .def, .expr, .required_binding, .hoisted, .literal => {
             base.invariant("CLI test invariant violated: test root was not published from an expect statement", .{});
         },
     };
@@ -11124,7 +11124,7 @@ fn collectExpectBindingPatterns(
 ) Allocator.Error![]CIR.Pattern.Idx {
     const statement_idx = switch (root.source) {
         .statement => |statement| statement,
-        .def, .expr, .required_binding, .hoisted => return allocator.alloc(CIR.Pattern.Idx, 0),
+        .def, .expr, .required_binding, .hoisted, .literal => return allocator.alloc(CIR.Pattern.Idx, 0),
     };
     const statement = env.store.getStatement(statement_idx);
     if (statement != .s_expect) return allocator.alloc(CIR.Pattern.Idx, 0);

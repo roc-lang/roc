@@ -119,6 +119,18 @@ my @RULES = (
     { category => 'closed-occurrence-representative', regex => qr/\bcanonicalNamedOccurrence\b/, allowed => {} },
     { category => 'solver-store-release', regex => qr/\breleaseCheckedSolverTypes\b/, allowed => {} },
     { category => 'solver-store-release', regex => qr/\brelease_checked_solver_types\b/, allowed => {} },
+    # Lowering reads bodies from the canonical IR through the checked body
+    # reader, keyed by CIR ids. Nothing copies a body after checking, so the
+    # frozen body store, its id spaces, its source-to-copy maps, and its
+    # synthetic nodes stay gone; a row coercion is a lowering-side construct,
+    # never a checked expression variant.
+    { category => 'checked-body-store', regex => qr/\bCheckedBodyStore\w*\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bCheckedExprId\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bCheckedPatternId\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bexprIdForSource\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bpatternIdForSource\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bSyntheticExprOrigin\b/, allowed => {} },
+    { category => 'checked-row-coerce-variant', regex => qr/\brow_coerce\b/, scope => qr{\Asrc/check/}, allowed => {} },
     # Post-check code reads sealed solver stores through the checked type
     # reader and never writes one.
     {

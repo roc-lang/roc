@@ -4684,8 +4684,17 @@ pub const Coordinator = struct {
         };
         const platform_keys = platform.checked_types.sealed_keys orelse coordinatorInvariant("a platform was paired before its key slots were attached", .{});
         const synthesized_keys = CheckedArtifact.SynthesizedTypeKeys.create(platform_keys.allocator, platform_keys.io, header.synthesizedTypeCount(platform)) catch return null;
+        const body_analyses = CheckedArtifact.BodyAnalyses.create(
+            platform_keys.allocator,
+            platform_keys.io,
+            platform.moduleEnvConst(),
+            platform.checked_procedure_templates.promoted,
+        ) catch {
+            synthesized_keys.destroy();
+            return null;
+        };
         installed = true;
-        return header.install(platform, arena, synthesized_keys);
+        return header.install(platform, arena, synthesized_keys, body_analyses);
     }
 
     /// Write `artifact`'s checked entry. This reads none of the module's
@@ -4919,6 +4928,17 @@ pub const Coordinator = struct {
         };
         var synthesized_keys_owned = true;
         defer if (synthesized_keys_owned) synthesized_keys.destroy();
+        const body_analyses = check.CheckedArtifact.BodyAnalyses.create(
+            module_alloc,
+            self.roc_ctx.std_io,
+            cached_env,
+            artifact_serialized.checked_procedure_templates.promoted.deserialize(@intFromPtr(artifact_buffer.ptr)),
+        ) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        var body_analyses_owned = true;
+        defer if (body_analyses_owned) body_analyses.destroy();
 
         // Transform E: the artifact's sub-stores alias `artifact_buffer` and the
         // freshly relocated env is injected as its storage. Cross-artifact
@@ -4943,8 +4963,10 @@ pub const Coordinator = struct {
             } },
         );
         artifact_ptr.checked_types.attachSealedTypes(cached_env, sealed_keys, synthesized_keys);
+        artifact_ptr.body_analyses = body_analyses;
         sealed_keys_owned = false;
         synthesized_keys_owned = false;
+        body_analyses_owned = false;
         entry_owned = false;
         source_owned = false;
         cached_env_owned = false;
@@ -7520,28 +7542,14 @@ const PatternExtractionRegionStatsError = error{
     PatternExtractionMissingSourcePattern,
     PatternExtractionSourcePatternMismatch,
     PatternExtractionMissingCheckedPattern,
-    PatternExtractionMissingSyntheticMatch,
-    PatternExtractionSyntheticMatchRegionMismatch,
-    PatternExtractionRootWasNotSyntheticMatch,
-    PatternExtractionSyntheticMatchBranchCountMismatch,
-    PatternExtractionSyntheticMatchWasTrySuffix,
-    PatternExtractionSyntheticMatchSkippedExhaustiveness,
-    PatternExtractionMissingBaseExpr,
-    PatternExtractionBaseRegionMismatch,
-    PatternExtractionSyntheticPatternCountMismatch,
-    PatternExtractionSyntheticPatternWasDegenerate,
-    PatternExtractionSyntheticPatternHadRemaps,
-    PatternExtractionSyntheticBranchHadGuard,
-    PatternExtractionMissingScrutineePattern,
-    PatternExtractionScrutineePatternRegionMismatch,
-    PatternExtractionMissingSyntheticLookup,
-    PatternExtractionSyntheticLookupRegionMismatch,
-    PatternExtractionValueWasNotSyntheticLookup,
-    PatternExtractionLookupPatternMismatch,
-    PatternExtractionLookupWasNotResolved,
-    PatternExtractionResolvedRefMissing,
-    PatternExtractionCallableLookupWasNotLexical,
-    PatternExtractionConstantLookupWasNotHoisted,
+    PatternExtractionRootPatternMismatch,
+    PatternExtractionRootExprWasNotBaseExpr,
+    PatternExtractionRootEvaluatedItsExpr,
+    PatternExtractionBodyExprMismatch,
+    PatternExtractionBodyPatternMismatch,
+    PatternExtractionCallableResultWasHoistedConst,
+    PatternExtractionConstantResultWasNotHoisted,
+    PatternExtractionConstantResultRootMismatch,
     PatternExtractionValidationRootHadExtraction,
 };
 
@@ -7985,10 +7993,8 @@ fn compileAppRootIdentityExpecting(
         }
     }
     var direct_required_call_count: usize = 0;
-    for (root.checked_bodies.stored_exprs.items) |expr| {
-        if (expr.data != .call) continue;
-        const target = expr.data.call.direct_target orelse continue;
-        if (root.resolved_value_refs.records[@backingInt(target)].ref == .platform_required_proc) {
+    for (root.resolved_value_refs.call_direct_targets) |call| {
+        if (root.resolved_value_refs.records[@backingInt(call.target)].ref == .platform_required_proc) {
             direct_required_call_count += 1;
         }
     }
@@ -9398,7 +9404,7 @@ fn hashPatternExtractionRegionsForView(
             => true,
             .callable_binding => switch (root.source) {
                 .hoisted => true,
-                .def, .expr, .statement, .required_binding => false,
+                .def, .expr, .statement, .required_binding, .literal => false,
             },
             .constant,
             .expect,
@@ -9420,45 +9426,20 @@ fn hashPatternExtractionRegionsForView(
         if (root.source_pattern == null) return error.PatternExtractionMissingSourcePattern;
         if (root.source_pattern.? != extraction.result_pattern) return error.PatternExtractionSourcePatternMismatch;
         const root_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedPattern;
+        if (root_pattern != extraction.result_pattern) return error.PatternExtractionRootPatternMismatch;
+        if (root.rootExpr() != extraction.base_expr) return error.PatternExtractionRootExprWasNotBaseExpr;
+        if (root.evaluatedExpr() != null) return error.PatternExtractionRootEvaluatedItsExpr;
+        const parts = root.bodyParts();
+        if (parts.expr != extraction.base_expr) return error.PatternExtractionBodyExprMismatch;
+        if (parts.pattern != extraction.scrutinee_pattern) return error.PatternExtractionBodyPatternMismatch;
 
-        const expected_match_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern));
-        const expected_lookup_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.result_pattern));
-        const expected_base_region = view.module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.base_expr));
-
-        const synthetic_match = checkedExprForId(view, root.expr) orelse return error.PatternExtractionMissingSyntheticMatch;
-        if (!expected_match_region.eq(synthetic_match.source_region)) return error.PatternExtractionSyntheticMatchRegionMismatch;
-        if (std.meta.activeTag(synthetic_match.data) != .match_) return error.PatternExtractionRootWasNotSyntheticMatch;
-        const match_data = synthetic_match.data.match_;
-        if (match_data.branches.len != 1) return error.PatternExtractionSyntheticMatchBranchCountMismatch;
-        if (match_data.is_try_suffix) return error.PatternExtractionSyntheticMatchWasTrySuffix;
-        if (match_data.skip_exhaustiveness) return error.PatternExtractionSyntheticMatchSkippedExhaustiveness;
-
-        const base_expr = checkedExprForId(view, match_data.cond) orelse return error.PatternExtractionMissingBaseExpr;
-        if (!expected_base_region.eq(base_expr.source_region)) return error.PatternExtractionBaseRegionMismatch;
-
-        const branch = match_data.branches[0];
-        const branch_patterns = branch.patternsSlice(view.checked_bodies);
-        if (branch_patterns.len != 1) return error.PatternExtractionSyntheticPatternCountMismatch;
-        if (branch_patterns[0].degenerate) return error.PatternExtractionSyntheticPatternWasDegenerate;
-        if (branch_patterns[0].binderRemapsSlice(view.checked_bodies).len != 0) return error.PatternExtractionSyntheticPatternHadRemaps;
-        if (branch.guard != null) return error.PatternExtractionSyntheticBranchHadGuard;
-
-        const scrutinee_pattern = checkedPatternForId(view, branch_patterns[0].pattern) orelse
-            return error.PatternExtractionMissingScrutineePattern;
-        if (!expected_match_region.eq(scrutinee_pattern.source_region)) return error.PatternExtractionScrutineePatternRegionMismatch;
-
-        const synthetic_lookup = checkedExprForId(view, branch.value) orelse return error.PatternExtractionMissingSyntheticLookup;
-        if (!expected_lookup_region.eq(synthetic_lookup.source_region)) return error.PatternExtractionSyntheticLookupRegionMismatch;
-        if (std.meta.activeTag(synthetic_lookup.data) != .lookup_local) return error.PatternExtractionValueWasNotSyntheticLookup;
-        const lookup = synthetic_lookup.data.lookup_local;
-        if (lookup.pattern != root_pattern) return error.PatternExtractionLookupPatternMismatch;
-        if (lookup.resolved == null) return error.PatternExtractionLookupWasNotResolved;
-        const resolved_index = @backingInt(lookup.resolved.?);
-        if (resolved_index >= view.resolved_value_refs.records.len) return error.PatternExtractionResolvedRefMissing;
-        const resolved = view.resolved_value_refs.records[resolved_index].ref;
+        const result_const = view.hoisted_constants.lookupByPattern(extraction.result_pattern);
         switch (root.kind) {
-            .callable_binding => if (resolved != .pattern_binder) return error.PatternExtractionCallableLookupWasNotLexical,
-            .hoisted_constant => if (resolved != .selected_hoisted_const) return error.PatternExtractionConstantLookupWasNotHoisted,
+            .callable_binding => if (result_const != null) return error.PatternExtractionCallableResultWasHoistedConst,
+            .hoisted_constant => {
+                const entry = result_const orelse return error.PatternExtractionConstantResultWasNotHoisted;
+                if (entry.root != root.id) return error.PatternExtractionConstantResultRootMismatch;
+            },
             .hoisted_validation => return error.PatternExtractionValidationRootHadExtraction,
             .constant,
             .expect,
@@ -9469,38 +9450,17 @@ fn hashPatternExtractionRegionsForView(
             => unreachable, // is_selected_root skipped every root of these kinds
         }
 
+        const store = &view.module_env.store;
         hasher.update(&view.key.bytes);
         hashU32IntoSha256(hasher, @backingInt(root.id));
-        hashU32IntoSha256(hasher, @backingInt(root.expr));
+        hashU32IntoSha256(hasher, @backingInt(root.rootExpr()));
         hashU32IntoSha256(hasher, @backingInt(extraction.base_expr));
         hashU32IntoSha256(hasher, @backingInt(extraction.scrutinee_pattern));
         hashU32IntoSha256(hasher, @backingInt(extraction.result_pattern));
-        hashRegionIntoSha256(hasher, expected_base_region);
-        hashRegionIntoSha256(hasher, base_expr.source_region);
-        hashRegionIntoSha256(hasher, expected_match_region);
-        hashRegionIntoSha256(hasher, synthetic_match.source_region);
-        hashRegionIntoSha256(hasher, scrutinee_pattern.source_region);
-        hashRegionIntoSha256(hasher, expected_lookup_region);
-        hashRegionIntoSha256(hasher, synthetic_lookup.source_region);
+        hashRegionIntoSha256(hasher, store.getExprRegion(extraction.base_expr));
+        hashRegionIntoSha256(hasher, store.getPatternRegion(extraction.scrutinee_pattern));
+        hashRegionIntoSha256(hasher, store.getPatternRegion(extraction.result_pattern));
     }
-}
-
-fn checkedExprForId(
-    view: check.CheckedArtifact.ImportedModuleView,
-    expr: check.CheckedArtifact.CheckedExprId,
-) ?check.CheckedArtifact.CheckedExpr {
-    const index = @backingInt(expr);
-    if (index >= view.checked_bodies.exprCount()) return null;
-    return view.checked_bodies.expr(expr);
-}
-
-fn checkedPatternForId(
-    view: check.CheckedArtifact.ImportedModuleView,
-    pattern: check.CheckedArtifact.CheckedPatternId,
-) ?check.CheckedArtifact.CheckedPattern {
-    const index = @backingInt(pattern);
-    if (index >= view.checked_bodies.patternCount()) return null;
-    return view.checked_bodies.pattern(pattern);
 }
 
 fn hashRegionIntoSha256(hasher: *base.Sha256, region: base.Region) void {
