@@ -2423,13 +2423,16 @@ An entry-block slot is allocated for the whole activation, so LLVM can overlap
 two slots only through `llvm.lifetime.start` and `llvm.lifetime.end`. The LLVM
 backend brackets the slot of every local whose address it passes to an
 out-of-line Roc procedure call (a result returned through memory, or an
-argument passed by pointer) with markers at that local's exact lifetime
-boundaries, which the shared LIR stack planner solves over the procedure's
-explicit control-flow graph. Other slots carry no markers: SROA removes slots
-whose addresses never escape, and markers on them would only add optimizer
-work. Procedure arguments, which the prologue writes, and locals in deferred
-string-match captures, which the backend materializes outside the statements
-that access them, keep their activation lifetime.
+argument passed by pointer) or an explicit RC helper call with markers at that
+storage owner's exact lifetime boundaries, which the shared LIR stack planner
+solves over the procedure's explicit control-flow graph. Other slots carry no
+markers: SROA removes slots whose addresses never escape, and markers on them
+would only add optimizer work. RC argument emission and lifetime planning
+share the same size rule: small values use the shared RC scratch slot; larger
+values pass their own storage. Views extend their owner's lifetime. Procedure
+arguments, which the prologue writes, and locals in deferred string-match
+captures, which the backend materializes outside the statements that access
+them, keep their activation lifetime.
 
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
@@ -5250,7 +5253,12 @@ before materializing an edge for a direct call, procedure value, or interface
 relation; downstream specialization receives only that selected edge. Boxy
 lowering selects the same root evidence, read through the app CheckedModule's
 evidence table, for every direct call and procedure-value use of a platform
-requirement.
+requirement. The platform's copied type pins only what the requirement names,
+so this root evidence follows the same default rule as every root's: a
+requirement on a variable its literals constrain and nothing pins resolves
+against the literals' default owner (`Str` for quotes and interpolations,
+`Dec` for numerals), as in `main! : List(Str) => Try({}, _)` returning
+`Err(Fail("x"))`.
 
 A platform `provides` declaration must name a top-level value defined in the
 platform module. It cannot name a value from `requires` directly; a platform
@@ -10571,6 +10579,12 @@ type reaches a cycle reports it by name and becomes `.err`. A cycle no
 rejected root's type reaches, such as one in a lambda passed straight to a
 call, is reported at the output root whose walk found it, and one of the
 cycle's variables becomes `.err` after every report has its snapshot.
+A dispatch this module resolved to a definition the check rejected was
+selected while that definition still had its inferred type, so it succeeded
+then; it is rejected now at the expression that owns it, with no report of
+its own (`Check.retireDispatchesOfRejectedDefs`), exactly as a dispatch to an
+imported definition whose type is an error is rejected at selection. A use by
+name is retired by the erroneous-use sweep the same way.
 
 Normalization needs no metadata on type variables and adds no work where no
 label repeats: detection rides on the unifier's gather, the key writer's row
@@ -13720,9 +13734,18 @@ locals, read from their descriptors, and each dynamic local's address is the
 region base plus its running offset. Because every descriptor a body uses is
 composed at entry, the region's size and every offset are available before the
 first body statement runs. LLVM allocates the region with one dynamically
-sized `alloca`; the dev backend adjusts the stack pointer after its fixed frame
-and keeps the region base in a frame slot; the wasm backend bumps the shadow
-stack; the interpreter allocates a buffer per activation.
+sized `alloca` and has the Boxy runtime place the locals in it, one run of
+locals sharing a descriptor per call (`roc_desc_frame_run_size`,
+`roc_desc_frame_place_run`), writing each local's address into its slot in
+one array of address slots the procedure reads at each use. The procedure
+itself stores nothing per local and holds no address in a register across its
+body: a store per local would be a stack access in the entry block, which
+LLVM's WebAssembly register stackifier handles quadratically in that block's
+uses of the frame register, and an address held from the prologue to a distant
+use is what LLVM's register allocator handles quadratically in a large body.
+The dev backend adjusts the stack pointer after its fixed frame and keeps the
+region base in a frame slot; the wasm backend bumps the shadow stack; the
+interpreter allocates a buffer per activation.
 
 Boxy lowering gives a call fresh result storage, separate from its arguments
 and captures. In return position it may forward the enclosing procedure's
@@ -16726,7 +16749,15 @@ through any number of templates converges. A direct operand of a call or a
 low-level operation that reads a local materializes nothing; every other
 expression or pattern whose type mentions a variable demands its layout. A
 variable a parameter holds by value rather than as a `List` item or `Box` payload
-demands at least its layout, because it sizes the parameter. A body that is
+demands at least its layout, because it sizes the parameter. A user nominal
+type's argument stands where the declaration's backing places the matching
+formal: an argument the backing extends a row with is a row extension, one the
+backing holds only as a `List` item or `Box` payload (or not at all) is held in
+a container, and one under a function or a representation-deciding builtin is
+an exact mention. Each declaration's reach of its formals is computed once per
+module, the first time a type names it, as the least fixed point over the
+declarations whose backings name one another. Builtin nominals keep their
+fixed argument rules. A body that is
 not a checked Roc body (an intrinsic, an entry wrapper, a hosted procedure, or
 an unimplemented declaration, whose crash body still returns at its declared
 type) demands all of every variable.
@@ -22286,11 +22317,14 @@ payloads use the same memory-view plan: an immutable alias or field read names
 its ultimate storage owner and a committed byte offset. LLVM does not rebuild
 these aliases or field reads field by field. The existing per-proc
 value planner uses the shared LIR access inventory and liveness solution to
-prove these views. Join parameters, explicit mutations, and uninitialized
-storage remain snapshots. A single static definition may execute repeatedly:
-a view may not remain live across its storage owner's next definition.
-View chains are resolved once, and all reads through them extend the owner's
-LLVM slot lifetime. A view's definition does not overwrite its owner's bytes.
+prove these views. A join declaration does not mutate its parameters: an
+`initialize_join_param` write is an ordinary definition. Single-definition join
+parameters are eligible view owners; multiple definitions, explicit replacement,
+and uninitialized storage retain snapshots. A single static definition may
+execute repeatedly: a view may not remain live across its storage owner's next
+definition. View chains are resolved once, and all reads through them extend the
+owner's LLVM slot lifetime. A view's definition does not overwrite its owner's
+bytes.
 
 An ordinary indirect fast-call parameter with no body writes can use the
 caller's storage directly. Tail-group parameters keep their snapshots because
@@ -22485,23 +22519,31 @@ Stable does not mean distinct. Before emitting a procedure, `LirCodeGen` walks
 its exact control-flow graph and inventories every definition and indirect
 write. A one-definition `assign_ref.local` may adopt its source's authoritative
 location only when both locals have the same runtime representation and the
-source is immutable. Multiply-defined locals, join parameters, uninitialized
-poisoning, output-pointer writes, control-flow capture writes, and aggregate
-stores therefore retain independent storage identities. This lets immutable alias
-chains emit no load/store copies without allowing a later source mutation to
-change an earlier snapshot. Floating-point values that require per-binding NaN
-normalization and vector values retain independent locations. The proof never
-uses emission order, last-use guesses, or an adjacent-instruction peephole.
+source has at most one definition. Join declarations do not write storage;
+initialization of a join parameter counts as an ordinary definition. The planner
+proves that the alias is not live at procedure entry or across its ultimate
+owner's definition, including when that definition executes again in a loop.
+Multiply-defined locals, explicit replacements, uninitialized poisoning,
+output-pointer writes, control-flow capture writes, and aggregate stores retain
+independent storage identities. This lets immutable alias chains emit no
+load/store copies without allowing a later source mutation to change an earlier
+snapshot. Floating-point values that require per-binding NaN normalization and
+vector values retain independent locations. The proof never uses emission
+order, last-use guesses, or an adjacent-instruction peephole.
 
 Native stack planning uses the shared LIR stack planner, which builds a
 procedure's control-flow graph from the shared LIR read/definition
 inventories, plus explicit native descriptor accesses and fused-result writes.
 Runtime successor edges distinguish join declarations from jumps, and pattern
-captures write only on their successful edges. Immutable aliases share a storage identity; their
-combined reads keep that identity live. Each instruction-selection region holds
-all its inputs and outputs simultaneously, so multiword copies cannot overwrite
-unread operands. This analysis follows explicit ARC statements as ordinary reads
-and makes no ownership decisions.
+captures write only on their successful edges. Immutable aliases share a storage
+identity; their combined reads keep that identity live. The planner solves
+independent local lifetimes once, resolves eligible alias chains against that
+solution, and unions their live ranges into the owner's range before assigning
+slots. This preserves loop snapshots without a second control-flow solve.
+Each instruction-selection region holds all its inputs and outputs
+simultaneously, so multiword copies cannot overwrite unread operands. This
+analysis follows explicit ARC statements as ordinary reads and makes no
+ownership decisions.
 
 The planner forms basic blocks once. Within each block it records disjoint
 read-before-write intervals, propagating only live-in requirements backward across

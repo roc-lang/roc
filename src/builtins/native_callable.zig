@@ -43,11 +43,13 @@ fn invoke(cell: *Pending, callable: erased.CallableFnPtr, ret: ?[*]u8, args: ?[*
     invoked(host.ops(), ret, args, capture, reuse, invocation(cell));
 }
 
-/// Ordinary indirect invocation with the producer's exact packed ABI.
+/// Ordinary indirect invocation with the producer's exact packed ABI. The
+/// invocation is the hot path and stays inline at each call site; a pending
+/// call the callee left behind is the cold path, driven out of line.
 pub fn call(callable: erased.CallableFnPtr, ret: ?[*]u8, args: ?[*]const u8, capture: ?[*]u8, reuse: ?[*]u8) void {
     var pending: Pending = .{};
     invoke(&pending, callable, ret, args, capture, reuse);
-    drive(&pending, ret);
+    if (pending.callable != null) drivePending(&pending, ret);
 }
 
 /// ARC transfers one closure reference and the arguments to this pending call.
@@ -68,6 +70,19 @@ pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]
 
 /// Tail-drive's result slot has the same concrete ABI throughout the chain.
 pub fn drive(pending: *Pending, ret: ?[*]u8) void {
+    drivePending(pending, ret);
+}
+
+/// Run the chain of pending calls. A program makes one erased call per
+/// literal argument and per call of a stored function, so a generic body
+/// can hold thousands of call sites; the loop stays out of line so no site
+/// carries a copy of it, and each site ends with the branch over it, which
+/// keeps the body in blocks of one site each. LLVM's WebAssembly register
+/// stackifier does work proportional to a block's length for each of a
+/// register's uses in that block, and every stack-slot access in a function
+/// uses its frame register, so a body kept in one block costs the square of
+/// its size there.
+noinline fn drivePending(pending: *Pending, ret: ?[*]u8) void {
     while (pending.callable) |callable| {
         pending.callable = null;
         const closure = pending.closure.?;
