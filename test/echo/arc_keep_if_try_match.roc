@@ -1,9 +1,11 @@
 # Issue 12810: a keep_if predicate that matches on a Try from a function with
 # several Ok constructors.
 
+# spellchecker:off
 Interaktion : [Streicheln, Schmusen, Pflegen]
 
 von : Str -> Try(Interaktion, Str)
+# spellchecker:on
 von = |n|
     if n == "streicheln" { Ok(Streicheln) }
     else if n == "schmusen" { Ok(Schmusen) }
