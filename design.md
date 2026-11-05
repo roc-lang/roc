@@ -5874,7 +5874,9 @@ diagnostics never show them (`Store.nominalDeclaredArgs`); arity checks and
 argument positions read the declared arguments, and a context argument is an
 invariant position. The escape rule (Body-Local Types Stay In Their Context)
 keeps a value of such a type inside the functions it depends on, so no
-diagnostic compares two applications that differ only in context arguments.
+diagnostic compares two applications that differ only in context arguments:
+a relation that fails there is the escape's consequence, and is withdrawn in
+favor of the escape's report.
 
 Once every body is checked, `finalizeLocalTypeContexts` makes each candidate
 enclosing a recorded reference to a type with a context contextual from the
@@ -6072,7 +6074,16 @@ its type against the local types whose owners' bodies do not enclose it
 set over type nodes; no other body is walked. A rejected binding is a Local
 Type Escapes error at its name, showing its type and the local type's
 declaration, and suggesting a top-level declaration with a type parameter
-(`Local(a)`). The binding binds nothing, so every use of it crashes, and
+(`Local(a)`). A relation that failed only because the type left its
+context is that report's consequence and is withdrawn once every relation is
+checked (`withdrawLocalTypeEscapeConsequences`): the unifier marks a
+mismatch whose two applications of the type disagreed at a context argument
+(values of two instantiations met), or one of whose operands is a context
+variable of the type (which a value of it carried out of the body that
+introduced it, so that body's annotation could not generalize it, as an
+enclosing body's `acc = []` carries the variable of the nested function
+whose local values it holds), with the type and that variable
+(`problem.LocalTypeEscapeCause`). The binding binds nothing, so every use of it crashes, and
 every method of the escaped type is rejected like a capturing method
 (Methods Never Capture), so no dispatch outside the type's context reaches a
 local procedure that needs it.

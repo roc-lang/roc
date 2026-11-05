@@ -124,3 +124,4 @@ pub const ComptimeEvalError = types.ComptimeEvalError;
 pub const VarWithSnapshot = types.VarWithSnapshot;
 pub const GrowingPolymorphicRecursion = types.GrowingPolymorphicRecursion;
 pub const LocalTypeEscape = types.LocalTypeEscape;
+pub const LocalTypeEscapeCause = types.LocalTypeEscapeCause;

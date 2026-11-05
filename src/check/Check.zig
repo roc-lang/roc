@@ -5611,6 +5611,64 @@ const LocalTypeEscapeJudge = struct {
     }
 };
 
+/// A relation or requirement that failed only because a body-local type left
+/// the functions its identity depends on (`problem.LocalTypeEscapeCause`:
+/// values of two instantiations met, or a context variable it carried out met
+/// another type or a requirement it does not declare) is withdrawn once the
+/// escape rule reports that type: the escape is the problem, reported at the
+/// binding the type left through, and the failure is its consequence. This
+/// runs once every relation is checked.
+fn withdrawLocalTypeEscapeConsequences(
+    self: *Self,
+    escaped: *const collections.DenseMapUnmanaged(CIR.Statement.Idx, void),
+) void {
+    const self_module = self.cir.selfModuleIdentity();
+    const items = self.problems.problems.items;
+    var kept: usize = 0;
+    for (items) |item| {
+        const cause: ?problem.LocalTypeEscapeCause = switch (item) {
+            .type_mismatch => |mismatch| mismatch.local_type_escape,
+            .static_dispatch => |dispatch| switch (dispatch) {
+                .dispatcher_not_nominal => |failure| failure.local_type_escape,
+                .dispatcher_does_not_impl_method => |failure| failure.local_type_escape,
+                else => null,
+            },
+            else => null,
+        };
+        const withdrawn = if (cause) |escape| switch (escape) {
+            .context_argument => |decl_idx| argument: {
+                const decl = self.types.getNominalDecl(decl_idx);
+                break :argument decl.origin_module == self_module and
+                    escaped.contains(@fromBackingInt(decl.statement()));
+            },
+            .context_variable => |variable| variable: {
+                for (self.local_type_context_owners.items) |entry| {
+                    if (ModuleEnv.varFrom(entry.rigid) == variable and escaped.contains(entry.decl)) break :variable true;
+                }
+                break :variable false;
+            },
+        } else false;
+        if (withdrawn) continue;
+        items[kept] = item;
+        kept += 1;
+    }
+    self.problems.truncate(kept);
+}
+
+/// The context variable of a body-local type (design.md "Body-Local Type
+/// Context") that `var_` is, as its annotation's variable.
+fn probeContextVariable(ctx: *const anyopaque, var_: Var) ?Var {
+    const self: *const Self = @ptrCast(@alignCast(ctx));
+    if (self.local_type_context_rigids.items.len == 0) return null;
+    const resolved = self.types.resolveVar(var_);
+    if (resolved.desc.content != .rigid) return null;
+    for (self.local_type_context_rigids.items) |rigid| {
+        const variable = ModuleEnv.varFrom(rigid);
+        if (self.types.resolveVar(variable).var_ == resolved.var_) return variable;
+    }
+    return null;
+}
+
 /// POLICY: a body-local type stays inside the functions its identity depends
 /// on (design.md "Body-Local Types Stay In Their Context"). A nominal type
 /// declared in a function body whose context includes a type variable of an
@@ -5708,6 +5766,7 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
     }
     const escaped = &judge.escaped;
     if (escaped.count() == 0) return;
+    self.withdrawLocalTypeEscapeConsequences(escaped);
 
     // Values of an escaped type exist outside its context, where its methods
     // have no declaration context to run in, so every method is rejected.
@@ -8168,6 +8227,7 @@ fn unifyEnv(self: *Self) unifier.Env {
         .unify_scratch = &self.unify_scratch,
         .occurs_scratch = &self.occurs_scratch,
         .construction_probe = .{ .ctx = self, .isRecordConstruction = probeRecordConstruction },
+        .context_variable_probe = .{ .ctx = self, .contextVariable = probeContextVariable },
         .deferred_callables = .{ .ctx = self, .link = linkDeferredCallableHook, .link_all = linkAllDeferredCallablesHook },
     };
 }
@@ -8506,6 +8566,7 @@ fn appendTypeMismatch(
         .host_fixed_row = host_fixed_row,
         .host_fixed_origin = host_fixed_origin,
         .method_conflict = method_conflict,
+        .local_type_escape = unifier.localTypeEscapeCause(&unify_env, expected, actual),
         .str_conversion = try self.strConversionFor(
             diagnostic_ctx,
             self.types.resolveThroughAliases(expected).desc.content,
@@ -60904,6 +60965,10 @@ fn reportConstraintErrorAt(
     else
         self.stringLiteralRegionForDispatcher(constraint, dispatcher_var);
     const copied: ?problem.CopiedRequirement = if (copied_failure) |failure| failure.copied else null;
+    const local_type_escape: ?problem.LocalTypeEscapeCause = if (probeContextVariable(self, dispatcher_var)) |variable|
+        .{ .context_variable = variable }
+    else
+        null;
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{
             .static_dispatch = .{
@@ -60927,6 +60992,7 @@ fn reportConstraintErrorAt(
                         .ext_name = self.rowExtensionSourceName(dispatcher_var),
                         .kind = entry.kind,
                     } else null,
+                    .local_type_escape = local_type_escape,
                 },
             },
         },
@@ -60941,6 +61007,7 @@ fn reportConstraintErrorAt(
                 .num_literal = self.types.constraintNumeralInfo(constraint),
                 .string_literal_region = string_literal_region,
                 .copied = copied,
+                .local_type_escape = local_type_escape,
             },
         } },
     };
