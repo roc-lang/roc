@@ -50,7 +50,7 @@ pub fn main(init: std.process.Init) SmokeError!void {
     const expected_names: []const []const u8 = &.{"roc_main"};
 
     // 1. Builtins + Coordinator.
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, init.io);
     defer builtin_modules.deinit();
 
     var coord = try Coordinator.init(
