@@ -7087,6 +7087,8 @@ pub const Builder = struct {
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
     }
 
+    /// Prepare the callee's signature descriptors at this checked instantiation.
+    /// The returned argument array belongs to the caller; locals belong to LIR.
     pub fn callDescriptorArgs(self: *Builder, callee: WorkerId, bound: ?[]const TypeId) Allocator.Error![]LocalId {
         const required = try self.program.passedDescriptorTypes(self.allocator, callee);
         defer self.allocator.free(required);
