@@ -139,6 +139,12 @@ const PathTable = struct {
         return table;
     }
 
+    fn deinit(self: *PathTable, allocator: Allocator) void {
+        self.nodes.deinit(allocator);
+        self.children.deinit(allocator);
+        self.joined.deinit(allocator);
+    }
+
     fn node(self: *const PathTable, path: PathId) Node {
         return self.nodes.items[@backingInt(path)];
     }
@@ -259,6 +265,12 @@ pub const DemandSet = struct {
     read_paths: std.ArrayList(PathId) = .empty,
     read_consumers: std.ArrayList(Consumers) = .empty,
     placements: std.AutoArrayHashMapUnmanaged(Placement, void) = .empty,
+
+    fn deinit(self: *DemandSet, allocator: Allocator) void {
+        self.read_paths.deinit(allocator);
+        self.read_consumers.deinit(allocator);
+        self.placements.deinit(allocator);
+    }
 
     fn addRead(self: *DemandSet, allocator: Allocator, path: PathId, consumers: Consumers) Allocator.Error!bool {
         if (std.mem.findScalar(PathId, self.read_paths.items, path)) |index| {
@@ -411,6 +423,38 @@ pub const Demand = struct {
 /// as the clone sees it at one call.
 pub const ResolvedRead = struct { steps: []const Step, consumers: Consumers };
 
+/// Resolved reads collected with each part listed once.
+const ResolvedReads = struct {
+    allocator: Allocator,
+    out: std.ArrayList(ResolvedRead) = .empty,
+    /// The position in `out` of each part's read.
+    positions: std.HashMapUnmanaged([]const Step, u32, StepsContext, std.hash_map.default_max_load_percentage) = .empty,
+
+    const StepsContext = struct {
+        pub fn hash(_: StepsContext, steps: []const Step) u64 {
+            return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(steps));
+        }
+
+        pub fn eql(_: StepsContext, a: []const Step, b: []const Step) bool {
+            if (a.len != b.len) return false;
+            for (a, b) |x, y| if (!x.eql(y)) return false;
+            return true;
+        }
+    };
+
+    fn add(self: *ResolvedReads, steps: []const Step, consumers: Consumers) Allocator.Error!void {
+        const entry = try self.positions.getOrPut(self.allocator, steps);
+        if (entry.found_existing) {
+            self.out.items[entry.value_ptr.*].consumers.setUnion(consumers);
+            return;
+        }
+        const owned = try self.allocator.dupe(Step, steps);
+        entry.key_ptr.* = owned;
+        entry.value_ptr.* = @intCast(self.out.items.len);
+        try self.out.append(self.allocator, .{ .steps = owned, .consumers = consumers });
+    }
+};
+
 /// A parameter or capture of a function.
 pub const Slot = struct {
     kind: Kind,
@@ -444,16 +488,31 @@ pub const FnSummary = struct {
 
 /// The productivity summaries of every function in a program, computed
 /// before any clone runs.
+///
+/// The fixpoint grows the path table and the demand sets on every visit, so
+/// they live in `gpa`, where a container that grows gives its old buffer
+/// back; only the fixed-size per-function arrays live in the arena.
 pub const Analysis = struct {
+    gpa: Allocator,
     arena: collections.SingleThreadArena,
     program: *const Ast.Program,
-    paths: PathTable,
-    fns: []FnSummary,
+    paths: PathTable = .{},
+    fns: []FnSummary = &.{},
     /// What each direct or value call's surroundings in a source body consume
     /// of its result.
     call_demand: collections.DenseMapUnmanaged(Ast.ExprId, DemandSet) = .empty,
 
     pub fn deinit(self: *Analysis) void {
+        var calls = self.call_demand.iterator();
+        while (calls.next()) |entry| entry.value_ptr.deinit(self.gpa);
+        self.call_demand.deinit(self.gpa);
+        for (self.fns) |*fn_summary| {
+            for (fn_summary.params) |*set| set.deinit(self.gpa);
+            for (fn_summary.captures) |*set| set.deinit(self.gpa);
+            self.gpa.free(fn_summary.constructed);
+            self.gpa.free(fn_summary.passes);
+        }
+        self.paths.deinit(self.gpa);
         self.arena.deinit();
     }
 
@@ -478,13 +537,16 @@ pub const Analysis = struct {
     }
 
     /// `demand` with each placement resolved against `result`, the reads of
-    /// the enclosing function's result.
+    /// the enclosing function's result. Each part is listed once, with the
+    /// union of the consumers that read it: a caller asks only whether some
+    /// read meets some consumer, and resolving through nested inlines would
+    /// otherwise repeat a part once per route that reaches it, at every level.
     pub fn resolve(self: *const Analysis, allocator: Allocator, demand: Demand, result: []const ResolvedRead) Allocator.Error![]const ResolvedRead {
-        var out: std.ArrayList(ResolvedRead) = .empty;
+        var resolved: ResolvedReads = .{ .allocator = allocator };
         var steps: std.ArrayList(Step) = .empty;
         for (demand.read_paths, demand.read_consumers) |path, consumers| {
             try self.paths.stepsOf(allocator, path, &steps);
-            try out.append(allocator, .{ .steps = try allocator.dupe(Step, steps.items), .consumers = consumers });
+            try resolved.add(steps.items, consumers);
         }
         var placed: std.ArrayList(Step) = .empty;
         var rest: std.ArrayList(Step) = .empty;
@@ -494,10 +556,10 @@ pub const Analysis = struct {
                 if (!startsWith(read.steps, placed.items)) continue;
                 try self.paths.stepsOf(allocator, placement.value, &rest);
                 for (read.steps[placed.items.len..]) |step| try appendStep(allocator, &rest, step);
-                try out.append(allocator, .{ .steps = try allocator.dupe(Step, rest.items), .consumers = read.consumers });
+                try resolved.add(rest.items, read.consumers);
             }
         }
-        return out.items;
+        return resolved.out.items;
     }
 
     /// Whether `fn_id` constructs, on every path that returns, a result part
@@ -562,25 +624,26 @@ fn recordFieldType(types: *const Type.Store, record_ty: Type.TypeId, name: names
 /// Analyze every function of `program` whose body `bodies` gives.
 pub fn analyze(gpa: Allocator, program: *const Ast.Program, bodies: []const ?Ast.ExprId) Allocator.Error!Analysis {
     var analysis: Analysis = .{
+        .gpa = gpa,
         .arena = collections.SingleThreadArena.init(gpa),
         .program = program,
-        .paths = undefined,
-        .fns = &.{},
     };
     errdefer analysis.deinit();
     const arena = analysis.arena.allocator();
-    analysis.paths = try PathTable.init(arena);
-    analysis.fns = try arena.alloc(FnSummary, bodies.len);
+    analysis.paths = try PathTable.init(gpa);
+    const fns = try arena.alloc(FnSummary, bodies.len);
+    for (fns) |*fn_summary| fn_summary.* = .{ .params = try arena.alloc(DemandSet, 0), .captures = try arena.alloc(DemandSet, 0) };
+    analysis.fns = fns;
     for (analysis.fns, 0..) |*fn_summary, index| {
         const fn_ = program.getFnAt(index);
-        fn_summary.* = .{
-            .params = try arena.alloc(DemandSet, program.typedLocalSpan(fn_.args).len),
-            .captures = try arena.alloc(DemandSet, program.typedLocalSpan(fn_.captures).len),
-            .wrapper = bodies[index] != null and
-                try WrapperBody.wrapperBody(gpa, program, @fromBackingInt(@as(u32, @intCast(index)))) != null,
-        };
-        for (fn_summary.params) |*set| set.* = .{};
-        for (fn_summary.captures) |*set| set.* = .{};
+        const params = try arena.alloc(DemandSet, program.typedLocalSpan(fn_.args).len);
+        for (params) |*set| set.* = .{};
+        fn_summary.params = params;
+        const captures = try arena.alloc(DemandSet, program.typedLocalSpan(fn_.captures).len);
+        for (captures) |*set| set.* = .{};
+        fn_summary.captures = captures;
+        fn_summary.wrapper = bodies[index] != null and
+            try WrapperBody.wrapperBody(gpa, program, @fromBackingInt(@as(u32, @intCast(index)))) != null;
     }
 
     var builder = Builder{
@@ -646,7 +709,7 @@ const Builder = struct {
     }
 
     fn persistent(self: *Builder) Allocator {
-        return self.analysis.arena.allocator();
+        return self.analysis.gpa;
     }
 
     fn temp(self: *Builder) Allocator {
@@ -1402,8 +1465,13 @@ const Builder = struct {
                 std.debug.assert(kept);
             }
         }
-        fn_summary.constructed = try self.persistent().dupe(Read, parts);
-        fn_summary.passes = try self.persistent().dupe(PassThrough, passes);
+        const constructed = try self.persistent().dupe(Read, parts);
+        errdefer self.persistent().free(constructed);
+        const distinct_passes = try self.persistent().dupe(PassThrough, passes);
+        self.persistent().free(fn_summary.constructed);
+        self.persistent().free(fn_summary.passes);
+        fn_summary.constructed = constructed;
+        fn_summary.passes = distinct_passes;
         return true;
     }
 
