@@ -28344,7 +28344,6 @@ pub const HoistedConstTable = struct {
         var by_pattern = std.ArrayList(HoistedConstByPatternEntry).empty;
         errdefer by_pattern.deinit(allocator);
 
-
         for (roots.roots) |root| {
             if (root.kind != .hoisted_constant) continue;
             const source_expr = switch (root.source) {
@@ -28493,7 +28492,6 @@ pub const CheckedConstBodyTable = struct {
     ) Allocator.Error!CheckedConstBodyTable {
         var bodies = std.ArrayList(CheckedConstBody).empty;
         errdefer bodies.deinit(allocator);
-
 
         for (roots.roots) |root| {
             if (!compileTimeRootHasConstBody(root.kind)) continue;
@@ -31349,7 +31347,7 @@ pub const EvaluationOutput = struct {
 /// The order of constant template owners in an evaluation output: top-level
 /// constants by binder pattern, then hoisted constants by root id.
 fn constOwnerOrder(a: ConstOwner, b: ConstOwner) std.math.Order {
-    const tag_order = std.math.order(@intFromEnum(std.meta.activeTag(a)), @intFromEnum(std.meta.activeTag(b)));
+    const tag_order = std.math.order(@backingInt(std.meta.activeTag(a)), @backingInt(std.meta.activeTag(b)));
     if (tag_order != .eq) return tag_order;
     return switch (a) {
         .top_level_binding => |owner| std.math.order(@backingInt(owner.pattern), @backingInt(b.top_level_binding.pattern)),
