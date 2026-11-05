@@ -9018,11 +9018,11 @@ pub const Builder = struct {
         defer layers.deinit(self.allocator);
         const iter_stamp = self.dispatchStamp(plan.iter.resolution);
         switch (iter_stamp orelse return null) {
-            .list_iter => try layers.append(self.allocator, .{ .list = .{ .list = plan.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
-            .list_iter_rev => try layers.append(self.allocator, .{ .list_rev = .{ .list = plan.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
-            .str_iter_utf8 => try layers.append(self.allocator, .{ .str = .{ .str = plan.iterable } }),
+            .list_iter => try layers.append(self.allocator, .{ .list = .{ .list = plan.forLoopSite().iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
+            .list_iter_rev => try layers.append(self.allocator, .{ .list_rev = .{ .list = plan.forLoopSite().iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
+            .str_iter_utf8 => try layers.append(self.allocator, .{ .str = .{ .str = plan.forLoopSite().iterable } }),
             .identity => {
-                var current = plan.iterable;
+                var current = plan.forLoopSite().iterable;
                 walk: while (true) {
                     const call = try self.chainCall(current) orelse {
                         try layers.append(self.allocator, .{ .value = .{ .iterator = current } });
@@ -9332,11 +9332,11 @@ pub const Builder = struct {
                     .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an iterator's step field is not a function"),
                 };
                 const step_value = try self.emitErasedCall(thunk.value, thunk.ty, &.{}, step_ty);
-                const done_name = try store.internName(names.tagLabelText(plan.step_topology.done_tag));
-                const skip_name = try store.internName(names.tagLabelText(plan.step_topology.skip_tag));
-                const one_name = try store.internName(names.tagLabelText(plan.step_topology.one_tag));
-                const item_name = try store.internName(names.recordFieldLabelText(plan.step_topology.item_field));
-                const rest_name = try store.internName(names.recordFieldLabelText(plan.step_topology.rest_field));
+                const done_name = try store.internName(names.tagLabelText(plan.forLoopSite().step_topology.done_tag));
+                const skip_name = try store.internName(names.tagLabelText(plan.forLoopSite().step_topology.skip_tag));
+                const one_name = try store.internName(names.tagLabelText(plan.forLoopSite().step_topology.one_tag));
+                const item_name = try store.internName(names.recordFieldLabelText(plan.forLoopSite().step_topology.item_field));
+                const rest_name = try store.internName(names.recordFieldLabelText(plan.forLoopSite().step_topology.rest_field));
                 const not_done_hole = try self.newHole();
                 try self.branchOnTag(step_value, step_ty, done_name, not_done_hole);
                 try self.emitJump(exit, null);
