@@ -263,6 +263,12 @@ pub const Dismantles = struct {
     /// Parameter positions whose owned variant activates an exact field take,
     /// indexed directly by source procedure id.
     owned_only_param_benefits: []arc_sig.ParamMask,
+    /// Parameter positions whose owned variant takes every stored unit of
+    /// the parameter on every returning path, indexed by source procedure
+    /// id. The borrowed base retains each of those units where the variant
+    /// takes it, so borrowing saves no work for any caller: the parameter's
+    /// base signature owns the position instead (`arc.zig`).
+    owned_only_param_totals: []arc_sig.ParamMask,
     /// Bindings that hold a stored unit taken from their container: the
     /// owned targets of unconditional field takes, projected containers
     /// solved borrowed whose read moves their root's unit, and views solved
@@ -353,6 +359,14 @@ pub const Dismantles = struct {
             dismantleInvariant("ARC owned-only benefit lookup exceeded the analyzed source-procedure table");
         }
         return self.owned_only_param_benefits[index];
+    }
+
+    pub fn ownedOnlyParamTotals(self: *const Dismantles, proc: LIR.LirProcSpecId) arc_sig.ParamMask {
+        const index = @backingInt(proc);
+        if (index >= self.owned_only_param_totals.len) {
+            dismantleInvariant("ARC owned-only total lookup exceeded the analyzed source-procedure table");
+        }
+        return self.owned_only_param_totals[index];
     }
 
     pub fn ownedOnlyBindingRoot(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
@@ -532,6 +546,10 @@ const Analysis = struct {
     /// Root ownership unit for a borrowed struct reached through an explicit
     /// chain of ownership-complete projections, `no_index` otherwise.
     projected_root: []const u32,
+    /// For a borrowed local defined by an ownership-complete projection,
+    /// the local it projects; `no_index` otherwise. Such a local denotes
+    /// its source's whole ownership unit.
+    projection_source: []const u32,
     /// Canonical projected struct binding for repeated complete reads of the
     /// same root and committed layout.
     projected_container: []const u32,
@@ -809,11 +827,17 @@ const Analysis = struct {
         }
         const candidate = (try self.entryOf(root)) orelse return false;
         const slots = self.readSlots(source, field_idx, target);
+        // A struct read is a view of the slots it covers. A tag union read
+        // is a view of its one slot: nothing reads through it except an
+        // ownership-complete payload view, which carries the union's whole
+        // unit, so it is held exactly when that payload reaches a consuming
+        // operand, and it dismantles no further.
+        const target_layout_tag = self.layouts.getLayout(self.store.getLocal(target).layout_idx).tag;
         const view = self.state[target_index] == .unknown and
             self.rc_local[target_index] and
             self.solution.isBorrowed(target) and
             !self.is_param[target_index] and
-            self.layouts.getLayout(self.store.getLocal(target).layout_idx).tag == .struct_ and
+            (target_layout_tag == .struct_ or target_layout_tag == .tag_union) and
             self.projected_root[target_index] == no_index and
             self.view_root[target_index] == no_index;
         if (view) {
@@ -1572,11 +1596,30 @@ fn restoredFieldMaskForDefault(
 const StatementDominance = struct {
     enter: []u32,
     leave: []u32,
+    /// The graph's successors in compressed-row form, for queries that walk
+    /// paths rather than the dominator tree.
+    succ_starts: []u32,
+    succs: []u32,
 
     const Edge = struct { from: u32, to: u32 };
     const Frame = struct { node: u32, edge: u32 };
 
     fn initGraph(gpa: Allocator, count: usize, entry: u32, edges: []const Edge) Error!StatementDominance {
+        const succ_starts = try gpa.alloc(u32, count + 1);
+        errdefer gpa.free(succ_starts);
+        @memset(succ_starts, 0);
+        for (edges) |edge| succ_starts[edge.from + 1] += 1;
+        for (1..count + 1) |index| succ_starts[index] += succ_starts[index - 1];
+        const succs = try gpa.alloc(u32, edges.len);
+        errdefer gpa.free(succs);
+        {
+            const fill = try gpa.dupe(u32, succ_starts[0..count]);
+            defer gpa.free(fill);
+            for (edges) |edge| {
+                succs[fill[edge.from]] = edge.to;
+                fill[edge.from] += 1;
+            }
+        }
         const outgoing = try gpa.alloc(u32, count);
         defer gpa.free(outgoing);
         const incoming = try gpa.alloc(u32, count);
@@ -1682,31 +1725,160 @@ const StatementDominance = struct {
                 try frames.append(gpa, .{ .node = child, .edge = outgoing[child] });
             }
         }
-        return .{ .enter = enter, .leave = leave };
+        return .{ .enter = enter, .leave = leave, .succ_starts = succ_starts, .succs = succs };
     }
 
     fn deinit(self: *StatementDominance, gpa: Allocator) void {
         gpa.free(self.enter);
         gpa.free(self.leave);
+        gpa.free(self.succ_starts);
+        gpa.free(self.succs);
     }
 
     fn dominates(self: StatementDominance, dominator: LIR.CFStmtId, target: LIR.CFStmtId) bool {
         return self.dominatesNode(@backingInt(dominator), @backingInt(target));
     }
 
+    /// A node the entry does not reach runs on no path, so it dominates
+    /// nothing and nothing dominates it.
     fn dominatesNode(self: StatementDominance, a: u32, b: u32) bool {
-        std.debug.assert(self.enter[a] != no_index and self.enter[b] != no_index);
+        if (self.enter[a] == no_index or self.enter[b] == no_index) return false;
         return self.enter[a] <= self.enter[b] and self.enter[b] < self.leave[a];
+    }
+
+    fn successorsOf(self: StatementDominance, node: u32) []const u32 {
+        return self.succs[self.succ_starts[node]..self.succ_starts[node + 1]];
+    }
+
+    /// The nodes some path from `from` reaches after running through one of
+    /// `writes` without passing `from` again, written to `after_write`. A
+    /// statement dominated by `from` can still observe a value such a write
+    /// stored after `from` ran. `reached` and `stack` are scratch; both bit
+    /// sets must hold this graph's node count.
+    fn afterWrites(self: StatementDominance, gpa: Allocator, from: u32, writes: []const u32, reached: *std.bit_set.DynamicBitSetUnmanaged, after_write: *std.bit_set.DynamicBitSetUnmanaged, stack: *std.ArrayList(u32)) Error!void {
+        reached.unsetAll();
+        after_write.unsetAll();
+        stack.clearRetainingCapacity();
+        // Every node a path leaving `from` reaches before re-entering it.
+        reached.set(from);
+        for (self.successorsOf(from)) |next| {
+            if (reached.isSet(next)) continue;
+            reached.set(next);
+            try stack.append(gpa, next);
+        }
+        while (stack.pop()) |node| {
+            for (self.successorsOf(node)) |next| {
+                if (reached.isSet(next)) continue;
+                reached.set(next);
+                try stack.append(gpa, next);
+            }
+        }
+        // Every node a path leaving one of those writes reaches, again
+        // without passing `from`.
+        after_write.set(from);
+        for (writes) |write| {
+            if (!reached.isSet(write) or after_write.isSet(write)) continue;
+            after_write.set(write);
+            try stack.append(gpa, write);
+        }
+        while (stack.pop()) |node| {
+            for (self.successorsOf(node)) |next| {
+                if (after_write.isSet(next)) continue;
+                after_write.set(next);
+                try stack.append(gpa, next);
+            }
+        }
+    }
+
+    fn nodeCount(self: StatementDominance) usize {
+        return self.succ_starts.len - 1;
+    }
+};
+
+/// The rebind sets of one ownership root's earlier reads, each memoized by
+/// its read statement while the root's later reads are compared against it,
+/// so a root with many reads costs one walk of its component per earlier
+/// read rather than one per pair of reads.
+const RebindMemo = struct {
+    slots: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    sets: std.ArrayList(std.bit_set.DynamicBitSetUnmanaged) = .empty,
+    used: usize = 0,
+    reached: std.bit_set.DynamicBitSetUnmanaged = .{},
+    stack: std.ArrayList(u32) = .empty,
+
+    /// Forget every memoized read; the sets keep their storage.
+    fn reset(self: *RebindMemo) void {
+        self.slots.clearRetainingCapacity();
+        self.used = 0;
+    }
+
+    fn deinit(self: *RebindMemo, gpa: Allocator) void {
+        self.slots.deinit(gpa);
+        for (self.sets.items) |*set| set.deinit(gpa);
+        self.sets.deinit(gpa);
+        self.reached.deinit(gpa);
+        self.stack.deinit(gpa);
+    }
+};
+
+/// The control-flow successors of one statement: its structural successors,
+/// with a join's body entered only through the jumps that name the join.
+/// `joins` lists every join statement of the graph by join identity; a jump
+/// to an identity declared by several joins has an edge to each body.
+fn appendControlFlowSuccessors(
+    store: *const LirStore,
+    successors: *std.ArrayList(LIR.CFStmtId),
+    stmt_id: LIR.CFStmtId,
+    joins: *const JoinBodies,
+    gpa: Allocator,
+) Error!void {
+    try body_clone.appendSuccessorsInOrder(store, successors, stmt_id, gpa, .{ .join_body = false });
+    const stmt = store.getCFStmtImmediate(stmt_id);
+    if (stmt.* != .jump) return;
+    var entry = joins.heads.get(@backingInt(stmt.jump.target)) orelse no_index;
+    while (entry != no_index) : (entry = joins.entries.items[entry].next) {
+        try successors.append(gpa, joins.entries.items[entry].body);
+    }
+}
+
+/// Every join statement of a statement set, indexed by join identity.
+const JoinBodies = struct {
+    const Entry = struct { body: LIR.CFStmtId, next: u32 };
+    heads: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    entries: std.ArrayList(Entry) = .empty,
+
+    fn collect(self: *JoinBodies, gpa: Allocator, store: *const LirStore, stmts: []const LIR.CFStmtId) Error!void {
+        for (stmts) |stmt_id| {
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .join) continue;
+            const head = try self.heads.getOrPut(gpa, @backingInt(stmt.join.id));
+            if (!head.found_existing) head.value_ptr.* = no_index;
+            try self.entries.append(gpa, .{ .body = stmt.join.body, .next = head.value_ptr.* });
+            head.value_ptr.* = @intCast(self.entries.items.len - 1);
+        }
+    }
+
+    fn clear(self: *JoinBodies) void {
+        self.heads.clearRetainingCapacity();
+        self.entries.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *JoinBodies, gpa: Allocator) void {
+        self.heads.deinit(gpa);
+        self.entries.deinit(gpa);
     }
 };
 
 /// Statement dominance from a synthetic entry for every procedure body, solved
 /// separately for each component of procedures that reach a common statement,
-/// on its first query. Every path from the entry to a statement starts at the
-/// body of a procedure reaching that statement and stays among statements that
-/// procedure reaches, all of which lie in the statement's component. A
-/// statement therefore dominates only statements of its own component, and the
-/// component's graph answers every query exactly as the whole store's would.
+/// on its first query. The graph is the control-flow graph: a join's body is
+/// entered through the jumps that name it, so a statement of the join's
+/// remainder dominates the body when every jump runs after it. Every path
+/// from the entry to a statement starts at the body of a procedure reaching
+/// that statement and stays among statements that procedure reaches, all of
+/// which lie in the statement's component. A statement therefore dominates
+/// only statements of its own component, and the component's graph answers
+/// every query exactly as the whole store's would.
 const ComponentDominance = struct {
     store: *const LirStore,
     solution: *const arc_solve.Solution,
@@ -1764,6 +1936,37 @@ const ComponentDominance = struct {
         return slot.value_ptr.dominatesNode(self.dense[@backingInt(dominator)], self.dense[@backingInt(target)]);
     }
 
+    /// Whether a path from `from` to `to` runs through one of `writes`
+    /// without passing `from` again (see `StatementDominance.afterWrites`).
+    /// Writes outside the two statements' component lie on no such path.
+    /// `memo` holds the set computed for `from` across the queries of one
+    /// root's reads; the caller resets it when it moves to another root.
+    fn rebindOnPath(self: *ComponentDominance, gpa: Allocator, memo: *RebindMemo, from: LIR.CFStmtId, to: LIR.CFStmtId, writes: []const LIR.CFStmtId, dense_writes: *std.ArrayList(u32)) Error!bool {
+        const component = self.root(self.stmt_first_proc[@backingInt(to)]);
+        if (self.root(self.stmt_first_proc[@backingInt(from)]) != component) return false;
+        const dominance = self.solved.getPtr(component) orelse dismantleInvariant("ARC dismantle asked about rebinds in a component it never solved");
+        dense_writes.clearRetainingCapacity();
+        for (writes) |write| {
+            const write_index = @backingInt(write);
+            if (self.stmt_first_proc[write_index] == no_index or self.root(self.stmt_first_proc[write_index]) != component) continue;
+            try dense_writes.append(gpa, self.dense[write_index]);
+        }
+        if (dense_writes.items.len == 0) return false;
+        const from_dense = self.dense[@backingInt(from)];
+        const slot = try memo.slots.getOrPut(gpa, from_dense);
+        if (!slot.found_existing) {
+            if (memo.used == memo.sets.items.len) try memo.sets.append(gpa, .{});
+            slot.value_ptr.* = @intCast(memo.used);
+            memo.used += 1;
+            const set = &memo.sets.items[slot.value_ptr.*];
+            const count = dominance.nodeCount();
+            try set.resize(gpa, count, false);
+            try memo.reached.resize(gpa, count, false);
+            try dominance.afterWrites(gpa, from_dense, dense_writes.items, &memo.reached, set, &memo.stack);
+        }
+        return memo.sets.items[slot.value_ptr.*].isSet(self.dense[@backingInt(to)]);
+    }
+
     fn solve(self: *ComponentDominance, gpa: Allocator, component: u32) Error!StatementDominance {
         const store = self.store;
         if (self.component_offsets.len == 0) try self.groupProcs(gpa);
@@ -1783,9 +1986,12 @@ const ComponentDominance = struct {
         defer edges.deinit(gpa);
         var successors = std.ArrayList(LIR.CFStmtId).empty;
         defer successors.deinit(gpa);
+        var joins = JoinBodies{};
+        defer joins.deinit(gpa);
+        try joins.collect(gpa, store, stmts.items);
         for (stmts.items, 0..) |stmt_id, index| {
             successors.clearRetainingCapacity();
-            try body_clone.appendSuccessors(store, &successors, stmt_id, gpa);
+            try appendControlFlowSuccessors(store, &successors, stmt_id, &joins, gpa);
             for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = self.dense[@backingInt(next)] });
         }
         for (procs) |proc| {
@@ -1879,6 +2085,11 @@ test "component dominance agrees with whole-store dominance across shared proced
     defer edges.deinit(gpa);
     var successors = std.ArrayList(LIR.CFStmtId).empty;
     defer successors.deinit(gpa);
+    var joins = JoinBodies{};
+    defer joins.deinit(gpa);
+    for (0..store.procSpecCount()) |proc_index| {
+        try joins.collect(gpa, &store, solution.procStatements(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index))))));
+    }
     for (0..store.procSpecCount()) |proc_index| {
         const proc: u32 = @intCast(proc_index);
         for (solution.procStatements(@fromBackingInt(proc))) |stmt_id| {
@@ -1889,7 +2100,7 @@ test "component dominance agrees with whole-store dominance across shared proced
             }
             stmt_first_proc[index] = proc;
             successors.clearRetainingCapacity();
-            try body_clone.appendSuccessors(&store, &successors, stmt_id, gpa);
+            try appendControlFlowSuccessors(&store, &successors, stmt_id, &joins, gpa);
             for (successors.items) |next| try edges.append(gpa, .{ .from = index, .to = @backingInt(next) });
         }
     }
@@ -2157,18 +2368,38 @@ const OperandUse = struct {
     next: LIR.CFStmtId,
 };
 
+/// Whether `local` carries the value of the borrowed read binding `root`:
+/// it is the binding or a borrowed pure same-value alias of it, or an
+/// ownership-complete projection (through any number of such projections
+/// and aliases) of one. A complete projection holds every refcounted byte
+/// its source owns, so consuming it consumes the source's whole unit.
+fn carriesReadValue(analysis: *const Analysis, solution: *const arc_solve.Solution, local: LIR.LocalId, root: u32) bool {
+    var cursor = @backingInt(solution.unitLocalOf(local));
+    var steps: usize = 0;
+    while (cursor != root) {
+        const source = analysis.projection_source[cursor];
+        if (source == no_index) return false;
+        cursor = @backingInt(solution.unitLocalOf(@fromBackingInt(@intCast(source))));
+        steps += 1;
+        if (steps > analysis.projection_source.len) dismantleInvariant("ARC dismantle projection chain contained a cycle");
+    }
+    return true;
+}
+
 /// Where `stmt` consumes exactly one member of a borrowed read's forest, and
-/// that member carries the read's value: it is the read's binding `root` or a
-/// borrowed pure same-value alias of it, at an owned direct-call position, a
+/// that member carries the read's value: it is the read's binding `root`, a
+/// borrowed pure same-value alias of it, or an ownership-complete projection
+/// of either (see `carriesReadValue`), at an owned direct-call position, a
 /// borrowed one whose owned variant takes a field, a consumed low-level
 /// position, or a retained one whose result can hold the operand. A member
-/// borrowed onward from the binding through a field or payload read, a
-/// borrowed low-level result, or a lent call result holds a different value,
-/// so consuming it only observes the field, as does any other mention or a
-/// second mention in the same statement.
+/// borrowed onward from the binding through a partial field or payload read,
+/// a borrowed low-level result, or a lent call result holds a different
+/// value, so consuming it only observes the field, as does any other mention
+/// or a second mention in the same statement.
 fn operandSiteUse(
     store: *const LirStore,
     solution: *const arc_solve.Solution,
+    analysis: *const Analysis,
     owner: LIR.LirProcSpecId,
     param_benefits: []const arc_sig.ParamMask,
     rc_local: []const bool,
@@ -2186,7 +2417,7 @@ fn operandSiteUse(
                 const arg = GuardedList.at(args, position);
                 if (!forest_mark[@backingInt(arg)]) continue;
                 if (found != null or position >= arc_sig.tracked_param_count or !rc_local[@backingInt(arg)]) return null;
-                if (@backingInt(solution.unitLocalOf(arg)) != root) return null;
+                if (!carriesReadValue(analysis, solution, arg, root)) return null;
                 const bit = arc_sig.paramBit(position).?;
                 // A borrowed position takes a field only through the
                 // callee's owned variant, which only a call within the
@@ -2210,7 +2441,7 @@ fn operandSiteUse(
                 const arg = GuardedList.at(args, position);
                 if (!forest_mark[@backingInt(arg)]) continue;
                 if (found != null or position >= 64 or !rc_local[@backingInt(arg)]) return null;
-                if (@backingInt(solution.unitLocalOf(arg)) != root) return null;
+                if (!carriesReadValue(analysis, solution, arg, root)) return null;
                 const bit = @as(u64, 1) << @intCast(position);
                 if ((mask & bit) == 0) return null;
                 // A retained operand moves into the result only when the
@@ -2251,6 +2482,202 @@ fn operandSiteUse(
         .crash,
         => return null,
     }
+}
+
+/// Scratch storage of `forwardsWholeOnEveryReturn`, reused across queries.
+const ForwardScratch = struct {
+    forwards: std.ArrayList(u32),
+    visited: std.bit_set.DynamicBitSetUnmanaged,
+    stack: std.ArrayList(LIR.CFStmtId),
+    successors: std.ArrayList(LIR.CFStmtId),
+    /// The join index of procedure `joins_proc`, shared by the queries for
+    /// that procedure's parameters.
+    joins: JoinBodies,
+    joins_proc: u32,
+
+    fn deinit(self: *ForwardScratch, gpa: Allocator) void {
+        self.forwards.deinit(gpa);
+        self.visited.deinit(gpa);
+        self.stack.deinit(gpa);
+        self.successors.deinit(gpa);
+        self.joins.deinit(gpa);
+    }
+};
+
+/// Whether `proc` forwards the whole unit of its borrowed parameter `param`
+/// on every returning path and does nothing else with it. Every mention of
+/// the parameter's borrow forest must define another member of the forest
+/// (a pure alias or an ownership-complete projection), read a discriminant,
+/// or consume a member carrying the parameter's whole unit
+/// (`carriesReadValue`): at a callee position its signature owns or takes
+/// totally, at a consumed low-level position, into an aggregate, or as an
+/// owned return. Every path from the procedure's body to a return must then
+/// pass such a consuming mention. The borrowed base retains the parameter's
+/// unit at each of those mentions, so an owned base, which moves it at the
+/// last one, costs no caller more and spares the dying argument's release.
+fn forwardsWholeOnEveryReturn(
+    gpa: Allocator,
+    store: *const LirStore,
+    solution: *const arc_solve.Solution,
+    analysis: *const Analysis,
+    result: *const Dismantles,
+    borrow_child_heads: []const u32,
+    borrow_child_edges: []const BorrowChildEdge,
+    borrow_stack: *std.ArrayList(u32),
+    forest: *std.ArrayList(u32),
+    forest_mark: []bool,
+    scratch: *ForwardScratch,
+    proc: LIR.LirProcSpecId,
+    sig: arc_sig.RcSig,
+    param: LIR.LocalId,
+) Error!bool {
+    const root = @backingInt(param);
+    try collectBorrowForest(gpa, store, analysis, borrow_child_heads, borrow_child_edges, borrow_stack, forest, forest_mark, root);
+    defer for (forest.items) |member| {
+        forest_mark[member] = false;
+    };
+    scratch.forwards.clearRetainingCapacity();
+    for (forest.items) |member| {
+        var mention = analysis.mention_heads[member];
+        while (mention != no_index) {
+            const edge = analysis.mention_edges.items[mention];
+            mention = edge.next;
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
+            switch (store.getCFStmtImmediate(stmt_id).*) {
+                .assign_ref => |stmt| {
+                    if (stmt.op.kind == .discriminant) continue;
+                    const defines_member = forest_mark[@backingInt(stmt.target)] and switch (stmt.op.kind) {
+                        .local => true,
+                        .field, .tag_payload, .tag_payload_struct => analysis.projection_source[@backingInt(stmt.target)] != no_index,
+                        .discriminant, .list_reinterpret, .nominal => false,
+                    };
+                    if (!defines_member) return false;
+                },
+                .assign_call => |stmt| {
+                    const args = store.getLocalSpan(stmt.args);
+                    const callee_sig = solution.sigOf(stmt.proc);
+                    var found = false;
+                    for (0..GuardedList.borrowLen(args)) |position| {
+                        const arg = GuardedList.at(args, position);
+                        if (!forest_mark[@backingInt(arg)]) continue;
+                        if (found or position >= arc_sig.tracked_param_count) return false;
+                        if (!carriesReadValue(analysis, solution, arg, root)) return false;
+                        const bit = arc_sig.paramBit(position).?;
+                        const total = (result.owned_only_param_totals[@backingInt(stmt.proc)] & bit) != 0;
+                        if (callee_sig.paramMode(position) != .owned and !total) return false;
+                        found = true;
+                    }
+                    if (!found) return false;
+                    try scratch.forwards.append(gpa, edge.stmt);
+                },
+                .assign_low_level => |stmt| {
+                    const args = store.getLocalSpan(stmt.args);
+                    const effect = store.stmtRow(stmt.rc_effect);
+                    var found = false;
+                    for (0..GuardedList.borrowLen(args)) |position| {
+                        const arg = GuardedList.at(args, position);
+                        if (!forest_mark[@backingInt(arg)]) continue;
+                        if (found or position >= 64) return false;
+                        if (!carriesReadValue(analysis, solution, arg, root)) return false;
+                        if ((effect.consume_args & (@as(u64, 1) << @intCast(position))) == 0) return false;
+                        found = true;
+                    }
+                    if (!found) return false;
+                    try scratch.forwards.append(gpa, edge.stmt);
+                },
+                .assign_struct => |stmt| {
+                    if (!aggregateMovesWhole(solution, analysis, forest_mark, root, store.getLocalSpan(stmt.fields))) return false;
+                    try scratch.forwards.append(gpa, edge.stmt);
+                },
+                .assign_list => |stmt| {
+                    if (!aggregateMovesWhole(solution, analysis, forest_mark, root, store.getLocalSpan(stmt.elems))) return false;
+                    try scratch.forwards.append(gpa, edge.stmt);
+                },
+                .assign_tag => |stmt| {
+                    const payload = stmt.payload orelse return false;
+                    if (!forest_mark[@backingInt(payload)] or !carriesReadValue(analysis, solution, payload, root)) return false;
+                    try scratch.forwards.append(gpa, edge.stmt);
+                },
+                .ret => |stmt| {
+                    if (sig.ret_mode != .owned) return false;
+                    if (!forest_mark[@backingInt(stmt.value)] or !carriesReadValue(analysis, solution, stmt.value, root)) return false;
+                    try scratch.forwards.append(gpa, edge.stmt);
+                },
+                .init_uninitialized,
+                .assign_literal,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .crash,
+                .dyn,
+                => return false,
+            }
+        }
+    }
+    if (scratch.forwards.items.len == 0) return false;
+
+    // Every path from the body to a return passes a forward: no return is
+    // reachable from the body without entering one.
+    if (scratch.joins_proc != @backingInt(proc)) {
+        scratch.joins.clear();
+        try scratch.joins.collect(gpa, store, solution.procStatements(proc));
+        scratch.joins_proc = @backingInt(proc);
+    }
+    scratch.visited.unsetAll();
+    for (scratch.forwards.items) |forward| scratch.visited.set(forward);
+    scratch.stack.clearRetainingCapacity();
+    const body = store.getProcSpecImmediate(proc).arcBody() orelse return false;
+    if (scratch.visited.isSet(@backingInt(body))) return true;
+    scratch.visited.set(@backingInt(body));
+    try scratch.stack.append(gpa, body);
+    while (scratch.stack.pop()) |cursor| {
+        if (store.getCFStmtImmediate(cursor).* == .ret) return false;
+        scratch.successors.clearRetainingCapacity();
+        try appendControlFlowSuccessors(store, &scratch.successors, cursor, &scratch.joins, gpa);
+        for (scratch.successors.items) |next| {
+            const index = @backingInt(next);
+            if (scratch.visited.isSet(index)) continue;
+            scratch.visited.set(index);
+            try scratch.stack.append(gpa, next);
+        }
+    }
+    return true;
+}
+
+/// Whether every forest member among `operands` carries the parameter's
+/// whole unit into the aggregate, which consumes it.
+fn aggregateMovesWhole(
+    solution: *const arc_solve.Solution,
+    analysis: *const Analysis,
+    forest_mark: []const bool,
+    root: u32,
+    operands: anytype,
+) bool {
+    var found = false;
+    for (0..GuardedList.borrowLen(operands)) |index| {
+        const operand = GuardedList.at(operands, index);
+        if (!forest_mark[@backingInt(operand)]) continue;
+        if (found or !carriesReadValue(analysis, solution, operand, root)) return false;
+        found = true;
+    }
+    return found;
 }
 
 /// Collects the borrow forest of `root` into `forest` and marks each member in
@@ -2308,7 +2735,7 @@ fn forestHasOperandSite(
             const edge = analysis.mention_edges.items[mention];
             mention = edge.next;
             const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
-            if (operandSiteUse(store, solution, owner, param_benefits, rc_local, forest_mark, root, stmt) != null) return true;
+            if (operandSiteUse(store, solution, analysis, owner, param_benefits, rc_local, forest_mark, root, stmt) != null) return true;
         }
     }
     return false;
@@ -2390,6 +2817,12 @@ fn placeLinkOf(
     return .{ .source = @backingInt(source), .target = @backingInt(assign.target), .kind = kind };
 }
 
+/// One `set_local` statement and the local it writes.
+const Rebind = struct {
+    target: LIR.LocalId,
+    stmt: LIR.CFStmtId,
+};
+
 /// A reachable reference read whose place link is read after projection
 /// aliases are materialized. Only a read carrying a projection edge can be
 /// rewritten into an alias, so every other read keeps the link computed here.
@@ -2412,6 +2845,9 @@ const StatementFacts = struct {
     allocator: Allocator,
     /// Join cells written by an `initialize_join_param` statement.
     join_init_targets: std.ArrayList(LIR.LocalId) = .empty,
+    /// Every `set_local`, whatever its mode: a later read of its target
+    /// may observe the written value rather than an earlier read's.
+    rebinds: std.ArrayList(Rebind) = .empty,
     projection_edges: std.ArrayList(ProjectionEdge) = .empty,
     place_reads: std.ArrayList(PlaceRead) = .empty,
     calls: std.ArrayList(LIR.CFStmtId) = .empty,
@@ -2420,6 +2856,7 @@ const StatementFacts = struct {
 
     fn deinit(self: *StatementFacts) void {
         self.join_init_targets.deinit(self.allocator);
+        self.rebinds.deinit(self.allocator);
         self.projection_edges.deinit(self.allocator);
         self.place_reads.deinit(self.allocator);
         self.calls.deinit(self.allocator);
@@ -2432,8 +2869,9 @@ const StatementFacts = struct {
             if (!self.reachable.isSet(index)) continue;
             const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(index));
             switch (self.store.getCFStmtImmediate(stmt_id).*) {
-                .set_local => |stmt| if (stmt.mode == .initialize_join_param) {
-                    try self.join_init_targets.append(allocator, stmt.target);
+                .set_local => |stmt| {
+                    try self.rebinds.append(allocator, .{ .target = stmt.target, .stmt = stmt_id });
+                    if (stmt.mode == .initialize_join_param) try self.join_init_targets.append(allocator, stmt.target);
                 },
                 .assign_ref => |stmt| {
                     const projection = projectionEdgeOf(self.store, self.layouts, self.solution, stmt_id, stmt);
@@ -2757,6 +3195,12 @@ pub fn compute(
     for (projected_root) |*root| {
         if (root.* == no_index - 1) root.* = no_index;
     }
+    const projection_source = try gpa.alloc(u32, store.localCount());
+    defer gpa.free(projection_source);
+    @memset(projection_source, no_index);
+    for (projection_edges.items) |edge| {
+        if (edge.is_projection) projection_source[@backingInt(edge.target)] = @backingInt(edge.source);
+    }
     const projected_container = try gpa.alloc(u32, store.localCount());
     defer gpa.free(projected_container);
     @memset(projected_container, no_index);
@@ -2777,29 +3221,58 @@ pub fn compute(
         root_next[index] = root_heads[root];
         root_heads[root] = @intCast(index);
     }
-    for (projected_root, 0..) |root, local_index| {
-        if (root == no_index) continue;
-        const local: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(local_index))));
-        const local_layout = layouts.getLayout(store.getLocal(local).layout_idx);
-        if (local_layout.tag != .struct_) continue;
-        const target_stmt_index = projected_stmt[local_index];
-        if (target_stmt_index == no_index) continue;
-        var representative: u32 = @intCast(local_index);
-        var other_index = root_heads[root];
-        while (other_index != no_index) : (other_index = root_next[other_index]) {
-            // A projection dominates itself and the representative it starts as.
-            if (other_index == local_index) continue;
-            const other: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(other_index))));
-            if (store.getLocal(other).layout_idx != store.getLocal(local).layout_idx) continue;
-            const other_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(projected_stmt[other_index]));
-            const target_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(target_stmt_index));
-            if (!try dominance.dominates(gpa, other_stmt, target_stmt)) continue;
-            const representative_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(projected_stmt[representative]));
-            if (try dominance.dominates(gpa, other_stmt, representative_stmt)) {
-                representative = @intCast(other_index);
-            }
+    // The writes of each root, so a read that a write can separate from an
+    // earlier read of the same root keeps its own read: it may observe the
+    // written value, which the earlier read never saw.
+    const write_heads = try gpa.alloc(u32, store.localCount());
+    defer gpa.free(write_heads);
+    @memset(write_heads, no_index);
+    var write_edges = std.ArrayList(struct { stmt: LIR.CFStmtId, next: u32 }).empty;
+    defer write_edges.deinit(gpa);
+    for (fact_ranges) |range| {
+        for (range.rebinds.items) |rebind| {
+            const target_index = @backingInt(rebind.target);
+            try write_edges.append(gpa, .{ .stmt = rebind.stmt, .next = write_heads[target_index] });
+            write_heads[target_index] = @intCast(write_edges.items.len - 1);
         }
-        projected_container[local_index] = representative;
+    }
+    var root_writes = std.ArrayList(LIR.CFStmtId).empty;
+    defer root_writes.deinit(gpa);
+    var dense_writes = std.ArrayList(u32).empty;
+    defer dense_writes.deinit(gpa);
+    var rebind_memo = RebindMemo{};
+    defer rebind_memo.deinit(gpa);
+    for (root_heads, 0..) |head, root| {
+        if (head == no_index) continue;
+        root_writes.clearRetainingCapacity();
+        var write_index = write_heads[root];
+        while (write_index != no_index) : (write_index = write_edges.items[write_index].next) {
+            try root_writes.append(gpa, write_edges.items[write_index].stmt);
+        }
+        rebind_memo.reset();
+        var local_index = head;
+        while (local_index != no_index) : (local_index = root_next[local_index]) {
+            const local: LIR.LocalId = @fromBackingInt(local_index);
+            const local_layout = layouts.getLayout(store.getLocal(local).layout_idx);
+            if (local_layout.tag != .struct_) continue;
+            const target_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[local_index]);
+            var representative: u32 = local_index;
+            var other_index = head;
+            while (other_index != no_index) : (other_index = root_next[other_index]) {
+                // A projection dominates itself and the representative it starts as.
+                if (other_index == local_index) continue;
+                const other: LIR.LocalId = @fromBackingInt(other_index);
+                if (store.getLocal(other).layout_idx != store.getLocal(local).layout_idx) continue;
+                const other_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[other_index]);
+                if (!try dominance.dominates(gpa, other_stmt, target_stmt)) continue;
+                if (try dominance.rebindOnPath(gpa, &rebind_memo, other_stmt, target_stmt, root_writes.items, &dense_writes)) continue;
+                const representative_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[representative]);
+                if (try dominance.dominates(gpa, other_stmt, representative_stmt)) {
+                    representative = other_index;
+                }
+            }
+            projected_container[local_index] = representative;
+        }
     }
     var analysis = Analysis{
         .gpa = gpa,
@@ -2819,6 +3292,7 @@ pub fn compute(
         .candidates = .empty,
         .is_param = is_param,
         .projected_root = projected_root,
+        .projection_source = projection_source,
         .projected_container = projected_container,
         .explicit_init_join = explicit_init_join,
         .mention_heads = try gpa.alloc(u32, store.localCount()),
@@ -2878,6 +3352,7 @@ pub fn compute(
         .owned_only_takes = .init(gpa),
         .owned_only_containers = .init(gpa),
         .owned_only_param_benefits = &.{},
+        .owned_only_param_totals = &.{},
         .take_bindings = &.{},
         .owned_only_binding_roots = &.{},
         .field_restitution_args = .empty,
@@ -2889,6 +3364,8 @@ pub fn compute(
     errdefer result.deinit();
     result.owned_only_param_benefits = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
     @memset(result.owned_only_param_benefits, 0);
+    result.owned_only_param_totals = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
+    @memset(result.owned_only_param_totals, 0);
     result.take_bindings = try result.arena.allocator().alloc(bool, store.localCount());
     @memset(result.take_bindings, false);
     result.owned_only_binding_roots = try result.arena.allocator().alloc(u32, store.localCount());
@@ -2962,6 +3439,15 @@ pub fn compute(
     const forest_mark = try gpa.alloc(bool, store.localCount());
     defer gpa.free(forest_mark);
     @memset(forest_mark, false);
+    var forward_scratch = ForwardScratch{
+        .forwards = .empty,
+        .visited = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount()),
+        .stack = .empty,
+        .successors = .empty,
+        .joins = .{},
+        .joins_proc = no_index,
+    };
+    defer forward_scratch.deinit(gpa);
     var operand_sites = std.ArrayList(OperandSite).empty;
     defer operand_sites.deinit(gpa);
     // Per read of the container being solved: whether it defines a view whose
@@ -3247,7 +3733,10 @@ pub fn compute(
                 }
                 undo.clearRetainingCapacity();
                 for (component_place_keys.items) |key| _ = places.remove(key);
-                for (scc_procs) |proc_index| result.owned_only_param_benefits[proc_index] = 0;
+                for (scc_procs) |proc_index| {
+                    result.owned_only_param_benefits[proc_index] = 0;
+                    result.owned_only_param_totals[proc_index] = 0;
+                }
             }
             solved = true;
 
@@ -3397,6 +3886,8 @@ pub fn compute(
                     try view_demand.append(gpa, demanded);
                 }
                 declined_takes.clearRetainingCapacity();
+                var ret_must: u64 = ~@as(u64, 0);
+                var saw_ret = false;
                 const taken_mask: u64 = attempt: while (true) {
                     // A view whose value reaches a consuming operand is solved as the
                     // take of its whole range, and while it is, it holds its slots:
@@ -3449,7 +3940,7 @@ pub fn compute(
                         const callee_sig = solution.sigOf(call_stmt.assign_call.proc);
                         if (callee_sig.paramMode(position) != .owned) continue;
                         const outcomes = solution.outcomeSpanForCall(store, @fromBackingInt(@intCast(owner)), call_stmt.assign_call.proc);
-                        const refinement = (try arc_solve.findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes)) orelse continue;
+                        const refinement = (try arc_solve.findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes, .absent)) orelse continue;
                         const position_bit = arc_sig.paramBit(position).?;
                         var any_restitution = false;
                         for (solution.sigTable().outcomesOf(.{ .outcomes = outcomes })) |outcome| {
@@ -3500,7 +3991,7 @@ pub fn compute(
                                 const edge = analysis.mention_edges.items[mention];
                                 mention = edge.next;
                                 const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
-                                const site_use = operandSiteUse(store, solution, @fromBackingInt(@intCast(owner)), operand_benefits, rc_local, forest_mark, target_index, stmt);
+                                const site_use = operandSiteUse(store, solution, &analysis, @fromBackingInt(@intCast(owner)), operand_benefits, rc_local, forest_mark, target_index, stmt);
                                 const slot = try read_kinds.getOrPut(stmt);
                                 if (site_use) |use| {
                                     if (!slot.found_existing) {
@@ -3536,6 +4027,8 @@ pub fn compute(
                         if (kind.consuming) candidate_mask |= kind.bit;
                     }
                     candidate_mask &= rc_mask;
+                    ret_must = ~@as(u64, 0);
+                    saw_ret = false;
                     const solved_mask: u64 = solve: {
                         if (candidate_mask == 0) break :solve 0;
                         var poison: u64 = 0;
@@ -3676,7 +4169,13 @@ pub fn compute(
                                         }
                                         cursor = stmt.on_miss;
                                     },
-                                    .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {
+                                    .ret => {
+                                        // The pieces every path to this return has taken.
+                                        ret_must &= state.must;
+                                        saw_ret = true;
+                                        break :chain;
+                                    },
+                                    .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {
                                         break :chain;
                                     },
                                 }
@@ -3724,6 +4223,17 @@ pub fn compute(
                     !result.take_bindings[candidate_index]
                 else
                     solution.isBorrowed(activation_root) and union_root == null;
+                // A parameter whose every stored unit is taken on every
+                // returning path: borrowing it saves no caller any work.
+                if (owned_only and !entry.view and !projected and is_param[candidate_index] and
+                    saw_ret and taken_mask == rc_mask and (ret_must & rc_mask) == rc_mask)
+                {
+                    if (param_info.get(candidate_index)) |info| {
+                        if (info.proc != ambiguous_index and !solution.isPinnedProc(@fromBackingInt(info.proc))) {
+                            result.owned_only_param_totals[info.proc] |= arc_sig.paramBit(info.position).?;
+                        }
+                    }
+                }
                 if (projected) {
                     // The projection read itself moves the outer unit into this
                     // container in precisely those emissions where the root is owned.
@@ -3902,9 +4412,14 @@ pub fn compute(
                 const source: LIR.LocalId = @fromBackingInt(source_index);
                 const root = solution.unitLocalOf(source);
                 const root_index = @backingInt(root);
+                // A take binding holds the unit its take consumed, in the
+                // emissions that take applies to, so a complete projection
+                // of it denotes that unit.
                 const root_can_own = !solution.isBorrowed(root) or
                     is_param[root_index] or
-                    solution.isJoinParam(root);
+                    solution.isJoinParam(root) or
+                    result.take_bindings[root_index] or
+                    result.owned_only_binding_roots[root_index] != no_index;
                 if (!root_can_own) continue;
                 try places.put(gpa, source_index, .{ .root = root_index, .owner = root_index, .projected = false });
                 try component_place_keys.append(gpa, source_index);
@@ -4079,6 +4594,30 @@ pub fn compute(
             if (origin.root == ambiguous_index or origin.owner == ambiguous_index) continue;
             try result.complete_takes.put(@fromBackingInt(edge.kind.projection), @fromBackingInt(origin.owner));
         }
+
+        // A borrowed parameter forwarded whole on every returning path is
+        // owned by its base signature exactly like a totally taken one: the
+        // borrowed base retains its unit at every forward. Callees are final
+        // here, so a forward to a position owned by their signatures or
+        // totally taken counts.
+        for (scc_procs) |proc_index| {
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(proc_index);
+            if (solution.isPinnedProc(proc_id)) continue;
+            const sig = solution.sigOf(proc_id);
+            const params = store.getLocalSpan(store.getProcSpecImmediate(proc_id).args);
+            for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
+                const bit = arc_sig.paramBit(position).?;
+                if ((result.owned_only_param_totals[proc_index] & bit) != 0) continue;
+                if (sig.paramMode(position) != .borrowed) continue;
+                const param = GuardedList.at(params, position);
+                if (!rc_local[@backingInt(param)]) continue;
+                const info = param_info.get(@backingInt(param)) orelse continue;
+                if (info.proc == ambiguous_index) continue;
+                if (try forwardsWholeOnEveryReturn(gpa, store, solution, &analysis, &result, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, &forward_scratch, proc_id, sig, param)) {
+                    result.owned_only_param_totals[proc_index] |= bit;
+                }
+            }
+        }
     }
     // Materialize only equivalences whose representative actually acquired a
     // committed dismantle plan. Lookup-only projections retain their original
@@ -4104,6 +4643,9 @@ pub fn compute(
     // keyed by the union, whose payload view numbers the slots.
     for (analysis.state, 0..) |state, local_index| {
         if (state != .view) continue;
+        // A tag union view holds its slot or reads it; it has no
+        // representation shell to write.
+        if (layouts.getLayout(store.getLocal(@fromBackingInt(@intCast(@as(u32, @intCast(local_index))))).layout_idx).tag != .struct_) continue;
         const root_index = analysis.alias_root[local_index];
         const union_index = analysis.view_root[root_index];
         const key: LIR.LocalId = @fromBackingInt(@intCast(if (union_index != no_index) union_index else root_index));

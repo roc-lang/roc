@@ -534,8 +534,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     writeSignatureHeader(mapped[@intCast(signature_offset)..][0..signature_header_size], @intCast(signature_offset), page_count, page_size, host_text.fileoff, host_text.filesize);
     timing.finalize_ns = elapsed(std_io, finalize_started);
     const unmap_started = now(std_io);
-    output.unmap(mapped);
     unmapped = true;
+    try output.finish(mapped);
     timing.unmap_ns = elapsed(std_io, unmap_started);
 }
 

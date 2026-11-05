@@ -53,7 +53,11 @@ pub const LinuxOutputFile = struct {
     temp: [:0]const u8,
     /// Whether the file already has `temp` as its name.
     named: bool,
-    size: u64 = 0,
+    /// How far from the start `copyHost` and `writeStart` have written.
+    written: u64 = 0,
+    /// Whether `map` gave out a buffer instead of a mapping of the file,
+    /// which `finish` writes back.
+    buffered: bool = false,
 
     pub const Error = OutputError;
 
@@ -95,7 +99,7 @@ pub const LinuxOutputFile = struct {
             if (rc == 0) return error.Unexpected;
             remaining -= rc;
         }
-        self.size = @max(self.size, bytes.len);
+        self.written = @max(self.written, bytes.len);
     }
 
     /// Write `bytes` at the start of the output.
@@ -112,22 +116,54 @@ pub const LinuxOutputFile = struct {
             if (errno != .SUCCESS) return failure(errno);
             written += rc;
         }
-        self.size = @max(self.size, at + bytes.len);
+        self.written = @max(self.written, at + bytes.len);
     }
 
+    /// Set the output's size; bytes it grows by read as zero.
     pub fn resize(self: *LinuxOutputFile, size: u64) Error!void {
         const rc = linux.ftruncate(self.fd, @intCast(size));
         if (linux.errno(rc) != .SUCCESS) return failure(linux.errno(rc));
-        self.size = size;
     }
 
+    /// Map the output's first `size` bytes for writing, with the blocks
+    /// behind them allocated first, so a filesystem that runs out of room
+    /// fails here instead of faulting a write into the mapping. On a
+    /// filesystem without block allocation the bytes go to a buffer that
+    /// `finish` writes out, which reports the same failure.
     pub fn map(self: *LinuxOutputFile, size: u64) Error![]u8 {
-        const rc = linux.mmap(null, @intCast(size), .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, self.fd, 0);
+        const allocated = linux.fallocate(self.fd, 0, 0, @intCast(size));
+        const allocated_errno = linux.errno(allocated);
+        if (allocated_errno != .SUCCESS and allocated_errno != .OPNOTSUPP) return failure(allocated_errno);
+        self.buffered = allocated_errno == .OPNOTSUPP;
+        const rc = if (self.buffered)
+            linux.mmap(null, @intCast(size), .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0)
+        else
+            linux.mmap(null, @intCast(size), .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, self.fd, 0);
         if (linux.errno(rc) != .SUCCESS) return failure(linux.errno(rc));
         const start: [*]u8 = @ptrFromInt(rc);
-        return start[0..@intCast(size)];
+        const bytes = start[0..@intCast(size)];
+        if (self.buffered) {
+            // The bytes already in the file belong in the buffer too.
+            var got: usize = 0;
+            while (got < self.written) {
+                const read = linux.pread(self.fd, start + got, @intCast(self.written - got), @intCast(got));
+                const read_errno = linux.errno(read);
+                if (read_errno == .INTR) continue;
+                if (read_errno != .SUCCESS) return failure(read_errno);
+                if (read == 0) return error.Unexpected;
+                got += read;
+            }
+        }
+        return bytes;
     }
 
+    /// Complete the bytes of a mapping `map` made and release it.
+    pub fn finish(self: *LinuxOutputFile, bytes: []u8) Error!void {
+        defer self.unmap(bytes);
+        if (self.buffered) try self.writeAt(bytes, 0);
+    }
+
+    /// Release a mapping `map` made without completing the output.
     pub fn unmap(_: *LinuxOutputFile, bytes: []u8) void {
         _ = linux.munmap(bytes.ptr, bytes.len);
     }
@@ -258,6 +294,12 @@ pub const PosixOutputFile = struct {
             else => error.Unexpected,
         };
         return mapped;
+    }
+
+    /// Complete the bytes of a mapping `map` made, which are the file's
+    /// own pages, and release it.
+    pub fn finish(self: *PosixOutputFile, bytes: []u8) Error!void {
+        self.unmap(bytes);
     }
 
     /// Release the mapping. The macOS kernel validates an executable's
@@ -421,6 +463,12 @@ pub const WindowsOutputFile = struct {
         };
         self.mapping = mapping;
         return view[0..@intCast(size)];
+    }
+
+    /// Complete the bytes of a mapping `map` made, which are the file's
+    /// own pages, and release it.
+    pub fn finish(self: *WindowsOutputFile, bytes: []u8) Error!void {
+        self.unmap(bytes);
     }
 
     pub fn unmap(self: *WindowsOutputFile, bytes: []u8) void {

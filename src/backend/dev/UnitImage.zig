@@ -9,7 +9,9 @@
 //! (an import), and every reference whose distance depends on where the
 //! linker places the unit's regions (a local site). References inside the
 //! code block that are position independent are resolved when the image is
-//! built, so placing a unit never touches them.
+//! built, so placing a unit whole never touches them; each is also recorded
+//! against its atom (`Ref`), so a link that drops the block's unreached
+//! atoms can re-fix the ones whose fields the move changes.
 //!
 //! Images are built from relocatable objects (`build`): x86_64 ELF objects
 //! for Linux, arm64 Mach-O objects for macOS, x86_64 and arm64 COFF objects
@@ -34,7 +36,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RBXU".*;
 /// Format version; bump whenever the encoding or its contents change.
-pub const format_version: u32 = 5;
+pub const format_version: u32 = 6;
 /// Alignment of the code block inside an image, and of every region the
 /// linker places.
 pub const page_size: u32 = 4096;
@@ -136,7 +138,8 @@ pub const Import = extern struct {
 pub const Site = extern struct {
     /// Offset of the field in `region`.
     offset: u32,
-    /// The import index, for an import site.
+    /// The import index, for an import site; for a local site, the atom its
+    /// target is in when `target_region` is the block, else `no_atom`.
     target: u32,
     /// Added to the target address; for a local site the target's offset
     /// in `target_region` is folded in.
@@ -154,15 +157,92 @@ pub const Site = extern struct {
 /// `Site.atom` of a field outside the block.
 pub const no_atom: u32 = std.math.maxInt(u32);
 
+/// How a reference the image resolved inside its block encodes its target.
+pub const RefKind = enum(u8) {
+    /// A 32-bit displacement (`SiteKind.pc32`).
+    pc32 = 0,
+    /// An arm64 `B` or `BL` word displacement (`SiteKind.branch26`).
+    branch26 = 1,
+    /// An arm64 `ADRP` page displacement (`SiteKind.page21`).
+    page21 = 2,
+    /// The low 12 bits of the target in an arm64 `ADD` or load/store
+    /// immediate (`SiteKind.pageoff12`).
+    pageoff12 = 3,
+    /// The arm64 dev backend's PC-relative address sequence: `ADR` of
+    /// itself, `MOVZ` and `MOVK` of the distance's low and high halves into
+    /// a scratch register, and an `ADD` or `SUB` of it, the field being the
+    /// four instructions from the `ADR`.
+    pc_sequence = 4,
+
+    /// The reference kind of a site kind `build` resolves in the block.
+    pub fn ofSite(kind: SiteKind) RefKind {
+        return switch (kind) {
+            .pc32 => .pc32,
+            .branch26 => .branch26,
+            .page21 => .page21,
+            .pageoff12 => .pageoff12,
+            .abs64, .abs32, .abs32s, .rva32 => unreachable, // absolute fields stay sites; only relative ones resolve in the block
+        };
+    }
+
+    /// The width of the field in bytes.
+    pub fn width(self: RefKind) usize {
+        return switch (self) {
+            .pc32, .branch26, .page21, .pageoff12 => 4,
+            .pc_sequence => 16,
+        };
+    }
+
+    /// Whether the field encodes page arithmetic, which a move by other
+    /// than whole pages changes even when both ends move together.
+    pub fn isPageRelative(self: RefKind) bool {
+        return switch (self) {
+            .page21, .pageoff12 => true,
+            .pc32, .branch26, .pc_sequence => false,
+        };
+    }
+
+    /// Whether the field changes when its own atom moves back by
+    /// `from_shift` bytes and its target's atom by `to_shift`. Atoms move
+    /// within a block placed page aligned.
+    pub fn moved(self: RefKind, from_shift: u64, to_shift: u64) bool {
+        return switch (self) {
+            .pc32, .branch26, .pc_sequence => from_shift != to_shift,
+            .page21 => from_shift != to_shift or from_shift % page_size != 0,
+            .pageoff12 => to_shift % page_size != 0,
+        };
+    }
+};
+
+/// One relative reference between two atoms of the block, or a page
+/// reference inside one, resolved in the block's bytes for the atoms at
+/// their image offsets.
+pub const Ref = extern struct {
+    /// Offset of the field in the block.
+    offset: u32,
+    /// The atom the field refers into.
+    target: u32,
+    /// What the field encodes, less the start of the target atom: the
+    /// field encodes the target atom's start plus this.
+    addend: i32,
+    /// A `RefKind`.
+    kind: u8,
+    reserved: [3]u8 = @splat(0),
+};
+
 /// `edges()` entry bit marking an import index rather than an atom.
 pub const edge_import: u32 = 1 << 31;
 
 /// A code reference the object's assembly resolved in place, with no
 /// relocation: the offsets, in the first object's text section, of the
-/// referring field and of its target.
+/// referring field and of its target, how the field encodes the target,
+/// and what the field adds to the target (an x86_64 displacement counts
+/// from the end of its 4-byte field, so it adds -4).
 pub const CodeEdge = struct {
     site: u64,
     target: u64,
+    kind: RefKind,
+    addend: i64,
 };
 
 const Header = extern struct {
@@ -212,6 +292,11 @@ const Header = extern struct {
     /// writable data, encoded like `edges()` entries.
     roots_offset: u32,
     root_count: u32,
+    /// For each atom, the start of its `Ref`s (ascending by offset), and
+    /// one end entry.
+    ref_starts_offset: u32,
+    refs_offset: u32,
+    ref_count: u32,
     total_size: u32,
     reserved: u32 = 0,
     /// BLAKE3 of the image's bytes with this field zeroed: what places the
@@ -254,6 +339,8 @@ pub const View = struct {
         try checkRange(bytes.len, header.edge_starts_offset, header.atom_count + 1, @sizeOf(u32));
         try checkRange(bytes.len, header.edges_offset, header.edge_count, @sizeOf(u32));
         try checkRange(bytes.len, header.roots_offset, header.root_count, @sizeOf(u32));
+        try checkRange(bytes.len, header.ref_starts_offset, header.atom_count + 1, @sizeOf(u32));
+        try checkRange(bytes.len, header.refs_offset, header.ref_count, @sizeOf(Ref));
         if (header.atom_count == 0) return error.InvalidImage;
         if (header.text_size > header.block_size or header.import_site_count > header.site_count) return error.InvalidImage;
         if (header.strings_size == 0 or bytes[header.strings_offset + header.strings_size - 1] != 0) return error.InvalidImage;
@@ -359,6 +446,12 @@ pub const View = struct {
     pub fn roots(self: View) []const u32 {
         return table(u32, self.bytes, self.header.roots_offset, self.header.root_count);
     }
+    /// The resolved references from atom `index` into other atoms of the
+    /// block, and its page references into itself, ascending by offset.
+    pub fn atomRefs(self: View, index: u32) []const Ref {
+        const starts = table(u32, self.bytes, self.header.ref_starts_offset, self.header.atom_count + 1);
+        return table(Ref, self.bytes, self.header.refs_offset, self.header.ref_count)[starts[index]..starts[index + 1]];
+    }
 
     pub fn regionBytes(self: View, region: Region) []const u8 {
         return switch (region) {
@@ -432,10 +525,23 @@ pub const BuildOptions = struct {
     atoms: union(enum) {
         /// One atom: the image is placed whole.
         whole,
-        /// One atom per symbol in the block, with every reference between
-        /// them a relocation or one of these patched code references.
-        symbols: []const CodeEdge,
+        /// One atom per symbol in the text and per datum in the read-only
+        /// data, with every reference between them a relocation or a
+        /// patched code reference.
+        symbols: SymbolAtoms,
     },
+};
+
+/// The atoms of a block built from one object: the text's symbols start
+/// its atoms, and the read-only data's atoms are the data the object laid
+/// out, whose symbols may sit inside them (a refcounted datum's symbol
+/// follows its header).
+pub const SymbolAtoms = struct {
+    /// The code references the object's assembly resolved in place.
+    edges: []const CodeEdge,
+    /// The offset in the object's static data section
+    /// (`Object.static_data_section`) where each datum starts, ascending.
+    data_starts: []const u64,
 };
 
 /// Build one image from `objects`, linking them to each other: a symbol one
@@ -632,9 +738,20 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     try atom_starts.append(arena, 0);
     switch (options.atoms) {
         .whole => {},
-        .symbols => {
+        .symbols => |symbol_atoms| {
             for (symbol_records.items) |symbol| {
-                if (symbol.region == @backingInt(Region.block)) try atom_starts.append(arena, symbol.value);
+                if (symbol.region == @backingInt(Region.block) and symbol.value < text_size) try atom_starts.append(arena, symbol.value);
+            }
+            if (symbol_atoms.data_starts.len != 0) {
+                const data_index = parsed[0].static_data_section orelse return error.InvalidObject;
+                const data_place = places[0][data_index] orelse return error.InvalidObject;
+                // A format whose static data is writable (Mach-O's
+                // `__DATA,__const`) places it whole in the data region, so
+                // only data in the block divides into atoms.
+                if (data_place.region == .block) for (symbol_atoms.data_starts) |start| {
+                    if (start > parsed[0].sections[data_index].size) return error.InvalidObject;
+                    try atom_starts.append(arena, std.math.cast(u32, data_place.offset + start) orelse return error.ImageTooLarge);
+                };
             }
             std.mem.sort(u32, atom_starts.items, {}, std.sort.asc(u32));
             var kept: usize = 1;
@@ -654,11 +771,15 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     };
     switch (options.atoms) {
         .whole => {},
-        .symbols => |code_edges| {
+        .symbols => |symbol_atoms| {
             const text_index = parsed[0].text_section orelse return error.InvalidObject;
             const text_place = places[0][text_index] orelse return error.InvalidObject;
-            for (code_edges) |edge| {
-                try sites.edge_pairs.append(arena, .{ .from = sites.atom_list.of(text_place.offset + edge.site), .to = sites.atom_list.of(text_place.offset + edge.target) });
+            for (symbol_atoms.edges) |edge| {
+                const site = text_place.offset + edge.site;
+                const from = sites.atom_list.of(site);
+                const to = sites.atom_list.of(text_place.offset + edge.target);
+                try sites.edge_pairs.append(arena, .{ .from = from, .to = to });
+                try sites.noteRef(from, site, edge.kind, to, @as(i64, @intCast(text_place.offset + edge.target)) + edge.addend);
             }
         },
     }
@@ -681,15 +802,16 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
                     const key = if (symbol.bind == .local) try std.fmt.allocPrint(arena, "\x00{d}:{d}", .{ object_index, reloc.symbol }) else symbol.name;
                     const slot = got_slots.getIndex(key).?;
                     const slot_definition: Definition = .{ .object = 0, .symbol = 0, .weak = false, .region = .data, .offset = got_offset + slot * 8 };
-                    try sites.noteEdge(site_place, site_offset, target, symbol);
-                    try sites.add(site_place, site_offset, kind, slot_definition, "", false, reloc.addend);
+                    try sites.noteEdge(site_place, site_offset, target, symbol, targetPoint(target, .abs64, 0, object.x86_64));
+                    try sites.add(site_place, site_offset, kind, slot_definition, "", false, reloc.addend, 0);
                 },
                 .abs64, .pc32, .abs32, .abs32s, .branch26, .page21, .pageoff12, .rva32 => {
                     const kind = reloc.kind.siteKind();
                     if (reloc.offset + kindWidth(kind) > site_section.size) return error.InvalidObject;
                     const site_offset = site_place.offset + reloc.offset;
-                    try sites.noteEdge(site_place, site_offset, target, symbol);
-                    try sites.add(site_place, site_offset, kind, target, symbol.name, symbol.bind == .weak, reloc.addend);
+                    const point = targetPoint(target, kind, reloc.addend, object.x86_64);
+                    try sites.noteEdge(site_place, site_offset, target, symbol, point);
+                    try sites.add(site_place, site_offset, kind, target, symbol.name, symbol.bind == .weak, reloc.addend, point);
                 },
             }
         }
@@ -701,8 +823,9 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
         const symbol = object.symbols[ref.symbol];
         const target = try resolveTarget(&definitions, places[ref.object], symbol);
         const site_offset = got_offset + slot * 8;
-        try sites.noteEdge(slot_place, site_offset, target, symbol);
-        try sites.add(slot_place, site_offset, .abs64, target, symbol.name, symbol.bind == .weak, 0);
+        const point = targetPoint(target, .abs64, 0, object.x86_64);
+        try sites.noteEdge(slot_place, site_offset, target, symbol, point);
+        try sites.add(slot_place, site_offset, .abs64, target, symbol.name, symbol.bind == .weak, 0, point);
     }
 
     // Imports in name order, each with its sites in the order found.
@@ -766,6 +889,19 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     }
     edge_starts[atom_list.starts.len] = @intCast(edge_targets.items.len);
     const root_atoms = &sites.root_atoms;
+    // References by atom, each atom's by offset.
+    const ref_entries = &sites.ref_entries;
+    std.mem.sort(RefEntry, ref_entries.items, {}, RefEntry.lessThan);
+    const refs = try arena.alloc(Ref, ref_entries.items.len);
+    const ref_starts = try arena.alloc(u32, atom_list.starts.len + 1);
+    var ref_at: usize = 0;
+    for (0..atom_list.starts.len) |atom| {
+        ref_starts[atom] = @intCast(ref_at);
+        while (ref_at < ref_entries.items.len and ref_entries.items[ref_at].atom == atom) : (ref_at += 1) {
+            refs[ref_at] = ref_entries.items[ref_at].ref;
+        }
+    }
+    ref_starts[atom_list.starts.len] = @intCast(ref_at);
     for (root_atoms.items) |*root| {
         if (root.* & edge_import != 0) root.* = edge_import | rank[root.* & ~edge_import];
     }
@@ -807,6 +943,8 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     const edge_starts_offset = layout.reserve(edge_starts.len * @sizeOf(u32), 8);
     const edges_offset = layout.reserve(edge_targets.items.len * @sizeOf(u32), 8);
     const roots_offset = layout.reserve(root_atoms.items.len * @sizeOf(u32), 8);
+    const ref_starts_offset = layout.reserve(ref_starts.len * @sizeOf(u32), 8);
+    const refs_offset = layout.reserve(refs.len * @sizeOf(Ref), 8);
     const total = std.mem.alignForward(u64, layout.end, 16);
     if (total > limit) return error.ImageTooLarge;
 
@@ -853,6 +991,9 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
         .edge_count = @intCast(edge_targets.items.len),
         .roots_offset = roots_offset,
         .root_count = @intCast(root_atoms.items.len),
+        .ref_starts_offset = ref_starts_offset,
+        .refs_offset = refs_offset,
+        .ref_count = @intCast(refs.len),
         .total_size = @intCast(total),
         .digest = @splat(0),
     };
@@ -874,6 +1015,8 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     @memcpy(out[edge_starts_offset..][0 .. edge_starts.len * @sizeOf(u32)], std.mem.sliceAsBytes(edge_starts));
     @memcpy(out[edges_offset..][0 .. edge_targets.items.len * @sizeOf(u32)], std.mem.sliceAsBytes(edge_targets.items));
     @memcpy(out[roots_offset..][0 .. root_atoms.items.len * @sizeOf(u32)], std.mem.sliceAsBytes(root_atoms.items));
+    @memcpy(out[ref_starts_offset..][0 .. ref_starts.len * @sizeOf(u32)], std.mem.sliceAsBytes(ref_starts));
+    @memcpy(out[refs_offset..][0 .. refs.len * @sizeOf(Ref)], std.mem.sliceAsBytes(refs));
     var content_digest: [32]u8 = undefined;
     std.crypto.hash.Blake3.hash(out, &content_digest, .{});
     @memcpy(out[@offsetOf(Header, "digest")..][0..32], &content_digest);
@@ -944,6 +1087,31 @@ pub fn applySite(field: []u8, kind: SiteKind, target_plus_addend: i64, site_addr
     return true;
 }
 
+/// Write `target` into a resolved reference's `field` of `kind`, the field
+/// sitting at `site_address`, keeping the instructions' registers. Returns
+/// false when the target is out of the field's reach.
+pub fn applyRef(field: []u8, kind: RefKind, target: i64, site_address: u64) bool {
+    switch (kind) {
+        .pc32 => return applySite(field, .pc32, target, site_address),
+        .branch26 => return applySite(field, .branch26, target, site_address),
+        .page21 => return applySite(field, .page21, target, site_address),
+        .pageoff12 => return applySite(field, .pageoff12, target, site_address),
+        .pc_sequence => {
+            const distance = target - @as(i64, @intCast(site_address));
+            const magnitude = std.math.cast(u32, @abs(distance)) orelse return false;
+            const imm16_mask: u32 = 0xffff << 5;
+            const movz = std.mem.readInt(u32, field[4..8], .little);
+            const movk = std.mem.readInt(u32, field[8..12], .little);
+            const add = std.mem.readInt(u32, field[12..16], .little);
+            const subtract_bit: u32 = 1 << 30;
+            std.mem.writeInt(u32, field[4..8], (movz & ~imm16_mask) | ((magnitude & 0xffff) << 5), .little);
+            std.mem.writeInt(u32, field[8..12], (movk & ~imm16_mask) | ((magnitude >> 16) << 5), .little);
+            std.mem.writeInt(u32, field[12..16], (add & ~subtract_bit) | (if (distance < 0) subtract_bit else 0), .little);
+            return true;
+        },
+    }
+}
+
 /// How many bits an arm64 instruction's 12-bit immediate is scaled by: an
 /// `ADD` takes the offset as is, a load or store scales it by its access
 /// width. Null for an instruction a page offset cannot patch.
@@ -989,6 +1157,17 @@ const EdgePair = struct {
     }
 };
 
+/// A `Ref` with the atom holding its field, before the refs are grouped.
+const RefEntry = struct {
+    atom: u32,
+    ref: Ref,
+
+    fn lessThan(_: void, a: RefEntry, b: RefEntry) bool {
+        if (a.atom != b.atom) return a.atom < b.atom;
+        return a.ref.offset < b.ref.offset;
+    }
+};
+
 fn placeDebug(place: *?Place, size: *u64, region: Region, section_size: u64) void {
     place.* = .{ .region = region, .offset = size.* };
     size.* += section_size;
@@ -1021,7 +1200,7 @@ fn resolveTarget(definitions: *const std.StringArrayHashMapUnmanaged(Definition)
 const PendingImport = struct { weak: bool };
 const PendingSite = struct { import: u32, site: Site };
 
-/// The sites and edges `build` collects.
+/// The sites, edges and resolved references `build` collects.
 const Sites = struct {
     arena: Allocator,
     options: BuildOptions,
@@ -1032,17 +1211,24 @@ const Sites = struct {
     local_sites: std.ArrayList(Site) = .empty,
     edge_pairs: std.ArrayList(EdgePair) = .empty,
     root_atoms: std.ArrayList(u32) = .empty,
+    ref_entries: std.ArrayList(RefEntry) = .empty,
+
+    /// The atom holding `point`, a block offset a field reaches.
+    fn atomAt(self: *const Sites, point: i64) BuildError!u32 {
+        return self.atom_list.of(std.math.cast(u64, point) orelse return error.InvalidObject);
+    }
 
     /// What the field's atom reaches. A field in writable data is always
     /// placed, so what it reaches is a root. A reference through a section
     /// symbol names no symbol whose atom it reaches, so atoms by symbol
-    /// admit none from the block.
-    fn noteEdge(self: *Sites, site_place: Place, site_offset: u64, target: ?Definition, symbol: ObjectSymbol) BuildError!void {
+    /// admit none from the block. `point` is the block offset the field
+    /// reaches when its target is in the block (`targetPoint`).
+    fn noteEdge(self: *Sites, site_place: Place, site_offset: u64, target: ?Definition, symbol: ObjectSymbol, point: i64) BuildError!void {
         const site_atom: u32 = if (site_place.region == .block) self.atom_list.of(site_offset) else no_atom;
         if (target) |local| {
             if (local.region == .block and self.options.atoms != .whole) {
                 if (symbol.kind == .section and site_place.region == .block) return error.UnsupportedRelocation;
-                const to = self.atom_list.of(local.offset);
+                const to = try self.atomAt(point);
                 switch (site_place.region) {
                     .block => try self.edge_pairs.append(self.arena, .{ .from = site_atom, .to = to }),
                     .data => try self.root_atoms.append(self.arena, to),
@@ -1059,24 +1245,44 @@ const Sites = struct {
         }
     }
 
+    /// Record the resolved reference of a field at block offset `offset`
+    /// in atom `from`, encoding `value`, a block offset in atom `to`. A
+    /// field whose two ends share an atom keeps its distance wherever the
+    /// atom lands, and needs no record unless it encodes page arithmetic;
+    /// the one atom of a whole block never moves.
+    fn noteRef(self: *Sites, from: u32, offset: u64, kind: RefKind, to: u32, value: i64) BuildError!void {
+        if (self.options.atoms == .whole) return;
+        if (from == to and !kind.isPageRelative()) return;
+        const addend = std.math.cast(i32, value - @as(i64, self.atom_list.starts[to])) orelse return error.ImageTooLarge;
+        try self.ref_entries.append(self.arena, .{ .atom = from, .ref = .{
+            .offset = std.math.cast(u32, offset) orelse return error.ImageTooLarge,
+            .target = to,
+            .addend = addend,
+            .kind = @backingInt(kind),
+        } });
+    }
+
     /// Resolve the field in place when its target is in the block with it,
-    /// else record it as a local or import site.
-    fn add(self: *Sites, site_place: Place, site_offset: u64, kind: SiteKind, target: ?Definition, symbol_name: []const u8, weak_reference: bool, addend: i64) BuildError!void {
+    /// else record it as a local or import site. `point` is the block
+    /// offset the field reaches when its target is in the block.
+    fn add(self: *Sites, site_place: Place, site_offset: u64, kind: SiteKind, target: ?Definition, symbol_name: []const u8, weak_reference: bool, addend: i64, point: i64) BuildError!void {
         const site_atom: u32 = if (site_place.region == .block) self.atom_list.of(site_offset) else no_atom;
         if (target) |local| {
             const total = addend + @as(i64, @intCast(local.offset));
+            const target_atom: u32 = if (local.region == .block) try self.atomAt(point) else no_atom;
             const relative = kind.isPcRelative() or kind == .pageoff12;
             if (relative and site_place.region == .block and local.region == .block) {
                 // The block is placed page aligned, so page and low-bit
                 // arithmetic over block offsets holds wherever it lands.
                 const field = self.block_bytes[@intCast(site_offset)..][0..@intCast(kindWidth(kind))];
                 if (!applySite(field, kind, total, site_offset)) return error.RelocationOutOfRange;
+                try self.noteRef(site_atom, site_offset, RefKind.ofSite(kind), target_atom, total);
                 return;
             }
             if (relative and !(site_place.region.isAllocated() and local.region.isAllocated())) return error.UnsupportedRelocation;
             try self.local_sites.append(self.arena, .{
                 .offset = @intCast(site_offset),
-                .target = 0,
+                .target = target_atom,
                 .addend = total,
                 .atom = site_atom,
                 .region = @backingInt(site_place.region),
@@ -1100,6 +1306,14 @@ const Sites = struct {
         } });
     }
 };
+
+/// The offset a field of `kind` against `local` plus `addend` reaches in
+/// its target's region: the target plus the addend, less the -4 an x86_64
+/// `pc32` field carries for its own width.
+fn targetPoint(local: ?Definition, kind: SiteKind, addend: i64, x86_64: bool) i64 {
+    const definition = local orelse return 0;
+    return @as(i64, @intCast(definition.offset)) + addend + @as(i64, if (x86_64 and kind == .pc32) 4 else 0);
+}
 
 const Strings = struct {
     arena: Allocator,
@@ -1243,6 +1457,13 @@ const Object = struct {
     /// The index of the object's text section, which code edges are
     /// offsets in.
     text_section: ?u32,
+    /// The index of the section the dev backend's object writers put
+    /// static data in (ELF `.rodata`, Mach-O `__DATA,__const`, COFF
+    /// `.rdata`), which `SymbolAtoms.data_starts` are offsets in.
+    static_data_section: ?u32,
+    /// Whether the object is x86_64 code, whose `pc32` displacements count
+    /// from the end of their field.
+    x86_64: bool,
 
     fn parse(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildError!Object {
         if (bytes.len < 4) return error.InvalidObject;
@@ -1292,9 +1513,11 @@ fn parseElf(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildErr
     }
     const sections = try arena.alloc(Section, shnum);
     var text_section: ?u32 = null;
+    var static_data_section: ?u32 = null;
     for (raw, sections, 0..) |section, *out, index| {
         const class = try classifyElf(section.name, section.type, section.flags, section.addralign, options);
         if (class == .text and text_section == null and std.mem.eql(u8, section.name, ".text")) text_section = @intCast(index);
+        if (class == .rodata and static_data_section == null and std.mem.eql(u8, section.name, ".rodata")) static_data_section = @intCast(index);
         out.* = .{
             .class = class,
             .bytes = if (section.type == SHT_NOBITS or section.type == SHT_NULL) &.{} else bytes[@intCast(section.offset)..][0..@intCast(section.size)],
@@ -1368,7 +1591,7 @@ fn parseElf(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildErr
             });
         }
     }
-    return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section };
+    return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section, .static_data_section = static_data_section, .x86_64 = machine == EM_X86_64 };
 }
 
 fn classifyX86_64Reloc(r_type: u32) BuildError!RelocKind {
@@ -1478,10 +1701,12 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
     }
     const sections = try arena.alloc(Section, raw.items.len);
     var text_section: ?u32 = null;
+    var static_data_section: ?u32 = null;
     for (raw.items, sections, 0..) |section, *out, index| {
         if (section.@"align" > 12) return error.UnsupportedSection;
         const class = try classifyMachO(section.segname, section.sectname, section.flags, options);
         if (class == .text and text_section == null and std.mem.eql(u8, section.sectname, "__text")) text_section = @intCast(index);
+        if (class != .skip and static_data_section == null and std.mem.eql(u8, section.segname, "__DATA") and std.mem.eql(u8, section.sectname, "__const")) static_data_section = @intCast(index);
         out.* = .{
             .class = class,
             .bytes = if (class == .bss) &.{} else bytes[section.offset..][0..@intCast(section.size)],
@@ -1640,7 +1865,7 @@ fn parseMachO(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildE
         }
         if (pending_addend != null) return error.InvalidObject;
     }
-    return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section };
+    return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section, .static_data_section = static_data_section, .x86_64 = x86_64 };
 }
 
 fn classifyMachO(segname: []const u8, sectname: []const u8, flags: u32, options: BuildOptions) BuildError!SectionClass {
@@ -1824,9 +2049,11 @@ fn parseCoff(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildEr
 
     const sections = try arena.alloc(Section, section_count);
     var text_section: ?u32 = null;
+    var static_data_section: ?u32 = null;
     for (raw, sections, 0..) |section, *out, section_index| {
         const class = try classifyCoff(section.name, section.characteristics, options);
         if (class == .text and text_section == null and std.mem.eql(u8, section.name, ".text")) text_section = @intCast(section_index);
+        if (class == .rodata and static_data_section == null and std.mem.eql(u8, section.name, ".rdata")) static_data_section = @intCast(section_index);
         const align_field = (section.characteristics >> 20) & 0xf;
         const addralign: u64 = if (align_field == 0) 16 else @as(u64, 1) << @intCast(align_field - 1);
         if (addralign > page_size) return error.UnsupportedSection;
@@ -1885,7 +2112,7 @@ fn parseCoff(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildEr
             try relocs.append(arena, .{ .section = @intCast(section_index), .offset = offset, .kind = decoded.kind, .symbol = symbol_index, .addend = decoded.addend });
         }
     }
-    return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section };
+    return .{ .sections = sections, .symbols = symbols, .relocs = relocs.items, .text_section = text_section, .static_data_section = static_data_section, .x86_64 = !arm64 };
 }
 
 const DecodedCoffReloc = struct { kind: RelocKind, addend: i64, section_relative: bool = false };
@@ -3032,7 +3259,7 @@ test "atoms by symbol record every reference between them" {
         .{ .section = 3, .offset = 0, .symbol = 3, .type = R_X86_64_64, .addend = 0 },
     });
     defer allocator.free(object);
-    const image = try build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .{ .symbols = &.{.{ .site = 17, .target = 0 }} } });
+    const image = try build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .{ .symbols = .{ .edges = &.{.{ .site = 17, .target = 0, .kind = .pc32, .addend = -4 }}, .data_starts = &.{0} } } });
     defer allocator.free(image);
     const view = try View.init(image);
     try std.testing.expectEqualSlices(u32, &.{ 0, 8, 16, 24 }, view.atoms());
@@ -3043,8 +3270,61 @@ test "atoms by symbol record every reference between them" {
     try std.testing.expectEqualSlices(u32, &.{2}, view.roots());
     try std.testing.expectEqual(@as(u32, 1), view.importSites(view.imports()[0])[0].atom);
     try std.testing.expectEqual(no_atom, view.localSites()[0].atom);
+    // The data word refers into third's atom.
+    try std.testing.expectEqual(@as(u32, 2), view.localSites()[0].target);
     try std.testing.expectEqual(@as(u32, 24), view.atomRange(3).start);
     try std.testing.expectEqual(@as(u32, 32), view.atomRange(3).end);
+    // The resolved references: first's call to second, second's lea of the
+    // constant, and third's patched call to first.
+    try std.testing.expectEqualSlices(Ref, &.{.{ .offset = 1, .target = 1, .addend = -4, .kind = @backingInt(RefKind.pc32) }}, view.atomRefs(0));
+    try std.testing.expectEqualSlices(Ref, &.{.{ .offset = 12, .target = 3, .addend = -4, .kind = @backingInt(RefKind.pc32) }}, view.atomRefs(1));
+    try std.testing.expectEqualSlices(Ref, &.{.{ .offset = 17, .target = 0, .addend = -4, .kind = @backingInt(RefKind.pc32) }}, view.atomRefs(2));
+    try std.testing.expectEqualSlices(Ref, &.{}, view.atomRefs(3));
+}
+
+test "a PC-relative address sequence takes a new distance and keeps its registers" {
+    // adr x9, #0; movz x10, #0; movk x10, #0, lsl #16; add x9, x9, x10
+    var field: [16]u8 = undefined;
+    for ([_]u32{ 0x1000_0009, 0xd280_000a, 0xf2a0_000a, 0x8b0a_0129 }, 0..) |word, index| std.mem.writeInt(u32, field[index * 4 ..][0..4], word, .little);
+    try std.testing.expect(applyRef(&field, .pc_sequence, 0x1_2344 + 0x1000, 0x1000));
+    try std.testing.expectEqual(@as(u32, 0x1000_0009), std.mem.readInt(u32, field[0..4], .little));
+    try std.testing.expectEqual(@as(u32, 0xd280_000a | (0x2344 << 5)), std.mem.readInt(u32, field[4..8], .little));
+    try std.testing.expectEqual(@as(u32, 0xf2a0_000a | (0x1 << 5)), std.mem.readInt(u32, field[8..12], .little));
+    try std.testing.expectEqual(@as(u32, 0x8b0a_0129), std.mem.readInt(u32, field[12..16], .little));
+    // A target behind the sequence subtracts.
+    try std.testing.expect(applyRef(&field, .pc_sequence, 0x1000 - 0x40, 0x1000));
+    try std.testing.expectEqual(@as(u32, 0xd280_000a | (0x40 << 5)), std.mem.readInt(u32, field[4..8], .little));
+    try std.testing.expectEqual(@as(u32, 0xf2a0_000a), std.mem.readInt(u32, field[8..12], .little));
+    try std.testing.expectEqual(@as(u32, 0xcb0a_0129), std.mem.readInt(u32, field[12..16], .little));
+}
+
+test "a page reference inside one atom is recorded, a branch inside one is not" {
+    const allocator = std.testing.allocator;
+    // f: bl g; adrp x0, f+12; add x0, x0, :lo12:f+12; b f; g: ret
+    var text: [20]u8 = undefined;
+    for ([_]u32{ bl_instruction, 0x9000_0000, 0x9100_0000, 0x1400_0000, 0xd65f_03c0 }, 0..) |word, index| std.mem.writeInt(u32, text[index * 4 ..][0..4], word, .little);
+    const object = try TestObject.encodeAarch64(allocator, &.{
+        .{ .name = ".text", .flags = SHF_ALLOC | SHF_EXECINSTR, .bytes = &text, .addralign = 4 },
+    }, &.{
+        .{ .name = "f", .section = 1, .value = 0, .size = 16, .global = true, .func = true },
+        .{ .name = "g", .section = 1, .value = 16, .size = 4, .func = true },
+    }, &.{
+        .{ .section = 1, .offset = 0, .symbol = 2, .type = R_AARCH64_CALL26, .addend = 0 },
+        .{ .section = 1, .offset = 4, .symbol = 1, .type = R_AARCH64_ADR_PREL_PG_HI21, .addend = 12 },
+        .{ .section = 1, .offset = 8, .symbol = 1, .type = R_AARCH64_ADD_ABS_LO12_NC, .addend = 12 },
+        .{ .section = 1, .offset = 12, .symbol = 1, .type = R_AARCH64_JUMP26, .addend = 0 },
+    });
+    defer allocator.free(object);
+    const image = try build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .{ .symbols = .{ .edges = &.{}, .data_starts = &.{} } } });
+    defer allocator.free(image);
+    const view = try View.init(image);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 16 }, view.atoms());
+    try std.testing.expectEqualSlices(Ref, &.{
+        .{ .offset = 0, .target = 1, .addend = 0, .kind = @backingInt(RefKind.branch26) },
+        .{ .offset = 4, .target = 0, .addend = 12, .kind = @backingInt(RefKind.page21) },
+        .{ .offset = 8, .target = 0, .addend = 12, .kind = @backingInt(RefKind.pageoff12) },
+    }, view.atomRefs(0));
+    try std.testing.expectEqualSlices(Ref, &.{}, view.atomRefs(1));
 }
 
 const bl_instruction: u32 = 0x9400_0000;

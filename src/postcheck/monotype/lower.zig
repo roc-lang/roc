@@ -4214,6 +4214,18 @@ const RestoredLocalProcScope = struct {
     entries: []const LexicalBinderEntry,
 };
 
+/// A stored function a body restores, read for the evidence chain of the
+/// template that declares local procedures of another template it reaches.
+const RestoredConstFn = struct {
+    store_view: ModuleView,
+    fn_value: check.ConstStore.ConstFn,
+};
+
+const RestoredDeclaringEvidence = struct {
+    owner: names.ProcTemplate,
+    chain: EvidenceChain,
+};
+
 const StoredConstFnEvidence = struct {
     entries: check.ConstStore.ConstFnEvidenceVector,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
@@ -8022,6 +8034,55 @@ const Builder = struct {
         try self.const_evidence_memo.put(key, stored);
         try self.const_evidence_by_content.put(bucket, stored);
         return stored;
+    }
+
+    /// A function's own evidence chain followed by the chain of the template
+    /// that declares the local procedures of another template it reaches.
+    /// The head names the own chain's innermost frame; the declaring chain's
+    /// root frame comes right after it.
+    fn constFnEvidenceWithDeclaring(
+        self: *Builder,
+        evidence: EvidenceChain,
+        declaring: EvidenceChain,
+    ) Allocator.Error!StoredConstFnEvidence {
+        var nodes: check.ConstStore.ConstFnEvidenceBuilder = .{};
+        defer nodes.deinit(self.allocator);
+        var frames = std.ArrayList(check.ConstStore.ConstFnEvidenceFrame).empty;
+        defer frames.deinit(self.allocator);
+        var head: ?u32 = null;
+        for ([_]*const EvidenceChain{ &evidence, &declaring }, 0..) |innermost, chain_index| {
+            var chain = std.ArrayList(*const EvidenceChain).empty;
+            defer chain.deinit(self.allocator);
+            var current: ?*const EvidenceChain = innermost;
+            while (current) |frame| : (current = frame.parent) {
+                try chain.append(self.allocator, frame);
+            }
+            var index = chain.items.len;
+            var parent: ?u32 = null;
+            while (index > 0) {
+                index -= 1;
+                const frame = chain.items[index];
+                const roots_start: u32 = @intCast(nodes.nodes.items.len);
+                try self.appendConstFnEvidence(&nodes, frame.vector);
+                const scope: check.ConstStore.ConstFnEvidenceScope = switch (frame.scope.lexical) {
+                    .root => .root,
+                    .generalized => |scope_id| .{ .generalized = @backingInt(scope_id) },
+                };
+                try frames.append(self.allocator, check.ConstStore.ConstFnEvidenceFrame.init(
+                    scope,
+                    parent,
+                    roots_start,
+                    @intCast(frame.vector.len),
+                ));
+                parent = @intCast(frames.items.len - 1);
+            }
+            if (chain_index == 0) head = parent;
+        }
+        return StoredConstFnEvidence.init(
+            try nodes.dupe(self.evidence_arena.allocator()),
+            try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, frames.items),
+            head,
+        );
     }
 
     /// Copy committed evidence out of the growable program lists so a lowered
@@ -12795,7 +12856,7 @@ const Builder = struct {
                 const draft = FinalBodyOutputGuard.begin(self);
                 const request_fn_node = try graph.importMonoIndependent(fn_template.mono_fn_ty);
                 fn_ctx.current_fn_key = nested.context_fn_key;
-                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
+                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(store_view, fn_value, nested, nested.context_fn_key);
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 try fn_ctx.restoreConstFnOwner(store_view, fn_value);
                 const fn_target = try self.lowerDraftNestedFromContext(
@@ -12939,6 +13000,16 @@ const Builder = struct {
                     },
                     .default_root => if (!in_default_expr) continue,
                 }
+                if (@import("builtin").mode == .debug) {
+                    for (view.nested_proc_sites.sites[@backingInt(candidate.site) + 1 ..]) |later| {
+                        if (later.checked_expr == null or later.checked_expr.? != expr_id) continue;
+                        const same_owner = switch (later.owner) {
+                            .template => |site_owner| !in_default_expr and names.procedureTemplateRefEql(site_owner, owner),
+                            .default_root => in_default_expr,
+                        };
+                        if (same_owner) Common.invariant("nested function expression matched two checked nested function sites");
+                    }
+                }
                 try self.nested_site_cache.put(address, candidate.site);
                 break :blk candidate.site;
             }
@@ -13029,7 +13100,7 @@ const Builder = struct {
         const family = DraftNestedFamilyAddress.init(nested, source_fn_key);
         self.countBodyDiagnostic("nested_lookup_probes");
         const family_exists = source_ctx.draft.nested_spec_families.contains(family);
-        const stored_evidence = try source_ctx.storedEvidence(requested_evidence);
+        const stored_evidence = try source_ctx.storedEvidenceForFn(requested_evidence, nested.owner);
         const evidence_digest = stored_evidence.digest;
         const draft_evidence = try source_ctx.draft.addStoredConstFnEvidence(stored_evidence);
         const resolved_request_ty: ?Type.TypeId = if (try source_ctx.graph.typeIsResolved(request_fn_node))
@@ -15838,7 +15909,7 @@ const Builder = struct {
             .nested => |nested| nested,
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("capturing stored function had no nested function identity"),
         };
-        const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, fn_ctx.current_fn_key);
+        const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(store_view, fn_value, nested, fn_ctx.current_fn_key);
         defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
 
         const capture_values = try self.allocator.alloc(DraftFnDefCapture, captures.len);
@@ -17749,6 +17820,16 @@ const DraftCodecLexicalContext = struct {
     view: [32]u8,
     binders: []const LexicalBinderEntry,
     local_procs: []const DraftCodecLocalProcContext,
+    /// The restored-function scope of a body that restores a stored function.
+    /// A deferred boundary resolves local procedures that body has not used
+    /// yet against it, exactly as the body itself would.
+    restored: ?RestoredLexicalScope = null,
+};
+
+const RestoredLexicalScope = struct {
+    /// Its entries live in the builder's evidence arena.
+    scope: RestoredLocalProcScope,
+    const_fn: ?RestoredConstFn,
 };
 
 const CodecKind = enum {
@@ -21935,6 +22016,17 @@ const BodyContext = struct {
     typed_binders: TypedBinders,
     local_proc_contexts: LocalProcContexts,
     restored_local_proc_scope: ?RestoredLocalProcScope = null,
+    /// The stored function this body restores. Its evidence frames after the
+    /// head frame are the evidence chain of the template that declares the
+    /// local procedures of another template it reaches (see
+    /// `storedDeclaringEvidence`).
+    restored_const_fn: ?RestoredConstFn = null,
+    /// The restored declaring template's chain, materialized on first use.
+    restored_declaring_evidence: ?RestoredDeclaringEvidence = null,
+    /// Some visible local procedure declaration context may belong to a
+    /// template other than `owner_template`. Only then does a function
+    /// produced here scan for a declaring template's evidence to retain.
+    may_see_other_template_local_procs: bool = false,
     /// The binder relations every nested context created from this one
     /// starts from (see `nestedRelationBase`).
     nested_relation_base: ?*NestedRelationBase = null,
@@ -23664,7 +23756,7 @@ const BodyContext = struct {
         if (!source.const_evidence.isEmpty() or source.const_evidence_frames.len != 0 or source.const_evidence_frame_head != null) {
             Common.invariant("body-local function source carried evidence outside its lexical lowering context");
         }
-        const stored_evidence = try self.storedEvidence(self.evidence);
+        const stored_evidence = try self.storedEvidenceForFn(self.evidence, self.owner_template);
         const evidence_digest = stored_evidence.digest;
         const draft_evidence = try self.draft.addStoredConstFnEvidence(stored_evidence);
         return try self.draft.addFn(.{
@@ -24915,6 +25007,9 @@ const BodyContext = struct {
         child.function_entry_demand_guards = self.function_entry_demand_guards;
         child.propagate_constructor_value_evidence = self.propagate_constructor_value_evidence;
         child.restored_local_proc_scope = self.restored_local_proc_scope;
+        child.restored_const_fn = self.restored_const_fn;
+        child.restored_declaring_evidence = self.restored_declaring_evidence;
+        child.may_see_other_template_local_procs = self.may_see_other_template_local_procs;
         child.in_default_expr = self.in_default_expr;
         child.specialization_dispatch_crashes = self.specialization_dispatch_crashes;
         child.owns_specialization_dispatch_crashes = false;
@@ -24938,9 +25033,13 @@ const BodyContext = struct {
 
     fn enterRestoredLocalProcScope(
         self: *BodyContext,
+        store_view: ModuleView,
+        fn_value: check.ConstStore.ConstFn,
         nested: Ast.NestedFn,
         base_key: names.TypeDigest,
     ) Allocator.Error!?[]LexicalBinderEntry {
+        self.restored_const_fn = .{ .store_view = store_view, .fn_value = fn_value };
+        self.restored_declaring_evidence = null;
         const digest = nested.local_proc_context_digest orelse {
             self.restored_local_proc_scope = null;
             return null;
@@ -24952,6 +25051,96 @@ const BodyContext = struct {
             .entries = entries,
         };
         return entries;
+    }
+
+    /// A restored generated codec runtime reaches the local procedures its
+    /// generated body calls, such as the format methods of a type declared in
+    /// a function body. Its stored definition names no source declaration
+    /// context of its own, so those procedures specialize under the restored
+    /// function's identity.
+    fn enterRestoredCodecLocalProcScope(
+        self: *BodyContext,
+        store_view: ModuleView,
+        fn_value: check.ConstStore.ConstFn,
+    ) Allocator.Error![]LexicalBinderEntry {
+        self.restored_const_fn = .{ .store_view = store_view, .fn_value = fn_value };
+        self.restored_declaring_evidence = null;
+        const entries = try self.captureLexicalBinderEntries();
+        self.restored_local_proc_scope = .{
+            .source_context_digest = self.current_fn_key,
+            .base_key = self.current_fn_key,
+            .entries = entries,
+        };
+        return entries;
+    }
+
+    /// The evidence chain of `owner`, a template other than this body's,
+    /// whose local procedures this body reaches through a declaration context
+    /// it was handed (only a template specialization's lexical codec context
+    /// hands one). Every such context belongs to one declaring body, and the
+    /// deepest declaration's chain contains every shallower one's.
+    fn otherTemplateDeclaringEvidence(self: *BodyContext, owner: names.ProcTemplate) ?EvidenceChain {
+        if (!self.may_see_other_template_local_procs) return null;
+        var declaring_owner: ?names.ProcTemplate = null;
+        var deepest: ?EvidenceChain = null;
+        var deepest_depth: usize = 0;
+        var iter = self.local_proc_contexts.iterator();
+        while (iter.next()) |entry| {
+            const context = self.draft.local_proc_contexts.items[@backingInt(entry.value_ptr.*)];
+            if (names.procedureTemplateRefEql(context.owner_template, owner)) continue;
+            if (declaring_owner) |existing| {
+                if (!names.procedureTemplateRefEql(existing, context.owner_template)) {
+                    Common.invariant("one body reached local procedures declared by two other templates");
+                }
+            } else declaring_owner = context.owner_template;
+            var depth: usize = 0;
+            var current: ?*const EvidenceChain = &context.evidence;
+            while (current) |frame| : (current = frame.parent) depth += 1;
+            if (deepest == null or depth > deepest_depth) {
+                deepest = context.evidence;
+                deepest_depth = depth;
+            }
+        }
+        return deepest;
+    }
+
+    /// Stored evidence for a function this body produces with owner template
+    /// `owner`: its own chain, followed by the declaring template's chain when
+    /// it reaches local procedures another template declares.
+    fn storedEvidenceForFn(
+        self: *BodyContext,
+        chain: EvidenceChain,
+        owner: names.ProcTemplate,
+    ) Allocator.Error!StoredConstFnEvidence {
+        const declaring = self.otherTemplateDeclaringEvidence(owner) orelse return try self.storedEvidence(chain);
+        return try self.builder.constFnEvidenceWithDeclaring(chain, declaring);
+    }
+
+    /// The declaring template's evidence chain a restored stored function
+    /// retained after its own head frame.
+    fn storedDeclaringEvidence(self: *BodyContext, owner: names.ProcTemplate) Allocator.Error!EvidenceChain {
+        if (self.restored_declaring_evidence) |restored| {
+            if (!names.procedureTemplateRefEql(restored.owner, owner)) {
+                Common.invariant("restored function reached local procedures declared by two other templates");
+            }
+            return restored.chain;
+        }
+        const restored = self.restored_const_fn orelse
+            Common.invariant("local procedure of another template reached a body that restores no stored function");
+        const fn_value = restored.fn_value;
+        const head = fn_value.evidence_frame_head orelse
+            Common.invariant("stored function reaching another template's local procedure had no evidence");
+        const first = head + 1;
+        if (first >= fn_value.evidence_frames.len) {
+            Common.invariant("stored function omitted the declaring template's evidence for a local procedure it reaches");
+        }
+        var cursor: usize = fn_value.evidence_frames[first].roots_start;
+        const chain = try self.materializeEvidenceFrames(restored.store_view, fn_value, owner, first, fn_value.evidence_frames.len, &cursor);
+        if (cursor != fn_value.evidence.nodes.len) {
+            Common.invariant("stored declaring evidence contained unreferenced nodes");
+        }
+        self.restored_declaring_evidence = .{ .owner = owner, .chain = chain };
+        return chain;
     }
 
     fn cloneLocalProcContext(self: *BodyContext, context: LocalProcContext) Allocator.Error!LocalProcContext {
@@ -24970,8 +25159,17 @@ const BodyContext = struct {
         const binders = try self.captureLexicalBinderEntries();
         errdefer self.allocator.free(binders);
         const local_procs = try self.allocator.alloc(DraftCodecLocalProcContext, self.local_proc_contexts.count());
+        errdefer self.allocator.free(local_procs);
         self.fillLocalProcContexts(local_procs);
-        return .{ .view = self.view.key.bytes, .binders = binders, .local_procs = local_procs };
+        const restored: ?RestoredLexicalScope = if (self.restored_local_proc_scope) |scope| .{
+            .scope = .{
+                .source_context_digest = scope.source_context_digest,
+                .base_key = scope.base_key,
+                .entries = try self.builder.evidence_arena.allocator().dupe(LexicalBinderEntry, scope.entries),
+            },
+            .const_fn = self.restored_const_fn,
+        } else null;
+        return .{ .view = self.view.key.bytes, .binders = binders, .local_procs = local_procs, .restored = restored };
     }
 
     /// Every visible local procedure context, in declaration order.
@@ -25044,7 +25242,16 @@ const BodyContext = struct {
                 else => Common.invariant("deferred lexical context had an unknown binder kind"),
             };
         }
+        if (lexical.restored) |restored| {
+            self.restored_local_proc_scope = restored.scope;
+            self.restored_const_fn = restored.const_fn;
+            self.restored_declaring_evidence = null;
+        }
         for (lexical.local_procs) |proc| {
+            const context = self.draft.local_proc_contexts.items[@backingInt(proc.context)];
+            if (!names.procedureTemplateRefEql(context.owner_template, self.owner_template)) {
+                self.may_see_other_template_local_procs = true;
+            }
             try self.local_proc_contexts.putPermanent(proc.declaration, proc.context);
         }
     }
@@ -35044,7 +35251,22 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = plan, .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            // A coercion's row can be open with nothing in this body to
+            // close it, as when every use matches its error with `Err(_)`. It
+            // is lowered at a graph cell of its own checked type, so a row no
+            // use relates to seals by the specialization's row defaults, as at
+            // every other coercion site, instead of being read as a settled
+            // type here.
+            .row_coerce => {
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .at_type_cell = .{
+                    .expr = expr_id,
+                    .cell = DraftTypeCell.fromGraphNode(expr_node),
+                    .demand = .runtime_value,
+                    .diverges = false,
+                } });
+            },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_ty = try self.lowerExprType(expr_id);
         if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return self.exprInnerDone(task, restored);
@@ -47624,7 +47846,7 @@ const BodyContext = struct {
                 defer fn_ctx.deinit();
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 fn_ctx.current_fn_key = nested.context_fn_key;
-                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
+                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(store_view, fn_value, nested, nested.context_fn_key);
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 const restored_owner_scope = try fn_ctx.enterRestoredConstFnOwner();
                 defer restored_owner_scope.leave();
@@ -47715,7 +47937,7 @@ const BodyContext = struct {
         defer self.builder.releaseConstSourceCaptures(&fn_ctx, &bound_captures);
         const captures = bound_captures.items;
 
-        const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(capture_nested, fn_ctx.current_fn_key);
+        const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(store_view, fn_value, capture_nested, fn_ctx.current_fn_key);
         defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
 
         const request_fn_node = switch (request) {
@@ -47916,7 +48138,7 @@ const BodyContext = struct {
         }
         self.draft.exprs.items[@backingInt(body)].ty = ret_cell;
 
-        const stored_evidence = try self.storedEvidence(self.evidence);
+        const stored_evidence = try self.storedEvidenceForFn(self.evidence, runtime.owner);
         const evidence_digest = stored_evidence.digest;
         const draft_evidence = try self.draft.addStoredConstFnEvidence(stored_evidence);
         const runtime_fn_id = try self.draft.addFn(.{ .source = .{
@@ -48036,6 +48258,8 @@ const BodyContext = struct {
             ),
         };
         defer self.builder.releaseConstSourceCaptures(&fn_ctx, &source_captures);
+        const restored_local_proc_entries = try fn_ctx.enterRestoredCodecLocalProcScope(store_view, fn_value);
+        defer fn_ctx.allocator.free(restored_local_proc_entries);
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
@@ -51427,55 +51651,15 @@ const BodyContext = struct {
         const frames = fn_value.evidence_frames;
         const head = fn_value.evidence_frame_head orelse
             Common.invariant("stored function evidence did not declare a head frame");
-        if (frames.len == 0 or head != frames.len - 1) {
-            Common.invariant("stored function evidence head did not name its final frame");
+        if (frames.len == 0 or head >= frames.len) {
+            Common.invariant("stored function evidence head named no frame");
         }
         const owner = ownerTemplateForConstFnDef(fn_value.fn_def);
         const owner_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(owner));
         var cursor: usize = 0;
-        const arena = self.builder.evidence_arena.allocator();
-        const restored = try arena.alloc(EvidenceChain, frames.len);
-        for (frames, 0..) |frame, index| {
-            if (frame.roots_start != cursor) {
-                Common.invariant("stored function evidence frame roots were not contiguous");
-            }
-            const vector = try self.materializeConstFnEvidenceVector(store_view, fn_value.evidence, &cursor, frame.roots_len);
-            const scope: LexicalDispatchScope = switch (frame.scope()) {
-                .root => .root,
-                .generalized => |scope_id| .{ .generalized = @fromBackingInt(@intCast(scope_id)) },
-            };
-            if (index == 0) {
-                if (scope != .root or frame.parent != null) {
-                    Common.invariant("stored function evidence did not begin at the checked root scope");
-                }
-                restored[index] = rootEvidence(owner, vector);
-                restored[index].origin = .stored_function;
-                continue;
-            }
-            if (scope == .root or frame.parent == null or frame.parent.? != index - 1) {
-                Common.invariant("stored function evidence frame did not name its immediate lexical parent");
-            }
-            const scope_id = scope.generalized;
-            const raw_scope = @backingInt(scope_id);
-            if (raw_scope >= owner_view.templates.dispatch_scopes.len) {
-                Common.invariant("stored function evidence referenced an unknown checked scope");
-            }
-            const scope_record = owner_view.templates.dispatch_scopes[raw_scope];
-            const expected_parent: LexicalDispatchScope = if (scope_record.parent) |parent|
-                .{ .generalized = parent }
-            else
-                .root;
-            if (!std.meta.eql(restored[index - 1].scope.lexical, expected_parent)) {
-                Common.invariant("stored function evidence parent differed from the checked lexical scope");
-            }
-            restored[index] = .{
-                .scope = .{ .owner = owner, .lexical = scope },
-                .origin = .stored_function,
-                .vector = vector,
-                .parent = &restored[index - 1],
-            };
-        }
-        if (cursor != fn_value.evidence.nodes.len) {
+        const head_chain = try self.materializeEvidenceFrames(store_view, fn_value, owner, 0, head + 1, &cursor);
+        const own_end = if (head + 1 < frames.len) frames[head + 1].roots_start else fn_value.evidence.nodes.len;
+        if (cursor != own_end) {
             Common.invariant("stored function evidence contained unreferenced nodes");
         }
         const expected_head: LexicalDispatchScope = switch (fn_value.fn_def) {
@@ -51516,10 +51700,70 @@ const BodyContext = struct {
             },
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => .root,
         };
-        if (!std.meta.eql(restored[head].scope.lexical, expected_head)) {
+        if (!std.meta.eql(head_chain.scope.lexical, expected_head)) {
             Common.invariant("stored function evidence head differed from its checked nested site scope");
         }
-        return restored[head];
+        return head_chain;
+    }
+
+    /// Materialize the stored frames `first..end` as one lexical chain of
+    /// `owner`, returning its innermost frame. `first` is the chain's root
+    /// frame; each later frame names its immediate predecessor.
+    fn materializeEvidenceFrames(
+        self: *BodyContext,
+        store_view: ModuleView,
+        fn_value: check.ConstStore.ConstFn,
+        owner: names.ProcTemplate,
+        first: usize,
+        end: usize,
+        cursor: *usize,
+    ) Allocator.Error!EvidenceChain {
+        const frames = fn_value.evidence_frames;
+        const owner_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(owner));
+        const arena = self.builder.evidence_arena.allocator();
+        const restored = try arena.alloc(EvidenceChain, end - first);
+        for (frames[first..end], first..) |frame, index| {
+            if (frame.roots_start != cursor.*) {
+                Common.invariant("stored function evidence frame roots were not contiguous");
+            }
+            const vector = try self.materializeConstFnEvidenceVector(store_view, fn_value.evidence, cursor, frame.roots_len);
+            const scope: LexicalDispatchScope = switch (frame.scope()) {
+                .root => .root,
+                .generalized => |scope_id| .{ .generalized = @fromBackingInt(@intCast(scope_id)) },
+            };
+            const local = index - first;
+            if (local == 0) {
+                if (scope != .root or frame.parent != null) {
+                    Common.invariant("stored function evidence did not begin at the checked root scope");
+                }
+                restored[local] = rootEvidence(owner, vector);
+                restored[local].origin = .stored_function;
+                continue;
+            }
+            if (scope == .root or frame.parent == null or frame.parent.? != index - 1) {
+                Common.invariant("stored function evidence frame did not name its immediate lexical parent");
+            }
+            const scope_id = scope.generalized;
+            const raw_scope = @backingInt(scope_id);
+            if (raw_scope >= owner_view.templates.dispatch_scopes.len) {
+                Common.invariant("stored function evidence referenced an unknown checked scope");
+            }
+            const scope_record = owner_view.templates.dispatch_scopes[raw_scope];
+            const expected_parent: LexicalDispatchScope = if (scope_record.parent) |parent|
+                .{ .generalized = parent }
+            else
+                .root;
+            if (!std.meta.eql(restored[local - 1].scope.lexical, expected_parent)) {
+                Common.invariant("stored function evidence parent differed from the checked lexical scope");
+            }
+            restored[local] = .{
+                .scope = .{ .owner = owner, .lexical = scope },
+                .origin = .stored_function,
+                .vector = vector,
+                .parent = &restored[local - 1],
+            };
+        }
+        return restored[end - first - 1];
     }
 
     fn instantiateStoredEvidence(self: *BodyContext, evidence: EvidenceChain) Allocator.Error!EvidenceChain {
@@ -65016,15 +65260,19 @@ const BodyContext = struct {
             .context_anchor = context_anchor,
         };
         const context_id: DraftLocalProcContextId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.local_proc_contexts.items.len))));
+        const declared = try self.restoredLocalProcDeclaration(view, expr);
+        if (!names.procedureTemplateRefEql(declared.owner, self.owner_template)) {
+            self.may_see_other_template_local_procs = true;
+        }
         const entries = try self.allocator.dupe(LexicalBinderEntry, restored.entries);
         self.draft.local_proc_contexts.append(self.allocator, .{
             .declaration = declaration,
             .lexical_owner = self.draft.current_owner,
-            .owner_template = self.owner_template,
+            .owner_template = declared.owner,
             .base_key = restored.base_key,
             .restored_specialization_key = restoredLocalProcUseContextKey(restored.base_key, restored.source_context_digest, binder),
             .entries = entries,
-            .evidence = self.restoredLocalProcDeclarationEvidence(view, expr),
+            .evidence = declared.evidence,
         }) catch |err| {
             self.allocator.free(entries);
             return err;
@@ -65033,19 +65281,27 @@ const BodyContext = struct {
         return context_id;
     }
 
-    fn restoredLocalProcDeclarationEvidence(
+    const RestoredLocalProcDeclaration = struct {
+        owner: names.ProcTemplate,
+        evidence: EvidenceChain,
+    };
+
+    /// The checked declaring template of a restored local procedure and its
+    /// evidence at the procedure's checked nested site. The procedure's site
+    /// names the template that declares it. That is this body's own template
+    /// unless the restored function reached the procedure through a
+    /// declaration context another template handed it, whose chain the stored
+    /// function retained after its own.
+    fn restoredLocalProcDeclaration(
         self: *BodyContext,
         view: ModuleView,
         expr: checked.CheckedExprId,
-    ) EvidenceChain {
+    ) Allocator.Error!RestoredLocalProcDeclaration {
         var site: ?checked.NestedProcSite = null;
         for (view.nested_proc_sites.sites) |candidate| {
             if (candidate.checked_expr == null or candidate.checked_expr.? != expr) continue;
             switch (candidate.owner) {
-                .template => |site_owner| {
-                    if (self.in_default_expr) continue;
-                    if (!names.procedureTemplateRefEql(site_owner, self.owner_template)) continue;
-                },
+                .template => if (self.in_default_expr) continue,
                 .default_root => if (!self.in_default_expr) continue,
             }
             if (site != null) Common.invariant("restored local procedure matched multiple checked nested sites");
@@ -65053,6 +65309,10 @@ const BodyContext = struct {
         }
         const nested_site = site orelse
             Common.invariant("restored local procedure had no checked nested site");
+        const owner = switch (nested_site.owner) {
+            .template => |site_owner| site_owner,
+            .default_root => self.owner_template,
+        };
         const wanted: LexicalDispatchScope = switch (nested_site.lexical_scope) {
             .root => .root,
             .generalized => |scope_id| blk: {
@@ -65067,11 +65327,17 @@ const BodyContext = struct {
                     .{ .generalized = scope_id };
             },
         };
-
-        return self.evidence.atScope(.{
-            .owner = self.owner_template,
-            .lexical = wanted,
-        }) orelse Common.invariant("restored local procedure evidence omitted its checked lexical parent");
+        const chain = if (names.procedureTemplateRefEql(owner, self.owner_template))
+            self.evidence
+        else
+            try self.storedDeclaringEvidence(owner);
+        return .{
+            .owner = owner,
+            .evidence = chain.atScope(.{
+                .owner = owner,
+                .lexical = wanted,
+            }) orelse Common.invariant("restored local procedure evidence omitted its checked lexical parent"),
+        };
     }
 
     fn localProcBinder(self: *BodyContext, pattern_id: checked.CheckedPatternId) checked.PatternBinderId {

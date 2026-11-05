@@ -1683,7 +1683,7 @@ fn lowerCheckedRootWithViews(
     const reopened = options.specialization_strategy == .boxy and
         root_module.evaluation_state == .finalized and
         root_module.hasUnevaluatedRequests(.boxy);
-    if (reopened) try root_module.reopenForEvaluation(allocator);
+    if (reopened) try root_module.reopenForEvaluation();
 
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
         .root = check.CheckedArtifact.loweringView(root_module),

@@ -582,8 +582,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     std.mem.writeInt(u32, mapped[@intCast(strtab_offset)..][0..4], @intCast(strtab_size), .little);
     timing.finalize_ns = elapsed(std_io, finalize_started);
     const unmap_started = now(std_io);
-    output.unmap(mapped);
     unmapped = true;
+    try output.finish(mapped);
     timing.unmap_ns = elapsed(std_io, unmap_started);
 }
 

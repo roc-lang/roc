@@ -102,12 +102,16 @@ pub const ComposeOptions = struct {
 /// text section.
 pub const PatchedRefs = struct {
     edges: std.ArrayList(UnitImage.CodeEdge) = .empty,
+    /// Where each datum starts in the object's read-only data
+    /// (`UnitImage.SymbolAtoms.data_starts`).
+    data_starts: std.ArrayList(u64) = .empty,
     /// Whether some excerpt also has symbolic references, which the
     /// assembly resolves without reporting them here.
     incomplete: bool = false,
 
     pub fn deinit(self: *PatchedRefs, allocator: Allocator) void {
         self.edges.deinit(allocator);
+        self.data_starts.deinit(allocator);
     }
 };
 
@@ -355,7 +359,7 @@ pub const ObjectFileCompiler = struct {
             .keep_debug = true,
             // Code reached only through references the image cannot see
             // keeps the whole image together.
-            .atoms = if (patched.incomplete) .whole else .{ .symbols = patched.edges.items },
+            .atoms = if (patched.incomplete) .whole else .{ .symbols = .{ .edges = patched.edges.items, .data_starts = patched.data_starts.items } },
         }) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
             error.InvalidObject,
@@ -736,7 +740,7 @@ fn compileWithCodeGen(
                 .relocations = relocations,
             };
         }
-        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
+        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols, null);
     }
 
     {
@@ -1071,6 +1075,9 @@ fn appendStaticDataExports(
     zero_fill_size: *u64,
     relocations: *std.ArrayList(ObjectWriter.IndexedDataRelocation),
     symbols: *std.ArrayList(SymbolDefinition),
+    /// Receives the read-only data offset where each stored datum starts,
+    /// when non-null.
+    data_starts: ?*std.ArrayList(u64),
 ) CompilationError!void {
     const data_symbols = allocator.alloc(SymbolTable.Id, exports.len) catch return CompilationError.OutOfMemory;
     defer allocator.free(data_symbols);
@@ -1085,6 +1092,7 @@ fn appendStaticDataExports(
         // A zero-fill export has no relocations, so this offset is only ever
         // used for exports placed in readonly data.
         const aligned_offset = std.mem.alignForward(usize, start, @intCast(data_export.alignment));
+        if (data_starts) |starts| if (!isZeroFillExport(data_export)) starts.append(allocator, aligned_offset) catch return CompilationError.OutOfMemory;
         // A data symbol named by the relocation before is the symbol it
         // interned: a list of copies of one value names it once per item.
         var previous_data: ?struct { name: []const u8, id: SymbolTable.Id } = null;
@@ -1205,7 +1213,7 @@ fn compileStaticDataObjectBytes(
     defer rodata_relocations.deinit(allocator);
     var zero_fill_size: u64 = 0;
 
-    try appendStaticDataExports(allocator, &table, static_data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
+    try appendStaticDataExports(allocator, &table, static_data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols, null);
 
     // This object is linked separately from generated code. LLVM constant
     // expressions can reference any backing named by a frozen relocation,
@@ -1488,7 +1496,12 @@ fn composeWithCodeGen(
         for (canonical.set.excerpts, starts) |excerpt, start| {
             if (excerpt.symbolic_refs.len != 0) patched.incomplete = true;
             for (excerpt.refs) |ref| {
-                patched.edges.append(allocator, .{ .site = start + ref.site, .target = starts[ref.target] + ref.delta }) catch return CompilationError.OutOfMemory;
+                const edges = final.codeRefEdges(start + ref.site, switch (ref.form) {
+                    .call => .call,
+                    .inline_call => .inline_call,
+                    .addr => .addr,
+                }, starts[ref.target] + ref.delta);
+                patched.edges.appendSlice(allocator, edges.slice()) catch return CompilationError.OutOfMemory;
             }
         }
     }
@@ -1540,7 +1553,7 @@ fn composeWithCodeGen(
                 .relocations = relocations,
             };
         }
-        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
+        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols, if (options.patched_refs) |patched| &patched.data_starts else null);
     }
     for (canonical.set.excerpts, starts) |excerpt, start| switch (excerpt.kind) {
         .proc => |identity| {

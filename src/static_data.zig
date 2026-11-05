@@ -1903,7 +1903,7 @@ const StaticDataBuilder = struct {
         for (self.root.module.provided_exports.exports, 0..) |provided, provided_index| {
             const data = switch (provided) {
                 .data => |data| data,
-                .procedure => continue,
+                .procedure, .checked_error => continue,
             };
             self.beginOwner(self.providedOwner(provided_index));
 
@@ -2250,7 +2250,7 @@ fn moduleHasProvidedData(module: *const Checked.CheckedModuleArtifact) bool {
     for (module.provided_exports.exports) |provided| {
         switch (provided) {
             .data => return true,
-            .procedure => {},
+            .procedure, .checked_error => {},
         }
     }
     return false;

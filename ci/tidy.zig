@@ -1159,7 +1159,7 @@ fn tidyDeadDeclarationsIsPrivateDeclaration(
             if (context_tag != .keyword_fn and context_tag != .keyword_const) return false;
             declaration_keyword = context_tag;
         } else {
-            if (context_tag == .keyword_inline or context_tag == .string_literal) continue;
+            if (context_tag == .keyword_inline or context_tag == .keyword_noinline or context_tag == .string_literal) continue;
             if (context_tag == .keyword_extern) {
                 saw_extern = true;
                 continue;
@@ -1511,6 +1511,23 @@ test "dead files detector distinguishes private toolchain imports from repositor
     const int = detector.files.get(DeadFilesDetector.pathToName("int.zig")).?;
     try std.testing.expectEqual(@as(u32, 1), int.import_count);
     try std.testing.expectEqual(@as(u32, 0), int.definition_count);
+}
+
+test "dead declarations count pub noinline functions as public" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { source: [:0]const u8, private: bool }{
+        .{ .source = "pub noinline fn f() void {}\n", .private = false },
+        .{ .source = "noinline fn f() void {}\n", .private = true },
+        .{ .source = "pub inline fn f() void {}\n", .private = false },
+    };
+    for (cases) |case| {
+        var tree = try Ast.parse(gpa, case.source, .{ .mode = .zig });
+        defer tree.deinit(gpa);
+        const name = for (tree.tokens.items(.tag), 0..) |tag, index| {
+            if (tag == .identifier) break @as(Ast.TokenIndex, @intCast(index));
+        } else unreachable;
+        try std.testing.expectEqual(case.private, tidyDeadDeclarationsIsPrivateDeclaration(&tree, name));
+    }
 }
 
 /// Lists all files in the repository.

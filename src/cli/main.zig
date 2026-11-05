@@ -192,6 +192,7 @@ comptime {
         std.testing.refAllDecls(coff_patch_link);
         std.testing.refAllDecls(@import("patch_fanout.zig"));
         std.testing.refAllDecls(@import("link_output.zig"));
+        std.testing.refAllDecls(patch_link);
         std.testing.refAllDecls(wasm_link);
         std.testing.refAllDecls(wasm_host_image);
         std.testing.refAllDecls(@import("test/platform_config.zig"));
@@ -5323,6 +5324,9 @@ fn checkedArtifactForBuild(
     if (artifact.hasUnboundPlatformRequirements()) {
         return ctx.fail(.{ .platform_requires_app = .{ .platform_path = source_path } });
     }
+    // A `provides` entry whose type is erroneous declares no host ABI, so no
+    // program exists to link; the error was rendered with the diagnostics.
+    if (artifact.hasProvidedExportWithoutAbi()) return error.TypeCheckingFailed;
     return artifact;
 }
 
@@ -6757,6 +6761,12 @@ fn lowerRunUnits(
     try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), reporter, build_env.getTimingInfo());
 
     const root_artifact = build_env.executableRootCheckedArtifact();
+    // A `provides` entry whose type is erroneous declares no host ABI, so no
+    // program exists to run; the error was rendered with the diagnostics.
+    if (root_artifact.hasProvidedExportWithoutAbi()) {
+        reporter.fail();
+        return error.TypeCheckingFailed;
+    }
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
@@ -9769,6 +9779,7 @@ fn compileLlvmAppObject(
         codegen.enable_default_platform_runtime = enable_default_platform_runtime;
         codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
         codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
+        codegen.optimize_for_size = llvmOptimizationLevel(args.opt) == .size;
         codegen.stack_checks = stack_checks;
         codegen.debug_producer = "roc " ++ @import("compiler_version").compiler_version;
         defer codegen.deinit();
@@ -11929,6 +11940,8 @@ const FastDevLink = struct {
             .{ .name = "Images placed", .count = timing.images_placed },
             .{ .name = "Bytes written", .count = timing.bytes_written },
             .{ .name = "Patch sites", .count = timing.sites_patched },
+            .{ .name = "References fixed", .count = timing.refs_fixed },
+            .{ .name = "Hole bytes dropped", .count = timing.hole_bytes },
         });
     }
 };
@@ -14034,22 +14047,22 @@ fn checkedRuntimeLoweringConfig(
 }
 
 /// Whether the code `opt` runs for `target` reads composition sites: the
-/// interpreter and the native dev backend do, LLVM and the wasm backend do not.
+/// interpreter, the native dev backend and the LLVM backend do, the wasm
+/// dev backend does not.
 fn readsCompositionSites(opt: cli_args.OptLevel, target: RocTarget) bool {
     return switch (opt) {
-        .interpreter => true,
+        .interpreter, .size, .speed => true,
         .dev => target.toCpuArch() != .wasm32,
-        .size, .speed => false,
     };
 }
 
-test "only the interpreter and the native dev backend get composition sites" {
+test "every consumer but the wasm dev backend gets composition sites" {
     try std.testing.expect(readsCompositionSites(.interpreter, .x64musl));
     try std.testing.expect(readsCompositionSites(.dev, .x64musl));
     try std.testing.expect(!readsCompositionSites(.dev, .wasm32));
-    try std.testing.expect(!readsCompositionSites(.size, .x64musl));
-    try std.testing.expect(!readsCompositionSites(.speed, .x64musl));
-    try std.testing.expect(!readsCompositionSites(.speed, .wasm32));
+    try std.testing.expect(readsCompositionSites(.size, .x64musl));
+    try std.testing.expect(readsCompositionSites(.speed, .x64musl));
+    try std.testing.expect(readsCompositionSites(.speed, .wasm32));
 }
 
 /// The bytes a program's erased callables reserve at the start of their

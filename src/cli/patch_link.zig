@@ -7,16 +7,22 @@
 //!
 //! The app region is two segments: one read-and-execute segment holding
 //! the `provides` windows and every image's code block (text, then its
-//! read-only data, then on AArch64 a veneer per import, `jump_window`), and
-//! one read-write segment holding every image's data and zero-fill. Every
-//! reference left in an image is a patch site the link fills; an import
-//! resolves first inside the app region, then against the host's kept
-//! symbols, and an AArch64 branch that cannot reach its import takes the
-//! import's veneer. Debug information and symbols are appended after
-//! the segments, with the host's own, under a rebuilt section header table.
+//! read-only data, without the atoms the program does not reach, then on
+//! AArch64 a veneer per import, `jump_window`), and one read-write segment
+//! holding every image's data and zero-fill. Every reference left in an
+//! image is a patch site the link fills; an import resolves first inside
+//! the app region, then against the host's kept symbols, and an AArch64
+//! branch that cannot reach its import takes the import's veneer. A
+//! reference an image resolved between two of its atoms is fixed again
+//! only when dropping unreached atoms changed what its field encodes
+//! (`UnitImage.RefKind.moved`). Debug information and symbols are appended
+//! after the segments, with the host's own, under a rebuilt section header
+//! table.
 //!
-//! The output file is written through a shared mapping, one task per image
-//! on the compilation's post-check executor. Every write lands in the
+//! The output file is written through a shared mapping of the file, whose
+//! blocks are allocated before any write so running out of room is reported
+//! rather than faulted, one task per image on the compilation's post-check
+//! executor. Every write lands in the
 //! writing task's own region: a fixup writes into the referring site,
 //! never into the referent, and every region an image owns is disjoint from
 //! every other image's. The host's words, the windows and the file tail
@@ -74,11 +80,15 @@ pub const Timing = struct {
     layout_ns: u64 = 0,
     fan_out_ns: u64 = 0,
     finalize_ns: u64 = 0,
-    /// Releasing the output's mapping.
+    /// Completing and releasing the output's mapping.
     unmap_ns: u64 = 0,
     images_placed: u64 = 0,
     bytes_written: u64 = 0,
     sites_patched: u64 = 0,
+    /// Resolved references between atoms re-fixed after compaction.
+    refs_fixed: u64 = 0,
+    /// Bytes of unreached atoms the output does without.
+    hole_bytes: u64 = 0,
 };
 
 /// Why a patch link failed.
@@ -153,6 +163,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         }
     }.lessThan);
     timing.images_placed = order.items.len;
+    const reached_atoms = try gpa.alloc([]const bool, images.items.len);
+    defer gpa.free(reached_atoms);
+    for (walk.states, reached_atoms) |state, *atoms| atoms.* = if (state) |placed| placed.atoms else &.{};
 
     // Layout.
     const host = inputs.host;
@@ -171,12 +184,17 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     const places = try gpa.alloc(Place, images.items.len);
     defer gpa.free(places);
     @memset(places, .{});
+    defer for (places) |place| if (place.atoms.len != 0) gpa.free(place.atoms);
     var rx_size: u64 = std.mem.alignForward(u64, provide_count * host_prelink.provide_window, page_size);
     for (order.items) |index| {
         const view = images.items[index].view;
         rx_size = std.mem.alignForward(u64, rx_size, page_size);
         places[index].block = host_prelink.app_base + rx_size;
-        rx_size += view.block().len;
+        const compact = try compactAtoms(gpa, view, reached_atoms[index]);
+        places[index].atoms = compact.offsets;
+        places[index].block_size = compact.size;
+        timing.hole_bytes += view.block().len - compact.size;
+        rx_size += compact.size;
         if (arm64) {
             rx_size = std.mem.alignForward(u64, rx_size, 4);
             places[index].veneers = host_prelink.app_base + rx_size;
@@ -220,12 +238,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         debug_sizes[slot] = size;
         tail_at += size;
     }
-    // Symbols of code the link leaves as a hole get no entry: each placed
+    // Symbols of code the link leaves out get no entry: each placed
     // image's symbol table index maps to its entry's position among the
     // image's kept symbols, or `no_symbol`.
-    const reached_atoms = try gpa.alloc([]const bool, images.items.len);
-    defer gpa.free(reached_atoms);
-    for (walk.states, reached_atoms) |state, *atoms| atoms.* = if (state) |placed| placed.atoms else &.{};
     const symbol_slots = try gpa.alloc([]u32, images.items.len);
     @memset(symbol_slots, &.{});
     defer {
@@ -317,13 +332,22 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         gpa.free(resolved);
     }
     for (order.items) |index| {
-        const targets = walk.states[index].?.targets;
-        resolved[index] = try gpa.alloc(u64, targets.len);
-        for (targets, resolved[index]) |target, *address| {
+        const state = walk.states[index].?;
+        resolved[index] = try gpa.alloc(u64, state.targets.len);
+        for (state.targets, resolved[index], 0..) |target, *address, import| {
             address.* = switch (target) {
                 .app => |found| app: {
-                    const symbol = images.items[found.image].view.symbols()[found.symbol];
-                    break :app places[found.image].base(@fromBackingInt(symbol.region)) + symbol.value;
+                    const target_view = images.items[found.image].view;
+                    const atom = target_view.symbolAtoms()[found.symbol];
+                    // An import no reached atom names resolves to a symbol
+                    // of an image the link may not place, or an atom it may
+                    // leave out; no placed field reads it.
+                    const target_atoms = reached_atoms[found.image];
+                    if (target_atoms.len == 0 or (atom != UnitImage.no_atom and !target_atoms[atom])) {
+                        std.debug.assert(!state.imports_used[import]);
+                        break :app 0;
+                    }
+                    break :app places[found.image].symbolAddress(target_view, found.symbol);
                 },
                 .host => |vaddr| vaddr,
                 .missing => unreachable, // a missing host symbol failed the link above
@@ -374,11 +398,13 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     defer symbol_ranges.deinit(gpa);
     var site_ranges: std.ArrayList(fanout.Range) = .empty;
     defer site_ranges.deinit(gpa);
+    var ref_ranges: std.ArrayList(fanout.Range) = .empty;
+    defer ref_ranges.deinit(gpa);
     for (order.items) |index| {
         const view = images.items[index].view;
         const place = places[index];
-        // Only reached atoms are written; the rest of the block stays a
-        // hole of zeros.
+        // Only reached atoms are written, each run of them to where the
+        // compacted block puts it.
         const atoms_reached = reached_atoms[index];
         var atom: u32 = 0;
         while (atom < atoms_reached.len) {
@@ -386,10 +412,11 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
                 atom += 1;
                 continue;
             }
+            const first_atom = atom;
             const first = view.atomRange(atom).start;
             while (atom < atoms_reached.len and atoms_reached[atom]) atom += 1;
             const end = view.atomRange(atom - 1).end;
-            try fanout.addCopies(gpa, &copy_list, view.block()[first..end], context.fileOffsetOf(place.block) + first);
+            try fanout.addCopies(gpa, &copy_list, view.block()[first..end], context.fileOffsetOf(place.block) + place.atoms[first_atom]);
         }
         if (view.data().len != 0) try fanout.addCopies(gpa, &copy_list, view.data(), context.fileOffsetOf(place.data));
         for ([_]UnitImage.Region{ .debug_abbrev, .debug_info, .debug_line }, 0..) |region, slot| {
@@ -398,6 +425,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         try fanout.addCopies(gpa, &copy_list, view.strings(), strtab_offset + place.strings);
         try fanout.addRanges(gpa, &symbol_ranges, index, view.symbols().len);
         try fanout.addRanges(gpa, &site_ranges, index, view.sites().len);
+        try fanout.addRanges(gpa, &ref_ranges, index, view.atoms().len);
     }
     if (host_symtab) |symtab| try fanout.addCopies(gpa, &copy_list, hostBytes(host, symtab.offset + sym_size, symtab.size -| sym_size), symtab_offset + (1 + app_symbol_count) * sym_size);
     for (debug_host_index, 0..) |host_index, slot| {
@@ -416,10 +444,14 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     var patches: std.ArrayList(Task) = .empty;
     defer patches.deinit(gpa);
     for (site_ranges.items) |range| try patches.append(gpa, .{ .context = &context, .work = .{ .sites = range } });
+    for (ref_ranges.items) |range| try patches.append(gpa, .{ .context = &context, .work = .{ .refs = range } });
     try fanout.runTasks(gpa, executor, Task, copies.items);
     try fanout.runTasks(gpa, executor, Task, patches.items);
     for (copies.items) |task| timing.bytes_written += task.bytes;
-    for (patches.items) |task| timing.sites_patched += task.sites;
+    for (patches.items) |task| {
+        timing.sites_patched += task.sites;
+        timing.refs_fixed += task.refs;
+    }
     timing.fan_out_ns = elapsed(std_io, fan_out_started);
 
     // The coordinator's writes: windows, program headers, build id, ELF
@@ -430,7 +462,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         const window_bytes = mapped[@intCast(app_offset + (window - host_prelink.app_base))..][0..@intCast(host_prelink.provide_window)];
         const symbol = images.items[found.image].view.symbols()[found.symbol];
         const region: UnitImage.Region = @fromBackingInt(symbol.region);
-        const address = places[found.image].base(region) + symbol.value;
+        const address = places[found.image].symbolAddress(images.items[found.image].view, found.symbol);
         if (@as(UnitImage.SymbolType, @fromBackingInt(symbol.type)) == .func) {
             jump_window.writeJump(arm64, window_bytes[0..16], window, address);
             continue;
@@ -464,8 +496,8 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     std.mem.writeInt(u16, mapped[60..62], @intCast(headers.items.len), .little);
     timing.finalize_ns = elapsed(std_io, finalize_started);
     const unmap_started = now(std_io);
-    output.unmap(mapped);
     unmapped = true;
+    try output.finish(mapped);
     timing.unmap_ns = elapsed(std_io, unmap_started);
 }
 
@@ -481,6 +513,11 @@ const no_symbol: u32 = std.math.maxInt(u32);
 
 const Place = struct {
     block: u64 = 0,
+    /// The size of the image's compacted block: its reached atoms, in
+    /// order, without the unreached ones (`compactAtoms`).
+    block_size: u64 = 0,
+    /// For each atom, its offset in the compacted block, or `hole`.
+    atoms: []u32 = &.{},
     /// On AArch64, the image's veneers, one per import in import order.
     veneers: u64 = 0,
     data: u64 = 0,
@@ -503,7 +540,66 @@ const Place = struct {
             .debug_line => self.debug[2],
         };
     }
+
+    /// How far back from its image offset the reached atom `atom` sits in
+    /// the compacted block.
+    fn shift(self: Place, view: UnitImage.View, atom: u32) u64 {
+        std.debug.assert(self.atoms[atom] != hole);
+        return view.atoms()[atom] - self.atoms[atom];
+    }
+
+    /// The address of symbol `symbol_index` of the image placed here; a
+    /// block symbol's atom is reached.
+    fn symbolAddress(self: Place, view: UnitImage.View, symbol_index: u32) u64 {
+        const symbol = view.symbols()[symbol_index];
+        const region: UnitImage.Region = @fromBackingInt(symbol.region);
+        if (region != .block) return self.base(region) + symbol.value;
+        const atom = view.symbolAtoms()[symbol_index];
+        return self.block + symbol.value - self.shift(view, atom);
+    }
 };
+
+/// `Place.atoms` entry of an atom the link leaves out.
+const hole: u32 = std.math.maxInt(u32);
+
+/// Lay out the reached atoms of `view`'s block without the unreached ones.
+/// Each run of consecutive reached atoms keeps its bytes together and
+/// lands at the first place at or past the previous run where every atom
+/// in it keeps the alignment its image offset has (the strongest the
+/// object could have required of it, at most the block's), so a run moves
+/// back by a multiple of that alignment. Returns each atom's offset in the
+/// compacted block, `hole` for an unreached one, and the compacted size.
+fn compactAtoms(gpa: Allocator, view: UnitImage.View, reached: []const bool) Allocator.Error!struct { offsets: []u32, size: u64 } {
+    const starts = view.atoms();
+    const offsets = try gpa.alloc(u32, starts.len);
+    @memset(offsets, hole);
+    const block_align: u64 = view.blockAlign();
+    var cursor: u64 = 0;
+    var atom: usize = 0;
+    while (atom < starts.len) {
+        if (!reached[atom]) {
+            atom += 1;
+            continue;
+        }
+        const first = atom;
+        var run_align: u64 = 1;
+        while (atom < starts.len and reached[atom]) : (atom += 1) run_align = @max(run_align, atomAlign(starts[atom], block_align));
+        const old_start: u64 = starts[first];
+        const old_end: u64 = view.atomRange(@intCast(atom - 1)).end;
+        std.debug.assert(cursor <= old_start);
+        const new_start = cursor + (old_start - cursor) % run_align;
+        for (first..atom) |index| offsets[index] = @intCast(new_start + (starts[index] - old_start));
+        cursor = new_start + (old_end - old_start);
+    }
+    return .{ .offsets = offsets, .size = cursor };
+}
+
+/// The alignment an atom at block offset `start` has: the largest power of
+/// two dividing its offset, at most the block's alignment.
+fn atomAlign(start: u64, block_align: u64) u64 {
+    if (start == 0) return block_align;
+    return @min(block_align, start & (~start +% 1));
+}
 
 const Context = struct {
     out: []u8,
@@ -535,7 +631,7 @@ const Context = struct {
         const len = view.regionBytes(region).len;
         if (len == 0) return &.{};
         return switch (region) {
-            .block => self.out[@intCast(self.fileOffsetOf(place.block))..][0..len],
+            .block => self.out[@intCast(self.fileOffsetOf(place.block))..][0..@intCast(place.block_size)],
             .data => self.out[@intCast(self.fileOffsetOf(place.data))..][0..len],
             .bss => &.{},
             .pdata, .xdata => unreachable, // an ELF image carries no unwind regions
@@ -556,8 +652,11 @@ const Task = struct {
         sites: Range,
         /// The veneers of one placed image.
         veneers: u32,
+        /// A range of atoms whose resolved references are fixed.
+        refs: Range,
     },
     sites: u64 = 0,
+    refs: u64 = 0,
     bytes: u64 = 0,
 
     pub fn run(opaque_task: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
@@ -567,6 +666,7 @@ const Task = struct {
             .symbols => |range| self.writeSymbols(range),
             .sites => |range| self.applySites(range),
             .veneers => |image| self.writeVeneers(image),
+            .refs => |range| self.applyRefs(range),
         }
         return opaque_task;
     }
@@ -594,8 +694,8 @@ const Task = struct {
         const symbols = view.symbols()[range.first..][0..range.count];
         const slots = context.symbol_slots[range.image][range.first..][0..range.count];
         var written: u64 = 0;
-        for (symbols, slots) |symbol, slot| {
-            // A symbol of code the link left as a hole has no entry.
+        for (symbols, slots, 0..) |symbol, slot, at| {
+            // A symbol of code the link left out has no entry.
             if (slot == no_symbol) continue;
             const entry = context.out[@intCast(context.symtab_offset + (place.first_symbol + slot) * sym_size)..][0..sym_size];
             written += sym_size;
@@ -617,7 +717,7 @@ const Task = struct {
                     .pdata, .xdata => unreachable, // an ELF image carries no unwind regions
                 }
             ]), .little);
-            std.mem.writeInt(u64, entry[8..16], place.base(region) + symbol.value, .little);
+            std.mem.writeInt(u64, entry[8..16], place.symbolAddress(view, @intCast(range.first + at)), .little);
             std.mem.writeInt(u64, entry[16..24], symbol.size, .little);
         }
         self.bytes = written;
@@ -633,12 +733,26 @@ const Task = struct {
             if (site.atom != UnitImage.no_atom and !atoms_reached[site.atom]) continue;
             const region: UnitImage.Region = @fromBackingInt(site.region);
             const kind: UnitImage.SiteKind = @fromBackingInt(site.kind);
-            const site_address = place.base(region) + site.offset;
+            // A field in the block sits where its atom moved to.
+            const offset: u64 = if (site.atom != UnitImage.no_atom) site.offset - place.shift(view, site.atom) else site.offset;
+            const site_address = place.base(region) + offset;
             const out = context.regionOut(place, view, region);
-            const field = out[site.offset..][0..@intCast(UnitImage.kindWidth(kind))];
+            const field = out[@intCast(offset)..][0..@intCast(UnitImage.kindWidth(kind))];
             const imported = site.target_region == UnitImage.import_target;
-            const target = if (imported) addresses[site.target] else place.base(@fromBackingInt(site.target_region));
-            var value = @as(i64, @intCast(target)) + site.addend;
+            const target: i64 = if (imported)
+                @intCast(addresses[site.target])
+            else if (site.target_region == @backingInt(UnitImage.Region.block)) block: {
+                // Only a debug field can name an atom the link left out (a
+                // reached atom's edges reach every atom its fields name, and
+                // writable data's are roots): it gets the DWARF tombstone.
+                if (!atoms_reached[site.target]) {
+                    std.debug.assert(!region.isAllocated());
+                    @memset(field, 0);
+                    continue;
+                }
+                break :block @as(i64, @intCast(place.block)) - @as(i64, @intCast(place.shift(view, site.target)));
+            } else @intCast(place.base(@fromBackingInt(site.target_region)));
+            var value = target + site.addend;
             // A branch to an import beyond its reach takes the import's
             // veneer; the app region is within reach of the host and of
             // itself for every other kind, and debug sections within 32-bit
@@ -652,6 +766,36 @@ const Task = struct {
             }
         }
         self.sites = range.count;
+    }
+
+    /// Fix the resolved references of the reached atoms in `range` whose
+    /// fields the compaction changed (`UnitImage.RefKind.moved`). Two atoms
+    /// only ever come closer, so every field keeps reaching its target.
+    fn applyRefs(self: *Task, range: Range) void {
+        const context = self.context;
+        const view = context.images[range.image].view;
+        const place = context.places[range.image];
+        const atoms_reached = context.reached_atoms[range.image];
+        const out = context.regionOut(place, view, .block);
+        var fixed: u64 = 0;
+        for (range.first..range.first + range.count) |atom_index| {
+            const atom: u32 = @intCast(atom_index);
+            if (!atoms_reached[atom]) continue;
+            const from_shift = place.shift(view, atom);
+            for (view.atomRefs(atom)) |ref| {
+                std.debug.assert(atoms_reached[ref.target]); // a reached atom's edges reach every atom its references name
+                const kind: UnitImage.RefKind = @fromBackingInt(ref.kind);
+                if (!kind.moved(from_shift, place.shift(view, ref.target))) continue;
+                const offset = ref.offset - from_shift;
+                const field = out[@intCast(offset)..][0..kind.width()];
+                const value = @as(i64, @intCast(place.block + place.atoms[ref.target])) + ref.addend;
+                if (!UnitImage.applyRef(field, kind, value, place.block + offset)) {
+                    base.invariant("fast dev link invariant violated: a resolved reference no longer reaches its target", .{});
+                }
+                fixed += 1;
+            }
+        }
+        self.refs = fixed;
     }
 };
 
@@ -686,3 +830,50 @@ fn elapsed(std_io: std.Io, started: i96) u64 {
 }
 
 pub const OutputFile = link_output.OutputFile;
+
+/// A one-object image whose 16-byte-aligned block holds four 8-byte
+/// functions at 0, 8, 16 and 24, each its own atom.
+fn fourAtomImage(allocator: Allocator) UnitImage.BuildError![]align(UnitImage.alignment.toByteUnits()) u8 {
+    const shf_alloc: u64 = 0x2;
+    const shf_execinstr: u64 = 0x4;
+    const text: [32]u8 = @splat(0x90);
+    const object = try UnitImage.TestObject.encode(allocator, &.{
+        .{ .name = ".text", .flags = shf_alloc | shf_execinstr, .bytes = &text, .addralign = 16 },
+    }, &.{
+        .{ .name = "a", .section = 1, .value = 0, .size = 8, .global = true, .func = true },
+        .{ .name = "b", .section = 1, .value = 8, .size = 8, .func = true },
+        .{ .name = "c", .section = 1, .value = 16, .size = 8, .func = true },
+        .{ .name = "d", .section = 1, .value = 24, .size = 8, .func = true },
+    }, &.{});
+    defer allocator.free(object);
+    return UnitImage.build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .{ .symbols = .{ .edges = &.{}, .data_starts = &.{} } } });
+}
+
+test "compaction packs runs of reached atoms and keeps each run's alignment" {
+    const allocator = std.testing.allocator;
+    const image = try fourAtomImage(allocator);
+    defer allocator.free(image);
+    const view = try UnitImage.View.init(image);
+    try std.testing.expectEqual(@as(u32, 16), view.blockAlign());
+    // c is 16-aligned, so the run c,d cannot move back by the 8 bytes b
+    // leaves; the block keeps its size.
+    const held = try compactAtoms(allocator, view, &.{ true, false, true, true });
+    defer allocator.free(held.offsets);
+    try std.testing.expectEqualSlices(u32, &.{ 0, hole, 16, 24 }, held.offsets);
+    try std.testing.expectEqual(@as(u64, 32), held.size);
+    // A run whose atoms are all 8-aligned moves back by 8.
+    const moved = try compactAtoms(allocator, view, &.{ false, true, false, true });
+    defer allocator.free(moved.offsets);
+    try std.testing.expectEqualSlices(u32, &.{ hole, 0, hole, 8 }, moved.offsets);
+    try std.testing.expectEqual(@as(u64, 16), moved.size);
+    // The 16-aligned atom inside a run pins the whole run.
+    const pinned = try compactAtoms(allocator, view, &.{ false, true, true, false });
+    defer allocator.free(pinned.offsets);
+    try std.testing.expectEqualSlices(u32, &.{ hole, 8, 16, hole }, pinned.offsets);
+    try std.testing.expectEqual(@as(u64, 24), pinned.size);
+    // A run moves back by a multiple of its alignment.
+    const by_sixteen = try compactAtoms(allocator, view, &.{ false, false, true, true });
+    defer allocator.free(by_sixteen.offsets);
+    try std.testing.expectEqualSlices(u32, &.{ hole, hole, 0, 8 }, by_sixteen.offsets);
+    try std.testing.expectEqual(@as(u64, 16), by_sixteen.size);
+}
