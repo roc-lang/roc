@@ -90,7 +90,7 @@
 //!     range_iter = (0.I64..=15).iter()
 //!
 //!     source_stream = {
-//!         len_if_known: Known(16),
+//!         len_if_known: Ok(16),
 //!         step!: ||
 //!             match Iter.next(range_iter) {
 //!                 Done => Done
@@ -117,8 +117,8 @@
 //!     }
 //!
 //!     cap = match mapped_stream.len_if_known {
-//!         Known(n) => n
-//!         Unknown => 0
+//!         Ok(n) => n
+//!         Err(Unknown) => 0
 //!     }
 //!
 //!     var $list = List.with_capacity(cap)

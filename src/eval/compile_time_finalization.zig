@@ -1859,7 +1859,7 @@ fn evaluateRootsBoxy(
     // (design.md "Literal Arguments").
     for (roots, specialized) |root, *flag| {
         flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
-            try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules.imports, root);
+            try checked_root_graph.rootHoldsFunction(allocator, lowering_modules.root, lowering_modules.imports, artifacts[root.module], root.request);
     }
     var images = BoxyLinkedImages{ .allocator = allocator };
     defer images.deinit();
@@ -4132,7 +4132,7 @@ fn lowerEvalAndFinishRoots(
     defer boxy_root_ids.deinit(allocator);
     for (requests, root_ids) |request, root_id| {
         const boxy = module.compile_time_roots.root(root_id).kind == .literal_argument or
-            (options.strategy == .boxy and !try checked_root_graph.rootHoldsFunction(allocator, &.{module}, lowering_imports, .{ .module = 0, .root = root_id, .request = request }));
+            (options.strategy == .boxy and !try checked_root_graph.rootHoldsFunction(allocator, checked.loweringViewWithRelations(module, relation_modules), lowering_imports, module, request));
         if (boxy) {
             try boxy_requests.append(allocator, request);
             try boxy_root_ids.append(allocator, root_id);

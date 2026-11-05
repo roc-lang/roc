@@ -322,8 +322,8 @@ fn certifyProcAbiMetadata(
 
         if (proc.abi == .erased_record) {
             // A `.boxy` erased worker receives the packed argument record as
-            // its one explicit argument, besides its capture pointer, and
-            // takes no reuse input.
+            // its one explicit argument, besides its capture pointer and the
+            // reuse input its ownership marker names.
             var explicit_args: usize = 0;
             for (0..GuardedList.borrowLen(args)) |index| {
                 const arg = GuardedList.at(args, index);
@@ -335,9 +335,10 @@ fn certifyProcAbiMetadata(
                     }
                     continue;
                 }
+                if (proc.erased_reuse_arg != null and arg == proc.erased_reuse_arg.?) continue;
                 explicit_args += 1;
             }
-            if (explicit_args > 1 or proc.erased_reuse_arg != null or proc.erased_call_args != null) {
+            if (explicit_args > 1 or proc.erased_call_args != null) {
                 diag.context_proc = proc_id;
                 diag.set("proc={d}: erased-record ABI proc must take only its argument record", .{proc_index});
                 return error.Certification;
@@ -3998,7 +3999,18 @@ const Certifier = struct {
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
                 .dyn => |dyn_stmt| {
                     if (dyn_stmt.target) |target| try self.noteProcLocal(target);
-                    try DynOps.Operands.of(self.store.stmtRow(dyn_stmt.data)).each(self.store, self, Certifier.noteProcLocal);
+                    const op = self.store.stmtRow(dyn_stmt.data);
+                    try DynOps.Operands.of(op).each(self.store, self, Certifier.noteProcLocal);
+                    if (op == .call_erased) {
+                        if (op.call_erased.reuse_source) |reuse_source| {
+                            try self.noteProcLocal(reuse_source);
+                            try self.erased_call_owner_checks.append(self.allocator, .{
+                                .stmt = current,
+                                .closure = op.call_erased.closure,
+                                .reuse_source = reuse_source,
+                            });
+                        }
+                    }
                 },
                 .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
@@ -6569,9 +6581,15 @@ const Certifier = struct {
             },
             .call_erased => {
                 const call = op.call_erased;
-                // A deferred call keeps one reference to its closure until
-                // whoever makes the call releases it.
-                if (call.deferred and self.isRc(call.closure)) try self.consumeUnit(state, state.valueOf(call.closure), call.closure);
+                if (!LIR.erasedCallReuseFieldsMatch(call)) return self.fail("erased call reuse flag and ownership source disagreed", .{});
+                // An owned call transfers one unit of its closure to the
+                // callee, and a deferred call keeps one reference to its
+                // closure until whoever makes the call transfers or
+                // releases it.
+                if (call.reuse_source) |reuse_source| {
+                    const reuse_value = try self.requireLive(state, reuse_source);
+                    if (self.isRc(reuse_source)) try self.consumeUnit(state, reuse_value, reuse_source);
+                } else if (call.deferred and self.isRc(call.closure)) try self.consumeUnit(state, state.valueOf(call.closure), call.closure);
                 if (call.args) |args| {
                     if (self.isRc(args)) try self.consumeUnit(state, state.valueOf(args), args);
                 }

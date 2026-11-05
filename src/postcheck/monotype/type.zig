@@ -70,7 +70,8 @@ pub const OwnerHead = union(enum(u8)) {
 pub const IteratorTopology = struct {
     len_field: names.RecordFieldNameId,
     step_field: names.RecordFieldNameId,
-    known_tag: names.TagNameId,
+    ok_tag: names.TagNameId,
+    err_tag: names.TagNameId,
     unknown_tag: names.TagNameId,
     done_tag: names.TagNameId,
     one_tag: names.TagNameId,
@@ -2071,7 +2072,8 @@ pub const Store = struct {
                 if (imported.def.iterator_topology) |*topology| {
                     topology.len_field = try relocation.name_relocation.relocateRecordFieldLabel(source_names, topology.len_field);
                     topology.step_field = try relocation.name_relocation.relocateRecordFieldLabel(source_names, topology.step_field);
-                    topology.known_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.known_tag);
+                    topology.ok_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.ok_tag);
+                    topology.err_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.err_tag);
                     topology.unknown_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.unknown_tag);
                     topology.done_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.done_tag);
                     topology.one_tag = try relocation.name_relocation.relocateTagLabel(source_names, topology.one_tag);
@@ -3850,7 +3852,8 @@ fn sinkIteratorTopology(
     try sink.writeBytes("iterator-topology");
     try sink.writeBytes(name_store.recordFieldLabelText(value.len_field));
     try sink.writeBytes(name_store.recordFieldLabelText(value.step_field));
-    try sink.writeBytes(name_store.tagLabelText(value.known_tag));
+    try sink.writeBytes(name_store.tagLabelText(value.ok_tag));
+    try sink.writeBytes(name_store.tagLabelText(value.err_tag));
     try sink.writeBytes(name_store.tagLabelText(value.unknown_tag));
     try sink.writeBytes(name_store.tagLabelText(value.done_tag));
     try sink.writeBytes(name_store.tagLabelText(value.one_tag));
@@ -4172,7 +4175,8 @@ test "monotype cross-store import preserves named metadata and deduplicates repe
     const item_field = try source_names.internRecordFieldLabel("item");
     const rest_field = try source_names.internRecordFieldLabel("rest");
     const declared_field = try source_names.internRecordFieldLabel("declared");
-    const known_tag = try source_names.internTagLabel("Known");
+    const ok_tag = try source_names.internTagLabel("Ok");
+    const err_tag = try source_names.internTagLabel("Err");
     const unknown_tag = try source_names.internTagLabel("Unknown");
     const done_tag = try source_names.internTagLabel("Done");
     const one_tag = try source_names.internTagLabel("One");
@@ -4194,7 +4198,8 @@ test "monotype cross-store import preserves named metadata and deduplicates repe
             .iterator_topology = .{
                 .len_field = len_field,
                 .step_field = step_field,
-                .known_tag = known_tag,
+                .ok_tag = ok_tag,
+                .err_tag = err_tag,
                 .unknown_tag = unknown_tag,
                 .done_tag = done_tag,
                 .one_tag = one_tag,
@@ -4240,7 +4245,8 @@ test "monotype cross-store import preserves named metadata and deduplicates repe
     const topology = imported.def.iterator_topology.?;
     try std.testing.expectEqualStrings("len", destination_names.recordFieldLabelText(topology.len_field));
     try std.testing.expectEqualStrings("step", destination_names.recordFieldLabelText(topology.step_field));
-    try std.testing.expectEqualStrings("Known", destination_names.tagLabelText(topology.known_tag));
+    try std.testing.expectEqualStrings("Ok", destination_names.tagLabelText(topology.ok_tag));
+    try std.testing.expectEqualStrings("Err", destination_names.tagLabelText(topology.err_tag));
     try std.testing.expectEqualStrings("Unknown", destination_names.tagLabelText(topology.unknown_tag));
     try std.testing.expectEqualStrings("Done", destination_names.tagLabelText(topology.done_tag));
     try std.testing.expectEqualStrings("One", destination_names.tagLabelText(topology.one_tag));

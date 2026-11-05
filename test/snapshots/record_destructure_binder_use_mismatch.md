@@ -98,7 +98,7 @@ NO CHANGE
 				(p-assign (ident "item")))
 			(e-block
 				(s-runtime-error (tag "erroneous_value_expr"))
-				(e-call (constraint-fn-var 268)
+				(e-call (constraint-fn-var 271)
 					(e-lookup-external
 						(builtin))
 					(e-runtime-error (tag "erroneous_value_use"))

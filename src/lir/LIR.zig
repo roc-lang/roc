@@ -1317,7 +1317,8 @@ pub const PackedErasedFnData = struct {
 /// `record`, `tuple`, `tag`, `list`, and `box` consume their value operands
 /// into the target, as `assign_struct`, `assign_tag`, and `assign_list` do;
 /// `eq`, `hash`, `inspect`, and `tag_discriminant` borrow their value
-/// operands; `call_erased` consumes `args` and borrows `closure`;
+/// operands; `call_erased` consumes `args` and borrows `closure`, or
+/// consumes one unit of it when the call is owned (`reuse_closure`);
 /// `dict_compose` and `dict_record` hold their operands as an aggregate
 /// holds its fields; `dict_patch` borrows its immortal operands.
 pub const DynOp = union(enum) {
@@ -1458,6 +1459,18 @@ pub const DynOp = union(enum) {
     call_erased: struct {
         closure: LocalId,
         args: ?LocalId,
+        /// The call transfers one ownership unit of `closure`'s allocation
+        /// to the callee through the erased ABI's reuse channel, which
+        /// consumes it: an owned erased call (design.md "Destination-Passing
+        /// Results and Allocation Reuse"). Boxy lowering sets it when the
+        /// call's result type holds one erased-callable slot; ARC moves the
+        /// unit when `closure` dies at the call and retains it otherwise. A
+        /// deferred owned call's pending record transfers the unit when the
+        /// call is driven.
+        reuse_closure: bool = false,
+        /// The local whose ownership unit `reuse_closure` transfers, which
+        /// denotes `closure`'s allocation (`lir/erased_owner.zig`).
+        reuse_source: ?LocalId = null,
         /// Set by ARC emission on a call whose value the procedure returns:
         /// the call is left pending instead of made, owning one reference to
         /// `closure` and the argument record (design.md "Deferred Erased
@@ -1469,13 +1482,22 @@ pub const DynOp = union(enum) {
     },
     /// An erased callable of `proc` (an `erased_record` procedure) whose
     /// capture is the dynamic record `capture`, consumed. The record's first
-    /// word is its own descriptor; the callable's `on_drop` is the runtime's
-    /// shared capture drop, which releases the record through that word.
-    closure: struct { proc: LirProcSpecId, capture: LocalId },
+    /// word is its own descriptor and its second the allocation's capture
+    /// capacity (design.md "Function Values"); the callable's `on_drop` is
+    /// the runtime's shared capture drop, which releases the record through
+    /// the first word. `reuse` is a consumed erased-callable allocation the
+    /// runtime repacks in place when it is unique (or `reuse_unique` says
+    /// ARC proved it) and the record fits its capacity; otherwise the
+    /// callable is a fresh allocation and `reuse` is released. Its runtime
+    /// value may be null, which transfers nothing.
+    closure: struct { proc: LirProcSpecId, capture: LocalId, reuse: ?LocalId = null, reuse_unique: bool = false },
     /// A `view` dynamic target over the bytes at `address` (an `opaque_ptr`
     /// local), which the target's descriptor describes; it borrows from
-    /// whatever owns those bytes.
-    view: struct { address: LocalId },
+    /// whatever owns those bytes: `owner`, the local holding an ownership
+    /// unit of the allocation the bytes are in (an erased worker's reuse
+    /// argument for its capture record), or the address when the procedure
+    /// holds no unit of them.
+    view: struct { address: LocalId, owner: ?LocalId = null },
     /// The value `src` (borrowed), which `from` describes, rebuilt as the
     /// owned value `to` describes. The descriptors describe one type whose
     /// record fields may differ in storage (design.md "Field Kinds"): a

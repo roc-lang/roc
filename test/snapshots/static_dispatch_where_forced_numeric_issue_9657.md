@@ -204,18 +204,18 @@ use_it = {
 									(ty-rigid-var (name "a")))
 								(s-let
 									(p-assign (ident "value"))
-									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 30) (constraint-fn-var 309)
+									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 30) (constraint-fn-var 312)
 										(args
 											(e-lookup-local
 												(p-assign (ident "input"))))))
 								(s-let
 									(p-assign (ident "output"))
-									(e-call (constraint-fn-var 317)
+									(e-call (constraint-fn-var 320)
 										(e-lookup-local
 											(p-assign (ident "f")))
 										(e-lookup-local
 											(p-assign (ident "value")))))
-								(e-dispatch-call (method "encode") (constraint-fn-var 318)
+								(e-dispatch-call (method "encode") (constraint-fn-var 321)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "output"))))
@@ -246,18 +246,18 @@ use_it = {
 		(e-block
 			(s-let
 				(p-assign (ident "transform"))
-				(e-call (constraint-fn-var 339)
+				(e-call (constraint-fn-var 342)
 					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-lambda
 						(args
 							(p-assign (ident "n")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 337)
+						(e-dispatch-call (method "plus") (constraint-fn-var 340)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
 							(args
 								(e-num (value "1")))))))
-			(e-call (constraint-fn-var 340)
+			(e-call (constraint-fn-var 343)
 				(e-lookup-local
 					(p-assign (ident "transform")))
 				(e-num (value "41"))))))

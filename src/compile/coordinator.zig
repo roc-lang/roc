@@ -2185,8 +2185,10 @@ pub const Coordinator = struct {
     /// the general session is borrowed and released around it, and while
     /// the frontend loop still consumes its own results.
     /// The coordinating thread's lanes for the post-check tasks it runs
-    /// while waiting in a session.
-    coordinator_lanes: ThreadLanes,
+    /// while waiting in a session. They live in their own allocation, so the
+    /// thread's `thread_lanes` names them wherever this coordinator is moved,
+    /// and teardown recognizes and clears it.
+    coordinator_lanes: *ThreadLanes,
     /// Every session box allocated, for teardown, and the ones no session
     /// uses now.
     all_session_boxes: Channel(*SessionBox),
@@ -2368,6 +2370,9 @@ pub const Coordinator = struct {
         const initial_task_capacity = 256;
         var cache_entry_dirs = try CacheEntryDirs.resolve(gpa, cache_manager);
         errdefer cache_entry_dirs.deinit(gpa);
+        const coordinator_lanes = try gpa.create(ThreadLanes);
+        errdefer gpa.destroy(coordinator_lanes);
+        coordinator_lanes.* = ThreadLanes.init(worker_allocator, max_threads, false);
         return .{
             .gpa = gpa,
             .mode = mode,
@@ -2381,7 +2386,7 @@ pub const Coordinator = struct {
             .inflight = std.atomic.Value(usize).init(0),
             .shutting_down = std.atomic.Value(bool).init(false),
             .worker_oom = std.atomic.Value(bool).init(false),
-            .coordinator_lanes = ThreadLanes.init(worker_allocator, max_threads, false),
+            .coordinator_lanes = coordinator_lanes,
             .all_session_boxes = try Channel(*SessionBox).init(channel_allocator, 64, roc_ctx.std_io),
             .free_session_boxes = try Channel(*SessionBox).init(channel_allocator, 64, roc_ctx.std_io),
             .frontend_complete = false,
@@ -2470,8 +2475,9 @@ pub const Coordinator = struct {
         }
         self.all_session_boxes.deinit();
         self.free_session_boxes.deinit();
-        if (thread_lanes == &self.coordinator_lanes) thread_lanes = null;
+        if (thread_lanes == self.coordinator_lanes) thread_lanes = null;
         self.coordinator_lanes.deinit();
+        self.gpa.destroy(self.coordinator_lanes);
 
         if (self.program_session) |*session| session.deinit();
         self.program_session = null;
@@ -3408,7 +3414,7 @@ pub const Coordinator = struct {
         self.workers.clearRetainingCapacity();
         // The coordinating thread's lanes go with the workers': lane state
         // is destroyed with the pool.
-        if (thread_lanes == &self.coordinator_lanes) thread_lanes = null;
+        if (thread_lanes == self.coordinator_lanes) thread_lanes = null;
         self.coordinator_lanes.deinit();
     }
 
@@ -3656,7 +3662,7 @@ pub const Coordinator = struct {
                 if (artifact.hasUnboundPlatformRequirements()) coordinatorInvariant("platform awaiting its app relation left compile-time roots unevaluated", .{});
                 const state = try UnfinalizedReportDestinations.newState(self);
                 errdefer state.deinit();
-                try artifact.reopenForEvaluation(self.gpa);
+                try artifact.reopenForEvaluation();
                 mod.pending_evaluation = state;
                 mod.reopened_unevaluated = unevaluatedRequestCount(artifact, self.specialization_strategy);
             }
@@ -4346,7 +4352,7 @@ pub const Coordinator = struct {
         if (self.shutting_down.load(.acquire)) {
             base.invariant("{s}", .{"post-check executor requested after the coordinator shut down"});
         }
-        if (thread_lanes == null or !thread_lanes.?.worker) thread_lanes = &self.coordinator_lanes;
+        if (thread_lanes == null or !thread_lanes.?.worker) thread_lanes = self.coordinator_lanes;
         return .{
             .context = self,
             .worker_count = self.workerCount(),

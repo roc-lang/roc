@@ -769,6 +769,14 @@ pub const CheckedBodies = struct {
         };
     }
 
+    /// Whether `id` is a literal string segment with no bytes. Such a
+    /// segment writes nothing into the string it is part of, so a lowering
+    /// that writes a literal's parts once leaves it out.
+    pub fn isEmptyStrSegment(self: CheckedBodies, id: ExprId) bool {
+        const data = self.store().getExpr(id);
+        return data == .e_str_segment and self.text(data.e_str_segment.literal).len == 0;
+    }
+
     /// Whether a string literal's conversion dispatches to its target's
     /// `from_quote`.
     pub fn quoteIsCustom(self: CheckedBodies, raw_node: u32) bool {

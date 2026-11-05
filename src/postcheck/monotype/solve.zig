@@ -10267,7 +10267,8 @@ const OpenFunctionInterfaceShapeWriter = struct {
         try self.writeU8(1);
         try self.writeBytes(self.graph.name_store.recordFieldLabelText(value.len_field));
         try self.writeBytes(self.graph.name_store.recordFieldLabelText(value.step_field));
-        try self.writeBytes(self.graph.name_store.tagLabelText(value.known_tag));
+        try self.writeBytes(self.graph.name_store.tagLabelText(value.ok_tag));
+        try self.writeBytes(self.graph.name_store.tagLabelText(value.err_tag));
         try self.writeBytes(self.graph.name_store.tagLabelText(value.unknown_tag));
         try self.writeBytes(self.graph.name_store.tagLabelText(value.done_tag));
         try self.writeBytes(self.graph.name_store.tagLabelText(value.one_tag));
@@ -13419,7 +13420,8 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
         .iterator_topology = .{
             .len_field = try name_store.internRecordFieldLabel("len"),
             .step_field = try name_store.internRecordFieldLabel("step"),
-            .known_tag = try name_store.internTagLabel("Known"),
+            .ok_tag = try name_store.internTagLabel("Ok"),
+            .err_tag = try name_store.internTagLabel("Err"),
             .unknown_tag = try name_store.internTagLabel("Unknown"),
             .done_tag = try name_store.internTagLabel("Done"),
             .one_tag = try name_store.internTagLabel("One"),
