@@ -4181,6 +4181,10 @@ const DraftLocalProcDeclaration = struct {
     binder: checked.PatternBinderId,
     expr: checked.CheckedExprId,
     context_anchor: ?checked.CheckedStatementId,
+    /// Whether the procedure is a method of a type declared in a body: the
+    /// checked method registry names it as a `.local_proc` target, so static
+    /// dispatch (structural derivation included) can select it.
+    method: bool,
 
     fn address(self: DraftLocalProcDeclaration) DraftLocalProcAddress {
         return .{ .module = self.module, .binder = self.binder, .expr = self.expr };
@@ -5506,7 +5510,6 @@ const Builder = struct {
     source_line_cursor: struct { line_starts: []const u32 = &.{}, line: u32 = 0 } = .{},
     /// Scratch for lexical-context digests, which are built and hashed
     /// without reentering lowering.
-    lexical_binder_scratch: std.ArrayList(LexicalBinderEntry) = .empty,
     local_proc_context_scratch: std.ArrayList(DraftCodecLocalProcContext) = .empty,
     /// Worklists of `BodyContext.patternNeedsExplicitBinding`.
     explicit_binding_scratch: struct {
@@ -6083,7 +6086,6 @@ const Builder = struct {
         for (self.body_memo_pool.items) |*memos| memos.deinit(self.allocator);
         self.body_memo_pool.deinit(self.allocator);
         self.task_storage.deinit(self.allocator);
-        self.lexical_binder_scratch.deinit(self.allocator);
         self.local_proc_context_scratch.deinit(self.allocator);
         self.explicit_binding_scratch.visits.deinit(self.allocator);
         self.explicit_binding_scratch.children.deinit(self.allocator);
@@ -10243,12 +10245,17 @@ const Builder = struct {
 
         const stored_evidence = try self.constFnEvidence(rootEvidence(template_ref, evidence));
         const evidence_digest = stored_evidence.digest;
+        // Structural derivation, and a generated codec contract, select
+        // methods by type inside the body, so the body depends on the caller's
+        // context exactly when a method of a body-declared type is visible:
+        // a registered one, or one a restored function's scope resolves on
+        // first use (`localProcContextId`).
         const structural_lexical_dependent = template.target != .hosted and
-            source_ctx.local_proc_contexts.count() != 0 and
+            (source_ctx.visible_local_method_contexts != 0 or source_ctx.restored_local_proc_scope != null) and
             (try specEvidenceContainsStructural(self.allocator, evidence) or
                 (codec_contract != null and source_ctx.activeCodecContractContainsLocalTarget()));
         const lexical_context_key: ?names.TypeDigest = if (structural_lexical_dependent)
-            try source_ctx.codecLexicalContextKey()
+            try source_ctx.templateLexicalContextKey()
         else
             null;
         const local_evidence_owner = try specEvidenceLocalOwner(self.allocator, source_ctx.draft, evidence);
@@ -10465,7 +10472,7 @@ const Builder = struct {
         }
         const spec_index = source_ctx.draft.template_specs.items.len;
         const lexical = if (local_context_dependent)
-            try source_ctx.captureCodecLexicalContext()
+            try source_ctx.captureTemplateLexicalContext()
         else
             null;
         var lexical_needs_cleanup = lexical != null;
@@ -22126,6 +22133,10 @@ const BodyContext = struct {
     /// template other than `owner_template`. Only then does a function
     /// produced here scan for a declaring template's evidence to retain.
     may_see_other_template_local_procs: bool = false,
+    /// How many entries of `local_proc_contexts` are methods of body-declared
+    /// types (`DraftLocalProcDeclaration.method`). Only those can be selected
+    /// by static dispatch the caller does not name explicitly.
+    visible_local_method_contexts: u32 = 0,
     /// The binder relations every nested context created from this one
     /// starts from (see `nestedRelationBase`).
     nested_relation_base: ?*NestedRelationBase = null,
@@ -25197,6 +25208,7 @@ const BodyContext = struct {
         child.restored_const_fn = self.restored_const_fn;
         child.restored_declaring_evidence = self.restored_declaring_evidence;
         child.may_see_other_template_local_procs = self.may_see_other_template_local_procs;
+        child.visible_local_method_contexts = self.visible_local_method_contexts;
         child.in_default_expr = self.in_default_expr;
         child.specialization_dispatch_crashes = self.specialization_dispatch_crashes;
         child.owns_specialization_dispatch_crashes = false;
@@ -25359,6 +25371,58 @@ const BodyContext = struct {
         return .{ .view = self.view.key.bytes, .binders = binders, .local_procs = local_procs, .restored = restored };
     }
 
+    /// The lexical context a caller-owned procedure template specialization
+    /// inherits: the visible local procedure declaration contexts and the
+    /// restored-function scope. A template body names none of the caller's
+    /// value binders; every local procedure it reaches installs its own
+    /// declaration context's captured binders (`installLocalProcContext`).
+    fn captureTemplateLexicalContext(self: *BodyContext) Allocator.Error!DraftCodecLexicalContext {
+        const local_procs = try self.allocator.alloc(DraftCodecLocalProcContext, self.local_proc_contexts.count());
+        errdefer self.allocator.free(local_procs);
+        self.fillLocalProcContexts(local_procs);
+        const restored: ?RestoredLexicalScope = if (self.restored_local_proc_scope) |scope| .{
+            .scope = .{
+                .source_context_digest = scope.source_context_digest,
+                .base_key = scope.base_key,
+                .entries = try self.builder.evidence_arena.allocator().dupe(LexicalBinderEntry, scope.entries),
+            },
+            .const_fn = self.restored_const_fn,
+        } else null;
+        return .{ .view = self.view.key.bytes, .binders = &.{}, .local_procs = local_procs, .restored = restored };
+    }
+
+    /// The identity of `captureTemplateLexicalContext`'s result. Requests
+    /// made under equal inherited contexts share one specialization, so the
+    /// recursive calls of a caller-owned template body reuse the body.
+    fn templateLexicalContextKey(self: *BodyContext) Allocator.Error!names.TypeDigest {
+        const local_procs = &self.builder.local_proc_context_scratch;
+        try local_procs.resize(self.builder.allocator, self.local_proc_contexts.count());
+        self.fillLocalProcContexts(local_procs.items);
+
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.template_lexical_context");
+        hasher.update(&self.view.key.bytes);
+        if (self.restored_local_proc_scope) |scope| {
+            hasher.update(&.{1});
+            hasher.update(&scope.source_context_digest.bytes);
+            hasher.update(&scope.base_key.bytes);
+            hashU32(&hasher, @intCast(scope.entries.len));
+            for (scope.entries) |entry| {
+                hasher.update(&.{entry.kind});
+                hashU32(&hasher, entry.binder);
+                hashU32(&hasher, entry.local);
+                hasher.update(&entry.type_digest.bytes);
+            }
+        } else hasher.update(&.{0});
+        for (local_procs.items) |proc| {
+            hasher.update(&proc.declaration.module);
+            hashU32(&hasher, @backingInt(proc.declaration.binder));
+            hashU32(&hasher, @backingInt(proc.declaration.expr));
+            hashU32(&hasher, @backingInt(proc.context));
+        }
+        return .{ .bytes = hasher.finalResult() };
+    }
+
     /// Every visible local procedure context, in declaration order.
     fn fillLocalProcContexts(self: *BodyContext, local_procs: []DraftCodecLocalProcContext) void {
         var initialized: usize = 0;
@@ -25372,30 +25436,6 @@ const BodyContext = struct {
         }
         std.debug.assert(initialized == local_procs.len);
         sortCodecLocalProcContexts(local_procs);
-    }
-
-    /// The digest of `captureCodecLexicalContext`'s result, built in the
-    /// builder's scratch lists.
-    fn codecLexicalContextKey(self: *BodyContext) Allocator.Error!names.TypeDigest {
-        const binders = &self.builder.lexical_binder_scratch;
-        try binders.resize(self.builder.allocator, self.binders.count() + self.typed_binders.count());
-        self.fillLexicalBinderEntries(binders.items);
-        const local_procs = &self.builder.local_proc_context_scratch;
-        try local_procs.resize(self.builder.allocator, self.local_proc_contexts.count());
-        self.fillLocalProcContexts(local_procs.items);
-
-        const binder_key = lexicalContextKeyFromEntries(self.current_fn_key, binders.items);
-        var hasher = TypeDigestHasher.init();
-        hasher.update("roc.monotype.codec_lexical_context");
-        hasher.update(&self.view.key.bytes);
-        hasher.update(&binder_key.bytes);
-        for (local_procs.items) |proc| {
-            hasher.update(&proc.declaration.module);
-            hashU32(&hasher, @backingInt(proc.declaration.binder));
-            hashU32(&hasher, @backingInt(proc.declaration.expr));
-            hashU32(&hasher, @backingInt(proc.context));
-        }
-        return .{ .bytes = hasher.finalResult() };
     }
 
     fn sortCodecLocalProcContexts(contexts: []DraftCodecLocalProcContext) void {
@@ -25439,7 +25479,20 @@ const BodyContext = struct {
             if (!names.procedureTemplateRefEql(context.owner_template, self.owner_template)) {
                 self.may_see_other_template_local_procs = true;
             }
-            try self.local_proc_contexts.putPermanent(proc.declaration, proc.context);
+            try self.putLocalProcContext(proc.declaration, proc.context);
+        }
+    }
+
+    /// Make a local procedure declaration context visible in this body.
+    fn putLocalProcContext(
+        self: *BodyContext,
+        address: DraftLocalProcAddress,
+        context_id: DraftLocalProcContextId,
+    ) Allocator.Error!void {
+        const is_new = !self.local_proc_contexts.contains(address);
+        try self.local_proc_contexts.putPermanent(address, context_id);
+        if (is_new and self.draft.local_proc_contexts.items[@backingInt(context_id)].declaration.method) {
+            self.visible_local_method_contexts += 1;
         }
     }
 
@@ -65473,6 +65526,7 @@ const BodyContext = struct {
             .binder = self.localProcBinder(pattern_id),
             .expr = expr,
             .context_anchor = context_anchor,
+            .method = false,
         }, snapshots);
     }
 
@@ -65491,6 +65545,7 @@ const BodyContext = struct {
                         .binder = local.binder,
                         .expr = local.expr,
                         .context_anchor = local.context_anchor,
+                        .method = true,
                     }, snapshots);
                 }
             },
@@ -65536,7 +65591,7 @@ const BodyContext = struct {
         } else {
             const context_id: DraftLocalProcContextId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.local_proc_contexts.items.len))));
             try self.draft.local_proc_contexts.append(self.allocator, try self.cloneLocalProcContext(current));
-            try self.local_proc_contexts.putPermanent(address, context_id);
+            try self.putLocalProcContext(address, context_id);
         }
     }
 
@@ -65620,6 +65675,7 @@ const BodyContext = struct {
             .binder = binder,
             .expr = expr,
             .context_anchor = context_anchor,
+            .method = context_anchor != null,
         };
         const context_id: DraftLocalProcContextId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.local_proc_contexts.items.len))));
         const declared = try self.restoredLocalProcDeclaration(view, expr);
@@ -65639,7 +65695,7 @@ const BodyContext = struct {
             self.allocator.free(entries);
             return err;
         };
-        try self.local_proc_contexts.putPermanent(address, context_id);
+        try self.putLocalProcContext(address, context_id);
         return context_id;
     }
 
