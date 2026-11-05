@@ -710,14 +710,15 @@ growth_use_pairs: std.ArrayListUnmanaged(GrowthUsePair) = .empty,
 /// removed when the statement finishes). The value is the def's annotation,
 /// whose `predeclared_slots` entry holds the scheme.
 predeclared_local_annotations: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Annotation.Idx) = .empty,
-/// Hole-sharing predeclared schemes (annotations with `_` inference holes,
-/// predeclared at their recursive group's start), keyed by the scheme var:
-/// each value lists the scheme's hole copies paired with the live annotation
-/// hole vars. Every use re-unifies its hole copies with the live vars so the
-/// body's inference and the uses' constraints stay monomorphically consistent
-/// until the group's boundary generalizes the holes; see
-/// `predeclareAnnotationSchemeKeepingHolesShared` and `reunifySharedSchemeHoles`.
-/// Each value is a run of `hole_shared_vars`.
+/// Predeclared schemes that share live vars with their definition, keyed by
+/// the scheme var: annotations with `_` inference holes (predeclared at
+/// their recursive group's start), whose live annotation hole vars every use
+/// shares, and block-local annotations that look up an enclosing
+/// annotation's type variables, which every use shares too. Sharing keeps
+/// the body's inference and the uses' constraints monomorphically
+/// consistent until the boundary that owns the vars generalizes them; see
+/// `predeclareAnnotationSchemeKeepingHolesShared`. Each value is a run of
+/// `hole_shared_vars`.
 hole_shared_schemes: collections.DenseMapUnmanaged(Var, HoleSharedRun) = .empty,
 hole_shared_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// The one expression (a recursive group member's top-level RHS) whose
@@ -19883,13 +19884,23 @@ fn predeclareAnnotationSchemeHelp(
         self.retainUndecidedHoles(&live_holes);
     }
 
-    const scheme_var = if (live_holes.items.len > 0)
+    // A block-local annotation can name an enclosing annotation's type
+    // variable. That variable belongs to the enclosing definition: the
+    // scheme shares it instead of quantifying it (its rank is below this
+    // frame, so generalization leaves it alone), and every use of the
+    // scheme shares it too.
+    var shared_vars: std.ArrayListUnmanaged(Var) = .empty;
+    defer shared_vars.deinit(self.gpa);
+    try shared_vars.appendSlice(self.gpa, live_holes.items);
+    try self.collectEnclosingRigidVars(annotation_idx, &shared_vars);
+
+    const scheme_var = if (shared_vars.items.len > 0)
         try self.instantiateVarOrphanSharingVars(
             ModuleEnv.varFrom(annotation_idx),
             env,
             env.rank(),
             .use_last_var,
-            live_holes.items,
+            shared_vars.items,
         )
     else
         try self.instantiateVarOrphan(
@@ -19929,12 +19940,15 @@ fn predeclareAnnotationSchemeHelp(
             const resolved_hole = self.types.resolveVar(hole_var);
             try self.types.setDescRank(resolved_hole.desc_idx, hr);
         }
+    }
 
-        // Every use of the scheme shares the live hole vars; register them so
-        // each use's instantiation seeds the identity mappings.
+    if (shared_vars.items.len > 0) {
+        // Every use of the scheme shares the live hole vars and the
+        // enclosing type variables; register them so each use's
+        // instantiation seeds the identity mappings.
         const start = std.math.cast(u32, self.hole_shared_vars.items.len) orelse return error.OutOfMemory;
-        const len = std.math.cast(u32, live_holes.items.len) orelse return error.OutOfMemory;
-        try self.hole_shared_vars.appendSlice(self.gpa, live_holes.items);
+        const len = std.math.cast(u32, shared_vars.items.len) orelse return error.OutOfMemory;
+        try self.hole_shared_vars.appendSlice(self.gpa, shared_vars.items);
         try self.hole_shared_schemes.put(self.gpa, scheme_var, .{ .start = start, .len = len });
     }
     return scheme_var;
@@ -20460,6 +20474,9 @@ fn recordPredeclaredDispatchUse(
 /// node VARS, which the reset gives fresh unbound classes—the body pass's
 /// annotation regeneration then re-ranks and re-constrains those same vars,
 /// which is exactly the sharing the scheme is meant to preserve.
+/// A lookup of an enclosing annotation's type variable keeps its class: it
+/// joined the enclosing variable's live class, which the body pass joins
+/// again, and resetting it could carry that live class away with it.
 fn resetAnnotationNodes(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
     try self.types.resetVarToUnbound(ModuleEnv.varFrom(annotation_idx), Rank.outermost);
 
@@ -20470,7 +20487,42 @@ fn resetAnnotationNodes(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem
     defer nodes.deinit(stack_allocator);
     try self.collectAnnotationTypeAnnos(annotation_idx, &nodes, stack_allocator);
     for (nodes.items) |anno_idx| {
+        if (enclosingRigidLookup(self.cir, nodes.items, anno_idx) != null) continue;
         try self.types.resetVarToUnbound(ModuleEnv.varFrom(anno_idx), Rank.outermost);
+    }
+}
+
+/// The enclosing annotation's type variable that `anno_idx` looks up, when
+/// it is a lookup of a type variable outside `nodes` (one annotation's
+/// nodes, from `collectAnnotationTypeAnnos`).
+fn enclosingRigidLookup(cir: *const ModuleEnv, nodes: []const CIR.TypeAnno.Idx, anno_idx: CIR.TypeAnno.Idx) ?CIR.TypeAnno.Idx {
+    const lookup = switch (cir.store.getTypeAnno(anno_idx)) {
+        .rigid_var_lookup => |lookup| lookup,
+        else => return null,
+    };
+    for (nodes) |node| {
+        if (node == lookup.ref) return null;
+    }
+    return lookup.ref;
+}
+
+/// Append the var of every enclosing annotation's type variable that this
+/// annotation looks up.
+fn collectEnclosingRigidVars(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    out: *std.ArrayListUnmanaged(Var),
+) std.mem.Allocator.Error!void {
+    if (!self.cir.store.getAnnotation(annotation_idx).mentions_type_var) return;
+    var stack_allocator_state_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.gpa);
+    const stack_allocator = stack_allocator_state.allocator();
+    var nodes: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
+    defer nodes.deinit(stack_allocator);
+    try self.collectAnnotationTypeAnnos(annotation_idx, &nodes, stack_allocator);
+    for (nodes.items) |anno_idx| {
+        const ref = enclosingRigidLookup(self.cir, nodes.items, anno_idx) orelse continue;
+        try out.append(self.gpa, ModuleEnv.varFrom(ref));
     }
 }
 
@@ -30759,15 +30811,11 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             // An annotated local function's scheme is pre-declared from its
             // annotation so in-flight (recursive) references instantiate
             // it—the same rule as top-level defs; the statement itself is
-            // checked on the ordinary path. Conservatively limited to
-            // type-var-free annotations: a type-var-mentioning local
-            // annotation can reference the ENCLOSING def's rigids
-            // (`rigid_var_lookup`), and the pre-pass generation would merge
-            // this annotation's nodes into the enclosing generation's live
-            // classes before the reset severs them.
+            // checked on the ordinary path. A type variable the annotation
+            // looks up from an enclosing annotation stays shared by the
+            // scheme (`predeclareAnnotationSchemeHelp`).
             const decl_predeclared = decl_is_fn and decl_stmt.anno != null and
                 self.cir.store.getPattern(decl_stmt.pattern) == .assign and
-                !self.cir.store.getAnnotation(decl_stmt.anno.?).mentions_type_var and
                 !self.cir.store.getAnnotation(decl_stmt.anno.?).contains_underscore;
 
             // A local function def is a binding group of one: its pattern

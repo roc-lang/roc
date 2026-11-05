@@ -22092,6 +22092,10 @@ const BodyContext = struct {
     /// instantiation creates or resolves is recorded here, so each nested
     /// context forked from it can join its own answer for the variable.
     relation_variables: ?*std.ArrayList(InstantiatedVariable) = null,
+    /// The binder relations a recursive nested instance was forked from
+    /// (`recursiveNestedRelationBase`), owned by this context because they
+    /// belong to no binder environment another nested context shares.
+    owned_relation_base: ?*NestedRelationBase = null,
     /// The quantified variables of a generalized scope this context is
     /// constructing: they stay fresh until the construction request
     /// determines them.
@@ -23004,6 +23008,7 @@ const BodyContext = struct {
         self.local_proc_contexts.deinit();
         self.typed_binders.deinit();
         self.binders.deinit();
+        if (self.owned_relation_base) |relation_base| destroyRelationBase(self.allocator, relation_base);
     }
 
     fn draftTypeCell(self: *BodyContext, ty: Type.TypeId) Allocator.Error!DraftTypeCell {
@@ -24839,8 +24844,17 @@ const BodyContext = struct {
         var child = try self.childContextWithTypeCells(current_fn_key, false);
         errdefer child.deinit();
         // The child starts from this context's binder relations, related
-        // once for every nested context rather than once by each.
-        const relation_base = try self.nestedRelationBase();
+        // once for every nested context rather than once by each. An
+        // instance of a generalized scope made inside an instance of that
+        // same scope (a recursive use, which an annotated local may make at
+        // other types) has variables of its own where the enclosing
+        // instance's binders mention the enclosing instance's: it starts
+        // from relations of the binders that mention none of them.
+        const relation_base = if (evidence.schema != null and self.evidence.atScope(evidence.scope) != null) owned: {
+            const owned = try self.recursiveNestedRelationBase(evidence.schema.?);
+            child.owned_relation_base = owned;
+            break :owned owned;
+        } else try self.nestedRelationBase();
         child.instantiation.replaceNodeMap(relation_base.ctx.instantiation.node_map.forkCompleted());
         var kinds = relation_base.ctx.instantiation.field_kind_map.iterator();
         while (kinds.next()) |entry| try child.instantiation.field_kind_map.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -24907,6 +24921,76 @@ const BodyContext = struct {
         return relation_base;
     }
 
+    /// Relations of the environment's binders whose types mention none of
+    /// `scheme`'s quantified variables, for one recursive nested instance of
+    /// the scope `scheme` quantifies; the caller owns them.
+    fn recursiveNestedRelationBase(self: *BodyContext, scheme: SchemeRequirements) Allocator.Error!*NestedRelationBase {
+        const relation_base = try self.allocator.create(NestedRelationBase);
+        errdefer self.allocator.destroy(relation_base);
+        relation_base.* = .{
+            .ctx = try self.childContextWithTypeCells(self.current_fn_key, false),
+            .related = collections.DenseMap(checked.PatternBinderId, DraftLocalId).init(self.allocator),
+        };
+        errdefer {
+            relation_base.ctx.deinit();
+            relation_base.related.deinit();
+        }
+        relation_base.ctx.relation_variables = &relation_base.variables;
+        const entries = try self.allocator.alloc(BinderMap.Entry, self.binders.count());
+        defer self.allocator.free(entries);
+        var filled: usize = 0;
+        var binders = self.binders.iterator();
+        while (binders.next()) |entry| {
+            entries[filled] = entry;
+            filled += 1;
+        }
+        std.mem.sort(BinderMap.Entry, entries, {}, BinderMap.Entry.binderLessThan);
+        for (entries) |entry| {
+            if (moduleBytesEqual(scheme.view.key.bytes, self.view.key.bytes) and
+                try self.checkedTypeMentionsSchemeVar(checkedBinderType(self.view, entry.binder), scheme.scheme_vars)) continue;
+            try relation_base.relate(entry);
+        }
+        return relation_base;
+    }
+
+    /// Whether `root` mentions one of `scheme_vars`.
+    fn checkedTypeMentionsSchemeVar(self: *BodyContext, root: checked.CheckedTypeId, scheme_vars: []const checked.CheckedTypeId) Allocator.Error!bool {
+        var pending = std.ArrayList(checked.CheckedTypeId).empty;
+        defer pending.deinit(self.allocator);
+        var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            if ((try visited.getOrPut(ty)).found_existing) continue;
+            switch (checkedPayload(self.view, ty)) {
+                .flex, .rigid => if (try self.builder.schemeVarSlot(scheme_vars, ty) != null) return true,
+                .alias => |alias| {
+                    try pending.appendSlice(self.allocator, alias.args);
+                    try pending.append(self.allocator, alias.backing);
+                },
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .record => |record| {
+                    for (record.fields) |field| try pending.append(self.allocator, field.ty);
+                    try pending.append(self.allocator, record.ext);
+                },
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.argsSlice(self.view.types));
+                    try pending.append(self.allocator, tag_union.ext);
+                },
+                .nominal => |nominal| {
+                    try pending.appendSlice(self.allocator, nominal.args);
+                    try pending.appendSlice(self.allocator, nominal.padding_field_types);
+                },
+                .pending, .err, .field_kind, .empty_record, .empty_tag_union => {},
+            }
+        }
+        return false;
+    }
+
     /// The environment's binders `relation_base` has not related, in binder
     /// order, which is the order relations are made in.
     fn unrelatedBinderEntries(self: *BodyContext, relation_base: *const NestedRelationBase) Allocator.Error![]BinderMap.Entry {
@@ -24956,10 +25040,14 @@ const BodyContext = struct {
     fn destroyNestedRelationBase(self: *BodyContext) void {
         const relation_base = self.nested_relation_base orelse return;
         self.nested_relation_base = null;
+        destroyRelationBase(self.allocator, relation_base);
+    }
+
+    fn destroyRelationBase(allocator: Allocator, relation_base: *NestedRelationBase) void {
         relation_base.ctx.deinit();
         relation_base.related.deinit();
-        relation_base.variables.deinit(self.allocator);
-        self.allocator.destroy(relation_base);
+        relation_base.variables.deinit(allocator);
+        allocator.destroy(relation_base);
     }
 
     /// The cell a nested body's instantiation gives a quantified variable of
@@ -27612,10 +27700,15 @@ const BodyContext = struct {
                     const local_scope = local.dispatch_scope orelse
                         Common.invariant("generalized local specialization relation had no checked scope");
                     const request_node = try self.instNode(record.checked_ty);
-                    if (frame.active_local_scopes.get(local_scope)) |active_root| {
-                        try relateFunctionRequestInterface(self.graph, active_root, request_node);
-                        continue;
-                    }
+                    // A use inside the scope's own relations is a recursive
+                    // use. An annotated local can recur at another
+                    // instantiation of its own variables, so the use relates
+                    // to a fresh instantiation of the scope's root, which
+                    // shares only the enclosing frames' variables; the frame
+                    // that made the scope active already applies its
+                    // relations, and what they imply about enclosing
+                    // variables is the same at every instantiation.
+                    const recursive_use = frame.active_local_scopes.contains(local_scope);
                     const local_ctx = try self.allocator.create(BodyContext);
                     local_ctx.* = BodyContext.init(
                         self.allocator,
@@ -27670,6 +27763,10 @@ const BodyContext = struct {
                     }
                     const local_root_node = try local_ctx.checkedTemplateInterfaceScopeRootNode(local_scope);
                     try relateFunctionRequestInterface(self.graph, local_root_node, request_node);
+                    if (recursive_use) {
+                        self.releaseInterfaceScopeFrame(child);
+                        continue;
+                    }
                     try frame.active_local_scopes.put(local_scope, local_root_node);
                     child.leave_scope = local_scope;
                     child.scope_root_node = local_root_node;

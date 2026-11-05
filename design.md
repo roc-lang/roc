@@ -4654,8 +4654,11 @@ annotated members instantiate the pre-declared scheme, preserving sound
 polymorphic recursion for annotated defs, except recursion that grows its
 types forever (Growing Polymorphic Recursion, below). The same rule applies to
 block-local `s_decl` functions: each local function decl is a binding group
-of one with its own rank frame, and annotated (type-var-free) locals
-pre-declare their scheme. An unannotated local's lambda stays in that frame
+of one with its own rank frame, and annotated locals pre-declare their
+scheme. A type variable a local annotation looks up from an enclosing
+annotation belongs to the enclosing definition: the local's scheme shares it
+rather than quantifying it, so only the local's own variables can differ
+between its recursive uses. An unannotated local's lambda stays in that frame
 like a group member's; the frame's boundary unifies the pattern with the
 RHS, re-runs dispatch for receivers that unification pinned (an accumulator
 the recursive call passes as `[]`), and only then generalizes, so
@@ -15523,6 +15526,14 @@ expansion's roots, so a slot that denoted a different type would unify two
 types the program keeps apart. A request that joins beyond the expansion's
 own cells unifies the cell with that other node, so the expansion's interface
 is specific to that type and is stored for no other request.
+
+A generalized local function's relations are applied in a child scope frame
+at its use. A use inside that frame is a recursive use, which an annotated
+local may make at another instantiation of its own variables, so it relates
+to a fresh instantiation of the scope's root that shares only the enclosing
+frames' variables. The active frame already applies the scope's relations,
+and what they imply about enclosing variables is the same at every
+instantiation.
 
 A single-request component takes a parametric
 summary from its expansion before relating back to the request, so the summary
