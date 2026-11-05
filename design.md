@@ -4954,9 +4954,10 @@ through its owner), and a reader that needs the declaration reads it in that
 module (`nominalDeclarationSite`), through the `ModuleResolver` its consumer
 passes; a walk over types that reaches a nominal's backing continues in the
 declaring module's types. A creation that instantiates another module's
-declaration in its own store projects that declaration's formals and backing
-into the store once, under the creation lock, and remembers the projection
-by declaring module and declaration.
+declaration in its own store creates that declaration's formals and backing
+in the store once, under the creation lock, and reuses them for every later
+instantiation of the declaration there (`projected_declarations`, by
+declaring module and declaration).
 
 There is no second representation of any of this. No pass copies types,
 bodies, templates, names, plans or roots into another table after checking.
