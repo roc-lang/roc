@@ -3533,9 +3533,10 @@ relation.
 A scrutinee that always crashes (`...`, `crash`, or a block or `if` whose
 every result crashes) relates no branch pattern at all: no value ever reaches
 a branch, so no pattern is observed at runtime and the patterns are not
-required to agree with each other. Monotype consumes the scrutinee's checked
-divergence and lowers any match whose scrutinee diverges as the scrutinee's
-divergence alone; it never instantiates or relates the branch patterns. The
+required to agree with each other. Monotype and Boxy consume the scrutinee's
+checked divergence and lower any match whose scrutinee diverges as the
+scrutinee's divergence alone; neither instantiates or relates the branch
+patterns, nor builds a decision tree over them. The
 scrutinee lowers at its own type, exactly like a discarded divergent
 statement, followed by an unreachable continuation at the match's type: a
 scrutinee that diverges in its condition, such as an `if` whose condition is

@@ -3396,6 +3396,15 @@ pub const Builder = struct {
                     try self.destination_types.put(self.allocator, value, try self.exprType(expr_id));
                     return try self.push(.{ .expr = value });
                 }
+                // A scrutinee that diverges leaves every branch unreachable;
+                // checking relates no pattern to it, so it has no decision
+                // tree.
+                if (self.bodies().exprDiverges(match.cond, self.inlineExpectMode())) {
+                    const match_ty = self.bodies().expr(expr_id).ty;
+                    try self.push(.{ .diverged = if (try self.program.converter().hasError(self.module, match_ty)) null else try self.exprType(expr_id) });
+                    try self.push(.discard);
+                    return try self.push(.{ .expr = match.cond });
+                }
                 try self.push(.{ .match_start = expr_id });
                 try self.push(.{ .expr = match.cond });
             },
