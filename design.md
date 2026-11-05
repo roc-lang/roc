@@ -4128,8 +4128,8 @@ the completed app-dependent evaluation results and their recorded debug
 observations. It never holds bodies, types, templates, names, relations, root
 requests, source environments or a live checker continuation, because a
 pairing rewrites none of those. A hit is installed over a pairing created from
-the two modules exactly as without a hit, and every other fact of the pairing
-is computed on demand. Only a
+the two modules exactly as without a hit, and everything else the pairing
+reads is computed on demand. Only a
 completed pairing without new checking or evaluation diagnostics may be
 cached; already-replayed earlier-stage reports do not prevent caching. A hit
 consumes its stored outcomes and replays its recorded debug observations without
@@ -5239,19 +5239,19 @@ read of platform data under that pairing resolves through the map on first
 demand (`CheckedTypeStoreView.pairedType`, `pairedScheme`; `CheckedBodies.typeOf`
 reads through it): a type that reaches no formal is its own image, and every
 other type's image is a synthesized type of the platform's store, created
-under the store's creation lock and memoized by the pairing, which publishes
+under the store's creation lock and memoized by the pairing, which records
 each image of a type that existed when it was created in a lock-free column.
 Whether a type reaches a formal is classified on demand too, over exactly the
 types the demanded type reaches. A consumer reads a template's, an entry or
 intrinsic wrapper's, a compile-time root's or a resolved reference's type
 through the pairing; root requests and provided exports carry their images.
-The paired artifact holds no type store or name store of its own: its types
-and names are its platform's (`typeStore`, `nameStore`), and anything the
-pairing interns (an app type's names, an evaluated constant's names) is
-interned into the platform's name store as a shared writer. Facts that depend
-on the substituted types (direct targets, required-reference classification,
+The paired checked module holds no type store or name store of its own: its
+types and names are its platform's (`typeStore`, `nameStore`), and every name
+the pairing interns (an app type's names, an evaluated constant's names) is
+interned into the platform's name store as a shared writer. The data that
+depends on the substituted types (direct targets, required-reference classification,
 requirement relations, required bindings, provided exports, exhaustiveness
-policy) are per-pairing on-demand analyses; the pairing's root requests are
+policy) is computed by per-pairing on-demand analyses; the pairing's root requests are
 built once when it is created (`pairingRootRequests`) and read its required
 bindings and reference classification. Bodies, templates, names, roots and
 tables are never copied or rewritten: both lowering strategies read the
