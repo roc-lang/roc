@@ -7893,7 +7893,12 @@ of the dying frame. A `.boxy` self call is also lowered that way when it does
 not pass the procedure's own descriptors, dictionaries, and literal arguments
 along unchanged: a polymorphic recursive call at other types needs the
 descriptors its body composes at entry composed again, which a loop jump never
-does. A proven call to any other procedure has its continuation
+does. So is one that does not pass each dynamic parameter along unchanged: a
+dynamic parameter is the address of storage its caller owns, which a loop jump
+cannot rebind, while a frame-replacing call moves its dynamic arguments. A
+`.boxy` self-tail loop begins after the entry chain that composes those
+descriptors (`TailCalls.entry`), so every iteration shares them and each
+dynamic parameter's descriptor is defined before the loop binds it. A proven call to any other procedure has its continuation
 replaced by a `ret` of the call's target, so the tail position is structural:
 the statement after the call returns its result. That is the only form later
 stages read. A pass that moves a body into another procedure keeps the form:
