@@ -10380,7 +10380,6 @@ const TestImportViewTables = struct {
             .module_identity = identity,
             .exports = .{},
             .checked_types = checked_types,
-            .checked_type_store = &self.checked_type_store,
             .checked_bodies = .{
                 .env = module_env,
                 .names = names,
@@ -10514,7 +10513,7 @@ test "imported origin resolution visits each import view and owner declaration o
             .module_name = owner_module_name,
             .display_module_name = owner_module_name,
             .kind = module_env.module_kind,
-        }, if (index == owner_view_index) owner_store.view() else .{});
+        }, if (index == owner_view_index) &owner_store else &tables.checked_type_store);
     }
     const imports = CheckedImportViews{
         .current_owner = testCheckedModuleKey(255).digest(),
@@ -17537,8 +17536,34 @@ pub fn computeTemplateDispatchRelations(allocator: Allocator, dispatch: CheckedD
 /// Specialize each direct call the pass resolved against its target and
 /// classify it `direct_closed` or `direct_parametric`, against every
 /// scheme context that references the plan.
+///
+/// Specialization creates types in the module's store, which other threads
+/// read once the module is published, so it runs under the store's creation
+/// lock (`CheckedTypeStore.beginCreation`). It reads the nominal
+/// representations of the module's own types and of the types it projects
+/// from each target's module, so their interface capabilities are demanded
+/// before the lock is taken; classification reads only complete types and
+/// runs after the lock is released.
 fn specializeResolvedPlans(allocator: Allocator, pass: *EvidencePass, index: *const DispatchIndex) Allocator.Error!void {
     const source = pass.dispatch.source;
+    const store = source.types.store;
+    // A store gets its capability source when its module is published;
+    // before that, nothing has the module's capabilities to read.
+    if (store.capability_source != null) _ = try store.view().interfaceCapabilities();
+    const owner = source.key.digest();
+    for (pass.plan_results.items) |entry| switch (entry.resolution.resolution) {
+        .direct_pending => |node_id| try demandTargetCapabilities(pass, owner, node_id),
+        .direct_closed, .direct_parametric => checkedArtifactInvariant("static dispatch plan was finalized more than once", .{}),
+        .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+    };
+    for (pass.iterator_results.items) |entry| {
+        inline for (.{ entry.resolution.iter, entry.resolution.next }) |call| switch (call) {
+            .direct_pending => |node_id| try demandTargetCapabilities(pass, owner, node_id),
+            .direct_closed, .direct_parametric => checkedArtifactInvariant("iterator dispatch plan was finalized more than once", .{}),
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+        };
+    }
+
     const evidence_closure = try allocator.alloc(DirectEvidenceClosure, pass.evidence_nodes.items.len);
     defer allocator.free(evidence_closure);
     @memset(evidence_closure, .unknown);
@@ -17554,11 +17579,17 @@ fn specializeResolvedPlans(allocator: Allocator, pass: *EvidencePass, index: *co
         .identity_index = EnclosingIdentityIndex.init(allocator, source.names, source.types.store),
     };
     defer specializer.deinit();
+    {
+        store.beginCreation(source.analyses.io);
+        defer store.endCreation(source.analyses.io);
+        for (pass.plan_results.items) |*entry| try specializer.specializePlan(&entry.resolution);
+        for (pass.iterator_results.items) |*entry| try specializer.specializeIteratorPlan(&entry.resolution);
+    }
     var sites = std.ArrayList(EnclosingDispatchSite).empty;
     defer sites.deinit(allocator);
     for (pass.plan_results.items) |*entry| {
         try enclosingSitesFor(allocator, source.templates, index.planSites(@fromBackingInt(entry.plan)), &sites);
-        try specializer.finalizePlan(&entry.resolution, .{
+        try specializer.classifyPlan(&entry.resolution, .{
             .index = &specializer.identity_index,
             .sites = sites.items,
             .scopes = source.templates.dispatch_scopes,
@@ -17566,12 +17597,27 @@ fn specializeResolvedPlans(allocator: Allocator, pass: *EvidencePass, index: *co
     }
     for (pass.iterator_results.items) |*entry| {
         try enclosingSitesFor(allocator, source.templates, index.iteratorSites(@fromBackingInt(entry.plan)), &sites);
-        try specializer.finalizeIteratorPlan(&entry.resolution, .{
+        try specializer.classifyIteratorPlan(&entry.resolution, .{
             .index = &specializer.identity_index,
             .sites = sites.items,
             .scopes = source.templates.dispatch_scopes,
         });
     }
+}
+
+/// Demand the interface capabilities of the module whose callable the
+/// resolved target `node_id` names, when that module is not `owner`.
+fn demandTargetCapabilities(pass: *EvidencePass, owner: ModuleId, node_id: static_dispatch.EvidenceNodeId) Allocator.Error!void {
+    const target = pass.evidence_nodes.items[node_id.index].target;
+    const target_key = switch (target.kind) {
+        .local_proc => return,
+        .structural => checkedArtifactInvariant("structural method registry result was published as a direct callable target", .{}),
+        .procedure => |procedure| procedure.template.artifact,
+    };
+    if (target_key.eql(owner)) return;
+    const imported = pass.import_views.viewForKey(target_key) orelse
+        checkedArtifactInvariant("resolved dispatch target module was not among the modules dispatch resolution reads", .{});
+    _ = try imported.checked_types.interfaceCapabilities();
 }
 
 fn enclosingSitesFor(
@@ -21178,31 +21224,51 @@ const ResolvedDispatchCallableSpecializer = struct {
         self.instantiated_pairs.deinit(self.allocator);
     }
 
-    fn finalizePlan(
+    /// Specialize a pending direct plan's callable. The caller holds the
+    /// store's creation lock.
+    fn specializePlan(self: *ResolvedDispatchCallableSpecializer, plan: *static_dispatch.PlanResolution) Allocator.Error!void {
+        switch (plan.resolution) {
+            .direct_pending => |node_id| plan.callable_ty = try self.specializeCallable(node_id, plan.callable_ty),
+            .direct_closed, .direct_parametric => checkedArtifactInvariant("static dispatch plan was finalized more than once", .{}),
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+        }
+    }
+
+    /// Classify a pending direct plan over its specialized callable.
+    fn classifyPlan(
         self: *ResolvedDispatchCallableSpecializer,
         plan: *static_dispatch.PlanResolution,
         enclosing: EnclosingDispatchIdentity,
     ) Allocator.Error!void {
-        const node_id = switch (plan.resolution) {
-            .direct_pending => |node_id| node_id,
+        switch (plan.resolution) {
+            .direct_pending => |node_id| plan.resolution = try self.classify(node_id, plan.callable_ty, enclosing),
             .direct_closed, .direct_parametric => checkedArtifactInvariant("static dispatch plan was finalized more than once", .{}),
-            .evidence_dependent, .structural, .checked_error, .@"unreachable" => return,
-        };
-        plan.callable_ty = try self.specializeCallable(node_id, plan.callable_ty);
-        plan.resolution = try self.classify(node_id, plan.callable_ty, enclosing);
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+        }
     }
 
-    fn finalizeIteratorPlan(
+    /// Specialize the callables of an iterator plan's pending direct calls.
+    /// The caller holds the store's creation lock.
+    fn specializeIteratorPlan(self: *ResolvedDispatchCallableSpecializer, iterator_plan: *static_dispatch.IteratorPlanResolution) Allocator.Error!void {
+        inline for (.{ .{ &iterator_plan.iter, &iterator_plan.iter_callable_ty }, .{ &iterator_plan.next, &iterator_plan.next_callable_ty } }) |call| {
+            switch (call[0].*) {
+                .direct_pending => |node_id| call[1].* = try self.specializeCallable(node_id, call[1].*),
+                .direct_closed, .direct_parametric => checkedArtifactInvariant("iterator dispatch plan was finalized more than once", .{}),
+                .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+            }
+        }
+    }
+
+    /// Classify an iterator plan's pending direct calls over their
+    /// specialized callables.
+    fn classifyIteratorPlan(
         self: *ResolvedDispatchCallableSpecializer,
         iterator_plan: *static_dispatch.IteratorPlanResolution,
         enclosing: EnclosingDispatchIdentity,
     ) Allocator.Error!void {
         inline for (.{ .{ &iterator_plan.iter, &iterator_plan.iter_callable_ty }, .{ &iterator_plan.next, &iterator_plan.next_callable_ty } }) |call| {
             switch (call[0].*) {
-                .direct_pending => |node_id| {
-                    call[1].* = try self.specializeCallable(node_id, call[1].*);
-                    call[0].* = try self.classify(node_id, call[1].*, enclosing);
-                },
+                .direct_pending => |node_id| call[0].* = try self.classify(node_id, call[1].*, enclosing),
                 .direct_closed, .direct_parametric => checkedArtifactInvariant("iterator dispatch plan was finalized more than once", .{}),
                 .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
             }
@@ -30402,7 +30468,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 114;
+    const serialized_layout_version: u32 = 115;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -30502,8 +30568,6 @@ pub const CheckedModuleArtifact = struct {
             // `direct_import_module_keys` free below points into it too). Free
             // only the buffer and the injected env storage, mirroring how a
             // `cached_entry`/`static_builtin`-backed module is torn down.
-            // Types created on demand after loading are the store's own.
-            self.checked_types.deinit(allocator);
             if (deinit_module_env) {
                 self.module_env.deinit();
             } else {
@@ -31207,9 +31271,6 @@ pub const ImportedModuleView = struct {
     module_analyses: ?*ModuleAnalyses = null,
     exports: ExportTableView,
     checked_types: CheckedTypeStoreView,
-    /// The store dispatch resolution creates the module's synthesized types
-    /// in.
-    checked_type_store: *CheckedTypeStore,
     checked_bodies: CheckedBodies,
     exhaustiveness_sites: *const CheckedExhaustivenessSiteTable,
     checked_const_bodies: *const CheckedConstBodyTable,
@@ -31301,7 +31362,6 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .module_analyses = artifact.module_analyses,
         .exports = artifact.exports.view(),
         .checked_types = artifact.typesView(),
-        .checked_type_store = @constCast(&artifact.checked_types),
         .checked_bodies = artifact.bodies(),
         .exhaustiveness_sites = &artifact.exhaustiveness_sites,
         .checked_const_bodies = &artifact.checked_const_bodies,
@@ -33248,6 +33308,9 @@ pub fn publishFromTypedModule(
     // returned.
     sealed_keys_owned = false;
     artifact.checked_types.key_names = null;
+    // Other threads read the module's names from here on, while its
+    // analyses intern into them, exactly as they read its types.
+    artifact.canonical_names.markPublished();
     artifact.attachCapabilitySource();
     checked_const_store = ConstStore.init(allocator);
     errdefer artifact.const_store.deinit();
@@ -33264,8 +33327,6 @@ pub fn publishFromTypedModule(
         artifact.evaluation_state = .finalized;
         try artifact.verifyComplete();
     }
-    artifact.checked_types.markPublished();
-    artifact.canonical_names.markPublished();
     analyses_owned = false;
     module_analyses_owned = false;
     return artifact;
@@ -34294,7 +34355,6 @@ fn testVisibilityImportedView(
         },
         .module_analyses = analyses,
         .exports = undefined,
-        .checked_type_store = undefined,
         .checked_types = undefined,
         .checked_bodies = undefined,
         .exhaustiveness_sites = undefined,
@@ -34916,8 +34976,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xAF, 0x97, 0xEF, 0x2E, 0xCB, 0x73, 0x38, 0xC0, 0xD6, 0xD7, 0xF5, 0x94, 0xAD, 0x79, 0x7F, 0xCC,
-        0xBC, 0x32, 0x2C, 0x63, 0x95, 0x7A, 0x76, 0xB1, 0x43, 0x3E, 0x47, 0xB1, 0x15, 0x28, 0x4A, 0x9E,
+        0x88, 0x2A, 0xCD, 0x0F, 0x76, 0xC3, 0x39, 0xC3, 0x9F, 0xC4, 0xD7, 0xB8, 0xA3, 0x3E, 0x84, 0xD2,
+        0xF4, 0xF7, 0xD4, 0xEE, 0x07, 0x9A, 0xD6, 0x9C, 0x96, 0xEA, 0x21, 0xBC, 0x4C, 0xDE, 0xEF, 0x16,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

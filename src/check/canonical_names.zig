@@ -243,15 +243,14 @@ pub const CanonicalNameStore = struct {
     proc_base_by_key: std.StringHashMap(ProcBaseKeyRef),
     /// Build-only scratch buffer for proc-base key encoding. NOT serialized.
     scratch_key: std.ArrayList(u8) = .empty,
-    /// True for a store reconstructed from a serialized buffer: `proc_bases`
-    /// points into buffer-owned memory and must not be freed. Its interners
-    /// also start buffer-backed, and the first new name interned into one
-    /// copies it into owned memory, which `deinit` frees.
+    /// True for a store reconstructed from a serialized buffer: its interners
+    /// and `proc_bases` point into buffer-owned memory and must not be freed.
     serialized: bool = false,
-    /// The names below the module's publication boundary (`markPublished`),
-    /// which are the names the store serializes. Names interned by a module
-    /// analysis afterwards are never serialized: a loaded module's analyses
-    /// intern them again.
+    /// The names the store held when its module was published
+    /// (`markPublished`), which are the names it serializes; null while it is
+    /// built. Once it is set, other threads read the store while module
+    /// analyses intern names into it (`NameInterner.insertShared`), and a
+    /// loaded module's analyses intern those names again.
     published: ?EpochBoundary = null,
     /// Query-only facade; its owner retains every allocation and must remain
     /// alive and unmodified until all borrowed readers have finished.
@@ -297,8 +296,8 @@ pub const CanonicalNameStore = struct {
         self.assertMutable();
         if (self.record_field_text_rank == null) self.record_field_text_rank = try base.TextRankCache.create(self.allocator);
         if (self.tag_text_rank == null) self.tag_text_rank = try base.TextRankCache.create(self.allocator);
-        _ = try labelTextRanks(&self.record_field_labels, self.record_field_text_rank.?);
-        _ = try labelTextRanks(&self.tag_labels, self.tag_text_rank.?);
+        _ = try labelTextRanks(&self.record_field_labels, self.record_field_labels.count(), self.record_field_text_rank.?);
+        _ = try labelTextRanks(&self.tag_labels, self.tag_labels.count(), self.tag_text_rank.?);
     }
 
     /// Allocation-free facade over immutable serial names and prepared ranks.
@@ -333,9 +332,9 @@ pub const CanonicalNameStore = struct {
         }
         if (self.record_field_text_rank) |cache| cache.destroy();
         if (self.tag_text_rank) |cache| cache.destroy();
-        // Interners no-op their own free while frozen and free the copy a
-        // later insert made; `proc_bases` is a plain SafeList with no frozen
-        // flag, so it alone is guarded.
+        // Interners free the names shared inserts made, and no-op the rest
+        // of their free while frozen; `proc_bases` is a plain SafeList with
+        // no frozen flag, so it alone is guarded.
         self.module_names.deinit(self.allocator);
         self.module_identities.deinit(self.allocator);
         self.type_names.deinit(self.allocator);
@@ -477,25 +476,13 @@ pub const CanonicalNameStore = struct {
 
         const Serde = artifact_serialize.SliceStoreSerde(CanonicalNameStore, @This());
 
-        /// Serialize the names below the store's publication boundary.
-        pub fn serialize(self: *Serialized, store: *const CanonicalNameStore, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            const published = store.published orelse base.invariant("{s}", .{"a canonical name store was serialized before its module published it"});
-            inline for (interner_fields) |field| {
-                const interner = &@field(store, field);
-                const boundary = @field(published, field);
-                if (boundary.ids == interner.count()) {
-                    try @field(self, field).serialize(interner, gpa, writer);
-                } else {
-                    var prefix = try interner.prefixClone(gpa, boundary.ids);
-                    defer prefix.deinit(gpa);
-                    try @field(self, field).serialize(&prefix, gpa, writer);
-                }
-            }
-            const proc_bases = SafeList(ProcBaseKey){ .items = std.ArrayList(ProcBaseKey).fromOwnedSlice(@constCast(store.proc_bases.items.items[0..published.proc_bases])) };
-            try self.proc_bases.serialize(&proc_bases, gpa, writer);
-        }
+        /// Serialize the names interned before the store was published: a
+        /// published interner keeps them apart from the names interned since
+        /// (`NameInterner.insertShared`).
+        pub const serialize = Serde.serialize;
 
-        /// A loaded store's names are exactly its publication boundary.
+        /// A loaded store is published: other threads read it while module
+        /// analyses intern into it.
         pub fn deserialize(self: *const Serialized, base_addr: usize, allocator: Allocator) CanonicalNameStore {
             var store = Serde.deserializeWithAllocator(self, base_addr, allocator);
             store.published = store.epochBoundary();
@@ -503,17 +490,13 @@ pub const CanonicalNameStore = struct {
         }
     };
 
-    /// Insert into one of this store's interners. A store that retains
-    /// superseded backings first reserves room for the text and its end offset, so
-    /// the insert never moves interned names a prefix view may be reading.
-    /// Intern `text` into `interner`. A buffer-backed interner of a loaded
-    /// store answers a name it already holds in place and is copied into
-    /// owned memory by the first name it does not.
+    /// Intern `text` into `interner`. Once the store is published, other
+    /// threads read it while module analyses intern into it, so a name goes
+    /// in as a shared insert. Before that, a store that retains superseded
+    /// backings first reserves room for the text and its end offset, so the
+    /// insert never moves interned names a prefix view may be reading.
     fn insertName(self: *CanonicalNameStore, interner: *NameInterner, text: []const u8) Allocator.Error!u32 {
-        if (!interner.supports_inserts) {
-            if (interner.lookup(text)) |id| return id;
-            try interner.enableRuntimeInserts(self.allocator);
-        }
+        if (self.published != null) return interner.insertShared(self.allocator, text);
         if (self.superseded) |superseded| {
             _ = try superseded.ensureUnusedCapacity(u8, &interner.bytes.items, self.allocator, text.len);
             _ = try superseded.ensureUnusedCapacity(u32, &interner.ends.items, self.allocator, 1);
@@ -575,7 +558,7 @@ pub const CanonicalNameStore = struct {
 
     pub fn internRecordFieldLabel(self: *CanonicalNameStore, text: []const u8) Allocator.Error!RecordFieldLabelId {
         self.assertMutable();
-        if (self.record_field_text_rank == null) self.record_field_text_rank = try base.TextRankCache.create(self.allocator);
+        if (self.published == null and self.record_field_text_rank == null) self.record_field_text_rank = try base.TextRankCache.create(self.allocator);
         return @fromBackingInt(@intCast(try self.insertName(&self.record_field_labels, text)));
     }
 
@@ -585,7 +568,7 @@ pub const CanonicalNameStore = struct {
 
     pub fn internTagLabel(self: *CanonicalNameStore, text: []const u8) Allocator.Error!TagLabelId {
         self.assertMutable();
-        if (self.tag_text_rank == null) self.tag_text_rank = try base.TextRankCache.create(self.allocator);
+        if (self.published == null and self.tag_text_rank == null) self.tag_text_rank = try base.TextRankCache.create(self.allocator);
         return @fromBackingInt(@intCast(try self.insertName(&self.tag_labels, text)));
     }
 
@@ -657,6 +640,8 @@ pub const CanonicalNameStore = struct {
 
     pub fn internProcBase(self: *CanonicalNameStore, key: ProcBaseKey) Allocator.Error!ProcBaseKeyRef {
         self.assertMutable();
+        // Procedure bases are interned only while the store is built.
+        std.debug.assert(self.published == null);
         self.scratch_key.clearRetainingCapacity();
         try self.scratch_key.print(self.allocator, "proc:{d}:{s}:{d}:{d}:{d}|", .{
             @backingInt(key.module_name),
@@ -703,7 +688,8 @@ pub const CanonicalNameStore = struct {
     /// Prepare transient lexicographic ranks for this label generation.
     pub fn recordFieldLabelTextRanks(self: *const CanonicalNameStore, scratch: *base.TextRankCache) Allocator.Error![]const u32 {
         if (self.borrowed_read_only) return self.preparedRecordFieldRanks();
-        return labelTextRanks(&self.record_field_labels, self.record_field_text_rank orelse scratch);
+        const limit = self.record_field_labels.count();
+        return labelTextRanks(&self.record_field_labels, limit, sharedRankCache(self.record_field_text_rank, limit, if (self.published) |published| published.record_field_labels.ids else null) orelse scratch);
     }
 
     pub fn recordFieldLabelTextRank(self: *const CanonicalNameStore, id: RecordFieldLabelId) u32 {
@@ -743,7 +729,8 @@ pub const CanonicalNameStore = struct {
     /// Prepare transient lexicographic ranks for this label generation.
     pub fn tagLabelTextRanks(self: *const CanonicalNameStore, scratch: *base.TextRankCache) Allocator.Error![]const u32 {
         if (self.borrowed_read_only) return self.preparedTagRanks();
-        return labelTextRanks(&self.tag_labels, self.tag_text_rank orelse scratch);
+        const limit = self.tag_labels.count();
+        return labelTextRanks(&self.tag_labels, limit, sharedRankCache(self.tag_text_rank, limit, if (self.published) |published| published.tag_labels.ids else null) orelse scratch);
     }
 
     pub fn tagLabelTextRank(self: *const CanonicalNameStore, id: TagLabelId) u32 {
@@ -947,7 +934,20 @@ pub const NameRelocation = struct {
     }
 };
 
-fn labelTextRanks(interner: *const NameInterner, cache: *base.TextRankCache) Allocator.Error![]const u32 {
+/// A store's own rank cache for ranks over its first `limit` labels, when
+/// it may hold them: once the store is published, other threads read its
+/// cache, so it holds only the ranks of the labels interned before
+/// (`published_limit`), and ranks over labels interned since are each
+/// reader's own.
+fn sharedRankCache(cache: ?*base.TextRankCache, limit: u32, published_limit: ?u32) ?*base.TextRankCache {
+    const shared = cache orelse return null;
+    if (published_limit) |published| {
+        if (limit != published) return null;
+    }
+    return shared;
+}
+
+fn labelTextRanks(interner: *const NameInterner, limit: u32, cache: *base.TextRankCache) Allocator.Error![]const u32 {
     const Context = struct {
         interner: *const NameInterner,
         pub fn text(ctx: @This(), index: u32) []const u8 {
@@ -957,7 +957,7 @@ fn labelTextRanks(interner: *const NameInterner, cache: *base.TextRankCache) All
             return index + 1;
         }
     };
-    return cache.ensure(0, interner.count(), interner.count(), Context{ .interner = interner });
+    return cache.ensure(0, limit, limit, Context{ .interner = interner });
 }
 
 fn appendOptionalNestedProcSiteKey(

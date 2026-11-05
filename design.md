@@ -5165,6 +5165,27 @@ first consumer that needs it after a cache hit. Synthesized ids follow
 creation order, so no consumer orders anything that reaches output by a
 synthesized id.
 
+Dispatch resolution creates types once other threads read the store: each
+resolved direct call's callable is the target's callable, copied from its
+module and instantiated at the call. A template's or the module's
+resolution first demands every slot it reads (the schemas it resolves
+against, the interface capabilities of its own module once that module has
+a capability source and of each target's module) and only then holds the
+creation lock while it specializes the calls it resolved; it classifies
+them after the lock is released.
+
+A module's name store grows the same way. Once its module's types are
+complete, other threads read its names while its analyses intern method
+names, type names, labels and module identities into it (copying an
+imported type, dispatch resolution). Each interner then interns as one
+writer at a time under its own lock (`NameInterner.insertShared`), which
+it holds for no wait, while readers read its columns and probing table
+without a lock (a grown table replaces the current one and the old one
+stays alive). A cache entry holds exactly the names the store held at that
+point, and procedure bases are interned only before. The store's own label
+rank caches hold the ranks of exactly those names; a reader that ranks
+labels interned since ranks them in its own cache.
+
 A synthesized type's key is computed on first demand through its own key
 slot, like a source type's. A synthesized function type records that its key
 composes its children's keys (`CheckedTypeKeyRecipe.synthetic_function`), and
@@ -5292,9 +5313,7 @@ computed by whichever consumer first needs it, exactly once, into a slot owned
 by the module. Nothing computes such a fact eagerly for a whole module, and no
 cache entry stores one: a cache hit recomputes each fact on its first demand.
 
-- Per-root slots: a type's canonical key; a definition's call-edge evidence
-  (the total resolution of its dispatch plans against the settled store, its
-  evidence vectors and its callable specialization); a template's nested
+- Per-root slots: a type's canonical key; a template's nested
   procedure sites; a declaration's synthesized template; a template's
   exhaustiveness sites; a top-level unit's body-level analyses
   (divergence, inspect elision, state merges and loop mutations).
@@ -5321,11 +5340,26 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   reached and every local nominal synthesized type the module held when
   it was published, the instance's capability, its instantiated backing
   and padding types, which the computation creates, and whether an opaque
-  instance's backing holds no callable). A platform/app pairing has
-  analyses of its own; its export closures, public API dependencies and
-  interface capabilities are its platform's, and a pairing demands its
-  platform's capabilities before it borrows the platform's types. A
-  constant's closure follows the template its compile-time root evaluates
+  instance's backing holds no callable), and the module's dispatch
+  resolution, which the module's dispatch reader (`CheckedDispatch`)
+  answers from: the indexes of the checker's dispatch records
+  (`dispatchIndex`), the schema of each template and of each generalized
+  local scope (`templateSchema`, `scopeSchema`), each template's
+  call-edge evidence (`templateDispatch`: the total resolution of the
+  plans, iterator plans and use sites its body reaches that its scheme
+  chain binds, its root evidence, and the callable specialization of each
+  direct call), how each template's plans relate to its specialization
+  (`templateDispatchRelations`), the module's resolution of what no
+  template binds, with its generated codecs (`moduleDispatch`), and an
+  app's root evidence for its platform requirement solutions
+  (`platformRequirementRootEvidence`). Each resolution owns the evidence
+  pool its evidence ids name, and a plan's or site's resolution is the
+  first template's, in template order, that holds it, otherwise the
+  module's. A platform/app pairing has analyses of its own; its export
+  closures, public API dependencies, interface capabilities and dispatch
+  resolution are its platform's, and a pairing demands its platform's
+  capabilities before it borrows the platform's types. A constant's
+  closure follows the template its compile-time root evaluates
   whether or not evaluation has stored the constant's value, so the result
   is the same before and after evaluation.
 
@@ -5526,8 +5560,8 @@ evidence to a downstream call.
 Requirement rows may be allocated before their app definitions are checked, but
 they remain explicitly pending checker state until all definition checking and
 error poisoning has completed. The checker then stamps each row as successful
-or checked-error. `platformRequirementSolutionTableFromInputs` and
-`EvidencePass.run` consume that verdict directly; they never infer success by
+or checked-error. `platformRequirementSolutionTableFromInputs` and the app's platform
+requirement root evidence analysis consume that verdict directly; they never infer success by
 inspecting solved type shape or by comparing the eventual runtime value kind.
 
 A procedure requirement's root evidence follows the complete scheme of its
@@ -17413,12 +17447,11 @@ The `.lss` strategy consumes these plans while producing Monotype IR. The
 plans while lowering checked CIR directly to LIR, choosing dictionary calls
 or concrete structural operations from the explicit checked data.
 
-Totality is enforced where evidence is computed: a definition's call-edge
-evidence analysis asserts (`validateDispatchEvidence`) that every
-dispatch-bearing expression of the definition names a plan and that every
-plan and evidence reference lands inside the evidence it stores. A missing or
-corrupt record is a compiler bug: a debug assertion at that analysis in debug
-builds and `unreachable` in release builds, never a lowering panic.
+Totality is enforced where evidence is read: every plan read through the
+module's dispatch reader (`CheckedDispatch`) has a resolution, and every
+evidence reference lands inside the pool of the analysis that owns it. A
+missing or corrupt record is a compiler bug: a debug assertion at that read
+in debug builds and `unreachable` in release builds, never a lowering panic.
 
 **Target substitutions.** A direct evidence node either carries the checked
 substitution of its target's scheme, carries the substitution of the exact

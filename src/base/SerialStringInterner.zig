@@ -18,6 +18,13 @@
 //! `lookup` (text → id) and `getText` (id → text) both work with NO rebuild,
 //! because the probing table is part of the serialized data and is relocated in
 //! place. `enableRuntimeInserts` can re-open it for insertion if ever needed.
+//!
+//! An interner other threads read while it grows is shared: every name
+//! interned into it from then on goes through `insertShared`, which one
+//! thread at a time runs under `writer`, while every reader reads without a
+//! lock. Those names live in `growth`, beside a copy of the names interned
+//! before; `bytes`, `ends` and `index` keep exactly the names interned before
+//! the first shared insert, which are the names it serializes.
 
 const std = @import("std");
 const invariant = @import("invariant.zig").invariant;
@@ -44,8 +51,100 @@ index: SafeList(u32) = .{},
 /// True while this interner owns growable memory; false after deserialize
 /// (memory then points into the serialization buffer and must not be freed/grown).
 supports_inserts: bool = true,
+/// Every name, once a name was interned while other threads read the
+/// interner (`insertShared`); null before. Every read goes through it once it
+/// is set.
+growth: std.atomic.Value(?*Growth) = .init(null),
+/// Held by the one thread at a time that interns into a shared interner.
+writer: std.atomic.Mutex = .unlocked,
 
 const initial_index_capacity: usize = 16;
+
+/// The names of a shared interner. Its columns grow while other threads read
+/// them (`collections.PublishedList`). A name's text and end are published
+/// before its probing cell, so a reader that finds the cell reads the name.
+/// A grown probing table replaces the current one and the old one stays
+/// alive, so a reader probing it never reads freed memory; it misses only
+/// names interned after it loaded the table.
+const Growth = struct {
+    bytes: collections.PublishedList(u8),
+    ends: collections.PublishedList(u32),
+    table: std.atomic.Value(*const Table),
+    /// Every table `table` has named, freed with the interner.
+    tables: std.ArrayList(*Table) = .empty,
+
+    const Table = struct { cells: []u32 };
+
+    fn textAt(self: *const Growth, id: u32) []const u8 {
+        const ends = self.ends.items();
+        const start = if (id == 0) 0 else ends[id - 1];
+        return self.bytes.items()[start..ends[id]];
+    }
+
+    fn lookup(self: *const Growth, string: []const u8) ?u32 {
+        const table = self.table.load(.acquire);
+        const mask = table.cells.len - 1;
+        var slot: usize = @intCast(InternedBytes.hash(string) & mask);
+        while (true) {
+            const cell = @atomicLoad(u32, &table.cells[slot], .acquire);
+            if (cell == 0) return null;
+            if (std.mem.eql(u8, string, self.textAt(cell - 1))) return cell - 1;
+            slot = (slot + 1) & mask;
+        }
+    }
+
+    /// Place `id` in `cells`, which hold no name with its text. Only the
+    /// writer calls this.
+    fn place(cells: []u32, text: []const u8, id: u32) void {
+        const mask = cells.len - 1;
+        var slot: usize = @intCast(InternedBytes.hash(text) & mask);
+        while (cells[slot] != 0) slot = (slot + 1) & mask;
+        @atomicStore(u32, &cells[slot], id + 1, .release);
+    }
+
+    /// Publish a table of `size` cells holding the first `names` names.
+    fn publishTable(self: *Growth, gpa: Allocator, size: usize, names: u32) Allocator.Error!void {
+        try self.tables.ensureUnusedCapacity(gpa, 1);
+        const table = try gpa.create(Table);
+        errdefer gpa.destroy(table);
+        const cells = try gpa.alloc(u32, size);
+        @memset(cells, 0);
+        for (0..names) |id| place(cells, self.textAt(@intCast(id)), @intCast(id));
+        table.* = .{ .cells = cells };
+        self.tables.appendAssumeCapacity(table);
+        self.table.store(table, .release);
+    }
+
+    /// Intern `string`, which the growth does not hold. Only the writer
+    /// calls this.
+    fn append(self: *Growth, gpa: Allocator, string: []const u8) Allocator.Error!u32 {
+        const id = std.math.cast(u32, self.ends.count()) orelse return error.OutOfMemory;
+        if (id == std.math.maxInt(u32)) return error.OutOfMemory;
+        const start = std.math.cast(u32, self.bytes.count()) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, string.len) orelse return error.OutOfMemory;
+        const end = std.math.add(u32, start, len) catch return error.OutOfMemory;
+        const size = self.table.load(.monotonic).cells.len;
+        if (InternedBytes.wouldExceedMaxLoad(@as(usize, id) + 1, size)) try self.publishTable(gpa, size * 2, id);
+        try self.bytes.own(gpa);
+        try self.ends.own(gpa);
+        try self.ends.ensureUnusedCapacity(gpa, 1);
+        try self.bytes.appendSlice(gpa, string);
+        self.ends.appendAssumeCapacity(end);
+        place(@constCast(self.table.load(.monotonic).cells), string, id);
+        return id;
+    }
+
+    fn destroy(self: *Growth, gpa: Allocator) void {
+        self.bytes.deinit(gpa);
+        self.ends.deinit(gpa);
+        for (self.tables.items) |table| {
+            gpa.free(table.cells);
+            gpa.destroy(table);
+        }
+        self.tables.deinit(gpa);
+        gpa.destroy(self);
+    }
+};
 const Index = InternedBytes.Index(Policy);
 
 /// Initialize an empty, insertable interner sized for roughly `capacity` names.
@@ -71,6 +170,8 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!SerialStrin
 /// Free owned memory. No-op for deserialized (frozen) interners, whose memory is
 /// owned by the serialization buffer.
 pub fn deinit(self: *SerialStringInterner, gpa: Allocator) void {
+    if (self.growth.load(.monotonic)) |growth| growth.destroy(gpa);
+    self.growth = .init(null);
     if (!self.supports_inserts) return;
     self.bytes.deinit(gpa);
     self.ends.deinit(gpa);
@@ -79,6 +180,7 @@ pub fn deinit(self: *SerialStringInterner, gpa: Allocator) void {
 
 /// Number of interned strings.
 pub fn count(self: *const SerialStringInterner) u32 {
+    if (self.growth.load(.acquire)) |growth| return @intCast(growth.ends.count());
     return @intCast(self.ends.items.items.len);
 }
 
@@ -90,6 +192,10 @@ pub const EpochBoundary = struct {
 
 /// Capture the current durable boundary without exposing growable storage.
 pub fn epochBoundary(self: *const SerialStringInterner) EpochBoundary {
+    if (self.growth.load(.acquire)) |growth| return .{
+        .ids = @intCast(growth.ends.count()),
+        .bytes = @intCast(growth.bytes.count()),
+    };
     return .{
         .ids = @intCast(self.ends.items.items.len),
         .bytes = @intCast(self.bytes.items.items.len),
@@ -97,6 +203,7 @@ pub fn epochBoundary(self: *const SerialStringInterner) EpochBoundary {
 }
 
 fn textAt(self: *const SerialStringInterner, id: u32) []const u8 {
+    if (self.growth.load(.acquire)) |growth| return growth.textAt(id);
     const ends = self.ends.items.items;
     const start = if (id == 0) 0 else ends[id - 1];
     return self.bytes.items.items[start..ends[id]];
@@ -156,6 +263,7 @@ fn assertSupportsInserts(supports_inserts: bool) void {
 /// Look up a string's serial id without modifying the interner. Safe on frozen
 /// (deserialized) interners.
 pub fn lookup(self: *const SerialStringInterner, string: []const u8) ?u32 {
+    if (self.growth.load(.acquire)) |growth| return growth.lookup(string);
     const index = Index.fromCells(self.index, self.count());
     return index.lookup(self, string);
 }
@@ -163,6 +271,7 @@ pub fn lookup(self: *const SerialStringInterner, string: []const u8) ?u32 {
 /// Intern `string`, returning its serial id. Deduplicates: equal text always
 /// returns the same id.
 pub fn insert(self: *SerialStringInterner, gpa: Allocator, string: []const u8) Allocator.Error!u32 {
+    std.debug.assert(self.growth.load(.monotonic) == null);
     var index = Index.fromCells(self.index, self.count());
     defer {
         self.index = index.cells;
@@ -178,17 +287,46 @@ pub fn enableRuntimeInserts(self: *SerialStringInterner, gpa: Allocator) Allocat
     self.* = try self.clone(gpa);
 }
 
-/// An insertable interner holding this interner's first `len` names under
-/// their ids.
-pub fn prefixClone(self: *const SerialStringInterner, gpa: Allocator, len: u32) Allocator.Error!SerialStringInterner {
-    var result = try initCapacity(gpa, len);
-    errdefer result.deinit(gpa);
-    for (0..len) |id| _ = try result.insert(gpa, self.textAt(@intCast(id)));
-    return result;
+/// Intern `string` into an interner other threads read while it grows.
+/// One writer at a time interns, under `writer`; it never waits on anything
+/// else while holding it.
+pub fn insertShared(self: *SerialStringInterner, gpa: Allocator, string: []const u8) Allocator.Error!u32 {
+    if (self.lookup(string)) |id| return id;
+    while (!self.writer.tryLock()) std.atomic.spinLoopHint();
+    defer self.writer.unlock();
+    const growth = self.growth.load(.monotonic) orelse try self.startGrowth(gpa);
+    if (growth.lookup(string)) |id| return id;
+    return growth.append(gpa, string);
+}
+
+/// Begin the growth of a shared interner over the names it holds. Only the
+/// writer calls this.
+fn startGrowth(self: *SerialStringInterner, gpa: Allocator) Allocator.Error!*Growth {
+    const growth = try gpa.create(Growth);
+    errdefer gpa.destroy(growth);
+    growth.* = .{
+        .bytes = .borrowing(self.bytes.items.items),
+        .ends = .borrowing(self.ends.items.items),
+        .table = undefined,
+    };
+    errdefer growth.tables.deinit(gpa);
+    const base_count: u32 = @intCast(self.ends.items.items.len);
+    var size = @max(initial_index_capacity, self.index.items.items.len);
+    while (InternedBytes.wouldExceedMaxLoad(@as(usize, base_count) + 1, size)) size *= 2;
+    try growth.publishTable(gpa, size, base_count);
+    self.growth.store(growth, .release);
+    return growth;
 }
 
 /// Preserve serial IDs and the lookup index while taking independent ownership.
 pub fn clone(self: *const SerialStringInterner, gpa: Allocator) Allocator.Error!SerialStringInterner {
+    if (self.growth.load(.acquire)) |growth| {
+        const total: u32 = @intCast(growth.ends.count());
+        var result = try initCapacity(gpa, total);
+        errdefer result.deinit(gpa);
+        for (0..total) |id| _ = try result.insert(gpa, growth.textAt(@intCast(id)));
+        return result;
+    }
     var new_bytes = try SafeList(u8).initCapacity(gpa, self.bytes.items.items.len);
     errdefer new_bytes.deinit(gpa);
     _ = try new_bytes.appendSlice(gpa, self.bytes.items.items);
@@ -385,4 +523,37 @@ test "SerialStringInterner: relocation fixup count is constant in number of name
     try testing.expectEqual(nonEmptyBasePointers(&rt_small.it), nonEmptyBasePointers(&rt_large.it));
     try testing.expectEqual(@as(usize, 3), nonEmptyBasePointers(&rt_large.it));
     try testing.expectEqualStrings("T3999", rt_large.it.getText(rt_large.it.lookup("T3999").?));
+}
+
+test "SerialStringInterner: shared inserts extend a loaded interner and keep its serialized names" {
+    const gpa = testing.allocator;
+    var it = try SerialStringInterner.initCapacity(gpa, 4);
+    defer it.deinit(gpa);
+    const list = try it.insert(gpa, "List");
+
+    var rt = try roundTrip(gpa, &it);
+    defer gpa.free(rt.buffer);
+    defer rt.it.deinit(gpa);
+
+    try testing.expectEqual(list, try rt.it.insertShared(gpa, "List"));
+    var buf: [16]u8 = undefined;
+    var i: u32 = 0;
+    while (i < 200) : (i += 1) {
+        try testing.expectEqual(i + 1, try rt.it.insertShared(gpa, try std.fmt.bufPrint(&buf, "n{d}", .{i})));
+    }
+    try testing.expectEqual(@as(u32, 201), rt.it.count());
+    try testing.expectEqualStrings("List", rt.it.getText(list));
+    i = 0;
+    while (i < 200) : (i += 1) {
+        const name = try std.fmt.bufPrint(&buf, "n{d}", .{i});
+        try testing.expectEqual(@as(?u32, i + 1), rt.it.lookup(name));
+        try testing.expectEqualStrings(name, rt.it.getText(i + 1));
+    }
+    // The serialized names are the ones interned before sharing.
+    try testing.expectEqual(@as(usize, 1), rt.it.ends.items.items.len);
+
+    var copy = try rt.it.clone(gpa);
+    defer copy.deinit(gpa);
+    try testing.expectEqual(@as(u32, 201), copy.count());
+    try testing.expectEqual(@as(?u32, 200), copy.lookup("n199"));
 }
