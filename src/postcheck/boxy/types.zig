@@ -1113,6 +1113,48 @@ pub const Converter = struct {
         return false;
     }
 
+    /// The distinct flex and rigid variables the checked type `root` of
+    /// `module` mentions, in the order a depth-first walk first reaches them.
+    pub fn typeVariables(self: Converter, allocator: Allocator, module: ModuleIndex, root: checked.CheckedTypeId) Allocator.Error![]const checked.CheckedTypeId {
+        const types = self.modules.get(module).types();
+        const scratch = self.store.allocator;
+        var found: std.ArrayList(checked.CheckedTypeId) = .empty;
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(scratch);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(scratch);
+        try pending.append(scratch, root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(scratch, ty)).found_existing) continue;
+            const start = pending.items.len;
+            switch (types.payload(ty)) {
+                .flex, .rigid => try found.append(allocator, ty),
+                .alias => |alias| {
+                    try pending.appendSlice(scratch, alias.args);
+                    try pending.append(scratch, alias.backing);
+                },
+                .record => |record| {
+                    for (record.fields) |field| try pending.append(scratch, field.ty);
+                    try pending.append(scratch, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(scratch, items),
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(scratch, tag.argsSlice(types));
+                    try pending.append(scratch, tag_union.ext);
+                },
+                .function => |function| {
+                    try pending.appendSlice(scratch, function.args);
+                    try pending.append(scratch, function.ret);
+                },
+                .nominal => |nominal| try pending.appendSlice(scratch, nominal.args),
+                .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
+            }
+            // Children are visited in the order they were listed.
+            std.mem.reverse(checked.CheckedTypeId, pending.items[start..]);
+        }
+        return found.items;
+    }
+
     /// The type a scheme variable takes where nothing relates it to a use:
     /// what it seals to when no scope binds it.
     pub fn sealedScheme(self: Converter, module: ModuleIndex, variable: checked.CheckedTypeId) Allocator.Error!TypeId {

@@ -12788,9 +12788,15 @@ space, so even a same-module default materialized twice in one procedure
 never observes an earlier materialization's bindings, and the save/restore
 is stack-shaped so defaults that construct other defaulted nominals nest.
 Boxy reaches each omitted default through the same explicit CheckedModule
-data (`record_omitted_defaults` → `defaultExpr`) under the consuming site's
-worker; declaring modules resolve by content identity, and an unresolvable
-origin is an invariant violation, never a fallback. There is no archived
+data (`record_omitted_defaults` → `defaultExpr`); declaring modules resolve
+by content identity, and an unresolvable origin is an invariant violation,
+never a fallback. Boxy lowers a default as one worker of its declaring
+module whose scheme variables are the variables of the default
+expression's checked type (the fresh instantiation of the declaration's
+parameters): each construction relates that type to its field's type and
+passes the resulting types' descriptors, exactly as a call passes a
+template's, so a parametric default such as `Pair(x) := { items : List(x)
+?? [] }` builds `items` at `List(U8)` for a `Pair(U8)`. There is no archived
 VALUE, no `field_default` compile-time root, and no cross-root ordering:
 the inlined expression evaluates as part of whatever body consumes it—a
 comptime root's own evaluation for top-level constants, a runtime body

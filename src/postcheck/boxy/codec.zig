@@ -2497,7 +2497,7 @@ const Gen = struct {
                 const missing_hole = try self.branchTag(slot, slot_ty, layouts_mod.present_label);
                 try self.jump(merged.id, &.{merged.param}, &.{(try self.payload(slot, slot_ty, layouts_mod.present_label, 0)).value});
                 self.b.hole = missing_hole;
-                try self.jump(merged.id, &.{merged.param}, &.{try self.b.defaultValue(field_default)});
+                try self.jump(merged.id, &.{merged.param}, &.{try self.b.defaultValue(field_default, field_info.ty)});
                 self.b.hole = merged.after;
                 value.* = merged.param;
                 continue;

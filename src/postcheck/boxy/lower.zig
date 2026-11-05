@@ -2002,7 +2002,14 @@ pub const Program = struct {
         const key: WorkerKey = .{ .default = .{ .module = module_index, .expr = expr } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
-        const ret = try self.converter().convert(module_index, view.bodies().expr(expr).ty, .{ .module = module_index, .vars = &.{}, .bound = &.{} });
+        // The default's type is the field's type at a fresh instantiation of
+        // its declaration's parameters (design.md "Defaulted Fields"): each
+        // construction takes the types its field gives those variables.
+        const default_ty = view.bodies().expr(expr).ty;
+        const scheme_vars = try self.converter().typeVariables(self.arena.allocator(), module_index, default_ty);
+        const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.len);
+        for (bound, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
+        const ret = try self.converter().convert(module_index, default_ty, .{ .module = module_index, .vars = scheme_vars, .bound = bound });
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const identity = self.workerIdentity(key);
         const imported = !self.ownsModule(module_index);
@@ -2017,7 +2024,7 @@ pub const Program = struct {
             .key = key,
             .proc = proc,
             .module = module_index,
-            .scheme_vars = &.{},
+            .scheme_vars = scheme_vars,
             .dictionary_params = &.{},
             .params = &.{},
             .ret = ret,
@@ -2027,8 +2034,8 @@ pub const Program = struct {
         });
         try self.worker_ids.put(self.allocator, key, id);
         if (imported) {
-            // A default is called directly, at its closed result's layout.
-            self.result.store.getProcSpecPtr(proc).ret_layout = try self.layouts.layoutOf(ret);
+            // A default is called directly, with its variables' descriptors.
+            try self.declareImportedTemplateSignature(id);
             self.bindImportedInterface(id);
         } else {
             try self.worklist.append(self.allocator, id);
