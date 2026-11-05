@@ -10739,3 +10739,38 @@ test "certify dynamic product scalar reads preserve representation but not relea
         }
     }
 }
+
+test "certify dynamic erased call retains the explicit ownership source across a join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const callable = try f.layouts.insertErasedCallable();
+    const owner = try f.local(callable);
+    const alias = try f.local(callable);
+    const result = try f.local(callable);
+    const ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .dyn = .{
+        .target = result,
+        .data = try f.store.addStmtRow(LIR.DynOp, .{ .call_erased = .{
+            .closure = alias,
+            .args = null,
+            .reuse_closure = true,
+            .reuse_source = owner,
+        } }),
+        .next = ret,
+    } }, .test_fixture);
+    const join_id = f.freshJoinPointId();
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = .empty(),
+        .body = call,
+        .remainder = jump,
+    } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .local(owner),
+        .next = join,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{owner}, body, callable);
+    try f.certify();
+}

@@ -22493,7 +22493,10 @@ be an outer nominal or zero-discriminant tag wrapper only when the emitted
 `assign_ref` chain proves exact pointer representation at every edge. Debug LIR
 certification derives that exact allocation identity from those explicit
 producer operations and rejects a call that would pass one allocation to the
-machine ABI while consuming another in ARC. The representation-transparent
+machine ABI while consuming another in ARC. The
+ownership source is an explicit read in the common operand inventory, including
+for `DynOp.call_erased`; liveness and join summaries must carry it even when
+the callable is read through a different alias. The representation-transparent
 `assign_ref` edge has one definition, `lir_core`'s `ErasedOwnerEdge`: the direct
 LIR lowerer records each emitted `assign_ref` target's provenance from it, and
 the resolution in `lir/erased_owner.zig` follows it. A LIR transform that
