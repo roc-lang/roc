@@ -374,22 +374,38 @@ const PlatformImmortals = struct {
     }
 };
 
-/// Temporary storage for `count` items: inline when small, otherwise
-/// allocated through `RocOps` and released by `deinit`.
+/// Reclaimable composition scratch. Published descriptors and interned keys
+/// use the program-lifetime allocator separately; these buffers do not escape.
+pub fn scratchAlloc(comptime T: type, count: usize, ops: *RocOps) []T {
+    if (comptime builtins.host_abi.host_role != .platform) {
+        return std.heap.smp_allocator.alloc(T, count) catch ops.crash("out of memory allocating descriptor scratch");
+    }
+    const items: [*]T = @ptrCast(@alignCast(ops.allocRaw(count * @sizeOf(T), @alignOf(T))));
+    return items[0..count];
+}
+
+pub fn scratchFree(comptime T: type, items: []T, ops: *RocOps) void {
+    if (comptime builtins.host_abi.host_role != .platform) {
+        std.heap.smp_allocator.free(items);
+    } else ops.dealloc(@ptrCast(items.ptr), @alignOf(T));
+}
+
 fn Scratch(comptime T: type, comptime inline_count: usize) type {
     return struct {
         inline_items: [inline_count]T = undefined,
         heap: ?[*]T = null,
+        heap_len: usize = 0,
 
         fn get(self: *@This(), count: usize, ops: *RocOps) []T {
             if (count <= inline_count) return self.inline_items[0..count];
-            const items: [*]T = @ptrCast(@alignCast(ops.allocRaw(count * @sizeOf(T), @alignOf(T))));
+            const items = scratchAlloc(T, count, ops).ptr;
             self.heap = items;
+            self.heap_len = count;
             return items[0..count];
         }
 
         fn deinit(self: *@This(), ops: *RocOps) void {
-            if (self.heap) |items| ops.dealloc(@ptrCast(items), @alignOf(T));
+            if (self.heap) |items| scratchFree(T, items[0..self.heap_len], ops);
         }
     };
 }
@@ -811,7 +827,7 @@ pub fn tagUnion(cache: *Cache, ops: *RocOps, variants: []const VariantInput) *co
     return cache.intern(key, recursiveMemberOf(block.desc, ops) orelse block.desc, ops);
 }
 
-/// A growable list of descriptors for a walk, allocated through `ops`.
+/// A growable temporary list of descriptors for a composition walk.
 fn DescWalk(comptime Item: type) type {
     return struct {
         items: []Item = &.{},
@@ -822,7 +838,7 @@ fn DescWalk(comptime Item: type) type {
         fn append(self: *Self, item: Item, ops: *RocOps) void {
             if (self.len == self.items.len) {
                 const capacity = @max(16, self.items.len * 2);
-                const grown: [*]Item = @ptrCast(@alignCast(ops.allocRaw(capacity * @sizeOf(Item), @alignOf(Item))));
+                const grown = scratchAlloc(Item, capacity, ops).ptr;
                 @memcpy(grown[0..self.len], self.items[0..self.len]);
                 self.free(ops);
                 self.items = grown[0..capacity];
@@ -838,7 +854,7 @@ fn DescWalk(comptime Item: type) type {
         }
 
         fn free(self: *Self, ops: *RocOps) void {
-            if (self.items.len != 0) ops.dealloc(@ptrCast(self.items.ptr), @alignOf(Item));
+            if (self.items.len != 0) scratchFree(Item, self.items, ops);
         }
     };
 }

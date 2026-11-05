@@ -696,6 +696,24 @@ pub const Program = struct {
         }, base.SourceLoc.none);
     }
 
+    /// Composite descriptor arguments supplied by the caller.
+    /// The signature alone declares these requirements, identically in an
+    /// importing unit and a defining unit; no body discovery is involved.
+    pub fn passedDescriptorTypes(self: *Program, allocator: Allocator, id: WorkerId) Allocator.Error![]TypeId {
+        var result: std.ArrayList(TypeId) = .empty;
+        errdefer result.deinit(allocator);
+        const target = self.worker(id).*;
+        if (target.key == .template) {
+            for (0..target.params.len + 1) |i| {
+                const ty = if (i < target.params.len) target.params[i] else target.ret;
+                if (self.store.get(ty) == .variable or try self.converter().representationClosed(ty)) continue;
+                if (std.mem.findScalar(TypeId, result.items, ty) != null) continue;
+                try result.append(allocator, ty);
+            }
+        }
+        return result.toOwnedSlice(allocator);
+    }
+
     /// Declare the signature of imported template worker `id`, exactly as
     /// its defining unit's body lowering declares it: explicit parameters,
     /// then hidden descriptors and dictionaries, and a dynamic result slot
@@ -719,6 +737,9 @@ pub const Program = struct {
         const erased = try self.result.layouts.insertErasedCallable();
         for (imported.dictionary_params) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = erased }));
         for (0..imported.literal_params) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = erased }));
+        const passed_types = try self.passedDescriptorTypes(self.allocator, id);
+        defer self.allocator.free(passed_types);
+        for (passed_types) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = .opaque_ptr }));
         const proc = store.getProcSpecPtr(imported.proc);
         proc.args = try store.addLocalSpan(args.items);
         if (try self.converter().representationClosed(imported.ret)) {

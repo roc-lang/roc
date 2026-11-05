@@ -13768,6 +13768,20 @@ values through descriptors, never on descriptors.
 
 #### Dynamic Values In LIR
 
+Template workers receive an additional hidden descriptor argument for each
+unique dynamic composite type in their parameters and result, in signature
+order (parameters, then result). Bare type variables already receive hidden
+descriptors, and representation-closed types need no additional argument.
+The caller substitutes the checked call edge's type arguments into these
+formal types and prepares the descriptors in its entry chain. The callee
+binds them before constructing parameter and result locals, and consumes
+those bindings wherever it needs the same descriptor. Importing units and
+defining units derive this ABI from the same declared signature, without
+inspecting the callee's body. Direct calls, erased adapters, override workers,
+and generated codec calls pass the same explicit descriptor arguments.
+Host-visible signatures and erased callable signatures do not change; their
+wrappers supply these hidden arguments when calling a template worker.
+
 A local whose checked type mentions a type variable in scope has the LIR
 layout `dynamic` and names the local holding its descriptor. A dynamic local
 is always manipulated by address. Its storage lives in the procedure's
@@ -14205,9 +14219,16 @@ the interning keys are addresses in the program's code and static data, which
 the process reuses once the program is gone, so the state is destroyed with
 the program and never shared between programs.
 
-A generic body composes its instantiation's descriptors and dictionaries on
-every call, so a cache hit is the hot path, and the compile-time workers of
-a build compose concurrently. The interning table is therefore read without
+Temporary composition keys, field-order buffers, and traversal stacks do not
+escape the composition operation. In-process execution allocates these from
+the reclaiming SMP allocator and frees them when the operation finishes;
+platform runtimes retain their existing host allocation/free operations.
+Published descriptors and copied interning keys still use program-lifetime
+storage. Repeated cache hits must not retain temporary buffers in that storage.
+
+A generic body receives its signature's composite descriptors from its caller
+and composes any remaining descriptors and dictionaries on every call, so a
+cache hit remains a hot path, and compile-time workers compose concurrently. The interning table is therefore read without
 its lock: a reader loads the current table and probes it from the key's
 hashed slot to the first empty one. That is sound because a table is only
 ever added to, never changed or compacted; an entry stores its value
