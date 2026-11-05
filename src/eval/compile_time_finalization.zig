@@ -6129,8 +6129,9 @@ fn evalDevProgramRoots(
             };
             jobs[i].host.setGeneratedCode(native.executable.generatedCode(), native.linkedCode());
             jobs[i].host.timing_io = if (options.timing) |timing| timing.std_io else null;
-            jobs_len += 1;
+            errdefer jobs[i].host.deinit();
             try jobs[i].host.enableAllocationExperiment();
+            jobs_len += 1;
         }
     }
     defer {

@@ -77,6 +77,7 @@ fn install(comptime Host: type, comptime policy: ?Policy, comptime stats: bool, 
                 return exp.state.?.alloc(p, stats, length, alignment) catch owner.experimentalAllocationFailed();
             } else {
                 const ptr = exp.original.roc_alloc(roc_ops, length, alignment);
+                if (@hasDecl(Host, "experimentalSetAllocationSize")) Host.experimentalSetAllocationSize(ptr, length);
                 exp.baseline_stats.alloc_count +|= 1;
                 exp.baseline_stats.alloc_bytes +|= length;
                 exp.baseline_stats.live_bytes += Host.experimentalAllocationSize(ptr);
@@ -105,6 +106,7 @@ fn install(comptime Host: type, comptime policy: ?Policy, comptime stats: bool, 
             } else {
                 const old_size = Host.experimentalAllocationSize(ptr);
                 const result = exp.original.roc_realloc(roc_ops, ptr, length, alignment);
+                if (@hasDecl(Host, "experimentalSetAllocationSize")) Host.experimentalSetAllocationSize(result, length);
                 exp.baseline_stats.realloc_count +|= 1;
                 exp.baseline_stats.alloc_bytes +|= length;
                 exp.baseline_stats.live_bytes = exp.baseline_stats.live_bytes - old_size + Host.experimentalAllocationSize(result);

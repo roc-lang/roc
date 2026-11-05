@@ -48,6 +48,8 @@ const AllocationHeader = extern struct {
     size: usize,
     alignment: usize,
     stamp: u64,
+    // Written/read only by diagnostic allocation-stat callbacks.
+    requested_length: usize,
 };
 
 /// A small block is carved from the root's arena at a power-of-two size,
@@ -196,8 +198,12 @@ pub fn experimentalAllocationFailed(self: *CompileTimeHost) noreturn {
     self.jump(.host_oom);
 }
 
+pub fn experimentalSetAllocationSize(ptr: *anyopaque, length: usize) void {
+    allocationHeader(ptr).requested_length = length;
+}
+
 pub fn experimentalAllocationSize(ptr: *anyopaque) usize {
-    return allocationHeader(ptr).size;
+    return allocationHeader(ptr).requested_length;
 }
 
 /// Clear per-run state and release root-local compile-time host memory.
