@@ -25,17 +25,6 @@ const host_abi = @import("host_abi.zig");
 const shim_symbols = @import("shim_symbols.zig");
 
 const RocOps = host_abi.RocOps;
-const RcAtomicity = @import("utils.zig").RcAtomicity;
-
-/// Count-update policy for an explicitly entered compiler-owned root.
-pub const RcMode = enum {
-    /// Preserve the atomicity requested by each RC operation.
-    requested,
-    /// The caller guarantees that every mutable Roc allocation touched through
-    /// this root's ops is confined to this invocation. Shared values must be
-    /// immutable static data, whose counts are never updated.
-    single_thread,
-};
 
 /// An observer for a source-level `expect` executed under a test host:
 /// the ops the evaluation entered, the expect site, and whether it passed.
@@ -65,7 +54,6 @@ pub const roc_checked_error_reached = shim_symbols.roc_checked_error_reached;
 pub const CheckedErrorRecorder = *const fn () callconv(.c) void;
 
 threadlocal var current_ops: ?*RocOps = null;
-threadlocal var current_rc_mode: RcMode = .requested;
 threadlocal var current_expect_observer: ?ExpectObserver = null;
 threadlocal var last_expect_err_region: ?ExpectErrRegion = null;
 threadlocal var checked_error_reached: bool = false;
@@ -74,7 +62,6 @@ threadlocal var checked_error_reached: bool = false;
 pub const Saved = struct {
     ops: ?*RocOps,
     expect_observer: ?ExpectObserver,
-    rc_mode: RcMode,
 };
 
 /// Make `ops` the host of every Roc call on this thread until `leave`. An
@@ -86,18 +73,10 @@ pub const Saved = struct {
 /// entering writes the thread-local and a platform may run where no
 /// thread-local storage exists.
 pub fn enter(roc_ops: *RocOps, expect_observer: ?ExpectObserver) Saved {
-    return enterWithRcMode(roc_ops, expect_observer, .requested);
-}
-
-/// Enter a root with an explicit experimental RC policy. Ordinary `enter`
-/// always selects `requested`, including when nested inside an experiment.
-/// The caller must `leave` after normal return and after catching a Roc crash.
-pub fn enterWithRcMode(roc_ops: *RocOps, expect_observer: ?ExpectObserver, rc_mode: RcMode) Saved {
-    comptime assertInProcessHost("enterWithRcMode");
-    const saved = Saved{ .ops = current_ops, .expect_observer = current_expect_observer, .rc_mode = current_rc_mode };
+    comptime assertInProcessHost("enter");
+    const saved = Saved{ .ops = current_ops, .expect_observer = current_expect_observer };
     current_ops = roc_ops;
     current_expect_observer = expect_observer;
-    current_rc_mode = rc_mode;
     return saved;
 }
 
@@ -106,16 +85,6 @@ pub fn leave(saved: Saved) void {
     comptime assertInProcessHost("leave");
     current_ops = saved.ops;
     current_expect_observer = saved.expect_observer;
-    current_rc_mode = saved.rc_mode;
-}
-
-/// Apply the root's explicit policy only to operations using that root's ops.
-/// Shared descriptor composition uses different ops and retains its requested
-/// atomicity. Platform builds never consult thread-local host state.
-pub inline fn effectiveRcAtomicity(requested: RcAtomicity, roc_ops: *RocOps) RcAtomicity {
-    if (comptime host_abi.host_role == .platform) return requested;
-    if (current_rc_mode == .single_thread and current_ops == roc_ops) return .single_thread;
-    return requested;
 }
 
 /// The ops of the evaluation this thread is inside, if any. A platform never
@@ -274,53 +243,6 @@ fn rocExpectErrRegion(start: u32, end: u32) callconv(.c) void {
 
 fn rocCheckedErrorReached() callconv(.c) void {
     checked_error_reached = true;
-}
-
-test "in-process RC mode matches ops and restores nested policies" {
-    if (comptime host_abi.host_role == .platform) return error.SkipZigTest;
-    const TestEnv = @import("utils.zig").TestEnv;
-    var outer = TestEnv.init(std.testing.allocator);
-    defer outer.deinit();
-    var inner = TestEnv.init(std.testing.allocator);
-    defer inner.deinit();
-    const outer_ops = outer.getOps();
-    const inner_ops = inner.getOps();
-
-    try std.testing.expect(current() == null);
-    try std.testing.expectEqual(RcAtomicity.atomic, effectiveRcAtomicity(.atomic, outer_ops));
-    try std.testing.expectEqual(RcAtomicity.single_thread, effectiveRcAtomicity(.single_thread, outer_ops));
-    {
-        const ordinary = enter(outer_ops, null);
-        defer leave(ordinary);
-        try std.testing.expectEqual(RcAtomicity.atomic, effectiveRcAtomicity(.atomic, outer_ops));
-        try std.testing.expectEqual(RcAtomicity.single_thread, effectiveRcAtomicity(.single_thread, outer_ops));
-        {
-            const experimental = enterWithRcMode(outer_ops, null, .single_thread);
-            defer leave(experimental);
-            try std.testing.expectEqual(RcAtomicity.single_thread, effectiveRcAtomicity(.atomic, outer_ops));
-            // Different ops, such as the shared composition state's, do not opt in.
-            try std.testing.expectEqual(RcAtomicity.atomic, effectiveRcAtomicity(.atomic, inner_ops));
-            {
-                const nested = enter(outer_ops, null);
-                defer leave(nested);
-                // Ordinary entry resets the policy even with the same ops.
-                try std.testing.expectEqual(RcAtomicity.atomic, effectiveRcAtomicity(.atomic, outer_ops));
-            }
-            try std.testing.expectEqual(RcAtomicity.single_thread, effectiveRcAtomicity(.atomic, outer_ops));
-            {
-                const nested = enterWithRcMode(inner_ops, null, .single_thread);
-                defer leave(nested);
-                try std.testing.expectEqual(RcAtomicity.single_thread, effectiveRcAtomicity(.atomic, inner_ops));
-                try std.testing.expectEqual(RcAtomicity.atomic, effectiveRcAtomicity(.atomic, outer_ops));
-            }
-            try std.testing.expectEqual(outer_ops, requireOps());
-            try std.testing.expectEqual(RcAtomicity.single_thread, effectiveRcAtomicity(.atomic, outer_ops));
-        }
-        try std.testing.expectEqual(RcAtomicity.atomic, effectiveRcAtomicity(.atomic, outer_ops));
-    }
-    try std.testing.expect(current() == null);
-    try std.testing.expectEqual(RcMode.requested, current_rc_mode);
-    try std.testing.expectEqual(RcAtomicity.atomic, effectiveRcAtomicity(.atomic, outer_ops));
 }
 
 test "in-process host scopes restore ops and expect observers" {

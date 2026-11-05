@@ -15,7 +15,6 @@ const JmpBuf = crash_boundary_mod.JmpBuf;
 const longjmp = crash_boundary_mod.longjmp;
 
 const RuntimeHostEnv = @This();
-const AllocationExperiment = @import("allocation_experiment.zig");
 
 /// Bookkeeping stored at the start of every block handed to Roc code: a free
 /// or reallocation reads the block's size and alignment back from the block
@@ -200,7 +199,6 @@ pub const CrashState = union(enum) {
 pub const LeakError = error{MemoryLeak};
 
 allocator: std.mem.Allocator,
-allocation_experiment: AllocationExperiment.Experiment = .{},
 roc_ops: ?RocOps = null,
 jmp_buf: JmpBuf = undefined,
 active_jmp_buf: ?*JmpBuf = null,
@@ -223,7 +221,6 @@ pub fn init(allocator: std.mem.Allocator) RuntimeHostEnv {
 }
 
 pub fn deinit(self: *RuntimeHostEnv) void {
-    self.allocation_experiment.deinit();
     self.resetObservation();
     self.freeRemainingAllocations();
     // Runtime byte leak checking is handled by the live block list itself, so
@@ -243,7 +240,6 @@ pub fn resetObservation(self: *RuntimeHostEnv) void {
 
 /// Public function `resetAllocationTracker`.
 pub fn resetAllocationTracker(self: *RuntimeHostEnv) void {
-    self.allocation_experiment.reset();
     self.freeRemainingAllocations();
     self.allocation_call_count = 0;
 }
@@ -295,19 +291,6 @@ pub fn get_ops(self: *RuntimeHostEnv) *RocOps {
         };
     }
     return &self.roc_ops.?;
-}
-
-/// Configure only an actual native test invocation, not host leak-check fixtures.
-pub fn enableAllocationExperiment(self: *RuntimeHostEnv) Allocator.Error!void {
-    try self.allocation_experiment.enable(.tests, runtime_bytes_allocator, RuntimeHostEnv, self.get_ops());
-}
-
-pub fn experimentalAllocationFailed(_: *RuntimeHostEnv) noreturn {
-    oom("experimental root allocator");
-}
-
-pub fn experimentalAllocationSize(ptr: *anyopaque) usize {
-    return Header.fromPayload(ptr).size;
 }
 
 /// Public function `terminationState`.

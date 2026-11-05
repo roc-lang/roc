@@ -25598,37 +25598,6 @@ compiler started with `ROC_DEBUG_FORCE_ICE=<phase>[:<module or stage>]`
 panics on purpose when a matching frame is pushed; CLI tests use it to pin
 each phase's report.
 
-### Root Allocation and Refcount Experiments
-
-Developer-diagnostic compilers may select experimental allocation policies for
-native test roots and native compile-time roots. The choice is made explicitly
-at the root invocation, before execution, and selects its RocOps callbacks once.
-It never changes source typing, generated unit-image identity, or the platform
-host ABI. Standard release compilers read no selector. Every run owns its
-allocation state; no pointer from that state may enter a shared descriptor cache.
-
-The policies compare bump allocation with no per-block reclamation, the existing
-CTFE small-block recycling strategy, small recycling with large-block retention,
-and finer segregated small-block classes. Fine classes are compared both with
-per-class slabs and with individual arena blocks plus immediate large frees
-(the compact policy). Allocator classes and thresholds govern
-storage management only, not compiler semantic decisions. Diagnostic runs collect
-logical live bytes and backing storage separately; counters are absent from the
-selected timing callbacks. Root storage is released only after all returned
-values and effects have been copied/frozen into their destination owners.
-
-A separate diagnostic invocation contract may declare native test/CTFE Roc
-allocations single-threaded. The compiler establishes it when entering a pure
-root, and restores the prior contract after return or a caught crash. Builtin RC
-updates consume that explicit contract only when their RocOps matches the entered
-root. Shared descriptor-composition allocations have different RocOps and retain
-their existing policy; platform hosts never inspect this compiler-local state.
-Normal RC updates, child destruction, and uniqueness tests remain unchanged.
-Shared inputs are immutable frozen graphs with immortal RC headers. No mutable
-root allocation may escape to another thread; CTFE publication freezes/copies the
-result before its root storage is destroyed. These are experimental host policy
-choices, not ownership decisions made by a backend.
-
 ### Developer Diagnostics
 
 The compiler's developer-only environment variables (`ROC_LIR_DUMP`,

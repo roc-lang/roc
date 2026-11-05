@@ -2569,10 +2569,6 @@ fn callBoolRoot(
     base.dev_diagnostics.countTestWork(.test_root_execution, 1);
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
-    switch (target) {
-        .dev, .unit_image => try runtime_env.enableAllocationExperiment(),
-        .llvm => {},
-    }
     var event_forwarder: RuntimeHostEventForwarder = undefined;
     if (event_callback) |callback| {
         event_forwarder = .{
@@ -2599,11 +2595,7 @@ fn callBoolRoot(
     _ = builtins.in_process_host.takeCheckedErrorReached();
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
-    const rc_mode = switch (target) {
-        .dev, .unit_image => @import("allocation_experiment.zig").rcMode(.tests),
-        .llvm => .requested,
-    };
-    const entered = builtins.in_process_host.enterWithRcMode(runtime_env.get_ops(), RuntimeHostEnv.rocExpectObserved, rc_mode);
+    const entered = builtins.in_process_host.enter(runtime_env.get_ops(), RuntimeHostEnv.rocExpectObserved);
     defer builtins.in_process_host.leave(entered);
     if (crash_boundary.set() == 0) {
         switch (target) {

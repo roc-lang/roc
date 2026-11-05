@@ -8,7 +8,6 @@
 //! for low-level operations and host interface functions.
 const std = @import("std");
 const builtin = @import("builtin");
-const in_process_host = @import("in_process_host.zig");
 
 pub const RocOps = @import("host_abi.zig").RocOps;
 
@@ -352,7 +351,7 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
     if (!rcConstant(refcount)) {
         // Note: we assume that a refcount will never overflow.
         // As such, we do not need to cap incrementing.
-        switch (in_process_host.effectiveRcAtomicity(atomicity, roc_ops)) {
+        switch (atomicity) {
             .single_thread => {
                 ptr_to_refcount.* = refcount +% amount;
             },
@@ -628,7 +627,7 @@ inline fn decref_ptr_to_refcount(
     }
 
     if (!rcConstant(refcount)) {
-        switch (in_process_host.effectiveRcAtomicity(atomicity, roc_ops)) {
+        switch (atomicity) {
             .single_thread => {
                 refcount_ptr[0] = refcount -% 1;
                 if (refcount == 1) {
@@ -1160,45 +1159,6 @@ test "single-thread incref/decref pair on a real allocation frees on zero" {
 
     decrefDataPtr(data_ptr, 8, false, .single_thread, ops);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
-}
-
-test "root RC experiment preserves counts uniqueness static data and final free" {
-    if (comptime @import("host_abi.zig").host_role == .platform) return error.SkipZigTest;
-    for ([_]in_process_host.RcMode{ .requested, .single_thread }) |mode| {
-        var test_env = TestEnv.init(std.testing.allocator);
-        defer test_env.deinit();
-        const ops = test_env.getOps();
-        const saved = in_process_host.enterWithRcMode(ops, null, mode);
-        defer in_process_host.leave(saved);
-
-        const data_ptr = allocateWithRefcount(64, 8, false, ops);
-        const rc_ptr: *isize = @ptrCast(alignedPtrCast([*]isize, data_ptr, @src()) - 1);
-        try std.testing.expectEqual(@as(isize, 1), rc_ptr.*);
-        try std.testing.expect(isUnique(data_ptr, ops));
-
-        // Default native wrappers request atomic updates in both modes.
-        increfDataPtrC(data_ptr, 2, ops);
-        try std.testing.expectEqual(@as(isize, 3), rc_ptr.*);
-        try std.testing.expect(!isUnique(data_ptr, ops));
-        decrefDataPtrC(data_ptr, 8, false, ops);
-        try std.testing.expectEqual(@as(isize, 2), rc_ptr.*);
-        try std.testing.expect(!isUnique(data_ptr, ops));
-        decrefDataPtrC(data_ptr, 8, false, ops);
-        try std.testing.expectEqual(@as(isize, 1), rc_ptr.*);
-        try std.testing.expect(isUnique(data_ptr, ops));
-        try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
-
-        var static_rc: isize = REFCOUNT_STATIC_DATA;
-        increfRcPtr(&static_rc, 2, .atomic, ops);
-        decrefRcPtr(@ptrCast(&static_rc), 8, false, .atomic, ops);
-        try std.testing.expectEqual(REFCOUNT_STATIC_DATA, static_rc);
-        try std.testing.expect(rcConstant(static_rc));
-        try std.testing.expect(!rcUnique(static_rc));
-        try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
-
-        decrefDataPtrC(data_ptr, 8, false, ops);
-        try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
-    }
 }
 
 test "TestEnv basic functionality" {

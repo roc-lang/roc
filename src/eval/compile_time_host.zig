@@ -20,7 +20,6 @@ const JmpBuf = sljmp.JmpBuf;
 const longjmp = sljmp.longjmp;
 
 const CompileTimeHost = @This();
-const AllocationExperiment = @import("allocation_experiment.zig");
 
 /// Every compile-time allocation starts with a header recording its byte
 /// length and alignment; reallocation and deallocation read the block's length
@@ -48,8 +47,6 @@ const AllocationHeader = extern struct {
     size: usize,
     alignment: usize,
     stamp: u64,
-    // Written/read only by diagnostic allocation-stat callbacks.
-    requested_length: usize,
 };
 
 /// A small block is carved from the root's arena at a power-of-two size,
@@ -130,7 +127,6 @@ pub const HostEvent = union(enum) {
     }
 };
 
-allocation_experiment: AllocationExperiment.Experiment = .{},
 arena: base.SingleThreadArena,
 host_arena: base.SingleThreadArena,
 /// Freed small blocks by size class, ready for reuse.
@@ -164,7 +160,6 @@ pub fn init(allocator: Allocator) CompileTimeHost {
 }
 
 pub fn deinit(self: *CompileTimeHost) void {
-    self.allocation_experiment.deinit();
     self.clearHostState();
     self.freeLargeBlocks();
     self.host_arena.deinit();
@@ -189,26 +184,8 @@ pub fn ops(self: *CompileTimeHost) *RocOps {
     return &self.roc_ops.?;
 }
 
-/// Configure a native CTFE invocation after its owner can unwind an allocation failure.
-pub fn enableAllocationExperiment(self: *CompileTimeHost) Allocator.Error!void {
-    try self.allocation_experiment.enable(.ctfe, self.arena.child_allocator, CompileTimeHost, self.ops());
-}
-
-pub fn experimentalAllocationFailed(self: *CompileTimeHost) noreturn {
-    self.jump(.host_oom);
-}
-
-pub fn experimentalSetAllocationSize(ptr: *anyopaque, length: usize) void {
-    allocationHeader(ptr).requested_length = length;
-}
-
-pub fn experimentalAllocationSize(ptr: *anyopaque) usize {
-    return allocationHeader(ptr).requested_length;
-}
-
 /// Clear per-run state and release root-local compile-time host memory.
 pub fn resetForRun(self: *CompileTimeHost) void {
-    self.allocation_experiment.reset();
     self.clearHostState();
     _ = self.host_arena.reset(.free_all);
     self.failure = null;
