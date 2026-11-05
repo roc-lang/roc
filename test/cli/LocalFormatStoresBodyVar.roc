@@ -5,7 +5,7 @@ LocalFormatStoresBodyVar :: [].{}
 # function's instantiation, and the generated encoder holds a format value of
 # that representation.
 make_encoder : a -> ({ count : U64, name : Str }, U64 -> Try(U64, []))
-make_encoder = |_x| {
+make_encoder = |x| {
 	LocalFormat := [Default, Other(List(a))].{
 		rename_field : LocalFormat, Str -> Str
 		rename_field = |_, name| Str.concat(name, "!")
@@ -33,8 +33,15 @@ make_encoder = |_x| {
 		Shape : value
 		Shape.encoder_for(LocalFormat.Default)
 	}
+	# A local function whose annotation names the format type and no type
+	# variable, and which reads the values a format stores.
+	stored : LocalFormat -> U64
+	stored = |format| match format {
+		Default => 0
+		Other(items) => List.len(items)
+	}
 	sample_name : Str
-	sample_name = ""
+	sample_name = Str.repeat("x", stored(LocalFormat.Other([x, x, x])))
 	encoder_of({ count: 0.U64, name: sample_name })
 }
 

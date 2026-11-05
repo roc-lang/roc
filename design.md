@@ -5816,6 +5816,19 @@ list the context: within the body every use means the body's own variables,
 so nothing inside checking can tell instantiations apart, and diagnostics and
 printed types never show it.
 
+Generalization still needs the variables a declaration's backing names
+while solving is under way, because opening the backing of an application
+reaches them. An application that lists no arguments is otherwise ground and
+ranks outermost, so an opening made at that rank would hold a variable of a
+deeper scope, and the enclosing function's generalization would pull that
+variable down with it and leave the function monomorphic in it. The
+generalizer therefore ranks a nominal application over its arguments and the
+enclosing variables its declaration's backing names, directly or through the
+other body-local types it names (`Check.nominalRankContext`). These are read
+from the annotation references the declarations' generation recorded; the
+variables the methods name join only the final context, since they change
+what a declaration's methods do, not what its values contain.
+
 Checked publication treats the context as hidden trailing parameters. A
 nominal use of such a declaration lists, after its own arguments, the
 variables of its context (the rigid variables themselves, as the body's types
