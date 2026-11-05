@@ -1521,6 +1521,9 @@ pub const Builder = struct {
         }
         try self.run();
 
+        self.tail_calls.loop_params = args.items;
+        self.tail_calls.instance_start = params.len;
+        defer self.tail_calls.loop_params = &.{};
         try self.finishProc(entry, body_start, args.items, ret_layout);
     }
 
@@ -1689,6 +1692,9 @@ pub const Builder = struct {
         // copy of the body's first statement.
         const proc_body: CFStmtId = if (entry == self.entry_hole) body_start else blk: {
             try self.store.replaceCFStmt(self.entry_hole, self.store.getCFStmt(body_start), self.store.stmtOrigin(body_start));
+            // A self-tail loop re-enters the body after the entry chain,
+            // whose descriptors every iteration shares.
+            self.tail_calls.loop_entry = self.entry_hole;
             break :blk entry;
         };
 
