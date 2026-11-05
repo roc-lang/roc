@@ -226,7 +226,7 @@ pub const ConstType = union(enum) {
 /// owns the root and the root's id within that module.
 pub const ConstRecursiveBinding = struct {
     module: names.CheckedModuleDigest,
-    root: checked_ids.ComptimeRootId,
+    root: checked_ids.ComptimeRootKey,
 };
 
 /// What a stored closure capture holds, recorded where the captured local was

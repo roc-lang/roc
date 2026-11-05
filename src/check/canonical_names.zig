@@ -47,7 +47,7 @@ pub const ExternalSymbolNameId = enum(u32) { _ };
 pub const ProcBaseKeyRef = enum(u32) { _ };
 /// A procedure template of one checked module: a row of the module's
 /// template table, or the entry wrapper of a literal root, whose id carries
-/// its root's identity (`ComptimeRootId`) and names no row.
+/// its root's identity (`ComptimeRootKey`) and names no row.
 pub const CheckedProcedureTemplateId = enum(u128) {
     _,
 

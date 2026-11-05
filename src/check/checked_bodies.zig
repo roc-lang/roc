@@ -27,7 +27,7 @@ const Var = types.Var;
 
 const Allocator = std.mem.Allocator;
 const CheckedTypeId = checked_artifact.CheckedTypeId;
-const ComptimeRootId = checked_artifact.ComptimeRootId;
+const ComptimeRootKey = checked_artifact.ComptimeRootKey;
 const ResolvedValueId = checked_artifact.ResolvedValueId;
 const ResolvedValueRefId = checked_artifact.ResolvedValueRefId;
 const StaticDispatchPlanId = static_dispatch.StaticDispatchPlanId;
@@ -662,7 +662,7 @@ pub const CheckedBodies = struct {
 
     /// The compile-time root that evaluates a literal's conversion, when that
     /// conversion is independent of specialization.
-    pub fn literalConversionRoot(self: CheckedBodies, raw_node: u32) Allocator.Error!?ComptimeRootId {
+    pub fn literalConversionRoot(self: CheckedBodies, raw_node: u32) Allocator.Error!?ComptimeRootKey {
         const dispatch = self.tables.dispatch orelse return null;
         return dispatch.literalConversionRoot(raw_node);
     }

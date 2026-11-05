@@ -28,7 +28,7 @@ pub const CheckedTypeSchemeId = enum(u32) { _ };
 /// callee requirement it converts. The top two bits say which; the encodings
 /// live with the literal identities (`checked_artifact.literalConversionRootId`,
 /// `checked_artifact.literalArgumentRootId`).
-pub const ComptimeRootId = enum(u128) {
+pub const ComptimeRootKey = enum(u128) {
     _,
 
     pub const Kind = enum(u2) { row = 0, literal_conversion = 1, literal_argument = 2 };
@@ -36,11 +36,11 @@ pub const ComptimeRootId = enum(u128) {
     pub const kind_shift = 126;
 
     /// The root at `index` of the module's compile-time root table.
-    pub fn row(row_index: u32) ComptimeRootId {
+    pub fn row(row_index: u32) ComptimeRootKey {
         return @fromBackingInt(row_index);
     }
 
-    pub fn kind(self: ComptimeRootId) Kind {
+    pub fn kind(self: ComptimeRootKey) Kind {
         return switch (@as(u2, @truncate(@backingInt(self) >> kind_shift))) {
             0 => .row,
             1 => .literal_conversion,
@@ -50,7 +50,7 @@ pub const ComptimeRootId = enum(u128) {
     }
 
     /// The root's table row, or null for a literal root.
-    pub fn rowIndex(self: ComptimeRootId) ?u32 {
+    pub fn rowIndex(self: ComptimeRootKey) ?u32 {
         return switch (self.kind()) {
             .row => @truncate(@backingInt(self)),
             .literal_conversion, .literal_argument => null,
@@ -58,14 +58,14 @@ pub const ComptimeRootId = enum(u128) {
     }
 
     /// The root's table row; the root must be one.
-    pub fn index(self: ComptimeRootId) u32 {
+    pub fn index(self: ComptimeRootKey) u32 {
         std.debug.assert(self.kind() == .row);
         return @truncate(@backingInt(self));
     }
 
     /// Feed the id to a digest: a row as its 32-bit index, a literal root as
     /// 32 set bits and then its 128-bit identity, each little-endian.
-    pub fn digestInto(self: ComptimeRootId, hasher: anytype) void {
+    pub fn digestInto(self: ComptimeRootKey, hasher: anytype) void {
         const raw = @backingInt(self);
         if (raw >> 32 == 0) {
             const little = std.mem.nativeToLittle(u32, @truncate(raw));

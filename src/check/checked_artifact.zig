@@ -1105,7 +1105,7 @@ pub const RootRequest = struct {
     /// Exact checked root selected for this request. Compile-time roots can
     /// share a source expression, so source and broad request kind are not an
     /// identity.
-    compile_time_root: ?ComptimeRootId = null,
+    compile_time_root: ?ComptimeRootKey = null,
     checked_type: CheckedTypeId,
     abi: RootAbi,
     exposure: RootExposure,
@@ -1445,7 +1445,7 @@ fn compileTimeRootIdForSourceAndRequestKind(
     compile_time_roots: *const CompileTimeRootTable,
     source: RootSource,
     request_kind: RootRequestKind,
-) ?ComptimeRootId {
+) ?ComptimeRootKey {
     for (compile_time_roots.roots) |root| {
         if (!rootSourceMatches(root.source, source)) continue;
         if (!compileTimeRootKindMatchesRequest(root.kind, request_kind)) continue;
@@ -1471,7 +1471,7 @@ fn collectRuntimeRootRequests(
 
 const CompileTimeRequestScheduleEntry = struct {
     request: RootRequest,
-    root_id: ComptimeRootId,
+    root_id: ComptimeRootKey,
     original_order: u32,
 };
 
@@ -1546,19 +1546,19 @@ const CompileTimeRequestScheduler = struct {
     hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
     entries: []CompileTimeRequestScheduleEntry,
-    root_to_request_index: std.AutoHashMapUnmanaged(ComptimeRootId, usize) = .empty,
+    root_to_request_index: std.AutoHashMapUnmanaged(ComptimeRootKey, usize) = .empty,
     dependents: []std.ArrayList(usize),
     pairing_dependents: []std.ArrayList(usize),
     indegrees: []u32,
     emitted: []bool,
     visited_templates: []u32,
     /// The visit stamp of each literal root's entry wrapper the walk entered.
-    visited_literal_wrappers: std.AutoHashMapUnmanaged(ComptimeRootId, u32) = .empty,
-    literal_demand: std.ArrayList(ComptimeRootId) = .empty,
+    visited_literal_wrappers: std.AutoHashMapUnmanaged(ComptimeRootKey, u32) = .empty,
+    literal_demand: std.ArrayList(ComptimeRootKey) = .empty,
     seen_edges: std.AutoHashMap(u64, void),
     visit: u32 = 0,
     current_request_index: usize = 0,
-    current_root_id: ComptimeRootId = undefined, // Set before dependency collection for each scheduled root.
+    current_root_id: ComptimeRootKey = undefined, // Set before dependency collection for each scheduled root.
 
     fn init(
         allocator: Allocator,
@@ -1576,7 +1576,7 @@ const CompileTimeRequestScheduler = struct {
         const_templates: *const ConstTemplateTable,
         entries: []CompileTimeRequestScheduleEntry,
     ) Allocator.Error!CompileTimeRequestScheduler {
-        var root_to_request_index: std.AutoHashMapUnmanaged(ComptimeRootId, usize) = .empty;
+        var root_to_request_index: std.AutoHashMapUnmanaged(ComptimeRootKey, usize) = .empty;
         errdefer root_to_request_index.deinit(allocator);
 
         const dependents = try allocator.alloc(std.ArrayList(usize), entries.len);
@@ -1981,7 +1981,7 @@ const CompileTimeRequestScheduler = struct {
     fn rootForConstRef(
         self: *CompileTimeRequestScheduler,
         const_ref: ConstRef,
-    ) ?ComptimeRootId {
+    ) ?ComptimeRootKey {
         if (!const_ref.artifact.eql(self.artifact_key.digest())) return null;
         return switch (const_ref.owner) {
             .top_level_binding => |top_level| blk: {
@@ -2011,7 +2011,7 @@ const CompileTimeRequestScheduler = struct {
 
     fn addRootDependency(
         self: *CompileTimeRequestScheduler,
-        dependency_root: ComptimeRootId,
+        dependency_root: ComptimeRootKey,
     ) Allocator.Error!void {
         if (dependency_root == self.current_root_id) return;
         if (self.root_to_request_index.get(dependency_root)) |dependency_index| {
@@ -2023,7 +2023,7 @@ const CompileTimeRequestScheduler = struct {
 
     fn addUnconditionalRootDependency(
         self: *CompileTimeRequestScheduler,
-        dependency_root: ComptimeRootId,
+        dependency_root: ComptimeRootKey,
     ) Allocator.Error!void {
         if (dependency_root == self.current_root_id) return;
         const dependency_index = self.root_to_request_index.get(dependency_root) orelse return;
@@ -2037,7 +2037,7 @@ const CompileTimeRequestScheduler = struct {
 
     fn rootDependencyIsStrict(
         self: *const CompileTimeRequestScheduler,
-        dependency_root: ComptimeRootId,
+        dependency_root: ComptimeRootKey,
     ) Allocator.Error!bool {
         const dependent = try self.dispatch.compileTimeRoot(self.current_root_id);
         const dependency = try self.dispatch.compileTimeRoot(dependency_root);
@@ -2068,7 +2068,7 @@ const CompileTimeRequestScheduler = struct {
 fn compileTimeRootIdForRequest(
     dispatch: CheckedDispatch,
     request: RootRequest,
-) Allocator.Error!ComptimeRootId {
+) Allocator.Error!ComptimeRootKey {
     const root_id = request.compile_time_root orelse {
         checkedArtifactInvariant("compile-time request had no exact compile-time root identity", .{});
     };
@@ -2611,7 +2611,7 @@ fn aliasRootWrapperTemplate(
 const RootBackingProcedure = struct {
     checked_type: CheckedTypeId,
     template: canonical.ProcedureTemplateRef,
-    compile_time_root: ?ComptimeRootId,
+    compile_time_root: ?ComptimeRootKey,
 };
 
 fn explicitRootBackingProcedure(
@@ -2686,7 +2686,7 @@ const RootRequestWithoutOrder = struct {
     source: RootSource,
     /// Exact `provides` declaration for a published procedure root.
     provided_export: ?ProvidedExportId = null,
-    compile_time_root: ?ComptimeRootId = null,
+    compile_time_root: ?ComptimeRootKey = null,
     checked_type: CheckedTypeId,
     abi: RootAbi,
     exposure: RootExposure,
@@ -2721,14 +2721,14 @@ fn appendRoot(
 
 fn templateForEntryWrapperRoot(
     entry_wrappers: *const EntryWrapperTable,
-    root: ComptimeRootId,
+    root: ComptimeRootKey,
 ) canonical.ProcedureTemplateRef {
     return entryWrapperForRoot(entry_wrappers, root).template;
 }
 
 fn entryWrapperForRoot(
     entry_wrappers: *const EntryWrapperTable,
-    root: ComptimeRootId,
+    root: ComptimeRootKey,
 ) EntryWrapper {
     const wrapper = entry_wrappers.lookupByRoot(root) orelse {
         base.invariant("checked artifact invariant violated: compile-time/test root has no entry wrapper", .{});
@@ -10778,7 +10778,7 @@ pub const CheckedComptimeSiteKind = enum {
 
 /// Describes whether an exhaustiveness site remains pending, can run at runtime, or is handled at compile time.
 pub const ExhaustivenessResolutionPolicy = union(enum) {
-    compile_time_replaced_by_root: ComptimeRootId,
+    compile_time_replaced_by_root: ComptimeRootKey,
     compile_time_only,
     runtime_reachable,
     /// No checked body reaches the site, so no evaluation decides it and its
@@ -10789,7 +10789,7 @@ pub const ExhaustivenessResolutionPolicy = union(enum) {
 /// Checked owner that establishes the diagnostic and dependency context for an exhaustiveness site.
 pub const CheckedExhaustivenessSiteOwner = union(enum) {
     procedure_template: canonical.ProcedureTemplateRef,
-    root: ComptimeRootId,
+    root: ComptimeRootKey,
 };
 
 /// Checked exhaustiveness metadata preserved for comptime evaluation and diagnostics.
@@ -11287,7 +11287,7 @@ pub const CheckedProcedureBody = union(enum) {
     entry_wrapper: canonical.EntryWrapperId,
     /// The entry wrapper of a literal root, which no table row holds: its
     /// body converts the root's literal (`CheckedDispatch.procedureTemplate`).
-    literal_root: ComptimeRootId,
+    literal_root: ComptimeRootKey,
     /// This procedure was declared with a type annotation and never given an
     /// implementation. It lowers to a crash body carrying the declared arity,
     /// so every call site still links and arguments still evaluate.
@@ -11354,7 +11354,7 @@ pub const IntrinsicWrapperTable = struct {
 /// Public `EntryWrapper` declaration.
 pub const EntryWrapper = struct {
     id: canonical.EntryWrapperId,
-    root: ComptimeRootId,
+    root: ComptimeRootKey,
     template: canonical.ProcedureTemplateRef,
     checked_fn_root: CheckedTypeId,
 };
@@ -11373,7 +11373,7 @@ pub const EntryWrapperTable = struct {
     pub fn append(
         self: *EntryWrapperTable,
         allocator: Allocator,
-        root: ComptimeRootId,
+        root: ComptimeRootKey,
         template: canonical.ProcedureTemplateRef,
         checked_fn_root: CheckedTypeId,
     ) Allocator.Error!canonical.EntryWrapperId {
@@ -11391,7 +11391,7 @@ pub const EntryWrapperTable = struct {
         return self.wrappers.items[@backingInt(id)];
     }
 
-    pub fn lookupByRoot(self: *const EntryWrapperTable, root: ComptimeRootId) ?EntryWrapper {
+    pub fn lookupByRoot(self: *const EntryWrapperTable, root: ComptimeRootKey) ?EntryWrapper {
         for (self.wrappers.items) |wrapper| {
             if (wrapper.root == root) return wrapper;
         }
@@ -11564,7 +11564,7 @@ pub const CallableEvalTemplate = struct {
     id: CallableEvalTemplateId,
     module_idx: u32,
     pattern: CIR.Pattern.Idx,
-    root: ComptimeRootId,
+    root: ComptimeRootKey,
     source_scheme: CheckedTypeSchemeId,
     checked_fn_root: CheckedTypeId,
     /// The binding's checked lookup of another procedure when the binding is
@@ -11599,7 +11599,7 @@ pub const CallableEvalTemplateTable = struct {
         allocator: Allocator,
         module_idx: u32,
         pattern: CIR.Pattern.Idx,
-        root: ComptimeRootId,
+        root: ComptimeRootKey,
         source_scheme: CheckedTypeSchemeId,
         checked_fn_root: CheckedTypeId,
     ) Allocator.Error!CallableEvalTemplateId {
@@ -14107,7 +14107,7 @@ pub const CheckedDispatch = struct {
     /// Append the literal argument roots template `template`'s edges read to
     /// `out`, ascending: a row's, or a literal conversion root's entry
     /// wrapper's, whose edges are its conversion's.
-    pub fn appendLiteralArgumentDemand(self: CheckedDispatch, allocator: Allocator, template: canonical.CheckedProcedureTemplateId, out: *std.ArrayList(ComptimeRootId)) Error!void {
+    pub fn appendLiteralArgumentDemand(self: CheckedDispatch, allocator: Allocator, template: canonical.CheckedProcedureTemplateId, out: *std.ArrayList(ComptimeRootKey)) Error!void {
         if (template.rowIndex()) |row| {
             try out.appendSlice(allocator, try self.analyses().templateLiteralArgumentDemand(self, row));
             return;
@@ -14127,7 +14127,7 @@ pub const CheckedDispatch = struct {
             };
         }
         const added = out.items[first..];
-        std.mem.sort(ComptimeRootId, added, {}, comptimeRootIdLessThan);
+        std.mem.sort(ComptimeRootKey, added, {}, comptimeRootIdLessThan);
         var kept: usize = 0;
         for (added, 0..) |id, index| {
             if (index != 0 and added[index - 1] == id) continue;
@@ -14140,7 +14140,7 @@ pub const CheckedDispatch = struct {
     /// Append every literal root of the module to `out`: each top-level
     /// unit's literal conversion roots in unit order, then each literal
     /// component's argument roots in component order.
-    pub fn appendLiteralRoots(self: CheckedDispatch, allocator: Allocator, out: *std.ArrayList(ComptimeRootId)) Error!void {
+    pub fn appendLiteralRoots(self: CheckedDispatch, allocator: Allocator, out: *std.ArrayList(ComptimeRootKey)) Error!void {
         for (0..self.source.module_index.units.len) |unit| {
             const conversions = try self.analyses().unitLiteralConversions(self, @fromBackingInt(@intCast(unit)));
             for (conversions.records) |record| try out.append(allocator, record.root.id);
@@ -14153,13 +14153,13 @@ pub const CheckedDispatch = struct {
     }
 
     /// The conversion root of the literal at `raw_node`, or null.
-    pub fn literalConversionRoot(self: CheckedDispatch, raw_node: u32) Error!?ComptimeRootId {
+    pub fn literalConversionRoot(self: CheckedDispatch, raw_node: u32) Error!?ComptimeRootKey {
         const candidate = (try literalConversionCandidate(dispatchSourceBodies(self.source), self, raw_node)) orelse return null;
         return literalConversionRootId(candidate.literal);
     }
 
     /// Literal root `id` with its entry wrapper.
-    pub fn literalRoot(self: CheckedDispatch, id: ComptimeRootId) Error!*const LiteralRootRecord {
+    pub fn literalRoot(self: CheckedDispatch, id: ComptimeRootKey) Error!*const LiteralRootRecord {
         const name = literalRootName(id) orelse checkedArtifactInvariant("a root of the root table was read as a literal root", .{});
         switch (name) {
             .conversion => |literal| {
@@ -14204,7 +14204,7 @@ pub const CheckedDispatch = struct {
     /// Compile-time root `id`: a row of the root table, or a literal root.
     /// A literal root's payload is the evaluation output's
     /// (`CheckedModuleArtifact.compileTimeRoot`).
-    pub fn compileTimeRoot(self: CheckedDispatch, id: ComptimeRootId) Error!CompileTimeRoot {
+    pub fn compileTimeRoot(self: CheckedDispatch, id: ComptimeRootKey) Error!CompileTimeRoot {
         if (id.rowIndex() != null) return self.source.compile_time_roots.root(id);
         return (try self.literalRoot(id)).root;
     }
@@ -21733,26 +21733,26 @@ fn directEvidenceEnter(
 }
 
 /// The identity of the conversion root of `literal`: the literal itself.
-pub fn literalConversionRootId(literal: LiteralNode) ComptimeRootId {
-    const kind: u128 = @backingInt(ComptimeRootId.Kind.literal_conversion);
+pub fn literalConversionRootId(literal: LiteralNode) ComptimeRootKey {
+    const kind: u128 = @backingInt(ComptimeRootKey.Kind.literal_conversion);
     const pattern: u128 = switch (literal) {
         .expr => 0,
         .pattern => 1,
     };
-    return @fromBackingInt((kind << ComptimeRootId.kind_shift) | (pattern << 32) | literal.node());
+    return @fromBackingInt((kind << ComptimeRootKey.kind_shift) | (pattern << 32) | literal.node());
 }
 
 /// The identity of the literal argument root converting literal requirement
 /// `requirement` of the scheme `edge` instantiates at the type the edge
 /// fixes.
-pub fn literalArgumentRootId(edge: LiteralEdge, requirement: u32) ComptimeRootId {
-    const kind: u128 = @backingInt(ComptimeRootId.Kind.literal_argument);
+pub fn literalArgumentRootId(edge: LiteralEdge, requirement: u32) ComptimeRootKey {
+    const kind: u128 = @backingInt(ComptimeRootKey.Kind.literal_argument);
     const edge_bits: u128 = switch (edge) {
         .node => |id| @as(u64, @bitCast(id)),
         .use => |expr| (@as(u128, 1) << 64) | @backingInt(expr),
         .literal => checkedArtifactInvariant("a literal argument root was named by a literal requirement's own literal", .{}),
     };
-    return @fromBackingInt((kind << ComptimeRootId.kind_shift) | (edge_bits << 32) | requirement);
+    return @fromBackingInt((kind << ComptimeRootKey.kind_shift) | (edge_bits << 32) | requirement);
 }
 
 /// What a literal root's identity names (`literalConversionRootId`,
@@ -21764,7 +21764,7 @@ pub const LiteralRootName = union(enum) {
 
 /// What literal root `id` names, or null for a root of the module's root
 /// table.
-pub fn literalRootName(id: ComptimeRootId) ?LiteralRootName {
+pub fn literalRootName(id: ComptimeRootKey) ?LiteralRootName {
     const raw = @backingInt(id);
     switch (id.kind()) {
         .row => return null,
@@ -21785,14 +21785,14 @@ pub fn literalRootName(id: ComptimeRootId) ?LiteralRootName {
 
 /// The entry wrapper of literal root `root`: a template named by the root's
 /// identity, which no row of the template table holds.
-pub fn literalRootWrapperTemplate(root: ComptimeRootId) canonical.CheckedProcedureTemplateId {
+pub fn literalRootWrapperTemplate(root: ComptimeRootKey) canonical.CheckedProcedureTemplateId {
     std.debug.assert(root.kind() != .row);
     return @fromBackingInt(@backingInt(root));
 }
 
 /// The literal root whose entry wrapper `template` is, or null for a template
 /// of the template table.
-pub fn templateLiteralRoot(template: canonical.CheckedProcedureTemplateId) ?ComptimeRootId {
+pub fn templateLiteralRoot(template: canonical.CheckedProcedureTemplateId) ?ComptimeRootKey {
     if (template.rowIndex() != null) return null;
     return @fromBackingInt(@backingInt(template));
 }
@@ -22797,7 +22797,7 @@ fn literalScopeKeyLessThan(_: void, a: LiteralScopeKey, b: LiteralScopeKey) bool
     return a_scope < b_scope;
 }
 
-fn comptimeRootIdLessThan(_: void, a: ComptimeRootId, b: ComptimeRootId) bool {
+fn comptimeRootIdLessThan(_: void, a: ComptimeRootKey, b: ComptimeRootKey) bool {
     return @backingInt(a) < @backingInt(b);
 }
 
@@ -22834,9 +22834,9 @@ pub const LiteralComponent = struct {
         return self.args[span.start..][0..span.len];
     }
 
-    pub fn root(self: *const LiteralComponent, id: ComptimeRootId) ?*const LiteralRootRecord {
+    pub fn root(self: *const LiteralComponent, id: ComptimeRootKey) ?*const LiteralRootRecord {
         const index = std.sort.binarySearch(LiteralRootRecord, self.roots, id, struct {
-            fn order(key: ComptimeRootId, item: LiteralRootRecord) std.math.Order {
+            fn order(key: ComptimeRootKey, item: LiteralRootRecord) std.math.Order {
                 return std.math.order(@backingInt(key), @backingInt(item.root.id));
             }
         }.order) orelse return null;
@@ -22858,7 +22858,7 @@ pub const LiteralComponent = struct {
 /// The literal argument roots one template's edges read
 /// (`ModuleAnalyses.templateLiteralArgumentDemand`), ascending.
 pub const LiteralArgumentDemand = struct {
-    roots: []const ComptimeRootId,
+    roots: []const ComptimeRootKey,
 
     pub fn destroy(self: *LiteralArgumentDemand, allocator: Allocator) void {
         allocator.free(self.roots);
@@ -23056,7 +23056,7 @@ pub fn computeLiteralComponent(
         }
     }
 
-    const ArgBuild = union(enum) { root: ComptimeRootId, forwarded: u32, unbound };
+    const ArgBuild = union(enum) { root: ComptimeRootKey, forwarded: u32, unbound };
     const EdgeState = struct {
         index: u32,
         edge: LiteralGraphEdge,
@@ -23155,10 +23155,10 @@ pub fn computeLiteralComponent(
         }
     }
 
-    const NewRoot = struct { id: ComptimeRootId, site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, owner_expr: CIR.Expr.Idx };
+    const NewRoot = struct { id: ComptimeRootKey, site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, owner_expr: CIR.Expr.Idx };
     var new_roots: std.ArrayListUnmanaged(NewRoot) = .empty;
     defer new_roots.deinit(allocator);
-    var root_index = std.AutoHashMapUnmanaged(ObligationKey, ComptimeRootId).empty;
+    var root_index = std.AutoHashMapUnmanaged(ObligationKey, ComptimeRootKey).empty;
     defer root_index.deinit(allocator);
     while (true) {
         var changed = false;
@@ -23324,7 +23324,7 @@ pub fn computeLiteralComponent(
 /// one of the template's edges is done before the template's slot is
 /// claimed (`ModuleAnalyses.templateLiteralArgumentDemand`).
 pub fn computeLiteralArgumentDemand(allocator: Allocator, graph: *const LiteralGraph, template: u32) Allocator.Error!*LiteralArgumentDemand {
-    var roots: std.ArrayList(ComptimeRootId) = .empty;
+    var roots: std.ArrayList(ComptimeRootKey) = .empty;
     defer roots.deinit(allocator);
     for (graph.held[graph.held_starts[template]..graph.held_starts[template + 1]]) |edge| {
         const component = graph.component_slots[graph.components.component_of[graph.edges[edge].holder]].peek() orelse
@@ -23334,7 +23334,7 @@ pub fn computeLiteralArgumentDemand(allocator: Allocator, graph: *const LiteralG
             .forwarded, .unbound => {},
         };
     }
-    std.mem.sort(ComptimeRootId, roots.items, {}, comptimeRootIdLessThan);
+    std.mem.sort(ComptimeRootKey, roots.items, {}, comptimeRootIdLessThan);
     var kept: usize = 0;
     for (roots.items, 0..) |id, index| {
         if (index != 0 and roots.items[index - 1] == id) continue;
@@ -25374,8 +25374,8 @@ fn checkedTypeHasNoReachableCallableSlots(
     return true;
 }
 
-/// Public `ComptimeRootId` declaration.
-pub const ComptimeRootId = checked_ids.ComptimeRootId;
+/// Public `ComptimeRootKey` declaration.
+pub const ComptimeRootKey = checked_ids.ComptimeRootKey;
 
 /// Public `CompileTimeRootKind` declaration.
 pub const CompileTimeRootKind = enum {
@@ -25476,7 +25476,7 @@ pub const LiteralRequirement = struct {
 /// root of the edge's module (its converted value) or an literal requirement of the
 /// scope the edge is in (that scope's own hidden argument).
 pub const LiteralArgSource = union(enum(u8)) {
-    root: ComptimeRootId,
+    root: ComptimeRootKey,
     forwarded: u32,
     /// The instantiated literal's type mentions a variable that no scheme
     /// around the edge quantifies: a use's copy of a variable nothing relates
@@ -25535,7 +25535,7 @@ pub const CompileTimeRootRequestEligibility = enum(u8) {
 
 /// Public `CompileTimeRoot` declaration.
 pub const CompileTimeRoot = struct {
-    id: ComptimeRootId,
+    id: ComptimeRootKey,
     module_idx: u32,
     kind: CompileTimeRootKind,
     source: RootSource,
@@ -25638,7 +25638,7 @@ fn rootBodyContainsDiagnosticError(diagnostics: *const body_analyses.NodeBits, r
 
 /// One literal root's evaluation output.
 pub const LiteralRootPayload = struct {
-    id: ComptimeRootId,
+    id: ComptimeRootKey,
     payload: CompileTimeRootPayload = .pending,
     /// The value a `.boxy` evaluation stored for the root
     /// (`CompileTimeRoot.boxy_value`).
@@ -25660,20 +25660,20 @@ pub const LiteralRootPayloadTable = struct {
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
-    fn find(self: *const LiteralRootPayloadTable, id: ComptimeRootId) ?usize {
+    fn find(self: *const LiteralRootPayloadTable, id: ComptimeRootKey) ?usize {
         return std.sort.binarySearch(LiteralRootPayload, self.entries, id, struct {
-            fn order(key: ComptimeRootId, item: LiteralRootPayload) std.math.Order {
+            fn order(key: ComptimeRootKey, item: LiteralRootPayload) std.math.Order {
                 return std.math.order(@backingInt(key), @backingInt(item.id));
             }
         }.order);
     }
 
-    pub fn get(self: *const LiteralRootPayloadTable, id: ComptimeRootId) ?LiteralRootPayload {
+    pub fn get(self: *const LiteralRootPayloadTable, id: ComptimeRootKey) ?LiteralRootPayload {
         const index = self.find(id) orelse return null;
         return self.entries[index];
     }
 
-    fn entry(self: *LiteralRootPayloadTable, id: ComptimeRootId) *LiteralRootPayload {
+    fn entry(self: *LiteralRootPayloadTable, id: ComptimeRootKey) *LiteralRootPayload {
         const index = self.find(id) orelse checkedArtifactInvariant("a literal root no root request evaluates received a payload", .{});
         return &self.entries[index];
     }
@@ -25833,7 +25833,7 @@ pub const CompileTimeRootTable = struct {
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
 
-    pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) ?ComptimeRootId {
+    pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) ?ComptimeRootKey {
         for (self.roots) |entry| {
             if (entry.kind == .hoisted_validation) continue;
             if (entry.pattern != null and entry.pattern.? == pattern) return entry.id;
@@ -25862,12 +25862,12 @@ pub const CompileTimeRootTable = struct {
 
     /// Row `id` of the table. A literal root is no row
     /// (`CheckedModuleArtifact.compileTimeRoot`).
-    pub fn root(self: *const CompileTimeRootTable, id: ComptimeRootId) CompileTimeRoot {
+    pub fn root(self: *const CompileTimeRootTable, id: ComptimeRootKey) CompileTimeRoot {
         return self.roots[id.index()];
     }
 
     /// Record the value a `.boxy` evaluation stored for root `id`.
-    pub fn fillBoxyValue(self: *CompileTimeRootTable, id: ComptimeRootId, value: StoredConstTemplate) void {
+    pub fn fillBoxyValue(self: *CompileTimeRootTable, id: ComptimeRootKey, value: StoredConstTemplate) void {
         const index = id.index();
         if (index >= self.roots.len) {
             checkedArtifactInvariant("compile-time root id is out of range", .{});
@@ -25877,7 +25877,7 @@ pub const CompileTimeRootTable = struct {
 
     pub fn fillPayload(
         self: *CompileTimeRootTable,
-        id: ComptimeRootId,
+        id: ComptimeRootKey,
         payload: CompileTimeRootPayload,
     ) void {
         const index = id.index();
@@ -25932,7 +25932,7 @@ pub const CompileTimeRootTable = struct {
     }
 
     /// The id `appendCompileTimeRoot` assigns to the next appended root.
-    fn nextCompileTimeRootId(roots: []const CompileTimeRoot) ComptimeRootId {
+    fn nextCompileTimeRootId(roots: []const CompileTimeRoot) ComptimeRootKey {
         return @fromBackingInt(@intCast(@as(u32, @intCast(roots.len))));
     }
 
@@ -27631,8 +27631,6 @@ const ExhaustivenessTemplateReachability = struct {
     }
 };
 
-/// The exhaustiveness checks a procedure template's body reaches
-/// (`ModuleAnalyses.templateExhaustivenessSites`).
 /// The nested procedure sites of a literal root's entry wrapper, whose body
 /// constructs no procedure.
 pub const empty_owner_nested_proc_sites: OwnerNestedProcSites = .{};
@@ -27641,6 +27639,8 @@ pub const empty_owner_nested_proc_sites: OwnerNestedProcSites = .{};
 /// reaches none.
 pub const empty_template_exhaustiveness_sites: TemplateExhaustivenessSites = .{};
 
+/// The exhaustiveness checks a procedure template's body reaches
+/// (`ModuleAnalyses.templateExhaustivenessSites`).
 pub const TemplateExhaustivenessSites = struct {
     /// Ascending.
     sites: []const CheckedExhaustivenessSiteId = &.{},
@@ -28186,7 +28186,7 @@ pub const ConstHoistedOwner = struct {
     /// The hoisted constant's compile-time root. Several roots can match one
     /// expression (one per binder of a destructure), so the root identifies
     /// the constant.
-    root: ComptimeRootId,
+    root: ComptimeRootKey,
 };
 
 /// Public `TopLevelValueKind` declaration.
@@ -28396,7 +28396,7 @@ pub const HoistedConstId = enum(u32) { _ };
 pub const HoistedConstEntry = struct {
     id: HoistedConstId,
     module_idx: u32,
-    root: ComptimeRootId,
+    root: ComptimeRootKey,
     expr: CIR.Expr.Idx,
     pattern: ?CIR.Pattern.Idx,
     checked_type: CheckedTypeId,
@@ -28571,7 +28571,7 @@ pub const HoistedConstTable = struct {
         return self.entries[@backingInt(self.by_pattern[lo].entry)];
     }
 
-    pub fn lookupByRoot(self: *const HoistedConstTable, root: ComptimeRootId) ?HoistedConstEntry {
+    pub fn lookupByRoot(self: *const HoistedConstTable, root: ComptimeRootKey) ?HoistedConstEntry {
         const idx = root.rowIndex() orelse return null;
         if (idx >= self.by_root.len) return null;
         const entry_id = self.by_root[idx] orelse return null;
@@ -28591,7 +28591,7 @@ pub const ConstTemplateId = enum(u32) { _ };
 /// Public `CheckedConstBody` declaration.
 pub const CheckedConstBody = struct {
     id: CheckedConstBodyRef,
-    root: ComptimeRootId,
+    root: ComptimeRootKey,
     body_expr: CIR.Expr.Idx,
     checked_type: CheckedTypeId,
 };
@@ -28638,7 +28638,7 @@ pub const CheckedConstBodyTable = struct {
         };
     }
 
-    pub fn bodyForRoot(self: *const CheckedConstBodyTable, root: ComptimeRootId) ?CheckedConstBodyRef {
+    pub fn bodyForRoot(self: *const CheckedConstBodyTable, root: ComptimeRootKey) ?CheckedConstBodyRef {
         const idx = root.rowIndex() orelse return null;
         if (idx >= self.by_root.len) return null;
         return self.by_root[idx];
@@ -30813,7 +30813,7 @@ pub const StoredConstTemplate = struct {
     /// The compile-time root whose evaluation stored `node`. A compilation
     /// that restores this value demands that root (design.md "Demand-Driven
     /// Compile-Time Evaluation").
-    root: ComptimeRootId,
+    root: ComptimeRootKey,
     /// Exact producer-owned Monotype representation used to evaluate `node`.
     /// This is explicit post-check evidence, stored in `ConstStore.type_store`.
     root_type: const_store.ConstTypeId,
@@ -30912,7 +30912,7 @@ pub const ConstTemplateTable = struct {
         allocator: Allocator,
         artifact_key: CheckedModuleArtifactKey,
         module_idx: u32,
-        root: ComptimeRootId,
+        root: ComptimeRootKey,
         source_scheme: CheckedTypeSchemeId,
     ) Allocator.Error!ConstRef {
         const id: ConstTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
@@ -31137,8 +31137,8 @@ fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
 /// Ordered compile-time debug observations owned by checked publication and
 /// replayed from cache without executing their roots again.
 pub const CompileTimeDebugStore = struct {
-    pub const Entry = extern struct { root: ComptimeRootId, message_start: u32, message_len: u32, _reserved: u64 = 0 };
-    pub const Input = struct { root: ComptimeRootId, message: []const u8 };
+    pub const Entry = extern struct { root: ComptimeRootKey, message_start: u32, message_len: u32, _reserved: u64 = 0 };
+    pub const Input = struct { root: ComptimeRootKey, message: []const u8 };
     entries: []const Entry = &.{},
     bytes: []const u8 = &.{},
 
@@ -31190,10 +31190,10 @@ pub const CompileTimeDebugStore = struct {
 /// content; its payload says so.
 pub const CompileTimeRootReadTable = struct {
     /// A read root, named by its module's identity bytes.
-    pub const Ref = extern struct { module: [32]u8, root: ComptimeRootId };
+    pub const Ref = extern struct { module: [32]u8, root: ComptimeRootKey };
     /// The reads of one evaluated root, by root id.
-    pub const Row = extern struct { root: ComptimeRootId, start: u32 = 0, len: u32 = 0, _reserved: u64 = 0 };
-    pub const Input = struct { root: ComptimeRootId, reads: []const Ref };
+    pub const Row = extern struct { root: ComptimeRootKey, start: u32 = 0, len: u32 = 0, _reserved: u64 = 0 };
+    pub const Input = struct { root: ComptimeRootKey, reads: []const Ref };
     /// Ascending by root.
     rows: []const Row = &.{},
     refs: []const Ref = &.{},
@@ -31213,18 +31213,18 @@ pub const CompileTimeRootReadTable = struct {
         previous: CompileTimeRootReadTable,
         inputs: []const Input,
     ) Allocator.Error!CompileTimeRootReadTable {
-        var replaced = std.AutoHashMapUnmanaged(ComptimeRootId, []const Ref).empty;
+        var replaced = std.AutoHashMapUnmanaged(ComptimeRootKey, []const Ref).empty;
         defer replaced.deinit(allocator);
         for (inputs) |input| {
             const slot = try replaced.getOrPut(allocator, input.root);
             if (slot.found_existing) checkedArtifactInvariant("compile-time root reads were recorded twice for one root", .{});
             slot.value_ptr.* = input.reads;
         }
-        var roots: std.ArrayList(ComptimeRootId) = .empty;
+        var roots: std.ArrayList(ComptimeRootKey) = .empty;
         defer roots.deinit(allocator);
         for (previous.rows) |row| if (!replaced.contains(row.root)) try roots.append(allocator, row.root);
         for (inputs) |input| try roots.append(allocator, input.root);
-        std.mem.sort(ComptimeRootId, roots.items, {}, comptimeRootIdLessThan);
+        std.mem.sort(ComptimeRootKey, roots.items, {}, comptimeRootIdLessThan);
         var ref_count: usize = 0;
         for (roots.items) |root| ref_count += (replaced.get(root) orelse previous.readsOf(root)).len;
         const rows = try allocator.alloc(Row, roots.items.len);
@@ -31240,9 +31240,9 @@ pub const CompileTimeRootReadTable = struct {
         return .{ .rows = rows, .refs = refs };
     }
 
-    pub fn readsOf(self: CompileTimeRootReadTable, root: ComptimeRootId) []const Ref {
+    pub fn readsOf(self: CompileTimeRootReadTable, root: ComptimeRootKey) []const Ref {
         const index = std.sort.binarySearch(Row, self.rows, root, struct {
-            fn order(key: ComptimeRootId, item: Row) std.math.Order {
+            fn order(key: ComptimeRootKey, item: Row) std.math.Order {
                 return std.math.order(@backingInt(key), @backingInt(item.root));
             }
         }.order) orelse return &.{};
@@ -31561,19 +31561,19 @@ pub const CheckedModuleArtifact = struct {
 
     /// Compile-time root `id` of this module, with the payload evaluation
     /// gave it: a row of the root table, or a literal root.
-    pub fn compileTimeRoot(self: *const CheckedModuleArtifact, id: ComptimeRootId) Allocator.Error!CompileTimeRoot {
+    pub fn compileTimeRoot(self: *const CheckedModuleArtifact, id: ComptimeRootKey) Allocator.Error!CompileTimeRoot {
         return importedView(self).compileTimeRoot(id);
     }
 
     /// Record root `id`'s payload.
-    pub fn fillRootPayload(self: *CheckedModuleArtifact, id: ComptimeRootId, payload: CompileTimeRootPayload) Allocator.Error!void {
+    pub fn fillRootPayload(self: *CheckedModuleArtifact, id: ComptimeRootKey, payload: CompileTimeRootPayload) Allocator.Error!void {
         if (id.rowIndex() != null) return self.compile_time_roots.fillPayload(id, payload);
         verifyCompileTimeRootPayloadMatchesKind((try self.dispatch().literalRoot(id)).root, payload);
         self.literal_root_payloads.entry(id).payload = payload;
     }
 
     /// Record the value a `.boxy` evaluation stored for root `id`.
-    pub fn fillRootBoxyValue(self: *CheckedModuleArtifact, id: ComptimeRootId, value: StoredConstTemplate) void {
+    pub fn fillRootBoxyValue(self: *CheckedModuleArtifact, id: ComptimeRootKey, value: StoredConstTemplate) void {
         if (id.rowIndex() != null) return self.compile_time_roots.fillBoxyValue(id, value);
         self.literal_root_payloads.entry(id).boxy_value = value;
     }
@@ -32754,7 +32754,7 @@ pub const ImportedModuleView = struct {
 
     /// Compile-time root `id` of the module, with the payload evaluation gave
     /// it: a row of the root table, or a literal root.
-    pub fn compileTimeRoot(self: ImportedModuleView, id: ComptimeRootId) Allocator.Error!CompileTimeRoot {
+    pub fn compileTimeRoot(self: ImportedModuleView, id: ComptimeRootKey) Allocator.Error!CompileTimeRoot {
         if (id.rowIndex() != null) return self.compile_time_roots.root(id);
         var root = (try self.dispatch().literalRoot(id)).root;
         if (self.literal_root_payloads.get(id)) |output| {
@@ -36122,11 +36122,11 @@ test "compile-time root read table keeps earlier rows beside newly evaluated roo
         .{ .root = @fromBackingInt(1), .reads = &first_reads },
     });
     defer first.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 0), first.readsOf(testIndexId(ComptimeRootId, 0)).len);
+    try std.testing.expectEqual(@as(usize, 0), first.readsOf(testIndexId(ComptimeRootKey, 0)).len);
     try std.testing.expectEqualSlices(Ref, &first_reads, first.readsOf(@fromBackingInt(1)));
 
     const later_reads = [_]Ref{
-        .{ .module = @as([32]u8, @splat(2)), .root = testIndexId(ComptimeRootId, 0) },
+        .{ .module = @as([32]u8, @splat(2)), .root = testIndexId(ComptimeRootKey, 0) },
         .{ .module = @as([32]u8, @splat(1)), .root = @fromBackingInt(4) },
     };
     var later = try CompileTimeRootReadTable.merge(allocator, first, &.{
@@ -36135,7 +36135,7 @@ test "compile-time root read table keeps earlier rows beside newly evaluated roo
     defer later.deinit(allocator);
     try std.testing.expectEqualSlices(Ref, &first_reads, later.readsOf(@fromBackingInt(1)));
     try std.testing.expectEqualSlices(Ref, &later_reads, later.readsOf(@fromBackingInt(2)));
-    try std.testing.expectEqual(@as(usize, 0), later.readsOf(testIndexId(ComptimeRootId, 0)).len);
+    try std.testing.expectEqual(@as(usize, 0), later.readsOf(testIndexId(ComptimeRootKey, 0)).len);
     try later.validate();
 }
 

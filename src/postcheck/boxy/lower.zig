@@ -229,7 +229,7 @@ pub const WorkerKey = union(enum) {
     /// compile-time program evaluating it: an erased worker with no
     /// arguments reading the root's compile-time value slot
     /// (`Program.rootValueSlot`), which readers call once the root completes.
-    root_slot: struct { module: ModuleIndex, root: checked.ComptimeRootId },
+    root_slot: struct { module: ModuleIndex, root: checked.ComptimeRootKey },
     /// A compiler-derived structural method over the descriptor its
     /// dictionary captures.
     structural: StructuralMethod,
@@ -546,7 +546,7 @@ pub const Program = struct {
     /// Each module's callable-eval templates, by their binding pattern.
     callable_eval_by_pattern: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, pattern: PatternId }, checked.CallableEvalTemplateId) = .empty,
     /// Each module's entry wrappers, by the compile-time root they wrap.
-    wrapper_by_root: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, root: checked.ComptimeRootId }, checked_names.ProcedureTemplateRef) = .empty,
+    wrapper_by_root: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, root: checked.ComptimeRootKey }, checked_names.ProcedureTemplateRef) = .empty,
     /// Each module's exported procedure bindings, by their definition.
     exported_bindings: std.AutoHashMapUnmanaged(ExportedBindingKey, *const checked.ImportedProcedureBindingView) = .empty,
     observe_expects: bool,
@@ -734,7 +734,7 @@ pub const Program = struct {
     /// The entry wrapper template of module `index`'s compile-time root
     /// `root`: a row of its template table, or, for a literal root, the
     /// template its identity names.
-    pub fn rootWrapper(self: *const Program, index: ModuleIndex, root: checked.ComptimeRootId) checked_names.ProcedureTemplateRef {
+    pub fn rootWrapper(self: *const Program, index: ModuleIndex, root: checked.ComptimeRootKey) checked_names.ProcedureTemplateRef {
         if (root.rowIndex() == null) {
             const view = self.module(index);
             return .{
@@ -2208,7 +2208,7 @@ pub const Program = struct {
     /// The thunk reading the compile-time value slot of literal argument root
     /// `root` of `module_index`, whose value has type `ty`
     /// (`WorkerKey.root_slot`).
-    pub fn rootSlotThunkWorker(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!WorkerId {
+    pub fn rootSlotThunkWorker(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootKey, ty: TypeId) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .root_slot = .{ .module = module_index, .root = root } };
         if (self.worker_ids.get(key)) |existing| return existing;
         return try self.addErasedWorker(key, module_index, &.{}, &.{}, ty, "boxy.root_slot");
@@ -2325,13 +2325,13 @@ pub const Program = struct {
     }
 
     /// A compile-time root of a module of the program.
-    pub const RootSlotKey = struct { module: ModuleIndex, root: checked.ComptimeRootId };
+    pub const RootSlotKey = struct { module: ModuleIndex, root: checked.ComptimeRootKey };
 
     /// Whether this program evaluates compile-time root `root` of module
     /// `module_index`: the root is one of the program's requests. A pending
     /// root no program evaluates (a literal in a branch, whose conversion
     /// runs where it is reached) has no value to read.
-    pub fn evaluatesRoot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootId) bool {
+    pub fn evaluatesRoot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootKey) bool {
         return self.requested_roots.contains(.{ .module = module_index, .root = root });
     }
 
@@ -2339,7 +2339,7 @@ pub const Program = struct {
     /// compile-time value slot: this program evaluates the root, at one
     /// type. A polymorphic constant computes at each instance it is read
     /// at, as its entry procedure's value.
-    pub fn readsRootSlot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootId) Allocator.Error!bool {
+    pub fn readsRootSlot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootKey) Allocator.Error!bool {
         if (!self.evaluatesRoot(module_index, root)) return false;
         const view = self.module(module_index);
         return !try types.Converter.rootHasIdentityVariables(view, (try view.view.compileTimeRoot(root)).checked_type);
@@ -2353,7 +2353,7 @@ pub const Program = struct {
     /// fails as the recursion evaluating the value in place would end in,
     /// and the evaluator reruns the reader once the root completes
     /// (design.md "Compile-Time Evaluation Strategy").
-    pub fn rootValueSlot(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!LIR.StaticDataId {
+    pub fn rootValueSlot(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootKey, ty: TypeId) Allocator.Error!LIR.StaticDataId {
         const key: RootSlotKey = .{ .module = module_index, .root = root };
         if (self.root_value_slots.get(key)) |slot| return slot;
         const module_key = self.module(module_index).key;
@@ -2654,7 +2654,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
             _ = try program.methodEntryWorker(worker);
         }
         // Each literal root's entry wrapper, which no table row holds.
-        var literal_roots: std.ArrayList(checked.ComptimeRootId) = .empty;
+        var literal_roots: std.ArrayList(checked.ComptimeRootKey) = .empty;
         defer literal_roots.deinit(program.allocator);
         try view.view.dispatch().appendLiteralRoots(program.allocator, &literal_roots);
         for (literal_roots.items) |root| {

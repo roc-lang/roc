@@ -70,7 +70,7 @@ pub inline fn traceEnabled() bool {
 /// A compile-time root this compilation evaluates.
 pub const DeclaredRoot = struct {
     module: checked.ModuleId,
-    root: checked.ComptimeRootId,
+    root: checked.ComptimeRootKey,
 };
 
 /// What a node can contribute to a literal root.

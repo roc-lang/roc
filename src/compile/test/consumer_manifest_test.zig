@@ -76,7 +76,7 @@ fn moduleArtifactNamed(coord: *Coordinator, name: []const u8) ?*CheckedArtifact.
 fn valueSlotsForRoot(
     program: *const lir.CheckedPipeline.LoweredProgram,
     module: CheckedArtifact.ModuleId,
-    root: CheckedArtifact.ComptimeRootId,
+    root: CheckedArtifact.ComptimeRootKey,
 ) usize {
     var count: usize = 0;
     for (program.lir_result.static_data_values.items) |value| {
@@ -92,7 +92,7 @@ fn valueSlotsForRoot(
 fn valueSlotForRoot(
     program: *const lir.CheckedPipeline.LoweredProgram,
     module: CheckedArtifact.ModuleId,
-    root: CheckedArtifact.ComptimeRootId,
+    root: CheckedArtifact.ComptimeRootKey,
 ) ?lir.LIR.StaticDataId {
     for (program.lir_result.static_data_values.items, 0..) |value, index| {
         const owner = value.compile_time_root orelse continue;
@@ -108,7 +108,7 @@ fn valueSlotForRoot(
 fn materializesRoot(
     program: *const lir.CheckedPipeline.LoweredProgram,
     module: CheckedArtifact.ModuleId,
-    root: CheckedArtifact.ComptimeRootId,
+    root: CheckedArtifact.ComptimeRootKey,
 ) bool {
     const slot = valueSlotForRoot(program, module, root) orelse return false;
     for (program.lir_result.const_roots.items) |const_root| {
@@ -121,7 +121,7 @@ fn materializesRoot(
 fn materializingStage(
     stages: *const CompletedStages,
     module: CheckedArtifact.ModuleId,
-    root: CheckedArtifact.ComptimeRootId,
+    root: CheckedArtifact.ComptimeRootKey,
 ) ?usize {
     for (stages.programs(), 0..) |program, index| {
         if (materializesRoot(program, module, root)) return index;
@@ -149,7 +149,7 @@ fn countProcsNaming(store: *const lir.LirStore, fragment: []const u8) usize {
     return count;
 }
 
-fn rootIdentity(request: CheckedArtifact.RootRequest) error{TestUnexpectedResult}!CheckedArtifact.ComptimeRootId {
+fn rootIdentity(request: CheckedArtifact.RootRequest) error{TestUnexpectedResult}!CheckedArtifact.ComptimeRootKey {
     return request.compile_time_root orelse error.TestUnexpectedResult;
 }
 

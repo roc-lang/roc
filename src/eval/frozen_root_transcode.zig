@@ -643,7 +643,7 @@ test "frozen root transcode maps erased worker and drop identities across target
     try std.testing.expectEqual(@as(u8, 0x87), payload.bytes[capture_offset + 11]);
 }
 
-fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("check").CheckedArtifact.ComptimeRootId) Allocator.Error!lir.LIR.StaticDataId {
+fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("check").CheckedArtifact.ComptimeRootKey) Allocator.Error!lir.LIR.StaticDataId {
     const idx = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const data = program.layouts.getLayout(idx).getStruct().idx;
     const id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
@@ -660,7 +660,7 @@ test "frozen root transcode preserves failure flag and message using explicit fi
     const checked = @import("check").CheckedArtifact;
     var roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer roots.deinit(allocator);
-    const root_id: checked.ComptimeRootId = @fromBackingInt(@intCast(roots.items.len));
+    const root_id: checked.ComptimeRootKey = @fromBackingInt(@intCast(roots.items.len));
     // Transcoding reads only the published root identity, not its source body/type.
     try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
     const source_id = try failureSlot(allocator, &source, roots.items[root_id.index()].id);
@@ -810,7 +810,7 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     const checked = @import("check").CheckedArtifact;
     var roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer roots.deinit(allocator);
-    const root_id: checked.ComptimeRootId = @fromBackingInt(@intCast(roots.items.len));
+    const root_id: checked.ComptimeRootKey = @fromBackingInt(@intCast(roots.items.len));
     // Transcoding reads only the published root identity, not its source body/type.
     try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
 
@@ -857,7 +857,7 @@ fn boxedValueSlot(
     program: *Program.Result,
     box_idx: layout.Idx,
     plan: Program.ConstPlanId,
-    root: @import("check").CheckedArtifact.ComptimeRootId,
+    root: @import("check").CheckedArtifact.ComptimeRootKey,
 ) Allocator.Error!lir.LIR.StaticDataId {
     const failure_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(program.store.allocator, .{ .initializer = null, .layout_idx = .zst });

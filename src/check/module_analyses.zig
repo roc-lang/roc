@@ -659,7 +659,7 @@ pub const ModuleAnalyses = struct {
     /// The literal argument roots procedure template `template`'s edges read,
     /// ascending. Demands, holding no claim, the component of every edge the
     /// template holds before claiming.
-    pub fn templateLiteralArgumentDemand(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: u32) Allocator.Error![]const checked_artifact.ComptimeRootId {
+    pub fn templateLiteralArgumentDemand(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: u32) Allocator.Error![]const checked_artifact.ComptimeRootKey {
         self.assertPublished();
         const graph = try self.literalGraph(dispatch);
         if (graph.demand_slots[template].peek()) |done| return done.roots;

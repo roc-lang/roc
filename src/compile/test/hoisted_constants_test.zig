@@ -2600,8 +2600,8 @@ fn expectExportedRuntimeEntrypoint(
 
 fn expectRootRequestBefore(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    before: check.CheckedArtifact.ComptimeRootId,
-    after: check.CheckedArtifact.ComptimeRootId,
+    before: check.CheckedArtifact.ComptimeRootKey,
+    after: check.CheckedArtifact.ComptimeRootKey,
 ) HoistedConstantsTestError!void {
     const before_index = (try compileTimeRequestIndexForRoot(artifact, before)) orelse return error.BeforeRootHadNoRequest;
     const after_index = (try compileTimeRequestIndexForRoot(artifact, after)) orelse return error.AfterRootHadNoRequest;
@@ -2610,7 +2610,7 @@ fn expectRootRequestBefore(
 
 fn compileTimeRequestIndexForRoot(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    root_id: check.CheckedArtifact.ComptimeRootId,
+    root_id: check.CheckedArtifact.ComptimeRootKey,
 ) std.mem.Allocator.Error!?usize {
     const root = (try artifact.compileTimeRoot(root_id));
     for ((try artifact.rootRequests()).compile_time_requests, 0..) |request, i| {

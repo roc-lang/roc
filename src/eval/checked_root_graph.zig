@@ -27,7 +27,7 @@ const static_dispatch = check.StaticDispatchRegistry;
 /// position in the finalization's module list, and its checked identity.
 pub const Root = struct {
     module: u32,
-    root: checked.ComptimeRootId,
+    root: checked.ComptimeRootKey,
     request: checked.RootRequest,
 };
 
@@ -42,7 +42,7 @@ pub const Graph = struct {
     }
 };
 
-const RootKey = struct { module: [32]u8, root: checked.ComptimeRootId };
+const RootKey = struct { module: [32]u8, root: checked.ComptimeRootKey };
 
 /// A template of one listed module.
 pub const TemplateKey = struct { module: u32, template: canonical.CheckedProcedureTemplateId };
@@ -130,7 +130,7 @@ const Walker = struct {
     summaries: std.AutoHashMapUnmanaged(TemplateKey, DirectDependencies) = .empty,
     /// The walk that last visited each literal root's entry wrapper.
     visited_literal_wrappers: std.AutoHashMapUnmanaged(TemplateKey, u32) = .empty,
-    literal_demand: std.ArrayList(checked.ComptimeRootId) = .empty,
+    literal_demand: std.ArrayList(checked.ComptimeRootKey) = .empty,
     summary_templates: std.ArrayList(TemplateKey) = .empty,
     summary_reads: std.ArrayList(u32) = .empty,
     pending: std.ArrayList(TemplateKey) = .empty,
@@ -352,7 +352,7 @@ const Walker = struct {
 
     /// Walk a literal root's entry wrapper: a conversion root's conversion
     /// plan and the literal argument roots its edges read.
-    fn walkLiteralRootWrapper(self: *Walker, key: TemplateKey, root: checked.ComptimeRootId) Allocator.Error!void {
+    fn walkLiteralRootWrapper(self: *Walker, key: TemplateKey, root: checked.ComptimeRootKey) Allocator.Error!void {
         const stamp = try self.visited_literal_wrappers.getOrPut(self.allocator, key);
         if (stamp.found_existing and stamp.value_ptr.* == self.visit) return;
         stamp.value_ptr.* = self.visit;
@@ -426,7 +426,7 @@ const Walker = struct {
             .eval_template => |eval| try self.pushTemplate(eval.entry_template),
             .stored_const, .reserved => {},
         }
-        const root: checked.ComptimeRootId = switch (const_ref.owner) {
+        const root: checked.ComptimeRootKey = switch (const_ref.owner) {
             .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
             .hoisted_root => |hoisted| (artifact.hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
         };
@@ -469,7 +469,7 @@ const Walker = struct {
     /// the evaluation may never call included: the root then runs after the
     /// value completes, or, when the two read each other, in one group with
     /// it.
-    fn readRoot(self: *Walker, module: u32, root: checked.ComptimeRootId) Allocator.Error!void {
+    fn readRoot(self: *Walker, module: u32, root: checked.ComptimeRootKey) Allocator.Error!void {
         const artifact = self.modules[module];
         const ordinal = self.root_ordinals.get(.{ .module = artifact.key.digest().bytes, .root = root }) orelse return;
         try self.reads.append(self.allocator, ordinal);

@@ -5568,7 +5568,7 @@ A literal conversion compile-time root names its literal explicitly
 hoisted pattern root names its hoisted body; no root names a node that does
 not exist in CIR.
 
-A compile-time root's identity (`ComptimeRootId`) is a function of the
+A compile-time root's identity (`ComptimeRootKey`) is a function of the
 module's checked data alone. A root of the module's root table (a
 definition's, an expect's, a selected hoisted root's, a REPL expression's)
 is named by its row, which checking's recorded outputs fix. A literal root
@@ -23613,7 +23613,7 @@ const CaptureId = union(enum) {
 
 const ConstCaptureKind = union(enum) {
     lexical,
-    recursive_binding: struct { module: CheckedModuleDigest, root: ComptimeRootId },
+    recursive_binding: struct { module: CheckedModuleDigest, root: ComptimeRootKey },
 };
 
 const ConstCapture = struct {

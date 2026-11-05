@@ -738,7 +738,7 @@ const Decoder = struct {
             // stored now, and the root's wrapper restores it.
             .root_slot => {
                 const module_index = self.module();
-                const root: checked.ComptimeRootId = @fromBackingInt(self.wide());
+                const root: checked.ComptimeRootKey = @fromBackingInt(self.wide());
                 _ = self.typeOf();
                 const wrapper = program.rootWrapper(module_index, root);
                 return try program.methodEntryWorker(try program.templateRefWorker(wrapper));

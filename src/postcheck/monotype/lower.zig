@@ -1495,7 +1495,7 @@ const ModuleViewData = struct {
 
     /// Compile-time root `id`, with the payload evaluation gave it: a row of
     /// the root table, or a literal root.
-    fn compileTimeRoot(self: *const ModuleViewData, id: checked.ComptimeRootId) Allocator.Error!checked.CompileTimeRoot {
+    fn compileTimeRoot(self: *const ModuleViewData, id: checked.ComptimeRootKey) Allocator.Error!checked.CompileTimeRoot {
         if (id.rowIndex() != null) return self.compile_time_roots.root(id);
         var root = (try self.dispatch.literalRoot(id)).root;
         if (self.literal_root_payloads.get(id)) |output| {
@@ -1563,11 +1563,11 @@ const ExprSite = enum(u32) {
         return if (view.bodies.rowCoercion(source) != null) coercedValue(source) else read(source);
     }
 
-    fn hoistedRoot(root_id: checked.ComptimeRootId) ExprSite {
+    fn hoistedRoot(root_id: checked.ComptimeRootKey) ExprSite {
         return make(.hoisted_root, root_id.index());
     }
 
-    fn hoistedResult(root_id: checked.ComptimeRootId) ExprSite {
+    fn hoistedResult(root_id: checked.ComptimeRootKey) ExprSite {
         return make(.hoisted_result, root_id.index());
     }
 
@@ -1627,7 +1627,7 @@ const ExprSite = enum(u32) {
 
     /// The compile-time root a `hoisted_root` or `hoisted_result` reference
     /// belongs to.
-    fn root(self: ExprSite) checked.ComptimeRootId {
+    fn root(self: ExprSite) checked.ComptimeRootKey {
         return switch (self.kind()) {
             .hoisted_root, .hoisted_result => @fromBackingInt(self.payload()),
             .read, .coerced_value, .literal_guard, .literal_value, .literal_conversion => Common.invariant("a reference that belongs to no hoisted root was read as one"),
@@ -1903,7 +1903,7 @@ const ResolvedUse = union(enum) {
     /// A body lookup expression, whose reference is its resolved value
     /// reference.
     lookup: CIR.Expr.Idx,
-    hoisted_result: checked.ComptimeRootId,
+    hoisted_result: checked.ComptimeRootKey,
     literal_value: CIR.Pattern.Idx,
 };
 
@@ -2146,7 +2146,7 @@ fn patternIntroducesBinder(view: ModuleView, pattern: CIR.Pattern.Idx) bool {
 
 /// The compile-time root that evaluates a literal's conversion, when its
 /// conversion is independent of specialization.
-fn literalConversionRootOf(view: ModuleView, data: ExprData) Allocator.Error!?checked.ComptimeRootId {
+fn literalConversionRootOf(view: ModuleView, data: ExprData) Allocator.Error!?checked.ComptimeRootKey {
     return switch (data) {
         .numeral, .str_from_quote => |node| try view.bodies.literalConversionRoot(node),
         .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => null,
@@ -12527,7 +12527,7 @@ const Builder = struct {
     /// before any root bodies are lowered. Type eligibility alone does not
     /// select a root: the checker omits procedure aliases and roots that depend
     /// on unbound platform requirements from that manifest.
-    fn comptimeValueReadDeclared(self: *Builder, view: ModuleView, root_id: checked.ComptimeRootId) bool {
+    fn comptimeValueReadDeclared(self: *Builder, view: ModuleView, root_id: checked.ComptimeRootKey) bool {
         if (!self.comptime_value_reads) return false;
         const declarations = self.borrowed_comptime_roots orelse &self.declared_comptime_roots;
         return declarations.contains(.{ .module = view.key, .root = root_id });
@@ -15755,7 +15755,7 @@ const Builder = struct {
 
     /// Record a coordinator-built expression that restores a root's stored
     /// value.
-    fn recordRestoredRootRead(self: *Builder, expr: Ast.ExprId, module: checked.ModuleId, root: checked.ComptimeRootId) Allocator.Error!void {
+    fn recordRestoredRootRead(self: *Builder, expr: Ast.ExprId, module: checked.ModuleId, root: checked.ComptimeRootKey) Allocator.Error!void {
         if (self.spec_job_parallel_callback) Common.invariant("specialization worker restored a stored root outside its body draft");
         try self.root_value_reads.append(self.allocator, .{ .expr = expr, .root = .{ .module = module, .root = root }, .evaluated = false });
     }
@@ -17967,7 +17967,7 @@ const DraftDeferredConstUse = struct {
 /// recursive let around the produced callable value.
 const ActiveCallableEvalBinding = struct {
     module: checked.ModuleId,
-    root: checked.ComptimeRootId,
+    root: checked.ComptimeRootKey,
     request_node: NodeId,
     local: DraftLocalId,
     /// Owner whose body the reserved local is bound in. A read from deeper
@@ -19696,11 +19696,11 @@ const BodyDraftStore = struct {
         return read;
     }
 
-    fn recordRestoredRootRead(self: *BodyDraftStore, expr: DraftExprId, module: checked.ModuleId, root: checked.ComptimeRootId) Allocator.Error!void {
+    fn recordRestoredRootRead(self: *BodyDraftStore, expr: DraftExprId, module: checked.ModuleId, root: checked.ComptimeRootKey) Allocator.Error!void {
         try self.root_value_reads.append(self.allocator, .{ .expr = expr, .root = .{ .module = module, .root = root }, .evaluated = false });
     }
 
-    fn recordEvaluatedRootRead(self: *BodyDraftStore, expr: DraftExprId, module: checked.ModuleId, root: checked.ComptimeRootId) Allocator.Error!void {
+    fn recordEvaluatedRootRead(self: *BodyDraftStore, expr: DraftExprId, module: checked.ModuleId, root: checked.ComptimeRootKey) Allocator.Error!void {
         try self.root_value_reads.append(self.allocator, .{ .expr = expr, .root = .{ .module = module, .root = root }, .evaluated = true });
     }
 
@@ -20213,7 +20213,7 @@ const BodyDraftStore = struct {
 
     /// Mark `id` as the recursive binding reserved for top-level root `root`
     /// of `module`, so a closure capturing it stores that capture kind.
-    fn setLocalRecursiveBinding(self: *BodyDraftStore, id: DraftLocalId, module: checked.ModuleId, root: checked.ComptimeRootId) void {
+    fn setLocalRecursiveBinding(self: *BodyDraftStore, id: DraftLocalId, module: checked.ModuleId, root: checked.ComptimeRootKey) void {
         self.locals.items[@backingInt(id)].capture_kind = .{ .recursive_binding = .{
             .module = .{ .bytes = module.bytes },
             .root = root,
@@ -28485,7 +28485,7 @@ const BodyContext = struct {
 
     fn lowerRootEntryAtCell(
         self: *BodyContext,
-        root_id: checked.ComptimeRootId,
+        root_id: checked.ComptimeRootKey,
         ret_cell: DraftTypeCell,
     ) Allocator.Error!LoweredTemplateBody {
         const root = try self.view.compileTimeRoot(root_id);
@@ -37910,7 +37910,7 @@ const BodyContext = struct {
     fn declaredComptimeValueRead(
         self: *BodyContext,
         view: ModuleView,
-        root_id: checked.ComptimeRootId,
+        root_id: checked.ComptimeRootKey,
         cell: DraftTypeCell,
         const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
@@ -37930,7 +37930,7 @@ const BodyContext = struct {
     fn lowerPendingCallableEvalRoot(
         self: *BodyContext,
         view: ModuleView,
-        root_id: checked.ComptimeRootId,
+        root_id: checked.ComptimeRootKey,
         body_expr: ExprSite,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftExprId {
@@ -37950,7 +37950,7 @@ const BodyContext = struct {
     fn activeCallableEvalBindingExpr(
         self: *BodyContext,
         view: ModuleView,
-        root_id: checked.ComptimeRootId,
+        root_id: checked.ComptimeRootKey,
         request_fn_node: NodeId,
     ) Allocator.Error!?DraftExprId {
         var index = self.draft.active_callable_eval_bindings.items.len;
@@ -37974,7 +37974,7 @@ const BodyContext = struct {
     fn reserveCallableEvalBinding(
         self: *BodyContext,
         view: ModuleView,
-        root_id: checked.ComptimeRootId,
+        root_id: checked.ComptimeRootKey,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftLocalId {
         const root = (try view.compileTimeRoot(root_id));
@@ -38002,7 +38002,7 @@ const BodyContext = struct {
     fn finishCallableEvalBinding(
         self: *BodyContext,
         view: ModuleView,
-        root_id: checked.ComptimeRootId,
+        root_id: checked.ComptimeRootKey,
         request_cell: DraftTypeCell,
         local: DraftLocalId,
         lowered: DraftExprId,
@@ -45739,7 +45739,7 @@ const BodyContext = struct {
     /// compile-time root that binding belongs to.
     const TopLevelConstBinding = struct {
         binder: BinderId,
-        root: checked.ComptimeRootId,
+        root: checked.ComptimeRootKey,
     };
 
     fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?TopLevelConstBinding {
@@ -51092,7 +51092,7 @@ const BodyContext = struct {
     fn lowerLiteralConversionAtNode(
         self: *BodyContext,
         expr_id: ExprSite,
-        root_id: checked.ComptimeRootId,
+        root_id: checked.ComptimeRootKey,
         request_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const root = (try self.view.compileTimeRoot(root_id));

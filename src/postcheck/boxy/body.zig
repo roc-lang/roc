@@ -76,11 +76,11 @@ pub const Task = union(enum) {
     stmt: StatementId,
     /// Lower the body of compile-time root `root` of this body's module
     /// (`lowerRootBody`).
-    root_body: checked.ComptimeRootId,
+    root_body: checked.ComptimeRootKey,
     /// Pop the value of a hoisted pattern root's base expression, match it
     /// against the root's pattern, and push the root's value
     /// (`rootPatternMatch`).
-    root_pattern_match: checked.ComptimeRootId,
+    root_pattern_match: checked.ComptimeRootKey,
     /// Push whether the value a custom literal pattern matches equals the
     /// pattern's literal converted at its type
     /// (`checked_bodies.LiteralPatternGuard`).
@@ -167,7 +167,7 @@ pub const Task = union(enum) {
     /// root whose own value the node is, when the restore reads one: a read
     /// of a failed root's value then fails as that root did, reported once
     /// by the root (`CrashExtra.failed_value`).
-    restore: struct { source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId, root: ?checked.ComptimeRootId = null },
+    restore: struct { source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId, root: ?checked.ComptimeRootKey = null },
     /// Push the function value a callable-eval binding stored.
     restore_callable_eval: struct { module: ModuleIndex, template: checked.CallableEvalTemplateId, ty: TypeId },
     /// Pop a restored closure's capture values and build it.
@@ -320,7 +320,7 @@ const DeferredLiterals = union(enum) {
 };
 
 /// A `literal_argument` root of a module, whose thunk a body composes once.
-const RootThunkKey = struct { module: ModuleIndex, root: checked.ComptimeRootId };
+const RootThunkKey = struct { module: ModuleIndex, root: checked.ComptimeRootKey };
 
 /// The lowering state a literal chain restores once its tasks have run.
 const SavedScope = struct {
@@ -457,7 +457,7 @@ pub const Builder = struct {
     immortal_closures: bool = false,
     /// The compile-time root whose entry wrapper this body is: its own
     /// hoisted expression computes its value here rather than reading it.
-    own_root: ?checked.ComptimeRootId = null,
+    own_root: ?checked.ComptimeRootKey = null,
     /// The recursive components whose members' descriptors this body has
     /// begun composing.
     opened_components: std.AutoHashMapUnmanaged(u32, void) = .empty,
@@ -1466,7 +1466,7 @@ pub const Builder = struct {
     }
 
     /// The body of compile-time root `root_id`'s entry wrapper.
-    fn lowerRootEntry(self: *Builder, root_id: checked.ComptimeRootId, params: []const LocalId) Allocator.Error!void {
+    fn lowerRootEntry(self: *Builder, root_id: checked.ComptimeRootKey, params: []const LocalId) Allocator.Error!void {
         const root = try self.view.view.compileTimeRoot(root_id);
         // A conversion root's body is its literal, whose own
         // conversion runs here (`restoreConversionRoot`); a
@@ -3089,7 +3089,7 @@ pub const Builder = struct {
 
     /// The compile-time root of a hoisted constant of this module, or null
     /// for a constant of another module or one no root computes.
-    fn hoistedRootOfConstRef(self: *Builder, const_ref: checked.ConstRef) ?checked.ComptimeRootId {
+    fn hoistedRootOfConstRef(self: *Builder, const_ref: checked.ConstRef) ?checked.ComptimeRootKey {
         if (!std.mem.eql(u8, &const_ref.artifact.bytes, &self.view.key.bytes)) return null;
         return switch (const_ref.owner) {
             .hoisted_root => |hoisted| hoisted.root,
@@ -3099,7 +3099,7 @@ pub const Builder = struct {
 
     /// What a body reads for a hoisted root: its stored value, or, under a
     /// compile-time evaluator, a root the evaluator has not completed.
-    const HoistedRead = union(enum) { stored: checked.StoredConstTemplate, pending: checked.ComptimeRootId };
+    const HoistedRead = union(enum) { stored: checked.StoredConstTemplate, pending: checked.ComptimeRootKey };
 
     /// The read of a compile-time value the evaluator has not completed when
     /// the body is lowered: a root of the same compile-time program, read
@@ -3108,7 +3108,7 @@ pub const Builder = struct {
     /// fails as the recursion that evaluating the value in place would end
     /// in, and the evaluator reruns the reading root once the value
     /// completes (design.md "Compile-Time Evaluation Strategy").
-    fn pendingValueRead(self: *Builder, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!void {
+    fn pendingValueRead(self: *Builder, module_index: ModuleIndex, root: checked.ComptimeRootKey, ty: TypeId) Allocator.Error!void {
         if (self.program.evaluatesRoot(module_index, root)) {
             if (!try self.closed(ty)) invariant("a compile-time root's value has an open type");
             const slot = try self.program.rootValueSlot(module_index, root, ty);
@@ -3477,7 +3477,7 @@ pub const Builder = struct {
 
     /// A numeric literal at `at`: its conversion root's value, its
     /// conversion `plan`'s result, or a builtin number.
-    pub fn lowerNumeral(self: *Builder, at: LiteralAt, literal: NumeralLiteral, plan: ?static_dispatch.StaticDispatchPlanId, conversion_root: ?checked.ComptimeRootId) Allocator.Error!void {
+    pub fn lowerNumeral(self: *Builder, at: LiteralAt, literal: NumeralLiteral, plan: ?static_dispatch.StaticDispatchPlanId, conversion_root: ?checked.ComptimeRootKey) Allocator.Error!void {
         if (conversion_root) |root| return try self.restoreConversionRoot(root, at, .numeral, plan);
         if (plan) |plan_id| return try self.lowerPlannedLiteral(at.node(), .numeral, plan_id, try self.literalType(at));
         const ty = try self.literalType(at);
@@ -3491,7 +3491,7 @@ pub const Builder = struct {
     /// A literal-only string at `at` whose target is custom or open: its
     /// conversion root's value, its conversion `plan`'s result, or the
     /// string itself at a `Str` target.
-    pub fn lowerQuote(self: *Builder, at: LiteralAt, literal: bodies_mod.Text, plan: ?static_dispatch.StaticDispatchPlanId, conversion_root: ?checked.ComptimeRootId) Allocator.Error!void {
+    pub fn lowerQuote(self: *Builder, at: LiteralAt, literal: bodies_mod.Text, plan: ?static_dispatch.StaticDispatchPlanId, conversion_root: ?checked.ComptimeRootKey) Allocator.Error!void {
         if (conversion_root) |root| return try self.restoreConversionRoot(root, at, .quote, plan);
         if (plan) |plan_id| return try self.lowerPlannedLiteral(at.node(), .quote, plan_id, try self.literalType(at));
         const ty = try self.literalType(at);
@@ -3833,7 +3833,7 @@ pub const Builder = struct {
     /// The immortal callable of this body's module's `literal_argument`
     /// root `root`: its entry wrapper's dictionary entry, which restores the
     /// stored value, or converts the literal where none is stored.
-    pub fn rootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!LocalId {
+    pub fn rootThunk(self: *Builder, root: checked.ComptimeRootKey) Allocator.Error!LocalId {
         const key: RootThunkKey = .{ .module = self.module, .root = root };
         if (self.root_thunks.get(key)) |existing| return existing;
         const thunk = try self.composeRootThunk(root);
@@ -3842,7 +3842,7 @@ pub const Builder = struct {
     }
 
     /// `rootThunk`'s callable, composed here.
-    fn composeRootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!LocalId {
+    fn composeRootThunk(self: *Builder, root: checked.ComptimeRootKey) Allocator.Error!LocalId {
         const compile_time_root = (try self.view.view.compileTimeRoot(root));
         const argument = compile_time_root.literal_argument orelse invariant("a literal argument root records no literal argument");
         // In the compile-time program evaluating the root, a reader reads
@@ -3920,7 +3920,7 @@ pub const Builder = struct {
     /// destructure binder's root crashes; an extraction or validation root
     /// matches its base expression against its pattern, crashing where the
     /// pattern does not match (`rootPatternMatch`).
-    fn lowerRootBody(self: *Builder, root_id: checked.ComptimeRootId) Allocator.Error!void {
+    fn lowerRootBody(self: *Builder, root_id: checked.ComptimeRootKey) Allocator.Error!void {
         const root = (try self.view.view.compileTimeRoot(root_id));
         if (root.literalNode()) |literal| return switch (literal) {
             .expr => |expr| try self.push(.{ .own_expr = expr }),
@@ -3942,7 +3942,7 @@ pub const Builder = struct {
 
     /// Lower a hoisted pattern root's base expression, then match it
     /// against the root's pattern (`rootPatternMatch`).
-    fn pushRootPatternMatch(self: *Builder, root_id: checked.ComptimeRootId, scrutinee_pattern: PatternId, base_expr: ExprId) Allocator.Error!void {
+    fn pushRootPatternMatch(self: *Builder, root_id: checked.ComptimeRootKey, scrutinee_pattern: PatternId, base_expr: ExprId) Allocator.Error!void {
         try self.push(.{ .restore_region = self.region });
         self.region = self.nodeRegion(@backingInt(scrutinee_pattern));
         try self.push(.{ .root_pattern_match = root_id });
@@ -3953,7 +3953,7 @@ pub const Builder = struct {
     /// root's pattern: where it matches, an extraction root's value is its
     /// result binder's, and a validation root's is `{}`; where it does not,
     /// the root crashes.
-    fn rootPatternMatch(self: *Builder, root_id: checked.ComptimeRootId) Allocator.Error!void {
+    fn rootPatternMatch(self: *Builder, root_id: checked.ComptimeRootKey) Allocator.Error!void {
         const root = (try self.view.view.compileTimeRoot(root_id));
         const body = root.hoisted_body orelse invariant("a hoisted pattern root has no hoisted body");
         const scrutinee_pattern, const base_expr, const result_pattern: ?PatternId = switch (body) {
@@ -3980,7 +3980,7 @@ pub const Builder = struct {
     /// value restored, or, where evaluation stored none (the root is being
     /// evaluated, or its value holds a function), the literal's conversion
     /// at the root's edge.
-    pub fn lowerLiteralArgumentRoot(self: *Builder, root_id: checked.ComptimeRootId, argument: checked.LiteralArgumentRoot) Allocator.Error!void {
+    pub fn lowerLiteralArgumentRoot(self: *Builder, root_id: checked.ComptimeRootKey, argument: checked.LiteralArgumentRoot) Allocator.Error!void {
         const worker = self.currentWorker().*;
         switch ((try self.view.view.compileTimeRoot(root_id)).payload) {
             .const_node => |node| return try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = worker.ret, .root = root_id } }),
@@ -4296,7 +4296,7 @@ pub const Builder = struct {
         });
     }
 
-    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, at: LiteralAt, kind: LIR.LiteralRejectionKind, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootKey, at: LiteralAt, kind: LIR.LiteralRejectionKind, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         switch ((try self.view.view.compileTimeRoot(root_id)).payload) {
             .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.literalType(at), .root = root_id } }),
             // The literal converts where it is reached: as the root's own
@@ -5041,7 +5041,7 @@ pub const Builder = struct {
     /// Restore stored constant `stored` read at `ty`: at `ty` when it is
     /// closed, and otherwise at the value's own stored type, re-tagged to
     /// `ty`.
-    fn pushStoredRestore(self: *Builder, source: lower.ConstSource, stored: checked.StoredConstTemplate, ty: TypeId, root: ?checked.ComptimeRootId) Allocator.Error!void {
+    fn pushStoredRestore(self: *Builder, source: lower.ConstSource, stored: checked.StoredConstTemplate, ty: TypeId, root: ?checked.ComptimeRootKey) Allocator.Error!void {
         if (self.program.store.isClosed(ty)) return try self.push(.{ .restore = .{ .source = source, .node = stored.node, .ty = ty, .root = root } });
         const stored_ty = try self.constType(source, stored.root_type);
         try self.push(.{ .retag = .{ .from = stored_ty, .to = ty } });
@@ -5049,7 +5049,7 @@ pub const Builder = struct {
     }
 
     /// The compile-time root whose value a stored constant reference is.
-    fn rootOfConstRef(owner: *const types.ModuleView, const_ref: checked.ConstRef) ?checked.ComptimeRootId {
+    fn rootOfConstRef(owner: *const types.ModuleView, const_ref: checked.ConstRef) ?checked.ComptimeRootKey {
         return switch (const_ref.owner) {
             .hoisted_root => |hoisted| hoisted.root,
             .top_level_binding => |top_level| owner.view.compile_time_roots.lookupIdByPattern(top_level.pattern),
@@ -5094,7 +5094,7 @@ pub const Builder = struct {
 
     /// Restore stored constant `node` of `module` at `ty`, pushing tasks for
     /// its components first.
-    pub fn restoreStep(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, raw_ty: TypeId, root: ?checked.ComptimeRootId) Allocator.Error!void {
+    pub fn restoreStep(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, raw_ty: TypeId, root: ?checked.ComptimeRootKey) Allocator.Error!void {
         const const_store = self.program.constStore(source);
         const store = &self.program.store;
         // Every restore starts at a closed type (`pushStoredRestore`), and a

@@ -217,7 +217,7 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     var found_independent = expected.independent_expr == null;
     var completed_conversions: usize = 0;
     // Every compile-time root: the root table's rows, then the literal roots.
-    var root_ids: std.ArrayList(check.CheckedArtifact.ComptimeRootId) = .empty;
+    var root_ids: std.ArrayList(check.CheckedArtifact.ComptimeRootKey) = .empty;
     defer root_ids.deinit(std.testing.allocator);
     for (artifact.compile_time_roots.roots) |row| try root_ids.append(std.testing.allocator, row.id);
     try artifact.dispatch().appendLiteralRoots(std.testing.allocator, &root_ids);

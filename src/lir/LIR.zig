@@ -465,7 +465,7 @@ pub const LiteralRootId = enum(u32) { _ };
 /// The producer of one compile-time value: a checked compile-time root of its
 /// module, or a literal root of the lowered program.
 pub const ComptimeProducer = union(enum) {
-    checked: check.CheckedModule.ComptimeRootId,
+    checked: check.CheckedModule.ComptimeRootKey,
     literal: LiteralRootId,
 
     pub fn eql(a: ComptimeProducer, b: ComptimeProducer) bool {

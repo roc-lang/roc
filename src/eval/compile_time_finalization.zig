@@ -172,7 +172,7 @@ pub const ReportDestination = struct {
 const DebugEvents = struct {
     const Event = struct {
         module: checked.ModuleId,
-        root: checked.ComptimeRootId,
+        root: checked.ComptimeRootKey,
         sequence: usize,
         is_repl: bool,
         message: []const u8,
@@ -1264,7 +1264,7 @@ fn specializeAndEvaluate(
 
 /// A set of compile-time roots, by owning module and checked identity.
 pub const RootFilter = std.AutoHashMapUnmanaged(RootFilterKey, void);
-const RootFilterKey = struct { module: [32]u8, root: checked.ComptimeRootId };
+const RootFilterKey = struct { module: [32]u8, root: checked.ComptimeRootKey };
 
 /// The export interfaces a `.boxy` module unit compiles its calls against.
 pub const ExportInterfaces = lir.CheckedPipeline.BoxyExportInterfaces;
@@ -2227,7 +2227,7 @@ fn runBoxyBatch(
     stage_options.retry = retry;
     const requests = try allocator.alloc(checked.RootRequest, batch.len);
     defer allocator.free(requests);
-    const root_ids = try allocator.alloc(checked.ComptimeRootId, batch.len);
+    const root_ids = try allocator.alloc(checked.ComptimeRootKey, batch.len);
     defer allocator.free(root_ids);
     const plans = try allocator.alloc(LirProgram.ConstRootPlan, batch.len);
     defer allocator.free(plans);
@@ -2312,7 +2312,7 @@ const PublishedRequests = struct {
         roots: []const lir.CheckedPipeline.MonotypeRoot,
         lowering_modules: []const checked.ModuleId,
     ) Allocator.Error!void {
-        const Key = struct { module: [32]u8, root: checked.ComptimeRootId };
+        const Key = struct { module: [32]u8, root: checked.ComptimeRootKey };
         var demanded = std.AutoHashMapUnmanaged(Key, void).empty;
         defer demanded.deinit(allocator);
         for (roots) |root| {
@@ -2570,7 +2570,7 @@ fn evaluateStaged(
 
     // The roots whose completed values the program reads, so each one's
     // stage declares the slot its value is frozen into.
-    const ReadKey = struct { module: [32]u8, root: checked.ComptimeRootId };
+    const ReadKey = struct { module: [32]u8, root: checked.ComptimeRootKey };
     var read_roots = std.AutoHashMap(ReadKey, @FieldType(lir.CheckedPipeline.CompletedValueRequest, "value")).init(allocator);
     defer read_roots.deinit();
     for (prepared.comptimeValueReads()) |read| switch (read.root) {
@@ -2704,7 +2704,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
             completion: RootCompletionState,
             /// The first producer naming each of this module's compile-time
             /// roots, by root id.
-            ordinals: std.AutoHashMapUnmanaged(checked.ComptimeRootId, usize) = .empty,
+            ordinals: std.AutoHashMapUnmanaged(checked.ComptimeRootKey, usize) = .empty,
         };
         const Root = struct { module: usize, request: usize };
 
@@ -2883,7 +2883,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
             }
         }
 
-        fn rootId(self: *const Self, ordinal: usize) checked.ComptimeRootId {
+        fn rootId(self: *const Self, ordinal: usize) checked.ComptimeRootKey {
             const root = self.roots[ordinal];
             return self.states[root.module].completion.request_root_ids[root.request];
         }
@@ -2927,7 +2927,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
             const allocator = self.allocator;
             var requests = std.ArrayList(checked.RootRequest).empty;
             defer requests.deinit(allocator);
-            var root_ids = std.ArrayList(checked.ComptimeRootId).empty;
+            var root_ids = std.ArrayList(checked.ComptimeRootKey).empty;
             defer root_ids.deinit(allocator);
             var plans = std.ArrayList(LirProgram.ConstRootPlan).empty;
             defer plans.deinit(allocator);
@@ -2958,7 +2958,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
             self: *Self,
             module_index: usize,
             requests: []const checked.RootRequest,
-            root_ids: []const checked.ComptimeRootId,
+            root_ids: []const checked.ComptimeRootKey,
             plans: []const LirProgram.ConstRootPlan,
         ) FinalizeError!void {
             const entry = self.modules[module_index];
@@ -3446,7 +3446,7 @@ fn finalize(
         var batch_requests = std.ArrayList(checked.RootRequest).empty;
         defer batch_requests.deinit(allocator);
 
-        var batch_root_ids = std.ArrayList(checked.ComptimeRootId).empty;
+        var batch_root_ids = std.ArrayList(checked.ComptimeRootKey).empty;
         defer batch_root_ids.deinit(allocator);
 
         for (requests, 0..) |request, request_index| {
@@ -3515,30 +3515,30 @@ const RootCompletionState = struct {
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
     /// Each completed root.
-    done_roots: std.AutoHashMapUnmanaged(checked.ComptimeRootId, void) = .empty,
-    request_root_ids: []checked.ComptimeRootId,
+    done_roots: std.AutoHashMapUnmanaged(checked.ComptimeRootKey, void) = .empty,
+    request_root_ids: []checked.ComptimeRootKey,
     /// Position in `request_root_ids` of each compile-time root this module
     /// requests the evaluation of.
-    request_index_by_root: std.AutoHashMapUnmanaged(checked.ComptimeRootId, u32) = .empty,
+    request_index_by_root: std.AutoHashMapUnmanaged(checked.ComptimeRootKey, u32) = .empty,
     visited_templates: []u32,
     visit: u32,
     /// Procedure templates whose dependencies are still to be checked.
     pending_templates: std.ArrayList(canonical.ProcedureTemplateRef) = .empty,
     /// The visit stamp of each literal root's entry wrapper the walk entered.
-    visited_literal_wrappers: std.AutoHashMapUnmanaged(checked.ComptimeRootId, u32) = .empty,
-    literal_demand: std.ArrayList(checked.ComptimeRootId) = .empty,
-    current_root_id: ?checked.ComptimeRootId = null,
+    visited_literal_wrappers: std.AutoHashMapUnmanaged(checked.ComptimeRootKey, u32) = .empty,
+    literal_demand: std.ArrayList(checked.ComptimeRootKey) = .empty,
+    current_root_id: ?checked.ComptimeRootKey = null,
     /// The incomplete root the last `dependenciesComplete` stopped at.
-    blocked_on: ?checked.ComptimeRootId = null,
+    blocked_on: ?checked.ComptimeRootKey = null,
 
     fn init(
         allocator: Allocator,
         module: *checked.CheckedModuleArtifact,
         requests: []const checked.RootRequest,
     ) Allocator.Error!RootCompletionState {
-        const request_root_ids = try allocator.alloc(checked.ComptimeRootId, requests.len);
+        const request_root_ids = try allocator.alloc(checked.ComptimeRootKey, requests.len);
         errdefer allocator.free(request_root_ids);
-        var request_index_by_root: std.AutoHashMapUnmanaged(checked.ComptimeRootId, u32) = .empty;
+        var request_index_by_root: std.AutoHashMapUnmanaged(checked.ComptimeRootKey, u32) = .empty;
         errdefer request_index_by_root.deinit(allocator);
         for (requests, 0..) |request, i| {
             const root_id = try compileTimeRootForRequest(module, request);
@@ -3568,7 +3568,7 @@ const RootCompletionState = struct {
     /// producer records the owner and root id on each lowered root plan, so
     /// finalization asks the owner for the position instead of assuming the
     /// plan appears at the same offset the request did.
-    fn requestIndexForRoot(self: *const RootCompletionState, root_id: checked.ComptimeRootId) usize {
+    fn requestIndexForRoot(self: *const RootCompletionState, root_id: checked.ComptimeRootKey) usize {
         return self.request_index_by_root.get(root_id) orelse
             finalizationInvariant("lowered compile-time root was not requested by its declared owner");
     }
@@ -3585,15 +3585,15 @@ const RootCompletionState = struct {
         self.* = undefined;
     }
 
-    fn isDone(self: *const RootCompletionState, root_id: checked.ComptimeRootId) bool {
+    fn isDone(self: *const RootCompletionState, root_id: checked.ComptimeRootKey) bool {
         return self.done_roots.contains(root_id);
     }
 
-    fn markDone(self: *RootCompletionState, root_id: checked.ComptimeRootId) Allocator.Error!void {
+    fn markDone(self: *RootCompletionState, root_id: checked.ComptimeRootKey) Allocator.Error!void {
         try self.done_roots.put(self.allocator, root_id, {});
     }
 
-    fn rootIdForRequestIndex(self: *const RootCompletionState, request_index: usize) checked.ComptimeRootId {
+    fn rootIdForRequestIndex(self: *const RootCompletionState, request_index: usize) checked.ComptimeRootKey {
         if (request_index >= self.request_root_ids.len) {
             finalizationInvariant("compile-time request index was out of range");
         }
@@ -3746,7 +3746,7 @@ const RootCompletionState = struct {
 
     fn rootDependencyComplete(
         self: *RootCompletionState,
-        dependency_root_id: checked.ComptimeRootId,
+        dependency_root_id: checked.ComptimeRootKey,
     ) bool {
         const dependent_root_id = self.current_root_id orelse
             finalizationInvariant("compile-time dependency checked outside a root request");
@@ -3771,7 +3771,7 @@ const RootCompletionState = struct {
     fn rootForConstRef(
         self: *RootCompletionState,
         const_ref: checked.ConstRef,
-    ) ?checked.ComptimeRootId {
+    ) ?checked.ComptimeRootKey {
         if (!artifactMatches(const_ref.artifact, self.module.key)) return null;
         return switch (const_ref.owner) {
             .top_level_binding => |top_level| {
@@ -3828,7 +3828,7 @@ fn lowerEvalAndFinishRoots(
     lowering_imports: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     requests: []const checked.RootRequest,
-    root_ids: []const checked.ComptimeRootId,
+    root_ids: []const checked.ComptimeRootKey,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     options: Options,
@@ -3844,11 +3844,11 @@ fn lowerEvalAndFinishRoots(
     // other.
     var specialized_requests = std.ArrayList(checked.RootRequest).empty;
     defer specialized_requests.deinit(allocator);
-    var specialized_root_ids = std.ArrayList(checked.ComptimeRootId).empty;
+    var specialized_root_ids = std.ArrayList(checked.ComptimeRootKey).empty;
     defer specialized_root_ids.deinit(allocator);
     var boxy_requests = std.ArrayList(checked.RootRequest).empty;
     defer boxy_requests.deinit(allocator);
-    var boxy_root_ids = std.ArrayList(checked.ComptimeRootId).empty;
+    var boxy_root_ids = std.ArrayList(checked.ComptimeRootKey).empty;
     defer boxy_root_ids.deinit(allocator);
     for (requests, root_ids) |request, root_id| {
         const boxy = root_id.kind() == .literal_argument or
@@ -3880,7 +3880,7 @@ fn lowerEvalAndFinishBatch(
     lowering_imports: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     requests: []const checked.RootRequest,
-    root_ids: []const checked.ComptimeRootId,
+    root_ids: []const checked.ComptimeRootKey,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     options: Options,
@@ -3929,7 +3929,7 @@ fn evalInterpreterProgramRoots(
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
     requests: []const checked.RootRequest,
-    root_ids: []const checked.ComptimeRootId,
+    root_ids: []const checked.ComptimeRootKey,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     owners: *const ModuleOwners,
@@ -4247,7 +4247,7 @@ fn loweredModuleOfKey(lir_result: *const lir.Program.Result, key: [32]u8) checke
 fn checkedProducerReportedFailure(
     owners: *const ModuleOwners,
     module: checked.ModuleId,
-    root_id: checked.ComptimeRootId,
+    root_id: checked.ComptimeRootKey,
 ) bool {
     for (owners.modules) |owner| {
         if (!artifactMatches(module, owner.module.key)) continue;
@@ -4656,7 +4656,7 @@ const DevRootLabel = struct {
 
 const DevRootJob = struct {
     root: LirProgram.ConstRootPlan,
-    root_id: checked.ComptimeRootId,
+    root_id: checked.ComptimeRootKey,
     compile_time_root: checked.CompileTimeRoot,
     entry_offset: usize,
     ret_buf: []align(collections.max_roc_alignment.toByteUnits()) u8,
@@ -5011,12 +5011,12 @@ const InterpreterProgram = struct {
 /// Module and root ids are the existing lowering identities, including every
 /// representation of a checked root. No source identities are reconstructed.
 const PublicationSlots = struct {
-    checked_heads: []std.AutoHashMapUnmanaged(checked.ComptimeRootId, lir.LIR.StaticDataId),
+    checked_heads: []std.AutoHashMapUnmanaged(checked.ComptimeRootKey, lir.LIR.StaticDataId),
     literal_heads: []?lir.LIR.StaticDataId,
     next: []?lir.LIR.StaticDataId,
 
     fn init(allocator: Allocator, result: *const LirProgram.Result) Allocator.Error!PublicationSlots {
-        const checked_heads = try allocator.alloc(std.AutoHashMapUnmanaged(checked.ComptimeRootId, lir.LIR.StaticDataId), result.lowering_modules.items.len);
+        const checked_heads = try allocator.alloc(std.AutoHashMapUnmanaged(checked.ComptimeRootKey, lir.LIR.StaticDataId), result.lowering_modules.items.len);
         @memset(checked_heads, .empty);
         errdefer {
             for (checked_heads) |*heads| heads.deinit(allocator);
@@ -5756,7 +5756,7 @@ fn evalProgramRoots(
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
     requests: []const checked.RootRequest,
-    root_ids: []const checked.ComptimeRootId,
+    root_ids: []const checked.ComptimeRootKey,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     owners: *const ModuleOwners,
@@ -5774,7 +5774,7 @@ fn evalDevProgramRoots(
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
     requests: []const checked.RootRequest,
-    root_ids: []const checked.ComptimeRootId,
+    root_ids: []const checked.ComptimeRootKey,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
     owners: *const ModuleOwners,
@@ -6491,7 +6491,7 @@ fn reportCompileTimeExhaustiveness(
 /// delegated to.
 fn comptimeSiteMayResolvePending(
     module: *const checked.CheckedModuleArtifact,
-    root_id: ?checked.ComptimeRootId,
+    root_id: ?checked.ComptimeRootKey,
     checked_site: checked.CheckedExhaustivenessSiteId,
 ) Allocator.Error!bool {
     const site = try module.exhaustivenessSite(checked_site);
@@ -6526,7 +6526,7 @@ fn appendCompileTimeExhaustivenessProblem(
         const problem_store = owner.problem_store orelse {
             finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
         };
-        const owning_root: ?checked.ComptimeRootId = if (site_owner == root_owner) root.id else null;
+        const owning_root: ?checked.ComptimeRootKey = if (site_owner == root_owner) root.id else null;
         const site_record = try owner.module.exhaustivenessSite(checked_site);
         if (!try comptimeSiteMayResolvePending(owner.module, owning_root, checked_site)) {
             if (!site_record.requires_pairing) switch (site_record.policy) {
@@ -6845,7 +6845,7 @@ fn regionsEqual(a: base.Region, b: base.Region) bool {
 
 /// The definition a root of the module's root table evaluates, or null for
 /// any other root.
-fn rootDef(module: *const checked.CheckedModuleArtifact, root_id: checked.ComptimeRootId) ?@FieldType(checked.RootSource, "def") {
+fn rootDef(module: *const checked.CheckedModuleArtifact, root_id: checked.ComptimeRootKey) ?@FieldType(checked.RootSource, "def") {
     if (root_id.rowIndex() == null) return null;
     return switch (module.compile_time_roots.root(root_id).source) {
         .def => |def| def,
@@ -6856,7 +6856,7 @@ fn rootDef(module: *const checked.CheckedModuleArtifact, root_id: checked.Compti
 fn compileTimeRootForRequest(
     module: *const checked.CheckedModuleArtifact,
     request: checked.RootRequest,
-) Allocator.Error!checked.ComptimeRootId {
+) Allocator.Error!checked.ComptimeRootKey {
     const root_id = request.compile_time_root orelse {
         finalizationInvariant("compile-time request had no exact checked root identity");
     };
@@ -6900,7 +6900,7 @@ fn completeRoot(
     writer: *ConstStoreWriter.Writer,
     state: *RootCompletionState,
     root: LirProgram.ConstRootPlan,
-    root_id: checked.ComptimeRootId,
+    root_id: checked.ComptimeRootKey,
     compile_time_root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
 ) ConstStoreWriter.Error!void {
@@ -7278,7 +7278,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8) (FinalizeError || Interpret
     const module_id = result.loweringModuleId(module_key).?;
     var checked_roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer checked_roots.deinit(allocator);
-    const root_id: checked.ComptimeRootId = @fromBackingInt(@intCast(checked_roots.items.len));
+    const root_id: checked.ComptimeRootKey = @fromBackingInt(@intCast(checked_roots.items.len));
     // This execution fixture consumes only root identity, never checked syntax.
     try checked_roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .pending });
     const failure_layout = try result.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
