@@ -13777,12 +13777,19 @@ test "row coercion: a coercion in a branch in result position" {
 test "row coercion: a statically divergent child crashes" {
     // The coerced call's argument is a `crash`, so the coercion diverges and
     // is lowered by the divergent paths; the runtime result is the crash.
+    // The callback is a top-level function, so no caller holds an allocation
+    // when the callee crashes: a crash is fatal and releases nothing its
+    // callers own, so a closure value `.boxy` allocated in `main` would still
+    // be live.
     try expectRowCoercionCrash(
+        \\pick : U64 -> [B, C]
+        \\pick = |n| if n == 0 { B } else { C }
+        \\
         \\widen : (U64 -> [B, C]), U64 -> [A, B, C]
         \\widen = |f, _n| f(crash "row coercion child crashed")
         \\
         \\main : U64 -> U64
-        \\main = |mode| match widen(|n| if n == 0 { B } else { C }, mode) {
+        \\main = |mode| match widen(pick, mode) {
         \\    A => 1
         \\    B => 2
         \\    C => 3
