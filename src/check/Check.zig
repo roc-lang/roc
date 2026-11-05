@@ -59228,9 +59228,22 @@ fn checkBranchBodyAgainstExpected(
     // (Every Rejection Is Explicit Recovery).
     if (self.branchValueIsErroneous(body_expr_idx)) return;
 
+    // A body whose type reaches a closed tag union relates to the result
+    // through a widening copy and crosses into it through a row coercion
+    // (design.md "Row Subsumption"): both the probe against the annotated
+    // result and the fold into the accumulator relate the copy. The copy only
+    // re-opens rows the body's own type closes, so a rejected relation is
+    // reported through that own type.
+    std.debug.assert(!self.result_relation_defers);
+    self.result_relation_defers = target == .annotated;
+    const widening = try self.widenResultValue(body_expr_idx, env);
+    self.result_relation_defers = false;
+    const related_var = if (widening) |w| w.wide_var else body_var;
+
     // Probe (1): does the body match the annotated return type? That relation
     // reads only this branch's value.
-    if (!try self.probeBranchCompatible(body_var, expected_ret)) {
+    if (!try self.probeBranchCompatible(related_var, expected_ret)) {
+        if (widening) |w| self.discardResultWidening(w);
         const previous_relation = try self.enterRelation(.of(.value, body_expr_idx, 0));
         try self.reportBranchMismatchAndPoison(body_expr_idx, expected_ret, ctx);
         try self.leaveRelation(previous_relation);
@@ -59245,20 +59258,12 @@ fn checkBranchBodyAgainstExpected(
     // commit-probe. Success keeps the merge (regions/rank/deferred constraints
     // already propagated into env); failure falls through to the report below
     // AFTER the scope's rollback, so the snapshots it takes see the pristine vars.
-    // A body whose type reaches a closed tag union folds in through a widening
-    // copy and crosses into the result through a row coercion (design.md "Row
-    // Subsumption"); the copy only re-opens rows the body's own type closes,
-    // so a rejected fold is reported through that own type.
     {
-        std.debug.assert(!self.result_relation_defers);
-        self.result_relation_defers = target == .annotated;
-        const widening = try self.widenResultValue(body_expr_idx, env);
-        self.result_relation_defers = false;
         var commit_probe = try self.beginCommitProbe(env);
         var committed = false;
         defer if (!committed) commit_probe.rollback();
 
-        const result = try commit_probe.unifyInContext(if (widening) |w| w.wide_var else body_var, acc, ctx);
+        const result = try commit_probe.unifyInContext(related_var, acc, ctx);
         if (result.isAccepted() and (widening == null or try self.liftKeptTailSources(env, ctx))) {
             committed = true;
             try commit_probe.commit();
