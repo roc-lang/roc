@@ -1995,43 +1995,50 @@ const ConcreteRootWalk = enum { value_graph, decl_template };
 
 fn checkedTypeIsConcreteCompileTimeRoot(
     allocator: Allocator,
-    checked_types: *const CheckedTypeStore,
+    module: ModuleId,
+    checked_types: CheckedTypeStoreView,
+    resolver: ModuleResolver,
     root: CheckedTypeId,
 ) Allocator.Error!bool {
-    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
+    var active = std.AutoHashMap(u64, void).init(allocator);
     defer active.deinit();
-    var scan = ConcreteRootScan{ .checked_types = checked_types, .active = &active };
-    return ConcreteRootScan.Eval.run(allocator, &scan, .{ .ty = .{ .walk = .value_graph, .id = root } });
+    var modules = try WalkModules.init(allocator, module, checked_types, resolver);
+    defer modules.deinit(allocator);
+    var scan = ConcreteRootScan{ .allocator = allocator, .modules = &modules, .active = &active };
+    return ConcreteRootScan.Eval.run(allocator, &scan, .{ .ty = .{ .walk = .value_graph, .module = 0, .id = root } });
 }
 
 /// Whether a checked type is concrete enough to be a compile-time root. A
 /// type reached again while it is still being walked (a recursive type)
 /// counts as concrete.
 const ConcreteRootScan = struct {
-    checked_types: *const CheckedTypeStore,
-    /// The types on the path currently being walked.
-    active: *collections.DenseMap(CheckedTypeId, void),
+    allocator: Allocator,
+    /// The modules the walk has entered; a nominal's backing is walked in
+    /// its declaring module.
+    modules: *WalkModules,
+    /// The types on the path currently being walked (`WalkModules.key`).
+    active: *std.AutoHashMap(u64, void),
 
     const Leaf = union(enum) {
-        ty: struct { walk: ConcreteRootWalk, id: CheckedTypeId },
+        ty: struct { walk: ConcreteRootWalk, module: u32, id: CheckedTypeId },
         decided: bool,
     };
     const Eval = collections.AnyAll.Evaluation(Leaf, ConcreteRootScan);
 
-    fn addSpan(items: Eval.Items, walk: ConcreteRootWalk, ids: []const CheckedTypeId) Allocator.Error!void {
-        for (ids) |id| try items.add(.{ .ty = .{ .walk = walk, .id = id } });
+    fn addSpan(items: Eval.Items, walk: ConcreteRootWalk, module: u32, ids: []const CheckedTypeId) Allocator.Error!void {
+        for (ids) |id| try items.add(.{ .ty = .{ .walk = walk, .module = module, .id = id } });
     }
 
     pub fn enter(scan: *ConcreteRootScan, items: Eval.Items, leaf: Leaf) Allocator.Error!Eval.Expansion {
-        const checked_types = scan.checked_types;
         const ty = switch (leaf) {
             .decided => |value| return .{ .value = value },
             .ty => |ty| ty,
         };
         const walk = ty.walk;
-        if (scan.active.contains(ty.id)) return .{ .value = true };
+        const module = ty.module;
+        if (scan.active.contains(WalkModules.key(module, ty.id))) return .{ .value = true };
 
-        switch (checked_types.payload(ty.id)) {
+        switch (scan.modules.typesOf(module).payload(ty.id)) {
             .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
             .field_kind, .err => return .{ .value = false },
             .flex => return .{ .value = false },
@@ -2040,8 +2047,8 @@ const ConcreteRootScan = struct {
             .empty_tag_union,
             => return .{ .value = true },
             .alias => |alias| {
-                try addSpan(items, walk, alias.args);
-                try items.add(.{ .ty = .{ .walk = walk, .id = alias.backing } });
+                try addSpan(items, walk, module, alias.args);
+                try items.add(.{ .ty = .{ .walk = walk, .module = module, .id = alias.backing } });
             },
             .record => |record| {
                 for (0..record.fields.len()) |field_index| {
@@ -2050,12 +2057,12 @@ const ConcreteRootScan = struct {
                         try items.add(.{ .decided = false });
                         break;
                     }
-                    try items.add(.{ .ty = .{ .walk = walk, .id = field.ty } });
-                } else try items.add(.{ .ty = .{ .walk = walk, .id = record.ext } });
+                    try items.add(.{ .ty = .{ .walk = walk, .module = module, .id = field.ty } });
+                } else try items.add(.{ .ty = .{ .walk = walk, .module = module, .id = record.ext } });
             },
-            .tuple => |items_ids| try addSpan(items, walk, items_ids),
+            .tuple => |items_ids| try addSpan(items, walk, module, items_ids),
             .nominal => |nominal| {
-                try addSpan(items, walk, nominal.args);
+                try addSpan(items, walk, module, nominal.args);
                 const needs_backing = switch (nominal.representation) {
                     .builtin => |builtin_type| switch (builtinRuntimeEncoding(builtin_type)) {
                         .primitive,
@@ -2086,31 +2093,31 @@ const ConcreteRootScan = struct {
                 if (needs_backing) {
                     // Declaration formals stand for the args checked above, so they
                     // count as concrete while walking the backing template.
-                    if (checked_types.nominalBackingTemplateForPayload(nominal)) |backing| {
-                        try items.add(.{ .ty = .{ .walk = .decl_template, .id = backing } });
+                    if (try scan.modules.declaration(scan.allocator, module, nominal)) |site| {
+                        try items.add(.{ .ty = .{ .walk = .decl_template, .module = site.module, .id = site.declaration.backing } });
                     }
                 }
             },
             // A function scheme is a concrete compile-time root exactly when its
             // args and return contain no identity variables.
             .function => |function| {
-                try addSpan(items, walk, function.args);
-                try items.add(.{ .ty = .{ .walk = walk, .id = function.ret } });
+                try addSpan(items, walk, module, function.args);
+                try items.add(.{ .ty = .{ .walk = walk, .module = module, .id = function.ret } });
             },
             .tag_union => |tag_union| {
                 for (0..tag_union.tags.len()) |tag_index| {
                     const tag = tag_union.tags.get(tag_index);
-                    try addSpan(items, walk, tag.args);
+                    try addSpan(items, walk, module, tag.args);
                 }
-                try items.add(.{ .ty = .{ .walk = walk, .id = tag_union.ext } });
+                try items.add(.{ .ty = .{ .walk = walk, .module = module, .id = tag_union.ext } });
             },
         }
-        try scan.active.put(ty.id, {});
+        try scan.active.put(WalkModules.key(module, ty.id), {});
         return .{ .group = .all };
     }
 
     pub fn exit(scan: *ConcreteRootScan, leaf: Leaf, _: ?bool) Allocator.Error!void {
-        _ = scan.active.remove(leaf.ty.id);
+        _ = scan.active.remove(WalkModules.key(leaf.ty.module, leaf.ty.id));
     }
 };
 
@@ -2131,7 +2138,8 @@ test "compile-time roots reject undetermined record field kinds" {
     };
     try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .record = .{ .fields = fields, .ext = leaf } }));
 
-    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, &store, root));
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1).digest(), .direct = &.{} };
+    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, imports.current_owner, store.view(), imports.resolver(), root));
 }
 
 test "compile-time data roots with reachable callables require producer type evidence" {
@@ -2160,8 +2168,9 @@ test "compile-time data roots with reachable callables require producer type evi
         .ext = leaf,
     } }));
 
-    try std.testing.expect(!try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, false, root));
-    try std.testing.expect(try checkedTypeIsContextFreeCompileTimeRoot(allocator, &store, true, root));
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1).digest(), .direct = &.{} };
+    try std.testing.expect(!try checkedTypeIsContextFreeCompileTimeRoot(allocator, imports.current_owner, store.view(), imports.resolver(), false, root));
+    try std.testing.expect(try checkedTypeIsContextFreeCompileTimeRoot(allocator, imports.current_owner, store.view(), imports.resolver(), true, root));
 }
 
 fn compileTimeRootRequestIsEligible(root: CompileTimeRoot) bool {
@@ -3422,6 +3431,108 @@ fn checkedNominalTypeKey(nominal: CheckedNominalType) canonical.NominalTypeKey {
     };
 }
 
+/// A nominal type's declaration, read in the module that declares it.
+pub const NominalDeclarationSite = struct {
+    /// The declaring module.
+    module: ModuleId,
+    /// The declaring module's types, which the declaration's ids name.
+    types: CheckedTypeStoreView,
+    declaration: CheckedNominalDeclaration,
+};
+
+/// The declaration of `nominal`, a type of `reader` (the types of module
+/// `reader_module`), read from the module its representation names, which
+/// `resolver` resolves; null for a nominal with no declaration backing. A
+/// box payload capability is read from its module's interface capabilities,
+/// which a reader that meets one has demanded.
+pub fn nominalDeclarationSite(
+    reader_module: ModuleId,
+    reader: CheckedTypeStoreView,
+    resolver: ModuleResolver,
+    nominal: CheckedNominalType,
+) ?NominalDeclarationSite {
+    switch (nominal.representation) {
+        .opaque_without_backing => return null,
+        .builtin => |builtin_nominal| {
+            if (!builtinNominalHasDeclarationBacking(builtin_nominal)) return null;
+            const module = nominal.owner_module.*;
+            const module_types = moduleTypesForSite(reader_module, reader, resolver, module);
+            const declaration = module_types.builtinNominalDeclaration(builtin_nominal) orelse
+                checkedArtifactInvariant("a builtin nominal's owner has no declaration for it", .{});
+            return .{ .module = module, .types = module_types, .declaration = declaration };
+        },
+        .local_declaration => |declaration| return .{
+            .module = reader_module,
+            .types = reader,
+            .declaration = reader.nominalDeclarationById(declaration),
+        },
+        .imported_declaration => |imported| {
+            const module_types = moduleTypesForSite(reader_module, reader, resolver, imported.artifact);
+            return .{ .module = imported.artifact, .types = module_types, .declaration = module_types.nominalDeclarationById(imported.declaration) };
+        },
+        .local_box_payload_capability => |capability_ref| {
+            const capability = reader.demandedInterfaceCapabilities().boxPayloadCapability(capability_ref.capability);
+            const declaration = reader.nominalDeclaration(capability.nominal) orelse
+                checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
+            return .{ .module = reader_module, .types = reader, .declaration = declaration };
+        },
+        .imported_box_payload_capability => |capability_ref| {
+            const module_types = moduleTypesForSite(reader_module, reader, resolver, capability_ref.artifact);
+            const capability = module_types.demandedInterfaceCapabilities().boxPayloadCapability(capability_ref.capability);
+            const declaration = module_types.nominalDeclaration(capability.nominal) orelse
+                checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
+            return .{ .module = capability_ref.artifact, .types = module_types, .declaration = declaration };
+        },
+    }
+}
+
+fn moduleTypesForSite(reader_module: ModuleId, reader: CheckedTypeStoreView, resolver: ModuleResolver, module: ModuleId) CheckedTypeStoreView {
+    if (module.eql(reader_module)) return reader;
+    return resolver.require(module).checked_types;
+}
+
+/// The modules a walk over checked types has entered, by dense index, each
+/// read through its own types. Index 0 is the module the walk starts in.
+const WalkModules = struct {
+    resolver: ModuleResolver,
+    entries: std.ArrayListUnmanaged(Entry) = .empty,
+
+    const Entry = struct { module: ModuleId, types: CheckedTypeStoreView };
+
+    fn init(allocator: Allocator, module: ModuleId, module_types: CheckedTypeStoreView, resolver: ModuleResolver) Allocator.Error!WalkModules {
+        var result = WalkModules{ .resolver = resolver };
+        try result.entries.append(allocator, .{ .module = module, .types = module_types });
+        return result;
+    }
+
+    fn deinit(self: *WalkModules, allocator: Allocator) void {
+        self.entries.deinit(allocator);
+    }
+
+    fn typesOf(self: *const WalkModules, index: u32) CheckedTypeStoreView {
+        return self.entries.items[index].types;
+    }
+
+    /// The declaring module (its walk index) and declaration of `nominal`,
+    /// a type of module `index`.
+    fn declaration(self: *WalkModules, allocator: Allocator, index: u32, nominal: CheckedNominalType) Allocator.Error!?struct { module: u32, declaration: CheckedNominalDeclaration } {
+        const entry = self.entries.items[index];
+        const site = nominalDeclarationSite(entry.module, entry.types, self.resolver, nominal) orelse return null;
+        const module: u32 = for (self.entries.items, 0..) |existing, existing_index| {
+            if (existing.module.eql(site.module)) break @intCast(existing_index);
+        } else blk: {
+            try self.entries.append(allocator, .{ .module = site.module, .types = site.types });
+            break :blk @intCast(self.entries.items.len - 1);
+        };
+        return .{ .module = module, .declaration = site.declaration };
+    }
+
+    /// A key naming type `ty` of module `index`.
+    fn key(index: u32, ty: CheckedTypeId) u64 {
+        return (@as(u64, index) << 32) | @backingInt(ty);
+    }
+};
+
 /// Whether the builtin's representation comes from its checked Roc declaration.
 pub fn builtinNominalHasDeclarationBacking(builtin_nominal: CheckedBuiltinNominal) bool {
     return switch (builtinRuntimeEncoding(builtin_nominal)) {
@@ -3832,12 +3943,13 @@ pub const CheckedTypeStoreView = struct {
     }
 
     /// The interface capabilities of the module whose types the view reads,
-    /// computed on first demand. Reads of the module's nominal types carry
-    /// them from then on.
-    pub fn interfaceCapabilities(self: CheckedTypeStoreView) Allocator.Error!*const ModuleInterfaceCapabilities {
+    /// computed on first demand; `resolver` resolves the modules declaring
+    /// the nominal types its local nominal types' backings name. Reads of
+    /// the module's nominal types carry them from then on.
+    pub fn interfaceCapabilities(self: CheckedTypeStoreView, resolver: ModuleResolver) Allocator.Error!*const ModuleInterfaceCapabilities {
         const store = self.store orelse checkedArtifactInvariant("interface capabilities were demanded from a view without a store", .{});
         const source = store.capability_source orelse checkedArtifactInvariant("interface capabilities were demanded from a store without module analyses", .{});
-        return source.analyses.interfaceCapabilities(source.platform_store orelse store, source.current_module);
+        return source.analyses.interfaceCapabilities(source.platform_store orelse store, source.current_module, source.module, resolver);
     }
 
     /// Whether `id` is a nominal or alias type.
@@ -4149,6 +4261,9 @@ pub const CheckedTypeStoreView = struct {
         return self.nominalDeclarationById(@fromBackingInt(@intCast(entry - 1)));
     }
 
+    /// The declaration of `nominal`, a nominal type this view's module
+    /// declares; another module's nominal type is read in its declaring
+    /// module (`nominalDeclarationSite`).
     pub fn nominalDeclarationForPayload(
         self: CheckedTypeStoreView,
         nominal: CheckedNominalType,
@@ -4157,6 +4272,8 @@ pub const CheckedTypeStoreView = struct {
         return self.nominalDeclaration(checkedNominalTypeKey(nominal));
     }
 
+    /// The backing template of `nominal`, a nominal type this view's module
+    /// declares.
     pub fn nominalBackingTemplateForPayload(
         self: CheckedTypeStoreView,
         nominal: CheckedNominalType,
@@ -4579,18 +4696,10 @@ const CheckedTypePublication = struct {
         self: *CheckedTypePublication,
         allocator: Allocator,
         module: TypedCIR.Module,
-        names: *canonical.CanonicalNameStore,
         var_: Var,
     ) Allocator.Error!CheckedTypeId {
         std.debug.assert(self.source_types.?.scratch != null);
-        var newly_reached: std.ArrayList(Var) = .empty;
-        defer newly_reached.deinit(allocator);
-        const first_payload = self.store.payloads.items().len;
-        try sealed_type_view.reach(allocator, module.moduleEnvConst(), self.store.sealed_var_facts.items, var_, &newly_reached);
-        // Only this request's newly reached types need their imported
-        // declarations embedded. Other producers own the completeness of
-        // their own types.
-        try embedReachableImportedNominalDecls(allocator, &self.store, names, self.imports, newly_reached.items, first_payload);
+        try sealed_type_view.reach(allocator, module.moduleEnvConst(), self.store.sealed_var_facts.items, var_, null);
         return self.source_types.?.get(module, var_);
     }
 
@@ -4640,6 +4749,8 @@ const CheckedTypeSet = struct {
 pub const CapabilitySource = struct {
     analyses: *ModuleAnalyses,
     current_module: canonical.ModuleIdentityId,
+    /// The checked module whose types the store holds.
+    module: ModuleId,
     /// For a platform/app pairing: the platform's store, whose capabilities
     /// the pairing reads.
     platform_store: ?*CheckedTypeStore = null,
@@ -4757,12 +4868,19 @@ pub const CheckedTypeStore = struct {
     /// by importing module and imported id, so an imported type projected
     /// twice names one root.
     projected_imports: std.AutoHashMapUnmanaged(ProjectedImportKey, CheckedTypeId) = .empty,
+    /// The projection into this store of each declaration of another
+    /// module whose backing a creation instantiated here, by declaring
+    /// module and declaration. Read and written under the creation lock.
+    projected_declarations: std.AutoHashMapUnmanaged(ProjectedDeclarationKey, ProjectedDeclaration) = .empty,
     /// True for a store reconstructed from a serialized buffer (pools point into
     /// buffer-owned memory and must not be freed).
     serialized: bool = false,
 
     const SchemeRootKey = struct { root: CheckedTypeId, domain: CheckedTypeSchemeDomain };
     const ProjectedImportKey = struct { module: [32]u8, ty: CheckedTypeId };
+    const ProjectedDeclarationKey = struct { module: [32]u8, declaration: CheckedNominalDeclarationId };
+    /// A declaration's formals and backing, projected together.
+    const ProjectedDeclaration = struct { formals: []const CheckedTypeId, backing: CheckedTypeId };
 
     const BorrowedColumn = enum {
         roots,
@@ -4832,6 +4950,7 @@ pub const CheckedTypeStore = struct {
         "synthesized_keys",
         "key_names",
         "projected_imports",
+        "projected_declarations",
         "scheme_by_root",
         "sealed_env",
         "sealed_keys",
@@ -4857,12 +4976,14 @@ pub const CheckedTypeStore = struct {
     /// leaves it, and waits on no slot in between.
     pub fn beginCreation(self: *CheckedTypeStore, io: std.Io) void {
         self.writer_mutex.lockUncancelable(io);
+        collections.HeldLocks.acquired();
         self.creation_active.store(true, .seq_cst);
     }
 
     pub fn endCreation(self: *CheckedTypeStore, io: std.Io) void {
         self.committed_roots.store(self.roots.count(), .release);
         self.creation_active.store(false, .seq_cst);
+        collections.HeldLocks.released();
         self.writer_mutex.unlock(io);
     }
 
@@ -5058,19 +5179,6 @@ pub const CheckedTypeStore = struct {
             .promoted_local_procedures = promoted_local_procedures,
         };
         try forEachCheckedSourceTypeRoot(module, root_inputs, &publisher);
-
-        // Self-containment (issue #9983 / Option A): the published declaration
-        // table so far holds only THIS module's own declarations. Standalone
-        // consumers (glue) read an artifact without loading the declaring
-        // module's artifact, so embed a copy of every imported nominal
-        // declaration reachable from the published types, keyed by stable
-        // content identity.
-        var reached: std.ArrayList(Var) = .empty;
-        defer reached.deinit(allocator);
-        for (store.sealed_var_facts.items, 0..) |var_facts, raw| {
-            if (var_facts.reached) try reached.append(allocator, @fromBackingInt(@intCast(raw)));
-        }
-        try embedReachableImportedNominalDecls(allocator, &store, names, import_views, reached.items, 0);
 
         return .{
             .store = store,
@@ -5570,40 +5678,55 @@ pub const CheckedTypeStore = struct {
         return self.view().nominalDeclarationById(id);
     }
 
-    pub fn nominalDeclarationForPayload(
-        self: *const CheckedTypeStore,
-        nominal: CheckedNominalType,
-    ) ?CheckedNominalDeclaration {
-        return self.view().nominalDeclarationForPayload(nominal);
-    }
-
-    pub fn nominalBackingTemplateForPayload(
-        self: *const CheckedTypeStore,
-        nominal: CheckedNominalType,
-    ) ?CheckedTypeId {
-        if (nominal.representation == .opaque_without_backing) return null;
-        if (nominal.builtin) |builtin_nominal| {
-            if (!builtinNominalHasDeclarationBacking(builtin_nominal)) return null;
-        }
-        const declaration = self.nominalDeclarationForPayload(nominal) orelse {
-            checkedArtifactInvariant("checked nominal payload referenced a missing nominal declaration", .{});
-        };
-        return declaration.backing;
-    }
-
+    /// The backing of `nominal`, a type of this store (the types of module
+    /// `module`), instantiated at its arguments in this store; null for a
+    /// nominal with no declaration backing. A declaration of another module,
+    /// which `resolver` resolves, is projected into this store once, its
+    /// formals and backing together.
     pub fn ensureInstantiatedNominalBackingRootForPayload(
         self: *CheckedTypeStore,
         allocator: Allocator,
+        names: *canonical.CanonicalNameStore,
+        module: ModuleId,
+        resolver: ModuleResolver,
         nominal: CheckedNominalType,
     ) Allocator.Error!?CheckedTypeId {
-        if (nominal.representation == .opaque_without_backing) return null;
-        if (nominal.builtin) |builtin_nominal| {
-            if (!builtinNominalHasDeclarationBacking(builtin_nominal)) return null;
+        const site = nominalDeclarationSite(module, self.view(), resolver, nominal) orelse return null;
+        if (site.module.eql(module)) return try self.ensureInstantiatedNominalBackingRoot(allocator, site.declaration, nominal.args);
+
+        // nominal.args aliases type_id_pool, which projection may grow.
+        const actuals = try allocator.dupe(CheckedTypeId, nominal.args);
+        defer allocator.free(actuals);
+        const projected = try self.projectDeclaration(allocator, names, resolver.require(site.module), site.declaration);
+        if (projected.formals.len != actuals.len) {
+            checkedArtifactInvariant("nominal backing instantiation arity did not match declaration", .{});
         }
-        const declaration = self.nominalDeclarationForPayload(nominal) orelse {
-            checkedArtifactInvariant("checked nominal payload referenced a missing nominal declaration", .{});
-        };
-        return try self.ensureInstantiatedNominalBackingRoot(allocator, declaration, nominal.args);
+        if (checkedTypeIdSliceEql(projected.formals, actuals)) return projected.backing;
+        var substitution = CheckedTypeSubstitution.init(allocator, projected.formals, actuals);
+        defer substitution.deinit();
+        return try self.cloneCheckedTypeRootSubstituting(allocator, projected.backing, &substitution);
+    }
+
+    /// The projection of `declaration`, a declaration of module `owner`,
+    /// into this store.
+    fn projectDeclaration(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        names: *canonical.CanonicalNameStore,
+        owner: ImportedModuleView,
+        declaration: CheckedNominalDeclaration,
+    ) Allocator.Error!ProjectedDeclaration {
+        const key = ProjectedDeclarationKey{ .module = owner.key.digest().bytes, .declaration = declaration.id };
+        if (self.projected_declarations.get(key)) |known| return known;
+        var projector = CheckedTypeStoreImportProjector.init(allocator, self, names, owner);
+        defer projector.deinit();
+        const owner_formals = declaration.formalArgs(&owner.checked_types);
+        const formals = try allocator.alloc(CheckedTypeId, owner_formals.len);
+        errdefer allocator.free(formals);
+        for (owner_formals, formals) |owner_formal, *formal| formal.* = try projector.project(owner_formal);
+        const projected = ProjectedDeclaration{ .formals = formals, .backing = try projector.project(declaration.backing) };
+        try self.projected_declarations.put(allocator, key, projected);
+        return projected;
     }
 
     pub fn ensureInstantiatedNominalBackingRoot(
@@ -5686,6 +5809,9 @@ pub const CheckedTypeStore = struct {
         self.synthetic_variable_roots.deinit(allocator);
         self.scheme_by_root.deinit(allocator);
         self.projected_imports.deinit(allocator);
+        var projected_declarations = self.projected_declarations.valueIterator();
+        while (projected_declarations.next()) |projected| allocator.free(projected.formals);
+        self.projected_declarations.deinit(allocator);
         var names = self.var_name_ids.keyIterator();
         while (names.next()) |name| allocator.free(name.*);
         self.var_name_ids.deinit(allocator);
@@ -7601,154 +7727,6 @@ fn checkedNominalRecordFieldRootKeySliceEql(
     return true;
 }
 
-const OwnerNominalDecl = struct {
-    view: ImportedModuleView,
-    decl: CheckedNominalDeclaration,
-};
-
-/// Find the imported artifact view + declaration for a nominal using the
-/// explicit representation carried by the payload. Missing declaration-backed
-/// owners are producer bugs: a published artifact must be self-contained.
-fn ownerViewAndDeclForImportedNominal(
-    imports: CheckedImportViews,
-    owner_module: ModuleId,
-    representation: CheckedNominalRepresentationRef,
-) Allocator.Error!?OwnerNominalDecl {
-    return switch (representation) {
-        .builtin => |builtin_nominal| blk: {
-            const view = imports.viewForKey(owner_module) orelse return null;
-            const declaration = view.checked_types.builtinNominalDeclaration(builtin_nominal) orelse return null;
-            break :blk .{ .view = view, .decl = declaration };
-        },
-        .imported_declaration => |imported| blk: {
-            const view = imports.viewForKey(imported.artifact) orelse return null;
-            break :blk .{ .view = view, .decl = view.checked_types.nominalDeclarationById(imported.declaration) };
-        },
-        .imported_box_payload_capability => |capability_ref| blk: {
-            const view = imports.viewForKey(capability_ref.artifact) orelse return null;
-            const capability = (try view.checked_types.interfaceCapabilities()).boxPayloadCapability(capability_ref.capability);
-            const decl = view.checked_types.nominalDeclaration(capability.nominal) orelse
-                checkedArtifactInvariant("imported box payload capability referenced missing nominal declaration", .{});
-            break :blk .{ .view = view, .decl = decl };
-        },
-        .local_declaration,
-        .local_box_payload_capability,
-        .opaque_without_backing,
-        => null,
-    };
-}
-
-/// Project one imported nominal declaration (its declaration-root nominal
-/// payload, backing template, formals, declared record fields, and padding)
-/// from its owner view into `store`, and register it in the local declaration
-/// table. `appendCheckedNominalDeclarationFromPayload` deduplicates by content
-/// key and asserts equal-key-equal-content, so a redundant call is a no-op.
-fn embedOneImportedNominalDecl(
-    allocator: Allocator,
-    store: *CheckedTypeStore,
-    names: *canonical.CanonicalNameStore,
-    owner_view: ImportedModuleView,
-    owner_decl: CheckedNominalDeclaration,
-) Allocator.Error!void {
-    var projector = CheckedTypeStoreImportProjector.init(allocator, store, names, owner_view);
-    defer projector.deinit();
-
-    const local_root = try projector.project(owner_decl.declaration_root);
-
-    const owner_fields = owner_decl.declaredRecordFields(&owner_view.checked_types);
-    const local_fields = if (owner_fields.len == 0) &[_]CheckedNominalRecordField{} else blk: {
-        const out = try allocator.alloc(CheckedNominalRecordField, owner_fields.len);
-        errdefer allocator.free(out);
-        for (owner_fields, out) |owner_field, *local_field| {
-            local_field.* = switch (owner_field) {
-                .named => |label| .{ .named = try projector.remapRecordField(label) },
-                .padding => |ty| .{ .padding = try projector.project(ty) },
-            };
-        }
-        break :blk out;
-    };
-    defer if (local_fields.len != 0) allocator.free(local_fields);
-
-    const local_backing = try projector.project(owner_decl.backing);
-    try appendCheckedNominalDeclarationFromPayload(allocator, store, local_root, local_backing, local_fields);
-}
-
-/// Ensure the artifact's declaration table holds a copy of every IMPORTED
-/// nominal declaration reachable from the published checked types (see the
-/// call site in `fromModule` for why): the source types `source_vars` and
-/// every synthesized type from `first_payload` on. Fixpoint over
-/// `store.payloads`: projecting a backing can surface further imported
-/// nominals (e.g. an opaque whose backing uses `List`); those are appended
-/// and scanned in turn, so a single forward scan that re-reads the length
-/// reaches the transitive closure.
-fn embedReachableImportedNominalDecls(
-    allocator: Allocator,
-    store: *CheckedTypeStore,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    source_vars: []const Var,
-    first_payload: usize,
-) Allocator.Error!void {
-    for (source_vars) |var_| {
-        switch (store.payload(type_ids.fromVar(var_))) {
-            .nominal => |nominal| try embedImportedNominalDeclFor(allocator, store, names, imports, nominal.toBuild()),
-            .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => {},
-        }
-    }
-    var i = first_payload;
-    while (i < store.payloads.items().len) : (i += 1) {
-        // Read only scalar identity fields: the payload's slice fields alias
-        // pools that projection below can reallocate.
-        const payload = store.payloads.items()[i];
-        if (payload != .nominal) continue;
-        try embedImportedNominalDeclFor(allocator, store, names, imports, store.nominal_row_pool.items()[@backingInt(payload.nominal)]);
-    }
-}
-
-/// Embed the imported declaration `nominal` names, when the store lacks it.
-fn embedImportedNominalDeclFor(
-    allocator: Allocator,
-    store: *CheckedTypeStore,
-    names: *canonical.CanonicalNameStore,
-    imports: CheckedImportViews,
-    nominal: anytype,
-) Allocator.Error!void {
-    {
-        const origin_module = nominal.origin_module;
-        const owner_module = nominal.owner_module;
-        const source_decl = nominal.source_decl;
-        const builtin_nominal = nominal.builtin;
-        const representation = nominal.representation;
-
-        const key = canonical.NominalTypeKey{
-            .module = origin_module,
-            .source_decl = source_decl,
-        };
-        // Already declared locally (this module's own declaration) or already
-        // embedded on an earlier iteration.
-        if (store.nominalDeclaration(key) != null) return;
-
-        const owner = (try ownerViewAndDeclForImportedNominal(imports, owner_module, representation)) orelse
-            switch (representation) {
-                .opaque_without_backing => return,
-                .builtin => {
-                    if (builtin_nominal) |builtin_decl| {
-                        if (!builtinNominalHasDeclarationBacking(builtin_decl)) return;
-                    }
-                    checkedArtifactInvariant("checked type publication could not embed reachable builtin nominal declaration", .{});
-                },
-                .local_declaration,
-                .local_box_payload_capability,
-                => checkedArtifactInvariant("checked type publication had local nominal payload without local declaration", .{}),
-                .imported_declaration,
-                .imported_box_payload_capability,
-                => checkedArtifactInvariant("checked type publication could not embed reachable imported nominal declaration", .{}),
-            };
-
-        try embedOneImportedNominalDecl(allocator, store, names, owner.view, owner.decl);
-    }
-}
-
 const CheckedKeyEngine = type_key_engine.Engine(CheckedTypeKeyAdapter);
 
 /// Keys checked types through the canonical type-key engine. Classes and
@@ -9120,7 +9098,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     const nominal_payload = publication.store.payload(nominal_root);
     if (nominal_payload != .nominal) return error.ExpectedNominalPayload;
     const nominal = nominal_payload.nominal;
-    const backing = publication.store.nominalBackingTemplateForPayload(nominal) orelse return error.ExpectedNominalBacking;
+    const backing = publication.store.view().nominalBackingTemplateForPayload(nominal) orelse return error.ExpectedNominalBacking;
     try testing.expectEqual(expected, publication.store.payload(backing));
 }
 
@@ -17544,7 +17522,7 @@ fn specializeResolvedPlans(allocator: Allocator, pass: *EvidencePass, index: *co
     const store = source.types.store;
     // A store gets its capability source when its module is published;
     // before that, nothing has the module's capabilities to read.
-    if (store.capability_source != null) _ = try store.view().interfaceCapabilities();
+    if (store.capability_source != null) _ = try store.view().interfaceCapabilities(pass.import_views.resolver());
     const owner = source.key.digest();
     for (pass.plan_results.items) |entry| switch (entry.resolution.resolution) {
         .direct_pending => |node_id| try demandTargetCapabilities(pass, owner, node_id),
@@ -17612,7 +17590,7 @@ fn demandTargetCapabilities(pass: *EvidencePass, owner: ModuleId, node_id: stati
     if (target_key.eql(owner)) return;
     const imported = pass.import_views.viewForKey(target_key) orelse
         checkedArtifactInvariant("resolved dispatch target module was not among the modules dispatch resolution reads", .{});
-    _ = try imported.checked_types.interfaceCapabilities();
+    _ = try imported.checked_types.interfaceCapabilities(pass.import_views.resolver());
 }
 
 fn enclosingSitesFor(
@@ -20498,14 +20476,14 @@ const PlatformRelationTypeSubstitutions = struct {
                     std.debug.assert(checkedTypePayloadIsIdentity(checked_types.payload(formal)));
                 }
                 const actual = try projector.project(app_identity_root);
-                try recordRelationSubstitution(allocator, names, checked_types, &formals, &actuals, formal, actual);
+                try recordRelationSubstitution(allocator, checked_types, &formals, &actuals, formal, actual);
             }
 
             for (type_inputs.aliases[required.aliases.start..][0..required.aliases.len]) |alias| {
                 const actual = relationSubstitutionActual(formals.items, actuals.items, alias.identity) orelse continue;
-                try recordRelationSubstitution(allocator, names, checked_types, &formals, &actuals, alias.root, actual);
-                try recordRelationSubstitution(allocator, names, checked_types, &formals, &actuals, alias.backing, actual);
-                try recordRelationSubstitution(allocator, names, checked_types, &formals, &actuals, alias.identity, actual);
+                try recordRelationSubstitution(allocator, checked_types, &formals, &actuals, alias.root, actual);
+                try recordRelationSubstitution(allocator, checked_types, &formals, &actuals, alias.backing, actual);
+                try recordRelationSubstitution(allocator, checked_types, &formals, &actuals, alias.identity, actual);
             }
         }
 
@@ -20585,7 +20563,6 @@ const PlatformRelationTypeSubstitutions = struct {
 /// the first root; conflicting bindings violate the checked relation invariant.
 fn recordRelationSubstitution(
     allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
     store: *const CheckedTypeStore,
     formals: *std.ArrayList(CheckedTypeId),
     actuals: *std.ArrayList(CheckedTypeId),
@@ -20593,7 +20570,7 @@ fn recordRelationSubstitution(
     actual: CheckedTypeId,
 ) Allocator.Error!void {
     if (formal == actual) return;
-    try appendUniqueCheckedTypeSubstitution(formals, actuals, allocator, names, store, formal, actual);
+    try appendUniqueCheckedTypeSubstitution(formals, actuals, allocator, store, formal, actual);
 }
 
 /// The recorded actual paired with `formal`, or null if `formal` is unbound.
@@ -21410,8 +21387,7 @@ const ResolvedDispatchCallableSpecializer = struct {
         );
         return try instantiateResolvedDispatchTargetCallableMemoized(
             self.allocator,
-            self.names,
-            self.store,
+            .{ .store = self.store, .names = self.names, .module = self.owner, .resolver = self.imports.resolver() },
             target_callable,
             plan_callable,
             &self.instantiated_pairs,
@@ -22622,9 +22598,14 @@ fn checkedTypeHoldsFunction(
                         .parse_tag_union_spec => return true,
                         .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
                         .iterator => {
-                            const declaration = item.types.builtinNominalDeclaration(builtin_nominal) orelse
-                                checkedArtifactInvariant("a module has no declaration for the builtin iterator", .{});
-                            try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = declaration.backing });
+                            const owner = nominal.owner_module.*;
+                            const declaring: CheckedTypeStoreView = if (owner.eql(own_key))
+                                own_types
+                            else
+                                (import_views.viewForKey(owner) orelse checkedArtifactInvariant("a nominal type's declaring module is not available", .{})).checked_types;
+                            const declaration = declaring.builtinNominalDeclaration(builtin_nominal) orelse
+                                checkedArtifactInvariant("the Builtin module has no declaration for the builtin iterator", .{});
+                            try pending.append(allocator, .{ .key = owner.bytes, .types = declaring, .ty = declaration.backing });
                         },
                     },
                     .local_declaration => |declaration_id| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = item.types.nominalDeclarationById(declaration_id).backing }),
@@ -22651,7 +22632,7 @@ fn checkedTypeHoldsFunction(
                             try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = own_types, .ty = declaration.backing });
                         } else {
                             const declaring = import_views.viewForKey(imported.artifact) orelse checkedArtifactInvariant("a nominal type's declaring module is not available", .{});
-                            const capability = (try declaring.checked_types.interfaceCapabilities()).boxPayloadCapability(imported.capability);
+                            const capability = (try declaring.checked_types.interfaceCapabilities(import_views.resolver())).boxPayloadCapability(imported.capability);
                             const declaration = declaring.checked_types.nominalDeclaration(capability.nominal) orelse
                                 checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
                             try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring.checked_types, .ty = declaration.backing });
@@ -22688,10 +22669,19 @@ const ResolvedDispatchCallablePair = struct {
     plan: CheckedTypeId,
 };
 
+/// The store a dispatch specialization relates and creates types in: the
+/// types of module `module`, whose nominal types' declarations of other
+/// modules `resolver` resolves.
+const DispatchSubstitutionTypes = struct {
+    store: *CheckedTypeStore,
+    names: *canonical.CanonicalNameStore,
+    module: ModuleId,
+    resolver: ModuleResolver,
+};
+
 fn instantiateResolvedDispatchTargetCallableMemoized(
     allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
-    store: *CheckedTypeStore,
+    dispatch_types: DispatchSubstitutionTypes,
     target_callable: CheckedTypeId,
     plan_callable: CheckedTypeId,
     memo: *std.AutoHashMapUnmanaged(ResolvedDispatchCallablePair, CheckedTypeId),
@@ -22704,8 +22694,7 @@ fn instantiateResolvedDispatchTargetCallableMemoized(
 
     const instantiated = try instantiateResolvedDispatchTargetCallable(
         allocator,
-        names,
-        store,
+        dispatch_types,
         target_callable,
         plan_callable,
     );
@@ -22737,11 +22726,11 @@ fn projectResolvedDispatchTargetCallable(
 
 fn instantiateResolvedDispatchTargetCallable(
     allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
-    store: *CheckedTypeStore,
+    dispatch_types: DispatchSubstitutionTypes,
     target_callable: CheckedTypeId,
     plan_callable: CheckedTypeId,
 ) Allocator.Error!CheckedTypeId {
+    const store = dispatch_types.store;
     const target_fn = checkedFunctionPayload(store, target_callable, "resolved dispatch target callable");
     const plan_fn = checkedFunctionPayload(store, plan_callable, "resolved dispatch plan callable");
     if (target_fn.args.len != plan_fn.args.len) {
@@ -22765,8 +22754,7 @@ fn instantiateResolvedDispatchTargetCallable(
     for (target_args, plan_args) |target_arg, plan_arg| {
         try collectResolvedDispatchTargetSubstitutions(
             allocator,
-            names,
-            store,
+            dispatch_types,
             target_arg,
             plan_arg,
             &target_formals,
@@ -22793,8 +22781,7 @@ fn instantiateResolvedDispatchTargetCallable(
     for (target_instantiated_args, plan_args) |target_arg, plan_arg| {
         try collectDispatchPlanIdentitySubstitutions(
             allocator,
-            names,
-            store,
+            dispatch_types,
             target_arg,
             plan_arg,
             &plan_formals,
@@ -22805,8 +22792,7 @@ fn instantiateResolvedDispatchTargetCallable(
     active.clearRetainingCapacity();
     try collectDispatchPlanIdentitySubstitutions(
         allocator,
-        names,
-        store,
+        dispatch_types,
         target_instantiated_ret,
         plan_ret,
         &plan_formals,
@@ -22847,8 +22833,7 @@ pub fn checkedFunctionPayload(
 
 fn collectResolvedDispatchTargetSubstitutions(
     allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
-    store: *CheckedTypeStore,
+    dispatch_types: DispatchSubstitutionTypes,
     target: CheckedTypeId,
     plan: CheckedTypeId,
     formals: *std.ArrayList(CheckedTypeId),
@@ -22856,20 +22841,19 @@ fn collectResolvedDispatchTargetSubstitutions(
     active: *std.AutoHashMap(PlatformRequirementTypePair, void),
     conflicts: *collections.DenseMap(CheckedTypeId, void),
 ) Allocator.Error!void {
-    try walkDispatchSubstitutions(.resolved_target, allocator, names, store, target, plan, formals, actuals, active, conflicts);
+    try walkDispatchSubstitutions(.resolved_target, allocator, dispatch_types, target, plan, formals, actuals, active, conflicts);
 }
 
 fn collectDispatchPlanIdentitySubstitutions(
     allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
-    store: *CheckedTypeStore,
+    dispatch_types: DispatchSubstitutionTypes,
     target: CheckedTypeId,
     plan: CheckedTypeId,
     formals: *std.ArrayList(CheckedTypeId),
     actuals: *std.ArrayList(CheckedTypeId),
     active: *std.AutoHashMap(PlatformRequirementTypePair, void),
 ) Allocator.Error!void {
-    try walkDispatchSubstitutions(.plan_identity, allocator, names, store, target, plan, formals, actuals, active, {});
+    try walkDispatchSubstitutions(.plan_identity, allocator, dispatch_types, target, plan, formals, actuals, active, {});
 }
 
 /// `resolved_target` relates a resolved target's identities to the plan's
@@ -22890,8 +22874,7 @@ const DispatchSubstitutionItem = union(enum) {
 fn walkDispatchSubstitutions(
     comptime mode: DispatchSubstitutionMode,
     allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
-    store: *CheckedTypeStore,
+    dispatch_types: DispatchSubstitutionTypes,
     target: CheckedTypeId,
     plan: CheckedTypeId,
     formals: *std.ArrayList(CheckedTypeId),
@@ -22907,7 +22890,7 @@ fn walkDispatchSubstitutions(
     try pending.append(allocator, .{ .pair = .{ .target = target, .plan = plan } });
     while (pending.pop()) |item| switch (item) {
         .exit => |pair| _ = active.remove(pair),
-        .pair => |pair| try dispatchSubstitutionStep(mode, allocator, names, store, pair.target, pair.plan, formals, actuals, active, conflicts, &pending),
+        .pair => |pair| try dispatchSubstitutionStep(mode, allocator, dispatch_types, pair.target, pair.plan, formals, actuals, active, conflicts, &pending),
     };
 }
 
@@ -22916,8 +22899,7 @@ fn walkDispatchSubstitutions(
 fn dispatchSubstitutionStep(
     comptime mode: DispatchSubstitutionMode,
     allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
-    store: *CheckedTypeStore,
+    dispatch_types: DispatchSubstitutionTypes,
     target: CheckedTypeId,
     plan: CheckedTypeId,
     formals: *std.ArrayList(CheckedTypeId),
@@ -22929,6 +22911,8 @@ fn dispatchSubstitutionStep(
     },
     pending: *std.ArrayListUnmanaged(DispatchSubstitutionItem),
 ) Allocator.Error!void {
+    const names = dispatch_types.names;
+    const store = dispatch_types.store;
     if (target == plan) return;
 
     const pair = PlatformRequirementTypePair{
@@ -22955,7 +22939,7 @@ fn dispatchSubstitutionStep(
         .plan_identity => {
             if (checkedTypePayloadIsIdentity(plan_payload)) {
                 if (!checkedTypePayloadIsIdentity(target_payload)) {
-                    try appendUniqueCheckedTypeSubstitution(formals, actuals, allocator, names, store, plan, target);
+                    try appendUniqueCheckedTypeSubstitution(formals, actuals, allocator, store, plan, target);
                 }
                 return;
             }
@@ -23013,6 +22997,9 @@ fn dispatchSubstitutionStep(
                     if (!target_nominal.is_opaque) {
                         const target_backing = (try store.ensureInstantiatedNominalBackingRootForPayload(
                             allocator,
+                            dispatch_types.names,
+                            dispatch_types.module,
+                            dispatch_types.resolver,
                             target_nominal,
                         )) orelse return;
                         try pending.append(allocator, .{ .pair = .{ .target = target_backing, .plan = plan } });
@@ -23140,7 +23127,6 @@ fn appendUniqueCheckedTypeSubstitution(
     formals: *std.ArrayList(CheckedTypeId),
     actuals: *std.ArrayList(CheckedTypeId),
     allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
     store: *const CheckedTypeStore,
     formal: CheckedTypeId,
     actual: CheckedTypeId,
@@ -23150,13 +23136,13 @@ fn appendUniqueCheckedTypeSubstitution(
         // A store can hold two roots for one type, so a partially rebuilt
         // instantiation can reference one root in one position and another
         // in another. Two ids for one type are one actual, not a conflict;
-        // the first is kept. Debug builds check that the two have one key.
+        // the first is kept. Debug builds check that the two are one type
+        // by structure, which reads no key slot: the caller may hold the
+        // store's creation lock.
         if (builtin.mode == .debug and existing_actual != actual) {
-            var keys = CheckedTypeKeys.init(allocator, names, store);
-            defer keys.deinit();
-            const existing_key = try keys.key(existing_actual);
-            const new_key = try keys.key(actual);
-            if (!std.meta.eql(existing_key.bytes, new_key.bytes)) {
+            var scratch = CheckedTypeStoreView.EqualityScratch.init(allocator);
+            defer scratch.deinit();
+            if (!try checkedTypeRootSliceEql(.alpha, .named, store.view(), &.{existing_actual}, &.{actual}, &scratch)) {
                 checkedArtifactInvariant("checked type substitution mapped one formal to multiple actuals", .{});
             }
         }
@@ -23643,9 +23629,10 @@ pub fn pairCheckedPlatform(
     std.debug.assert(platform.checking_context_identity.platform_app_relation == null);
     // The pairing reads the platform's capabilities and the types they
     // name, so they exist before the pairing borrows the platform's types.
-    _ = try platform.typesView().interfaceCapabilities();
-    _ = try app.typesView().interfaceCapabilities();
-    for (available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities();
+    const capability_views = CheckedImportViews{ .current_owner = platform.key.digest(), .direct = &.{}, .available = available_artifacts };
+    _ = try platform.typesView().interfaceCapabilities(capability_views.resolver());
+    _ = try app.typesView().interfaceCapabilities(capability_views.resolver());
+    for (available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities(capability_views.resolver());
     const arena = try allocator.create(base.SingleThreadArena);
     arena.* = base.SingleThreadArena.init(allocator);
     errdefer {
@@ -24238,6 +24225,8 @@ pub const ModuleInterfaceCapabilities = struct {
         allocator: Allocator,
         checked_types: *CheckedTypeStore,
         current_module: canonical.ModuleIdentityId,
+        module: ModuleId,
+        resolver: ModuleResolver,
     ) Allocator.Error!ModuleInterfaceCapabilities {
         var boxed_payload_templates = std.ArrayList(BoxPayloadCapabilityEntry).empty;
         errdefer boxed_payload_templates.deinit(allocator);
@@ -24321,7 +24310,7 @@ pub const ModuleInterfaceCapabilities = struct {
 
             const proof_id: ?OpaqueAtomicProofId = blk: {
                 if (!nominal.is_opaque) break :blk null;
-                if (!try checkedTypeHasNoReachableCallableSlots(allocator, checked_types, backing_ty)) break :blk null;
+                if (!try checkedTypeHasNoReachableCallableSlots(allocator, module, checked_types.view(), resolver, backing_ty)) break :blk null;
 
                 const id: OpaqueAtomicProofId = @fromBackingInt(@intCast(@as(u32, @intCast(opaque_atomic_proofs.items.len))));
                 try opaque_atomic_proofs.append(allocator, .{
@@ -24419,6 +24408,23 @@ fn testFillSyntheticVariableRoot(
     try store.declareIdentityInstance(allocator, root);
 }
 
+/// The types of a test store whose nominal types name no declaration of
+/// another module.
+fn testDispatchSubstitutionTypes(store: *CheckedTypeStore, names: *canonical.CanonicalNameStore) DispatchSubstitutionTypes {
+    if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
+    const Resolver = struct {
+        fn resolveNone(_: *const anyopaque, _: ModuleId) ?ImportedModuleView {
+            return null;
+        }
+    };
+    return .{
+        .store = store,
+        .names = names,
+        .module = testCheckedModuleKey(1).digest(),
+        .resolver = .{ .context = store, .resolve_fn = Resolver.resolveNone },
+    };
+}
+
 fn testCheckedModuleKey(byte: u8) CheckedModuleArtifactKey {
     if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
 
@@ -24430,21 +24436,44 @@ fn testCheckedModuleKey(byte: u8) CheckedModuleArtifactKey {
 /// Whether no type reachable from `root` holds a callable. The answer is the
 /// conjunction of every reachable type's own verdict, so each is visited once
 /// from an explicit work list.
+/// A type of one module a walk over checked types has entered
+/// (`WalkModules`).
+const WalkItem = struct { module: u32, ty: CheckedTypeId };
+
+/// Queues the children of one walked type, which are types of its module.
+const WalkChildren = struct {
+    allocator: Allocator,
+    module: u32,
+    pending: *std.ArrayListUnmanaged(WalkItem),
+
+    fn add(self: *WalkChildren, ty: CheckedTypeId) Allocator.Error!void {
+        try self.pending.append(self.allocator, .{ .module = self.module, .ty = ty });
+    }
+
+    fn addSlice(self: *WalkChildren, tys: []const CheckedTypeId) Allocator.Error!void {
+        for (tys) |ty| try self.add(ty);
+    }
+};
+
 fn checkedTypeHasNoReachableCallableSlots(
     allocator: Allocator,
-    checked_types: *const CheckedTypeStore,
+    module: ModuleId,
+    checked_types: CheckedTypeStoreView,
+    resolver: ModuleResolver,
     root: CheckedTypeId,
 ) Allocator.Error!bool {
-    var visited = collections.DenseMap(CheckedTypeId, void).init(allocator);
+    var modules = try WalkModules.init(allocator, module, checked_types, resolver);
+    defer modules.deinit(allocator);
+    var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
-    var pending: std.ArrayListUnmanaged(CheckedTypeId) = .empty;
+    var pending: std.ArrayListUnmanaged(WalkItem) = .empty;
     defer pending.deinit(allocator);
-    try pending.append(allocator, root);
-    while (pending.pop()) |ty| {
-        if (visited.contains(ty)) continue;
-        try visited.put(ty, {});
+    try pending.append(allocator, .{ .module = 0, .ty = root });
+    while (pending.pop()) |item| {
+        if ((try visited.getOrPut(WalkModules.key(item.module, item.ty))).found_existing) continue;
+        var children = WalkChildren{ .allocator = allocator, .module = item.module, .pending = &pending };
 
-        switch (checked_types.payload(ty)) {
+        switch (modules.typesOf(item.module).payload(item.ty)) {
             .pending => checkedArtifactInvariant("callable-slot proof reached pending checked type", .{}),
             .field_kind, .err => {},
             .flex,
@@ -24454,7 +24483,7 @@ fn checkedTypeHasNoReachableCallableSlots(
             .empty_record,
             .empty_tag_union,
             => {},
-            .alias => |alias| try pending.append(allocator, alias.backing),
+            .alias => |alias| try children.add(alias.backing),
             .nominal => |nominal| {
                 if (nominal.builtin) |builtin_nominal| {
                     switch (builtin_nominal) {
@@ -24493,46 +24522,46 @@ fn checkedTypeHasNoReachableCallableSlots(
                         .box,
                         => {
                             if (nominal.args.len != 1) checkedArtifactInvariant("builtin container nominal had non-unary args", .{});
-                            try pending.append(allocator, nominal.args[0]);
+                            try children.add(nominal.args[0]);
                         },
                         .try_ => {
                             if (nominal.args.len != 2) checkedArtifactInvariant("builtin Try nominal had non-binary args", .{});
-                            try pending.appendSlice(allocator, nominal.args[0..2]);
+                            try children.addSlice(nominal.args[0..2]);
                         },
                         .set => {
                             if (nominal.args.len != 1) checkedArtifactInvariant("builtin Set nominal had non-unary args", .{});
-                            try pending.append(allocator, nominal.args[0]);
+                            try children.add(nominal.args[0]);
                         },
                         .dict => {
                             if (nominal.args.len != 2) checkedArtifactInvariant("builtin Dict nominal had non-binary args", .{});
-                            try pending.appendSlice(allocator, nominal.args[0..2]);
+                            try children.addSlice(nominal.args[0..2]);
                         },
                         .iter, .stream => {
-                            if (checked_types.nominalBackingTemplateForPayload(nominal)) |backing| {
-                                try pending.append(allocator, backing);
+                            if (try modules.declaration(allocator, item.module, nominal)) |site| {
+                                try pending.append(allocator, .{ .module = site.module, .ty = site.declaration.backing });
                             }
                         },
                     }
                     continue;
                 }
-                if (checked_types.nominalBackingTemplateForPayload(nominal)) |backing| {
-                    try pending.append(allocator, backing);
+                if (try modules.declaration(allocator, item.module, nominal)) |site| {
+                    try pending.append(allocator, .{ .module = site.module, .ty = site.declaration.backing });
                 }
             },
             .record => |record| {
                 for (0..record.fields.len()) |field_index| {
                     const field = record.fields.get(field_index);
-                    try pending.append(allocator, field.ty);
+                    try children.add(field.ty);
                 }
-                try pending.append(allocator, record.ext);
+                try children.add(record.ext);
             },
-            .tuple => |items| try pending.appendSlice(allocator, items),
+            .tuple => |items| try children.addSlice(items),
             .tag_union => |tag_union| {
                 for (0..tag_union.tags.len()) |tag_index| {
                     const tag = tag_union.tags.get(tag_index);
-                    try pending.appendSlice(allocator, tag.args);
+                    try children.addSlice(tag.args);
                 }
-                try pending.append(allocator, tag_union.ext);
+                try children.add(tag_union.ext);
             },
         }
     }
@@ -25154,7 +25183,9 @@ fn publishCompileTimeRootRequestEligibility(
         };
         const context_free = try checkedTypeIsContextFreeCompileTimeRoot(
             allocator,
-            &checked_types.store,
+            checked_types.imports.current_owner,
+            checked_types.store.view(),
+            checked_types.imports.resolver(),
             producer_callable_type_is_fixed,
             root.checked_type,
         );
@@ -26399,17 +26430,19 @@ const TemplateDemandWalk = struct {
 
 fn checkedTypeIsContextFreeCompileTimeRoot(
     allocator: Allocator,
-    checked_types: *const CheckedTypeStore,
+    module: ModuleId,
+    checked_types: CheckedTypeStoreView,
+    resolver: ModuleResolver,
     producer_callable_type_is_fixed: bool,
     root: CheckedTypeId,
 ) Allocator.Error!bool {
-    if (!try checkedTypeIsConcreteCompileTimeRoot(allocator, checked_types, root)) return false;
+    if (!try checkedTypeIsConcreteCompileTimeRoot(allocator, module, checked_types, resolver, root)) return false;
 
     // A callable root or an annotated data producer fixes its callable graph at
     // the producer. An unannotated data root can instead receive callable type
     // relations from a use site, so it must not seal a context-free graph first.
     return producer_callable_type_is_fixed or
-        try checkedTypeHasNoReachableCallableSlots(allocator, checked_types, root);
+        try checkedTypeHasNoReachableCallableSlots(allocator, module, checked_types, resolver, root);
 }
 
 fn deinitCompileTimeRootSlice(allocator: Allocator, roots: []CompileTimeRoot) void {
@@ -28256,7 +28289,7 @@ pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleV
     var type_owner_keys = ArtifactKeyAccumulator.empty;
     defer type_owner_keys.deinit(allocator);
 
-    var visited_types = collections.DenseMap(CheckedTypeId, void).init(allocator);
+    var visited_types = std.AutoHashMap(ModuleTypeVisit, void).init(allocator);
     defer visited_types.deinit();
 
     for (owner.exports.defs) |def_idx| {
@@ -28336,7 +28369,7 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
     allocator: Allocator,
     owner: ImportedModuleView,
     resolver: ModuleResolver,
-    visited_types: *collections.DenseMap(CheckedTypeId, void),
+    visited_types: *std.AutoHashMap(ModuleTypeVisit, void),
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
@@ -28392,25 +28425,28 @@ fn appendPublicApiTypeDependencies(
     artifact_key: ModuleId,
     checked_types: CheckedTypeStoreView,
     root: CheckedTypeId,
-    visited: *collections.DenseMap(CheckedTypeId, void),
+    visited: *std.AutoHashMap(ModuleTypeVisit, void),
     resolver: ModuleResolver,
     keys: *ArtifactKeyAccumulator,
     type_owner_keys: *ArtifactKeyAccumulator,
 ) Allocator.Error!void {
-    var pending: std.ArrayListUnmanaged(CheckedTypeId) = .empty;
+    var modules = try WalkModules.init(allocator, artifact_key, checked_types, resolver);
+    defer modules.deinit(allocator);
+    var pending: std.ArrayListUnmanaged(WalkItem) = .empty;
     defer pending.deinit(allocator);
-    try pending.append(allocator, root);
-    while (pending.pop()) |ty| {
-        if (visited.contains(ty)) continue;
-        try visited.put(ty, {});
+    try pending.append(allocator, .{ .module = 0, .ty = root });
+    while (pending.pop()) |item| {
+        const module = modules.entries.items[item.module].module;
+        if ((try visited.getOrPut(.{ .artifact = module.bytes, .ty = @backingInt(item.ty) })).found_existing) continue;
 
         const start = pending.items.len;
-        switch (checked_types.payload(ty)) {
+        var children = WalkChildren{ .allocator = allocator, .module = item.module, .pending = &pending };
+        switch (modules.typesOf(item.module).payload(item.ty)) {
             .pending => checkedArtifactInvariant("public API dependency scan reached pending checked type payload", .{}),
             .field_kind, .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => |variable| for (0..variable.constraints.len()) |constraint_index| {
                 const constraint = variable.constraints.get(constraint_index);
-                try pending.append(allocator, constraint.fn_ty);
+                try children.add(constraint.fn_ty);
             },
             .alias => |alias| {
                 try appendPublicApiOwnerDependency(
@@ -28421,8 +28457,8 @@ fn appendPublicApiTypeDependencies(
                     keys,
                     type_owner_keys,
                 );
-                try pending.append(allocator, alias.backing);
-                try pending.appendSlice(allocator, alias.args);
+                try children.add(alias.backing);
+                try children.addSlice(alias.args);
             },
             .nominal => |nominal| {
                 try appendPublicApiOwnerDependency(
@@ -28433,32 +28469,32 @@ fn appendPublicApiTypeDependencies(
                     keys,
                     type_owner_keys,
                 );
-                if (checked_types.nominalBackingTemplateForPayload(nominal)) |backing| {
-                    try pending.append(allocator, backing);
+                if (try modules.declaration(allocator, item.module, nominal)) |site| {
+                    try pending.append(allocator, .{ .module = site.module, .ty = site.declaration.backing });
                 }
-                try pending.appendSlice(allocator, nominal.args);
+                try children.addSlice(nominal.args);
             },
             .record => |record| {
                 for (0..record.fields.len()) |field_index| {
                     const field = record.fields.get(field_index);
-                    try pending.append(allocator, field.ty);
+                    try children.add(field.ty);
                 }
-                try pending.append(allocator, record.ext);
+                try children.add(record.ext);
             },
-            .tuple => |items| try pending.appendSlice(allocator, items),
+            .tuple => |items| try children.addSlice(items),
             .function => |function| {
-                try pending.appendSlice(allocator, function.args);
-                try pending.append(allocator, function.ret);
+                try children.addSlice(function.args);
+                try children.add(function.ret);
             },
             .tag_union => |tag_union| {
                 for (0..tag_union.tags.len()) |tag_index| {
                     const tag = tag_union.tags.get(tag_index);
-                    try pending.appendSlice(allocator, tag.args);
+                    try children.addSlice(tag.args);
                 }
-                try pending.append(allocator, tag_union.ext);
+                try children.add(tag_union.ext);
             },
         }
-        std.mem.reverse(CheckedTypeId, pending.items[start..]);
+        std.mem.reverse(WalkItem, pending.items[start..]);
     }
 }
 
@@ -28811,7 +28847,9 @@ const PublicApiClosureDependencyCollector = struct {
     }
 };
 
-const LoweringVisibilityTypeVisit = struct {
+/// A type of one module, which a walk over several modules' types visits
+/// once.
+const ModuleTypeVisit = struct {
     artifact: [32]u8,
     ty: u32,
 };
@@ -28826,7 +28864,7 @@ const LoweringVisibilityBuilder = struct {
     /// every alias and nominal it reaches, so each owner settles once
     /// rather than once per reference.
     settled_keys: std.AutoHashMapUnmanaged(CheckedModuleDigest, void) = .empty,
-    visited_types: std.AutoHashMap(LoweringVisibilityTypeVisit, void),
+    visited_types: std.AutoHashMap(ModuleTypeVisit, void),
     visited_public_api: std.AutoHashMap(CheckedModuleDigest, void),
 
     fn init(
@@ -28840,7 +28878,7 @@ const LoweringVisibilityBuilder = struct {
             .artifact_key = artifact_key,
             .checked_types = checked_types,
             .resolver = resolver,
-            .visited_types = std.AutoHashMap(LoweringVisibilityTypeVisit, void).init(allocator),
+            .visited_types = std.AutoHashMap(ModuleTypeVisit, void).init(allocator),
             .visited_public_api = std.AutoHashMap(CheckedModuleDigest, void).init(allocator),
         };
     }
@@ -28904,79 +28942,76 @@ const LoweringVisibilityBuilder = struct {
     }
 
     fn appendRootRequest(self: *LoweringVisibilityBuilder, request: RootRequest) Allocator.Error!void {
-        try self.appendTypeRoot(self.artifact_key, request.checked_type);
+        try self.appendTypeRoot(request.checked_type);
     }
 
     /// Make visible the owner of every type reachable from `root`, walking
-    /// each type once from an explicit work list.
-    fn appendTypeRoot(self: *LoweringVisibilityBuilder, artifact: ModuleId, root: CheckedTypeId) Allocator.Error!void {
-        var pending: std.ArrayListUnmanaged(CheckedTypeId) = .empty;
+    /// each type once from an explicit work list. A nominal's backing is
+    /// walked in its declaring module.
+    fn appendTypeRoot(self: *LoweringVisibilityBuilder, root: CheckedTypeId) Allocator.Error!void {
+        var modules = try WalkModules.init(self.allocator, self.artifact_key, self.checked_types, self.resolver);
+        defer modules.deinit(self.allocator);
+        var pending: std.ArrayListUnmanaged(WalkItem) = .empty;
         defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, root);
-        const local = ModuleId.eql(artifact, self.artifact_key);
-        const view: ?ImportedModuleView = if (local) null else self.viewByKey(artifact) orelse {
-            checkedArtifactInvariant("lowering visibility type root referenced unavailable checked artifact", .{});
-        };
-        while (pending.pop()) |ty| {
-            const entry = try self.visited_types.getOrPut(.{ .artifact = artifact.bytes, .ty = @backingInt(ty) });
+        try pending.append(self.allocator, .{ .module = 0, .ty = root });
+        while (pending.pop()) |item| {
+            const module = modules.entries.items[item.module].module;
+            const entry = try self.visited_types.getOrPut(.{ .artifact = module.bytes, .ty = @backingInt(item.ty) });
             if (entry.found_existing) continue;
             entry.value_ptr.* = {};
 
-            if (view) |imported| {
-                try self.appendKey(artifact);
-                try self.appendTypePayload(imported.checked_types, ty, &pending);
-            } else {
-                try self.appendTypePayload(self.checked_types, ty, &pending);
-            }
+            if (item.module != 0) try self.appendKey(module);
+            try self.appendTypePayload(&modules, item, &pending);
         }
     }
 
     fn appendTypePayload(
         self: *LoweringVisibilityBuilder,
-        store: anytype,
-        root: CheckedTypeId,
-        pending: *std.ArrayListUnmanaged(CheckedTypeId),
+        modules: *WalkModules,
+        item: WalkItem,
+        pending: *std.ArrayListUnmanaged(WalkItem),
     ) Allocator.Error!void {
         const gpa = self.allocator;
-        switch (store.payload(root)) {
+        var children = WalkChildren{ .allocator = gpa, .module = item.module, .pending = pending };
+        switch (modules.typesOf(item.module).payload(item.ty)) {
             .pending => checkedArtifactInvariant("lowering visibility type traversal reached pending payload", .{}),
             .field_kind, .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => |variable| for (0..variable.constraints.len()) |constraint_index| {
                 const constraint = variable.constraints.get(constraint_index);
-                try pending.append(gpa, constraint.fn_ty);
+                try children.add(constraint.fn_ty);
             },
             .alias => |alias| {
                 try self.appendKey(alias.owner_module.*);
-                try pending.append(gpa, alias.backing);
-                try pending.appendSlice(gpa, alias.args);
+                try children.add(alias.backing);
+                try children.addSlice(alias.args);
             },
             .nominal => |nominal| {
                 try self.appendKey(nominal.owner_module.*);
-                if (store.nominalBackingTemplateForPayload(nominal)) |backing| {
-                    try pending.append(gpa, backing);
+                if (try modules.declaration(gpa, item.module, nominal)) |site| {
+                    try pending.append(gpa, .{ .module = site.module, .ty = site.declaration.backing });
                 }
-                try pending.appendSlice(gpa, nominal.args);
-                try pending.appendSlice(gpa, nominal.padding_field_types);
+                try children.addSlice(nominal.args);
+                try children.addSlice(nominal.padding_field_types);
             },
             .record => |record| {
                 for (0..record.fields.len()) |field_index| {
                     const field = record.fields.get(field_index);
-                    if (field.kind.undeterminedVariable()) |variable| try pending.append(gpa, variable);
-                    try pending.append(gpa, field.ty);
+                    if (field.kind.undeterminedVariable()) |variable| try children.add(variable);
+                    try children.add(field.ty);
                 }
-                try pending.append(gpa, record.ext);
+                try children.add(record.ext);
             },
-            .tuple => |items| try pending.appendSlice(gpa, items),
+            .tuple => |items| try children.addSlice(items),
             .function => |function| {
-                try pending.appendSlice(gpa, function.args);
-                try pending.append(gpa, function.ret);
+                try children.addSlice(function.args);
+                try children.add(function.ret);
             },
             .tag_union => |tag_union| {
                 for (0..tag_union.tags.len()) |tag_index| {
                     const tag = tag_union.tags.get(tag_index);
-                    try pending.appendSlice(gpa, tag.args);
+                    try children.addSlice(tag.args);
                 }
-                try pending.append(gpa, tag_union.ext);
+                try children.add(tag_union.ext);
             },
         }
     }
@@ -30528,7 +30563,7 @@ pub const CheckedModuleArtifact = struct {
         const analyses = self.module_analyses orelse checkedArtifactInvariant("an artifact's capability source was attached before its module analyses", .{});
         const hash = self.moduleEnvConst().contentIdentityHash() orelse checkedArtifactInvariant("a checked module has no content identity", .{});
         const current_module = self.canonical_names.lookupModuleIdentity(hash) orelse checkedArtifactInvariant("a checked module's own identity was never interned", .{});
-        self.checked_types.capability_source = .{ .analyses = analyses, .current_module = current_module };
+        self.checked_types.capability_source = .{ .analyses = analyses, .current_module = current_module, .module = self.key.digest() };
     }
 
     /// The capability source of a platform/app pairing over this platform:
@@ -31968,14 +32003,9 @@ const CheckedTypeStoreImportProjector = struct {
     /// A type whose payload is still being projected: its ops occupy
     /// `ops[ops_start..]` and their results `results[results_start..]`.
     const Frame = struct {
-        kind: union(enum) {
-            type_root: struct { ty: CheckedTypeId, reserved: CheckedTypeId, payload: CheckedTypePayload },
-            /// The projected nominal's imported declaration, projected after
-            /// the nominal itself is filled.
-            declaration: CheckedNominalDeclaration,
-            /// Filled, and waiting only on its declaration.
-            done: CheckedTypeId,
-        },
+        ty: CheckedTypeId,
+        reserved: CheckedTypeId,
+        payload: CheckedTypePayload,
         ops_start: usize,
         next: usize,
         results_start: usize,
@@ -31992,9 +32022,11 @@ const CheckedTypeStoreImportProjector = struct {
             run.frames.deinit(allocator);
         }
 
-        fn push(run: *Run, allocator: Allocator, kind: @FieldType(Frame, "kind")) Allocator.Error!void {
+        fn push(run: *Run, allocator: Allocator, ty: CheckedTypeId, reserved: CheckedTypeId, payload: CheckedTypePayload) Allocator.Error!void {
             try run.frames.append(allocator, .{
-                .kind = kind,
+                .ty = ty,
+                .reserved = reserved,
+                .payload = payload,
                 .ops_start = run.ops.items.len,
                 .next = run.ops.items.len,
                 .results_start = run.results.items.len,
@@ -32020,12 +32052,6 @@ const CheckedTypeStoreImportProjector = struct {
         while (true) {
             const index = run.frames.items.len - 1;
             const frame = run.frames.items[index];
-            if (frame.kind == .done) {
-                _ = run.pop();
-                if (run.frames.items.len == 0) return frame.kind.done;
-                try run.results.append(self.allocator, @backingInt(frame.kind.done));
-                continue;
-            }
             if (frame.next < run.ops.items.len) {
                 const op = run.ops.items[frame.next];
                 run.frames.items[index].next += 1;
@@ -32042,26 +32068,11 @@ const CheckedTypeStoreImportProjector = struct {
             }
 
             var results = CheckedTypeProjectResults{ .items = run.results.items[frame.results_start..] };
-            switch (frame.kind) {
-                .type_root => |root| {
-                    const declaration = try self.finishType(root.ty, root.reserved, root.payload, &results);
-                    std.debug.assert(results.next == results.items.len);
-                    run.ops.shrinkRetainingCapacity(frame.ops_start);
-                    run.results.shrinkRetainingCapacity(frame.results_start);
-                    run.frames.items[index].kind = .{ .done = root.reserved };
-                    run.frames.items[index].next = frame.ops_start;
-                    if (declaration) |owner_decl| {
-                        try run.push(self.allocator, .{ .declaration = owner_decl });
-                        try self.appendDeclarationOps(&run.ops, owner_decl);
-                    }
-                },
-                .declaration => |owner_decl| {
-                    try self.finishDeclaration(owner_decl, &results);
-                    std.debug.assert(results.next == results.items.len);
-                    _ = run.pop();
-                },
-                .done => unreachable, // done frames are popped at the top of the loop
-            }
+            try self.finishType(frame.ty, frame.reserved, frame.payload, &results);
+            std.debug.assert(results.next == results.items.len);
+            _ = run.pop();
+            if (run.frames.items.len == 0) return frame.reserved;
+            try run.results.append(self.allocator, @backingInt(frame.reserved));
         }
     }
 
@@ -32092,7 +32103,7 @@ const CheckedTypeStoreImportProjector = struct {
         try self.active.put(ty, reserved);
 
         const payload = self.imported.checked_types.payload(ty);
-        try run.push(self.allocator, .{ .type_root = .{ .ty = ty, .reserved = reserved, .payload = payload } });
+        try run.push(self.allocator, ty, reserved, payload);
         try self.appendPayloadOps(&run.ops, payload);
         return null;
     }
@@ -32148,7 +32159,7 @@ const CheckedTypeStoreImportProjector = struct {
                     // root is distinct from the projected nominal usage backing (issue
                     // 9731). The projected id is unused—the registration is the point.
                     .local_box_payload_capability => |capability| try ops.append(gpa, .{
-                        .child = (try self.imported.checked_types.interfaceCapabilities()).boxPayloadCapability(capability.capability).backing_ty,
+                        .child = self.imported.checked_types.demandedInterfaceCapabilities().boxPayloadCapability(capability.capability).backing_ty,
                     }),
                     .builtin,
                     .local_declaration,
@@ -32179,15 +32190,14 @@ const CheckedTypeStoreImportProjector = struct {
         }
     }
 
-    /// Build and fill the projected payload from its op results. Returns the
-    /// nominal declaration that must be projected next, if any.
+    /// Build and fill the projected payload from its op results.
     fn finishType(
         self: *CheckedTypeStoreImportProjector,
         ty: CheckedTypeId,
         reserved: CheckedTypeId,
         source_payload: CheckedTypePayload,
         results: *CheckedTypeProjectResults,
-    ) Allocator.Error!?CheckedNominalDeclaration {
+    ) Allocator.Error!void {
         var payload = try self.buildPayload(source_payload, results);
         if (payload == .flex or payload == .rigid) {
             // The fill below owns the payload; until then this frame does.
@@ -32197,21 +32207,6 @@ const CheckedTypeStoreImportProjector = struct {
         try self.target_store.fillSyntheticTypeRoot(self.allocator, reserved, payload);
         _ = self.active.remove(ty);
         try self.projected.put(ty, reserved);
-        if (source_payload != .nominal) return null;
-
-        const nominal = source_payload.nominal;
-        const target_key = canonical.NominalTypeKey{
-            .module = try self.remapModuleIdentity(nominal.origin_module),
-            .source_decl = nominal.source_decl,
-        };
-        if (self.target_store.nominalDeclaration(target_key) != null) return null;
-
-        const owner_decl = self.imported.checked_types.nominalDeclaration(checkedNominalTypeKey(nominal)) orelse {
-            if (self.imported.checked_types.nominalBackingTemplateForPayload(nominal) == null) return null;
-            checkedArtifactInvariant("imported nominal projection could not find declaration backing", .{});
-        };
-        if (self.active.contains(owner_decl.declaration_root)) return null;
-        return owner_decl;
     }
 
     fn buildPayload(
@@ -32377,45 +32372,6 @@ const CheckedTypeStoreImportProjector = struct {
             };
         }
         return out;
-    }
-
-    /// The ops projecting one imported nominal declaration runs, in order.
-    fn appendDeclarationOps(
-        self: *CheckedTypeStoreImportProjector,
-        ops: *std.ArrayListUnmanaged(CheckedTypeProjectOp),
-        owner_decl: CheckedNominalDeclaration,
-    ) Allocator.Error!void {
-        const gpa = self.allocator;
-        try ops.append(gpa, .{ .child = owner_decl.declaration_root });
-        try ops.append(gpa, .{ .child = owner_decl.backing });
-        for (owner_decl.declaredRecordFields(&self.imported.checked_types)) |owner_field| switch (owner_field) {
-            .named => |label| try ops.append(gpa, .{ .record_field = label }),
-            .padding => |ty| try ops.append(gpa, .{ .child = ty }),
-        };
-    }
-
-    fn finishDeclaration(
-        self: *CheckedTypeStoreImportProjector,
-        owner_decl: CheckedNominalDeclaration,
-        results: *CheckedTypeProjectResults,
-    ) Allocator.Error!void {
-        const local_root = results.typeId();
-        const local_backing = results.typeId();
-
-        const owner_fields = owner_decl.declaredRecordFields(&self.imported.checked_types);
-        const local_fields = if (owner_fields.len == 0) &[_]CheckedNominalRecordField{} else blk: {
-            const out = try self.allocator.alloc(CheckedNominalRecordField, owner_fields.len);
-            for (owner_fields, out) |owner_field, *local_field| {
-                local_field.* = switch (owner_field) {
-                    .named => .{ .named = @fromBackingInt(@intCast(results.take())) },
-                    .padding => .{ .padding = results.typeId() },
-                };
-            }
-            break :blk out;
-        };
-        defer if (local_fields.len != 0) self.allocator.free(local_fields);
-
-        try appendCheckedNominalDeclarationFromPayload(self.allocator, self.target_store, local_root, local_backing, local_fields);
     }
 
     fn remapModuleIdentity(
@@ -33171,11 +33127,6 @@ pub fn publishFromTypedModule(
     if (std.debug.runtime_safety and !module_env.types.isSealed()) {
         base.invariant("a checked artifact was published from a module whose type store checking never sealed", .{});
     }
-    // Publication reads the nominal representations of the types of every
-    // module it imports or resolves against.
-    for (inputs.imports) |import| _ = try import.view.checked_types.interfaceCapabilities();
-    for (inputs.available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities();
-    for (inputs.relation_artifacts) |relation| _ = try relation.checked_types.interfaceCapabilities();
     const idents = module.identStoreConst();
 
     var canonical_names = canonical.CanonicalNameStore.init(allocator);
@@ -33243,6 +33194,11 @@ pub fn publishFromTypedModule(
     var module_analyses_owned = true;
     errdefer if (module_analyses_owned) module_analyses.destroy();
     const import_views = CheckedImportViews{ .current_owner = artifact_key.digest(), .direct = inputs.imports, .available = inputs.available_artifacts, .relations = inputs.relation_artifacts };
+    // Publication reads the nominal representations of the types of every
+    // module it imports or resolves against.
+    for (inputs.imports) |import| _ = try import.view.checked_types.interfaceCapabilities(import_views.resolver());
+    for (inputs.available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities(import_views.resolver());
+    for (inputs.relation_artifacts) |relation| _ = try relation.checked_types.interfaceCapabilities(import_views.resolver());
     const dispatch_view_keys = try dispatchViewKeys(allocator, module_analyses, import_views);
     errdefer allocator.free(dispatch_view_keys);
 
@@ -35769,7 +35725,7 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     // clones the tail, and the clone must still count as the template's.
     const tail = try testRowTail(allocator, &store, .{ .flex = .{ .row_default = .empty_tag_union } });
     const template_root = try testCallableWithRowTail(allocator, &names, &store, tail);
-    const instantiated = try instantiateResolvedDispatchTargetCallable(allocator, &names, &store, template_root, template_root);
+    const instantiated = try instantiateResolvedDispatchTargetCallable(allocator, testDispatchSubstitutionTypes(&store, &names), template_root, template_root);
     const instantiated_tail = switch (store.payload(checkedFunctionPayload(&store, instantiated, "test callable").ret)) {
         .tag_union => |tag_union| tag_union.ext,
         .pending,
@@ -35824,7 +35780,7 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     const target_root = try testCallableWithRowTail(allocator, &names, &store, target_tail);
     const plan_tail = try testRowTail(allocator, &store, .{ .flex = .{ .row_default = .empty_tag_union } });
     const plan_root = try testCallableWithRowTail(allocator, &names, &store, plan_tail);
-    const specialized = try instantiateResolvedDispatchTargetCallable(allocator, &names, &store, target_root, plan_root);
+    const specialized = try instantiateResolvedDispatchTargetCallable(allocator, testDispatchSubstitutionTypes(&store, &names), target_root, plan_root);
     const specialized_tail = switch (store.payload(checkedFunctionPayload(&store, specialized, "test callable").ret)) {
         .tag_union => |tag_union| tag_union.ext,
         .pending,
@@ -35867,7 +35823,7 @@ test "direct dispatch classification follows instantiation clones to the scheme 
         => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(plan_tail, store.identity_origins.get(plan_clone_tail).?);
-    const respecialized = try instantiateResolvedDispatchTargetCallable(allocator, &names, &store, target_root, plan_clone);
+    const respecialized = try instantiateResolvedDispatchTargetCallable(allocator, testDispatchSubstitutionTypes(&store, &names), target_root, plan_clone);
     const respecialized_tail = switch (store.payload(checkedFunctionPayload(&store, respecialized, "test callable").ret)) {
         .tag_union => |tag_union| tag_union.ext,
         .pending,

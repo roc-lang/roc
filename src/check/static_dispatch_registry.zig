@@ -898,7 +898,7 @@ pub const MethodRegistry = struct {
                 // not static-dispatch resolutions.
                 continue;
             const callable_var = referenced_callable_var orelse methodTargetCallableVar(module, def_idx, entry.value, target_kind);
-            const callable_ty = try checked_types.publishMethodCallableType(allocator, module, names, callable_var);
+            const callable_ty = try checked_types.publishMethodCallableType(allocator, module, callable_var);
 
             try entries.append(allocator, .{
                 .key = method_key,
@@ -914,7 +914,7 @@ pub const MethodRegistry = struct {
                 // context, so only a procedure can be one.
                 .inspect_override = if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
                     std.meta.activeTag(target_kind) == .procedure)
-                    try inspectOverrideCallableType(allocator, module, names, checked_types, method_owner, def_idx)
+                    try inspectOverrideCallableType(allocator, module, checked_types, method_owner, def_idx)
                 else
                     null,
             });
@@ -3058,13 +3058,12 @@ fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
 fn inspectOverrideCallableType(
     allocator: Allocator,
     module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
     checked_types: anytype,
     owner: MethodOwner,
     def_idx: CIR.Def.Idx,
 ) Allocator.Error!?CheckedTypeId {
     const instance_var = module.moduleEnvConst().inspectOverrideInstance(def_idx) orelse return null;
-    const instance_ty = try checked_types.publishMethodCallableType(allocator, module, names, instance_var);
+    const instance_ty = try checked_types.publishMethodCallableType(allocator, module, instance_var);
     return if (isInspectOverrideCallable(checked_types, owner, instance_ty)) instance_ty else null;
 }
 

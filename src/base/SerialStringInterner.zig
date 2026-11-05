@@ -293,7 +293,11 @@ pub fn enableRuntimeInserts(self: *SerialStringInterner, gpa: Allocator) Allocat
 pub fn insertShared(self: *SerialStringInterner, gpa: Allocator, string: []const u8) Allocator.Error!u32 {
     if (self.lookup(string)) |id| return id;
     while (!self.writer.tryLock()) std.atomic.spinLoopHint();
-    defer self.writer.unlock();
+    collections.HeldLocks.acquired();
+    defer {
+        collections.HeldLocks.released();
+        self.writer.unlock();
+    }
     const growth = self.growth.load(.monotonic) orelse try self.startGrowth(gpa);
     if (growth.lookup(string)) |id| return id;
     return growth.append(gpa, string);

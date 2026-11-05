@@ -33,7 +33,6 @@ const MethodRegistryTestCheckedTypes = struct {
         _: *const @This(),
         _: std.mem.Allocator,
         _: TypedCIR.Module,
-        _: *canonical.CanonicalNameStore,
         _: types.Var,
     ) std.mem.Allocator.Error!checked_ids.CheckedTypeId {
         @panic("the method registry test source declares no methods, so the registry never queries checked types");

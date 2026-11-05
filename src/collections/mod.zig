@@ -48,6 +48,8 @@ pub const VersionedHashMap = @import("VersionedMap.zig").VersionedHashMap;
 pub const DenseMapPool = @import("DenseMap.zig").DenseMapPool;
 /// A write-once slot for a fact computed by whichever consumer first needs it.
 pub const OnceSlot = @import("OnceSlot.zig").OnceSlot;
+/// Locks held that a slot claimant may need (`OnceSlot.HeldLocks`).
+pub const HeldLocks = @import("OnceSlot.zig").HeldLocks;
 pub const PublishedList = @import("PublishedList.zig").PublishedList;
 pub const StableList = @import("StableList.zig").StableList;
 pub const ScopedBitSet = @import("ScopedBitSet.zig");

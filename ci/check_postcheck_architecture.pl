@@ -148,6 +148,12 @@ my @RULES = (
     # into the template table or the cache entry.
     { category => 'eager-template-demand', regex => qr/\bTemplateDemandPass\b/, allowed => {} },
     { category => 'eager-template-demand', regex => qr/\bdemand_pool\b/, allowed => {} },
+    # A module's checked data holds only its own nominal declarations; a
+    # reader reads an imported declaration in the module that declares it.
+    { category => 'imported-nominal-embedding', regex => qr/\bembedReachableImportedNominalDecls\b/, allowed => {} },
+    { category => 'imported-nominal-embedding', regex => qr/\bembedOneImportedNominalDecl\b/, allowed => {} },
+    { category => 'imported-nominal-embedding', regex => qr/\bembedImportedNominalDeclFor\b/, allowed => {} },
+    { category => 'imported-nominal-embedding', regex => qr/\bownerViewAndDeclForImportedNominal\b/, allowed => {} },
     # Post-check code reads sealed solver stores through the checked type
     # reader and never writes one.
     {
