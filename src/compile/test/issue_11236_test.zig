@@ -253,5 +253,6 @@ test "issue 11236: rejection survives exports and serialization without callable
     var loaded = serialized.deserialize(buffer, gpa, artifact.module_env);
     defer loaded.deinitRetainingModuleEnv(gpa);
     try loaded.attachSealedTypes(gpa, io);
+    try check.CheckedArtifact.attachDispatchImports(loaded.module_analyses.?, loaded.dispatch_view_keys, build.moduleResolver());
     try expectRejectedBinding(&loaded);
 }

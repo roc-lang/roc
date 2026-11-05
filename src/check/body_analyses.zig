@@ -960,9 +960,11 @@ fn dispatchNodes(
 ) Allocator.Error!NodeBits {
     const plans = bodies.tables.plans orelse invariant("a body analysis ran without the module's dispatch plans");
     var bits = try std.DynamicBitSetUnmanaged.initEmpty(allocator, bodies.nodeCount());
+    errdefer bits.deinit(allocator);
     for ([_][]const static_dispatch.PlanKV{ plans.by_node, plans.numeral_by_node, plans.quote_by_node }) |entries| {
         for (entries) |entry| {
-            if (selected(plans.plans[entry.val].resolution)) bits.set(entry.key);
+            const dispatch = bodies.tables.dispatch orelse invariant("a body analysis read a dispatch plan without the module's dispatch resolution");
+            if (selected((try dispatch.plan(@fromBackingInt(entry.val))).resolution)) bits.set(entry.key);
         }
     }
     return .{ .bits = bits };
@@ -1976,8 +1978,9 @@ pub fn diagnosticErrors(allocator: Allocator, bodies: CheckedBodies, mode: Diagn
         .ordinary => {},
         .final => {
             const plans = bodies.tables.plans orelse invariant("diagnostic errors were computed without the module's dispatch plans");
-            for (plans.plans) |plan| {
-                if (plan.resolution == .checked_error) {
+            const dispatch = bodies.tables.dispatch orelse invariant("diagnostic errors were computed without the module's dispatch resolution");
+            for (0..plans.plans.len) |raw| {
+                if ((try dispatch.plan(@fromBackingInt(@intCast(raw)))).resolution == .checked_error) {
                     rejected_dispatch = try dispatchNodes(allocator, bodies, dispatchResolutionIsCheckedError);
                     scan.rejected_dispatch = &rejected_dispatch;
                     break;
@@ -2401,7 +2404,6 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     const templates = tables.templates orelse invariant("single-source calls were computed without the module's templates");
     const refs = tables.refs orelse invariant("single-source calls were computed without the module's value references");
     const bindings = tables.top_level_procedure_bindings orelse invariant("single-source calls were computed without the module's procedure bindings");
-    const plans = tables.plans orelse invariant("single-source calls were computed without the module's dispatch plans");
     const sites = tables.nested_proc_sites orelse invariant("single-source calls were computed without the module's nested procedure sites");
     const module = tables.module orelse invariant("single-source calls were computed without the module's identity");
     const env = bodies.env;
@@ -2446,19 +2448,22 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     }
 
     // A dispatch target can be reached without a reference.
-    for (plans.direct_template_refs) |plan_id| {
-        const direct = switch (plans.plans[@backingInt(plan_id)].resolution) {
-            .direct_closed, .direct_parametric => |direct| direct,
-            .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => continue,
-        };
-        const target = switch (plans.evidenceNode(direct.evidence).target.kind) {
-            .procedure => |procedure| switch (procedure.runtime_target) {
-                .procedure => local.template(procedure.template),
-                .low_level, .intrinsic, .graph_participating => null,
-            },
-            .local_proc, .structural => null,
-        };
-        if (target) |id| eligible[@backingInt(id)] = false;
+    const dispatch = tables.dispatch orelse invariant("single-source calls were computed without the module's dispatch resolution");
+    for (0..templates.templates.items.len) |raw_template| {
+        for ((try dispatch.templateRelations(@fromBackingInt(@intCast(raw_template)))).direct) |plan_id| {
+            const direct = switch ((try dispatch.plan(plan_id)).resolution) {
+                .direct_closed, .direct_parametric => |direct| direct,
+                .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => continue,
+            };
+            const target = switch ((try dispatch.evidenceNode(direct.evidence)).target.kind) {
+                .procedure => |procedure| switch (procedure.runtime_target) {
+                    .procedure => local.template(procedure.template),
+                    .low_level, .intrinsic, .graph_participating => null,
+                },
+                .local_proc, .structural => null,
+            };
+            if (target) |id| eligible[@backingInt(id)] = false;
+        }
     }
 
     var shapes = try SourceCallShapes.collect(allocator, bodies);

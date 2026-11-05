@@ -243,9 +243,16 @@ pub const CanonicalNameStore = struct {
     proc_base_by_key: std.StringHashMap(ProcBaseKeyRef),
     /// Build-only scratch buffer for proc-base key encoding. NOT serialized.
     scratch_key: std.ArrayList(u8) = .empty,
-    /// True for a store reconstructed from a serialized buffer: its interners
-    /// and `proc_bases` point into buffer-owned memory and must not be freed.
+    /// True for a store reconstructed from a serialized buffer: `proc_bases`
+    /// points into buffer-owned memory and must not be freed. Its interners
+    /// also start buffer-backed, and the first new name interned into one
+    /// copies it into owned memory, which `deinit` frees.
     serialized: bool = false,
+    /// The names below the module's publication boundary (`markPublished`),
+    /// which are the names the store serializes. Names interned by a module
+    /// analysis afterwards are never serialized: a loaded module's analyses
+    /// intern them again.
+    published: ?EpochBoundary = null,
     /// Query-only facade; its owner retains every allocation and must remain
     /// alive and unmodified until all borrowed readers have finished.
     borrowed_read_only: bool = false,
@@ -258,7 +265,7 @@ pub const CanonicalNameStore = struct {
     /// frozen store, so the mixin's `deserialize` resets them (`proc_base_by_key`
     /// via `init(allocator)`, `scratch_key` to its default). Declared so a *data*
     /// field accidentally omitted from `Serialized` is a compile error.
-    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key", "record_field_text_rank", "tag_text_rank", "borrowed_read_only", "superseded" };
+    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key", "record_field_text_rank", "tag_text_rank", "borrowed_read_only", "superseded", "published" };
 
     pub fn init(allocator: Allocator) CanonicalNameStore {
         return .{
@@ -326,19 +333,18 @@ pub const CanonicalNameStore = struct {
         }
         if (self.record_field_text_rank) |cache| cache.destroy();
         if (self.tag_text_rank) |cache| cache.destroy();
-        if (!self.serialized) {
-            // Interners no-op their own free when frozen, but `proc_bases` is a
-            // plain SafeList with no frozen flag, so guard the whole owned set.
-            self.module_names.deinit(self.allocator);
-            self.module_identities.deinit(self.allocator);
-            self.type_names.deinit(self.allocator);
-            self.method_names.deinit(self.allocator);
-            self.record_field_labels.deinit(self.allocator);
-            self.tag_labels.deinit(self.allocator);
-            self.export_names.deinit(self.allocator);
-            self.external_symbol_names.deinit(self.allocator);
-            self.proc_bases.deinit(self.allocator);
-        }
+        // Interners no-op their own free while frozen and free the copy a
+        // later insert made; `proc_bases` is a plain SafeList with no frozen
+        // flag, so it alone is guarded.
+        self.module_names.deinit(self.allocator);
+        self.module_identities.deinit(self.allocator);
+        self.type_names.deinit(self.allocator);
+        self.method_names.deinit(self.allocator);
+        self.record_field_labels.deinit(self.allocator);
+        self.tag_labels.deinit(self.allocator);
+        self.export_names.deinit(self.allocator);
+        self.external_symbol_names.deinit(self.allocator);
+        if (!self.serialized) self.proc_bases.deinit(self.allocator);
         // Build-only fields are always heap-owned (empty on a frozen store).
         freeStringHashMapKeys(ProcBaseKeyRef, &self.proc_base_by_key, self.allocator);
         self.proc_base_by_key.deinit();
@@ -358,6 +364,12 @@ pub const CanonicalNameStore = struct {
         external_symbol_names: NameInterner.EpochBoundary,
         proc_bases: u32,
     };
+
+    /// Record the current boundary as the module's publication boundary
+    /// (`published`).
+    pub fn markPublished(self: *CanonicalNameStore) void {
+        self.published = self.epochBoundary();
+    }
 
     pub fn epochBoundary(self: *const CanonicalNameStore) EpochBoundary {
         return .{
@@ -447,6 +459,7 @@ pub const CanonicalNameStore = struct {
         result.proc_bases.items = std.ArrayList(ProcBaseKey).fromOwnedSlice(@constCast(prefix.proc_bases));
         result.serialized = true;
         result.borrowed_read_only = true;
+        result.published = result.epochBoundary();
         return result;
     }
 
@@ -463,14 +476,44 @@ pub const CanonicalNameStore = struct {
         proc_bases: SafeList(ProcBaseKey).Serialized,
 
         const Serde = artifact_serialize.SliceStoreSerde(CanonicalNameStore, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserializeWithAllocator;
+
+        /// Serialize the names below the store's publication boundary.
+        pub fn serialize(self: *Serialized, store: *const CanonicalNameStore, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
+            const published = store.published orelse base.invariant("{s}", .{"a canonical name store was serialized before its module published it"});
+            inline for (interner_fields) |field| {
+                const interner = &@field(store, field);
+                const boundary = @field(published, field);
+                if (boundary.ids == interner.count()) {
+                    try @field(self, field).serialize(interner, gpa, writer);
+                } else {
+                    var prefix = try interner.prefixClone(gpa, boundary.ids);
+                    defer prefix.deinit(gpa);
+                    try @field(self, field).serialize(&prefix, gpa, writer);
+                }
+            }
+            const proc_bases = SafeList(ProcBaseKey){ .items = std.ArrayList(ProcBaseKey).fromOwnedSlice(@constCast(store.proc_bases.items.items[0..published.proc_bases])) };
+            try self.proc_bases.serialize(&proc_bases, gpa, writer);
+        }
+
+        /// A loaded store's names are exactly its publication boundary.
+        pub fn deserialize(self: *const Serialized, base_addr: usize, allocator: Allocator) CanonicalNameStore {
+            var store = Serde.deserializeWithAllocator(self, base_addr, allocator);
+            store.published = store.epochBoundary();
+            return store;
+        }
     };
 
     /// Insert into one of this store's interners. A store that retains
     /// superseded backings first reserves room for the text and its end offset, so
     /// the insert never moves interned names a prefix view may be reading.
+    /// Intern `text` into `interner`. A buffer-backed interner of a loaded
+    /// store answers a name it already holds in place and is copied into
+    /// owned memory by the first name it does not.
     fn insertName(self: *CanonicalNameStore, interner: *NameInterner, text: []const u8) Allocator.Error!u32 {
+        if (!interner.supports_inserts) {
+            if (interner.lookup(text)) |id| return id;
+            try interner.enableRuntimeInserts(self.allocator);
+        }
         if (self.superseded) |superseded| {
             _ = try superseded.ensureUnusedCapacity(u8, &interner.bytes.items, self.allocator, text.len);
             _ = try superseded.ensureUnusedCapacity(u32, &interner.ends.items, self.allocator, 1);
@@ -1266,6 +1309,7 @@ test "CanonicalNameStore: serialize/deserialize round-trip preserves names, ids,
     const aa = arena.allocator();
     var writer = collections.CompactWriter.init();
     const hdr = try writer.appendAlloc(aa, CanonicalNameStore.Serialized);
+    store.markPublished();
     try hdr.serialize(&store, aa, &writer);
 
     const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);

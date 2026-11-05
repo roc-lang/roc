@@ -130,7 +130,7 @@ test "concrete recursive dispatch records a shared method instance without copyi
 fn assertBuiltinIterExtremum(
     artifact: *const checked_artifact.CheckedModuleArtifact,
     method_name: []const u8,
-) error{ NoSpaceLeft, TestUnexpectedResult }!void {
+) (std.mem.Allocator.Error || error{ NoSpaceLeft, TestUnexpectedResult })!void {
     const env = artifact.moduleEnvConst();
     const source = env.getSourceAll();
     var needle_buffer: [64]u8 = undefined;
@@ -180,7 +180,7 @@ fn assertBuiltinIterExtremum(
         // branch exists to establish.
         try std.testing.expect(body_use_count >= 2);
 
-        const plan = artifact.static_dispatch_plans.plans[entry.val];
+        const plan = try artifact.dispatch().plan(@fromBackingInt(entry.val));
         switch (plan.resolution) {
             .evidence_dependent => |resolution| {
                 try std.testing.expect(resolution.independent_callable);

@@ -200,7 +200,8 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     const bodies = artifact.bodies();
     const store = &artifact.moduleEnvConst().store;
     var rejected: usize = 0;
-    for (artifact.static_dispatch_plans.plans) |plan| {
+    for (0..artifact.static_dispatch_plans.plans.len) |raw| {
+        const plan = try artifact.dispatch().plan(@fromBackingInt(@intCast(raw)));
         if (plan.resolution != .checked_error) continue;
         rejected += 1;
         try std.testing.expect(switch (bodies.index().nodeKind(plan.node)) {

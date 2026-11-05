@@ -738,18 +738,13 @@ pub const MethodRegistryEntry = struct {
     /// Only `inspectOverride` reads it; ordinary method dispatch ignores
     /// it.
     inspect_override: ?CheckedTypeId = null,
-    /// The evidence of inspection's use of this override at
-    /// `inspect_override`, published with the module's dispatch evidence.
-    inspect_evidence: ?EvidenceNodeId = null,
 };
 
 /// The `to_inspect` method generic inspection calls for an owner, the checked
-/// `T -> Str` instance of its type that inspection calls it at, and that use's
-/// evidence in the declaring module's dispatch plan table.
+/// `T -> Str` instance of its type that inspection calls it at.
 pub const InspectOverride = struct {
     target: MethodTarget,
     callable_ty: CheckedTypeId,
-    evidence: EvidenceNodeId,
 };
 
 /// Public `MethodRegistry` declaration.
@@ -791,8 +786,6 @@ pub const MethodRegistry = struct {
             .target = found.target orelse
                 std.debug.panic("checked static dispatch registry invariant violated: rejected declaration was recorded as an inspect override", .{}),
             .callable_ty = callable_ty,
-            .evidence = found.inspect_evidence orelse
-                base.invariant("checked static dispatch registry invariant violated: inspect override had no published use evidence", .{}),
         };
     }
 
@@ -1513,9 +1506,83 @@ pub const structural_method_kinds = [_]struct { method_name: [:0]const u8, commo
     .{ .method_name = "map!", .common_ident = "map_bang", .kind = .map_effectful },
 };
 
-/// Public `EvidenceNodeId` declaration. Index into
-/// `StaticDispatchPlanTable.evidence_nodes`.
-pub const EvidenceNodeId = enum(u32) { _ };
+/// The analysis whose evidence pool holds an evidence node, an evidence
+/// range or a substitution range: one procedure template's dispatch
+/// resolution, the module's resolution of what no template resolves
+/// (defaulted-field expressions, chain-free plans and sites, inspect
+/// overrides, generated codec calls), or an app's platform requirement roots.
+pub const EvidenceOwner = enum(u32) {
+    module = std.math.maxInt(u32) - 1,
+    platform_requirements = std.math.maxInt(u32) - 2,
+    _,
+
+    pub fn forTemplate(template_id: canonical.CheckedProcedureTemplateId) EvidenceOwner {
+        const raw = @backingInt(template_id);
+        std.debug.assert(raw < @backingInt(EvidenceOwner.platform_requirements));
+        return @fromBackingInt(@intCast(raw));
+    }
+
+    /// The template whose resolution owns the pool, or null for a
+    /// module-level owner.
+    pub fn template(self: EvidenceOwner) ?canonical.CheckedProcedureTemplateId {
+        return switch (self) {
+            .module, .platform_requirements => null,
+            _ => @fromBackingInt(@backingInt(self)),
+        };
+    }
+};
+
+/// An evidence node: its index in its owner's evidence pool.
+pub const EvidenceNodeId = packed struct(u64) {
+    index: u32,
+    owner: EvidenceOwner,
+};
+
+/// A range of one owner's evidence entries or substitution types.
+pub const EvidenceSpan = struct {
+    owner: EvidenceOwner = .module,
+    start: u32 = 0,
+    len: u32 = 0,
+};
+
+/// One parameter of a published scheme: the scheme's owning solver
+/// variable and the parameter's position in the scheme's parameters.
+pub const SchemeParamRef = struct {
+    scheme: u32,
+    index: u32,
+};
+
+/// The evidence one dispatch resolution produced: nodes, evidence entries
+/// (nested ranges, site ranges and callable contracts) and the
+/// substitution types nodes and sites name. Every id and range inside
+/// refers to this pool.
+pub const EvidencePool = struct {
+    owner: EvidenceOwner,
+    nodes: []const EvidenceNode = &.{},
+    refs: []const CheckedEvidence = &.{},
+    substitutions: []const CheckedTypeId = &.{},
+
+    pub fn node(self: *const EvidencePool, id: EvidenceNodeId) EvidenceNode {
+        std.debug.assert(id.owner == self.owner);
+        return self.nodes[id.index];
+    }
+
+    pub fn entries(self: *const EvidencePool, span: EvidenceSpan) []const CheckedEvidence {
+        std.debug.assert(span.len == 0 or span.owner == self.owner);
+        return self.refs[span.start..][0..span.len];
+    }
+
+    pub fn types(self: *const EvidencePool, span: EvidenceSpan) []const CheckedTypeId {
+        std.debug.assert(span.len == 0 or span.owner == self.owner);
+        return self.substitutions[span.start..][0..span.len];
+    }
+
+    pub fn deinit(self: *EvidencePool, allocator: Allocator) void {
+        allocator.free(self.nodes);
+        allocator.free(self.refs);
+        allocator.free(self.substitutions);
+    }
+};
 
 /// Public `EvidenceChainIndex` declaration.
 ///
@@ -1539,9 +1606,9 @@ pub const EvidenceChainIndex = struct {
 /// where-method use proves the signature copy shares every non-marker leaf.
 pub const ConstraintEvidenceRef = struct {
     /// Requirements outside the callable signature and independent callable
-    /// contracts name their exact owner in the checked evidence pool, so
-    /// dictionary ABIs need no lexical type search.
-    scheme_param: ?u32 = null,
+    /// contracts name their exact owning scheme parameter, so dictionary ABIs
+    /// need no lexical type search.
+    scheme_param: ?SchemeParamRef = null,
     index: EvidenceChainIndex,
     independent_callable: bool = false,
     reuse_slot_nested_evidence: bool = false,
@@ -1562,8 +1629,8 @@ pub const CheckedEvidence = struct {
     /// runtime representation still needs an explicit descriptor).
     dispatcher_ty: CheckedTypeId,
     resolution: Resolution,
-    /// Independent callable contracts in `evidence_refs`, sharing one target slot.
-    callable_contracts: artifact_serialize.Span = .{},
+    /// Independent callable contracts, sharing one target slot.
+    callable_contracts: EvidenceSpan = .{},
 
     pub const Resolution = union(enum) {
         direct: EvidenceNodeId,
@@ -1619,9 +1686,9 @@ pub const EvidenceTargetInstantiation = union(enum(u8)) {
 
 /// Producer-authored source of a target's own evidence vector.
 pub const EvidenceNested = union(enum(u8)) {
-    /// Checking recorded the target scheme instantiation, so publication
-    /// resolved every nested obligation explicitly.
-    resolved: artifact_serialize.Span,
+    /// Checking recorded the target scheme instantiation, so dispatch
+    /// resolution resolved every nested obligation explicitly.
+    resolved: EvidenceSpan,
     /// Target selection occurred after checking settled the dispatcher, or
     /// checking explicitly closed a concrete recursive dispatch. The edge
     /// derives the target's declared evidence params from their
@@ -1633,7 +1700,7 @@ pub const EvidenceNested = union(enum(u8)) {
     /// publication resolved every obligation of that alias's scheme, in its
     /// canonical order. The target's own evidence is the alias's forwarded
     /// lookup's evidence in the alias's scope under these entries.
-    through_alias: artifact_serialize.Span,
+    through_alias: EvidenceSpan,
 };
 
 /// Exact checked target and nested evidence selected for one dispatch edge.
@@ -1645,11 +1712,10 @@ pub const EvidenceNode = struct {
     generated_codec_derivation: ?GeneratedCodecDerivationId = null,
     instantiation: EvidenceTargetInstantiation,
     nested: EvidenceNested = .{ .resolved = .{} },
-    /// Range into `StaticDispatchPlanTable.site_substitutions`: the checked
-    /// type each quantified variable of the target's scheme was copied to at
-    /// this edge, in the target scheme's `scheme_vars` order. Empty for a
-    /// monomorphic target.
-    subst: artifact_serialize.Span = .{},
+    /// The checked type each quantified variable of the target's scheme was
+    /// copied to at this edge, in the target scheme's `scheme_vars` order.
+    /// Empty for a monomorphic target.
+    subst: EvidenceSpan = .{},
 };
 
 /// Public `SiteEvidenceEntry` declaration.
@@ -1815,7 +1881,7 @@ pub const CheckedCallResolution = union(enum) {
     /// The dispatcher is one of the enclosing callable's constrained scheme
     /// vars; each specialization edge supplies the target as evidence.
     evidence_dependent: struct {
-        scheme_param: ?u32 = null,
+        scheme_param: ?SchemeParamRef = null,
         index: EvidenceChainIndex,
         /// The evidence slot supplies target identity but this plan owns an
         /// explicit per-use callable relation, so it instantiates the target
@@ -1838,7 +1904,30 @@ pub const CheckedCallResolution = union(enum) {
     @"unreachable",
 };
 
-/// Public `StaticDispatchCallPlan` declaration.
+/// One dispatch plan as checking recorded it.
+pub const RecordedDispatchPlan = struct {
+    /// The CIR node of the dispatch site: a dispatching expression, a
+    /// literal expression, or a custom literal pattern (whose node keys both
+    /// its conversion plan and its equality plan).
+    node: u32,
+    method: canonical.MethodNameId,
+    dispatcher: StaticDispatchDispatcher,
+    dispatcher_ty: CheckedTypeId,
+    /// The callable checking recorded for the call.
+    callable_ty: CheckedTypeId,
+    /// Range into `StaticDispatchPlanTable.operand_pool` (transform B).
+    args: artifact_serialize.Span = .{},
+    result_mode: StaticDispatchResultMode,
+
+    /// The plan's operands within its table's pool.
+    pub fn argsSlice(self: RecordedDispatchPlan, table: *const StaticDispatchPlanTable) []const StaticDispatchOperand {
+        return table.operand_pool[self.args.start .. self.args.start + self.args.len];
+    }
+};
+
+/// One dispatch plan with its total resolution: the recorded plan, the
+/// callable specialized against a direct target, the resolution, and the
+/// generated-codec contract a structural codec resolution selected.
 pub const StaticDispatchCallPlan = struct {
     /// The CIR node of the dispatch site: a dispatching expression, a
     /// literal expression, or a custom literal pattern (whose node keys both
@@ -1847,6 +1936,8 @@ pub const StaticDispatchCallPlan = struct {
     method: canonical.MethodNameId,
     dispatcher: StaticDispatchDispatcher,
     dispatcher_ty: CheckedTypeId,
+    /// The recorded callable, specialized against the target of a direct
+    /// resolution.
     callable_ty: CheckedTypeId,
     /// Range into `StaticDispatchPlanTable.operand_pool` (transform B).
     args: artifact_serialize.Span = .{},
@@ -1854,13 +1945,89 @@ pub const StaticDispatchCallPlan = struct {
     /// Exact generated-codec contract selected for a structural parser or
     /// encoder call. Null for every other resolution kind.
     generated_codec_derivation: ?GeneratedCodecDerivationId = null,
-    /// Assigned by `resolveTotalDispatchPlans` during CheckedModule construction; the default is
-    /// a construction placeholder the pass overwrites for every plan.
-    resolution: CheckedCallResolution = .checked_error,
+    resolution: CheckedCallResolution,
+
+    pub fn fromRecorded(recorded: RecordedDispatchPlan, resolved: PlanResolution) StaticDispatchCallPlan {
+        return .{
+            .node = recorded.node,
+            .method = recorded.method,
+            .dispatcher = recorded.dispatcher,
+            .dispatcher_ty = recorded.dispatcher_ty,
+            .callable_ty = resolved.callable_ty,
+            .args = recorded.args,
+            .result_mode = recorded.result_mode,
+            .generated_codec_derivation = resolved.generated_codec_derivation,
+            .resolution = resolved.resolution,
+        };
+    }
 
     /// The plan's operands within its table's pool.
     pub fn argsSlice(self: StaticDispatchCallPlan, table: *const StaticDispatchPlanTable) []const StaticDispatchOperand {
         return table.operand_pool[self.args.start .. self.args.start + self.args.len];
+    }
+};
+
+/// What dispatch resolution decided for one plan.
+pub const PlanResolution = struct {
+    resolution: CheckedCallResolution,
+    callable_ty: CheckedTypeId,
+    generated_codec_derivation: ?GeneratedCodecDerivationId = null,
+};
+
+/// What dispatch resolution decided for one iterator plan's two calls.
+pub const IteratorPlanResolution = struct {
+    iter: CheckedCallResolution,
+    iter_callable_ty: CheckedTypeId,
+    next: CheckedCallResolution,
+    next_callable_ty: CheckedTypeId,
+};
+
+/// One iterator dispatch call with its total resolution; `callable_ty` is
+/// specialized against a direct target.
+pub const ResolvedIteratorDispatchCall = struct {
+    method: canonical.MethodNameId,
+    dispatcher_ty: CheckedTypeId,
+    callable_ty: CheckedTypeId,
+    dispatcher_arg_index: u32,
+    args: artifact_serialize.Span = .{},
+    resolution: CheckedCallResolution,
+
+    fn fromRecorded(call: IteratorDispatchCall, resolution: CheckedCallResolution, callable_ty: CheckedTypeId) ResolvedIteratorDispatchCall {
+        return .{
+            .method = call.method,
+            .dispatcher_ty = call.dispatcher_ty,
+            .callable_ty = callable_ty,
+            .dispatcher_arg_index = call.dispatcher_arg_index,
+            .args = call.args,
+            .resolution = resolution,
+        };
+    }
+
+    pub fn argsSlice(self: ResolvedIteratorDispatchCall, table: *const StaticDispatchPlanTable) []const IteratorDispatchOperand {
+        return table.iter_operand_pool[self.args.start .. self.args.start + self.args.len];
+    }
+};
+
+/// An iterator plan with its calls' total resolutions.
+pub const ResolvedIteratorForPlan = struct {
+    iter: ResolvedIteratorDispatchCall,
+    next: ResolvedIteratorDispatchCall,
+    iterable: CIR.Expr.Idx,
+    item_ty: CheckedTypeId,
+    iterator_ty: CheckedTypeId,
+    step_ty: CheckedTypeId,
+    step_topology: IteratorStepTopology,
+
+    pub fn fromRecorded(recorded: IteratorForPlan, resolved: IteratorPlanResolution) ResolvedIteratorForPlan {
+        return .{
+            .iter = ResolvedIteratorDispatchCall.fromRecorded(recorded.iter, resolved.iter, resolved.iter_callable_ty),
+            .next = ResolvedIteratorDispatchCall.fromRecorded(recorded.next, resolved.next, resolved.next_callable_ty),
+            .iterable = recorded.iterable,
+            .item_ty = recorded.item_ty,
+            .iterator_ty = recorded.iterator_ty,
+            .step_ty = recorded.step_ty,
+            .step_topology = recorded.step_topology,
+        };
     }
 };
 
@@ -1935,8 +2102,38 @@ pub const GeneratedCodecDerivation = struct {
     error_ty: CheckedTypeId,
     calls: artifact_serialize.Span = .{},
 
-    pub fn callsSlice(self: GeneratedCodecDerivation, table: *const StaticDispatchPlanTable) []const GeneratedCodecCall {
+    pub fn callsSlice(self: GeneratedCodecDerivation, table: *const GeneratedCodecTable) []const GeneratedCodecCall {
         return table.generated_codec_calls[self.calls.start .. self.calls.start + self.calls.len];
+    }
+};
+
+/// A module's generated-codec contracts with every call linked to its
+/// checked evidence, and the module-level evidence pool those links name.
+pub const GeneratedCodecTable = struct {
+    generated_codec_derivations: []GeneratedCodecDerivation = &.{},
+    generated_codec_calls: []GeneratedCodecCall = &.{},
+    /// The module-level pool's nodes, entries and substitution types.
+    evidence_nodes: []const EvidenceNode = &.{},
+    evidence_refs: []const CheckedEvidence = &.{},
+    site_substitutions: []const CheckedTypeId = &.{},
+
+    pub fn evidenceNode(self: *const GeneratedCodecTable, id: EvidenceNodeId) EvidenceNode {
+        std.debug.assert(id.owner == .module);
+        return self.evidence_nodes[id.index];
+    }
+
+    /// The nested evidence of a linked callable call.
+    pub fn callEvidence(self: *const GeneratedCodecTable, call: GeneratedCodecCall) []const CheckedEvidence {
+        const node = switch (call.resolution) {
+            .callable => |node_id| self.evidenceNode(node_id),
+            .pending => base.invariant("unlinked generated codec call had no checked evidence", .{}),
+            .checked_error => base.invariant("rejected generated codec call had no checked evidence", .{}),
+            .structural => base.invariant("structural generated codec call had no callable evidence", .{}),
+        };
+        return switch (node.nested) {
+            .resolved => |span| self.evidence_refs[span.start..][0..span.len],
+            .from_callable, .through_alias => base.invariant("generated codec callable evidence was not resolved at its call edge", .{}),
+        };
     }
 };
 
@@ -1957,9 +2154,6 @@ pub const IteratorDispatchCall = struct {
     dispatcher_arg_index: u32,
     /// Range into `StaticDispatchPlanTable.iter_operand_pool` (transform B).
     args: artifact_serialize.Span = .{},
-    /// Assigned by `resolveTotalDispatchPlans` during CheckedModule construction; the default is
-    /// a construction placeholder the pass overwrites for every plan.
-    resolution: CheckedCallResolution = .checked_error,
 
     pub fn argsSlice(self: IteratorDispatchCall, table: *const StaticDispatchPlanTable) []const IteratorDispatchOperand {
         return table.iter_operand_pool[self.args.start .. self.args.start + self.args.len];
@@ -2057,7 +2251,7 @@ fn sortedPlanKVs(allocator: Allocator, entries: *std.ArrayListUnmanaged(PlanKV))
 /// sorted expr/node → plan indexes, and the shared operand pools the plans reference
 /// (transform D). Reconstituted as plain slices on deserialize.
 pub const StaticDispatchPlanTable = struct {
-    plans: []StaticDispatchCallPlan = &.{},
+    plans: []RecordedDispatchPlan = &.{},
     /// The CIR node of a dispatching expression or of a custom literal
     /// pattern's equality -> `StaticDispatchPlanId`, sorted by key
     /// (transform D).
@@ -2072,64 +2266,42 @@ pub const StaticDispatchPlanTable = struct {
     iterator_topologies: []IteratorRepresentationTopology = &.{},
     /// `CIR.Node.Idx` -> `IteratorForPlanId`, sorted by key.
     iterator_for_by_node: []PlanKV = &.{},
-    /// Build-time collection of every plan referenced by each template.
-    /// CheckedModule construction consumes this to resolve evidence, then outputs the
-    /// category-specific pools below for post-check consumers.
-    template_refs: []StaticDispatchPlanId = &.{},
-    /// Direct calls grouped by checked procedure template.
-    direct_template_refs: []StaticDispatchPlanId = &.{},
-    /// Evidence-dependent or representation-sensitive relations grouped by
-    /// checked procedure template.
-    dispatch_relation_refs: []StaticDispatchPlanId = &.{},
     /// Shared flat pool of plan operands (transform-B side list).
     operand_pool: []const StaticDispatchOperand = &.{},
     /// Shared flat pool of iterator-plan operands.
     iter_operand_pool: []const IteratorDispatchOperand = &.{},
-    /// Concrete dispatch targets with nested evidence (`EvidenceNodeId`s).
-    evidence_nodes: []EvidenceNode = &.{},
-    /// Flat pool of evidence: node `nested` ranges and site-evidence ranges.
-    evidence_refs: []CheckedEvidence = &.{},
-    /// Checked-expr-keyed evidence for instantiation sites, sorted by key.
-    site_evidence: []SiteEvidenceEntry = &.{},
-    /// Flat pool backing `SiteEvidenceEntry` substitution ranges.
-    site_substitutions: []const CheckedTypeId = &.{},
-    /// Per procedure template (indexed like the template table), the
-    /// chain-free evidence of the template's root edge: how each of its own
-    /// obligations resolves when nothing instantiates it (a compile-time
-    /// root, a platform requirement, a const-eval entry). A range into
-    /// `evidence_refs`. Null explicitly marks a scheme-only procedure that
-    /// requires instantiation evidence and cannot be invoked as a bare root.
-    template_root_evidence: []const ?artifact_serialize.Span = &.{},
-    /// Exact generated-codec contracts emitted by checking.
-    generated_codec_derivations: []GeneratedCodecDerivation = &.{},
+    /// The solver variables checking recorded for each plan, parallel to
+    /// `plans`: what dispatch resolution resolves the plan from.
+    plan_sources: []PlanSource = &.{},
+    /// The solver variables checking recorded for each iterator plan,
+    /// parallel to `iterator_for_plans`.
+    iterator_plan_sources: []IteratorPlanSource = &.{},
+    /// Exact generated-codec contracts emitted by checking, with their calls
+    /// unlinked; the module's dispatch resolution links them
+    /// (`GeneratedCodecTable`).
+    recorded_codec_derivations: []GeneratedCodecDerivation = &.{},
     /// Shared flat pool backing `GeneratedCodecDerivation.calls`.
-    generated_codec_calls: []GeneratedCodecCall = &.{},
+    recorded_codec_calls: []GeneratedCodecCall = &.{},
 
     pub const Serialized = extern struct {
-        plans: SerializedSlice(StaticDispatchCallPlan) = .{},
+        plans: SerializedSlice(RecordedDispatchPlan) = .{},
         by_node: SerializedSlice(PlanKV) = .{},
         numeral_by_node: SerializedSlice(PlanKV) = .{},
         quote_by_node: SerializedSlice(PlanKV) = .{},
         iterator_for_plans: SerializedSlice(IteratorForPlan) = .{},
         iterator_topologies: SerializedSlice(IteratorRepresentationTopology) = .{},
         iterator_for_by_node: SerializedSlice(PlanKV) = .{},
-        template_refs: SerializedSlice(StaticDispatchPlanId) = .{},
-        direct_template_refs: SerializedSlice(StaticDispatchPlanId) = .{},
-        dispatch_relation_refs: SerializedSlice(StaticDispatchPlanId) = .{},
         operand_pool: SerializedSlice(StaticDispatchOperand) = .{},
         iter_operand_pool: SerializedSlice(IteratorDispatchOperand) = .{},
-        evidence_nodes: SerializedSlice(EvidenceNode) = .{},
-        evidence_refs: SerializedSlice(CheckedEvidence) = .{},
-        site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
-        site_substitutions: SerializedSlice(CheckedTypeId) = .{},
-        template_root_evidence: SerializedSlice(?artifact_serialize.Span) = .{},
-        generated_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
-        generated_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
+        plan_sources: SerializedSlice(PlanSource) = .{},
+        iterator_plan_sources: SerializedSlice(IteratorPlanSource) = .{},
+        recorded_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
+        recorded_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
 
         comptime {
-            // 19 side lists → 19 base-pointer fixups on deserialize, never a
+            // 13 side lists → 13 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 19);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 13);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -2143,9 +2315,8 @@ pub const StaticDispatchPlanTable = struct {
         names: *canonical.CanonicalNameStore,
         checked_types: anytype,
         bodies: anytype,
-        build_data: *PlanTableBuildData,
     ) Allocator.Error!StaticDispatchPlanTable {
-        var plans = std.ArrayList(StaticDispatchCallPlan).empty;
+        var plans = std.ArrayList(RecordedDispatchPlan).empty;
         errdefer plans.deinit(allocator);
         var plan_sources = std.ArrayList(PlanSource).empty;
         errdefer plan_sources.deinit(allocator);
@@ -2603,12 +2774,9 @@ pub const StaticDispatchPlanTable = struct {
         const iterator_for_sorted = try sortedPlanKVs(allocator, &iterator_for_by_node);
         errdefer allocator.free(iterator_for_sorted);
 
-        build_data.* = .{
+        return .{
             .plan_sources = try plan_sources.toOwnedSlice(allocator),
             .iterator_plan_sources = try iterator_plan_sources.toOwnedSlice(allocator),
-        };
-
-        return .{
             .plans = try plans.toOwnedSlice(allocator),
             .by_node = by_node_sorted,
             .numeral_by_node = numeral_sorted,
@@ -2618,8 +2786,8 @@ pub const StaticDispatchPlanTable = struct {
             .iterator_for_by_node = iterator_for_sorted,
             .operand_pool = try operand_pool.toOwnedSlice(allocator),
             .iter_operand_pool = try iter_operand_pool.toOwnedSlice(allocator),
-            .generated_codec_derivations = try generated_codec_derivations.toOwnedSlice(allocator),
-            .generated_codec_calls = try generated_codec_calls.toOwnedSlice(allocator),
+            .recorded_codec_derivations = try generated_codec_derivations.toOwnedSlice(allocator),
+            .recorded_codec_calls = try generated_codec_calls.toOwnedSlice(allocator),
         };
     }
 
@@ -2649,95 +2817,6 @@ pub const StaticDispatchPlanTable = struct {
         return if (lookupPlanKV(self.iterator_for_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
     }
 
-    pub fn evidenceNode(self: *const StaticDispatchPlanTable, id: EvidenceNodeId) EvidenceNode {
-        return self.evidence_nodes[@backingInt(id)];
-    }
-
-    /// The evidence node's nested evidence, in the target scheme's canonical
-    /// evidence-param order.
-    pub fn nestedEvidence(self: *const StaticDispatchPlanTable, node: EvidenceNode) []const CheckedEvidence {
-        const span = switch (node.nested) {
-            .resolved => |resolved| resolved,
-            .from_callable => {
-                base.invariant("callable-derived target evidence has no resolved checked-evidence span", .{});
-            },
-            .through_alias => {
-                base.invariant("alias-scope evidence was read as its target's own evidence", .{});
-            },
-        };
-        return self.evidence_refs[span.start .. span.start + span.len];
-    }
-
-    /// The evidence an edge that instantiated a procedure alias's scheme
-    /// resolved for that alias's own obligations.
-    pub fn aliasScopeEvidence(self: *const StaticDispatchPlanTable, node: EvidenceNode) []const CheckedEvidence {
-        const span = switch (node.nested) {
-            .through_alias => |through_alias| through_alias,
-            .resolved, .from_callable => {
-                base.invariant("target evidence was read as an alias scope's evidence", .{});
-            },
-        };
-        return self.evidence_refs[span.start .. span.start + span.len];
-    }
-
-    pub fn generatedCodecCallEvidence(self: *const StaticDispatchPlanTable, call: GeneratedCodecCall) []const CheckedEvidence {
-        const node = switch (call.resolution) {
-            .callable => |node_id| self.evidenceNode(node_id),
-            .pending => {
-                base.invariant("unlinked generated codec call had no checked evidence", .{});
-            },
-            .checked_error => {
-                base.invariant("rejected generated codec call had no checked evidence", .{});
-            },
-            .structural => {
-                base.invariant("structural generated codec call had no callable evidence", .{});
-            },
-        };
-        return self.nestedEvidence(node);
-    }
-
-    /// Evidence for the scheme instantiated at `expr` (a constrained
-    /// definition reference or an expression-position function construction
-    /// edge), in the scheme's canonical evidence-param order; null when no
-    /// checked instantiation edge was recorded for the expression.
-    pub fn siteEvidence(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?[]const CheckedEvidence {
-        const found = self.siteEvidenceSpan(expr) orelse return null;
-        return self.evidence_refs[found.start .. found.start + found.len];
-    }
-
-    /// Exact durable range for a checker-recorded instantiation edge.
-    pub fn siteEvidenceSpan(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?artifact_serialize.Span {
-        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @backingInt(expr), siteEvidenceOrder) orelse return null;
-        return .{ .start = found.start, .len = found.len };
-    }
-
-    /// The chain-free root evidence of a procedure template: its own
-    /// requirements resolved without a caller.
-    pub fn templateRootEvidence(self: *const StaticDispatchPlanTable, template: canonical.CheckedProcedureTemplateId) []const CheckedEvidence {
-        const raw = @backingInt(template);
-        if (raw >= self.template_root_evidence.len) return &.{};
-        std.debug.assert(self.template_root_evidence[raw] != null);
-        const span = self.template_root_evidence[raw].?;
-        return self.evidence_refs[span.start .. span.start + span.len];
-    }
-
-    /// The substitution recorded for the scheme used at `expr`: one checked
-    /// type per quantified variable of that scheme, in the scheme's
-    /// `scheme_vars` order. Null when the expression has no site entry at
-    /// all; empty when its entry recorded no instantiation.
-    /// The checked type of the instance a stored nested-function use at
-    /// `expr` places into its containing value.
-    pub fn siteInstanceType(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?CheckedTypeId {
-        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @backingInt(expr), siteEvidenceOrder) orelse return null;
-        if (found.instance_ty == SiteEvidenceEntry.no_site_instance) return null;
-        return @fromBackingInt(@intCast(found.instance_ty));
-    }
-
-    pub fn siteSubstitution(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?[]const CheckedTypeId {
-        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @backingInt(expr), siteEvidenceOrder) orelse return null;
-        return self.site_substitutions[found.subst_start .. found.subst_start + found.subst_len];
-    }
-
     /// Build-time-only teardown: frees the heap-owned slices. A frozen
     /// (deserialized) table's slices alias the artifact's single backing buffer and are
     /// NEVER freed here—the artifact's `deinitInternal` frees the buffer wholesale and
@@ -2745,9 +2824,6 @@ pub const StaticDispatchPlanTable = struct {
     /// needed because, unlike the mutation-guarded stores, this table has no post-load
     /// mutators.)
     pub fn deinit(self: *StaticDispatchPlanTable, allocator: Allocator) void {
-        allocator.free(self.template_refs);
-        allocator.free(self.direct_template_refs);
-        allocator.free(self.dispatch_relation_refs);
         allocator.free(self.by_node);
         allocator.free(self.numeral_by_node);
         allocator.free(self.quote_by_node);
@@ -2757,26 +2833,22 @@ pub const StaticDispatchPlanTable = struct {
         allocator.free(self.iterator_topologies);
         allocator.free(@constCast(self.operand_pool));
         allocator.free(@constCast(self.iter_operand_pool));
-        allocator.free(self.evidence_nodes);
-        allocator.free(self.evidence_refs);
-        allocator.free(self.site_evidence);
-        allocator.free(@constCast(self.site_substitutions));
-        allocator.free(@constCast(self.template_root_evidence));
-        allocator.free(self.generated_codec_derivations);
-        allocator.free(self.generated_codec_calls);
+        allocator.free(self.plan_sources);
+        allocator.free(self.iterator_plan_sources);
+        allocator.free(self.recorded_codec_derivations);
+        allocator.free(self.recorded_codec_calls);
         self.* = .{};
     }
 };
 
-fn siteEvidenceOrder(e: SiteEvidenceEntry, key: u32) std.math.Order {
+/// Orders site evidence entries by their CIR node for binary search.
+pub fn siteEvidenceOrder(e: SiteEvidenceEntry, key: u32) std.math.Order {
     return std.math.order(e.key, key);
 }
 
-/// Build-time-only side data recorded by `StaticDispatchPlanTable.fromModule`
-/// so the total-resolution pass (`dispatch_evidence.zig`) can resolve each
-/// plan from the checker type store: the source dispatcher var and the source
-/// constraint fn var (the discharge-record key). Parallel to `plans`; never
-/// serialized.
+/// The solver variables checking recorded for one plan: the source
+/// dispatcher var and the source constraint fn var (the discharge-record
+/// key), from which dispatch resolution resolves the plan.
 pub const PlanSource = struct {
     dispatcher_var: Var,
     constraint_fn_var: ?Var,
@@ -2787,26 +2859,12 @@ pub const PlanSource = struct {
     literal_kind: ?types.StaticDispatchConstraint.LiteralKind = null,
 };
 
-/// Build-time-only side data for iterator plans, parallel to
-/// `iterator_for_plans`.
+/// The solver variables checking recorded for one iterator plan.
 pub const IteratorPlanSource = struct {
     iter_dispatcher_var: Var,
     next_dispatcher_var: Var,
     iter_fn_var: Var,
     next_fn_var: Var,
-};
-
-/// Build-time-only outputs of `StaticDispatchPlanTable.fromModule` consumed by
-/// the total-resolution pass.
-pub const PlanTableBuildData = struct {
-    plan_sources: []PlanSource = &.{},
-    iterator_plan_sources: []IteratorPlanSource = &.{},
-
-    pub fn deinit(self: *PlanTableBuildData, allocator: Allocator) void {
-        allocator.free(self.plan_sources);
-        allocator.free(self.iterator_plan_sources);
-        self.* = .{};
-    }
 };
 
 const StaticDispatchConstraintIndex = struct {
@@ -3128,7 +3186,7 @@ pub fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
 /// Public `lookupCheckedMethodTarget` declaration: exact callable-or-structural
 /// registry lookup in the local registry, then the imported views.
 pub fn lookupCheckedMethodTarget(
-    names: *canonical.CanonicalNameStore,
+    names: *const canonical.CanonicalNameStore,
     local_method_registry: *const MethodRegistry,
     imported_views: anytype,
     owner: MethodOwner,
@@ -3301,12 +3359,7 @@ test "method registry distinguishes a rejected declaration from an undeclared me
     try std.testing.expect(registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @fromBackingInt(@intCast(3)) }) == null);
 }
 
-/// Convert an intentional fixture-table position while preserving enum inference.
-fn fixtureTableIndex(comptime index: u32) u32 {
-    return index;
-}
-
-fn testPlan(node: u32, args_start: u32, args_len: u32) StaticDispatchCallPlan {
+fn testPlan(node: u32, args_start: u32, args_len: u32) RecordedDispatchPlan {
     return .{
         .node = node,
         .method = @fromBackingInt(@intCast(1)),
@@ -3324,14 +3377,14 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".field_names.len == 19);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".field_names.len == 13);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);
         defer gpa.free(operands);
         for (operands, 0..) |*op, i| op.* = .{ .checked_expr = @fromBackingInt(@intCast(@as(u32, @intCast(i)) + 100)) };
 
-        var plans = [_]StaticDispatchCallPlan{
+        var plans = [_]RecordedDispatchPlan{
             testPlan(10, 0, 2),
             testPlan(11, 2, operand_count - 2),
         };
@@ -3339,34 +3392,10 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
             .{ .key = 10, .val = 0 },
             .{ .key = 11, .val = 1 },
         };
-        var evidence_nodes = [_]EvidenceNode{.{
-            .target = .{
-                .module_idx = 7,
-                .def_idx = @fromBackingInt(@intCast(8)),
-                .kind = .{ .local_proc = .{
-                    .binder = @fromBackingInt(@intCast(9)),
-                    .expr = @fromBackingInt(@intCast(10)),
-                    .context_anchor = @fromBackingInt(@intCast(12)),
-                } },
-                .callable_ty = @fromBackingInt(@intCast(11)),
-            },
-            .dispatcher_ty = @fromBackingInt(@intCast(12)),
-            .instantiation = .{ .callable = @fromBackingInt(@intCast(13)) },
-            .nested = .{ .resolved = .{ .start = 0, .len = 1 } },
-        }};
-        var evidence_refs = [_]CheckedEvidence{
-            .{ .dispatcher_ty = @fromBackingInt(@intCast(14)), .resolution = .{ .structural = .{
-                .derivation = .encoder,
-                .dispatcher_ty = @fromBackingInt(@intCast(14)),
-                .callable_ty = @fromBackingInt(@intCast(15)),
-            } } },
-            .{ .dispatcher_ty = @fromBackingInt(@intCast(12)), .resolution = .{ .direct = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+        var plan_sources = [_]PlanSource{
+            .{ .dispatcher_var = @fromBackingInt(@intCast(30)), .constraint_fn_var = null },
+            .{ .dispatcher_var = @fromBackingInt(@intCast(31)), .constraint_fn_var = @fromBackingInt(@intCast(32)) },
         };
-        var site_evidence = [_]SiteEvidenceEntry{.{
-            .key = 16,
-            .start = 1,
-            .len = 1,
-        }};
         var iterator_topologies = [_]IteratorRepresentationTopology{.{
             .len_field = @fromBackingInt(@intCast(20)),
             .step_field = @fromBackingInt(@intCast(21)),
@@ -3384,9 +3413,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
             .by_node = &by_node,
             .iterator_topologies = &iterator_topologies,
             .operand_pool = operands,
-            .evidence_nodes = &evidence_nodes,
-            .evidence_refs = &evidence_refs,
-            .site_evidence = &site_evidence,
+            .plan_sources = &plan_sources,
         };
 
         const rt = try artifact_serialize.roundTripForTest(gpa, StaticDispatchPlanTable, &table);
@@ -3409,18 +3436,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
         );
 
         try std.testing.expectEqual(@as(?u32, 1), lookupPlanKV(loaded.by_node, 11));
-
-        const node = loaded.evidenceNode(@fromBackingInt(@intCast(fixtureTableIndex(0))));
-        try std.testing.expectEqual(@as(?CheckedTypeId, @fromBackingInt(@intCast(12))), node.dispatcher_ty);
-        try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(13))), node.instantiation.callable);
-        const nested = loaded.nestedEvidence(node);
-        try std.testing.expectEqual(@as(usize, 1), nested.len);
-        try std.testing.expectEqual(StructuralKind.encoder, nested[0].resolution.structural.derivation.kind());
-        try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(14))), nested[0].resolution.structural.dispatcher_ty);
-        try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(15))), nested[0].resolution.structural.callable_ty);
-        const site = loaded.siteEvidence(@fromBackingInt(@intCast(16))) orelse return error.TestExpectedEqual;
-        try std.testing.expectEqual(@as(usize, 1), site.len);
-        try std.testing.expectEqual(@as(EvidenceNodeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))), site[0].resolution.direct);
+        try std.testing.expectEqualSlices(PlanSource, &plan_sources, loaded.plan_sources);
     }
 }
 
