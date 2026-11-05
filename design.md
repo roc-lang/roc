@@ -13615,6 +13615,16 @@ never recovers a substitution by matching types, never searches a type graph
 for where a descriptor could be read from, and never derives one hidden value
 from another by structural inspection of a representation.
 
+A direct call whose checked template carries `provided_low_level` emits that
+operation at the call's checked instantiation instead of calling its wrapper.
+The producer's explicit operation identity is authoritative: lowering does not
+inspect the wrapper's body or recognize a name. Operand evaluation, parameter
+adaptation and result adaptation keep their ordinary call order. Open list and
+box operations use the same descriptor operands as a `run_low_level` expression;
+closed operations use their committed layouts. Function values and erased calls
+retain the wrapper and its ordinary calling convention. This is direct lowering
+of a declared primitive, not general body inlining or specialization.
+
 #### Type Descriptors
 
 A type descriptor (`TypeDesc`) is an immutable, immortal runtime value that

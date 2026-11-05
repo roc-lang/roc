@@ -7077,6 +7077,20 @@ pub const Builder = struct {
         const explicit = try self.popValues(@intCast(arg_types.len));
         defer self.allocator.free(explicit);
         try self.argsAtParams(explicit, arg_types, callee, bound);
+        // Checking identifies compiler-provided operations explicitly. Emit
+        // that operation at its checked instantiation, using the same path
+        // as the wrapper's own body, rather than calling the wrapper.
+        const worker = self.program.worker(callee).*;
+        if (worker.key == .template) {
+            const key = worker.key.template;
+            const owner = self.program.module(key.module);
+            const template = owner.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+            if (template.provided_low_level) |op| {
+                try self.emitLowLevelCall(op, explicit, ret, arg_types);
+                const value = self.popValue();
+                return try self.pushValue(try self.adaptValue(value, ret, result_ty));
+            }
+        }
         const passed = try self.callDescriptorArgs(callee, bound);
         defer self.allocator.free(passed);
         const args = try std.mem.concat(self.allocator, LocalId, &.{ explicit, hidden, passed });
@@ -7416,6 +7430,10 @@ pub const Builder = struct {
     pub fn finishLowLevel(self: *Builder, op: LIR.LowLevel, arg_count: u32, result_ty: TypeId, arg_types: []const TypeId) Allocator.Error!void {
         const args = try self.popValues(arg_count);
         defer self.allocator.free(args);
+        try self.emitLowLevelCall(op, args, result_ty, arg_types);
+    }
+
+    fn emitLowLevelCall(self: *Builder, op: LIR.LowLevel, args: []const LocalId, result_ty: TypeId, arg_types: []const TypeId) Allocator.Error!void {
         const store = &self.program.store;
         var open = !store.isClosed(result_ty);
         for (arg_types) |arg_ty| open = open or !store.isClosed(arg_ty);
