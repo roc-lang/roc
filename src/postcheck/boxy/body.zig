@@ -4547,7 +4547,7 @@ pub const Builder = struct {
         const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }) orelse
             return try self.localProcValue(local);
         var scheme = try self.localScheme(scope_id);
-        if (!scheme.per_call or (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0)) return try self.localProcValue(local);
+        if (!scheme.per_call or scheme.isEmpty()) return try self.localProcValue(local);
         const scope = try self.localProcWorker(local, self.localProcDeclaration(lambda_expr));
         const scope_worker = scope.declaring;
         const declaring = self.program.worker(scope_worker).*;
@@ -4730,7 +4730,7 @@ pub const Builder = struct {
         const scope = self.program.worker(outer).*;
         const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr })) |scope_id| blk: {
             const scheme = try self.localScheme(scope_id);
-            break :blk if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) null else scheme;
+            break :blk if (scheme.isEmpty()) null else scheme;
         } else null;
         const vars = if (own) |scheme| try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ scope.scheme_vars, scheme.scheme_vars }) else try self.allocator.dupe(checked.CheckedTypeId, scope.scheme_vars);
         defer self.allocator.free(vars);
@@ -5418,7 +5418,7 @@ pub const Builder = struct {
                 const own_scope = self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr });
                 const own: ?lower.LocalScheme = if (own_scope) |scope_id| blk: {
                     var scheme = try self.localSchemeIn(owner_view, scope_id);
-                    if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
+                    if (scheme.isEmpty()) break :blk null;
                     scheme.per_call = false;
                     break :blk scheme;
                 } else null;
@@ -5705,7 +5705,7 @@ pub const Builder = struct {
         const captures = try self.program.siteCaptures(owner.module, lambda_expr);
         const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr })) |scope_id| blk: {
             var scheme = try self.localSchemeIn(owner_view, scope_id);
-            if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
+            if (scheme.isEmpty()) break :blk null;
             if (captured_scheme) scheme.per_call = false;
             break :blk scheme;
         } else null;
@@ -6075,7 +6075,7 @@ pub const Builder = struct {
                 if (local.is_alias) return try self.lowerValueCall(expr_id, call);
                 if (local.dispatch_scope) |scope_id| {
                     const scheme = try self.localScheme(scope_id);
-                    if (scheme.scheme_vars.len != 0 or scheme.dictionaries.len != 0) return try self.lowerGeneralizedLocalCall(expr_id, call, local, scheme);
+                    if (!scheme.isEmpty()) return try self.lowerGeneralizedLocalCall(expr_id, call, local, scheme);
                 }
                 return try self.lowerValueCall(expr_id, call);
             },
@@ -8210,7 +8210,7 @@ pub const Builder = struct {
         else
             null;
         const fn_ty = if (own) |scheme| blk: {
-            if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk try self.exprType(expr_id);
+            if (scheme.isEmpty()) break :blk try self.exprType(expr_id);
             const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ self.env.vars, scheme.scheme_vars });
             defer self.allocator.free(vars);
             const bound = try self.allocator.alloc(TypeId, vars.len);
@@ -8218,7 +8218,7 @@ pub const Builder = struct {
             for (bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
             break :blk try self.program.converter().convert(self.module, self.bodies().expr(expr_id).ty, .{ .module = self.module, .vars = vars, .bound = bound });
         } else try self.exprType(expr_id);
-        const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) null else scheme) else null;
+        const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.isEmpty()) null else scheme) else null;
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
         const values = try self.allocator.alloc(LocalId, captures.len + self.var_descs.len + self.dict_locals.len);
@@ -9424,7 +9424,7 @@ pub const Builder = struct {
                     if (self.bodies().patternBinder(binder).is_scheme_alias) {
                         if (self.program.local_scopes.get(.{ .module = self.module, .expr = decl.expr })) |scope_id| {
                             const scheme = try self.localScheme(scope_id);
-                            if (scheme.scheme_vars.len != 0 or scheme.dictionaries.len != 0) return;
+                            if (!scheme.isEmpty()) return;
                         }
                     }
                 }

@@ -2495,16 +2495,31 @@ const Inserter = struct {
                     },
                     .construct => {
                         const operands = try self.dynOperands(op);
-                        next = try self.retainLocalsExceptPositions(operands, step.transfer_positions.of(u32, &self.arc_plans.positions), .{ .stmt = at, .reason = .stored_in_aggregate }, next);
+                        const transferred = step.transfer_positions.of(u32, &self.arc_plans.positions);
                         if (op == .closure and op.closure.reuse != null) {
+                            // The capture record is retained after the
+                            // closure takes it, like any construction's
+                            // operand. A reuse allocation still read
+                            // afterwards (through views of its capture
+                            // record) is retained before: the closure
+                            // repacks the allocation in place when it finds
+                            // it unique, so the retain that keeps it must
+                            // already be counted then.
+                            if (operands.len != 2) arcInvariant("ARC closure repack has operands other than its capture record and reuse allocation");
+                            const capture_transferred = std.mem.findScalar(u32, transferred, 0) != null;
+                            const reuse_transferred = std.mem.findScalar(u32, transferred, 1) != null;
+                            if (!capture_transferred) next = try self.retainLocalIfRc(op.closure.capture, .{ .stmt = at, .reason = .stored_in_aggregate }, next);
                             var repack = op;
                             repack.closure.reuse_unique = step.reuse_unique;
-                            break :blk try self.store.addCFStmt(.{ .dyn = .{
+                            const closure_stmt = try self.store.addCFStmt(.{ .dyn = .{
                                 .target = dyn_stmt.target,
                                 .data = try self.store.addStmtRow(LIR.DynOp, repack),
                                 .next = next,
                             } }, origin);
+                            if (reuse_transferred) break :blk closure_stmt;
+                            break :blk try self.retainLocalIfRc(op.closure.reuse.?, .{ .stmt = at, .reason = .stored_in_aggregate }, closure_stmt);
                         }
+                        next = try self.retainLocalsExceptPositions(operands, transferred, .{ .stmt = at, .reason = .stored_in_aggregate }, next);
                     },
                 }
                 break :blk try self.addWithNext(stmt, next, origin);
