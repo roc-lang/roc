@@ -21736,6 +21736,16 @@ const InterfaceReplayEntry = struct {
     input_len: usize,
     /// The classes the request's parametric holes stood for.
     hole_classes: []const ?NodeId,
+    /// The request's node for each parametric hole slot.
+    hole_sources: []const NodeId,
+    /// Whether some hole slot's node is another unfinished expansion's hole
+    /// cell, which relating that expansion back binds to its own request.
+    hole_reaches_unfinished_cell: bool,
+    /// Whether a request joined this unfinished expansion beyond its own
+    /// cells (`UnfinishedJoin`): the expansion's interface then holds the
+    /// type that join unified into a cell, which its request identity does
+    /// not record, so no other request may reuse it.
+    joined_beyond_own_cells: bool = false,
     /// This expansion's instantiated cell for each parametric hole slot.
     hole_cells: []const NodeId,
     roots: []const NodeId,
@@ -27843,47 +27853,118 @@ const BodyContext = struct {
         return .{ .nodes = nodes, .root_indices = root_indices };
     }
 
-    /// An unfinished expansion is joined only by the instantiation it expands:
-    /// each hole slot names the class the expansion's request supplied or
-    /// the expansion's own hole cell. Inside mutually recursive expansions a
-    /// slot can instead name another unfinished expansion's hole cell, which
-    /// stands for the class that expansion's request supplied; the slot is
-    /// followed through those cells to what it stands for.
+    /// An unfinished expansion is joined only by a request for the types it
+    /// expands. A request slot and the expansion's slot denote the same type
+    /// when they reach a common class through what unfinished expansions'
+    /// hole cells stand for (a cell stands for its request's slot, which
+    /// can be another unfinished expansion's cell), or when what they
+    /// finally stand for are equal settled types: a concrete type built
+    /// afresh by each recursive call is a distinct class every time.
     fn joinsUnfinishedExpansion(
         self: *BodyContext,
         replay_state: *const InterfaceReplayState,
         entry: InterfaceReplayEntry,
         holes: []const NodeId,
-        hole_classes: []const ?NodeId,
-    ) bool {
-        if (entry.hole_classes.len != hole_classes.len) return false;
-        for (entry.hole_classes, entry.hole_cells, holes, hole_classes) |expanded_class, expanded_cell, hole, hole_class| {
-            const expanded = expanded_class orelse {
-                if (hole_class != null) return false;
-                continue;
-            };
+    ) Allocator.Error!?UnfinishedJoin {
+        std.debug.assert(entry.hole_sources.len == holes.len);
+        var scratch = self.graph.acquireArena();
+        defer self.graph.releaseArena(scratch);
+        const allocator = scratch.allocator();
+        var expanded_chain = std.ArrayList(NodeId).empty;
+        var join: UnfinishedJoin = .through_own_cells;
+        for (entry.hole_sources, entry.hole_cells, holes) |source, cell, hole| {
+            expanded_chain.clearRetainingCapacity();
+            try expanded_chain.append(allocator, cell);
+            try self.appendUnfinishedHoleChain(allocator, replay_state, source, &expanded_chain);
+            const expanded_end = expanded_chain.items[expanded_chain.items.len - 1];
             var current = hole;
-            var steps: usize = 0;
-            while (!self.graph.sameClass(current, expanded) and !self.graph.sameClass(current, expanded_cell)) {
-                if (steps == replay_state.stack.items.len) return false;
-                current = self.unfinishedHoleCellClass(replay_state, current) orelse return false;
-                steps += 1;
-            }
+            var below = replay_state.stack.items.len;
+            const slot_join: UnfinishedJoin = while (true) {
+                if (self.graph.sameClass(current, cell)) break .through_own_cells;
+                if (self.classInChain(current, expanded_chain.items[1..])) break .beyond_own_cells;
+                const next = self.unfinishedHoleSource(replay_state, current, below) orelse {
+                    if (try self.sameSettledType(allocator, current, expanded_end)) break .beyond_own_cells;
+                    return null;
+                };
+                current = next.source;
+                below = next.stack_position;
+            };
+            if (slot_join == .beyond_own_cells) join = .beyond_own_cells;
         }
-        return true;
+        return join;
     }
 
-    /// The class an unfinished expansion's hole cell stands for, when `node`
-    /// is such a cell.
-    fn unfinishedHoleCellClass(self: *BodyContext, replay_state: *const InterfaceReplayState, node: NodeId) ?NodeId {
-        for (replay_state.stack.items) |index| {
-            const unfinished = replay_state.entries.items[index];
-            for (unfinished.hole_cells, unfinished.hole_classes) |cell, class| {
-                const stands_for = class orelse continue;
-                if (self.graph.sameClass(node, cell)) return stands_for;
+    /// How a request joins an unfinished expansion. Through its own cells,
+    /// every slot is the cell the expansion instantiated, which leaves the
+    /// expansion's interface as general as its request. Beyond them, some
+    /// slot denotes the slot's type another way (the request it stands for,
+    /// or an equal settled type), so relating the join unifies the cell with
+    /// that type's node and the interface is specific to that type.
+    const UnfinishedJoin = enum { through_own_cells, beyond_own_cells };
+
+    fn classInChain(self: *BodyContext, node: NodeId, chain: []const NodeId) bool {
+        for (chain) |member| {
+            if (self.graph.sameClass(node, member)) return true;
+        }
+        return false;
+    }
+
+    /// Append `node` and, while the last appended node is an unfinished
+    /// expansion's hole cell, the slot that cell stands for.
+    fn appendUnfinishedHoleChain(
+        self: *BodyContext,
+        allocator: Allocator,
+        replay_state: *const InterfaceReplayState,
+        node: NodeId,
+        chain: *std.ArrayList(NodeId),
+    ) Allocator.Error!void {
+        var current = node;
+        var below = replay_state.stack.items.len;
+        while (true) {
+            try chain.append(allocator, current);
+            const next = self.unfinishedHoleSource(replay_state, current, below) orelse return;
+            current = next.source;
+            below = next.stack_position;
+        }
+    }
+
+    /// The request slot an unfinished expansion's hole cell stands for, when
+    /// `node` is the cell of an expansion below stack position `below`. The
+    /// topmost such expansion answers. Its request was made while only the
+    /// expansions beneath it were unfinished, so the slot is a cell, if at
+    /// all, of an expansion strictly lower on the stack, and following
+    /// slots descends the stack.
+    fn unfinishedHoleSource(
+        self: *BodyContext,
+        replay_state: *const InterfaceReplayState,
+        node: NodeId,
+        below: usize,
+    ) ?struct { source: NodeId, stack_position: usize } {
+        var position = below;
+        while (position > 0) {
+            position -= 1;
+            const unfinished = replay_state.entries.items[replay_state.stack.items[position]];
+            for (unfinished.hole_cells, unfinished.hole_sources) |cell, source| {
+                if (self.graph.sameClass(node, cell)) return .{ .source = source, .stack_position = position };
             }
         }
         return null;
+    }
+
+    /// Whether two nodes are both settled and denote equal types.
+    fn sameSettledType(self: *BodyContext, allocator: Allocator, left: NodeId, right: NodeId) Allocator.Error!bool {
+        const left_type = try self.settledNodeType(allocator, left) orelse return false;
+        const right_type = try self.settledNodeType(allocator, right) orelse return false;
+        return try self.typeStore().typeEql(self.nameStore(), left_type, right_type);
+    }
+
+    /// The sealed type of a node whose whole type is settled.
+    fn settledNodeType(self: *BodyContext, allocator: Allocator, node: NodeId) Allocator.Error!?Type.TypeId {
+        const captured = try InterfaceConstraints.captureRequest(self.graph, allocator, &.{node});
+        return switch (captured.nodes[@backingInt(captured.roots[0])]) {
+            .mono => |ty| ty,
+            .open => null,
+        };
     }
 
     fn relateInterfaceRoots(self: *BodyContext, produced: []const NodeId, requested: []const NodeId) Allocator.Error!void {
@@ -28016,7 +28097,10 @@ const BodyContext = struct {
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or !try entry.request.eql(request, self.typeStore(), self.nameStore())) continue;
             // An unfinished expansion is joined only by the exact request it
             // expands; parametric holes generalize completed summaries.
-            if (entry.status != .ready and !self.joinsUnfinishedExpansion(replay_state, entry, holes.nodes, hole_classes)) continue;
+            if (entry.status != .ready) {
+                const join = try self.joinsUnfinishedExpansion(replay_state, entry, holes.nodes) orelse continue;
+                if (join == .beyond_own_cells) replay_state.entries.items[raw_entry].joined_beyond_own_cells = true;
+            }
             self.builder.count("interface_replay_hits");
             switch (entry.status) {
                 .expanding, .expanded => {
@@ -28077,6 +28161,10 @@ const BodyContext = struct {
             .request = try request.copy(self.graph.arena(), InterfaceSummaryCopy{}),
             .input_len = shape.bytes.len,
             .hole_classes = try self.graph.arena().dupe(?NodeId, hole_classes),
+            .hole_sources = try self.graph.arena().dupe(NodeId, holes.nodes),
+            .hole_reaches_unfinished_cell = for (holes.nodes) |hole| {
+                if (self.unfinishedHoleSource(replay_state, hole, replay_state.stack.items.len) != null) break true;
+            } else false,
             .hole_cells = hole_cells: {
                 const cells = try self.graph.arena().alloc(NodeId, holes.root_indices.len);
                 for (holes.root_indices, cells) |root_index, *cell| cell.* = roots[root_index];
@@ -28224,11 +28312,13 @@ const BodyContext = struct {
                     // Members of a larger component are captured after relating
                     // back to each other's requests, so their interfaces hold the
                     // settled types their holes stood for; only exact requests
-                    // may reuse them.
+                    // may reuse them. A slot holding another member's hole cell
+                    // was settled by that member's request, which this
+                    // member's request identity does not record.
                     const parametric = for (entry.hole_classes) |hole_class| {
                         if (hole_class != null) break true;
                     } else false;
-                    if (parametric and !single_request_component) {
+                    if (entry.joined_beyond_own_cells or ((parametric or entry.hole_reaches_unfinished_cell) and !single_request_component)) {
                         entry.status = .ready;
                         if (index == replay_index) break;
                         continue;
