@@ -17,6 +17,7 @@
 const std = @import("std");
 const base = @import("base");
 const check = @import("check");
+const lir = @import("lir");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedArtifact;
@@ -447,11 +448,13 @@ const Walker = struct {
 /// a component, a list item, a box payload, a nominal's argument or
 /// backing. Such a root has no compile-time value slot, and a `.boxy`
 /// program storing it keeps what reading function values takes (design.md
-/// "Stored Function Values").
+/// "Stored Function Values"). `modules` lists the artifacts `root.module`
+/// indexes; `program` is every module of the program the root is evaluated
+/// in, which holds each nominal's declaring module.
 pub fn rootHoldsFunction(
     allocator: Allocator,
     modules: []const *const checked.CheckedModuleArtifact,
-    imports: []const checked.ImportedModuleView,
+    program: lir.CheckedPipeline.CheckedModuleSet,
     root: Root,
 ) Allocator.Error!bool {
     const artifact = modules[root.module];
@@ -506,9 +509,9 @@ pub fn rootHoldsFunction(
                     },
                     .local_declaration => |declaration_id| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = item.types.nominalDeclarationById(declaration_id).backing }),
                     .imported_declaration => |imported| {
-                        const declaring = typesOf(modules, imports, imported.artifact) orelse
+                        const declaring = program.moduleByKey(imported.artifact) orelse
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
-                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
+                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring.checked_types, .ty = declaring.checked_types.nominalDeclarationById(imported.declaration).backing });
                     },
                     // A nominal published as a box payload capability is
                     // declared in its module like any other: its value is
@@ -519,11 +522,11 @@ pub fn rootHoldsFunction(
                         try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = declaration.backing });
                     },
                     .imported_box_payload_capability => |imported| {
-                        const declaring = typesOf(modules, imports, imported.artifact) orelse
+                        const declaring = program.moduleByKey(imported.artifact) orelse
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
-                        const declaration = declaring.nominalDeclarationForPayload(nominal) orelse
+                        const declaration = declaring.checked_types.nominalDeclarationForPayload(nominal) orelse
                             base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
-                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaration.backing });
+                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring.checked_types, .ty = declaration.backing });
                     },
                     .opaque_without_backing => {},
                 }
@@ -531,16 +534,6 @@ pub fn rootHoldsFunction(
         }
     }
     return false;
-}
-
-fn typesOf(modules: []const *const checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?checked.CheckedTypeStoreView {
-    for (modules) |module| {
-        if (module.key.digest().eql(key)) return module.checked_types.view();
-    }
-    for (imports) |import| {
-        if (import.key.digest().eql(key)) return import.checked_types;
-    }
-    return null;
 }
 
 fn expectSharedDependencies(source: []const u8, imports: []const @import("inspected.zig").ModuleSource) (@import("inspected.zig").Error || Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {

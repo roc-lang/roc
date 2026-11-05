@@ -107,10 +107,7 @@ pub const StaticDataRequest = postcheck.Common.StaticDataRequest;
 pub const SpecializationStrategy = base.SpecializationStrategy;
 
 /// Root checked module plus the checked imports visible to post-check lowering.
-pub const CheckedModuleSet = struct {
-    root: checked.LoweringModuleView,
-    imports: []const checked.ImportedModuleView = &.{},
-};
+pub const CheckedModuleSet = postcheck.Common.CheckedModules;
 
 /// Root requests that determine which checked definitions become LIR roots.
 pub const RootRequestSet = struct {
@@ -1456,7 +1453,7 @@ pub fn prepareCheckedModulesMonotype(
         if (target.work_metrics) |metrics| metrics.monotype_runs += 1;
         break :monotype try postcheck.Monotype.Lower.run(
             allocator,
-            checkedModules(modules),
+            modules,
             rootRequests(roots, layout_requests, static_data_requests),
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
@@ -1992,7 +1989,7 @@ pub const PreparedBoxy = struct {
         const allocator = self.allocator;
         var boxy_timing_scope = PipelineStageScope.begin(target.timing, .boxy_lowering);
         var output = try postcheck.Boxy.run(allocator, .{
-            .modules = checkedModules(self.modules),
+            .modules = self.modules,
             .roots = rootRequests(self.roots, self.layout_requests, self.static_data_requests),
             .target_usize = target.target_usize,
             .inline_expects = switch (target.inline_expects) {
@@ -2141,13 +2138,6 @@ fn hostedProceduresBound(
         if (!bound) return false;
     }
     return true;
-}
-
-fn checkedModules(modules: CheckedModuleSet) postcheck.Common.CheckedModules {
-    return .{
-        .root = modules.root,
-        .imports = modules.imports,
-    };
 }
 
 fn rootRequests(

@@ -66,6 +66,16 @@ pub const unimplemented_declaration_crash = "declaration has no implementation";
 pub const CheckedModules = struct {
     root: checked.LoweringModuleView,
     imports: []const checked.ImportedModuleView = &.{},
+
+    /// The module in this set whose key is `key`: the root, one of the
+    /// root's relation modules, or an import. Null when the set does not
+    /// hold it.
+    pub fn moduleByKey(self: CheckedModules, key: checked.ModuleId) ?checked.ImportedModuleView {
+        if (self.root.module.key.digest().eql(key)) return checked.importedView(self.root.module);
+        for (self.root.relation_modules) |view| if (view.key.digest().eql(key)) return view;
+        for (self.imports) |view| if (view.key.digest().eql(key)) return view;
+        return null;
+    }
 };
 
 /// Dense id of one checked module inside a single lowering's module set; see

@@ -905,7 +905,7 @@ pub fn selectDiscoveryRoots(
 ) Allocator.Error!void {
     for (requests, 0..) |request, index| {
         const owner = if (source_modules.len == 0) modules.root.module.key.digest() else source_modules[index];
-        const view = findView(modules, owner) orelse Common.invariant("discovery root named a checked module outside its lowering set");
+        const view = modules.moduleByKey(owner) orelse Common.invariant("discovery root named a checked module outside its lowering set");
         const flags = try rootFlags(allocator, demand, modules, view, request);
         const reaches = flags.reachesLiteralRoot();
         if (traceEnabled()) std.debug.print("ctfe-demand root {d} {s} {s}\n", .{
@@ -930,7 +930,7 @@ fn rootFlags(
     const type_flags = try demand.checkedTypeFlags(allocator, view.canonical_names, view.checked_types, request.checked_type);
     var evidence_flags: Flags = .{};
     if (request.root_evidence) |evidence| {
-        const evidence_view = findView(modules, evidence.checked_module) orelse
+        const evidence_view = modules.moduleByKey(evidence.checked_module) orelse
             Common.invariant("discovery root evidence named a checked module outside its lowering set");
         const plans = evidence_view.static_dispatch_plans;
         evidence_flags = try demand.checkedEvidenceFlags(allocator, plans, plans.evidence_refs[evidence.span.start..][0..evidence.span.len]);
@@ -941,11 +941,4 @@ fn rootFlags(
         @as(u8, @bitCast(evidence_flags)),
     });
     return template_flags.merge(type_flags).merge(evidence_flags);
-}
-
-fn findView(modules: Common.CheckedModules, key: checked.ModuleId) ?checked.ImportedModuleView {
-    if (modules.root.module.key.digest().eql(key)) return checked.importedView(modules.root.module);
-    for (modules.root.relation_modules) |view| if (view.key.digest().eql(key)) return view;
-    for (modules.imports) |view| if (view.key.digest().eql(key)) return view;
-    return null;
 }

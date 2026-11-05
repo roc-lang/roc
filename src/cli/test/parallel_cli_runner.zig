@@ -752,6 +752,8 @@ const CustomCase = enum {
     boxy_test_outcome_files,
     stored_root_declared_row,
     issue_11389_check_after_test_shared_cache,
+    issue_12859_build_then_test_boxy,
+    issue_12859_build_then_test_lss,
     issue_11495_paired_body_types,
     issue_11065_duplicate_module_name_across_packages,
     dbg_transcript_same_across_backends,
@@ -4731,6 +4733,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build Shared output links a Windows DLL", .body = .{ .custom = .build_windows_shared_library } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12503: a cached constant read at joined rows with a repeated label is restored at its declared row (interpreter)", .backend = .interpreter, .body = .{ .custom = .stored_root_declared_row } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12503: a cached constant read at joined rows with a repeated label is restored at its declared row (dev)", .backend = .dev, .body = .{ .custom = .stored_root_declared_row } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12859: roc test validates an initializer roc build left pending whose nominal the test root declares (--specialize=no, dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .issue_12859_build_then_test_boxy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12859: roc test validates an initializer roc build left pending whose nominal the test root declares (--specialize=no, interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .custom = .issue_12859_build_then_test_boxy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12859: roc test validates an initializer roc build left pending whose nominal the test root declares (--specialize=yes, dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .issue_12859_build_then_test_lss } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12859: roc test validates an initializer roc build left pending whose nominal the test root declares (--specialize=yes, interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .custom = .issue_12859_build_then_test_lss } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11389: roc check succeeds on a cache roc test wrote", .body = .{ .custom = .issue_11389_check_after_test_shared_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11495: Boxy pairing keeps app body types across shared platform cache hits", .body = .{ .custom = .issue_11495_paired_body_types } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test dbg transcript is the same across backends and cached replays", .backend = .speed, .body = .{ .custom = .dbg_transcript_same_across_backends } },
@@ -6410,6 +6416,8 @@ fn runCustomCase(
         .boxy_test_outcome_files => customBoxyTestOutcomeFiles(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .dev),
         .stored_root_declared_row => customStoredRootDeclaredRow(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .issue_11389_check_after_test_shared_cache => customIssue11389CheckAfterTestSharedCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_12859_build_then_test_boxy => customIssue12859BuildThenTest(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .dev, "--specialize=no"),
+        .issue_12859_build_then_test_lss => customIssue12859BuildThenTest(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .dev, "--specialize=yes"),
         .issue_11495_paired_body_types => customIssue11495PairedBodyTypes(io, allocator, &env, &timer, timeout_ms),
         .issue_11065_duplicate_module_name_across_packages => customIssue11065DuplicateModuleNameAcrossPackages(io, allocator, &env, &timer, timeout_ms),
         .dbg_transcript_same_across_backends => customDbgTranscriptSameAcrossBackends(io, allocator, &env, &timer, timeout_ms),
@@ -15465,6 +15473,48 @@ fn customLocalFormatOuterTypeVarCache(
 }
 
 // Test and executable checking must accept each other's partial module caches.
+/// `roc build` leaves the app's unread initializer pending and caches the
+/// `Color` module it imports; `roc test` then makes `Color` the program root
+/// and validates that initializer, whose type is the nominal `Color`
+/// declares. Repeating the test runs it against a fully cached program.
+fn customIssue12859BuildThenTest(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    backend: OptMode,
+    specialize: []const u8,
+) ?TestResult {
+    const app = "test/cli/issue_12859_build_then_test/main.roc";
+    const opt_arg = backendOptArg(allocator, backend) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "issue_12859_app" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const output = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+    const not_contains = [_]OutputNeedle{
+        .{ .stream = .stderr, .text = "panic" },
+        .{ .stream = .stderr, .text = "invariant violated" },
+    };
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", opt_arg, specialize, output },
+        .roc_file = app,
+        .exit = .success,
+        .not_contains = &not_contains,
+    })) |failure| return failure;
+    for (0..2) |_| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "test", opt_arg, specialize, "-j1" },
+            .roc_file = app,
+            .exit = .success,
+            .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }},
+            .not_contains = &not_contains,
+        })) |failure| return failure;
+    }
+    return null;
+}
+
 fn customIssue11389CheckAfterTestSharedCache(
     io: std.Io,
     allocator: Allocator,
