@@ -389,6 +389,7 @@ pub fn scratchAlloc(comptime T: type, count: usize, ops: *RocOps) []T {
     return items[0..count];
 }
 
+/// Release a buffer `scratchAlloc` returned.
 pub fn scratchFree(comptime T: type, items: []T, ops: *RocOps) void {
     if (comptime builtins.host_abi.host_role != .platform) {
         scratch_allocator.free(items);
