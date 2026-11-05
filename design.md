@@ -14330,7 +14330,9 @@ module cache, and the compile-time evaluation results `roc check` produces
 module a module with roots left to evaluate imports, which compile-time
 evaluation runs against (Compile-Time Evaluation Strategy). `roc check` and
 `roc run` with `--specialize=no` therefore leave identical cache contents for
-the same sources when the run lowers its whole program, and `roc build`
+the same sources when the run lowers its whole program; a dev run of an app
+without a platform header builds it with a fast dev link and runs the
+executable, so it adds what `roc build` adds, and `roc build`
 adds exactly the module objects still missing (`compile.boxy_object_cache`,
 the `boxy_object` family); a wasm build adds its target's units beside the
 native ones (Fast Dev Link, "Wasm unit images").
@@ -24940,6 +24942,10 @@ import library beside it, written from its export directory by LLVM's COFF
 import library writer (`coff/ImportLibrary.zig`). A Mach-O link puts the
 unmapped `__DWARF` segment at `__LINKEDIT`'s address, as dyld requires a
 dylib's segments in address order.
+
+A `.boxy` dev `roc run` of an app without a platform header builds it
+against the synthetic default platform with a fast dev link and runs the
+executable, reusing every object `roc check` filed (Caching Under `.boxy`).
 
 **Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries,
 beside its pieces, a unit image (`backend.dev.UnitImage`): the unit's text

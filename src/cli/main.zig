@@ -2619,9 +2619,16 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     // app header naming no platform—before linking the platform host shim.
     if (try stageDefaultApp(ctx, args.path, .running)) |staged| {
         var owned_staged = staged;
-        // Default apps never hot reload; they just run once. The shared-memory
-        // shim is the run mechanism where the default platform runtime exists (Linux native,
-        // or any cross-target run); elsewhere we use the plain run-once path.
+        // Default apps never hot reload; they just run once. A `.boxy` dev
+        // run builds the app against the synthetic default platform with a
+        // fast dev link and runs the executable. Otherwise the shared-memory
+        // shim is the run mechanism where the default platform runtime
+        // exists (Linux native, or any cross-target run); elsewhere we use
+        // the plain run-once path.
+        if (args.opt == .dev and currentRuntimeSpecializationStrategy(args.specialization_strategy) == .boxy) {
+            owned_staged.deinit(ctx.gpa);
+            return rocRunBuildAndExec(ctx, args, arg0);
+        }
         if (useDefaultAppSharedMemoryShim(args)) {
             return rocRunDefaultAppSharedMemoryShim(ctx, args, &owned_staged);
         }
@@ -10257,6 +10264,11 @@ fn finishBuildCommand(
     reporter.finish();
     if (!args.suppress_build_status) {
         try printBuildSuccess(ctx, final_output_path, diag.errors, diag.warnings, elapsed_ns, args.verbose, build_env.getBuildStats());
+    } else if (diag.errors > 0 or diag.warnings > 0) {
+        // A run that builds its executable reports its diagnostics' counts
+        // as any run does.
+        renderSummaryHeaderLine(ctx.arena, ctx.io.stderr(), diag.errors, diag.warnings, args.synthetic_root_original_path orelse args.path, ctx.reportConfig(.stderr)) catch {};
+        ctx.io.flush();
     }
     return .{ .output_path = final_output_path, .diagnostics = diag };
 }
