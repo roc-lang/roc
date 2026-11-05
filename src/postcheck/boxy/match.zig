@@ -29,13 +29,13 @@ const invariant = types.invariant;
 const CheckedExprId = checked.CheckedExprId;
 const CheckedPatternId = checked.CheckedPatternId;
 
-/// A match being lowered: its emitter, and what its branch requests need.
 /// The checked site a compile-time match reports when no branch matches.
 pub const ComptimeFailure = struct {
     owner: LIR.LoweringModuleId,
     checked_site: ?checked.CheckedExhaustivenessSiteId,
 };
 
+/// A match being lowered: its emitter, and what its branch requests need.
 pub const State = struct {
     arena: std.heap.ArenaAllocator,
     emitter: *Compiler.Emitter = undefined,
