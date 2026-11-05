@@ -1421,6 +1421,15 @@ local_type_annotation_rigids: std.ArrayListUnmanaged(LocalTypeRigidRef) = .empty
 /// Each type declared in a function body that a type declaration's
 /// annotation names, as (declaration, named declaration).
 local_type_annotation_decls: std.ArrayListUnmanaged(LocalTypeDeclRef) = .empty,
+/// For each type declared in a function body, the type variables of
+/// enclosing functions its backing names, directly or through the other such
+/// types it names, as a range of `nominal_rank_context_vars`
+/// (`nominalRankContext`). Built from `local_type_annotation_rigids` and
+/// `local_type_annotation_decls` when their combined length was
+/// `nominal_rank_context_inputs_len`.
+nominal_rank_contexts: collections.DenseMapUnmanaged(CIR.Statement.Idx, NominalRankContext) = .empty,
+nominal_rank_context_vars: std.ArrayListUnmanaged(Var) = .empty,
+nominal_rank_context_inputs_len: usize = 0,
 /// Each rigid type variable of an enclosing function a candidate names.
 local_procedure_rigid_refs: std.ArrayListUnmanaged(LocalProcedureRigidRef) = .empty,
 /// Each reference to a type declared in a function body made inside
@@ -2033,6 +2042,9 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .local_type_context_depths = .keyed,
     .local_type_annotation_rigids = .keyed,
     .local_type_annotation_decls = .keyed,
+    .nominal_rank_contexts = .keyed,
+    .nominal_rank_context_vars = .keyed,
+    .nominal_rank_context_inputs_len = .keyed,
     .local_procedure_rigid_refs = .keyed,
     .local_type_references = .keyed,
     .local_type_reference_frame_patterns = .keyed,
@@ -3485,6 +3497,12 @@ const LocalTypeContextOwner = struct {
     decl: CIR.Statement.Idx,
     rigid: CIR.TypeAnno.Idx,
     owner: CIR.Pattern.Idx,
+};
+
+/// A range of `Check.nominal_rank_context_vars`.
+const NominalRankContext = struct {
+    start: u32,
+    len: u32,
 };
 
 const LocalProcedureRigidRef = struct {
@@ -5372,6 +5390,84 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
         try self.replaceExprWithRuntimeError(method.expr, diagnostic_idx);
         try self.markErroneousValueExpr(method.expr);
         try self.markErroneousValuePattern(method.pattern);
+    }
+}
+
+/// Generalize the variables of `env`'s current rank. A nominal application
+/// of a type declared in a function body ranks with the enclosing variables
+/// its declaration's backing names (`nominalRankContext`).
+fn generalizeRank(self: *Self, env: *Env) Allocator.Error!void {
+    self.generalizer.nominal_context = .{ .context = self, .resolve = nominalRankContextFor };
+    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+}
+
+fn nominalRankContextFor(context: *anyopaque, nominal: types_mod.NominalType) Allocator.Error![]const Var {
+    const self: *Self = @ptrCast(@alignCast(context));
+    return try self.nominalRankContext(nominal);
+}
+
+/// The type variables of enclosing functions a nominal application depends
+/// on through its declaration's backing (design.md "Body-Local Type
+/// Context"): those the backing of a type declared in a function body names,
+/// directly or through the other such types it names, other than its own
+/// parameters. Checking lists none of them in the application, yet opening
+/// the backing reaches each one, so the application is no more general than
+/// any of them. The context `finalizeLocalTypeContexts` decides adds the
+/// variables the declaration's methods name, which affect its behavior but
+/// not what its values contain.
+///
+/// The ranges are built once per state of the annotation references they are
+/// read from, so a slice returned during one generalization stays valid
+/// through it: annotations are generated only between generalizations.
+fn nominalRankContext(self: *Self, nominal: types_mod.NominalType) Allocator.Error![]const Var {
+    if (self.local_type_annotation_rigids.items.len == 0) return &.{};
+    if (nominal.origin_module != self.cir.selfModuleIdentity()) return &.{};
+    const inputs_len = self.local_type_annotation_rigids.items.len + self.local_type_annotation_decls.items.len;
+    if (inputs_len != self.nominal_rank_context_inputs_len) try self.buildNominalRankContexts(inputs_len);
+    const range = self.nominal_rank_contexts.get(@fromBackingInt(nominal.statement())) orelse return &.{};
+    return self.nominal_rank_context_vars.items[range.start..][0..range.len];
+}
+
+fn buildNominalRankContexts(self: *Self, inputs_len: usize) Allocator.Error!void {
+    self.nominal_rank_context_inputs_len = inputs_len;
+    self.nominal_rank_contexts.clearRetainingCapacity();
+    self.nominal_rank_context_vars.clearRetainingCapacity();
+    var decls: collections.DenseMapUnmanaged(CIR.Statement.Idx, void) = .empty;
+    defer decls.deinit(self.gpa);
+    for (self.local_type_annotation_rigids.items) |ref| try decls.put(self.gpa, ref.decl, {});
+    for (self.local_type_annotation_decls.items) |ref| try decls.put(self.gpa, ref.decl, {});
+    var visited: collections.DenseMapUnmanaged(CIR.Statement.Idx, void) = .empty;
+    defer visited.deinit(self.gpa);
+    var pending: std.ArrayListUnmanaged(CIR.Statement.Idx) = .empty;
+    defer pending.deinit(self.gpa);
+    var rigids: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty;
+    defer rigids.deinit(self.gpa);
+    var decl_iter = decls.keyIterator();
+    while (decl_iter.next()) |decl_ptr| {
+        const decl = decl_ptr.*;
+        if (try self.isModuleTypeDecl(decl)) continue;
+        visited.clearRetainingCapacity();
+        pending.clearRetainingCapacity();
+        rigids.clearRetainingCapacity();
+        try visited.put(self.gpa, decl, {});
+        try pending.append(self.gpa, decl);
+        while (pending.pop()) |current| {
+            for (self.local_type_annotation_rigids.items) |ref| {
+                if (ref.decl != current) continue;
+                if (std.mem.indexOfScalar(CIR.TypeAnno.Idx, self.typeDeclHeaderArgs(decl), ref.rigid) != null) continue;
+                if (std.mem.indexOfScalar(CIR.TypeAnno.Idx, rigids.items, ref.rigid) != null) continue;
+                try rigids.append(self.gpa, ref.rigid);
+            }
+            for (self.local_type_annotation_decls.items) |ref| {
+                if (ref.decl != current) continue;
+                if ((try visited.getOrPut(self.gpa, ref.referenced)).found_existing) continue;
+                try pending.append(self.gpa, ref.referenced);
+            }
+        }
+        if (rigids.items.len == 0) continue;
+        const start: u32 = @intCast(self.nominal_rank_context_vars.items.len);
+        for (rigids.items) |rigid| try self.nominal_rank_context_vars.append(self.gpa, ModuleEnv.varFrom(rigid));
+        try self.nominal_rank_contexts.put(self.gpa, decl, .{ .start = start, .len = @intCast(rigids.items.len) });
     }
 }
 
@@ -20206,7 +20302,7 @@ fn predeclareAnnotationSchemeHelp(
     }
     self.unify_scratch.clearPersistentOpenings();
     try self.linkDeferredUsesFrom(env.rank());
-    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+    try self.generalizeRank(env);
     // Problems raised here are discarded below; the annotation's own check
     // reports them against the def.
     try self.deduplicateGeneralizedDispatchRequirements(scheme_var, null, env);
@@ -21410,7 +21506,7 @@ fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_r
     try self.judgePendingAccessesAtBoundary(env);
     self.unify_scratch.clearPersistentOpenings();
     try self.linkDeferredUsesFrom(env.rank());
-    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+    try self.generalizeRank(env);
     if (self.growthBoundaryMadeRecursiveUse(env)) {
         for (member_roots) |root| try self.publishGrowthSchemeVars(root.interface);
     }
@@ -28829,7 +28925,7 @@ const ExprCheckFrame = struct {
         try checker.judgePendingAccessesAtBoundary(env);
         checker.unify_scratch.clearPersistentOpenings();
         try checker.linkDeferredUsesFrom(env.rank());
-        try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
+        try checker.generalizeRank(env);
         if (checker.growthBoundaryMadeRecursiveUse(env)) try checker.publishGrowthSchemeVars(self.expr_var);
         try checker.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }}, env);
         try checker.deduplicateGeneralizedDispatchRequirements(
@@ -31130,7 +31226,19 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             const decl = &statement.kind.decl;
 
             if (decl_predeclared) {
-                const scheme_var = try self.predeclareAnnotationScheme(decl_stmt.anno.?, env);
+                // The annotation is the local function's own: generated here
+                // first, the type variables it introduces take the depth of
+                // the function's candidate, as they do when the body pass
+                // generates it again (`recordRigidVarCandidateDepth`), and a
+                // lookup of an enclosing function's variable is that
+                // candidate's.
+                if (is_local_procedure_candidate) try self.local_procedure_candidate_stack.append(self.gpa, decl_stmt.pattern);
+                const scheme_var = scheme: {
+                    defer if (is_local_procedure_candidate) {
+                        _ = self.local_procedure_candidate_stack.pop();
+                    };
+                    break :scheme try self.predeclareAnnotationScheme(decl_stmt.anno.?, env);
+                };
                 try self.registerPredeclaredSlots(decl_stmt.anno.?, scheme_var);
                 try self.predeclared_local_annotations.put(self.gpa, decl_stmt.pattern, decl_stmt.anno.?);
             }
@@ -31463,7 +31571,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.judgePendingAccessesAtBoundary(env);
                 self.unify_scratch.clearPersistentOpenings();
                 try self.linkDeferredUsesFrom(env.rank());
-                try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                try self.generalizeRank(env);
                 if (self.growthBoundaryMadeRecursiveUse(env)) try self.publishGrowthSchemeVars(decl_pattern_var);
                 try self.captureEscapedSchemeDispatchRequirements(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }}, env);
                 try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var, decl_pattern_var, env);

@@ -56,6 +56,7 @@ const Var = @import("types.zig").Var;
 const Rank = @import("types.zig").Rank;
 const DescStoreIdx = @import("store.zig").DescStoreIdx;
 const RecordField = @import("types.zig").RecordField;
+const NominalType = @import("types.zig").NominalType;
 
 /// The descriptor a rank frame settles once its children have reported.
 const RankFill = struct {
@@ -81,6 +82,9 @@ const RankFrame = union(enum) {
 const OverArgsFrame = struct {
     fill: RankFill,
     args: []const Var,
+    /// Further children folded in after `args`: a nominal application's
+    /// context variables (`Generalizer.nominal_context`).
+    extra: []const Var = &.{},
     idx: u32 = 0,
     acc: Rank = Rank.generalized,
     /// Whether a requested child's rank is still to be folded in.
@@ -156,8 +160,20 @@ pub const Generalizer = struct {
     rank_frames: std.ArrayList(RankFrame),
     /// Settled child ranks, consumed by the frame that requested them.
     pending_ranks: std.ArrayList(Rank),
+    /// The type variables of enclosing functions that a nominal application
+    /// depends on although it does not list them: those its declaration's
+    /// backing names, for a type declared in a function body (design.md
+    /// "Body-Local Type Context"). An application's rank is the highest of
+    /// its arguments' and these, since opening its backing reaches them.
+    nominal_context: ?NominalContext = null,
 
     const Self = @This();
+
+    pub const NominalContext = struct {
+        context: *anyopaque,
+        /// The returned slice stays valid for the rest of the generalization.
+        resolve: *const fn (context: *anyopaque, nominal: NominalType) std.mem.Allocator.Error![]const Var,
+    };
 
     // general //
 
@@ -476,8 +492,10 @@ pub const Generalizer = struct {
                 .tuple => |tuple| return try self.pushOverArgs(fill, self.store.sliceVars(tuple.elems)),
                 .nominal_type => |nominal| {
                     // Same as .alias: don't descend into the backing type, take
-                    // the max over the args.
-                    return try self.pushOverArgs(fill, self.store.sliceNominalArgs(nominal));
+                    // the max over the args, and over the enclosing variables
+                    // a body-local declaration's backing names.
+                    const context: []const Var = if (self.nominal_context) |provider| try provider.resolve(provider.context, nominal) else &.{};
+                    return try self.pushOverArgsAndExtra(fill, self.store.sliceNominalArgs(nominal), context);
                 },
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
                     try self.rank_frames.append(self.gpa, .{ .func = .{
@@ -513,14 +531,18 @@ pub const Generalizer = struct {
     /// max over its args. Seed at `generalized` (the max-identity) and let the
     /// args raise it—seeding at `outermost` would floor the result there even
     /// when every arg is already generalized, wrongly blocking generalization of
-    /// the type that uses the container. No args means a ground type, which sits
-    /// at `outermost`.
+    /// the type that uses the container. No children (no args and no context
+    /// variables) means a ground type, which sits at `outermost`.
     fn pushOverArgs(self: *Self, fill: RankFill, args: []const Var) std.mem.Allocator.Error!bool {
-        if (args.len == 0) {
+        return try self.pushOverArgsAndExtra(fill, args, &.{});
+    }
+
+    fn pushOverArgsAndExtra(self: *Self, fill: RankFill, args: []const Var, extra: []const Var) std.mem.Allocator.Error!bool {
+        if (args.len == 0 and extra.len == 0) {
             try self.settleRank(fill.desc_idx, Rank.outermost);
             return true;
         }
-        try self.rank_frames.append(self.gpa, .{ .over_args = .{ .fill = fill, .args = args } });
+        try self.rank_frames.append(self.gpa, .{ .over_args = .{ .fill = fill, .args = args, .extra = extra } });
         return false;
     }
 
@@ -538,9 +560,10 @@ pub const Generalizer = struct {
                 frame.awaiting = false;
                 continue;
             }
-            if (frame.idx < frame.args.len) {
+            if (frame.idx < frame.args.len + frame.extra.len) {
                 frame.awaiting = true;
-                if (!try self.requestRank(frame.args[frame.idx], group_rank)) return false;
+                const child = if (frame.idx < frame.args.len) frame.args[frame.idx] else frame.extra[frame.idx - frame.args.len];
+                if (!try self.requestRank(child, group_rank)) return false;
                 continue;
             }
             try self.settleRank(frame.fill.desc_idx, frame.acc);
