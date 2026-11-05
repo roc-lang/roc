@@ -19207,10 +19207,14 @@ image serializes each row column alongside the statements.
 
 Statement compaction (`ReachableProcs`, which runs before ARC and again after
 ARC and the tail-drive pass) drops every statement no reachable procedure
-reaches, then every row no remaining statement names, and releases the
+reaches, then every row no remaining statement or local names, and releases the
 capacity both occupied. A procedure body that ARC or a procedure-local
 rewrite replaced therefore does not stay resident after the pass that
 replaced it.
+
+Dynamic locals also reference immutable product-shape rows. Compaction marks
+and renames these references alongside statement references; a local's shape
+must survive even when no statement directly names that row.
 
 ### Statement Provenance
 

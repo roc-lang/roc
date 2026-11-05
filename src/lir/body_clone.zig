@@ -1219,26 +1219,19 @@ pub fn cloneCallVariant(
     defer variant_args.deinit(store.allocator);
     variant_args.appendSliceAssumeCapacity(spec.leading_args);
 
-    for (0..source_args.len) |index| {
-        const source_arg = GuardedList.at(source_args, index);
-        const arg = try store.addLocal(.{ .layout_idx = store.getLocal(source_arg).layout_idx });
-        variant_args.appendAssumeCapacity(arg);
-    }
-
     var cloner = try BodyCloner(Rewriter).init(store, rewriter);
     defer cloner.deinit();
-
+    try cloner.new_locals.appendSlice(store.allocator, spec.leading_args);
     for (0..source_args.len) |index| {
-        const source_arg = GuardedList.at(source_args, index);
-        try cloner.local_map.put(source_arg, variant_args.items[index + spec.leading_args.len]);
+        const source_arg = GuardedList.at(store.getLocalSpan(source_spec.args), index);
+        variant_args.appendAssumeCapacity(try cloner.mapLocal(source_arg));
     }
 
-    try cloner.new_locals.appendSlice(store.allocator, variant_args.items);
     try cloner.new_locals.appendSlice(store.allocator, spec.extra_frame_locals);
 
     const source_frame = store.getLocalSpan(source_spec.frame_locals);
     for (0..source_frame.len) |index| {
-        _ = try cloner.mapLocal(GuardedList.at(source_frame, index));
+        _ = try cloner.mapLocal(GuardedList.at(store.getLocalSpan(source_spec.frame_locals), index));
     }
 
     const body = try cloner.cloneStmt(source_body);
@@ -2239,7 +2232,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             const locals = try self.allocator.alloc(LocalId, old_locals.len);
             defer self.allocator.free(locals);
             for (0..old_locals.len) |index| {
-                locals[index] = try self.mapLocal(GuardedList.at(old_locals, index));
+                locals[index] = try self.mapLocal(GuardedList.at(self.store.getLocalSpan(span), index));
             }
             return try self.store.addLocalSpan(locals);
         }
@@ -2975,4 +2968,40 @@ test "dynamic product metadata clones descriptors and preserves shared shapes" {
     try std.testing.expectEqual(copy_first.product, copy_second.product);
     const copy_shape = store.stmtRow(copy_first.product);
     try std.testing.expectEqual(copy_first.dyn.?.desc, GuardedList.at(store.getLocalSpan(copy_shape.descriptors), 0));
+}
+
+test "dynamic product metadata survives call variant cloning" {
+    const allocator = std.testing.allocator;
+    var layouts = try layout_mod.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const dynamic = try layouts.dynamicLayout();
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+    const shape = try store.addStmtRow(LIR.ProductShape, .{
+        .layouts = try store.addU32Span(&.{@backingInt(dynamic)}),
+        .slots = try store.addU32Span(&.{ 0, 1 }),
+        .descriptors = try store.addLocalSpan(&.{desc}),
+    });
+    const value = try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = desc, .storage = .param }, .product = shape });
+    const unit = try store.addLocal(.{ .layout_idx = .zst });
+    const body = try store.addCFStmt(.{ .ret = .{ .value = unit } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        // Descriptor after its value also exercises forward references.
+        .args = try store.addLocalSpan(&.{ value, desc }),
+        .frame_locals = try store.addLocalSpan(&.{ value, desc, unit }),
+        .body = body,
+        .ret_layout = .zst,
+        .abi = .roc,
+    }, .none);
+    const variant = try cloneCallVariant(TestRetRewriter, &store, &layouts, proc, .{}, .{ .leading_args = &.{}, .ret_layout = .zst });
+    const args = store.getLocalSpan(store.getProcSpec(variant).args);
+    const copy = store.getLocal(GuardedList.at(args, 0));
+    const copy_desc = GuardedList.at(args, 1);
+    try std.testing.expect(copy_desc != desc);
+    try std.testing.expectEqual(copy_desc, copy.dyn.?.desc);
+    try std.testing.expectEqual(LIR.DynStorage.param, copy.dyn.?.storage);
+    try std.testing.expectEqual(copy_desc, GuardedList.at(store.getLocalSpan(store.stmtRow(copy.product).descriptors), 0));
 }

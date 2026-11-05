@@ -8823,7 +8823,9 @@ pub const Builder = struct {
         if (self.store.getLocal(base_local).product != .none) {
             // Independent representation storage permits an ownership take;
             // retaining contents would not keep an interior address alive.
-            if (self.store.localDyn(target) != null) self.store.getLocalPtr(target).dyn_storage = .frame;
+            if (self.store.localDyn(target)) |dyn| {
+                if (dyn.storage == .view) self.store.getLocalPtr(target).dyn_storage = .frame;
+            }
             return self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.field(base_local, field_index), .next = undefined } });
         }
         // A field of an open row ranks among the remainder's fields too, so

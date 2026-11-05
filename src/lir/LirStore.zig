@@ -2930,7 +2930,7 @@ pub fn compactProcSpecs(self: *Self, reachable: []const bool) void {
 }
 
 /// Compacts control-flow statements and their parallel debug metadata in place,
-/// drops every out-of-line row no remaining statement names, and releases the
+/// drops every out-of-line row no remaining statement or local names, and releases the
 /// capacity the removed statements and rows occupied.
 pub fn compactCFStmts(self: *Self, reachable: *const std.bit_set.DynamicBitSetUnmanaged) Allocator.Error!void {
     std.debug.assert(self.body_coordinator == null and self.proc_rewrite == null);
@@ -2959,10 +2959,10 @@ pub fn compactCFStmts(self: *Self, reachable: *const std.bit_set.DynamicBitSetUn
     try self.compactStmtRows();
 }
 
-/// Marks a remapped row that no statement names.
+/// Marks a remapped row that no statement or local names.
 const unnamed_stmt_row = std.math.maxInt(u32);
 
-/// Drops every out-of-line row no statement names, renumbering the rest in
+/// Drops every out-of-line row no statement or local names, renumbering the rest in
 /// order. Every remap is allocated before any row moves, so allocation
 /// failure leaves the store unchanged.
 fn compactStmtRows(self: *Self) Allocator.Error!void {
@@ -2975,6 +2975,7 @@ fn compactStmtRows(self: *Self) Allocator.Error!void {
         @memset(remaps[column], unnamed_stmt_row);
     }
     for (self.cf_stmts.unsafeRawItemsMutForStore()) |*stmt| visitStmtRowIds(CFStmt, stmt, &remaps, .mark);
+    for (self.locals.unsafeRawItemsMutForStore()) |*local| visitStmtRowIds(StoredLocal, local, &remaps, .mark);
     inline for (0..stmt_row_column_count) |column| {
         const rows = self.stmt_rows[column].unsafeRawItemsMutForStore();
         var write: u32 = 0;
@@ -2987,6 +2988,7 @@ fn compactStmtRows(self: *Self) Allocator.Error!void {
         self.stmt_rows[column].shrinkAndFree(self.allocator, write);
     }
     for (self.cf_stmts.unsafeRawItemsMutForStore()) |*stmt| visitStmtRowIds(CFStmt, stmt, &remaps, .rename);
+    for (self.locals.unsafeRawItemsMutForStore()) |*local| visitStmtRowIds(StoredLocal, local, &remaps, .rename);
     self.rc_effect_rows.clearRetainingCapacity();
 }
 
@@ -3184,4 +3186,37 @@ test "dynamic product metadata relocates with a body shard" {
     try std.testing.expectEqual(moved_desc, GuardedList.at(coordinator.getLocalSpan(shape.descriptors), 0));
     try std.testing.expectEqual(@as(u32, @backingInt(dynamic)), GuardedList.at(coordinator.getU32Span(shape.layouts), 0));
     try std.testing.expectEqual(@as(u32, 1), GuardedList.at(coordinator.getU32Span(shape.slots), 1));
+}
+
+test "dynamic product metadata survives statement row compaction" {
+    const allocator = std.testing.allocator;
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const dynamic = try layouts.dynamicLayout();
+    var store = Self.init(allocator);
+    defer store.deinit();
+    const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+    // An unused row ahead of the shared live row forces its id to change.
+    _ = try store.addStmtRow(lir_defs.ProductShape, .{ .layouts = .empty(), .slots = .empty(), .descriptors = .empty() });
+    const shape = try store.addStmtRow(lir_defs.ProductShape, .{
+        .layouts = try store.addU32Span(&.{@backingInt(dynamic)}),
+        .slots = try store.addU32Span(&.{ 0, 1 }),
+        .descriptors = try store.addLocalSpan(&.{desc}),
+    });
+    const value = try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = desc, .storage = .param }, .product = shape });
+    const alias = try store.addLocal(store.getLocal(value));
+    _ = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    var reachable = try std.bit_set.DynamicBitSetUnmanaged.initFull(allocator, 1);
+    defer reachable.deinit(allocator);
+    try store.compactCFStmts(&reachable);
+    const moved = store.getLocal(value).product;
+    try std.testing.expect(moved != shape);
+    try std.testing.expectEqual(moved, store.getLocal(alias).product);
+    const product = store.stmtRow(moved);
+    try std.testing.expectEqual(desc, GuardedList.at(store.getLocalSpan(product.descriptors), 0));
+    try std.testing.expectEqual(@as(u32, @backingInt(dynamic)), GuardedList.at(store.getU32Span(product.layouts), 0));
+    try std.testing.expectEqual(@as(u32, 1), GuardedList.at(store.getU32Span(product.slots), 1));
+    // Repeated compaction preserves sharing and the already-renumbered id.
+    try store.compactCFStmts(&reachable);
+    try std.testing.expectEqual(moved, store.getLocal(value).product);
 }
