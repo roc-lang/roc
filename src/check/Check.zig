@@ -5247,6 +5247,14 @@ fn nominalRankContext(self: *Self, nominal: types_mod.NominalType) Allocator.Err
     return self.nominal_rank_context_vars.items[range.start..][0..range.len];
 }
 
+/// Whether `list` holds the annotation `anno`.
+fn typeAnnoListContains(list: []const CIR.TypeAnno.Idx, anno: CIR.TypeAnno.Idx) bool {
+    for (list) |item| {
+        if (item == anno) return true;
+    }
+    return false;
+}
+
 fn buildNominalRankContexts(self: *Self, inputs_len: usize) Allocator.Error!void {
     self.nominal_rank_context_inputs_len = inputs_len;
     self.nominal_rank_contexts.clearRetainingCapacity();
@@ -5273,8 +5281,8 @@ fn buildNominalRankContexts(self: *Self, inputs_len: usize) Allocator.Error!void
         while (pending.pop()) |current| {
             for (self.local_type_annotation_rigids.items) |ref| {
                 if (ref.decl != current) continue;
-                if (std.mem.indexOfScalar(CIR.TypeAnno.Idx, self.typeDeclHeaderArgs(decl), ref.rigid) != null) continue;
-                if (std.mem.indexOfScalar(CIR.TypeAnno.Idx, rigids.items, ref.rigid) != null) continue;
+                if (typeAnnoListContains(self.typeDeclHeaderArgs(decl), ref.rigid)) continue;
+                if (typeAnnoListContains(rigids.items, ref.rigid)) continue;
                 try rigids.append(self.gpa, ref.rigid);
             }
             for (self.local_type_annotation_decls.items) |ref| {
