@@ -2991,6 +2991,9 @@ pub const Interpreter = struct {
     const PendingDynCall = struct {
         closure: [*]u8,
         args: ?[]const u8,
+        /// The driven call passes the reference this record owns on to the
+        /// callee as its reuse input (an owned deferred call).
+        transfer: bool,
     };
 
     /// Whether an erased call is pending.
@@ -3037,9 +3040,11 @@ pub const Interpreter = struct {
                     @memcpy(copy, owned);
                     break :copy copy.ptr;
                 } else null;
-                try self.invokeErasedInto(pending.closure, if (ret_size == 0) null else ret, args);
-                // ARC explicitly transferred this reference to the pending call.
-                builtins.erased_callable.decref(pending.closure, &self.roc_ops);
+                try self.invokeErasedInto(pending.closure, if (ret_size == 0) null else ret, args, if (pending.transfer) pending.closure else null);
+                // ARC explicitly transferred this reference to the pending
+                // call: an owned call's callee consumed it, and every other
+                // is released here.
+                if (!pending.transfer) builtins.erased_callable.decref(pending.closure, &self.roc_ops);
                 continue;
             }
             // The call may leave another pending, which replaces the owned
@@ -3061,13 +3066,45 @@ pub const Interpreter = struct {
     /// Call the erased callable `closure` in the uniform erased-callable
     /// ABI, as the native erased-call runtime does: an interpreted callee
     /// learns that its caller makes the calls it leaves pending.
-    fn invokeErasedInto(self: *LirInterpreter, closure: [*]u8, ret: ?[*]u8, args: ?[*]const u8) Error!void {
+    /// A fresh closure of `proc` whose descriptor-described capture record
+    /// is a copy of `record`, with the record's size as its capture
+    /// capacity; the callable takes over the record's references.
+    fn allocInterpreterClosure(self: *LirInterpreter, proc: LirProcSpecId, record: [*]const u8, record_desc: *const boxy.TypeDesc) Error![*]u8 {
+        const capture_size = erased_callable_context_capture_offset + record_desc.size;
+        const data_ptr = try self.allocRocDataWithRc(
+            builtins.erased_callable.payloadSize(capture_size),
+            builtins.erased_callable.payload_alignment,
+            builtins.erased_callable.allocation_has_refcounted_children,
+        );
+        builtins.erased_callable.payloadPtr(data_ptr).* = .{
+            .callable_fn_ptr = &interpreterErasedCallableTrampoline,
+            .on_drop = &interpreterErasedCallableOnDrop,
+        };
+        if (self.retained_owner) |owner| owner.retain();
+        erasedCallableInterpreterContextFromPayload(data_ptr).* = .{
+            .owner = self.retained_owner,
+            .interpreter = self,
+            .proc_id = @backingInt(proc),
+            .drop_layout_plus_one = 0,
+            .capture_value_offset = @intCast(erased_callable_context_capture_offset),
+            .drop_kind = @backingInt(ErasedCallableCaptureDrop.desc),
+            .padding = .{ 0, 0, 0 },
+        };
+        const capture = erasedCallableInterpreterCaptureValuePtr(data_ptr);
+        @memcpy(capture[0..record_desc.size], record[0..record_desc.size]);
+        @as(*align(1) usize, @ptrCast(capture + @sizeOf(usize))).* = record_desc.size;
+        return data_ptr;
+    }
+
+    /// Invoke `closure` with its own capture; `reuse` is the allocation an
+    /// owned call transfers to it, which is `closure` or null.
+    fn invokeErasedInto(self: *LirInterpreter, closure: [*]u8, ret: ?[*]u8, args: ?[*]const u8, reuse: ?[*]u8) Error!void {
         var out_desc: ?*const anyopaque = null;
         if (interpretedCallable(closure)) |callable| {
             self.erased_caller_drives = true;
-            try self.callInterpreterErasedCallable(callable, &self.roc_ops, ret, args, null, &out_desc);
+            try self.callInterpreterErasedCallable(callable, &self.roc_ops, ret, args, reuse, &out_desc);
         } else {
-            builtins.erased_callable.payloadPtr(closure).callable_fn_ptr(&self.roc_ops, ret, args, builtins.erased_callable.capturePtr(closure), null, &out_desc);
+            builtins.erased_callable.payloadPtr(closure).callable_fn_ptr(&self.roc_ops, ret, args, builtins.erased_callable.capturePtr(closure), reuse, &out_desc);
         }
     }
 
@@ -3502,7 +3539,7 @@ pub const Interpreter = struct {
         const proc_spec = self.store.getProcSpec(proc_id);
         if (proc_spec.abi == .erased_record) {
             out_desc.* = null;
-            return self.callErasedRecordProc(proc_id, proc_spec, callable.capture_ptr, ret, args);
+            return self.callErasedRecordProc(proc_id, proc_spec, callable.capture_ptr, ret, args, reuse_ptr);
         }
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
         if (proc_arg_locals.len < 2) {
@@ -8322,6 +8359,7 @@ pub const Interpreter = struct {
         capture: [*]u8,
         ret: ?[*]u8,
         args: ?[*]const u8,
+        reuse: ?[*]u8,
     ) Error!void {
         const params = self.store.getLocalSpan(proc_spec.args);
         const capture_param = proc_spec.erased_capture_arg orelse return self.invariantFailedError(
@@ -8338,6 +8376,12 @@ pub const Interpreter = struct {
             if (param_id == capture_param) {
                 const cell = try self.alloc(.opaque_ptr);
                 cell.write(usize, @intFromPtr(capture));
+                proc_args[i] = cell;
+                continue;
+            }
+            if (proc_spec.erased_reuse_arg != null and param_id == proc_spec.erased_reuse_arg.?) {
+                const cell = try self.alloc(param.layout_idx);
+                cell.write(usize, @intFromPtr(reuse));
                 proc_args[i] = cell;
                 continue;
             }
@@ -9004,28 +9048,34 @@ pub const Interpreter = struct {
             .closure => |c| {
                 const record = try self.localBytes(frame, c.capture);
                 const record_desc: *const boxy.TypeDesc = @ptrFromInt(@as(*const usize, @ptrCast(@alignCast(record))).*);
-                const capture_size = erased_callable_context_capture_offset + record_desc.size;
-                const data_ptr = try self.allocRocDataWithRc(
-                    builtins.erased_callable.payloadSize(capture_size),
-                    builtins.erased_callable.payload_alignment,
-                    builtins.erased_callable.allocation_has_refcounted_children,
-                );
-                builtins.erased_callable.payloadPtr(data_ptr).* = .{
-                    .callable_fn_ptr = &interpreterErasedCallableTrampoline,
-                    .on_drop = &interpreterErasedCallableOnDrop,
-                };
-                if (self.retained_owner) |owner| owner.retain();
-                erasedCallableInterpreterContextFromPayload(data_ptr).* = .{
-                    .owner = self.retained_owner,
-                    .interpreter = self,
-                    .proc_id = @backingInt(c.proc),
-                    .drop_layout_plus_one = 0,
-                    .capture_value_offset = @intCast(erased_callable_context_capture_offset),
-                    .drop_kind = @backingInt(ErasedCallableCaptureDrop.desc),
-                    .padding = .{ 0, 0, 0 },
-                };
-                // The callable takes over the record's references.
-                @memcpy(erasedCallableInterpreterCaptureValuePtr(data_ptr)[0..record_desc.size], record[0..record_desc.size]);
+                const reuse: ?[*]u8 = if (c.reuse) |reuse_local| blk: {
+                    const word = @as(*align(1) const usize, @ptrCast(try self.localBytes(frame, reuse_local))).*;
+                    break :blk if (word == 0) null else @ptrFromInt(word);
+                } else null;
+                // A transferred allocation is repacked in place when it is
+                // one of this interpreter's closures with a descriptor-
+                // described capture, unique, and large enough; its old
+                // capture is released first. Any other transfer is released.
+                const data_ptr: [*]u8 = if (reuse) |old| repack: {
+                    const payload = builtins.erased_callable.payloadPtr(old);
+                    if (@intFromPtr(payload.callable_fn_ptr) == @intFromPtr(&interpreterErasedCallableTrampoline)) {
+                        const context = erasedCallableInterpreterContextFromPayload(old);
+                        const old_record = erasedCallableInterpreterCaptureValuePtr(old);
+                        const capacity = @as(*align(1) const usize, @ptrCast(old_record + @sizeOf(usize))).*;
+                        if (context.interpreter == self and context.drop_kind == @backingInt(ErasedCallableCaptureDrop.desc) and
+                            record_desc.size <= capacity and (c.reuse_unique or builtins.utils.isUnique(old, &self.roc_ops)))
+                        {
+                            boxy.walk.captureDrop(old_record, &self.roc_ops);
+                            context.proc_id = @backingInt(c.proc);
+                            @memcpy(old_record[0..record_desc.size], record[0..record_desc.size]);
+                            @as(*align(1) usize, @ptrCast(old_record + @sizeOf(usize))).* = capacity;
+                            break :repack old;
+                        }
+                    }
+                    const fresh = try self.allocInterpreterClosure(c.proc, record, record_desc);
+                    builtins.erased_callable.decref(old, &self.roc_ops);
+                    break :repack fresh;
+                } else try self.allocInterpreterClosure(c.proc, record, record_desc);
                 try self.setWordTarget(frame, stmt_id, target, @intFromPtr(data_ptr));
             },
             .call_erased => |c| {
@@ -9047,7 +9097,7 @@ pub const Interpreter = struct {
                         @memcpy(self.pending_storage.items, args.?[0..size]);
                         break :owned self.pending_storage.items;
                     } else null;
-                    self.pending_dyn = .{ .closure = closure, .args = owned_args };
+                    self.pending_dyn = .{ .closure = closure, .args = owned_args, .transfer = c.reuse_closure };
                     // The target holds no value until whoever makes the
                     // pending call writes it.
                     if (!drivesHere(frame, c.drive)) {
@@ -9055,7 +9105,9 @@ pub const Interpreter = struct {
                         return;
                     }
                 } else {
-                    try self.invokeErasedInto(closure, if (ret_size == 0) null else ret, args);
+                    // An owned call transfers the closure allocation as the
+                    // callee's reuse input.
+                    try self.invokeErasedInto(closure, if (ret_size == 0) null else ret, args, if (c.reuse_closure) closure else null);
                 }
                 if (self.hasPendingCall()) try self.drivePendingInto(ret, ret_size);
                 try self.finishResultStorage(frame, stmt_id, target, ret);

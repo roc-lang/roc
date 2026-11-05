@@ -473,14 +473,64 @@ pub const Solution = struct {
             self.alias_source[alias] = representative;
             if (self.leader[alias] != self.leader[representative]) try left_groups.append(allocator, self.leader[alias]);
         }
-        if (left_groups.items.len == 0) return;
+        try self.reresolveLeftGroups(allocator, left_groups.items);
+        if (builtin.mode == .debug) {
+            var check = aliases.constIterator();
+            while (check.next()) |entry| {
+                const alias = @backingInt(entry.key_ptr.*);
+                if (self.borrow_source[alias] == no_local) continue;
+                if (self.leader[alias] != self.leader[@backingInt(entry.value_ptr.*)]) {
+                    solveInvariant("ARC materialized alias left its representative's liveness group");
+                }
+            }
+        }
+    }
+
+    /// Adopts the bindings dismantle solved as takes while their binding is
+    /// borrowed: a held view, a held tag-union field read, or a projected
+    /// container that receives its root's unit. In the emissions its take
+    /// applies to, such a binding holds a unit of its own, so it leads a
+    /// liveness group of its own, together with every borrow anchored
+    /// through it, and its container's group dies at the container's own
+    /// last use. In the other emissions the binding holds nothing and its
+    /// container is a borrowed parameter, which no release waits for, so one
+    /// grouping serves every emission. The binding keeps its borrow source:
+    /// the ownership-place query still follows it to the nearest binding the
+    /// current emission makes owned.
+    pub fn adoptHeldBindings(self: *Solution, allocator: Allocator, held: []const LIR.LocalId) Allocator.Error!void {
+        var left_groups: std.ArrayList(u32) = .empty;
+        defer left_groups.deinit(allocator);
+        for (held) |local| {
+            const index = @backingInt(local);
+            if (!self.borrowed.isSet(index) or self.leader[index] == index) continue;
+            try left_groups.append(allocator, self.leader[index]);
+            self.leader[index] = index;
+        }
+        try self.reresolveLeftGroups(allocator, left_groups.items);
+    }
+
+    /// Owns parameter positions of a solved signature after the solve:
+    /// the positions whose owned variant takes every stored unit of the
+    /// parameter on every returning path, so the borrowed base would retain
+    /// each of those units where the variant takes them and save no caller
+    /// any work. The parameter's binding stays solved borrowed; emission
+    /// overrides it to owned exactly as a demanded variant does.
+    pub fn ownParams(self: *Solution, proc: LIR.LirProcSpecId, mask: arc_sig.ParamMask) void {
+        const index = @backingInt(proc);
+        if (index >= self.sigs.len) solveInvariant("ARC owned a parameter of a procedure without a solved signature");
+        self.sigs[index].borrowed_params &= ~mask;
+        self.sigs[index].read_only_params &= ~mask;
+    }
+
+    /// Re-resolves the leader of every member of the groups in `left_groups`
+    /// through its lender chain; the groups' anchors keep their own leaders.
+    fn reresolveLeftGroups(self: *Solution, allocator: Allocator, left_groups: []const u32) Allocator.Error!void {
+        if (left_groups.len == 0) return;
 
         const local_count = self.leader.len;
         var left = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
         defer left.deinit(allocator);
-        for (left_groups.items) |leader| left.set(leader);
-        // Every member of a group an alias leaves is re-resolved through its
-        // lender chain; the group's anchors keep their own leaders.
+        for (left_groups) |leader| left.set(leader);
         var pending = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
         defer pending.deinit(allocator);
         for (self.leader, 0..) |leader, index| {
@@ -502,16 +552,6 @@ pub const Solution = struct {
             for (chain.items) |link| {
                 self.leader[link] = leader;
                 pending.unset(link);
-            }
-        }
-        if (builtin.mode == .debug) {
-            var check = aliases.constIterator();
-            while (check.next()) |entry| {
-                const alias = @backingInt(entry.key_ptr.*);
-                if (self.borrow_source[alias] == no_local) continue;
-                if (self.leader[alias] != self.leader[@backingInt(entry.value_ptr.*)]) {
-                    solveInvariant("ARC materialized alias left its representative's liveness group");
-                }
             }
         }
     }
@@ -3318,7 +3358,13 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
         .call_erased => {
             const defined = target orelse solveInvariant("ARC dyn erased call had no target");
             const call = op.call_erased;
+            if (!LIR.erasedCallReuseFieldsMatch(call)) {
+                solveInvariant("erased call reuse flag and ownership source disagreed");
+            }
             try solver.binding_facts.append(allocator, .{ .fresh = defined });
+            if (call.reuse_source) |reuse_source| {
+                try solver.binding_facts.append(allocator, .{ .demand = reuse_source });
+            }
             if (call.args) |args| {
                 try solver.binding_facts.append(allocator, .{ .demand = args });
                 try liftVisibilitySeed(solver, args);
@@ -3326,7 +3372,11 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
             try liftVisibilitySeed(solver, call.closure);
             try liftVisibilitySeed(solver, defined);
             try solver.unique_facts.append(allocator, .{ .foreign = defined });
-            try solver.unique_facts.append(allocator, .{ .destroy = call.closure });
+            if (call.reuse_source) |reuse_source| {
+                try solver.unique_facts.append(allocator, .{ .consume = .{ .local = reuse_source, .stmt = current } });
+            } else {
+                try solver.unique_facts.append(allocator, .{ .destroy = call.closure });
+            }
             if (call.args) |args| try solver.unique_facts.append(allocator, .{ .destroy = args });
         },
     }

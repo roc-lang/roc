@@ -11490,9 +11490,9 @@ test "field takes: a view taken whole keeps a field it is read again for" {
 
 // With the calls in the other order, `view` is taken whole and lent to
 // `lookup_first`, and then `first` is taken out of the view for `consume`.
-// The read of `first` is solved borrowed, so the take belongs to its last
-// consuming operand, the `consume` call, not to the read: the read is no
-// take, and nothing in `main` retains a field read.
+// The read of `first` comes after the view's last whole use, so the read
+// takes the field out of its slot, and nothing in `main` retains a field
+// read.
 test "field takes: a view taken whole gives up a field after its last whole use" {
     const allocator = std.testing.allocator;
     const source = dying_view_record_source ++
@@ -11511,7 +11511,7 @@ test "field takes: a view taken whole gives up a field after its last whole use"
     const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
     try std.testing.expectEqual(@as(usize, 1), counts.struct_takes);
     try std.testing.expectEqual(@as(usize, 1), counts.tag_union_reads);
-    try std.testing.expectEqual(@as(usize, 0), counts.tag_union_takes);
+    try std.testing.expectEqual(@as(usize, 1), counts.tag_union_takes);
     try std.testing.expectEqual(@as(usize, 0), try mainFieldReadRetainCount(allocator, &lowered.lowered));
 }
 

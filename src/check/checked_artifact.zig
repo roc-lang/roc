@@ -875,10 +875,25 @@ pub const ProvidedDataExport = struct {
     const_ref: ConstRef,
 };
 
+/// Public `ProvidedCheckedErrorExport` declaration: a `provides` entry whose
+/// checked type contains an error, so the host boundary it declares has no
+/// ABI. It keeps the declaration's identity and nothing to lower: no runtime
+/// root, static data request, or glue signature is published for it, and a
+/// runtime command stops before linking a program whose host boundary has no
+/// ABI (`CheckedModuleArtifact.hasProvidedExportWithoutAbi`). The error
+/// itself was reported where the type was checked.
+pub const ProvidedCheckedErrorExport = struct {
+    source_name: canonical.ExportNameId,
+    ffi_symbol: canonical.ExternalSymbolNameId,
+    def: CIR.Def.Idx,
+    pattern: CheckedPatternId,
+};
+
 /// Public `ProvidedExport` declaration.
 pub const ProvidedExport = union(enum) {
     procedure: ProvidedProcedureExport,
     data: ProvidedDataExport,
+    checked_error: ProvidedCheckedErrorExport,
 };
 
 /// Dense declaration identity in one checked module's provided export table.
@@ -904,6 +919,9 @@ pub const ProvidedExportTable = struct {
     ) Allocator.Error!ProvidedExportTable {
         var exports = std.ArrayList(ProvidedExport).empty;
         errdefer exports.deinit(allocator);
+        var type_scan = CheckedTypeErrorScan{ .checked_types = &checked_types.store };
+        var type_errors = CheckedTypeErrorTraversal.init(allocator, &type_scan);
+        defer type_errors.deinit();
 
         for (published_provides) |published| {
             const def_idx = published.def;
@@ -915,6 +933,19 @@ pub const ProvidedExportTable = struct {
                 checked_types,
                 .{ .def = def_idx },
             );
+            // The host ABI is derived from the published type, so an entry
+            // whose type contains an error (an undeclared type in its
+            // annotation, for instance) declares no ABI, whatever value kind
+            // it binds.
+            if (try type_errors.visit(checked_type)) {
+                try exports.append(allocator, .{ .checked_error = .{
+                    .source_name = published.source_name,
+                    .ffi_symbol = published.ffi_symbol,
+                    .def = def_idx,
+                    .pattern = top_level.pattern,
+                } });
+                continue;
+            }
             switch (top_level.value) {
                 .procedure_binding => |binding| try exports.append(allocator, .{ .procedure = .{
                     .source_name = published.source_name,
@@ -2273,7 +2304,9 @@ fn appendPublishedEntrypointRoots(
                         .procedure_binding = procedure.binding,
                     });
                 },
-                .data => {},
+                // Data is requested as static data for builds; an export with
+                // no ABI has nothing to lower.
+                .data, .checked_error => {},
             }
         }
     }
@@ -28803,6 +28836,7 @@ pub fn pairCheckedPlatform(
     result.provided_exports = try copyPairingColumns(ProvidedExportTable, platform.provided_exports, session);
     for (result.provided_exports.exports) |*provided| switch (provided.*) {
         inline .procedure, .data => |*value| value.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, value.checked_type, &type_memo),
+        .checked_error => {},
     };
     var roots = std.ArrayList(RootRequest).empty;
     for (platform.root_requests.requests) |request| {
@@ -35941,7 +35975,9 @@ pub const CheckedModuleArtifact = struct {
     pairing_arena: ?*base.SingleThreadArena = null,
 
     pub fn owningAllocator(self: *const CheckedModuleArtifact) Allocator {
-        return if (self.pairing_arena) |arena| arena.child_allocator else self.canonical_names.allocator;
+        if (self.pairing_arena) |arena| return arena.child_allocator;
+        if (self.reopened_arena) |arena| return arena.child_allocator;
+        return self.canonical_names.allocator;
     }
 
     /// Semantic identity of executable code, including the session's exact
@@ -36013,14 +36049,17 @@ pub const CheckedModuleArtifact = struct {
     /// this artifact owns, every unevaluated root awaits evaluation again,
     /// and the artifact awaits finalization. Roots this compilation does not
     /// demand either return to `unevaluated` when it seals the artifact.
-    pub fn reopenForEvaluation(self: *CheckedModuleArtifact, allocator: Allocator) Allocator.Error!void {
+    pub fn reopenForEvaluation(self: *CheckedModuleArtifact) Allocator.Error!void {
         if (self.evaluation_state != .finalized) checkedArtifactInvariant("only a finalized artifact can be reopened for evaluation", .{});
         if (self.reopened_arena != null) checkedArtifactInvariant("checked artifact was reopened for evaluation twice", .{});
         // A relocated cache entry's columns alias its buffer and a pairing
         // overlay's borrow its platform, so they move into owned storage; an
-        // artifact this process published already owns them.
+        // artifact this process published already owns them. The arena
+        // belongs to the allocator that owns the artifact, which
+        // `owningAllocator` reads back through the arena.
         if (self.serialized_backing != null or self.pairing_arena != null) {
             const owner = if (self.pairing_arena) |arena| arena.allocator() else blk: {
+                const allocator = self.owningAllocator();
                 const arena = try allocator.create(base.SingleThreadArena);
                 arena.* = base.SingleThreadArena.init(allocator);
                 self.reopened_arena = arena;
@@ -36030,6 +36069,18 @@ pub const CheckedModuleArtifact = struct {
             self.const_templates = try copyPairingColumns(ConstTemplateTable, self.const_templates, owner);
             self.exported_const_templates = try copyPairingColumns(ExportedConstTemplateTable, self.exported_const_templates, owner);
             self.const_store = try copyPairingColumns(ConstStore, self.const_store, owner);
+            // A stored type names its labels and nominal types in this name
+            // store, and a value evaluated here can reach names the module's
+            // own source never mentions (the capture types of an imported
+            // closure), so the name store grows with the evaluation columns.
+            // A pairing overlay cloned its platform's names when it was
+            // composed; a store read from a cache entry still aliases the
+            // entry's buffer.
+            if (self.canonical_names.serialized) {
+                var frozen = self.canonical_names;
+                self.canonical_names = try frozen.clone(owner);
+                frozen.deinit();
+            }
         }
         for (self.compile_time_roots.roots) |*root| {
             if (root.payload == .unevaluated) root.payload = .pending;
@@ -36067,9 +36118,20 @@ pub const CheckedModuleArtifact = struct {
         const provided = self.provided_exports.exports[@backingInt(export_id)];
         const procedure = switch (provided) {
             .procedure => |procedure| procedure,
-            .data => checkedArtifactInvariant("provided procedure root names a data export", .{}),
+            .data, .checked_error => checkedArtifactInvariant("provided procedure root names an export that is not a procedure", .{}),
         };
         return self.canonical_names.externalSymbolNameText(procedure.ffi_symbol);
+    }
+
+    /// Whether a `provides` entry declares a host boundary with no ABI
+    /// (`ProvidedCheckedErrorExport`), in which case no program with this
+    /// module's host boundary exists and a runtime command stops at the
+    /// diagnostics already reported.
+    pub fn hasProvidedExportWithoutAbi(self: *const CheckedModuleArtifact) bool {
+        for (self.provided_exports.exports) |provided| {
+            if (provided == .checked_error) return true;
+        }
+        return false;
     }
 
     /// Extern-compatible inline mirror of `ModuleIdentity`. `ModuleIdentity`
@@ -36376,6 +36438,7 @@ pub const CheckedModuleArtifact = struct {
     }
 
     fn deinitInternal(self: *CheckedModuleArtifact, allocator: Allocator, comptime deinit_module_env: bool) void {
+        const owning = self.owningAllocator();
         if (self.reopened_arena) |arena| {
             const owner = arena.child_allocator;
             arena.deinit();
@@ -36402,13 +36465,13 @@ pub const CheckedModuleArtifact = struct {
                 self.module_env = undefined;
             }
             if (!self.serialized_backing_is_static) {
-                // `deserialize` allocated `backing` with the same gpa it recorded in
-                // `canonical_names.allocator`, and every teardown site passes that
-                // allocator back here. Assert the coupling so a caller freeing the
-                // frozen buffer with a different allocator trips in Debug rather than
+                // `deserialize` allocated `backing` with the gpa it recorded in
+                // `canonical_names.allocator`, which a reopened artifact's arena
+                // took over, and every teardown site passes that allocator back
+                // here. Assert the coupling so a caller freeing the frozen buffer
+                // with a different allocator trips in Debug rather than
                 // corrupting an unrelated heap.
-                std.debug.assert(allocator.ptr == self.canonical_names.allocator.ptr and
-                    allocator.vtable == self.canonical_names.allocator.vtable);
+                std.debug.assert(allocator.ptr == owning.ptr and allocator.vtable == owning.vtable);
                 allocator.free(backing);
             }
             self.* = undefined;
@@ -38008,6 +38071,16 @@ pub const CheckedModuleArtifact = struct {
         }
         for (self.provided_exports.exports, self.provides_requires.provides) |provided, metadata| {
             switch (provided) {
+                .checked_error => |export_| {
+                    std.debug.assert(export_.source_name == metadata.source_name);
+                    std.debug.assert(export_.ffi_symbol == metadata.ffi_symbol);
+                    std.debug.assert(export_.def == metadata.def);
+                    const top_level = self.top_level_values.lookupByDef(export_.def) orelse {
+                        base.invariant("checked artifact invariant violated: provided checked-error export references missing top-level value", .{});
+                    };
+                    std.debug.assert(top_level.pattern == export_.pattern);
+                    std.debug.assert(top_level.source_name == export_.source_name);
+                },
                 .procedure => |procedure| {
                     std.debug.assert(procedure.source_name == metadata.source_name);
                     std.debug.assert(procedure.ffi_symbol == metadata.ffi_symbol);
@@ -40336,6 +40409,7 @@ fn expectProvidedExportKind(
         switch (provided) {
             .data => provided_data_exports += 1,
             .procedure => provided_procedure_exports += 1,
+            .checked_error => {},
         }
     }
 
@@ -42521,8 +42595,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x82, 0xB0, 0x10, 0xA2, 0xBA, 0x12, 0x58, 0xDB, 0x80, 0x6A, 0xA7, 0xCA, 0x90, 0x22, 0xC1, 0x06,
-        0x67, 0x0D, 0xE1, 0x43, 0x52, 0x3F, 0xE7, 0x66, 0x03, 0x42, 0x8D, 0x8B, 0x76, 0xA8, 0x3A, 0xEB,
+        0x67, 0xD9, 0xD1, 0x11, 0x41, 0x9D, 0x10, 0x70, 0x5A, 0x27, 0x17, 0xF8, 0x84, 0xDE, 0xE6, 0xE0,
+        0x2E, 0x89, 0xA7, 0xFA, 0x5B, 0x06, 0xEC, 0xF6, 0x6E, 0xD1, 0xE4, 0xC2, 0xAA, 0xF7, 0xAD, 0x07,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
