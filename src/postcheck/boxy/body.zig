@@ -3108,11 +3108,17 @@ pub const Builder = struct {
     /// completes (design.md "Compile-Time Evaluation Strategy").
     fn pendingValueRead(self: *Builder, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!void {
         if (self.program.evaluatesRoot(module_index, root)) {
-            if (!try self.closed(ty)) invariant("a compile-time root's value has an open type");
-            const slot = try self.program.rootValueSlot(module_index, root, ty);
-            const local = try self.closedLocal(try self.program.layouts.layoutOf(ty));
+            // The slot holds the value at the root's own type. A read in
+            // another module is checked at that module's own copy of the
+            // type, which can store the value differently (a record row
+            // lifted into a padded nominal), so it converts the value as a
+            // read of a stored value does (`pushStoredRestore`).
+            const own = try self.program.rootValueType(module_index, root);
+            if (!try self.closed(own)) invariant("a compile-time root's value has an open type");
+            const slot = try self.program.rootValueSlot(module_index, root);
+            const local = try self.closedLocal(try self.program.layouts.layoutOf(own));
             try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
-            try self.pushValue(local);
+            try self.pushValue(if (own == ty) local else try self.retagValue(local, own, ty));
             return;
         }
         // A value no program evaluates: the read fails as the recursion

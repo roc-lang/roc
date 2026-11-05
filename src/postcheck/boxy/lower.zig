@@ -541,8 +541,9 @@ pub const Program = struct {
     /// evaluates later from (`rootValueSlot`), by root.
     root_value_slots: std.AutoHashMapUnmanaged(RootSlotKey, LIR.StaticDataId) = .empty,
     /// The compile-time roots this program evaluates (`Input.roots`), by
-    /// module and root (`evaluatesRoot`).
-    requested_roots: std.AutoHashMapUnmanaged(RootSlotKey, void) = .empty,
+    /// module and root (`evaluatesRoot`), each with its request's checked
+    /// type (`rootValueType`).
+    requested_roots: std.AutoHashMapUnmanaged(RootSlotKey, checked.CheckedTypeId) = .empty,
     /// The Builtin `Hasher` type, once asked for (`defaultHasher`).
     default_hasher: ?TypeId = null,
     /// Each module's callable-eval templates, by their binding pattern.
@@ -2340,17 +2341,31 @@ pub const Program = struct {
         return !types.Converter.rootHasIdentityVariables(view, view.view.compile_time_roots.root(root).checked_type);
     }
 
+    /// The type compile-time root `root` of module `module_index`, which
+    /// this program evaluates, produces its value at: the result of its
+    /// request's checked type, as its root worker returns it (`rootWorker`).
+    pub fn rootValueType(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId) Allocator.Error!TypeId {
+        const checked_type = self.requested_roots.get(.{ .module = module_index, .root = root }) orelse
+            invariant("a root value type was asked of a root the program does not evaluate");
+        const fn_ty = try self.converter().convert(module_index, checked_type, .{ .module = module_index, .vars = &.{}, .bound = &.{} });
+        return switch (self.store.get(fn_ty)) {
+            .function => |function| function.ret,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a compile-time root's checked type is not a function type"),
+        };
+    }
+
     /// The static data slot holding the value of compile-time root `root` of
-    /// module `module_index`, of type `ty`, once the evaluator completes it:
-    /// a compile-time value slot with a failure record, which every read
-    /// guards (`lir.ComptimeValueGuards`). The evaluator marks the slot
-    /// failed before any root runs, so a read of a root not yet completed
-    /// fails as the recursion evaluating the value in place would end in,
-    /// and the evaluator reruns the reader once the root completes
-    /// (design.md "Compile-Time Evaluation Strategy").
-    pub fn rootValueSlot(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!LIR.StaticDataId {
+    /// module `module_index` at its own type (`rootValueType`), once the
+    /// evaluator completes it: a compile-time value slot with a failure
+    /// record, which every read guards (`lir.ComptimeValueGuards`). The
+    /// evaluator marks the slot failed before any root runs, so a read of a
+    /// root not yet completed fails as the recursion evaluating the value in
+    /// place would end in, and the evaluator reruns the reader once the root
+    /// completes (design.md "Compile-Time Evaluation Strategy").
+    pub fn rootValueSlot(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId) Allocator.Error!LIR.StaticDataId {
         const key: RootSlotKey = .{ .module = module_index, .root = root };
         if (self.root_value_slots.get(key)) |slot| return slot;
+        const ty = try self.rootValueType(module_index, root);
         const module_key = self.module(module_index).key;
         const failure_layout = try self.result.layouts.putStructFields(&.{
             .{ .index = 0, .layout = .u8 },
@@ -2531,7 +2546,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             program.modules.views.items[0].index
         else
             program.moduleByKey(input.roots.source_modules[index]).index;
-        try program.requested_roots.put(allocator, .{ .module = source_module, .root = root_id }, {});
+        try program.requested_roots.put(allocator, .{ .module = source_module, .root = root_id }, request.checked_type);
     }
     for (requests, 0..) |request, index| {
         const source_module = if (input.roots.source_modules.len == 0)
