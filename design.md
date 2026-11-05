@@ -11105,6 +11105,18 @@ still has evidence at its construction.
 This validates in a private copy and rewrites no solved variable the program can
 reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
 
+The instance's copy of each of the template's variables is that variable
+throughout the instance's derivation (`Check.final_codec_instance_copies`). A
+format method of a type declared in the definition's body can name the
+definition's own variable in its signature (`rename_field : LocalFormat(a),
+Str -> Str`, with `a` the enclosing function's), and instantiating the method
+for the derivation reads that variable as the instance's copy rather than
+copying it again (`instantiateGeneratedCodecMethodTarget`). A second copy would
+carry the variable's `where` requirements as an instantiated relation of its
+own, whose receiver the instance's rigid copy then answers without being the
+variable the definition's clause declares. A derivation a format method's own
+requirement asks for reads the copies of the derivation that required it.
+
 A template relation that also reaches a variable of an enclosing scope
 (`_local = |_| U64.parser_for(Format.Default)(state)` inside a function of
 `state`) states something about that scope's values whether or not anything

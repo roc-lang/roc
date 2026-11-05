@@ -422,6 +422,13 @@ final_codec_dispatch_constraint_fns: collections.DenseMapUnmanaged(Var, CodecCon
 scheme_deferred_codec_constraint_fns: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// Each private instance's callable and the template relation it validates.
 final_codec_instance_templates: collections.DenseMapUnmanaged(Var, Var) = .empty,
+/// Each private instance's copies of its template's variables, as a range of
+/// `final_codec_instance_copy_pairs`, by the instance's callable.
+final_codec_instance_copies: collections.DenseMapUnmanaged(Var, CodecInstanceCopies) = .empty,
+final_codec_instance_copy_pairs: std.ArrayListUnmanaged(Instantiator.SharedSubtree) = .empty,
+/// The copies a generated codec method target's instantiation reads instead
+/// of copying those variables again (`instantiateGeneratedCodecMethodTarget`).
+codec_instance_copies: []const Instantiator.SharedSubtree = &.{},
 /// Every generated codec derivation validated so far, in order (design.md
 /// "Codec Derivation Recurrence"). A derivation's method instantiations can
 /// require another generated codec; that relation's derivation records the
@@ -1741,6 +1748,9 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .final_codec_dispatch_constraint_fns = .keyed,
     .scheme_deferred_codec_constraint_fns = .keyed,
     .final_codec_instance_templates = .keyed,
+    .final_codec_instance_copies = .keyed,
+    .final_codec_instance_copy_pairs = .keyed,
+    .codec_instance_copies = .lexical,
     .codec_derivation_frames = .keyed,
     .codec_derivation_children = .keyed,
     .codec_derivation_frame_by_child_fn_var = .keyed,
@@ -4162,11 +4172,20 @@ const FinalCodecDispatchConstraint = struct {
 
 const CodecConstraintPhase = enum { final, boundary };
 
+/// A range of `Check.final_codec_instance_copy_pairs`.
+const CodecInstanceCopies = struct {
+    start: u32 = 0,
+    len: u32 = 0,
+};
+
 /// One generated codec derivation, with the derivation whose method
 /// instantiation required the relation it satisfies.
 const CodecDerivationFrame = struct {
     kind: ModuleEnv.GeneratedCodecDerivation.Kind,
     parent: ?u32,
+    /// The copies of the private instance the derivation validates, or of
+    /// the one its parent validates (`final_codec_instance_copies`).
+    instance_copies: CodecInstanceCopies = .{},
     /// The relation the derivation satisfies, its source constraint.
     relation_fn_var: Var,
     dispatcher_var: Var,
@@ -11355,6 +11374,9 @@ fn instantiateVarHelpFromScheme(
     }
     for (instantiator.shared_subtrees) |subtree| {
         try instantiator.var_map.put(self.types.resolveVar(subtree.source).var_, subtree.copy);
+    }
+    for (self.codec_instance_copies) |copy| {
+        try instantiator.var_map.put(self.types.resolveVar(copy.source).var_, copy.copy);
     }
 
     // Then, instantiate the variable with the provided context
@@ -49822,6 +49844,19 @@ fn finalCodecRelationInstance(
         try self.fillInRegionsThrough(copied.*);
         self.setRegionAt(copied.*, region);
     }
+    // The instance's own copy of each type variable of the template. A format
+    // method selected for its derivation can name those variables too (a
+    // method of a type declared in the body whose relation this is), and
+    // reads them as this copy (`instantiateGeneratedCodecMethodTarget`).
+    const copies_start: u32 = @intCast(self.final_codec_instance_copy_pairs.items.len);
+    var copy_entries = instantiator.var_map.iterator();
+    while (copy_entries.next()) |entry| {
+        switch (self.types.resolveVar(entry.key_ptr.*).desc.content) {
+            .flex, .rigid => {},
+            .structure, .alias, .field_presence, .err => continue,
+        }
+        try self.final_codec_instance_copy_pairs.append(self.gpa, .{ .source = entry.key_ptr.*, .copy = entry.value_ptr.* });
+    }
     const copied_relation = self.types.resolveVar(copied_root).desc.content.unwrapFunc() orelse
         unreachable; // instantiating the function type relation_root yields a function type
     var relation = pending;
@@ -49832,6 +49867,10 @@ fn finalCodecRelationInstance(
     self.active_scheme_root = self.dispatchRelationOwner(pending.constraint.fn_var);
     try self.recordDispatchRelationOwner(relation.constraint.fn_var);
     try self.final_codec_instance_templates.put(self.gpa, relation.constraint.fn_var, pending.constraint.fn_var);
+    try self.final_codec_instance_copies.put(self.gpa, relation.constraint.fn_var, .{
+        .start = copies_start,
+        .len = @as(u32, @intCast(self.final_codec_instance_copy_pairs.items.len)) - copies_start,
+    });
     return relation;
 }
 
@@ -55979,7 +56018,10 @@ fn recurredCodecDerivation(
 
 fn beginCodecDerivationFrame(self: *Self, frame: CodecDerivationFrame) Allocator.Error!u32 {
     const index: u32 = @intCast(self.codec_derivation_frames.items.len);
-    try self.codec_derivation_frames.append(self.gpa, frame);
+    var with_copies = frame;
+    with_copies.instance_copies = self.final_codec_instance_copies.get(frame.relation_fn_var) orelse
+        if (frame.parent) |parent| self.codec_derivation_frames.items[parent].instance_copies else .{};
+    try self.codec_derivation_frames.append(self.gpa, with_copies);
     return index;
 }
 
@@ -56684,10 +56726,19 @@ fn instantiateGeneratedCodecMethodTarget(
             .records_scheme_use = predeclared_scheme == null,
         },
     };
-    const method_var = if (method_lookup.is_this_module)
-        try self.instantiateBindingVar(scheme_var, env, .use_last_var, evidence)
-    else
-        try self.instantiateVar(scheme_var, env, .{ .explicit = region }, evidence);
+    const method_var = if (method_lookup.is_this_module) local: {
+        // Within a private instance's derivation, a variable of the instance's
+        // template that the method's type names (the enclosing function's
+        // variable, for a method of a type declared in its body) is the
+        // instance's copy of it, as everywhere else in that instance.
+        const copies_before = self.codec_instance_copies;
+        defer self.codec_instance_copies = copies_before;
+        if (self.active_codec_derivation_frame) |frame| {
+            const copies = self.codec_derivation_frames.items[frame].instance_copies;
+            self.codec_instance_copies = self.final_codec_instance_copy_pairs.items[copies.start..][0..copies.len];
+        }
+        break :local try self.instantiateBindingVar(scheme_var, env, .use_last_var, evidence);
+    } else try self.instantiateVar(scheme_var, env, .{ .explicit = region }, evidence);
 
     if (predeclared_scheme != null) {
         try self.recordPredeclaredDispatchUse(
