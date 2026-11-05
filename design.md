@@ -24885,11 +24885,13 @@ An ELF link of an AArch64 executable places its two segments on 64 KiB
 boundaries, which load under a kernel of 4, 16 or 64 KiB pages, as LLD's
 own AArch64 layout does; the images inside a segment stay page aligned.
 
-Every link of arm64 code gives each placed image one veneer per import
-(`jump_window.zig`: `ADRP`, `ADD`, `BR x16`, reaching 4 GiB) after its
-block, written by the image's own task. A `B` or `BL` site to an import
-within its 128 MiB reach takes the import's address; one beyond it takes
-the veneer. In an ELF link the app region sits a fixed 1 GiB from the host,
+Every link of arm64 code reserves, after each placed image's block, one
+veneer slot per import (`jump_window.zig`: `ADRP`, `ADD`, `BR x16`,
+reaching 4 GiB), and the image's own task writes the veneers of the imports
+its reached atoms branch to; an import only unreached atoms name may
+resolve to an image the link does not place. A `B` or `BL` site to an
+import within its 128 MiB reach takes the import's address; one beyond it
+takes the veneer. In an ELF link the app region sits a fixed 1 GiB from the host,
 so every branch from the app into the host is veneered; in a Mach-O or COFF
 link the app follows the host and a veneer is taken only past 128 MiB. The
 dev backend's own code reaches other images through its page-relative stubs

@@ -24,14 +24,26 @@ pub fn branchReaches(site: u64, target: u64) bool {
     return delta & 3 == 0 and std.math.cast(i26, delta >> 2) != null;
 }
 
-/// Write the veneer at `veneer_address` jumping to `target`.
-pub fn writeVeneer(window: *[veneer_size]u8, veneer_address: u64, target: u64) void {
+/// Whether `import` needs a veneer: some reached atom of the image branches
+/// to it. An import only unreached atoms name may resolve to an image the
+/// link does not place.
+pub fn importNeedsVeneer(view: UnitImage.View, import: UnitImage.Import, reached_atoms: []const bool) bool {
+    for (view.importSites(import)) |site| {
+        if (@as(UnitImage.SiteKind, @fromBackingInt(site.kind)) != .branch26) continue;
+        if (site.atom == UnitImage.no_atom or reached_atoms[site.atom]) return true;
+    }
+    return false;
+}
+
+/// Write the veneer at `veneer_address` jumping to `target`. Returns false
+/// when the target is beyond the veneer's 4 GiB reach.
+pub fn writeVeneer(window: *[veneer_size]u8, veneer_address: u64, target: u64) bool {
     std.mem.writeInt(u32, window[0..4], adrp_x16, .little);
     std.mem.writeInt(u32, window[4..8], add_x16_x16, .little);
     std.mem.writeInt(u32, window[8..12], br_x16, .little);
-    // The app region is within 4 GiB of the host.
-    if (!UnitImage.applySite(window[0..4], .page21, @intCast(target), veneer_address)) base.invariant("fast dev link invariant violated: a veneer cannot reach its target", .{});
+    if (!UnitImage.applySite(window[0..4], .page21, @intCast(target), veneer_address)) return false;
     if (!UnitImage.applySite(window[4..8], .pageoff12, @intCast(target), veneer_address + 4)) unreachable; // an ADD takes any low bits
+    return true;
 }
 
 /// Write a procedure window: a jump from `window_address` to `target`, then
@@ -45,7 +57,8 @@ pub fn writeJump(arm64: bool, window: *[16]u8, window_address: u64, target: u64)
         return;
     }
     std.mem.writeInt(u32, window[12..16], brk, .little);
-    writeVeneer(window[0..12], window_address, target);
+    // The app region is within 4 GiB of the host.
+    if (!writeVeneer(window[0..12], window_address, target)) base.invariant("fast dev link invariant violated: a provide window cannot reach its procedure", .{});
 }
 
 const adrp_x16: u32 = 0x9000_0010;
@@ -62,7 +75,9 @@ test "a branch reaches 128 MiB either way, word aligned" {
 
 test "a veneer and a procedure window jump to their targets" {
     var veneer: [veneer_size]u8 = undefined;
-    writeVeneer(&veneer, 0x1_4000_2000, 0x1_4001_0010);
+    try std.testing.expect(writeVeneer(&veneer, 0x1_4000_2000, 0x1_4001_0010));
+    try std.testing.expect(!writeVeneer(&veneer, 0x1_4000_2000, 0x2_4001_0010));
+    try std.testing.expect(writeVeneer(&veneer, 0x1_4000_2000, 0x1_4001_0010));
     // ADRP x16 to page 0x10000 from page 0x2000: 14 pages, immlo 2, immhi 3.
     try std.testing.expectEqual(adrp_x16 | (2 << 29) | (3 << 5), std.mem.readInt(u32, veneer[0..4], .little));
     try std.testing.expectEqual(add_x16_x16 | (0x10 << 10), std.mem.readInt(u32, veneer[4..8], .little));

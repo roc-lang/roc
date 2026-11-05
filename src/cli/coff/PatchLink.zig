@@ -890,9 +890,15 @@ const Task = struct {
     fn writeVeneers(self: *Task, image: u32) void {
         const context = self.context;
         const place = context.places[image];
-        for (context.resolved[image], 0..) |target, import| {
-            const address = place.veneers + import * jump_window.veneer_size;
-            jump_window.writeVeneer(context.out[@intCast(context.fileOffsetOf(address))..][0..jump_window.veneer_size], context.image_base + address, context.image_base + target);
+        const view = context.images[image].view;
+        const atoms_reached = context.reached_atoms[image];
+        for (context.resolved[image], view.imports(), 0..) |target, import, index| {
+            if (!jump_window.importNeedsVeneer(view, import, atoms_reached)) continue;
+            const address = place.veneers + index * jump_window.veneer_size;
+            // The app region is within 4 GiB of the host.
+            if (!jump_window.writeVeneer(context.out[@intCast(context.fileOffsetOf(address))..][0..jump_window.veneer_size], context.image_base + address, context.image_base + target)) {
+                base.invariant("fast dev link invariant violated: the veneer for {s} cannot reach its target", .{view.name(import.name)});
+            }
         }
         self.bytes = context.resolved[image].len * jump_window.veneer_size;
     }
