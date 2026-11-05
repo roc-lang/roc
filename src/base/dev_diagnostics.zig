@@ -26,6 +26,9 @@ pub const Var = enum {
     lir_dump,
     /// Print every closed specialization key.
     spec_census,
+    /// Print the procedures each lowered LIR program compiles, one line per
+    /// program and one per procedure.
+    proc_census,
     /// Print deterministic Lambda Solved work once per required invocation.
     lambda_solve_stats,
     /// Start each top-level recursive type analysis with empty proof tables.
@@ -60,6 +63,7 @@ pub const Var = enum {
             .verify_boxy_object_reuse => "ROC_VERIFY_BOXY_OBJECT_REUSE",
             .lir_dump => "ROC_LIR_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",
+            .proc_census => "ROC_PROC_CENSUS",
             .lambda_solve_stats => "ROC_LAMBDA_SOLVE_STATS",
             .fresh_type_analysis => "ROC_FRESH_TYPE_ANALYSIS",
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",
