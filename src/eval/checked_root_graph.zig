@@ -571,9 +571,10 @@ test "CTFE root classification resolves nominal backings throughout the checked 
         defer parsed.deinit(allocator);
         try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
         const consumer = &parsed.checked_artifact;
-        const holder = for (parsed.import_artifacts) |*artifact| {
-            if (std.mem.eql(u8, artifact.moduleEnvConst().module_name, "Holder")) break artifact;
-        } else return error.TestUnexpectedResult;
+        // The import artifacts list the builtin module, then the program's
+        // imports in order; `Holder` is the program's only import.
+        try std.testing.expectEqual(@as(usize, 2), parsed.import_artifacts.len);
+        const holder = &parsed.import_artifacts[1];
         try std.testing.expectEqual(@as(usize, 1), consumer.root_requests.compile_time_requests.len);
         const request = consumer.root_requests.compile_time_requests[0];
         // A nominal can be supplied by the ownership anchor, a platform
