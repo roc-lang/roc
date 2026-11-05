@@ -180,6 +180,17 @@ my @RULES = (
     { category => 'eager-pairing', regex => qr/\brootsReachingAny\b/, allowed => {} },
     { category => 'eager-pairing', regex => qr/\bpairingCapabilitySource\b/, allowed => {} },
     { category => 'eager-pairing', regex => qr/\bborrowed_columns\b/, allowed => {} },
+    # Compile-time evaluation writes its module's evaluation output and
+    # nothing else: no checked row holds a payload or a stored value, and
+    # deferred diagnostics are read from the inference output.
+    { category => 'evaluation-in-checked-rows', regex => qr/\bfillStoredConst\b/, allowed => {} },
+    { category => 'evaluation-in-checked-rows', regex => qr/\bLiteralRootPayloadTable\b/, allowed => {} },
+    { category => 'evaluation-in-checked-rows', regex => qr/\bliteral_root_payloads\b/, allowed => {} },
+    { category => 'evaluation-in-checked-rows', regex => qr/\bevaluation_state\b/, allowed => {} },
+    { category => 'evaluation-in-checked-rows', regex => qr/\bcompile_time_root_reads\b/, allowed => {} },
+    { category => 'evaluation-in-checked-rows', regex => qr/\bcompile_time_debug\b/, allowed => {} },
+    { category => 'evaluation-diagnostics-copy', regex => qr/\bevaluation_diagnostics\b/, allowed => {} },
+    { category => 'evaluation-diagnostics-copy', regex => qr/\bEvaluationDiagnostics\b/, allowed => {} },
     # Post-check code reads sealed solver stores through the checked type
     # reader and never writes one.
     {

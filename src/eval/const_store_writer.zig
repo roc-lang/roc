@@ -91,7 +91,7 @@ pub const Writer = struct {
         module: *checked.CheckedModuleArtifact,
         program: *const LirProgram.Result,
     ) Writer {
-        return initStore(allocator, &module.const_store, module.internedNameStore(), program);
+        return initStore(allocator, &module.evaluation.const_store, module.internedNameStore(), program);
     }
 
     /// A writer into `store`, translating stored types into `names`.
@@ -1363,13 +1363,13 @@ fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.
         .top_level_values = .{},
         .hoisted_constants = .{},
         .const_templates = .{},
-        .const_store = const_store.ConstStore.init(allocator),
+        .evaluation = checked.EvaluationOutput.init(allocator),
     };
 }
 
 fn deinitTestArtifact(artifact: *checked.CheckedModuleArtifact, allocator: Allocator) void {
     artifact.const_templates.deinit(allocator);
-    artifact.const_store.deinit();
+    artifact.evaluation.deinit(allocator);
     artifact.canonical_names.deinit();
 }
 
@@ -1431,12 +1431,12 @@ test "const store writer pointer memoization is scoped to one root" {
 
     try testing.expect(first.const_node != second.const_node);
 
-    const first_value = artifact.const_store.get(first.const_node);
-    const second_value = artifact.const_store.get(second.const_node);
+    const first_value = artifact.evaluation.const_store.get(first.const_node);
+    const second_value = artifact.evaluation.const_store.get(second.const_node);
     try testing.expect(first_value == .str);
     try testing.expect(second_value == .str);
-    try testing.expectEqualStrings(first_bytes, artifact.const_store.strBytes(first_value.str));
-    try testing.expectEqualStrings(second_bytes, artifact.const_store.strBytes(second_value.str));
+    try testing.expectEqualStrings(first_bytes, artifact.evaluation.const_store.strBytes(first_value.str));
+    try testing.expectEqualStrings(second_bytes, artifact.evaluation.const_store.strBytes(second_value.str));
 }
 
 test "const store writer stores every NaN as Roc's one NaN" {
@@ -1458,19 +1458,19 @@ test "const store writer stores every NaN as Roc's one NaN" {
 
     var f64_payload: u64 = 0xfff9_2345_6789_abcd;
     const stored_f64 = try writer.storeRoot(testConstRoot(scalar_plan, .f64), .{ .ptr = @ptrCast(&f64_payload) });
-    const f64_value = artifact.const_store.get(stored_f64.const_node);
+    const f64_value = artifact.evaluation.const_store.get(stored_f64.const_node);
     try testing.expect(f64_value == .scalar and f64_value.scalar == .f64_bits);
     try testing.expectEqual(builtins.float_bits.normalized_f64_nan_bits, f64_value.scalar.f64_bits);
 
     var f32_payload: u32 = 0xffc1_2345;
     const stored_f32 = try writer.storeRoot(testConstRoot(scalar_plan, .f32), .{ .ptr = @ptrCast(&f32_payload) });
-    const f32_value = artifact.const_store.get(stored_f32.const_node);
+    const f32_value = artifact.evaluation.const_store.get(stored_f32.const_node);
     try testing.expect(f32_value == .scalar and f32_value.scalar == .f32_bits);
     try testing.expectEqual(builtins.float_bits.normalized_f32_nan_bits, f32_value.scalar.f32_bits);
 
     var finite: u64 = @bitCast(@as(f64, -2.5));
     const stored_finite = try writer.storeRoot(testConstRoot(scalar_plan, .f64), .{ .ptr = @ptrCast(&finite) });
-    try testing.expectEqual(finite, artifact.const_store.get(stored_finite.const_node).scalar.f64_bits);
+    try testing.expectEqual(finite, artifact.evaluation.const_store.get(stored_finite.const_node).scalar.f64_bits);
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10177
@@ -1523,18 +1523,18 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     };
     const stored_u16_list = try writer.storeRoot(testConstRoot(list_plan, u16_list_layout), .{ .ptr = @ptrCast(&roc_u16_list) });
 
-    const str_value = artifact.const_store.get(stored_str.const_node);
+    const str_value = artifact.evaluation.const_store.get(stored_str.const_node);
     try testing.expect(str_value == .str);
-    const list_value = artifact.const_store.get(stored_list.const_node);
+    const list_value = artifact.evaluation.const_store.get(stored_list.const_node);
     try testing.expect(list_value == .list);
     try testing.expect(list_value.list == .packed_bytes);
     const scalar_bytes = list_value.list.packed_bytes;
     try testing.expectEqual(@as(u32, 20 * 1024), scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u8, scalar_bytes.element);
     try testing.expectEqual(str_value.str.data, scalar_bytes.bytes.data);
-    try testing.expectEqualSlices(u8, bytes, artifact.const_store.blobBytes(scalar_bytes.bytes));
+    try testing.expectEqualSlices(u8, bytes, artifact.evaluation.const_store.blobBytes(scalar_bytes.bytes));
 
-    const u16_scalar_bytes = artifact.const_store.get(stored_u16_list.const_node).list.packed_bytes;
+    const u16_scalar_bytes = artifact.evaluation.const_store.get(stored_u16_list.const_node).list.packed_bytes;
     try testing.expectEqual(@as(u32, 10 * 1024), u16_scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u16, u16_scalar_bytes.element);
 
@@ -1545,6 +1545,6 @@ test "const store writer stores 20KB scalar lists as shared blob" {
         .capacity_or_alloc_ptr = RocList.encodeCapacity(bytes.len),
     };
     const stored_empty_list = try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&roc_empty_list) });
-    try testing.expectEqual(@as(u64, bytes.len), artifact.const_store.get(stored_empty_list.const_node).list.empty);
+    try testing.expectEqual(@as(u64, bytes.len), artifact.evaluation.const_store.get(stored_empty_list.const_node).list.empty);
     try testing.expectEqual(str_value.str.data, u16_scalar_bytes.bytes.data);
 }

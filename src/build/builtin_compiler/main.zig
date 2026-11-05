@@ -94,7 +94,7 @@ pub fn main(process_init: std.process.Init) !void {
     const builtin_roc_source = try readFileAllocPath(gpa, io, builtin_src_path, max_builtin_bytes);
 
     // Compile Builtin.roc (it's completely self-contained)
-    const builtin_env = try compileModule(
+    var compiled = try compileModule(
         gpa,
         io,
         "Builtin",
@@ -105,7 +105,9 @@ pub fn main(process_init: std.process.Init) !void {
         null, // try_stmt not available yet (will be found within Builtin)
         null, // str_stmt not available yet (will be found within Builtin)
     );
+    const builtin_env = compiled.env;
     defer {
+        compiled.inference.deinit(gpa);
         builtin_env.deinit();
         gpa.destroy(builtin_env);
         gpa.free(builtin_roc_source);
@@ -134,7 +136,7 @@ pub fn main(process_init: std.process.Init) !void {
 
     // Publish the type-checked Builtin to a CheckedModuleArtifact and serialize
     // it from the same prepared env that is embedded as Builtin.bin.
-    try serializeBuiltinArtifact(gpa, io, builtin_env, builtin_artifact_path);
+    try serializeBuiltinArtifact(gpa, io, builtin_env, &compiled.inference, builtin_artifact_path);
 
     // Validate that BuiltinIndices contains all type declarations under Builtin
     // before emitting the typed static data consumed by the compiler executable.
@@ -149,6 +151,7 @@ fn serializeBuiltinArtifact(
     gpa: Allocator,
     io: std.Io,
     builtin_env: *ModuleEnv,
+    inference: *const check.InferenceOutput,
     output_path: []const u8,
 ) !void {
     var typed_modules = try check.TypedCIR.Modules.init(gpa, &.{
@@ -168,6 +171,7 @@ fn serializeBuiltinArtifact(
             .hoisted_roots = .none,
             .io = io,
             .compile_time_finalizer = comptime_finalizer.finalizerWithOptions(&finalizer_options),
+            .inference = inference.*,
         },
     );
     defer artifact.deinitRetainingModuleEnv(gpa);
@@ -240,7 +244,7 @@ fn compileModule(
     bool_stmt_opt: ?CIR.Statement.Idx,
     try_stmt_opt: ?CIR.Statement.Idx,
     str_stmt_opt: ?CIR.Statement.Idx,
-) !*ModuleEnv {
+) !CompiledModule {
     // This follows the pattern from TestEnv.init() in src/check/test/TestEnv.zig
 
     // 1. Create ModuleEnv
@@ -430,8 +434,17 @@ fn compileModule(
         return error.TypeCheckError;
     }
 
-    return module_env;
+    var inference_arena = collections.SingleThreadArena.init(gpa);
+    defer inference_arena.deinit();
+    const inference = try check.InferenceOutput.fromChecker(inference_arena.allocator(), &checker, null);
+    return .{ .env = module_env, .inference = try inference.dupe(gpa) };
 }
+
+/// A checked module and what checking it output beside its solved source.
+const CompiledModule = struct {
+    env: *ModuleEnv,
+    inference: check.InferenceOutput,
+};
 
 fn serializeModuleEnv(
     gpa: Allocator,

@@ -254,7 +254,7 @@ test "a build evaluates every compile-time value and materializes the ones its p
     // below also fails if the wrong root were the materialized one.
     try std.testing.expectEqual(@as(usize, 1), try materializedAmong(host, helper.key.digest(), helper_roots));
     for (helper_roots) |request| {
-        try std.testing.expect((try helper.compileTimeRoot(request.compile_time_root.?)).payload != .unevaluated);
+        try std.testing.expect(helper.evaluation.rootPayload(request.compile_time_root.?) != .unevaluated);
     }
 
     // The runtime program restores the completed table from Helper's store

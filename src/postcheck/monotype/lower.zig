@@ -845,7 +845,7 @@ const ComptimeDemandState = struct {
                 }
                 try self.stored_demanded.append(allocator, root);
                 const stored = self.roots.items[root];
-                for (builder.moduleForId(stored.module).compile_time_root_reads.readsOf(stored.root)) |ref| {
+                for (builder.moduleForId(stored.module).evaluation.root_reads.readsOf(stored.root)) |ref| {
                     const read_view = builder.moduleForKeyBytes(ref.module) orelse
                         Common.invariant("stored compile-time root read a module outside the lowering input");
                     try roots.append(allocator, try self.intern(allocator, .{ .module = read_view.key, .root = ref.root }));
@@ -1486,23 +1486,24 @@ const ModuleViewData = struct {
     callable_eval_templates: checked.CallableEvalTemplateTableView,
     hoisted_constants: *const checked.HoistedConstTable,
     const_templates: *const checked.ConstTemplateTable,
+    /// What compile-time evaluation wrote for the module.
+    evaluation: *const checked.EvaluationOutput,
+    /// The module's constant store (`evaluation.const_store`).
     const_store: *const checked.ConstStore,
-    compile_time_root_reads: *const checked.CompileTimeRootReadTable,
-    literal_root_payloads: *const checked.LiteralRootPayloadTable,
     /// This module's dense id among the lowering input's modules, seeded
     /// once with the program's module tables.
     lowering_module: ?Common.LoweringModuleId = null,
 
-    /// Compile-time root `id`, with the payload evaluation gave it: a row of
-    /// the root table, or a literal root.
+    /// Compile-time root `id`: a row of the root table, or a literal root.
     fn compileTimeRoot(self: *const ModuleViewData, id: checked.ComptimeRootKey) Allocator.Error!checked.CompileTimeRoot {
         if (id.rowIndex() != null) return self.compile_time_roots.root(id);
-        var root = (try self.dispatch.literalRoot(id)).root;
-        if (self.literal_root_payloads.get(id)) |output| {
-            root.payload = output.payload;
-            root.boxy_value = output.boxy_value;
-        }
-        return root;
+        return (try self.dispatch.literalRoot(id)).root;
+    }
+
+    /// What constant template `ref` names holds: its checked state, or the
+    /// value evaluation stored for it.
+    fn constValue(self: *const ModuleViewData, ref: checked.ConstRef) checked.ConstTemplateValue {
+        return checked.ConstTemplateValue.of(self.const_templates.get(ref), self.evaluation);
     }
 
     /// Procedure template `id`: a row of the template table, or a literal
@@ -7842,8 +7843,7 @@ const Builder = struct {
             const restored = try runConstRestore(self, const_node.module, type_view, const_node.id, ret_ty, request.const_locator);
             if (self.comptime_value_reads) {
                 const view = self.moduleForId(checked.constModuleId(request.const_locator));
-                const template = view.const_templates.get(request.const_locator);
-                switch (template.state) {
+                switch (view.constValue(request.const_locator)) {
                     .stored_const => |stored| try self.recordRestoredRootRead(restored, view.key, stored.root),
                     .reserved, .eval_template, .unimplemented => Common.invariant("static data request restored a constant that was never stored"),
                 }
@@ -8344,7 +8344,7 @@ const Builder = struct {
         }
         const template = view.callable_eval_templates.templates[raw];
         const root = (try view.compileTimeRoot(template.root));
-        const restored = switch (root.payload) {
+        const restored = switch (view.evaluation.rootPayload(template.root)) {
             .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try runConstRestore(self, view, view, node, mono_fn_ty, null),
             // A program that does not evaluate a root no compilation
@@ -12545,8 +12545,7 @@ const Builder = struct {
     fn constNode(self: *Builder, const_locator: checked.ConstLocator, node: ?checked.ConstNodeId) ConstNode {
         const view = self.moduleForId(checked.constModuleId(const_locator));
         if (node) |id| return .{ .module = view, .id = id };
-        const template = view.const_templates.get(const_locator);
-        return switch (template.state) {
+        return switch (view.constValue(const_locator)) {
             .stored_const => |stored| .{ .module = view, .id = stored.node },
             .reserved,
             .eval_template,
@@ -37098,9 +37097,8 @@ const BodyContext = struct {
         entry: checked.HoistedConstEntry,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const template = self.view.const_templates.get(entry.const_ref);
         const source_region = self.hoistedConstSourceRegion(entry);
-        return switch (template.state) {
+        return switch (self.view.constValue(entry.const_ref)) {
             .stored_const => |stored| blk: {
                 const stored_ty = try self.storedConstRootMonoType(self.view, stored, entry.checked_type);
                 self.assertSameType(ty, stored_ty, "stored hoisted const representation differed from its expected Monotype type");
@@ -37136,9 +37134,8 @@ const BodyContext = struct {
         entry: checked.HoistedConstEntry,
         request_node: NodeId,
     ) Allocator.Error!DraftExprId {
-        const template = self.view.const_templates.get(entry.const_ref);
         const source_region = self.hoistedConstSourceRegion(entry);
-        return switch (template.state) {
+        return switch (self.view.constValue(entry.const_ref)) {
             .stored_const => |stored| blk: {
                 const stored_node = try self.storedConstRootTypeNode(self.view, stored, entry.checked_type);
                 try relateRequestComponent(self.graph, request_node, stored_node);
@@ -37218,7 +37215,7 @@ const BodyContext = struct {
     /// A guarded hoisted root whose compile-time evaluation failed has no
     /// stored value. Its original expression and declaration lower in place.
     fn hoistedConstRunsAtRuntime(view: ModuleView, entry: checked.HoistedConstEntry) bool {
-        return view.compile_time_roots.root(entry.root).payload == .runtime;
+        return view.evaluation.rootPayload(entry.root) == .runtime;
     }
 
     fn selectedHoistedConstEntry(
@@ -37248,8 +37245,7 @@ const BodyContext = struct {
     ) Allocator.Error!?Type.TypeId {
         const entry = self.selectedHoistedConstEntry(selected);
         if (self.loweringOwnHoistedConstRoot(entry)) return null;
-        const template = self.view.const_templates.get(entry.const_ref);
-        const hoisted_ty = switch (template.state) {
+        const hoisted_ty = switch (self.view.constValue(entry.const_ref)) {
             .stored_const => |stored| try self.storedConstRootMonoType(self.view, stored, entry.checked_type),
             // Dispatch requires one concrete specialization type for this
             // selected const use. A generalized field whose presence has no
@@ -37858,7 +37854,7 @@ const BodyContext = struct {
         }
         const template = view.callable_eval_templates.templates[raw];
         const root = (try view.compileTimeRoot(template.root));
-        const restored = switch (root.payload) {
+        const restored = switch (view.evaluation.rootPayload(template.root)) {
             .fn_value => |fn_id| try self.restoreConstFnAt(view, fn_id, .{ .node = request_fn_node }, null),
             .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
             // A program that does not evaluate a root no compilation
@@ -46736,8 +46732,7 @@ const BodyContext = struct {
         const requested_ty = const_use.requested_source_ty_payload orelse
             Common.invariant("checked const use reached Monotype without a requested checked type");
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
-        const template = store_view.const_templates.get(const_use.const_ref);
-        return switch (template.state) {
+        return switch (store_view.constValue(const_use.const_ref)) {
             .stored_const => |stored| try self.storedConstRootMonoType(store_view, stored, requested_ty),
             // An unimplemented declaration keeps its declared type; only the
             // value is missing, and reaching it crashes.
@@ -46754,8 +46749,7 @@ const BodyContext = struct {
         const requested_ty = const_use.requested_source_ty_payload orelse
             Common.invariant("checked const use reached Monotype without a requested checked type");
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
-        const template = store_view.const_templates.get(const_use.const_ref);
-        const requested_node = switch (template.state) {
+        const requested_node = switch (store_view.constValue(const_use.const_ref)) {
             .stored_const => |stored| try self.storedConstRootTypeNode(store_view, stored, requested_ty),
             .eval_template, .unimplemented => try self.instNode(requested_ty),
             .reserved => Common.invariant("reserved checked const template reached Monotype type selection"),
@@ -46776,8 +46770,7 @@ const BodyContext = struct {
         defer self.restore_evidence = previous_restore_evidence;
 
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
-        const template = store_view.const_templates.get(const_use.const_ref);
-        return switch (template.state) {
+        return switch (store_view.constValue(const_use.const_ref)) {
             .stored_const => |stored| blk: {
                 const stored_ty = try self.storedConstRootMonoType(store_view, stored, requested_ty);
                 self.assertSameType(ty, stored_ty, "stored const representation differed from its expected Monotype type");
@@ -46836,8 +46829,7 @@ const BodyContext = struct {
         defer self.restore_evidence = previous_restore_evidence;
 
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
-        const template = store_view.const_templates.get(const_use.const_ref);
-        return switch (template.state) {
+        return switch (store_view.constValue(const_use.const_ref)) {
             .stored_const => |stored| blk: {
                 const stored_node = try self.storedConstRootTypeNode(store_view, stored, requested_ty);
                 const interface_node = try self.instNode(requested_ty);
@@ -51105,7 +51097,7 @@ const BodyContext = struct {
         const root = (try self.view.compileTimeRoot(root_id));
         const kind = root.literalConversionKind() orelse
             Common.invariant("literal conversion root link named a non-conversion root");
-        switch (root.payload) {
+        switch (self.view.evaluation.rootPayload(root_id)) {
             .const_node => |node| {
                 const restored = try self.restoreConstNodeAtNode(self.view, self.view, node, request_node);
                 try self.draft.recordRestoredRootRead(restored, self.view.key, root_id);
@@ -52537,8 +52529,7 @@ const BodyContext = struct {
     /// stored or unimplemented const lowers no template body.
     fn constUseSchema(self: *BodyContext, const_use: checked.ConstUseTemplate) Allocator.Error!SchemeRequirements {
         const store_view = self.builder.moduleForId(checked.constModuleId(const_use.const_ref));
-        const template = store_view.const_templates.get(const_use.const_ref);
-        return switch (template.state) {
+        return switch (store_view.constValue(const_use.const_ref)) {
             .eval_template => |eval| try self.templateSchema(eval.entry_template),
             .stored_const, .reserved, .unimplemented => emptySchema(store_view),
         };
@@ -64557,7 +64548,7 @@ const BodyContext = struct {
                 // information but has no runtime value to bind.
                 .anno_only => false,
                 .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => !self.hoistedBindingRestored(decl.pattern) and
-                    !self.view.compile_time_roots.validationResolvedByPattern(decl.pattern),
+                    !self.view.compile_time_roots.validationResolvedByPattern(self.view.evaluation, decl.pattern),
             },
             .var_,
             .var_uninitialized,
@@ -69020,9 +69011,8 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .callable_eval_templates = view.callable_eval_templates,
         .hoisted_constants = view.hoisted_constants,
         .const_templates = view.const_templates,
+        .evaluation = view.evaluation,
         .const_store = view.const_store,
-        .compile_time_root_reads = view.compile_time_root_reads,
-        .literal_root_payloads = view.literal_root_payloads,
     };
 }
 

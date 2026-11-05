@@ -432,7 +432,7 @@ const StaticInitializerMachine = struct {
     /// input holds.
     fn constStoreOf(self: *const StaticInitializerMachine, module: Checked.ModuleId) *const Checked.ConstStore {
         const root = self.modules.root orelse staticDataInvariant("stored static data had no root checked module");
-        if (std.mem.eql(u8, &root.module.key.bytes, &module.bytes)) return &root.module.const_store;
+        if (std.mem.eql(u8, &root.module.key.bytes, &module.bytes)) return &root.module.evaluation.const_store;
         for (root.relation_modules) |view| {
             if (std.mem.eql(u8, &view.key.bytes, &module.bytes)) return view.const_store;
         }

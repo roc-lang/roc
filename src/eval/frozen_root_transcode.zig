@@ -662,7 +662,7 @@ test "frozen root transcode preserves failure flag and message using explicit fi
     defer roots.deinit(allocator);
     const root_id: checked.ComptimeRootKey = @fromBackingInt(@intCast(roots.items.len));
     // Transcoding reads only the published root identity, not its source body/type.
-    try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
+    try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible });
     const source_id = try failureSlot(allocator, &source, roots.items[root_id.index()].id);
     const target_id = try failureSlot(allocator, &target, roots.items[root_id.index()].id);
     const slot = source.static_data_values.items[@backingInt(source_id)];
@@ -812,7 +812,7 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     defer roots.deinit(allocator);
     const root_id: checked.ComptimeRootKey = @fromBackingInt(@intCast(roots.items.len));
     // Transcoding reads only the published root identity, not its source body/type.
-    try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
+    try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible });
 
     const source_slot_id = try boxedValueSlot(&source, source_box, source_plan, roots.items[root_id.index()].id);
     const native = try @import("native_root_export.zig").freezeRootIntoSlot(

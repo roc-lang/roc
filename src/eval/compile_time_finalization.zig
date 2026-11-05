@@ -209,8 +209,8 @@ const DebugEvents = struct {
     /// this compilation demands: every root, or, for a demand-driven
     /// compilation, the stored roots its program demands.
     fn appendStored(self: *DebugEvents, module: *const checked.CheckedModuleArtifact) Allocator.Error!void {
-        for (module.compile_time_debug.entries) |entry| {
-            try self.appendEvent(module.key.digest(), (try module.compileTimeRoot(entry.root)), module.compile_time_debug.message(entry), false);
+        for (module.evaluation.debug.entries) |entry| {
+            try self.appendEvent(module.key.digest(), (try module.compileTimeRoot(entry.root)), module.evaluation.debug.message(entry), false);
         }
     }
 
@@ -226,7 +226,7 @@ const DebugEvents = struct {
         defer inputs.deinit(self.allocator);
         for (modules) |entry| {
             inputs.clearRetainingCapacity();
-            const previous = entry.module.compile_time_debug;
+            const previous = entry.module.evaluation.debug;
             for (previous.entries) |stored| try inputs.append(self.allocator, .{ .root = stored.root, .message = previous.message(stored) });
             for (self.events.items) |event| {
                 if (event.fresh and entry.module.key.digest().eql(event.module)) try inputs.append(self.allocator, .{ .root = event.root, .message = event.message });
@@ -239,8 +239,8 @@ const DebugEvents = struct {
             // The artifact owns these bytes for cache publication and replay.
             const artifact_allocator = entry.module.evaluationAllocator();
             const stored = try checked.CompileTimeDebugStore.init(artifact_allocator, inputs.items);
-            if (entry.module.freesReplacedEvaluationColumns()) entry.module.compile_time_debug.deinit(artifact_allocator);
-            entry.module.compile_time_debug = stored;
+            if (entry.module.freesReplacedEvaluationColumns()) entry.module.evaluation.debug.deinit(artifact_allocator);
+            entry.module.evaluation.debug = stored;
         }
     }
 
@@ -919,7 +919,7 @@ pub fn finalizeProgram(
         finalizationInvariant("program roots omitted their checked owners");
     // Every literal root a module's requests evaluate has its evaluation
     // output entry before any evaluation reads or fills one.
-    for (modules) |entry| try entry.module.prepareLiteralRootPayloads(entry.module.evaluationAllocator());
+    for (modules) |entry| try entry.module.prepareLiteralRootPayloads();
     if (unfiltered_options.strategy == .boxy) return finalizeProgramBoxy(allocator, modules, lowering_modules, unfiltered_program_roots, runtime_roots, runtime_target, unfiltered_options);
     // A literal argument root is the `.boxy` evaluator's: a Solved program
     // neither specializes nor discovers through it (design.md "Literal
@@ -1092,7 +1092,7 @@ fn specializeAndEvaluate(
             // A reopened artifact's roots that an earlier compilation
             // evaluated are read from its store like any other module's.
             const root_id = (try compileTimeRootForRequest(entry.module, request));
-            if ((try entry.module.compileTimeRoot(root_id)).payload != .pending) continue;
+            if (entry.module.evaluation.rootPayload(root_id) != .pending) continue;
             // A literal argument root is the `.boxy` evaluator's (design.md
             // "Literal Arguments").
             if (root_id.kind() == .literal_argument) continue;
@@ -1163,7 +1163,7 @@ fn specializeAndEvaluate(
     if (requests.items.len == 0) {
         for (modules) |entry| {
             if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
-            try entry.module.const_store.verifyComplete();
+            try entry.module.evaluation.const_store.verifyComplete();
         }
         return result;
     }
@@ -1249,7 +1249,7 @@ fn specializeAndEvaluate(
     } else {
         for (modules) |entry| {
             if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
-            try entry.module.const_store.verifyComplete();
+            try entry.module.evaluation.const_store.verifyComplete();
         }
     }
     prepared_owned = false;
@@ -1519,10 +1519,10 @@ fn finalizeProgramBoxy(
         if (entry_key.found_existing) continue;
         for ((try entry.module.rootRequests()).compile_time_requests) |request| {
             const root_id = (try compileTimeRootForRequest(entry.module, request));
-            if ((try entry.module.compileTimeRoot(root_id)).payload != .pending) continue;
+            if (entry.module.evaluation.rootPayload(root_id) != .pending) continue;
             // Reopening the module for another root reopened this one, whose
             // value a `.boxy` evaluation stored.
-            if ((try entry.module.compileTimeRoot(root_id)).boxy_value != null) {
+            if (entry.module.evaluation.rootBoxyValue(root_id) != null) {
                 try entry.module.fillRootPayload(root_id, .unevaluated);
                 continue;
             }
@@ -1536,7 +1536,7 @@ fn finalizeProgramBoxy(
     // through its literal argument (design.md "Literal Arguments").
     for (modules) |entry| {
         if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
-        try entry.module.const_store.verifyComplete();
+        try entry.module.evaluation.const_store.verifyComplete();
     }
     const runtime_positions = try runtimeRootPositions(allocator, program_roots, runtime_roots, 0, false);
     var positions_owned = true;
@@ -2371,11 +2371,11 @@ fn recordEvaluatedRootReads(
         if (inputs.items.len == 0) continue;
         const merged = try checked.CompileTimeRootReadTable.merge(
             entry.module.evaluationAllocator(),
-            entry.module.compile_time_root_reads,
+            entry.module.evaluation.root_reads,
             inputs.items,
         );
-        if (entry.module.freesReplacedEvaluationColumns()) entry.module.compile_time_root_reads.deinit(entry.module.evaluationAllocator());
-        entry.module.compile_time_root_reads = merged;
+        if (entry.module.freesReplacedEvaluationColumns()) entry.module.evaluation.root_reads.deinit(entry.module.evaluationAllocator());
+        entry.module.evaluation.root_reads = merged;
     }
     if (position != demand.root_reads.len) finalizationInvariant("published compile-time roots did not match the finalized modules' demanded requests");
 }
@@ -2439,7 +2439,7 @@ fn sealUndemandedRoots(modules: []const ProgramModule) Allocator.Error!void {
     for (modules) |entry| {
         for ((try entry.module.rootRequests()).compile_time_requests) |request| {
             const root = (try compileTimeRootForRequest(entry.module, request));
-            if ((try entry.module.compileTimeRoot(root)).payload == .pending) {
+            if (entry.module.evaluation.rootPayload(root) == .pending) {
                 try entry.module.fillRootPayload(root, .unevaluated);
             }
         }
@@ -3092,7 +3092,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
             }
             for (self.modules) |entry| {
                 if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
-                try entry.module.const_store.verifyComplete();
+                try entry.module.evaluation.const_store.verifyComplete();
             }
         }
 
@@ -3433,7 +3433,7 @@ fn finalize(
         @as(*const Options, @ptrCast(@alignCast(raw))).*
     else
         .{};
-    try module.prepareLiteralRootPayloads(module.evaluationAllocator());
+    try module.prepareLiteralRootPayloads();
     const requests = (try module.rootRequests()).compile_time_requests;
     const total_started_ns = if (requests.len != 0) if (options.timing) |timing| timing.start() else 0 else 0;
     if (requests.len != 0) {
@@ -3505,7 +3505,7 @@ fn finalize(
         try finishPendingExhaustiveness(module, store);
     }
 
-    try module.const_store.verifyComplete();
+    try module.evaluation.const_store.verifyComplete();
     if (requests.len != 0) {
         if (options.timing) |timing| timing.finish(total_started_ns, .total);
     }
@@ -6367,8 +6367,8 @@ fn appendCrashConst(
     module: *checked.CheckedModuleArtifact,
     message: []const u8,
 ) Allocator.Error!checked.ConstNodeId {
-    const data = try module.const_store.addBlobData(message);
-    return try module.const_store.append(.{ .crash = .{
+    const data = try module.evaluation.const_store.addBlobData(message);
+    return try module.evaluation.const_store.append(.{ .crash = .{
         .data = data,
         .offset = 0,
         .len = @intCast(message.len),
@@ -6379,8 +6379,8 @@ fn appendCheckedErrorConst(
     module: *checked.CheckedModuleArtifact,
     message: []const u8,
 ) Allocator.Error!checked.ConstNodeId {
-    const data = try module.const_store.addBlobData(message);
-    return try module.const_store.append(.{ .checked_error = .{
+    const data = try module.evaluation.const_store.addBlobData(message);
+    return try module.evaluation.const_store.append(.{ .checked_error = .{
         .data = data,
         .offset = 0,
         .len = @intCast(message.len),
@@ -6541,6 +6541,7 @@ fn appendCompileTimeExhaustivenessProblem(
         if (!matched) {
             finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
         }
+        if (site_record.requires_pairing) try owner.module.evaluation.recordReportedSite(owner.module.evaluationAllocator(), owner.module.freesReplacedEvaluationColumns(), checked_site);
     }
 }
 
@@ -6593,7 +6594,7 @@ pub fn finishPendingExhaustiveness(module: *const checked.CheckedModuleArtifact,
             continue;
         }
         const decided_statically = if (site) |checked_site| switch (checked_site.policy) {
-            .compile_time_replaced_by_root => |root| switch ((try module.compileTimeRoot(root)).payload) {
+            .compile_time_replaced_by_root => |root| switch (module.evaluation.rootPayload(root)) {
                 .runtime => true,
                 .const_node, .fn_value, .discarded, .expect => false,
                 // A root this compilation never evaluated ran none of the
@@ -6686,7 +6687,7 @@ const RootFailure = enum {
     /// The failure a failed root's stored payload records.
     fn ofPayload(module: *const checked.CheckedModuleArtifact, payload: checked.CompileTimeRootPayload) RootFailure {
         return switch (payload) {
-            .const_node => |node| switch (module.const_store.get(node)) {
+            .const_node => |node| switch (module.evaluation.const_store.get(node)) {
                 .checked_error => .checked_error,
                 .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value, .boxy_fn => .crash,
             },
@@ -6984,10 +6985,7 @@ pub fn finishConstRoot(
         .root = root.id,
         .root_type = root_type orelse finalizationInvariant("constant root finalized without exact Monotype representation evidence"),
     };
-    module.const_templates.fillStoredConst(const_ref, stored);
-    if (root.kind == .constant) {
-        module.exported_const_templates.fillStoredConst(const_ref, stored);
-    }
+    module.evaluation.setStoredConst(const_ref.owner, stored);
 }
 
 fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
@@ -7280,7 +7278,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8) (FinalizeError || Interpret
     defer checked_roots.deinit(allocator);
     const root_id: checked.ComptimeRootKey = @fromBackingInt(@intCast(checked_roots.items.len));
     // This execution fixture consumes only root identity, never checked syntax.
-    try checked_roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .pending });
+    try checked_roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible });
     const failure_layout = try result.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = result.layouts.getLayout(failure_layout).getStruct().idx;
     const failed_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);

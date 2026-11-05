@@ -213,6 +213,8 @@ pub const ArtifactPublicationInputs = struct {
     /// How this module's compile-time roots were established. Part of the
     /// checked-artifact cache identity. See `Can.Validation`.
     validation: Can.Validation = .checking,
+    /// What checking the module output beside its solved source.
+    inference: check.InferenceOutput,
 };
 
 fn importedArtifactsCoverImportedEnvs(
@@ -573,8 +575,14 @@ pub fn typeCheckModule(
         env.types.seal();
     } else {
         try checker.checkFile();
-        if (inference_cache) |cache| cache.store(inference_key, env, &checker, &checking_scope);
     }
+    // The module's inference output, read from the checker against the
+    // current dependency scope whether checking ran or a capsule restored
+    // it, borrows the checker until publication copies it.
+    var inference_arena = base.SingleThreadArena.init(check_alloc);
+    defer inference_arena.deinit();
+    const inference = try check.InferenceOutput.fromChecker(inference_arena.allocator(), &checker, &checking_scope);
+    if (loaded == null) if (inference_cache) |cache| cache.store(inference_key, env, &inference);
 
     module_envs_map.deinit();
 
@@ -596,6 +604,7 @@ pub fn typeCheckModule(
             .ctfe_options = ctfe_options,
             .evaluation_phase = .post_frontend,
             .validation = validation,
+            .inference = inference,
         },
     );
     errdefer checked_artifact.deinit(artifact_alloc);
@@ -673,6 +682,7 @@ pub fn publishFromPrebuiltModules(
             .evaluation_phase = publication.evaluation_phase,
             .problem_store = publication.problem_store,
             .validation = publication.validation,
+            .inference = publication.inference,
         },
     );
 }

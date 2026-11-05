@@ -1749,7 +1749,7 @@ const BoxyObjects = struct {
         // The unit's ARC and code generation run their waves on the same
         // pool, whichever thread runs the unit.
         config.post_check_executor = self.coordinator.postCheckExecutor();
-        config.checked_module_state = if (artifact.evaluation_state == .finalized) .complete else .checking_finalization;
+        config.checked_module_state = if (artifact.evaluation.state == .finalized) .complete else .checking_finalization;
         return .{ .unit = .{
             .gpa = gpa,
             .artifact = artifact,
@@ -2908,7 +2908,7 @@ pub const Coordinator = struct {
         if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
             const platform = platform_root.mod.checkedArtifact().?;
-            if (platform.evaluation_state == .prepared) {
+            if (platform.evaluation.state == .prepared) {
                 if ((try platform.rootRequests()).compile_time_requests.len == 0) {
                     // No evaluator is needed to finish this parametric module.
                     // App checking and runtime roots still share one program.
@@ -3001,9 +3001,9 @@ pub const Coordinator = struct {
         const state = try self.gpa.create(messages.PendingEvaluationState);
         var state_owned = true;
         errdefer if (state_owned) self.gpa.destroy(state);
-        var problems = try platform.evaluation_diagnostics.instantiate(self.gpa);
+        var problems = try pairingProblemStore(self.gpa, platform);
         errdefer if (state_owned) problems.deinit();
-        var display_names = try platform.evaluation_diagnostics.instantiateImportMapping(self.gpa);
+        var display_names = try platform.inference.importMapping(self.gpa);
         errdefer if (state_owned) display_names.deinit();
         state.* = .{
             .allocator = self.gpa,
@@ -3022,6 +3022,26 @@ pub const Coordinator = struct {
         platform_root.mod.pending_evaluation = state;
         state_owned = false;
         try self.registerCheckedArtifact(platform_root.pkg, platform_root.mod);
+    }
+
+    /// The deferred exhaustiveness checks a pairing of `platform` decides:
+    /// those of the platform's inference output whose checks need the
+    /// pairing and whose empirical failure the platform's own evaluation did
+    /// not report, with the diagnostic text they name.
+    fn pairingProblemStore(gpa: Allocator, platform: *const CheckedModuleArtifact) Allocator.Error!check.problem.Store {
+        var store = try check.problem.Store.init(gpa);
+        errdefer store.deinit();
+        const outcome = platform.inference.outcome;
+        try store.extra_strings_backing.appendSlice(outcome.extra_strings);
+        try store.missing_patterns_backing.appendSlice(outcome.missing_patterns);
+        for (outcome.pending) |pending| {
+            if (pending.reported) continue;
+            const site = pending.site orelse continue;
+            if (!(try platform.exhaustivenessSite(site)).requires_pairing) continue;
+            if (platform.evaluation.reportedSite(site)) continue;
+            try store.pending_static_exhaustiveness.append(store.gpa, pending);
+        }
+        return store;
     }
 
     pub fn hasUserErrors(self: *const Coordinator) bool {
@@ -3583,7 +3603,7 @@ pub const Coordinator = struct {
             for (package.value_ptr.*.modules.items) |*mod| {
                 if (mod.pending_evaluation != null) continue;
                 const artifact = mod.checkedArtifact() orelse continue;
-                if (artifact.evaluation_state != .finalized or !try artifact.hasUnevaluatedRequests(self.specialization_strategy)) continue;
+                if (artifact.evaluation.state != .finalized or !try artifact.hasUnevaluatedRequests(self.specialization_strategy)) continue;
                 if (dependency_root != null and !dependencies.contains(artifact.key.bytes)) continue;
                 // A platform awaiting its app relation finalizes in the pass
                 // that evaluates the platform alone, which demands every root.
@@ -3634,13 +3654,13 @@ pub const Coordinator = struct {
         var cached_artifacts = self.checked_artifact_index.iterator();
         while (cached_artifacts.next()) |entry| {
             const artifact = self.checkedArtifactByKey(.{ .bytes = entry.key_ptr.* }).?;
-            if (replay_cached_debug and artifact.evaluation_state == .finalized and artifact.compile_time_debug.entries.len != 0)
+            if (replay_cached_debug and artifact.evaluation.state == .finalized and artifact.evaluation.debug.entries.len != 0)
                 try cached_debug_modules.append(self.gpa, artifact);
         }
         if (extra_cached) |artifact| {
             // A reopened composition replays its stored observations as one
             // of the modules this evaluation finalizes.
-            if (artifact.evaluation_state == .finalized and artifact.compile_time_debug.entries.len != 0) try cached_debug_modules.append(self.gpa, artifact);
+            if (artifact.evaluation.state == .finalized and artifact.evaluation.debug.entries.len != 0) try cached_debug_modules.append(self.gpa, artifact);
         }
         // An explicit runtime root set (a command that names its own roots,
         // such as `roc test`) is its own program. Every other command
@@ -3808,9 +3828,9 @@ pub const Coordinator = struct {
         for ((try artifact.rootRequests()).compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
             if (strategy == .lss and root.kind() == .literal_argument) continue;
-            if (strategy == .boxy and (try artifact.compileTimeRoot(root)).boxy_value != null) continue;
-            if ((try artifact.compileTimeRoot(root)).payload == .unevaluated or
-                (try artifact.compileTimeRoot(root)).payload == .pending) count += 1;
+            if (strategy == .boxy and artifact.evaluation.rootBoxyValue(root) != null) continue;
+            if (artifact.evaluation.rootPayload(root) == .unevaluated or
+                artifact.evaluation.rootPayload(root) == .pending) count += 1;
         }
         return count;
     }
@@ -3957,7 +3977,7 @@ pub const Coordinator = struct {
         const state = mod.pending_evaluation.?;
         const artifact = mod.checkedArtifact().?;
         try eval.CompileTimeFinalization.finishPendingExhaustiveness(artifact, &state.problems);
-        artifact.evaluation_state = .finalized;
+        artifact.evaluation.state = .finalized;
         try artifact.verifyComplete();
 
         const env = mod.moduleEnv().?;
@@ -3973,13 +3993,6 @@ pub const Coordinator = struct {
         const problems = state.problems.problems.items;
         for (problems[state.reported_problem_count..]) |problem| {
             try mod.reports.append(self.gpa, try rb.build(problem));
-        }
-        if (artifact.hasUnboundPlatformRequirements()) {
-            var diagnostics = try CheckedArtifact.EvaluationDiagnostics.fromStore(artifact.canonical_names.allocator, &state.problems);
-            errdefer diagnostics.deinit(artifact.canonical_names.allocator);
-            try diagnostics.setImportMapping(artifact.canonical_names.allocator, &state.import_mapping);
-            artifact.evaluation_diagnostics.deinit(artifact.canonical_names.allocator);
-            artifact.evaluation_diagnostics = diagnostics;
         }
         // A reopened cache entry is published again only when this
         // compilation evaluated roots it lacked.
@@ -7989,10 +8002,10 @@ fn compileAppRootIdentityExpecting(
         var found = false;
         for (root.top_level_values.entries) |entry| {
             if (!std.mem.eql(u8, root.nameStore().exportNameText(entry.source_name), expected.name)) continue;
-            const state = root.const_templates.get(entry.value.const_ref).state;
+            const state = CheckedArtifact.ConstTemplateValue.of(root.const_templates.get(entry.value.const_ref), &root.evaluation);
             try std.testing.expect(state == .stored_const);
-            var value = root.const_store.get(state.stored_const.node);
-            while (value == .nominal) value = root.const_store.get(value.nominal.backing);
+            var value = root.evaluation.const_store.get(state.stored_const.node);
+            while (value == .nominal) value = root.evaluation.const_store.get(value.nominal.backing);
             std.testing.expectEqual(expected.value, value.scalar.i64) catch return error.TestUnexpectedResult;
             found = true;
         }
@@ -8018,7 +8031,7 @@ fn compileAppRootIdentityExpecting(
     }
     return .{
         .compile_time_request_count = (try root.rootRequests()).compile_time_requests.len,
-        .compile_time_debug_count = root.compile_time_debug.entries.len,
+        .compile_time_debug_count = root.evaluation.debug.entries.len,
         .artifact_key = root.codeGenerationKey().bytes,
         .module_identity_hash = root.module_identity.stable_hash,
         .cache_hits = coord.getBuildStats().cache_hits,
@@ -8304,10 +8317,10 @@ test "prepared checked imports finalize after frontend and release abandoned dia
         }
         const helper_mod = helper orelse return error.TestUnexpectedResult;
         const artifact = helper_mod.checkedArtifact().?;
-        try std.testing.expectEqual(.prepared, artifact.evaluation_state);
+        try std.testing.expectEqual(.prepared, artifact.evaluation.state);
         try std.testing.expect(helper_mod.pending_evaluation != null);
         try std.testing.expect((try artifact.rootRequests()).compile_time_requests.len > 0);
-        try std.testing.expectEqual(@as(usize, 0), artifact.const_store.values.items.len);
+        try std.testing.expectEqual(@as(usize, 0), artifact.evaluation.const_store.values.items.len);
         const imported = CheckedArtifact.importedView(artifact);
         try std.testing.expect(imported.exported_const_templates.templates.len > 0);
         try std.testing.expect(imported.exported_const_templates.templates[0].template.state == .eval_template);
@@ -8318,10 +8331,10 @@ test "prepared checked imports finalize after frontend and release abandoned dia
             try coord.finishCheckedProgram(.none);
             try std.testing.expect(coord.frontend_complete);
             try std.testing.expect(!coord.hasUserErrors());
-            try std.testing.expectEqual(.finalized, artifact.evaluation_state);
+            try std.testing.expectEqual(.finalized, artifact.evaluation.state);
             try std.testing.expect(helper_mod.pending_evaluation == null);
             try std.testing.expectEqualSlices(u8, &key.bytes, &artifact.key.bytes);
-            try std.testing.expect(artifact.const_store.values.items.len > 0);
+            try std.testing.expect(artifact.evaluation.const_store.values.items.len > 0);
             try artifact.verifyComplete();
             const bytes = try serializedCheckedArtifactBytes(allocator, artifact);
             defer allocator.free(bytes);
@@ -12351,7 +12364,7 @@ test "successful compile-time dbg replays from warm checked cache without evalua
         const maybe_artifact = coord.checkedArtifactByKey(helper_key.?.digest());
         try std.testing.expect(maybe_artifact != null);
         const artifact = maybe_artifact.?;
-        try std.testing.expectEqual(@as(usize, 1), artifact.compile_time_debug.entries.len);
+        try std.testing.expectEqual(@as(usize, 1), artifact.evaluation.debug.entries.len);
         try std.testing.expect(std.mem.find(u8, capture.bytes[0..capture.len], "successful cached dbg") != null);
         if (run_index == 1) {
             try std.testing.expect(coord.cache_hits > 0);
@@ -12360,7 +12373,7 @@ test "successful compile-time dbg replays from warm checked cache without evalua
             // The helper remains backed by its serialized cache artifact:
             // its observed root was replayed, never prepared for evaluation.
             // Other modules may still need platform-related finalization.
-            try std.testing.expectEqual(.finalized, artifact.evaluation_state);
+            try std.testing.expectEqual(.finalized, artifact.evaluation.state);
         }
     }
 }

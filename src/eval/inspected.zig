@@ -1275,13 +1275,13 @@ pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const
     for (resources.checked_artifact.compile_time_roots.roots) |root| {
         if (root.kind != .repl_expr) continue;
 
-        var node = switch (root.payload) {
+        var node = switch (resources.checked_artifact.evaluation.rootPayload(root.id)) {
             .const_node => |const_node| const_node,
             .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => return error.Internal,
         };
         while (true) {
-            switch (resources.checked_artifact.const_store.get(node)) {
-                .str => |str| return resources.checked_artifact.const_store.strBytes(str),
+            switch (resources.checked_artifact.evaluation.const_store.get(node)) {
+                .str => |str| return resources.checked_artifact.evaluation.const_store.strBytes(str),
                 .nominal => |nominal| node = nominal.backing,
                 .boxy_fn,
                 .pending,
@@ -1398,11 +1398,14 @@ pub fn parseProgram(
         .published_only => {},
     }
 
+    var inference_arena = base.SingleThreadArena.init(allocator);
+    defer inference_arena.deinit();
     var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(
         allocator,
         &typed_cir_modules,
         0,
         .{
+            .inference = try check.InferenceOutput.fromChecker(inference_arena.allocator(), main_checked.checker, null),
             .module_env_storage = .{ .checked_source = main_checked.module_env },
             .io = options.io,
             .imports = publish_imports,
@@ -1687,7 +1690,7 @@ fn lowerCheckedRootWithViews(
     // roots to a `.boxy` compilation: one reopens the artifact to evaluate
     // them, as the coordinator does (design.md "Literal Arguments").
     const reopened = options.specialization_strategy == .boxy and
-        root_module.evaluation_state == .finalized and
+        root_module.evaluation.state == .finalized and
         try root_module.hasUnevaluatedRequests(.boxy);
     if (reopened) try root_module.reopenForEvaluation(allocator);
 
@@ -1704,7 +1707,7 @@ fn lowerCheckedRootWithViews(
         .boxy => blk: {
             var session = try CompileTimeFinalization.finalizeProgram(allocator, &.{.{ .module = root_module, .problem_store = null }}, modules, roots, roots, target, .{ .strategy = .boxy });
             defer session.deinit();
-            if (reopened) root_module.evaluation_state = .finalized;
+            if (reopened) root_module.evaluation.state = .finalized;
             break :blk try session.takeRuntime(allocator, roots, target);
         },
     };
@@ -1926,6 +1929,7 @@ fn publishImportArtifacts(
                 .hoisted_roots = .none,
                 .io = io,
                 .compile_time_finalizer = CompileTimeFinalization.finalizer(),
+                .inference = check.CheckedArtifact.CheckedModuleArtifact.bakedInference(compiled_builtins.builtin_artifact_bin[0..]) catch return error.CorruptEmbeddedBuiltins,
             },
         );
         builtin_module_owned_by_artifact.* = true;
@@ -1959,11 +1963,14 @@ fn publishImportArtifacts(
             const available_artifacts = try importedViewsFromPublishImports(allocator, published_keys.items);
             defer allocator.free(available_artifacts);
 
+            var inference_arena = base.SingleThreadArena.init(allocator);
+            defer inference_arena.deinit();
             const artifact = try check.CheckedArtifact.publishFromTypedModule(
                 allocator,
                 typed_cir_modules,
                 module_idx,
                 .{
+                    .inference = try check.InferenceOutput.fromChecker(inference_arena.allocator(), extra_modules[extra_i].checker, null),
                     .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
                     .io = io,
                     .imports = published_keys.items,

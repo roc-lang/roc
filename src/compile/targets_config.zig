@@ -1001,8 +1001,7 @@ fn topLevelConstNode(
                 return null;
             },
         };
-        const template = checked_module.const_templates.get(const_ref);
-        return switch (template.state) {
+        return switch (checked.ConstTemplateValue.of(checked_module.const_templates.get(const_ref), &checked_module.evaluation)) {
             .stored_const => |stored| stored.node,
             .reserved, .eval_template => blk: {
                 reason.* = .unevaluated_constant;
@@ -1020,7 +1019,7 @@ fn topLevelConstNode(
 }
 
 fn constWasmImportMemory(checked_module: *const checked.CheckedModuleArtifact, node: checked.ConstNodeId) ?WasmImportMemory {
-    const value = checked_module.const_store.get(node);
+    const value = checked_module.evaluation.const_store.get(node);
     if (value == .nominal) return constWasmImportMemory(checked_module, value.nominal.backing);
     if (value != .tag or value.tag.payloads.len != 0) return null;
     return WasmImportMemory.fromTagName(value.tag.tag_name);
@@ -1031,7 +1030,7 @@ fn constUnsigned(
     node: checked.ConstNodeId,
     reason: *TargetConfigResolveReason,
 ) ?usize {
-    const value = checked_module.const_store.get(node);
+    const value = checked_module.evaluation.const_store.get(node);
     if (value == .nominal) return constUnsigned(checked_module, value.nominal.backing, reason);
     if (value == .scalar) return scalarUnsigned(value.scalar, reason);
     reason.* = .expected_unsigned_integer;

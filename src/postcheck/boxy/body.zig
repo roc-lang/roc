@@ -1475,10 +1475,10 @@ pub const Builder = struct {
         if (params.len != 0) invariant("an entry wrapper has parameters");
         self.own_root = root_id;
         try self.tasks.append(self.allocator, .ret);
-        if (root.boxy_value) |stored| {
+        if (self.view.view.rootBoxyValue(root_id)) |stored| {
             try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
         } else switch (root.kind) {
-            .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .hoisted_validation => switch (root.payload) {
+            .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .hoisted_validation => switch (self.view.view.rootPayload(root_id)) {
                 // In a module's object, an evaluated root's wrapper
                 // produces the stored value: the object defines it
                 // for the other objects of a link that read the
@@ -2316,8 +2316,8 @@ pub const Builder = struct {
         self.hole = body_start;
         const owner = self.program.moduleByKey(checked.constModuleId(request.const_locator));
         try self.tasks.append(self.allocator, .ret);
-        const boxy_value = if (rootOfConstRef(owner, request.const_locator)) |root_id| (try owner.view.compileTimeRoot(root_id)).boxy_value else null;
-        if (boxy_value) |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = stored.node, .ty = worker.ret } }) else switch (owner.view.const_templates.get(request.const_locator).state) {
+        const boxy_value = if (rootOfConstRef(owner, request.const_locator)) |root_id| owner.view.rootBoxyValue(root_id) else null;
+        if (boxy_value) |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = stored.node, .ty = worker.ret } }) else switch (owner.view.constValue(request.const_locator)) {
             .stored_const => |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = request.node orelse stored.node, .ty = worker.ret } }),
             .unimplemented => |unimplemented| {
                 self.region = unimplemented.region;
@@ -2889,9 +2889,8 @@ pub const Builder = struct {
             .restore_callable_eval => |eval| {
                 const owner = self.program.module(eval.module);
                 const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
-                const root = (try owner.view.compileTimeRoot(template.root));
-                if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
-                switch (root.payload) {
+                if (owner.view.rootBoxyValue(template.root)) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
+                switch (owner.view.rootPayload(template.root)) {
                     .fn_value => |fn_id| try self.restoreFn(.{ .module = eval.module }, fn_id, eval.ty),
                     // Evaluation stored a value that is not a function: the
                     // crash a rejected binding is.
@@ -3071,10 +3070,10 @@ pub const Builder = struct {
         const entry = self.view.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.own_root) |own| if (own == entry.root) return null;
         const root = (try self.view.view.compileTimeRoot(entry.root));
-        if (root.boxy_value) |stored| return .{ .stored = stored };
-        if (root.payload == .runtime) return null;
+        if (self.view.view.rootBoxyValue(entry.root)) |stored| return .{ .stored = stored };
+        if (self.view.view.rootPayload(entry.root) == .runtime) return null;
         if (entry.pattern != null and root.guarded) return null;
-        return switch (self.view.view.const_templates.get(entry.const_ref).state) {
+        return switch (self.view.view.constValue(entry.const_ref)) {
             .stored_const => |stored| .{ .stored = stored },
             // A value this compile-time program evaluates is read from its
             // slot; a polymorphic hoisted value computes at its instance, as
@@ -3849,7 +3848,7 @@ pub const Builder = struct {
         // its value from its slot once it completes; its wrapper converts
         // the literal only as the root's own evaluation. A validate-only
         // root stores no value, so its wrapper converts for every reader.
-        const slot_read = compile_time_root.payload == .pending and !argument.validate_only and self.program.evaluatesRoot(self.module, root);
+        const slot_read = self.view.view.rootPayload(root) == .pending and !argument.validate_only and self.program.evaluatesRoot(self.module, root);
         const entry = if (slot_read)
             try self.program.rootSlotThunkWorker(self.module, root, try self.convert(argument.ty))
         else blk: {
@@ -3982,7 +3981,7 @@ pub const Builder = struct {
     /// at the root's edge.
     pub fn lowerLiteralArgumentRoot(self: *Builder, root_id: checked.ComptimeRootKey, argument: checked.LiteralArgumentRoot) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        switch ((try self.view.view.compileTimeRoot(root_id)).payload) {
+        switch (self.view.view.rootPayload(root_id)) {
             .const_node => |node| return try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = worker.ret, .root = root_id } }),
             .pending, .unevaluated, .discarded => {},
             inline .fn_value, .expect, .runtime => |_, tag| invariantFmt("a literal argument root holding {s} reached lowering", .{@tagName(tag)}),
@@ -4297,7 +4296,7 @@ pub const Builder = struct {
     }
 
     pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootKey, at: LiteralAt, kind: LIR.LiteralRejectionKind, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
-        switch ((try self.view.view.compileTimeRoot(root_id)).payload) {
+        switch (self.view.view.rootPayload(root_id)) {
             .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.literalType(at), .root = root_id } }),
             // The literal converts where it is reached: as the root's own
             // evaluation, or at a site no evaluation converts (a literal in
@@ -5058,11 +5057,10 @@ pub const Builder = struct {
 
     pub fn restoreConstUse(self: *Builder, expr_id: ExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
         const owner = self.program.moduleByKey(use.const_ref.artifact);
-        const template = owner.view.const_templates.get(use.const_ref);
-        if (rootOfConstRef(owner, use.const_ref)) |root_id| if ((try owner.view.compileTimeRoot(root_id)).boxy_value) |stored| {
+        if (rootOfConstRef(owner, use.const_ref)) |root_id| if (owner.view.rootBoxyValue(root_id)) |stored| {
             return try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, root_id);
         };
-        switch (template.state) {
+        switch (owner.view.constValue(use.const_ref)) {
             .stored_const => |stored| try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, rootOfConstRef(owner, use.const_ref)),
             // A constant this compile-time program evaluates is read from
             // its slot. A polymorphic constant compile-time evaluation did

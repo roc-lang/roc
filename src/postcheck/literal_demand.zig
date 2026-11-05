@@ -447,7 +447,7 @@ const Builder = struct {
     fn constReadLowersBody(self: *Builder, use: checked.ConstUseTemplate) bool {
         const const_ref = use.const_ref;
         const view = self.views.get(const_ref.artifact.bytes) orelse return true;
-        switch (view.const_templates.get(const_ref).state) {
+        switch (view.constValue(const_ref)) {
             .stored_const, .unimplemented => return false,
             .reserved, .eval_template => {},
         }
@@ -615,7 +615,7 @@ const Builder = struct {
         };
         // A conversion with no root of its own depends on its instance.
         const root_id = conversion_root orelse return dependent;
-        return switch ((try view.compileTimeRoot(root_id)).payload) {
+        return switch (view.rootPayload(root_id)) {
             .pending => if (self.declared.contains(.{ .module = view.key.digest(), .root = root_id })) .{} else unrequested: {
                 if (traceEnabled()) std.debug.print("ctfe-demand unbounded unrequested-root {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), region.start.offset });
                 break :unrequested .{ .strict = true };

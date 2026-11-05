@@ -1302,7 +1302,7 @@ test "callable binding with alias annotation is const-evaluated" {
     for (app_artifact.compile_time_roots.roots) |root| {
         if (root.kind != .callable_binding) continue;
         saw_callable_binding = true;
-        if (root.payload != .fn_value) return error.CallableBindingConstFnNotStored;
+        if (app_artifact.evaluation.rootPayload(root.id) != .fn_value) return error.CallableBindingConstFnNotStored;
     }
     try std.testing.expect(saw_callable_binding);
 }
@@ -1863,7 +1863,7 @@ test "hoisted roots admit non-concrete transient locals without losing validatio
     for (artifact.compile_time_roots.roots) |root| {
         if (root.kind == .hoisted_validation) found_validation = true;
         if (root.kind != .hoisted_constant or root.source != .hoisted) continue;
-        if (root.payload != .const_node) continue;
+        if (artifact.evaluation.rootPayload(root.id) != .const_node) continue;
         found = true;
     }
     try std.testing.expect(found);
@@ -2010,7 +2010,7 @@ test "issue 10721: compile-time known destructure inside an effectful body resol
     var found_validation_root = false;
     for (artifact.compile_time_roots.roots) |root| {
         if (root.kind != .hoisted_validation) continue;
-        try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootPayload.discarded, root.payload);
+        try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootPayload.discarded, artifact.evaluation.rootPayload(root.id));
         const body = root.hoisted_body orelse return error.ExpectedHoistedValidationBody;
         try std.testing.expect(body == .pattern_validation);
         try std.testing.expect(body.pattern_validation.erase_runtime);
@@ -2235,7 +2235,7 @@ fn checkEchoApp(gpa: std.mem.Allocator, source: []const u8) HoistedConstantsTest
         if (std.mem.eql(u8, entry.report.title, "Compile Time Crash")) result.comptime_crash = true;
     }
     for (coord.appRootCheckedArtifact().compile_time_roots.roots) |root| {
-        if (root.payload == .runtime) result.has_runtime_roots = true;
+        if (coord.appRootCheckedArtifact().evaluation.rootPayload(root.id) == .runtime) result.has_runtime_roots = true;
     }
     return result;
 }
@@ -2309,7 +2309,7 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
         if (root.kind != .callable_binding) continue;
         const body = root.hoisted_body orelse return error.ExpectedHoistedCallableBody;
         if (body != .pattern_extraction) continue;
-        try std.testing.expect(root.payload == .fn_value);
+        try std.testing.expect(artifact.evaluation.rootPayload(root.id) == .fn_value);
         validating_extraction_roots += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), validating_extraction_roots);
@@ -2576,7 +2576,7 @@ fn expectPendingProcedureAliasRoot(
         };
         const root = (try artifact.compileTimeRoot(root_id));
         try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootKind.callable_binding, root.kind);
-        try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootPayload.pending, root.payload);
+        try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootPayload.pending, artifact.evaluation.rootPayload(root.id));
         try std.testing.expect(try compileTimeRequestIndexForRoot(artifact, root.id) == null);
         return;
     }
@@ -2888,7 +2888,7 @@ fn storedI64(
     const root = (try artifact.compileTimeRoot(entry.root));
     if (root.kind != .hoisted_constant) return error.HoistedRootKindMismatch;
 
-    const node_from_root = switch (root.payload) {
+    const node_from_root = switch (artifact.evaluation.rootPayload(root.id)) {
         .const_node => |node| node,
         .pending,
         .unevaluated,
@@ -2898,8 +2898,7 @@ fn storedI64(
         .runtime,
         => return error.HoistedRootDidNotStoreConstNode,
     };
-    const template = artifact.const_templates.get(entry.const_ref);
-    const node_from_template = switch (template.state) {
+    const node_from_template = switch (artifact.constValue(entry.const_ref)) {
         .stored_const => |stored| stored.node,
         .reserved,
         .eval_template,
@@ -2915,7 +2914,7 @@ fn rootStoredI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     root: check.CheckedArtifact.CompileTimeRoot,
 ) HoistedConstantsTestError!i64 {
-    const node = switch (root.payload) {
+    const node = switch (artifact.evaluation.rootPayload(root.id)) {
         .const_node => |const_node| const_node,
         .pending,
         .unevaluated,
@@ -2932,7 +2931,7 @@ fn scalarConstNodeI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     node: check.CheckedArtifact.ConstNodeId,
 ) HoistedConstantsTestError!i64 {
-    const value = artifact.const_store.get(node);
+    const value = artifact.evaluation.const_store.get(node);
     const actual = switch (value) {
         .scalar => |scalar| switch (scalar) {
             .i64 => |i| i,

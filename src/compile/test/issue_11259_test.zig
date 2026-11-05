@@ -231,24 +231,24 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
         if (try bodies.rootContainsDiagnosticError(root) and root.kind != .expect and
             root.request_eligibility == .eligible)
         {
-            try std.testing.expect(root.payload == .const_node);
-            try std.testing.expect(artifact.const_store.get(root.payload.const_node) == .checked_error);
+            try std.testing.expect(artifact.evaluation.rootPayload(root_id) == .const_node);
+            try std.testing.expect(artifact.evaluation.const_store.get(artifact.evaluation.rootPayload(root_id).const_node) == .checked_error);
         }
         const expr_source = module_source[region.start.offset..region.end.offset];
         if (expected.independent_expr) |independent| {
             if (std.mem.eql(u8, expr_source, independent)) {
                 try std.testing.expect(!try bodies.rootContainsDiagnosticError(root));
-                try std.testing.expect(root.payload == .const_node);
+                try std.testing.expect(artifact.evaluation.rootPayload(root_id) == .const_node);
                 found_independent = true;
             }
         }
         if (std.mem.eql(u8, expr_source, "123.U64")) {
             try std.testing.expectEqual(.eligible, root.request_eligibility);
-            try std.testing.expect(root.payload == .const_node);
+            try std.testing.expect(artifact.evaluation.rootPayload(root_id) == .const_node);
             found_good = true;
         }
-        if (root.kind == .quote_conversion and root.payload == .const_node and
-            artifact.const_store.get(root.payload.const_node) != .checked_error) completed_conversions += 1;
+        if (root.kind == .quote_conversion and artifact.evaluation.rootPayload(root_id) == .const_node and
+            artifact.evaluation.const_store.get(artifact.evaluation.rootPayload(root_id).const_node) != .checked_error) completed_conversions += 1;
     }
     try std.testing.expect(found_good);
     try std.testing.expect(found_independent);

@@ -1037,8 +1037,8 @@ fn runComptimeFloatBitsTest(
             };
         },
     };
-    const stored = resources.checked_artifact.const_store.get(node);
-    const const_store = &resources.checked_artifact.const_store;
+    const stored = resources.checked_artifact.evaluation.const_store.get(node);
+    const const_store = &resources.checked_artifact.evaluation.const_store;
 
     const matches = switch (expected) {
         .comptime_f32_bits => |expected_bits| if (constF32Bits(stored)) |actual_bits|

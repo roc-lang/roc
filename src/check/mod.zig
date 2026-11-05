@@ -81,7 +81,6 @@ test "check tests" {
     std.testing.refAllDecls(@import("body_analyses.zig"));
     std.testing.refAllDecls(@import("sealed_type_view.zig"));
     std.testing.refAllDecls(@import("checked_type_ids.zig"));
-    std.testing.refAllDecls(@import("evaluation_diagnostics.zig"));
     std.testing.refAllDecls(@import("checked_ids.zig"));
     std.testing.refAllDecls(@import("typed_cir.zig"));
     std.testing.refAllDecls(@import("snapshot.zig"));

@@ -2240,8 +2240,9 @@ The evaluation output is the checked module's own data: compile-time
 evaluation writes it and nothing else does, and it is stored in the module's
 content-hash entry beside the `ModuleEnv` and the inference output. A checked
 module cache entry records every requested root it did not evaluate
-with the explicit `unevaluated` payload; its constant template keeps its
-`eval_template` state and the constant store holds nothing for it. When a
+with the explicit `unevaluated` payload; the evaluation output holds no
+stored value for its constant template and the constant store holds
+nothing for it. When a
 compilation loads a checked module whose evaluation output has unevaluated
 requests, evaluation resumes on that module: its evaluation output moves into
 storage the module owns, every unevaluated root returns to `pending`, and the
@@ -4924,10 +4925,15 @@ sealed. It consists of exactly these parts:
   checking writes when it completes, so every later analysis reads them
   from the module, after a cache hit as well. An exhaustiveness check's
   index in its list is its checked site id.
-- The evaluation output: the constant store (`ConstStore`), compile-time root
-  payloads (the root table's rows', and the literal roots' by identity) and
-  compile-time root reads. Compile-time evaluation writes it and nothing
-  else does.
+- The evaluation output (`EvaluationOutput`): the constant store
+  (`ConstStore`); each compile-time root's payload and stored `.boxy` value,
+  by root identity; each constant template's stored value, by the
+  template's owner; the recorded debug observations; the roots each
+  evaluated root read; and the exhaustiveness checks a pairing decides whose
+  empirical failure evaluation already reported. Compile-time evaluation
+  writes it and nothing else does: no checked table holds a payload, a
+  stored value or a copy of one, and every entry is named by an identity
+  that is a function of the module's sealed data.
 
 **Sealing.** Checking canonicalizes the solver store in place as its last
 write before sealing it (`types.Store.canonicalizeAndSeal`). Every slot comes
@@ -5219,9 +5225,13 @@ Platform requirement declarations record their checked type roots, the
 producer-assigned order of requirement identity variables, and each for-clause
 alias's checked identity and backing roots. Pairing consumes these exact rows
 and the app's recorded solution rows; it never revisits source annotations or
-rebuilds identity order. Deferred exhaustiveness diagnostics retain checked
-display text, missing patterns, source regions, and checked site IDs as
-serializable data.
+rebuilds identity order. The exhaustiveness checks a pairing decides are
+the platform's deferred checks in its inference output whose sites need the
+pairing, less those whose empirical failure the platform's own evaluation
+reported (its evaluation output records those sites); the inference output
+holds their checked display text, missing patterns, source regions and
+checked site IDs, and the import mapping their reports display names
+through. Nothing copies them into another table.
 
 A parametric platform outputs every root selected by the producer, including
 roots that require app bindings, and the complete same-module evaluation order.
@@ -5617,8 +5627,7 @@ check), and
 `CheckedDispatch.procedureTemplate` describes it from the slot that holds
 the root. Its function type and scheme are created by that slot. What
 compile-time evaluation stores for a literal root is evaluation output keyed
-by the root's identity (`LiteralRootPayloadTable`), serialized with the
-module in identity order.
+by the root's identity, like every other root's (`EvaluationOutput.roots`).
 
 Constructs lowering needs that the IR does not contain are built by each
 lowering in its worker's workspace and never added to the checked module:

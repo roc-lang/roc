@@ -26,7 +26,7 @@ const type_key_engine = @import("type_key_engine.zig");
 const hoist_roots = @import("can").HoistRoots;
 const const_store = @import("const_store.zig");
 const problem = @import("problem.zig");
-pub const EvaluationDiagnostics = @import("evaluation_diagnostics.zig").Templates;
+pub const InferenceOutput = @import("inference_output.zig");
 const artifact_serialize = @import("artifact_serialize.zig");
 const SerializedSlice = artifact_serialize.SerializedSlice;
 
@@ -779,6 +779,9 @@ pub const PublishInputs = struct {
     evaluation_phase: enum { immediate, post_frontend } = .immediate,
     problem_store: ?*problem.Store = null,
     validation: can.Can.Validation = .checking,
+    /// What checking the module output beside its solved source. Publication
+    /// keeps a copy.
+    inference: InferenceOutput,
 };
 
 /// Which of a module's checker-selected compile-time roots its artifact
@@ -10307,19 +10310,19 @@ const TestImportViewTables = struct {
     hoisted_constants: HoistedConstTable = .{},
     const_templates: ConstTemplateTable = .{},
     method_registry: static_dispatch.MethodRegistry = .{},
-    const_store: ConstStore,
+    evaluation: EvaluationOutput,
     analyses: std.ArrayList(*BodyAnalyses) = .empty,
     allocator: Allocator,
 
     fn init(allocator: Allocator) TestImportViewTables {
         if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
-        return .{ .const_store = ConstStore.init(allocator), .allocator = allocator };
+        return .{ .evaluation = EvaluationOutput.init(allocator), .allocator = allocator };
     }
 
     fn deinit(self: *TestImportViewTables) void {
         for (self.analyses.items) |analyses| analyses.destroy();
         self.analyses.deinit(self.allocator);
-        self.const_store.deinit();
+        self.evaluation.deinit(self.allocator);
         self.checked_type_store.deinit(self.allocator);
     }
 
@@ -10371,7 +10374,8 @@ const TestImportViewTables = struct {
             .hoisted_constants = &self.hoisted_constants,
             .const_templates = &self.const_templates,
             .method_registry = &self.method_registry,
-            .const_store = &self.const_store,
+            .evaluation = &self.evaluation,
+            .const_store = &self.evaluation.const_store,
         };
     }
 };
@@ -21876,7 +21880,6 @@ pub fn computeUnitLiteralConversions(allocator: Allocator, dispatch: CheckedDisp
                 .expr = null,
                 .checked_type = candidate.ty,
                 .request_eligibility = if (eligible) .eligible else .ineligible,
-                .payload = .pending,
             },
             .checked_fn_root = undefined, // Created below, under the creation lock.
             .checked_fn_scheme = undefined, // Created below, under the creation lock.
@@ -23192,7 +23195,6 @@ pub fn computeLiteralComponent(
                 .expr = new_root.owner_expr,
                 .checked_type = new_root.ty,
                 .request_eligibility = if (eligible) .eligible else .ineligible,
-                .payload = .pending,
                 .literal_argument = .{
                     .site = new_root.site,
                     .ty = new_root.ty,
@@ -24376,7 +24378,7 @@ pub const PlatformPairing = struct {
     /// Comptime fingerprint of `Serialized`'s layout. The compiler's cache
     /// versioning folds it into the platform-pairing cache entry's admission hash.
     // Bump the version for semantics not visible in the serialized layout fingerprint.
-    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 7);
+    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 8);
 
     /// A pairing's cache entry: its evaluation output alone, keyed by the
     /// platform's and the app's checked entries. A hit installs it over a
@@ -24384,14 +24386,7 @@ pub const PlatformPairing = struct {
     /// computed on demand as without a hit.
     pub const Serialized = extern struct {
         relation: [32]u8,
-        has_dependent_evaluation: bool,
-        compile_time_roots: CompileTimeRootTable.Serialized,
-        literal_root_payloads: LiteralRootPayloadTable.Serialized,
-        const_templates: ConstTemplateTable.Serialized,
-        const_store: ConstStore.Serialized,
-        exported_const_templates: ExportedConstTemplateTable.Serialized,
-        compile_time_debug: CompileTimeDebugStore.Serialized,
-        compile_time_root_reads: CompileTimeRootReadTable.Serialized,
+        evaluation: EvaluationOutput.Serialized,
 
         pub const root_contract: collections.serde_validation.RootContract = .{
             .Owner = CheckedModuleArtifact,
@@ -24406,10 +24401,13 @@ pub const PlatformPairing = struct {
                 "module_env",
                 "exports",
                 "checked_types",
-                "evaluation_diagnostics",
+                "inference",
                 "checked_const_bodies",
                 "exported_procedure_templates",
                 "exported_procedure_bindings",
+                "exported_const_templates",
+                "compile_time_roots",
+                "const_templates",
                 "provides_requires",
                 "provided_exports",
                 "method_registry",
@@ -24432,8 +24430,7 @@ pub const PlatformPairing = struct {
                 "resolved_value_refs",
                 "platform_requirement_relations",
                 "platform_required_bindings",
-                // Runtime ownership and preparation state, not checked data.
-                "evaluation_state",
+                // Runtime ownership, not checked data.
                 "serialized_backing",
                 "serialized_backing_is_static",
                 "pairing_arena",
@@ -24444,32 +24441,19 @@ pub const PlatformPairing = struct {
             },
             .serialized_only_fields = &.{
                 "relation", // `checking_context_identity.platform_app_relation`.
-                "has_dependent_evaluation", // Whether the evaluation columns are persisted.
             },
         };
 
         pub fn serialize(self: *Serialized, artifact: *const CheckedModuleArtifact, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            std.debug.assert(artifact.pairing != null and artifact.evaluation_state == .finalized);
+            std.debug.assert(artifact.pairing != null and artifact.evaluation.state == .finalized);
             self.relation = artifact.checking_context_identity.platform_app_relation.?.bytes;
-            self.has_dependent_evaluation = (try artifact.rootRequests()).compile_time_requests.len != 0;
-            const compile_time_roots_empty: CompileTimeRootTable = .{};
-            try self.compile_time_roots.serialize(if (self.has_dependent_evaluation) &artifact.compile_time_roots else &compile_time_roots_empty, gpa, writer);
-            const literal_root_payloads_empty: LiteralRootPayloadTable = .{};
-            try self.literal_root_payloads.serialize(if (self.has_dependent_evaluation) &artifact.literal_root_payloads else &literal_root_payloads_empty, gpa, writer);
-            const const_templates_empty: ConstTemplateTable = .{};
-            try self.const_templates.serialize(if (self.has_dependent_evaluation) &artifact.const_templates else &const_templates_empty, gpa, writer);
-            const const_store_empty = ConstStore.init(gpa);
-            try self.const_store.serialize(if (self.has_dependent_evaluation) &artifact.const_store else &const_store_empty, gpa, writer);
-            const exported_const_templates_empty: ExportedConstTemplateTable = .{};
-            try self.exported_const_templates.serialize(if (self.has_dependent_evaluation) &artifact.exported_const_templates else &exported_const_templates_empty, gpa, writer);
-            try self.compile_time_debug.serialize(&artifact.compile_time_debug, gpa, writer);
-            const compile_time_root_reads_empty: CompileTimeRootReadTable = .{};
-            try self.compile_time_root_reads.serialize(if (self.has_dependent_evaluation) &artifact.compile_time_root_reads else &compile_time_root_reads_empty, gpa, writer);
+            try self.evaluation.serialize(&artifact.evaluation, gpa, writer);
         }
 
         pub fn validate(self: *const Serialized, len: usize) error{CorruptArtifact}!void {
             if (len < @sizeOf(Serialized)) return error.CorruptArtifact;
             try artifact_serialize.validateSerialized(Serialized, self, len);
+            try self.evaluation.validateContents(@intFromPtr(self));
         }
 
         /// Whether the entry was stored for the relation `paired` has.
@@ -24482,33 +24466,23 @@ pub const PlatformPairing = struct {
         /// awaiting evaluation. The pairing's arena owns the relocated
         /// buffer the output aliases.
         pub fn install(self: *const Serialized, paired: *CheckedModuleArtifact) void {
-            std.debug.assert(paired.pairing != null and paired.evaluation_state == .prepared);
-            const address = @intFromPtr(self);
-            const allocator = paired.pairing_arena.?.allocator();
-            if (self.has_dependent_evaluation) {
-                paired.compile_time_roots = self.compile_time_roots.deserialize(address);
-                paired.literal_root_payloads = self.literal_root_payloads.deserialize(address);
-                paired.const_templates = self.const_templates.deserialize(address);
-                paired.const_store = self.const_store.deserialize(address, allocator);
-                paired.exported_const_templates = self.exported_const_templates.deserialize(address);
-                paired.compile_time_root_reads = self.compile_time_root_reads.deserialize(address);
-            }
-            paired.compile_time_debug = self.compile_time_debug.deserialize(address);
-            paired.evaluation_state = .finalized;
+            std.debug.assert(paired.pairing != null and paired.evaluation.state == .prepared);
+            paired.evaluation = self.evaluation.deserialize(@intFromPtr(self), paired.pairing_arena.?.allocator());
+            paired.evaluation.state = .finalized;
         }
     };
 };
 
 /// Pair a checked platform with a checked app. The paired artifact reads the
-/// platform's checked module in place through the pairing; it owns its root
-/// requests and the evaluation columns its app-dependent roots fill.
+/// platform's checked module in place through the pairing; it owns the
+/// evaluation output its app-dependent roots fill.
 pub fn pairCheckedPlatform(
     allocator: Allocator,
     platform: *const CheckedModuleArtifact,
     app: *const CheckedModuleArtifact,
     available_artifacts: []const ImportedModuleView,
 ) Allocator.Error!CheckedModuleArtifact {
-    std.debug.assert(platform.evaluation_state == .finalized);
+    std.debug.assert(platform.evaluation.state == .finalized);
     std.debug.assert(platform.checking_context_identity.platform_app_relation == null);
     // The pairing reads the nominal representations of the platform's, the
     // app's and every available module's types, so their capabilities exist
@@ -24554,8 +24528,6 @@ pub fn pairCheckedPlatform(
     result.serialized_backing_is_static = false;
     result.pairing_arena = arena;
     result.pairing = pairing;
-    result.evaluation_state = .prepared;
-    result.compile_time_debug = .{};
     // Every read of the pairing's types and names goes to the platform's
     // stores (`typeStore`, `nameStore`).
     result.checked_types = .{};
@@ -24572,18 +24544,18 @@ pub fn pairCheckedPlatform(
     result.module_analyses = try ModuleAnalyses.create(thread_safe, io, platform);
     errdefer result.module_analyses.?.destroy();
     // The pairing evaluates the compile-time roots its platform withheld
-    // until the app binds its requirements, into evaluation columns of its
-    // own.
+    // until the app binds its requirements, into an evaluation output of its
+    // own that starts as its platform's. A pairing with nothing to evaluate
+    // reads its platform's output. Either records its own debug
+    // observations.
     const pairing_evaluates = for ((try platform.rootRequests()).requests) |request| {
         if (request.abi == .compile_time and request.requires_pairing) break true;
     } else false;
     if (pairing_evaluates) {
-        result.compile_time_roots = try copyPairingColumns(CompileTimeRootTable, platform.compile_time_roots, session);
-        result.literal_root_payloads = try copyPairingColumns(LiteralRootPayloadTable, platform.literal_root_payloads, session);
-        result.const_templates = try copyPairingColumns(ConstTemplateTable, platform.const_templates, session);
-        result.exported_const_templates = try copyPairingColumns(ExportedConstTemplateTable, platform.exported_const_templates, session);
-        result.const_store = try copyPairingColumns(ConstStore, platform.const_store, session);
+        result.evaluation = try copyPairingColumns(EvaluationOutput, platform.evaluation, session);
     }
+    result.evaluation.debug = .{};
+    result.evaluation.state = .prepared;
     result.openToAnalyses();
     return result;
 }
@@ -25499,17 +25471,12 @@ pub const CompileTimeRoot = struct {
     expr: ?CIR.Expr.Idx,
     checked_type: CheckedTypeId,
     request_eligibility: CompileTimeRootRequestEligibility,
-    payload: CompileTimeRootPayload,
     /// A hoisted root reached only through a branch, guard, loop body, or
     /// expect body. Its evaluation failure is not a diagnostic; finalization
     /// records the `runtime` payload instead.
     guarded: bool = false,
     /// For a `literal_argument` root: what it converts.
     literal_argument: ?LiteralArgumentRoot = null,
-    /// The value a `.boxy` compilation stored for a root holding a function
-    /// value (design.md "Stored Function Values"). Only `.boxy` programs read
-    /// it: to a `.lss` compilation the root stays `unevaluated`.
-    boxy_value: ?StoredConstTemplate = null,
 
     /// The expression the root evaluates itself, or null when its entry
     /// evaluates a lowering-side construct instead: the one its
@@ -25583,49 +25550,6 @@ fn rootBodyContainsDiagnosticError(diagnostics: *const body_analyses.NodeBits, r
     return false;
 }
 
-/// One literal root's evaluation output.
-pub const LiteralRootPayload = struct {
-    id: ComptimeRootKey,
-    payload: CompileTimeRootPayload = .pending,
-    /// The value a `.boxy` evaluation stored for the root
-    /// (`CompileTimeRoot.boxy_value`).
-    boxy_value: ?StoredConstTemplate = null,
-};
-
-/// The evaluation output of a module's literal roots, by root id: an entry
-/// for every literal root the module's root requests evaluate, made before
-/// evaluation fills them (`CheckedModuleArtifact.prepareLiteralRootPayloads`).
-pub const LiteralRootPayloadTable = struct {
-    entries: []LiteralRootPayload = &.{},
-
-    pub const Serialized = extern struct {
-        entries: SerializedSlice(LiteralRootPayload) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(LiteralRootPayloadTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-
-    fn find(self: *const LiteralRootPayloadTable, id: ComptimeRootKey) ?usize {
-        return std.sort.binarySearch(LiteralRootPayload, self.entries, id, struct {
-            fn order(key: ComptimeRootKey, item: LiteralRootPayload) std.math.Order {
-                return std.math.order(@backingInt(key), @backingInt(item.id));
-            }
-        }.order);
-    }
-
-    pub fn get(self: *const LiteralRootPayloadTable, id: ComptimeRootKey) ?LiteralRootPayload {
-        const index = self.find(id) orelse return null;
-        return self.entries[index];
-    }
-
-    fn entry(self: *LiteralRootPayloadTable, id: ComptimeRootKey) *LiteralRootPayload {
-        const index = self.find(id) orelse checkedArtifactInvariant("a literal root no root request evaluates received a payload", .{});
-        return &self.entries[index];
-    }
-};
-
 /// Public `CompileTimeRootTable` declaration.
 ///
 /// This is the durable compile-time root schedule and payload table. It stores
@@ -25685,7 +25609,6 @@ pub const CompileTimeRootTable = struct {
                 .pattern = null,
                 .expr = reachedRootExpr(module_index, expr_idx),
                 .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx)),
-                .payload = .pending,
             });
         }
 
@@ -25710,7 +25633,6 @@ pub const CompileTimeRootTable = struct {
                     .pattern = reachedRootPattern(module_index, def.pattern.idx),
                     .expr = reachedRootExpr(module_index, def.expr.idx),
                     .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
-                    .payload = .pending,
                 });
             } else {
                 try appendCompileTimeRoot(&roots, allocator, .{
@@ -25720,7 +25642,6 @@ pub const CompileTimeRootTable = struct {
                     .pattern = reachedRootPattern(module_index, def.pattern.idx),
                     .expr = reachedRootExpr(module_index, def.expr.idx),
                     .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
-                    .payload = .pending,
                 });
             }
         }
@@ -25756,7 +25677,6 @@ pub const CompileTimeRootTable = struct {
                 .pattern = checked_root.pattern,
                 .expr = checked_root.expr,
                 .checked_type = checked_root.checked_type,
-                .payload = .pending,
                 .guarded = selected.guarded,
             });
         }
@@ -25788,13 +25708,15 @@ pub const CompileTimeRootTable = struct {
         return null;
     }
 
-    pub fn validationResolvedByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) bool {
+    /// Whether evaluation discarded the runtime-erasable validation root of
+    /// `pattern`, given the module's evaluation output.
+    pub fn validationResolvedByPattern(self: *const CompileTimeRootTable, evaluation: *const EvaluationOutput, pattern: CIR.Pattern.Idx) bool {
         for (self.roots) |entry| {
             if (entry.kind != .hoisted_validation or entry.pattern != pattern) continue;
             const body = entry.hoisted_body orelse checkedArtifactInvariant("hoisted validation root had no selected body", .{});
             if (body != .pattern_validation) checkedArtifactInvariant("hoisted validation root had a non-validation body", .{});
             if (!body.pattern_validation.erase_runtime) return false;
-            return entry.payload == .discarded;
+            return evaluation.rootPayload(entry.id) == .discarded;
         }
         return false;
     }
@@ -25813,28 +25735,6 @@ pub const CompileTimeRootTable = struct {
         return self.roots[id.index()];
     }
 
-    /// Record the value a `.boxy` evaluation stored for root `id`.
-    pub fn fillBoxyValue(self: *CompileTimeRootTable, id: ComptimeRootKey, value: StoredConstTemplate) void {
-        const index = id.index();
-        if (index >= self.roots.len) {
-            checkedArtifactInvariant("compile-time root id is out of range", .{});
-        }
-        self.roots[index].boxy_value = value;
-    }
-
-    pub fn fillPayload(
-        self: *CompileTimeRootTable,
-        id: ComptimeRootKey,
-        payload: CompileTimeRootPayload,
-    ) void {
-        const index = id.index();
-        if (index >= self.roots.len) {
-            checkedArtifactInvariant("compile-time root id is out of range", .{});
-        }
-        verifyCompileTimeRootPayloadMatchesKind(self.roots[index], payload);
-        self.roots[index].payload = payload;
-    }
-
     pub fn deinit(self: *CompileTimeRootTable, allocator: Allocator) void {
         deinitCompileTimeRootSlice(allocator, self.roots);
         allocator.free(self.roots);
@@ -25851,7 +25751,6 @@ pub const CompileTimeRootTable = struct {
         expr: ?CIR.Expr.Idx,
         checked_type: CheckedTypeId,
         request_eligibility: CompileTimeRootRequestEligibility = .pending,
-        payload: CompileTimeRootPayload,
         guarded: bool = false,
         literal_argument: ?LiteralArgumentRoot = null,
     };
@@ -25874,7 +25773,6 @@ pub const CompileTimeRootTable = struct {
             .pattern = null,
             .expr = reachedRootExpr(module_index, body_expr),
             .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(body_expr)),
-            .payload = .expect,
         });
     }
 
@@ -25900,7 +25798,6 @@ pub const CompileTimeRootTable = struct {
             .expr = entry.expr,
             .checked_type = entry.checked_type,
             .request_eligibility = entry.request_eligibility,
-            .payload = entry.payload,
             .guarded = entry.guarded,
             .literal_argument = entry.literal_argument,
         }) catch |err| {
@@ -29508,7 +29405,7 @@ const PublicApiClosureDependencyCollector = struct {
 
                 // An unimplemented declaration has no value and pulls in no
                 // further dependencies.
-                if (constEvalTemplate(self.const_templates, self.checked_const_bodies, self.entry_wrappers, self.checked_templates, const_ref)) |eval| {
+                if (constEvalTemplate(self.const_templates, const_ref)) |eval| {
                     try pending.append(gpa, .{ .resolved_value_refs = eval.resolved_value_refs });
                     try pending.append(gpa, .{ .procedure_template = eval.entry_template });
                 }
@@ -30084,33 +29981,11 @@ pub fn computeExportClosures(allocator: Allocator, owner: ImportedModuleView, re
     return result;
 }
 
-/// The evaluation template of a constant `const_templates` holds: its own
-/// when evaluation has not stored the constant's value, and the one its
-/// evaluated root runs otherwise, so a reader sees the same template before
-/// and after evaluation. Null for a constant that has no value.
-fn constEvalTemplate(
-    const_templates: *const ConstTemplateTable,
-    checked_const_bodies: *const CheckedConstBodyTable,
-    entry_wrappers: *const EntryWrapperTable,
-    templates: *const CheckedProcedureTemplateTable,
-    const_ref: ConstRef,
-) ?ConstEvalTemplate {
-    const template = const_templates.get(const_ref);
-    return switch (template.state) {
+/// The evaluation template of a constant `const_templates` holds, or null
+/// for a constant that has no value.
+fn constEvalTemplate(const_templates: *const ConstTemplateTable, const_ref: ConstRef) ?ConstEvalTemplate {
+    return switch (const_templates.get(const_ref).state) {
         .eval_template => |eval| eval,
-        .stored_const => |stored| blk: {
-            const body = checked_const_bodies.bodyForRoot(stored.root) orelse
-                checkedArtifactInvariant("a stored constant's root has no checked const body", .{});
-            const wrapper = entryWrapperForRoot(entry_wrappers, stored.root);
-            const entry = templates.get(wrapper.template.template);
-            break :blk .{
-                .body = body,
-                .entry_template = wrapper.template,
-                .source_scheme = const_ref.source_scheme,
-                .resolved_value_refs = entry.resolved_value_refs,
-                .static_dispatch_plans = entry.static_dispatch_plans,
-            };
-        },
         .unimplemented => null,
         .reserved => checkedArtifactInvariant("a closure reached an unsealed const template", .{}),
     };
@@ -30447,7 +30322,7 @@ const ImportedTemplateClosureBuilder = struct {
         try self.appendCheckedTypeRoot(scheme.root);
         try self.appendCheckedTypeScheme(const_ref.source_scheme);
 
-        const eval = constEvalTemplate(self.context.const_templates_table, self.context.checked_const_bodies, self.context.entry_wrappers, self.context.checked_templates, const_ref) orelse return;
+        const eval = constEvalTemplate(self.context.const_templates_table, const_ref) orelse return;
         try self.appendCheckedConstBody(eval.body);
         try self.appendResolvedValueRefs(eval.resolved_value_refs);
         try self.appendStaticDispatchPlans(eval.static_dispatch_plans);
@@ -30769,10 +30644,28 @@ pub const StoredConstTemplate = struct {
 pub const ConstTemplateState = union(enum) {
     reserved,
     eval_template: ConstEvalTemplate,
-    stored_const: StoredConstTemplate,
     /// This constant was declared with a type annotation and never given a
     /// value. It lowers to a crash wherever the constant is used.
     unimplemented: UnimplementedDeclaration,
+};
+
+/// What a constant template holds for a reader: its checked state, or the
+/// value evaluation stored for it (`EvaluationOutput.storedConst`).
+pub const ConstTemplateValue = union(enum) {
+    reserved,
+    eval_template: ConstEvalTemplate,
+    stored_const: StoredConstTemplate,
+    unimplemented: UnimplementedDeclaration,
+
+    /// The value of `template` given the evaluation output of its module.
+    pub fn of(template: ConstTemplate, evaluation: *const EvaluationOutput) ConstTemplateValue {
+        if (evaluation.storedConst(template.owner)) |stored| return .{ .stored_const = stored };
+        return switch (template.state) {
+            .reserved => .reserved,
+            .eval_template => |eval| .{ .eval_template = eval },
+            .unimplemented => |declaration| .{ .unimplemented = declaration },
+        };
+    }
 };
 
 /// Public `ConstTemplate` declaration.
@@ -30891,22 +30784,21 @@ pub const ConstTemplateTable = struct {
         }
         switch (record.state) {
             .reserved => record.state = .{ .eval_template = template },
-            .eval_template, .stored_const => checkedArtifactInvariant("constant template was filled twice", .{}),
+            .eval_template => checkedArtifactInvariant("constant template was filled twice", .{}),
             .unimplemented => checkedArtifactInvariant("constant template without a declared value was given an eval body", .{}),
         }
     }
 
-    pub fn fillStoredConst(
-        self: *ConstTemplateTable,
-        ref: ConstRef,
-        template: StoredConstTemplate,
-    ) void {
-        const record = self.recordForRef(ref);
-        switch (record.state) {
-            .reserved, .eval_template => record.state = .{ .stored_const = template },
-            .stored_const => checkedArtifactInvariant("constant template was filled twice", .{}),
-            .unimplemented => checkedArtifactInvariant("constant template without a declared value was given a stored value", .{}),
-        }
+    /// The owners of every template with a body to evaluate: the entries of
+    /// the module's evaluation output (`EvaluationOutput.addConsts`).
+    pub fn evaluatedOwners(self: *const ConstTemplateTable, allocator: Allocator) Allocator.Error![]ConstOwner {
+        var owners: std.ArrayList(ConstOwner) = .empty;
+        errdefer owners.deinit(allocator);
+        for (self.templates.items) |template| switch (template.state) {
+            .eval_template => try owners.append(allocator, template.owner),
+            .reserved, .unimplemented => {},
+        };
+        return owners.toOwnedSlice(allocator);
     }
 
     pub fn get(self: *const ConstTemplateTable, ref: ConstRef) ConstTemplate {
@@ -30931,7 +30823,7 @@ pub const ConstTemplateTable = struct {
             switch (template.state) {
                 // A declaration with no implementation is sealed on
                 // publication; there is never a value to fill in later.
-                .eval_template, .stored_const, .unimplemented => {},
+                .eval_template, .unimplemented => {},
                 .reserved => base.invariant(
                     "checked artifact invariant violated: constant template {d} was not sealed before publication",
                     .{i},
@@ -31038,18 +30930,6 @@ pub const ExportedConstTemplateTable = struct {
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
     };
-
-    pub fn fillStoredConst(
-        self: *ExportedConstTemplateTable,
-        ref: ConstRef,
-        template: StoredConstTemplate,
-    ) void {
-        for (self.templates) |*entry| {
-            if (!constRefEql(entry.const_ref, ref)) continue;
-            entry.template.state = .{ .stored_const = template };
-            return;
-        }
-    }
 };
 
 /// A compiler invariant of checked artifact construction: a debug-only
@@ -31111,9 +30991,8 @@ pub const CompileTimeDebugStore = struct {
         return .{ .entries = entries, .bytes = bytes };
     }
 
-    pub fn validate(self: CompileTimeDebugStore, root_count: usize) error{CorruptArtifact}!void {
+    pub fn validate(self: CompileTimeDebugStore) error{CorruptArtifact}!void {
         for (self.entries) |entry| {
-            if (entry.root.rowIndex()) |row| if (row >= root_count) return error.CorruptArtifact;
             if (entry.message_start > self.bytes.len or
                 entry.message_len > self.bytes.len - entry.message_start) return error.CorruptArtifact;
         }
@@ -31210,6 +31089,239 @@ pub const CompileTimeRootReadTable = struct {
     }
 };
 
+/// Whether compile-time evaluation still has to finish a module's evaluation
+/// output. Process-local: a cache entry holds a finished output.
+pub const EvaluationState = enum { prepared, finalized };
+
+/// One compile-time root's evaluation output.
+pub const RootOutput = struct {
+    id: ComptimeRootKey,
+    payload: CompileTimeRootPayload = .pending,
+    /// The value a `.boxy` evaluation stored for a root holding a function
+    /// value (design.md "Stored Function Values"). Only `.boxy` programs read
+    /// it: to a `.lss` compilation the root stays `unevaluated`.
+    boxy_value: ?StoredConstTemplate = null,
+};
+
+/// The value evaluation stored for one constant template, named by the
+/// template's owner.
+pub const ConstOutput = struct {
+    owner: ConstOwner,
+    value: ?StoredConstTemplate = null,
+};
+
+/// Everything compile-time evaluation writes for one module, and nothing
+/// else: the constant store, each root's payload and stored `.boxy` value,
+/// each constant template's stored value, the recorded debug observations and
+/// the roots each evaluated root read. Evaluation writes no checked table.
+/// Every entry is named by an id that is a function of the module's sealed
+/// data alone: a root by its root id, a constant by its owner.
+pub const EvaluationOutput = struct {
+    const_store: ConstStore,
+    /// Ascending by root id: an entry for every row of the module's root
+    /// table and for every literal root its root requests evaluate.
+    roots: []RootOutput = &.{},
+    /// Ascending by owner (`constOwnerOrder`): an entry for every constant
+    /// template with a body to evaluate.
+    consts: []ConstOutput = &.{},
+    debug: CompileTimeDebugStore = .{},
+    root_reads: CompileTimeRootReadTable = .{},
+    /// Ascending: each exhaustiveness check that needs a platform/app pairing
+    /// to decide whose empirical failure evaluation already reported. A
+    /// pairing does not decide it again.
+    reported_sites: []CheckedExhaustivenessSiteId = &.{},
+    state: EvaluationState = .finalized,
+
+    pub const serde_transient_fields = [_][]const u8{"state"};
+
+    pub const Serialized = extern struct {
+        const_store: ConstStore.Serialized,
+        roots: SerializedSlice(RootOutput) = .{},
+        consts: SerializedSlice(ConstOutput) = .{},
+        debug: CompileTimeDebugStore.Serialized = .{},
+        root_reads: CompileTimeRootReadTable.Serialized = .{},
+        reported_sites: SerializedSlice(CheckedExhaustivenessSiteId) = .{},
+
+        pub const root_contract: collections.serde_validation.RootContract = .{
+            .Owner = EvaluationOutput,
+            .owner_only_fields = &.{
+                "state", // Process-local; a serialized output is finished.
+            },
+        };
+
+        const Serde = artifact_serialize.SliceStoreSerde(EvaluationOutput, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserializeWithAllocator;
+
+        /// Check every range the output's tables hold against themselves,
+        /// once the buffer at `base_addr` that holds them is validated.
+        pub fn validateContents(self: *const Serialized, base_addr: usize) error{CorruptArtifact}!void {
+            try self.debug.deserialize(base_addr).validate();
+            try self.root_reads.deserialize(base_addr).validate();
+            const roots = self.roots.deserialize(base_addr);
+            for (roots, 0..) |root, index| {
+                if (index != 0 and @backingInt(roots[index - 1].id) >= @backingInt(root.id)) return error.CorruptArtifact;
+            }
+        }
+    };
+
+    pub fn init(allocator: Allocator) EvaluationOutput {
+        return .{ .const_store = ConstStore.init(allocator) };
+    }
+
+    pub fn deinit(self: *EvaluationOutput, allocator: Allocator) void {
+        self.const_store.deinit();
+        allocator.free(self.roots);
+        allocator.free(self.consts);
+        self.debug.deinit(allocator);
+        self.root_reads.deinit(allocator);
+        allocator.free(self.reported_sites);
+        self.* = undefined;
+    }
+
+    /// Whether evaluation reported the empirical failure of `site`, an
+    /// exhaustiveness check a pairing decides.
+    pub fn reportedSite(self: *const EvaluationOutput, site: CheckedExhaustivenessSiteId) bool {
+        return std.sort.binarySearch(CheckedExhaustivenessSiteId, self.reported_sites, site, struct {
+            fn order(key: CheckedExhaustivenessSiteId, item: CheckedExhaustivenessSiteId) std.math.Order {
+                return std.math.order(@backingInt(key), @backingInt(item));
+            }
+        }.order) != null;
+    }
+
+    /// Record that evaluation reported the empirical failure of `site`, an
+    /// exhaustiveness check a pairing decides.
+    pub fn recordReportedSite(self: *EvaluationOutput, allocator: Allocator, frees_replaced: bool, site: CheckedExhaustivenessSiteId) Allocator.Error!void {
+        if (self.reportedSite(site)) return;
+        const index = std.sort.lowerBound(CheckedExhaustivenessSiteId, self.reported_sites, site, struct {
+            fn order(key: CheckedExhaustivenessSiteId, item: CheckedExhaustivenessSiteId) std.math.Order {
+                return std.math.order(@backingInt(key), @backingInt(item));
+            }
+        }.order);
+        const sites = try allocator.alloc(CheckedExhaustivenessSiteId, self.reported_sites.len + 1);
+        @memcpy(sites[0..index], self.reported_sites[0..index]);
+        sites[index] = site;
+        @memcpy(sites[index + 1 ..], self.reported_sites[index..]);
+        if (frees_replaced) allocator.free(self.reported_sites);
+        self.reported_sites = sites;
+    }
+
+    fn findRoot(self: *const EvaluationOutput, id: ComptimeRootKey) ?usize {
+        return std.sort.binarySearch(RootOutput, self.roots, id, struct {
+            fn order(key: ComptimeRootKey, item: RootOutput) std.math.Order {
+                return std.math.order(@backingInt(key), @backingInt(item.id));
+            }
+        }.order);
+    }
+
+    fn findConst(self: *const EvaluationOutput, owner: ConstOwner) ?usize {
+        return std.sort.binarySearch(ConstOutput, self.consts, owner, struct {
+            fn order(key: ConstOwner, item: ConstOutput) std.math.Order {
+                return constOwnerOrder(key, item.owner);
+            }
+        }.order);
+    }
+
+    /// Root `id`'s payload: `pending` for a root evaluation has no entry for
+    /// yet.
+    pub fn rootPayload(self: *const EvaluationOutput, id: ComptimeRootKey) CompileTimeRootPayload {
+        const index = self.findRoot(id) orelse return .pending;
+        return self.roots[index].payload;
+    }
+
+    /// The value a `.boxy` evaluation stored for root `id`.
+    pub fn rootBoxyValue(self: *const EvaluationOutput, id: ComptimeRootKey) ?StoredConstTemplate {
+        const index = self.findRoot(id) orelse return null;
+        return self.roots[index].boxy_value;
+    }
+
+    /// The value evaluation stored for the constant template `owner` names.
+    pub fn storedConst(self: *const EvaluationOutput, owner: ConstOwner) ?StoredConstTemplate {
+        const index = self.findConst(owner) orelse return null;
+        return self.consts[index].value;
+    }
+
+    fn rootEntry(self: *EvaluationOutput, id: ComptimeRootKey) *RootOutput {
+        const index = self.findRoot(id) orelse checkedArtifactInvariant("a compile-time root without an evaluation output entry received a payload", .{});
+        return &self.roots[index];
+    }
+
+    /// Record root `id`'s payload.
+    pub fn setRootPayload(self: *EvaluationOutput, id: ComptimeRootKey, payload: CompileTimeRootPayload) void {
+        self.rootEntry(id).payload = payload;
+    }
+
+    /// Record the value a `.boxy` evaluation stored for root `id`.
+    pub fn setRootBoxyValue(self: *EvaluationOutput, id: ComptimeRootKey, value: StoredConstTemplate) void {
+        self.rootEntry(id).boxy_value = value;
+    }
+
+    /// Record the value evaluation stored for the constant template `owner`
+    /// names.
+    pub fn setStoredConst(self: *EvaluationOutput, owner: ConstOwner, value: StoredConstTemplate) void {
+        const index = self.findConst(owner) orelse checkedArtifactInvariant("a constant template without an evaluation output entry received a stored value", .{});
+        const entry = &self.consts[index];
+        if (entry.value != null) checkedArtifactInvariant("constant template was given a stored value twice", .{});
+        entry.value = value;
+    }
+
+    /// Give every root in `entries` an entry, keeping the entries already
+    /// present. `entries` holds each root with the payload it starts with.
+    pub fn addRoots(self: *EvaluationOutput, allocator: Allocator, frees_replaced: bool, entries: []const RootOutput) Allocator.Error!void {
+        var merged: std.ArrayList(RootOutput) = .empty;
+        errdefer merged.deinit(allocator);
+        try merged.appendSlice(allocator, self.roots);
+        for (entries) |entry| {
+            if (self.findRoot(entry.id) == null) try merged.append(allocator, entry);
+        }
+        if (merged.items.len == self.roots.len) {
+            merged.deinit(allocator);
+            return;
+        }
+        std.mem.sort(RootOutput, merged.items, {}, struct {
+            fn lessThan(_: void, a: RootOutput, b: RootOutput) bool {
+                return @backingInt(a.id) < @backingInt(b.id);
+            }
+        }.lessThan);
+        const roots = try merged.toOwnedSlice(allocator);
+        if (frees_replaced) allocator.free(self.roots);
+        self.roots = roots;
+    }
+
+    /// Give every constant template `owners` names an entry awaiting its
+    /// value. The output holds no constant entries yet.
+    pub fn addConsts(self: *EvaluationOutput, allocator: Allocator, owners: []const ConstOwner) Allocator.Error!void {
+        std.debug.assert(self.consts.len == 0);
+        const consts = try allocator.alloc(ConstOutput, owners.len);
+        for (consts, owners) |*entry, owner| entry.* = .{ .owner = owner };
+        std.mem.sort(ConstOutput, consts, {}, struct {
+            fn lessThan(_: void, a: ConstOutput, b: ConstOutput) bool {
+                return constOwnerOrder(a.owner, b.owner) == .lt;
+            }
+        }.lessThan);
+        self.consts = consts;
+    }
+
+    /// Make every root no compilation evaluated await evaluation again.
+    pub fn reopen(self: *EvaluationOutput) void {
+        for (self.roots) |*root| {
+            if (root.payload == .unevaluated) root.payload = .pending;
+        }
+        self.state = .prepared;
+    }
+};
+
+/// The order of constant template owners in an evaluation output: top-level
+/// constants by binder pattern, then hoisted constants by root id.
+fn constOwnerOrder(a: ConstOwner, b: ConstOwner) std.math.Order {
+    const tag_order = std.math.order(@intFromEnum(std.meta.activeTag(a)), @intFromEnum(std.meta.activeTag(b)));
+    if (tag_order != .eq) return tag_order;
+    return switch (a) {
+        .top_level_binding => |owner| std.math.order(@backingInt(owner.pattern), @backingInt(b.top_level_binding.pattern)),
+        .hoisted_root => |owner| std.math.order(@backingInt(owner.root), @backingInt(b.hoisted_root.root)),
+    };
+}
+
 /// Checked module publication, including typed stores and compile-time observations.
 pub const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
@@ -31231,7 +31343,9 @@ pub const CheckedModuleArtifact = struct {
     /// The module's types. Empty in a paired artifact, which reads its
     /// platform's (`typeStore`).
     checked_types: CheckedTypeStore = .{},
-    evaluation_diagnostics: EvaluationDiagnostics = .{},
+    /// What inference output beside the solved source: the checking outcome
+    /// and the import mapping.
+    inference: InferenceOutput = .{},
     checked_const_bodies: CheckedConstBodyTable = .{},
     exported_procedure_templates: ExportedProcedureTemplateTable = .{},
     exported_procedure_bindings: ExportedProcedureBindingTable = .{},
@@ -31246,8 +31360,6 @@ pub const CheckedModuleArtifact = struct {
     intrinsic_wrappers: IntrinsicWrapperTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
-    /// The evaluation output of the module's literal roots.
-    literal_root_payloads: LiteralRootPayloadTable = .{},
     hosted_procs: HostedProcTable,
     hosted_bindings: HostedBindingTable = .{},
     platform_required_declarations: PlatformRequiredDeclarationTable,
@@ -31259,12 +31371,9 @@ pub const CheckedModuleArtifact = struct {
     top_level_values: TopLevelValueTable,
     hoisted_constants: HoistedConstTable,
     const_templates: ConstTemplateTable,
-    const_store: ConstStore,
-    compile_time_debug: CompileTimeDebugStore = .{},
-    compile_time_root_reads: CompileTimeRootReadTable = .{},
-    /// Process-local publication state; cache entries always contain finalized output.
-    evaluation_state: enum { prepared, finalized } = .finalized,
-    /// Owns the evaluation columns of a finalized artifact that a compilation
+    /// What compile-time evaluation wrote for the module.
+    evaluation: EvaluationOutput,
+    /// Owns the evaluation output of a finalized artifact that a compilation
     /// reopened to evaluate roots no earlier compilation demanded (see
     /// `reopenForEvaluation`). Process-local, like `pairing_arena`.
     reopened_arena: ?*base.SingleThreadArena = null,
@@ -31276,7 +31385,7 @@ pub const CheckedModuleArtifact = struct {
     /// published artifacts, which own their sub-store allocations individually.
     serialized_backing: ?[]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 = null,
     serialized_backing_is_static: bool = false,
-    /// Owns a paired artifact's root requests and evaluation columns.
+    /// Owns a paired artifact's evaluation output.
     pairing_arena: ?*base.SingleThreadArena = null,
     /// The platform/app pairing a paired artifact reads its platform
     /// through. Process-local.
@@ -31515,10 +31624,11 @@ pub const CheckedModuleArtifact = struct {
     /// (design.md "Literal Arguments").
     pub fn hasUnevaluatedRequests(self: *const CheckedModuleArtifact, strategy: base.SpecializationStrategy) Allocator.Error!bool {
         for ((try self.rootRequests()).compile_time_requests) |request| {
-            const root = try self.compileTimeRoot(request.compile_time_root orelse continue);
-            if (root.payload != .unevaluated and root.payload != .pending) continue;
-            if (strategy == .lss and root.kind == .literal_argument) continue;
-            if (strategy == .boxy and root.boxy_value != null) continue;
+            const id = request.compile_time_root orelse continue;
+            const payload = self.evaluation.rootPayload(id);
+            if (payload != .unevaluated and payload != .pending) continue;
+            if (strategy == .lss and id.kind() == .literal_argument) continue;
+            if (strategy == .boxy and self.evaluation.rootBoxyValue(id) != null) continue;
             return true;
         }
         return false;
@@ -31535,56 +31645,49 @@ pub const CheckedModuleArtifact = struct {
         return analyses.root_requests.peek();
     }
 
-    /// Compile-time root `id` of this module, with the payload evaluation
-    /// gave it: a row of the root table, or a literal root.
+    /// Compile-time root `id` of this module: a row of the root table, or a
+    /// literal root.
     pub fn compileTimeRoot(self: *const CheckedModuleArtifact, id: ComptimeRootKey) Allocator.Error!CompileTimeRoot {
         return importedView(self).compileTimeRoot(id);
     }
 
     /// Record root `id`'s payload.
     pub fn fillRootPayload(self: *CheckedModuleArtifact, id: ComptimeRootKey, payload: CompileTimeRootPayload) Allocator.Error!void {
-        if (id.rowIndex() != null) return self.compile_time_roots.fillPayload(id, payload);
-        verifyCompileTimeRootPayloadMatchesKind((try self.dispatch().literalRoot(id)).root, payload);
-        self.literal_root_payloads.entry(id).payload = payload;
+        verifyCompileTimeRootPayloadMatchesKind(try self.compileTimeRoot(id), payload);
+        self.evaluation.setRootPayload(id, payload);
     }
 
     /// Record the value a `.boxy` evaluation stored for root `id`.
     pub fn fillRootBoxyValue(self: *CheckedModuleArtifact, id: ComptimeRootKey, value: StoredConstTemplate) void {
-        if (id.rowIndex() != null) return self.compile_time_roots.fillBoxyValue(id, value);
-        self.literal_root_payloads.entry(id).boxy_value = value;
+        self.evaluation.setRootBoxyValue(id, value);
     }
 
     /// Give every literal root the module's root requests evaluate its
     /// evaluation output entry, before evaluation fills any.
-    pub fn prepareLiteralRootPayloads(self: *CheckedModuleArtifact, allocator: Allocator) Allocator.Error!void {
-        if (self.literal_root_payloads.entries.len != 0) return;
-        var entries: std.ArrayList(LiteralRootPayload) = .empty;
-        errdefer entries.deinit(allocator);
+    pub fn prepareLiteralRootPayloads(self: *CheckedModuleArtifact) Allocator.Error!void {
+        const allocator = self.evaluationAllocator();
+        var entries: std.ArrayList(RootOutput) = .empty;
+        defer entries.deinit(allocator);
         for ((try self.rootRequests()).requests) |request| {
             const root = request.compile_time_root orelse continue;
             if (root.rowIndex() != null) continue;
             try entries.append(allocator, .{ .id = root });
         }
-        std.mem.sort(LiteralRootPayload, entries.items, {}, struct {
-            fn lessThan(_: void, a: LiteralRootPayload, b: LiteralRootPayload) bool {
-                return @backingInt(a.id) < @backingInt(b.id);
-            }
-        }.lessThan);
-        self.literal_root_payloads = .{ .entries = try entries.toOwnedSlice(allocator) };
+        try self.evaluation.addRoots(allocator, self.freesReplacedEvaluationColumns(), entries.items);
     }
 
     /// Reopen a finalized artifact so this compilation can evaluate the roots
     /// earlier compilations did not demand (design.md "Demand-Driven
-    /// Compile-Time Evaluation"). The evaluation columns move into storage
+    /// Compile-Time Evaluation"). The evaluation output moves into storage
     /// this artifact owns, every unevaluated root awaits evaluation again,
     /// and the artifact awaits finalization. Roots this compilation does not
     /// demand either return to `unevaluated` when it seals the artifact.
     pub fn reopenForEvaluation(self: *CheckedModuleArtifact, allocator: Allocator) Allocator.Error!void {
-        if (self.evaluation_state != .finalized) checkedArtifactInvariant("only a finalized artifact can be reopened for evaluation", .{});
+        if (self.evaluation.state != .finalized) checkedArtifactInvariant("only a finalized artifact can be reopened for evaluation", .{});
         if (self.reopened_arena != null) checkedArtifactInvariant("checked artifact was reopened for evaluation twice", .{});
-        // A relocated cache entry's columns alias its buffer and a paired
-        // module's may alias its platform's, so they move into owned storage; an
-        // artifact this process published already owns them.
+        // A relocated cache entry's output aliases its buffer and a paired
+        // module's may alias its platform's, so it moves into owned storage; an
+        // artifact this process published already owns it.
         if (self.serialized_backing != null or self.pairing_arena != null) {
             const owner = if (self.pairing_arena) |arena| arena.allocator() else blk: {
                 const arena = try allocator.create(base.SingleThreadArena);
@@ -31592,22 +31695,12 @@ pub const CheckedModuleArtifact = struct {
                 self.reopened_arena = arena;
                 break :blk arena.allocator();
             };
-            self.compile_time_roots = try copyPairingColumns(CompileTimeRootTable, self.compile_time_roots, owner);
-            self.literal_root_payloads = try copyPairingColumns(LiteralRootPayloadTable, self.literal_root_payloads, owner);
-            self.const_templates = try copyPairingColumns(ConstTemplateTable, self.const_templates, owner);
-            self.exported_const_templates = try copyPairingColumns(ExportedConstTemplateTable, self.exported_const_templates, owner);
-            self.const_store = try copyPairingColumns(ConstStore, self.const_store, owner);
+            self.evaluation = try copyPairingColumns(EvaluationOutput, self.evaluation, owner);
         }
-        for (self.compile_time_roots.roots) |*root| {
-            if (root.payload == .unevaluated) root.payload = .pending;
-        }
-        for (self.literal_root_payloads.entries) |*entry| {
-            if (entry.payload == .unevaluated) entry.payload = .pending;
-        }
-        self.evaluation_state = .prepared;
+        self.evaluation.reopen();
     }
 
-    /// The allocator that owns this artifact's evaluation columns: the bytes
+    /// The allocator that owns this artifact's evaluation output: the bytes
     /// finalization stores for cache publication and replay.
     pub fn evaluationAllocator(self: *const CheckedModuleArtifact) Allocator {
         if (self.reopened_arena) |arena| return arena.allocator();
@@ -31615,8 +31708,8 @@ pub const CheckedModuleArtifact = struct {
         return self.canonical_names.allocator;
     }
 
-    /// Whether replacing an evaluation column must free the one it replaces:
-    /// an arena or a relocated buffer owns them otherwise.
+    /// Whether replacing a column of the evaluation output must free the one
+    /// it replaces: an arena or a relocated buffer owns them otherwise.
     pub fn freesReplacedEvaluationColumns(self: *const CheckedModuleArtifact) bool {
         return self.reopened_arena == null and self.pairing_arena == null and self.serialized_backing == null;
     }
@@ -31697,7 +31790,7 @@ pub const CheckedModuleArtifact = struct {
         exports: ExportTable.Serialized,
         checked_types: CheckedTypeStore.Serialized,
         checked_const_bodies: CheckedConstBodyTable.Serialized,
-        evaluation_diagnostics: EvaluationDiagnostics.Serialized,
+        inference: InferenceOutput.Serialized,
         exported_procedure_templates: ExportedProcedureTemplateTable.Serialized,
         exported_procedure_bindings: ExportedProcedureBindingTable.Serialized,
         exported_const_templates: ExportedConstTemplateTable.Serialized,
@@ -31711,7 +31804,6 @@ pub const CheckedModuleArtifact = struct {
         intrinsic_wrappers: IntrinsicWrapperTable.Serialized,
         top_level_procedure_bindings: TopLevelProcedureBindingTable.Serialized,
         callable_eval_templates: CallableEvalTemplateTable.Serialized,
-        literal_root_payloads: LiteralRootPayloadTable.Serialized,
         hosted_procs: HostedProcTable.Serialized,
         hosted_bindings: HostedBindingTable.Serialized,
         platform_required_declarations: PlatformRequiredDeclarationTable.Serialized,
@@ -31721,9 +31813,7 @@ pub const CheckedModuleArtifact = struct {
         top_level_values: TopLevelValueTable.Serialized,
         hoisted_constants: HoistedConstTable.Serialized,
         const_templates: ConstTemplateTable.Serialized,
-        const_store: ConstStore.Serialized,
-        compile_time_debug: CompileTimeDebugStore.Serialized,
-        compile_time_root_reads: CompileTimeRootReadTable.Serialized,
+        evaluation: EvaluationOutput.Serialized,
 
         pub const root_contract: collections.serde_validation.RootContract = .{
             .Owner = CheckedModuleArtifact,
@@ -31734,8 +31824,7 @@ pub const CheckedModuleArtifact = struct {
                 "pairing", // The platform/app pairing a paired artifact reads through; process-local.
                 "platform_requirement_relations", // Computed by a pairing; empty in every published module.
                 "platform_required_bindings", // Computed by a pairing; empty in every published module.
-                "reopened_arena", // Runtime ownership for reopened evaluation columns, not checked data.
-                "evaluation_state", // Process-local preparation state; cached output is finalized.
+                "reopened_arena", // Runtime ownership for a reopened evaluation output, not checked data.
                 "serialized_backing_is_static", // Runtime ownership mode for `serialized_backing`.
                 "body_analyses", // Body facts computed on first demand; never serialized.
                 "module_analyses", // Module analyses computed on first demand; never serialized.
@@ -31750,7 +31839,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 144);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 157);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -31773,7 +31862,7 @@ pub const CheckedModuleArtifact = struct {
             writer: *CompactWriter,
         ) Allocator.Error!void {
             if (artifact.pairing != null) checkedArtifactInvariant("a paired artifact cannot be cached as a module", .{});
-            if (artifact.evaluation_state != .finalized) checkedArtifactInvariant("cannot serialize prepared checked module", .{});
+            if (artifact.evaluation.state != .finalized) checkedArtifactInvariant("cannot serialize prepared checked module", .{});
             self.key = artifact.key;
             self.source_hash = artifact.source_hash;
             self.module_identity = ModuleIdentitySerialized.encode(artifact.module_identity);
@@ -31806,11 +31895,7 @@ pub const CheckedModuleArtifact = struct {
         pub fn validate(self: *const Serialized, backing_len: usize) error{CorruptArtifact}!void {
             if (backing_len < @sizeOf(Serialized)) return error.CorruptArtifact;
             try artifact_serialize.validateSerialized(Serialized, self, backing_len);
-            const base_addr = @intFromPtr(self);
-            const observations = self.compile_time_debug.deserialize(base_addr);
-            const roots = self.compile_time_roots.deserialize(base_addr);
-            try observations.validate(roots.roots.len);
-            try self.compile_time_root_reads.deserialize(base_addr).validate();
+            try self.evaluation.validateContents(@intFromPtr(self));
         }
 
         /// A deserialized artifact reads its source types once
@@ -31858,7 +31943,6 @@ pub const CheckedModuleArtifact = struct {
             artifact.reopened_arena = null;
             artifact.body_analyses = null;
             artifact.module_analyses = null;
-            artifact.evaluation_state = .finalized;
             inline for (sub_store_fields) |name| {
                 // Stores that retain an allocator for their build-only fields
                 // take it as a second `deserialize` parameter.
@@ -31877,7 +31961,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 119;
+    const serialized_layout_version: u32 = 120;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -31929,6 +32013,15 @@ pub const CheckedModuleArtifact = struct {
             return error.BuiltinArtifactVersionMismatch;
         }
         return blob[0..serialized_len];
+    }
+
+    /// The inference output a baked artifact blob (`builtin_compiler`'s)
+    /// holds, aliasing the blob.
+    pub fn bakedInference(blob: []const u8) error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch, CorruptArtifact }!InferenceOutput {
+        const serialized_bytes = try splitVersionTrailer(blob);
+        const serialized: *const Serialized = @ptrCast(@alignCast(serialized_bytes.ptr));
+        try serialized.validate(serialized_bytes.len);
+        return serialized.inference.deserialize(@intFromPtr(serialized));
     }
 
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
@@ -32097,8 +32190,9 @@ pub const CheckedModuleArtifact = struct {
             if (root.literalNode()) |literal| std.debug.assert(literal.node() < self.moduleEnvConst().store.nodes.len());
             std.debug.assert((root.expr == null) == (root.literalNode() != null));
             if (root.pattern) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
+            const payload = self.evaluation.rootPayload(root.id);
             switch (root.kind) {
-                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => switch (root.payload) {
+                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => switch (payload) {
                     .pending => {},
                     .unevaluated,
                     .const_node,
@@ -32106,9 +32200,9 @@ pub const CheckedModuleArtifact = struct {
                     .discarded,
                     .expect,
                     .runtime,
-                    => verifyCompileTimeRootPayloadMatchesKind(root, root.payload),
+                    => verifyCompileTimeRootPayloadMatchesKind(root, payload),
                 },
-                .expect => switch (root.payload) {
+                .expect => switch (payload) {
                     .expect => {},
                     .pending,
                     .unevaluated,
@@ -32195,8 +32289,8 @@ pub const CheckedModuleArtifact = struct {
     }
 
     pub fn verifyComplete(self: *const CheckedModuleArtifact) Allocator.Error!void {
-        if (self.evaluation_state != .finalized) checkedArtifactInvariant("complete checked module still awaits evaluation", .{});
-        self.compile_time_debug.validate(self.compile_time_roots.roots.len) catch checkedArtifactInvariant("compile-time debug observation has an invalid root or message range", .{});
+        if (self.evaluation.state != .finalized) checkedArtifactInvariant("complete checked module still awaits evaluation", .{});
+        self.evaluation.debug.validate() catch checkedArtifactInvariant("compile-time debug observation has an invalid message range", .{});
         if (builtin.mode != .debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
@@ -32250,8 +32344,9 @@ pub const CheckedModuleArtifact = struct {
             if (root.literalNode()) |literal| std.debug.assert(literal.node() < self.moduleEnvConst().store.nodes.len());
             std.debug.assert((root.expr == null) == (root.literalNode() != null));
             if (root.pattern) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
+            const payload = self.evaluation.rootPayload(root.id);
             if (root.kind == .expect) {
-                switch (root.payload) {
+                switch (payload) {
                     .expect => {},
                     .pending, .unevaluated, .const_node, .fn_value, .discarded, .runtime => base.invariant("checked artifact invariant violated: expect root has non-expect payload", .{}),
                 }
@@ -32263,7 +32358,7 @@ pub const CheckedModuleArtifact = struct {
                 }
                 break :blk false;
             };
-            switch (root.payload) {
+            switch (payload) {
                 .pending => {
                     if (has_request) {
                         base.invariant("checked artifact invariant violated: requested compile-time root has pending payload", .{});
@@ -32273,7 +32368,7 @@ pub const CheckedModuleArtifact = struct {
                     if (!has_request) {
                         base.invariant("checked artifact invariant violated: non-requested compile-time root has concrete payload", .{});
                     }
-                    verifyCompileTimeRootPayloadMatchesKind(root, root.payload);
+                    verifyCompileTimeRootPayloadMatchesKind(root, payload);
                 },
             }
         }
@@ -32385,10 +32480,6 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(@backingInt(eval.body) < self.checked_const_bodies.bodies.len);
                     std.debug.assert(std.meta.eql(eval.entry_template.artifact.bytes, self.key.bytes));
                     std.debug.assert(@backingInt(eval.entry_template.template) < self.checked_procedure_templates.templates.items.len);
-                },
-                .stored_const => |stored| {
-                    std.debug.assert(@backingInt(stored.node) < self.const_store.values.items.len);
-                    std.debug.assert(@backingInt(stored.root_type) < self.const_store.type_store.typeCount());
                 },
                 .reserved => base.invariant(
                     "checked artifact invariant violated: exported const template was not sealed",
@@ -32559,17 +32650,13 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        for (self.const_templates.templates.items) |template| {
-            switch (template.state) {
-                .stored_const => |stored| {
-                    std.debug.assert(@backingInt(stored.node) < self.const_store.values.items.len);
-                    std.debug.assert(@backingInt(stored.root_type) < self.const_store.type_store.typeCount());
-                },
-                .eval_template, .reserved, .unimplemented => {},
-            }
+        for (self.evaluation.consts) |entry| {
+            const stored = entry.value orelse continue;
+            std.debug.assert(@backingInt(stored.node) < self.evaluation.const_store.values.items.len);
+            std.debug.assert(@backingInt(stored.root_type) < self.evaluation.const_store.type_store.typeCount());
         }
         self.const_templates.verifySealed();
-        try self.const_store.verifyComplete();
+        try self.evaluation.const_store.verifyComplete();
         for (self.resolved_value_refs.records) |record| {
             std.debug.assert(@backingInt(record.expr) < self.moduleEnvConst().store.nodes.len());
             if (self.checking_context_identity.platform_app_relation != null) {
@@ -32672,7 +32759,6 @@ pub const ImportedModuleView = struct {
     platform_required_bindings: *const PlatformRequiredBindingTable,
     checking_context_identity: *const CheckingContextIdentity = &empty_checking_context_identity,
     top_level_values: *const TopLevelValueTable = &empty_top_level_values,
-    literal_root_payloads: *const LiteralRootPayloadTable = &empty_literal_root_payloads,
     /// A platform's requirement identity variables (empty for any other
     /// module).
     platform_type_inputs: *const PlatformTypeInputs = &empty_platform_type_inputs,
@@ -32683,8 +32769,10 @@ pub const ImportedModuleView = struct {
     hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
     method_registry: *const static_dispatch.MethodRegistry,
+    /// What compile-time evaluation wrote for the module.
+    evaluation: *const EvaluationOutput,
+    /// The module's constant store (`evaluation.const_store`).
     const_store: *const ConstStore,
-    compile_time_root_reads: *const CompileTimeRootReadTable = &no_compile_time_root_reads,
 
     /// The keys of the modules this module imports directly.
     pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
@@ -32728,25 +32816,33 @@ pub const ImportedModuleView = struct {
         return self.analyses().rootRequests(self);
     }
 
-    /// Compile-time root `id` of the module, with the payload evaluation gave
-    /// it: a row of the root table, or a literal root.
+    /// Compile-time root `id` of the module: a row of the root table, or a
+    /// literal root.
     pub fn compileTimeRoot(self: ImportedModuleView, id: ComptimeRootKey) Allocator.Error!CompileTimeRoot {
         if (id.rowIndex() != null) return self.compile_time_roots.root(id);
-        var root = (try self.dispatch().literalRoot(id)).root;
-        if (self.literal_root_payloads.get(id)) |output| {
-            root.payload = output.payload;
-            root.boxy_value = output.boxy_value;
-        }
-        return root;
+        return (try self.dispatch().literalRoot(id)).root;
+    }
+
+    /// What constant template `ref` names holds: its checked state, or the
+    /// value evaluation stored for it.
+    pub fn constValue(self: ImportedModuleView, ref: ConstRef) ConstTemplateValue {
+        return ConstTemplateValue.of(self.const_templates.get(ref), self.evaluation);
+    }
+
+    /// The payload evaluation gave root `id`.
+    pub fn rootPayload(self: ImportedModuleView, id: ComptimeRootKey) CompileTimeRootPayload {
+        return self.evaluation.rootPayload(id);
+    }
+
+    /// The value a `.boxy` evaluation stored for root `id`.
+    pub fn rootBoxyValue(self: ImportedModuleView, id: ComptimeRootKey) ?StoredConstTemplate {
+        return self.evaluation.rootBoxyValue(id);
     }
 };
 
 const empty_root_requests: RootRequestTable = .{};
 const empty_checking_context_identity: CheckingContextIdentity = .{};
 const empty_top_level_values: TopLevelValueTable = .{};
-const empty_literal_root_payloads: LiteralRootPayloadTable = .{};
-
-const no_compile_time_root_reads: CompileTimeRootReadTable = .{};
 
 /// Public `LoweringModuleView` declaration.
 pub const LoweringModuleView = struct {
@@ -32789,15 +32885,14 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .platform_required_bindings = &artifact.platform_required_bindings,
         .checking_context_identity = &artifact.checking_context_identity,
         .top_level_values = &artifact.top_level_values,
-        .literal_root_payloads = &artifact.literal_root_payloads,
         .platform_type_inputs = &artifact.platform_type_inputs,
         .platform_requirement_solutions = &artifact.platform_requirement_solutions,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
         .hoisted_constants = &artifact.hoisted_constants,
         .const_templates = &artifact.const_templates,
         .method_registry = &artifact.method_registry,
-        .const_store = &artifact.const_store,
-        .compile_time_root_reads = &artifact.compile_time_root_reads,
+        .evaluation = &artifact.evaluation,
+        .const_store = &artifact.evaluation.const_store,
     };
 }
 
@@ -34198,9 +34293,6 @@ pub fn publishFromTypedModule(
         compile_time_roots.roots,
     );
 
-    var checked_const_store = ConstStore.init(allocator);
-    errdefer checked_const_store.deinit();
-
     var top_level_procedure_bindings = TopLevelProcedureBindingTable.initEmpty();
     errdefer top_level_procedure_bindings.deinit(allocator);
 
@@ -34334,11 +34426,8 @@ pub fn publishFromTypedModule(
         &hoisted_constants,
     );
 
-    var evaluation_diagnostics = if (module_env.module_kind == .platform and inputs.problem_store != null)
-        try EvaluationDiagnostics.fromStore(allocator, inputs.problem_store.?)
-    else
-        EvaluationDiagnostics{};
-    errdefer evaluation_diagnostics.deinit(allocator);
+    var inference = try inputs.inference.dupe(allocator);
+    errdefer inference.deinit(allocator);
 
     var exported_procedure_templates = try ExportedProcedureTemplateTable.fromModule(
         allocator,
@@ -34392,6 +34481,9 @@ pub fn publishFromTypedModule(
     checked_types.markPublished();
     checked_types.releaseSuperseded(allocator);
 
+    var evaluation = try preparedEvaluationOutput(allocator, &compile_time_roots, &const_templates);
+    errdefer evaluation.deinit(allocator);
+
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
         .source_hash = source_hash,
@@ -34403,7 +34495,7 @@ pub fn publishFromTypedModule(
         .module_env = inputs.module_env_storage,
         .exports = .{ .defs = exports },
         .checked_types = checked_types.*,
-        .evaluation_diagnostics = evaluation_diagnostics,
+        .inference = inference,
         .checked_const_bodies = checked_const_bodies,
         .exported_procedure_templates = exported_procedure_templates,
         .exported_procedure_bindings = exported_procedure_bindings,
@@ -34432,8 +34524,7 @@ pub fn publishFromTypedModule(
         .top_level_values = top_level_values,
         .hoisted_constants = hoisted_constants,
         .const_templates = const_templates,
-        .const_store = checked_const_store,
-        .evaluation_state = .prepared,
+        .evaluation = evaluation,
         .body_analyses = analyses,
         .module_analyses = module_analyses,
     };
@@ -34453,9 +34544,8 @@ pub fn publishFromTypedModule(
         artifact.canonical_names.deinit();
     }
     artifact.openToAnalyses();
-    checked_const_store = ConstStore.init(allocator);
-    errdefer artifact.const_store.deinit();
-    errdefer artifact.literal_root_payloads.deinit(allocator);
+    evaluation = EvaluationOutput.init(allocator);
+    errdefer artifact.evaluation.deinit(allocator);
 
     if (inputs.evaluation_phase == .immediate) {
         try inputs.compile_time_finalizer.run(
@@ -34466,12 +34556,39 @@ pub fn publishFromTypedModule(
             &.{},
             inputs.problem_store,
         );
-        artifact.evaluation_state = .finalized;
+        artifact.evaluation.state = .finalized;
         try artifact.verifyComplete();
     }
     analyses_owned = false;
     module_analyses_owned = false;
     return artifact;
+}
+
+/// A freshly published module's evaluation output, awaiting evaluation: an
+/// entry for every row of its root table, holding the payload the row starts
+/// with, and for every constant template with a body.
+fn preparedEvaluationOutput(
+    allocator: Allocator,
+    compile_time_roots: *const CompileTimeRootTable,
+    const_templates: *const ConstTemplateTable,
+) Allocator.Error!EvaluationOutput {
+    var evaluation = EvaluationOutput.init(allocator);
+    errdefer evaluation.deinit(allocator);
+    evaluation.state = .prepared;
+    const rows = try allocator.alloc(RootOutput, compile_time_roots.roots.len);
+    defer allocator.free(rows);
+    for (rows, compile_time_roots.roots) |*row, root| row.* = .{
+        .id = root.id,
+        .payload = switch (root.kind) {
+            .expect => .expect,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => .pending,
+        },
+    };
+    try evaluation.addRoots(allocator, true, rows);
+    const owners = try const_templates.evaluatedOwners(allocator);
+    defer allocator.free(owners);
+    try evaluation.addConsts(allocator, owners);
+    return evaluation;
 }
 
 const ProvidedExportKindExpectation = struct {
@@ -34537,6 +34654,7 @@ fn expectProvidedExportKind(
         .imports = &imports,
         .compile_time_finalizer = .{ .finalize = &NoFinalization.finalize },
         .evaluation_phase = .post_frontend,
+        .inference = .{},
     });
     defer artifact.deinitRetainingModuleEnv(allocator);
 
@@ -34607,11 +34725,13 @@ test "compile-time roots and top-level values store final checked output only" {
 }
 
 test "constant template states contain sealed value data but no runtime initializer concepts" {
-    try std.testing.expectEqual(@as(usize, 4), unionFieldCount(ConstTemplateState));
+    try std.testing.expectEqual(@as(usize, 3), unionFieldCount(ConstTemplateState));
     try std.testing.expect(@hasField(ConstTemplateState, "reserved"));
     try std.testing.expect(@hasField(ConstTemplateState, "eval_template"));
-    try std.testing.expect(@hasField(ConstTemplateState, "stored_const"));
     try std.testing.expect(@hasField(ConstTemplateState, "unimplemented"));
+    // A stored value is evaluation output, never a checked template's state.
+    try std.testing.expect(!@hasField(ConstTemplateState, "stored_const"));
+    try std.testing.expect(@hasField(EvaluationOutput, "consts"));
 
     try std.testing.expect(!@hasField(ConstTemplateState, "runtime_thunk"));
     try std.testing.expect(!@hasField(ConstTemplateState, "global_initializer"));
@@ -34642,7 +34762,13 @@ test "checked module owns post-check inputs at the checked boundary" {
     try std.testing.expect(@hasField(CheckedModuleArtifact, "compile_time_roots"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_values"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "const_templates"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "const_store"));
+    try std.testing.expect(!@hasField(CheckedModuleArtifact, "const_store"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "evaluation"));
+    try std.testing.expect(@hasField(CheckedModuleArtifact, "inference"));
+    // Evaluation writes its output and nothing else: no checked row holds a
+    // payload or a stored value.
+    try std.testing.expect(!@hasField(CompileTimeRoot, "payload"));
+    try std.testing.expect(!@hasField(CompileTimeRoot, "boxy_value"));
 }
 
 test "checked module keeps current compile-time ownership tables" {
@@ -35110,9 +35236,9 @@ test "relation projection preserves anonymous row identity and provenance" {
         .hoisted_constants = .{},
         .const_templates = .{},
         .checked_types = source_store,
-        .const_store = ConstStore.init(allocator),
+        .evaluation = EvaluationOutput.init(allocator),
     };
-    defer source_artifact.const_store.deinit();
+    defer source_artifact.evaluation.const_store.deinit();
     source_artifact.body_analyses = try BodyAnalyses.create(allocator, std.testing.io, &module_env, &.{});
     defer source_artifact.body_analyses.?.destroy();
 
@@ -35359,13 +35485,13 @@ test "artifact views are read-only projections" {
         .top_level_values = .{},
         .hoisted_constants = .{},
         .const_templates = .{},
-        .const_store = ConstStore.init(std.testing.allocator),
+        .evaluation = EvaluationOutput.init(std.testing.allocator),
     };
     artifact.body_analyses = try BodyAnalyses.create(std.testing.allocator, std.testing.io, &module_env, &.{});
     defer {
         artifact.body_analyses.?.destroy();
         artifact.const_templates.deinit(std.testing.allocator);
-        artifact.const_store.deinit();
+        artifact.evaluation.const_store.deinit();
         artifact.canonical_names.deinit();
     }
 
@@ -35518,6 +35644,7 @@ fn testVisibilityImportedView(
         .hoisted_constants = undefined,
         .const_templates = undefined,
         .method_registry = undefined,
+        .evaluation = undefined,
         .const_store = undefined,
     };
 }
@@ -35951,7 +36078,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .hoisted_constants = .{},
         .const_templates = .{},
         .checked_types = checked_types_src,
-        .const_store = const_store_src,
+        .evaluation = .{ .const_store = const_store_src },
     };
 
     var arena = base.SingleThreadArena.init(gpa);
@@ -35983,8 +36110,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqual(ModuleEnv.ModuleKind.module, loaded.module_identity.kind);
 
     // const_store entries survive.
-    try std.testing.expectEqual(@as(u64, 7), loaded.const_store.get(c0).scalar.u64);
-    try std.testing.expectEqual(@as(i32, -3), loaded.const_store.get(c1).scalar.i32);
+    try std.testing.expectEqual(@as(u64, 7), loaded.evaluation.const_store.get(c0).scalar.u64);
+    try std.testing.expectEqual(@as(i32, -3), loaded.evaluation.const_store.get(c1).scalar.i32);
 
     // checked_types roots survive.
     try std.testing.expectEqual(@as(usize, 2), loaded.checked_types.roots.items().len);
@@ -36200,6 +36327,7 @@ test "publishing a module releases each resource exactly once under allocation f
                 .imports = direct,
                 .available_artifacts = views,
                 .compile_time_finalizer = finalize,
+                .inference = .{},
             });
             artifact.deinitRetainingModuleEnv(failing);
         }
@@ -36263,7 +36391,7 @@ test "issue 11128 source scheme publication names each source root once" {
     try std.testing.expectEqual(allocations, counter.allocated_bytes);
 }
 
-test "compile-time debug store validates root identities and message ranges" {
+test "compile-time debug store validates message ranges" {
     const allocator = std.testing.allocator;
     const messages = [_][]const u8{ "first", "second" };
     var inputs: [messages.len]CompileTimeDebugStore.Input = undefined;
@@ -36272,19 +36400,18 @@ test "compile-time debug store validates root identities and message ranges" {
     }
     var observations = try CompileTimeDebugStore.init(allocator, &inputs);
     defer observations.deinit(allocator);
-    try observations.validate(2);
+    try observations.validate();
     try std.testing.expectEqualStrings("second", observations.message(observations.entries[1]));
-    try std.testing.expectError(error.CorruptArtifact, observations.validate(1));
     const malformed: CompileTimeDebugStore = .{
         .entries = &.{.{ .root = observations.entries[0].root, .message_start = 2, .message_len = std.math.maxInt(u32) }},
         .bytes = "abc",
     };
-    try std.testing.expectError(error.CorruptArtifact, malformed.validate(1));
+    try std.testing.expectError(error.CorruptArtifact, malformed.validate());
     const outside: CompileTimeDebugStore = .{
         .entries = &.{.{ .root = observations.entries[0].root, .message_start = 4, .message_len = 0 }},
         .bytes = "abc",
     };
-    try std.testing.expectError(error.CorruptArtifact, outside.validate(1));
+    try std.testing.expectError(error.CorruptArtifact, outside.validate());
 }
 
 /// Test scaffolding for the direct-dispatch classification predicate: a

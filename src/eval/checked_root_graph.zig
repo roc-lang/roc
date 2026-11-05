@@ -417,7 +417,7 @@ const Walker = struct {
         const const_ref = const_use.const_ref;
         const module = self.moduleOf(const_ref.artifact) orelse return;
         const artifact = self.modules[module];
-        switch (artifact.const_templates.get(const_ref).state) {
+        switch (checked.ConstTemplateValue.of(artifact.const_templates.get(const_ref), &artifact.evaluation)) {
             // A declaration with no implementation evaluates nothing.
             .unimplemented => return,
             // A value holding function values is restored by lowering its

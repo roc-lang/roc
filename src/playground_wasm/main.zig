@@ -1003,6 +1003,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
             .hoisted_roots = .none,
             .io = @as(std.Io, undefined),
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
+            .inference = check.CheckedArtifact.CheckedModuleArtifact.bakedInference(compiled_builtins.builtin_artifact_bin[0..]) catch return error.CorruptEmbeddedBuiltins,
         },
     );
     errdefer builtin_artifact.deinitRetainingModuleEnv(allocator);
@@ -1021,6 +1022,8 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         .exposure = .private,
     }};
 
+    var inference_arena = base.SingleThreadArena.init(allocator);
+    defer inference_arena.deinit();
     var root_artifact = try check.CheckedArtifact.publishFromTypedModule(
         allocator,
         &typed_cir_modules,
@@ -1029,6 +1032,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
             .module_env_storage = .{ .checked_source = checked_module.module_env },
             .hoisted_roots = .none,
             .io = @as(std.Io, undefined),
+            .inference = try check.InferenceOutput.fromChecker(inference_arena.allocator(), &checked_module.solver.?, null),
             .imports = &publish_imports,
             .explicit_roots = &explicit_roots,
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),

@@ -278,8 +278,9 @@ pub const Digests = struct {
     /// How an importer reads a constant: the value stored for it, or the
     /// entry procedure of one compile-time evaluation did not store.
     fn hashConstTemplate(self: *Digests, hasher: *Sha256, artifact: *const Artifact, template: CheckedArtifact.ConstTemplate) Allocator.Error!void {
-        hashTag(hasher, @tagName(std.meta.activeTag(template.state)));
-        switch (template.state) {
+        const value = CheckedArtifact.ConstTemplateValue.of(template, &artifact.evaluation);
+        hashTag(hasher, @tagName(std.meta.activeTag(value)));
+        switch (value) {
             .eval_template => |eval_template| try self.hashTemplateRef(hasher, artifact, eval_template.entry_template),
             .stored_const => {
                 const root = switch (template.owner) {
@@ -303,7 +304,7 @@ pub const Digests = struct {
         for (artifact.compile_time_roots.roots) |root| {
             switch (scope) {
                 .every_root => {},
-                .read_by_importers => if (root.kind != .callable_binding and root.boxy_value == null) continue,
+                .read_by_importers => if (root.kind != .callable_binding and artifact.evaluation.rootBoxyValue(root.id) == null) continue,
             }
             try self.hashRootValue(hasher, artifact, root);
         }
@@ -311,15 +312,16 @@ pub const Digests = struct {
 
     fn hashRootValue(self: *Digests, hasher: *Sha256, artifact: *const Artifact, root: CheckedArtifact.CompileTimeRoot) Allocator.Error!void {
         const context: ValueContext = .{ .digests = self, .artifact = artifact };
-        hashTag(hasher, @tagName(std.meta.activeTag(root.payload)));
-        switch (root.payload) {
-            .const_node => |node| try artifact.const_store.hashGraph(node, hasher, context),
+        const payload = artifact.evaluation.rootPayload(root.id);
+        hashTag(hasher, @tagName(std.meta.activeTag(payload)));
+        switch (payload) {
+            .const_node => |node| try artifact.evaluation.const_store.hashGraph(node, hasher, context),
             .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
             .pending, .unevaluated, .discarded, .expect, .runtime => {},
         }
-        if (root.boxy_value) |stored| {
+        if (artifact.evaluation.rootBoxyValue(root.id)) |stored| {
             hashTag(hasher, "boxy_value");
-            try artifact.const_store.hashGraph(stored.node, hasher, context);
+            try artifact.evaluation.const_store.hashGraph(stored.node, hasher, context);
         }
     }
 };

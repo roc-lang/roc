@@ -68,16 +68,15 @@ pub const Cache = struct {
 
     /// Store the complete pre-evaluation outcome. Evaluation reports are
     /// generated anew after publication, including on inference hits.
-    pub fn store(self: Cache, key: [32]u8, env: *const ModuleEnv, checker: *const check.Check, scope: *const check.CheckingDependencies.Scope) void {
-        self.storeFallible(key, env, checker, scope) catch self.manager.recordStoreFailureFor(.inference);
+    pub fn store(self: Cache, key: [32]u8, env: *const ModuleEnv, output: *const check.InferenceOutput) void {
+        self.storeFallible(key, env, output) catch self.manager.recordStoreFailureFor(.inference);
     }
 
-    fn storeFallible(self: Cache, key: [32]u8, env: *const ModuleEnv, checker: *const check.Check, scope: *const check.CheckingDependencies.Scope) Allocator.Error!void {
+    fn storeFallible(self: Cache, key: [32]u8, env: *const ModuleEnv, output: *const check.InferenceOutput) Allocator.Error!void {
         var arena = base.SingleThreadArena.init(env.gpa);
         defer arena.deinit();
         const allocator = arena.allocator();
-        const output = try check.InferenceOutput.fromChecker(allocator, checker, scope);
-        const buffer = try encode(allocator, key, env, &output);
+        const buffer = try encode(allocator, key, env, output);
         self.manager.storeRawBytesIn(env.gpa, .inference, key, buffer, self.directory, env.module_name);
     }
 };

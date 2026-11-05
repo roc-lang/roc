@@ -69,8 +69,8 @@ fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr
         const expr_source = module_source[region.start.offset..region.end.offset];
         if (std.mem.eql(u8, expr_source, blocked_expr)) {
             if (root.kind != .expect) {
-                try std.testing.expect(root.payload == .const_node);
-                try std.testing.expect(artifact.const_store.get(root.payload.const_node) == .checked_error);
+                try std.testing.expect(artifact.evaluation.rootPayload(root.id) == .const_node);
+                try std.testing.expect(artifact.evaluation.const_store.get(artifact.evaluation.rootPayload(root.id).const_node) == .checked_error);
             }
             found_blocked = true;
         }
@@ -78,8 +78,8 @@ fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr
         const is_fine = std.mem.eql(u8, expr_source, "helper(1.U64)");
         if (is_good or is_fine) {
             try std.testing.expectEqual(.eligible, root.request_eligibility);
-            try std.testing.expect(root.payload == .const_node);
-            try std.testing.expect(artifact.const_store.get(root.payload.const_node) != .checked_error);
+            try std.testing.expect(artifact.evaluation.rootPayload(root.id) == .const_node);
+            try std.testing.expect(artifact.evaluation.const_store.get(artifact.evaluation.rootPayload(root.id).const_node) != .checked_error);
             found_good = found_good or is_good;
             found_fine = found_fine or is_fine;
         }
