@@ -4733,13 +4733,14 @@ fn evalDevLiteralRoot(
     @memset(ret_buf, 0);
     var host = CompileTimeHost.init(host_allocator);
     defer host.deinit();
+    try host.enableAllocationExperiment();
     host.setGeneratedCode(native.executable.generatedCode(), native.linkedCode());
     host.timing_io = if (options.timing) |timing| timing.std_io else null;
 
     host.resetForRun();
     host.entry_frame = @frameAddress();
     var crash_boundary = host.enterCrashBoundary();
-    const entered = builtins.in_process_host.enter(host.ops(), null);
+    const entered = builtins.in_process_host.enterWithRcMode(host.ops(), null, @import("allocation_experiment.zig").rcMode(.ctfe));
     const composition = native.enterComposition();
     if (crash_boundary.set() == 0) {
         native.executable.callRocABIAt(entry_offset, @ptrCast(ret_buf.ptr), null);
@@ -6129,6 +6130,7 @@ fn evalDevProgramRoots(
             jobs[i].host.setGeneratedCode(native.executable.generatedCode(), native.linkedCode());
             jobs[i].host.timing_io = if (options.timing) |timing| timing.std_io else null;
             jobs_len += 1;
+            try jobs[i].host.enableAllocationExperiment();
         }
     }
     defer {
@@ -6315,7 +6317,7 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
 
     job.host.entry_frame = @frameAddress();
     var crash_boundary = job.host.enterCrashBoundary();
-    const entered = builtins.in_process_host.enter(job.host.ops(), null);
+    const entered = builtins.in_process_host.enterWithRcMode(job.host.ops(), null, @import("allocation_experiment.zig").rcMode(.ctfe));
     const composition = context.program.enterComposition();
     if (crash_boundary.set() == 0) {
         context.program.executable.callRocABIAt(

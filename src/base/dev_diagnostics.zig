@@ -16,6 +16,16 @@ pub const available = builtin.link_libc and build_options.dev_diagnostics;
 
 /// One developer-diagnostic environment variable.
 pub const Var = enum {
+    /// Select a developer-only native test root allocator experiment.
+    test_allocator,
+    /// Select a developer-only native CTFE root allocator experiment.
+    ctfe_allocator,
+    /// Record root-local allocation traffic separately from timings.
+    root_allocator_stats,
+    /// Use the explicit single-thread RC contract for native test roots.
+    test_single_thread_rc,
+    /// Use the explicit single-thread RC contract for native CTFE roots.
+    ctfe_single_thread_rc,
     /// Trace Boxy-only work; specialized compilation must produce no events.
     trace_boxy_work,
     /// Rebuild every restored Boxy object and compare it with the cached one.
@@ -55,6 +65,11 @@ pub const Var = enum {
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
         return switch (self) {
+            .test_allocator => "ROC_TEST_ALLOCATOR",
+            .ctfe_allocator => "ROC_CTFE_ALLOCATOR",
+            .root_allocator_stats => "ROC_ROOT_ALLOCATOR_STATS",
+            .test_single_thread_rc => "ROC_TEST_SINGLE_THREAD_RC",
+            .ctfe_single_thread_rc => "ROC_CTFE_SINGLE_THREAD_RC",
             .spec_resolution_profile => "ROC_SPEC_RESOLUTION_PROFILE",
             .trace_boxy_work => "ROC_TRACE_BOXY_WORK",
             .verify_boxy_object_reuse => "ROC_VERIFY_BOXY_OBJECT_REUSE",
