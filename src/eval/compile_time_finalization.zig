@@ -56,6 +56,15 @@ pub const DebugObserver = struct {
     observe: *const fn (*anyopaque, []const u8) Allocator.Error!void,
 };
 
+/// Reads each `.boxy` compile-time program once it is lowered, before it
+/// runs: instrumentation that measures the programs compile-time evaluation
+/// builds. A program can be lowered on any thread of the post-check
+/// executor, so `observe` synchronizes whatever it shares.
+pub const BoxyProgramObserver = struct {
+    context: *anyopaque,
+    observe: *const fn (*anyopaque, *const lir.Program.Result) Allocator.Error!void,
+};
+
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
     pub const StderrWriter = struct {
@@ -81,6 +90,7 @@ pub const Options = struct {
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
     debug_observer: ?DebugObserver = null,
+    boxy_program_observer: ?BoxyProgramObserver = null,
     debug_events: ?*DebugEvents = null,
     /// Artifact copies store results independently; shared slots publish once.
     publish_shared_slots: bool = true,
@@ -1935,6 +1945,7 @@ fn evaluateRootsBoxy(
     debug_events: *DebugEvents,
 ) FinalizeError!void {
     if (roots.len == 0) return;
+    if (options.timing) |timing| timing.recordBoxyRoots(roots.len);
     var evaluation_options = options;
     evaluation_options.debug_events = debug_events;
     // A module's program reads each root it completes from the root's
@@ -2544,6 +2555,7 @@ const ProgramBuild = struct {
         self.lowered = try lowerFinalizationModulesToLir(allocator, self.lowering_modules, .{ .requests = requests, .source_modules = source_modules }, self.target);
         const lowered = &self.lowered.?;
         if (lowered.lir_result.const_roots.items.len != pending.len) finalizationInvariant("the Boxy evaluator's lowering published a different count of compile-time roots than it was asked for");
+        if (self.build_options.boxy_program_observer) |observer| try observer.observe(observer.context, &lowered.lir_result);
         self.owners = try ModuleOwners.init(allocator, lowered.lir_result.lowering_modules.items, self.modules);
         self.owners.?.unfinalized = self.build_options.unfinalized_reports;
         self.program = try initEvaluationProgram(ProgramPtr, allocator, self.lowering_modules, lowered, self.build_options);
@@ -3671,10 +3683,11 @@ pub const Timing = struct {
     /// loading a module object into this process (`BoxyLinkedImages`).
     unit_compose_ns: TimingCounter = .{},
     unit_load_ns: TimingCounter = .{},
-    /// Compile-time roots the shared program declared, and how many of them
-    /// it published for evaluation.
     specialization_passes: TimingCounter = .{},
     respecialization_passes: TimingCounter = .{},
+    /// Compile-time roots a Solved program declared, and how many of them it
+    /// published for evaluation, plus every root the `.boxy` evaluator
+    /// evaluated, which it both declares and evaluates.
     roots_declared: TimingCounter = .{},
     roots_evaluated: TimingCounter = .{},
     /// Process footprint range observed at burst boundaries. Compile-time
@@ -3748,6 +3761,12 @@ pub const Timing = struct {
     fn recordRoots(self: *Timing, demand: lir.CheckedPipeline.ComptimeDemand) void {
         self.roots_declared.add(demand.declared_root_count);
         self.roots_evaluated.add(demand.root_reads.len);
+    }
+
+    /// The `.boxy` evaluator evaluates every root it is handed.
+    fn recordBoxyRoots(self: *Timing, count: usize) void {
+        self.roots_declared.add(count);
+        self.roots_evaluated.add(count);
     }
 
     fn sampleMemory(self: *Timing) void {
