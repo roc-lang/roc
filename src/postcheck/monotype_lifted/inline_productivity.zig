@@ -423,6 +423,38 @@ pub const Demand = struct {
 /// as the clone sees it at one call.
 pub const ResolvedRead = struct { steps: []const Step, consumers: Consumers };
 
+/// Resolved reads collected with each part listed once.
+const ResolvedReads = struct {
+    allocator: Allocator,
+    out: std.ArrayList(ResolvedRead) = .empty,
+    /// The position in `out` of each part's read.
+    positions: std.HashMapUnmanaged([]const Step, u32, StepsContext, std.hash_map.default_max_load_percentage) = .empty,
+
+    const StepsContext = struct {
+        pub fn hash(_: StepsContext, steps: []const Step) u64 {
+            return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(steps));
+        }
+
+        pub fn eql(_: StepsContext, a: []const Step, b: []const Step) bool {
+            if (a.len != b.len) return false;
+            for (a, b) |x, y| if (!x.eql(y)) return false;
+            return true;
+        }
+    };
+
+    fn add(self: *ResolvedReads, steps: []const Step, consumers: Consumers) Allocator.Error!void {
+        const entry = try self.positions.getOrPut(self.allocator, steps);
+        if (entry.found_existing) {
+            self.out.items[entry.value_ptr.*].consumers.setUnion(consumers);
+            return;
+        }
+        const owned = try self.allocator.dupe(Step, steps);
+        entry.key_ptr.* = owned;
+        entry.value_ptr.* = @intCast(self.out.items.len);
+        try self.out.append(self.allocator, .{ .steps = owned, .consumers = consumers });
+    }
+};
+
 /// A parameter or capture of a function.
 pub const Slot = struct {
     kind: Kind,
@@ -505,13 +537,16 @@ pub const Analysis = struct {
     }
 
     /// `demand` with each placement resolved against `result`, the reads of
-    /// the enclosing function's result.
+    /// the enclosing function's result. Each part is listed once, with the
+    /// union of the consumers that read it: a caller asks only whether some
+    /// read meets some consumer, and resolving through nested inlines would
+    /// otherwise repeat a part once per route that reaches it, at every level.
     pub fn resolve(self: *const Analysis, allocator: Allocator, demand: Demand, result: []const ResolvedRead) Allocator.Error![]const ResolvedRead {
-        var out: std.ArrayList(ResolvedRead) = .empty;
+        var resolved: ResolvedReads = .{ .allocator = allocator };
         var steps: std.ArrayList(Step) = .empty;
         for (demand.read_paths, demand.read_consumers) |path, consumers| {
             try self.paths.stepsOf(allocator, path, &steps);
-            try out.append(allocator, .{ .steps = try allocator.dupe(Step, steps.items), .consumers = consumers });
+            try resolved.add(steps.items, consumers);
         }
         var placed: std.ArrayList(Step) = .empty;
         var rest: std.ArrayList(Step) = .empty;
@@ -521,10 +556,10 @@ pub const Analysis = struct {
                 if (!startsWith(read.steps, placed.items)) continue;
                 try self.paths.stepsOf(allocator, placement.value, &rest);
                 for (read.steps[placed.items.len..]) |step| try appendStep(allocator, &rest, step);
-                try out.append(allocator, .{ .steps = try allocator.dupe(Step, rest.items), .consumers = read.consumers });
+                try resolved.add(rest.items, read.consumers);
             }
         }
-        return out.items;
+        return resolved.out.items;
     }
 
     /// Whether `fn_id` constructs, on every path that returns, a result part
