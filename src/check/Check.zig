@@ -5340,7 +5340,7 @@ const LocalTypeEscapeJudge = struct {
                     if (nominal.sourceDeclOptional()) |statement| {
                         for (owners, 0..) |entry, entry_index| {
                             if (@backingInt(entry.decl) != statement) continue;
-                            if (std.mem.indexOfScalar(CIR.Pattern.Idx, judge.inside.items, entry.owner) == null) break :search entry_index;
+                            if (std.mem.findScalar(CIR.Pattern.Idx, judge.inside.items, entry.owner) == null) break :search entry_index;
                         }
                     }
                 }
@@ -5437,8 +5437,10 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
         try work.append(gpa, .{ .expr = self.cir.store.getDef(def_idx).expr });
         while (work.pop()) |item| switch (item) {
             .leave_owner => _ = judge.inside.pop(),
-            .expr => |expr| switch (self.cir.store.getExpr(expr)) {
-                .e_block => |block| {
+            .expr => |expr| {
+                const node = self.cir.store.getExpr(expr);
+                if (node == .e_block) {
+                    const block = node.e_block;
                     try work.append(gpa, .{ .expr = block.final_expr });
                     const statements = self.cir.store.sliceStatements(block.stmts);
                     var index = statements.len;
@@ -5455,8 +5457,9 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
                             try self.visitStatementChildren(statements[index], collector);
                         }
                     }
-                },
-                else => try self.visitExprChildren(expr, collector),
+                } else {
+                    try self.visitExprChildren(expr, collector);
+                }
             },
             .enter_owner => |owner| try judge.inside.append(gpa, owner),
         };
