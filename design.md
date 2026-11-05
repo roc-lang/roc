@@ -25609,7 +25609,9 @@ allocation state; no pointer from that state may enter a shared descriptor cache
 
 The policies compare bump allocation with no per-block reclamation, the existing
 CTFE small-block recycling strategy, small recycling with large-block retention,
-and finer segregated small-block classes. Allocator classes and thresholds govern
+and finer segregated small-block classes. Fine classes are compared both with
+per-class slabs and with individual arena blocks plus immediate large frees
+(the compact policy). Allocator classes and thresholds govern
 storage management only, not compiler semantic decisions. Diagnostic runs collect
 logical live bytes and backing storage separately; counters are absent from the
 selected timing callbacks. Root storage is released only after all returned

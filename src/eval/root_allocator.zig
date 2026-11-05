@@ -9,7 +9,9 @@
 const std = @import("std");
 const base = @import("base");
 
-pub const Policy = enum { arena, recycle, hybrid, segregated };
+// Compact uses the fine classes without preallocating per-class slabs and
+// immediately releases large blocks, bounding retention by small-class demand.
+pub const Policy = enum { arena, recycle, hybrid, segregated, compact };
 
 /// Successful public calls only. Realloc counts once, contributes its requested
 /// new length to alloc_bytes, and replaces the old length in live_bytes. Zero
@@ -241,7 +243,7 @@ pub const RootAllocator = struct {
             const block: *FreeBlock = @ptrCast(header);
             block.next = self.free_lists[class];
             self.free_lists[class] = block;
-        } else if (policy == .recycle) {
+        } else if (policy == .recycle or policy == .compact) {
             const raw: [*]u8 = @ptrCast(header);
             const links: *Large = @ptrCast(@alignCast(raw - header_bytes));
             if (record_stats) self.large_reserved -= links.total;
@@ -285,7 +287,7 @@ fn checkLive(header: *const Header, alignment: usize) void {
 }
 
 fn classFor(comptime policy: Policy, needed: usize) usize {
-    if (policy != .segregated) return @max(std.math.log2_int_ceil(usize, needed), 6) - 6;
+    if (policy != .segregated and policy != .compact) return @max(std.math.log2_int_ceil(usize, needed), 6) - 6;
     if (needed <= 64) return 0;
     if (needed <= 96) return 1;
     if (needed <= 128) return 2;
@@ -295,7 +297,7 @@ fn classFor(comptime policy: Policy, needed: usize) usize {
 }
 
 fn classSize(comptime policy: Policy, class: usize) usize {
-    if (policy != .segregated) return @as(usize, 1) << @intCast(class + 6);
+    if (policy != .segregated and policy != .compact) return @as(usize, 1) << @intCast(class + 6);
     if (class <= 2) return 64 + class * 32;
     return (5 + (class - 3) % 4) << @intCast(5 + (class - 3) / 4);
 }
@@ -352,20 +354,20 @@ test "root allocator realloc preserves bytes and allocation identity across shri
 }
 
 test "root allocator size classes cover every small size and recycle across alignments" {
-    inline for (.{ Policy.recycle, Policy.hybrid, Policy.segregated }) |policy| {
+    inline for (.{ Policy.recycle, Policy.hybrid, Policy.segregated, Policy.compact }) |policy| {
         var root = RootAllocator.init(std.testing.allocator);
         defer root.deinit();
         var previous: usize = 0;
         for (overhead + 1..small_limit + 1) |needed| {
             const class = classFor(policy, needed);
             const size = classSize(policy, class);
-            try std.testing.expect(class < if (policy == .segregated) segregated_class_count else power_class_count);
+            try std.testing.expect(class < if (policy == .segregated or policy == .compact) segregated_class_count else power_class_count);
             try std.testing.expect(size >= needed and size >= previous);
             try std.testing.expectEqual(@as(usize, 0), size % header_bytes);
             if (class != 0) try std.testing.expect(classSize(policy, class - 1) < needed);
             previous = size;
         }
-        const count = if (policy == .segregated) segregated_class_count else power_class_count;
+        const count = if (policy == .segregated or policy == .compact) segregated_class_count else power_class_count;
         for (0..count) |class| {
             const length = classSize(policy, class) - overhead;
             const first = try root.alloc(policy, true, length, 1);
@@ -392,18 +394,18 @@ test "root allocator large release, retention and reset" {
         const last = try root.alloc(policy, true, 4 * small_limit, 16);
         const reserved = root.stats().reserved_bytes;
         root.free(policy, true, middle, 16);
-        try std.testing.expectEqual(@as(usize, if (policy == .recycle) 1 else 0), backing.deallocations);
-        if (policy == .recycle) {
+        try std.testing.expectEqual(@as(usize, if (policy == .recycle or policy == .compact) 1 else 0), backing.deallocations);
+        if (policy == .recycle or policy == .compact) {
             try std.testing.expect(root.stats().reserved_bytes < reserved);
         } else {
             try std.testing.expectEqual(reserved, root.stats().reserved_bytes);
         }
         root.free(policy, true, first, 16);
         root.free(policy, true, last, 16);
-        try std.testing.expectEqual(@as(usize, if (policy == .recycle) 3 else 0), backing.deallocations);
+        try std.testing.expectEqual(@as(usize, if (policy == .recycle or policy == .compact) 3 else 0), backing.deallocations);
         try std.testing.expectEqual(@as(usize, 0), root.stats().live_bytes);
         try std.testing.expectEqual(reserved, root.stats().peak_reserved_bytes);
-        if (policy == .recycle) {
+        if (policy == .recycle or policy == .compact) {
             try std.testing.expectEqual(@as(usize, 0), root.stats().reserved_bytes);
             try std.testing.expect(root.large_blocks == null);
         }
@@ -500,4 +502,15 @@ test "root allocator overflow and backing OOM preserve realloc input and counter
         for (bytes(ptr)[0..100]) |byte| try std.testing.expectEqual(@as(u8, 42), byte);
         root.free(policy, true, ptr, 8);
     }
+}
+
+test "root allocator compact small roots do not reserve whole slabs" {
+    var root = RootAllocator.init(std.testing.allocator);
+    defer root.deinit();
+    const first = try root.alloc(.compact, true, 1, 8);
+    const second = try root.alloc(.compact, true, 73, 8);
+    try std.testing.expect(root.stats().reserved_bytes < 2048);
+    root.free(.compact, true, first, 8);
+    root.free(.compact, true, second, 8);
+    try std.testing.expectEqual(@as(usize, 0), root.stats().live_bytes);
 }
