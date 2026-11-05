@@ -4487,7 +4487,7 @@ pub const Builder = struct {
         // A use checking recorded no evidence for (one inside a rejected
         // expression, evaluated only for its effects) resolves the
         // procedure's dictionaries from its types.
-        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id), .{ .use = expr_id }, self.siteSubstitution(expr_id));
+        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id), .{ .use = expr_id }, self.siteSubstitution(expr_id), null);
     }
 
     /// The function value of local procedure `local` used at the function
@@ -4496,7 +4496,7 @@ pub const Builder = struct {
     /// `localProcInstanceValue` resolving the procedure's dictionaries from
     /// its types.
     fn localProcInstanceValueAt(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId) Allocator.Error!LocalId {
-        return try self.localProcInstanceValue(local, use_ty, null, null, &.{});
+        return try self.localProcInstanceValue(local, use_ty, null, null, &.{}, null);
     }
 
     /// `edge` is the checked edge the use is (design.md "Literal
@@ -4504,8 +4504,11 @@ pub const Builder = struct {
     /// literal requirements take; null derives them from the use's types, as the
     /// dictionaries are derived when `evidence` is null. `subst` is the use's
     /// checked instantiation of the procedure's scheme, when it recorded one,
-    /// for the variables its type does not relate.
-    pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId) Allocator.Error!LocalId {
+    /// for the variables its type does not relate. `site` is the view
+    /// `evidence` and `subst` are read in, when it is not this body's: a
+    /// dispatch in an importing module selecting a method of a type another
+    /// module's function body declares.
+    pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView) Allocator.Error!LocalId {
         const lambda_expr = switch (self.bodies().expr(local.expr).data) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
@@ -4579,11 +4582,14 @@ pub const Builder = struct {
         @memcpy(descs[0..outer_count], scope.descs);
         const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
         defer self.allocator.free(own_types);
+        const declaring_module = self.module;
+        const declaring_view = self.view;
         for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*own_ty, ty, variable, index| {
-            own_ty.* = ty orelse if (index < subst.len and self.view.types().payload(subst[index]) != .err)
-                try self.convert(subst[index])
-            else
-                try self.program.converter().sealedScheme(self.module, variable);
+            own_ty.* = ty orelse if (index < subst.len and (site orelse declaring_view).types().payload(subst[index]) != .err) blk: {
+                self.enterSiteView(site);
+                defer self.leaveSiteView(declaring_module, declaring_view);
+                break :blk try self.convert(subst[index]);
+            } else try self.program.converter().sealedScheme(self.module, variable);
         }
         try self.resolveOwnKinds(lambda_ty, scheme, own_types);
         for (descs[outer_count..], own_types) |*desc, own_ty| desc.* = try self.descOf(own_ty);
@@ -4593,6 +4599,8 @@ pub const Builder = struct {
         for (scheme.dictionaries, dicts[0..scheme.dictionaries.len]) |param_index, *dict| {
             if (evidence) |entries| {
                 if (param_index >= entries.len) invariant("a local procedure use's evidence does not cover its dictionaries");
+                self.enterSiteView(site);
+                defer self.leaveSiteView(declaring_module, declaring_view);
                 dict.* = try self.paramDictionary(entries, param_index, context);
             } else {
                 const param = context.params[param_index];
@@ -4645,7 +4653,6 @@ pub const Builder = struct {
             .local_proc => |target| target,
             .procedure, .structural => invariant("a local method value names a procedure that is not local"),
         };
-        if (self.program.moduleByIdx(node.target.module_idx).index != self.module) invariant("a method declared in a function body is dispatched outside its module");
         const local: checked.LocalProcedureBinding = .{ .binder = target.binder, .expr = target.expr, .dispatch_scope = target.dispatch_scope };
         const table = self.view.view.static_dispatch_plans;
         const evidence: ?[]const static_dispatch.CheckedEvidence = switch (node.nested) {
@@ -4654,7 +4661,32 @@ pub const Builder = struct {
             .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
         };
         const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
-        return try self.localProcInstanceValue(local, fn_ty, evidence, null, subst);
+        // A dispatch in an importing module reaches a method of a type
+        // another module's function body declares through a requirement the
+        // body's scheme carries (design.md "Body-Local Type Context"). The
+        // procedure is built in its declaring module, from the declaration
+        // context of the call instance whose dictionaries are being built;
+        // the dispatch's evidence and substitution are read in this view.
+        const declaring = self.program.moduleByIdx(node.target.module_idx);
+        if (declaring.index == self.module) return try self.localProcInstanceValue(local, fn_ty, evidence, null, subst, null);
+        const site = self.view;
+        const site_module = self.module;
+        self.module = declaring.index;
+        self.view = declaring;
+        defer self.leaveSiteView(site_module, site);
+        return try self.localProcInstanceValue(local, fn_ty, evidence, null, subst, site);
+    }
+
+    /// Read in `site`'s view, when there is one (`localProcInstanceValue`).
+    fn enterSiteView(self: *Builder, site: ?*const types.ModuleView) void {
+        const view = site orelse return;
+        self.module = view.index;
+        self.view = view;
+    }
+
+    fn leaveSiteView(self: *Builder, module: ModuleIndex, view: *const types.ModuleView) void {
+        self.module = module;
+        self.view = view;
     }
 
     /// The declaration context a function value of the local procedure
