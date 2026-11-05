@@ -324,16 +324,16 @@ pub const FnTemplate = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
+    /// For a nested function, the function type of the template specialization
+    /// it was lowered in, which names the variables a stored value of it keeps
+    /// no other record of. Not part of the function's identity: a body that
+    /// depended on one would have a different request or evidence.
+    owner_fn_ty: ?Type.TypeId = null,
     evidence_digest: EvidenceDigest = .{},
     /// `specIdentityKey` of the specialization this template was reserved
-    /// for: the key an object-cache lookup can compute at reservation time,
-    /// before the body exists. Null for functions that are not template
+    /// for, computed before the body exists. Null for functions that are not template
     /// specializations.
     spec_key: ?names.TypeDigest = null,
-    /// Set when the object cache served this specialization: the body is
-    /// never lowered, and Direct LIR emits an external procedure that the
-    /// object writer fills from the cache entry.
-    cached: ?Common.SpecCacheHit = null,
     /// Set for a closed specialization of a Builtin template whose checked
     /// provided low-level operation is on `LowLevel.procedureKeyedByLayout`'s
     /// allow list. Direct LIR identifies the plain procedure of such a
@@ -372,10 +372,6 @@ pub const FnTemplate = struct {
     /// so such a procedure never stands for, or is merged with, the procedure
     /// an evaluation lowers from the same template and types.
     discovery: bool = false,
-    /// The `spec_key` a procedure lowered only for discovery was reserved
-    /// under. Its discovery summary is recorded under this key (design.md
-    /// "Discovery Summaries"); the procedure itself has no object-cache key.
-    discovery_key: ?names.TypeDigest = null,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: ConstEvidenceSpans = .{},
@@ -728,15 +724,15 @@ fn writeFnEvidence(
                 writeStructuralDerivation(hasher, structural.derivation);
                 if (structural.checked) |checked_structural| {
                     writeU8(hasher, 1);
-                    if (checked_structural.generated_codec_content) |content| {
+                    if (checked_structural.codecContent()) |content| {
                         writeU8(hasher, 1);
                         writeBytes(hasher, &content.bytes);
                     } else {
                         writeU8(hasher, 0);
-                        writeEvidenceModule(hasher, &checked_structural.view.bytes, site_names);
+                        writeEvidenceModule(hasher, &checked_structural.recorded.view.bytes, site_names);
                     }
-                    writeBytes(hasher, &checked_structural.dispatcher_key.bytes);
-                    writeBytes(hasher, &checked_structural.callable_key.bytes);
+                    writeBytes(hasher, &checked_structural.dispatcherKey().bytes);
+                    writeBytes(hasher, &checked_structural.callableKey().bytes);
                 } else writeU8(hasher, 0);
             },
             .from_callable => |use| {
@@ -1195,6 +1191,12 @@ pub const LambdaExpr = struct {
     fn_id: FnId,
     args: Span(TypedLocal),
     body: ExprId,
+    /// The locals a stored value of this function holds whether or not its
+    /// body reads them, each bound around the lambda. A generated codec
+    /// names here its encoding and every renamed field name, which its
+    /// restore reads by generated capture id (design.md "Stored Function
+    /// Capture Contract").
+    stored_captures: Span(TypedLocal) = .empty(),
 };
 
 /// Call through a function value before lambda solving.
@@ -2054,6 +2056,8 @@ pub const ProgramView = struct {
 
 /// Mutable builder-side Monotype program storage plus side arrays.
 pub const ProgramBuilder = struct {
+    /// See `MonotypeLifted.Ast.Program.retains_declared_captures`.
+    retains_declared_captures: bool = false,
     allocator: std.mem.Allocator,
     names: names.NameStore,
     next_symbol: u32,
@@ -3306,7 +3310,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
     const nodes = [_]Evidence{.{ .structural = 0 }};
     const left_structurals = [_]check.ConstStore.ConstFnStructuralEvidence{.{
         .derivation = .encoder,
-        .checked = .{
+        .checked = .{ .recorded = .{
             .view = .{ .bytes = @as([32]u8, @splat(1)) },
             .dispatcher_key = types.view().rootKey(replay_types[0]),
             .dispatcher_ty = replay_types[0],
@@ -3314,22 +3318,29 @@ test "codec function evidence identity excludes per-use replay addresses" {
             .callable_ty = replay_types[1],
             .generated_codec_derivation = derivation_ids[0],
             .generated_codec_content = .{ .bytes = @as([32]u8, @splat(4)) },
-        },
+        } },
     }};
     var right_structurals = left_structurals;
     const left: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &left_structurals };
     const right: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &right_structurals };
-    right_structurals[0].checked.?.dispatcher_ty = replay_types[2];
-    right_structurals[0].checked.?.callable_ty = replay_types[3];
-    right_structurals[0].checked.?.generated_codec_derivation = derivation_ids[1];
+    right_structurals[0].checked.?.recorded.dispatcher_ty = replay_types[2];
+    right_structurals[0].checked.?.recorded.callable_ty = replay_types[3];
+    right_structurals[0].checked.?.recorded.generated_codec_derivation = derivation_ids[1];
     try std.testing.expect(fnEvidenceEql(left, &frames, 0, right, &frames, 0));
     try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0));
     // Equal contracts recorded by different modules are one identity.
-    right_structurals[0].checked.?.view = .{ .bytes = @as([32]u8, @splat(5)) };
+    right_structurals[0].checked.?.recorded.view = .{ .bytes = @as([32]u8, @splat(5)) };
     try std.testing.expect(fnEvidenceEql(left, &frames, 0, right, &frames, 0));
     try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0));
-    right_structurals[0].checked.?.generated_codec_derivation = derivation_ids[2];
-    right_structurals[0].checked.?.generated_codec_content = .{ .bytes = @as([32]u8, @splat(6)) };
+    // A ConstStore's form names the contract without its recording module
+    // and keeps the identity.
+    const stored_structurals = [_]check.ConstStore.ConstFnStructuralEvidence{right_structurals[0].storedForm()};
+    try std.testing.expect(stored_structurals[0].checked.? == .codec);
+    const stored: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &stored_structurals };
+    try std.testing.expect(fnEvidenceEql(left, &frames, 0, stored, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(stored, &frames, 0));
+    right_structurals[0].checked.?.recorded.generated_codec_derivation = derivation_ids[2];
+    right_structurals[0].checked.?.recorded.generated_codec_content = .{ .bytes = @as([32]u8, @splat(6)) };
     try std.testing.expect(!fnEvidenceEql(left, &frames, 0, right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0)));
 }

@@ -1,12 +1,11 @@
 //! Shared-memory image for dev backend execution through the interpreter shim.
 //!
-//! The parent process emits machine code plus explicit relocation and readonly
+//! The parent process emits machine code plus explicit relocation and static
 //! data records. The child shim maps the image, patches those records in place,
 //! marks the generated code pages executable, and calls the requested Roc ABI
 //! entrypoint wrapper directly from the shared mapping.
 
 const std = @import("std");
-const lir = @import("lir");
 const Relocation = @import("Relocation.zig").IndexedRelocation;
 const DataRelocationKind = @import("Relocation.zig").DataRelocationKind;
 const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
@@ -17,19 +16,18 @@ const base = @import("base");
 
 const Allocator = std.mem.Allocator;
 
-/// Boxy runtime sidecar embedded in a dev run image: descriptor tables, the
-/// committed layout store, and the name store the descriptors index. Its
-/// offsets are relative to the run image's boxy blob region.
-pub const BoxySidecar = lir.LirImage.BoxySidecar;
-
 /// Magic number identifying a dev backend run image ("RDEV" in little-endian bytes).
 pub const MAGIC: u32 = 0x56454452;
 
 /// Version of the shared-memory dev run image format.
 /// v6: function relocations carry their producer-selected call encoding.
-/// v7: data symbols may live in the hot-reload static pool, and images carry
-/// their static pool chunk and whether their static data names code.
-pub const FORMAT_VERSION: u32 = 7;
+/// v8: data symbols may live in the hot-reload static pool, and images carry
+/// code, relocations, data, their static pool chunk, and whether their static
+/// data names code.
+/// v9: mutable composition slots occupy separate writable pages.
+/// v10: an image composed from unit images carries its host imports, each
+/// with its sites, and the words its loader rebases.
+pub const FORMAT_VERSION: u32 = 10;
 
 /// Maximum bytes reserved per host jump stub on the supported dev-shim hosts.
 /// The machine-code shim owns the per-arch emitted sizes and asserts at compile
@@ -78,18 +76,61 @@ pub const Header = extern struct {
     data_relocations: ArrayRef,
     symbol_names: ArrayRef,
     data: ArrayRef,
+    mutable_data: ArrayRef,
     data_symbols: ArrayRef,
-    /// Raw bytes of the boxy sidecar blob (empty when the program has no boxy
-    /// tables). `boxy_sidecar` offsets are relative to this region's base.
-    boxy_blob: ArrayRef,
-    boxy_sidecar: BoxySidecar,
     /// This image's static pool chunk: its `StaticDataPool.Chunk` header
     /// through the end of the image, which holds the data section. Empty when
     /// the image has no entries for later images to reuse.
     static_pool: ArrayRef,
-    /// Nonzero when the image's static data holds pointers to its own code.
+    /// Nonzero when the image's static data must live as long as its code:
+    /// it holds pointers to the image's own code, or it is laid out inside
+    /// the image's code blocks (an image composed from unit images).
     static_code_references: u32,
     _padding: u32 = 0,
+    /// A composed image's host imports (`HostImport`), in name order.
+    host_imports: ArrayRef,
+    /// The sites of every host import (`HostSite`), grouped by import.
+    host_sites: ArrayRef,
+    /// A composed image's absolute addresses into itself (`Rebase`).
+    rebases: ArrayRef,
+};
+
+/// One host symbol a composed image references: the loader resolves its
+/// name once, then fills each of its sites.
+pub const HostImport = extern struct {
+    symbol: StringRef,
+    first_site: u64,
+    site_count: u64,
+};
+
+/// How a composed image's host site encodes its target.
+pub const HostSiteKind = enum(u8) {
+    /// A 32-bit displacement from the end of the field, which reaches the
+    /// host symbol through the import's jump stub.
+    pc32 = 1,
+    /// The symbol's 64-bit address.
+    abs64 = 2,
+};
+
+/// One field of a composed image holding a host symbol's address. `offset`
+/// counts from the start of the image's code.
+pub const HostSite = extern struct {
+    offset: u64,
+    addend: i64,
+    kind: u8,
+    _padding: [7]u8 = @as([7]u8, @splat(0)),
+
+    pub fn siteKind(self: HostSite) ImageError!HostSiteKind {
+        return std.enums.fromInt(HostSiteKind, self.kind) orelse error.InvalidDevRunImage;
+    }
+};
+
+/// A 64-bit word of a composed image holding an address in the image: the
+/// loader stores the start of the image's code plus `value` at `offset`,
+/// both counted from that start.
+pub const Rebase = extern struct {
+    offset: u64,
+    value: u64,
 };
 
 /// Entry wrapper exported by the generated dev code image.
@@ -127,9 +168,11 @@ pub const DataLocation = enum(u32) {
     image = 0,
     /// In the hot-reload static pool; `data_offset` is relative to the mapping base.
     pool = 1,
+    /// In this image's writable section, never in the static pool.
+    mutable_image = 2,
 };
 
-/// Description of one exported readonly data symbol in the run image.
+/// Description of one exported static data symbol in the run image.
 pub const DataSymbol = extern struct {
     name: StringRef,
     data_offset: u64,
@@ -191,13 +234,23 @@ pub const ProgramView = struct {
     data_relocations: []const DataRelocationRecord,
     symbol_names: []const u8,
     data: []u8,
+    mutable_data: []u8 = &.{},
     data_symbols: []const DataSymbol,
     page_size: usize,
-    boxy_blob: []u8,
-    boxy_sidecar: BoxySidecar,
     /// The whole shared mapping, which pooled data symbols point into.
     mapping: []u8,
     static_code_references: bool,
+    host_imports: []const HostImport = &.{},
+    host_sites: []const HostSite = &.{},
+    rebases: []const Rebase = &.{},
+
+    /// The sites of one of the image's host imports.
+    pub fn hostImportSites(self: *const ProgramView, import: HostImport) ImageError![]const HostSite {
+        const first = try asBoundedOffset(import.first_site, self.host_sites.len);
+        const count = try asBoundedLen(import.site_count);
+        if (count > self.host_sites.len - first) return error.InvalidDevRunImage;
+        return self.host_sites[first..][0..count];
+    }
 
     pub fn symbolName(self: *const ProgramView, ref: StringRef) ImageError![]const u8 {
         const start = try asBoundedOffset(ref.offset, self.symbol_names.len);
@@ -218,6 +271,7 @@ pub const ProgramView = struct {
     pub fn dataSymbolBytes(self: *const ProgramView, symbol: DataSymbol) ImageError![]u8 {
         const container = switch (try symbol.dataLocation()) {
             .image => self.data,
+            .mutable_image => self.mutable_data,
             .pool => self.mapping,
         };
         const data_offset = try asBoundedOffset(symbol.data_offset, container.len);
@@ -242,8 +296,6 @@ pub fn writeToSharedMemory(
     relocations: []const Relocation,
     data_exports: []const StaticDataExport,
     plan: *const StaticDataPool.Plan,
-    boxy_blob: []const u8,
-    boxy_sidecar: BoxySidecar,
 ) WriteError!*Header {
     if (!std.math.isPowerOfTwo(page_size)) return error.InvalidDevRunImage;
     if (plan.placements.len != data_exports.len) base.invariant("run image invariant violated: static data plan covers {d} of {d} exports", .{ plan.placements.len, data_exports.len });
@@ -294,7 +346,7 @@ pub fn writeToSharedMemory(
                 });
             },
             .local_data => return error.UnsupportedDevRunRelocation,
-            .retired, .runtime_number => {},
+            .retired => {},
         }
     }
 
@@ -313,7 +365,7 @@ pub fn writeToSharedMemory(
         const alignment = StaticDataPool.exportAlignment(data_export);
         if (!std.math.isPowerOfTwo(alignment)) return error.InvalidStaticDataAlignment;
         const data_offset, const location: DataLocation = switch (placement) {
-            .local => |local| .{ local.data_offset, .image },
+            .local => |local| .{ local.data_offset, if (local.mutable) .mutable_image else .image },
             .pooled => |pooled| .{ pooled, .pool },
         };
         data_symbols.appendAssumeCapacity(.{
@@ -325,7 +377,7 @@ pub fn writeToSharedMemory(
             .location = @backingInt(location),
         });
         // A pooled entry's relocations were applied when its own image loaded.
-        if (location == .pool) continue;
+        if (location == .pool or location == .mutable_image) continue;
 
         for (data_export.relocations) |relocation| {
             if (relocation.offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
@@ -398,9 +450,14 @@ pub fn writeToSharedMemory(
     const function_stubs = try image_allocator.alignedAlloc(u8, .@"16", function_stub_len);
     @memset(function_stubs, 0);
 
-    // Page-aligned so it never shares a page with executable code.
-    const boxy_blob_copy = try allocRuntimeAlignedBytes(image_allocator, std.mem.Alignment.fromByteUnits(page_size), boxy_blob.len);
-    @memcpy(boxy_blob_copy, boxy_blob);
+    // Mutable slots live outside both executable/readonly pages and the pool
+    // chunk, so replacing an image also replaces its initially empty caches.
+    const mutable_copy: []u8 = if (plan.mutable_data_len == 0) &.{} else try allocRuntimeAlignedBytes(
+        image_allocator,
+        std.mem.Alignment.fromByteUnits(@max(page_size, plan.max_mutable_alignment)),
+        plan.mutable_data_len,
+    );
+    @memset(mutable_copy, 0);
 
     // The chunk starts on its own page so that reclaiming the rest of the
     // image never hands out a page the pool still uses.
@@ -420,7 +477,10 @@ pub fn writeToSharedMemory(
     @memset(data_copy, 0);
     for (data_exports, plan.placements) |data_export, placement| {
         switch (placement) {
-            .local => |local| @memcpy(data_copy[local.data_offset..][0..data_export.bytes.len], data_export.bytes),
+            .local => |local| {
+                const destination = if (local.mutable) mutable_copy else data_copy;
+                @memcpy(destination[local.data_offset..][0..data_export.bytes.len], data_export.bytes);
+            },
             .pooled => {},
         }
     }
@@ -484,7 +544,7 @@ pub fn writeToSharedMemory(
         symbol_names_copy,
         bytesOfSlice(data_symbols_copy),
         executable,
-        boxy_blob_copy,
+        mutable_copy,
         if (chunk) |chunk_header| bytesOf(chunk_header) else &.{},
         bytesOfSlice(chunk_entries),
         bytesOfSlice(chunk_relocations),
@@ -510,11 +570,13 @@ pub fn writeToSharedMemory(
         .data_relocations = try arrayRef(base_ptr, bytesOfSlice(data_relocation_copy)),
         .symbol_names = try arrayRef(base_ptr, symbol_names_copy),
         .data = try arrayRef(base_ptr, data_copy),
+        .mutable_data = try arrayRef(base_ptr, mutable_copy),
         .data_symbols = try arrayRef(base_ptr, bytesOfSlice(data_symbols_copy)),
-        .boxy_blob = try arrayRef(base_ptr, boxy_blob_copy),
-        .boxy_sidecar = boxy_sidecar,
         .static_pool = static_pool,
         .static_code_references = @intFromBool(plan.static_code_references),
+        .host_imports = ArrayRef.empty(),
+        .host_sites = ArrayRef.empty(),
+        .rebases = ArrayRef.empty(),
     };
 
     return header;
@@ -539,9 +601,8 @@ pub fn requiredCapacity(
     relocations: []const Relocation,
     data_exports: []const StaticDataExport,
     plan: *const StaticDataPool.Plan,
-    boxy_blob: []const u8,
 ) WriteError!usize {
-    return requiredCapacityFromOffset(scratch, page_size, 0, code, entrypoint_inputs, code_symbol_inputs, relocation_symbol_names, relocations, data_exports, plan, boxy_blob);
+    return requiredCapacityFromOffset(scratch, page_size, 0, code, entrypoint_inputs, code_symbol_inputs, relocation_symbol_names, relocations, data_exports, plan);
 }
 
 /// Return the exact allocator offset after serializing this run image starting
@@ -557,7 +618,6 @@ pub fn requiredCapacityFromOffset(
     relocations: []const Relocation,
     data_exports: []const StaticDataExport,
     plan: *const StaticDataPool.Plan,
-    boxy_blob: []const u8,
 ) WriteError!usize {
     if (!std.math.isPowerOfTwo(page_size)) return error.InvalidDevRunImage;
     if (plan.placements.len != data_exports.len) base.invariant("run image invariant violated: static data plan covers {d} of {d} exports", .{ plan.placements.len, data_exports.len });
@@ -578,7 +638,7 @@ pub fn requiredCapacityFromOffset(
                 relocation_count = try addNoOverflow(relocation_count, 1);
             },
             .local_data => return error.UnsupportedDevRunRelocation,
-            .retired, .runtime_number => {},
+            .retired => {},
         }
     }
 
@@ -615,13 +675,139 @@ pub fn requiredCapacityFromOffset(
     capacity = try addAllocationCapacity(capacity, @alignOf(DataSymbol), try mulNoOverflow(data_exports.len, @sizeOf(DataSymbol)));
     capacity = try addAllocationCapacity(capacity, page_size, code.len);
     capacity = try addAllocationCapacity(capacity, 16, function_stub_len);
-    if (boxy_blob.len > 0) capacity = try addAllocationCapacity(capacity, page_size, boxy_blob.len);
+    if (plan.mutable_data_len != 0) capacity = try addAllocationCapacity(capacity, @max(page_size, plan.max_mutable_alignment), plan.mutable_data_len);
     if (plan.listed_count > 0) capacity = try addAllocationCapacity(capacity, page_size, @sizeOf(Chunk));
     capacity = try addAllocationCapacity(capacity, @alignOf(StaticDataPool.Entry), try mulNoOverflow(plan.listed_count, @sizeOf(StaticDataPool.Entry)));
     capacity = try addAllocationCapacity(capacity, @alignOf(StaticDataPool.Relocation), try mulNoOverflow(plan.listed_relocation_count, @sizeOf(StaticDataPool.Relocation)));
     capacity = std.mem.alignForward(usize, capacity, page_size);
     capacity = try addAllocationCapacity(capacity, @max(page_size, plan.max_local_alignment), dataSectionLen(plan));
     return std.mem.alignForward(usize, capacity, page_size);
+}
+
+/// The sizes of a run image composed from unit images: its code, which the
+/// composer fills with the images' blocks, its writable data and zero-fill,
+/// and its tables.
+pub const ComposedLayout = struct {
+    /// Bytes of the code region: every placed image's block.
+    code_len: usize,
+    /// Bytes of the writable region: every placed image's data and zero-fill.
+    writable_len: usize,
+    /// The largest alignment anything in the writable region needs.
+    writable_alignment: usize,
+    entrypoint_count: usize,
+    /// Bytes of every host import's name.
+    symbol_names_len: usize,
+    host_import_count: usize,
+    host_site_count: usize,
+    rebase_count: usize,
+};
+
+/// A composed run image's parts in shared memory, for the composer to fill.
+/// The header already describes them.
+pub const Composed = struct {
+    header: *Header,
+    entrypoints: []Entrypoint,
+    symbol_names: []u8,
+    host_imports: []HostImport,
+    host_sites: []HostSite,
+    rebases: []Rebase,
+    /// The code region; host jump stubs follow it in the same executable
+    /// pages.
+    code: []u8,
+    /// The writable region, on pages of its own after the executable ones.
+    writable: []u8,
+    /// The distance from the start of `code` to the start of `writable`.
+    writable_offset: usize,
+};
+
+/// The allocator offset after allocating a composed run image of `layout`
+/// from an allocation cursor at `initial_offset`.
+pub fn composedCapacityFromOffset(page_size: usize, initial_offset: usize, layout: ComposedLayout) ImageError!usize {
+    if (!std.math.isPowerOfTwo(page_size)) return error.InvalidDevRunImage;
+    var capacity: usize = initial_offset;
+    capacity = try addAllocationCapacity(capacity, @alignOf(Header), @sizeOf(Header));
+    capacity = try addAllocationCapacity(capacity, @alignOf(Entrypoint), try mulNoOverflow(layout.entrypoint_count, @sizeOf(Entrypoint)));
+    capacity = try addAllocationCapacity(capacity, @alignOf(u8), layout.symbol_names_len);
+    capacity = try addAllocationCapacity(capacity, @alignOf(HostImport), try mulNoOverflow(layout.host_import_count, @sizeOf(HostImport)));
+    capacity = try addAllocationCapacity(capacity, @alignOf(HostSite), try mulNoOverflow(layout.host_site_count, @sizeOf(HostSite)));
+    capacity = try addAllocationCapacity(capacity, @alignOf(Rebase), try mulNoOverflow(layout.rebase_count, @sizeOf(Rebase)));
+    capacity = try addAllocationCapacity(capacity, page_size, @max(try composedExecutableLen(layout), 1));
+    capacity = try addAllocationCapacity(capacity, @max(page_size, layout.writable_alignment), layout.writable_len);
+    return std.mem.alignForward(usize, capacity, page_size);
+}
+
+/// The code region and the host jump stubs after it, one stub per import.
+fn composedExecutableLen(layout: ComposedLayout) ImageError!usize {
+    return addNoOverflow(std.mem.alignForward(usize, layout.code_len, 16), try mulNoOverflow(layout.host_import_count, max_jump_stub_size));
+}
+
+/// Allocate a composed run image of `layout` and write its header. Its
+/// static data lives in its code blocks, so a loaded image is retained for
+/// the rest of a hot-reload session once accepted, and it has no static pool
+/// chunk.
+pub fn allocComposed(image_allocator: Allocator, base_ptr: [*]align(1) u8, page_size: usize, layout: ComposedLayout) WriteError!Composed {
+    if (!std.math.isPowerOfTwo(page_size)) return error.InvalidDevRunImage;
+    const header = try image_allocator.create(Header);
+    header.* = undefined;
+    const entrypoints = try image_allocator.alloc(Entrypoint, layout.entrypoint_count);
+    const symbol_names = try image_allocator.alloc(u8, layout.symbol_names_len);
+    const host_imports = try image_allocator.alloc(HostImport, layout.host_import_count);
+    const host_sites = try image_allocator.alloc(HostSite, layout.host_site_count);
+    const rebases = try image_allocator.alloc(Rebase, layout.rebase_count);
+    const executable_len = try composedExecutableLen(layout);
+    const executable_bytes = try allocRuntimeAlignedBytes(image_allocator, std.mem.Alignment.fromByteUnits(page_size), @max(executable_len, 1));
+    const writable = try allocRuntimeAlignedBytes(
+        image_allocator,
+        std.mem.Alignment.fromByteUnits(@max(page_size, layout.writable_alignment)),
+        layout.writable_len,
+    );
+    const code = executable_bytes[0..layout.code_len];
+    const stubs_start = std.mem.alignForward(usize, layout.code_len, 16);
+    const function_stubs = executable_bytes[stubs_start..][0 .. layout.host_import_count * max_jump_stub_size];
+    const executable = executable_bytes.ptr[0..std.mem.alignForward(usize, @max(executable_len, 1), page_size)];
+    const image_size = std.mem.alignForward(usize, maxEnd(base_ptr, &.{
+        bytesOf(header),
+        bytesOfSlice(entrypoints),
+        symbol_names,
+        bytesOfSlice(host_imports),
+        bytesOfSlice(host_sites),
+        bytesOfSlice(rebases),
+        executable,
+        writable,
+    }), page_size);
+    header.* = .{
+        .magic = MAGIC,
+        .format_version = FORMAT_VERSION,
+        .image_size = @intCast(image_size),
+        .page_size = @intCast(page_size),
+        .executable = try arrayRef(base_ptr, executable),
+        .code = try arrayRef(base_ptr, code),
+        .function_stubs = try arrayRef(base_ptr, function_stubs),
+        .entrypoints = try arrayRef(base_ptr, bytesOfSlice(entrypoints)),
+        .code_symbols = ArrayRef.empty(),
+        .relocations = ArrayRef.empty(),
+        .data_relocations = ArrayRef.empty(),
+        .symbol_names = try arrayRef(base_ptr, symbol_names),
+        .data = ArrayRef.empty(),
+        .mutable_data = try arrayRef(base_ptr, writable),
+        .data_symbols = ArrayRef.empty(),
+        .static_pool = ArrayRef.empty(),
+        .static_code_references = 1,
+        .host_imports = try arrayRef(base_ptr, bytesOfSlice(host_imports)),
+        .host_sites = try arrayRef(base_ptr, bytesOfSlice(host_sites)),
+        .rebases = try arrayRef(base_ptr, bytesOfSlice(rebases)),
+    };
+    return .{
+        .header = header,
+        .entrypoints = entrypoints,
+        .symbol_names = symbol_names,
+        .host_imports = host_imports,
+        .host_sites = host_sites,
+        .rebases = rebases,
+        .code = code,
+        .writable = writable,
+        .writable_offset = if (writable.len == 0) std.mem.alignForward(usize, executable.len, page_size) else @intFromPtr(writable.ptr) - @intFromPtr(code.ptr),
+    };
 }
 
 /// Validate and view an already-mapped dev run image. The image occupies the
@@ -648,12 +834,14 @@ pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, image_bo
         .data_relocations = try sliceFromRef(DataRelocationRecord, base_ptr, image_size, header.data_relocations),
         .symbol_names = try bytesFromRef(base_ptr, image_size, header.symbol_names),
         .data = try bytesFromRef(base_ptr, image_size, header.data),
+        .mutable_data = try bytesFromRef(base_ptr, image_size, header.mutable_data),
         .data_symbols = try sliceFromRef(DataSymbol, base_ptr, image_size, header.data_symbols),
         .page_size = page_size,
-        .boxy_blob = try bytesFromRef(base_ptr, image_size, header.boxy_blob),
-        .boxy_sidecar = header.boxy_sidecar,
         .mapping = base_ptr[0..mapping_size],
         .static_code_references = header.static_code_references != 0,
+        .host_imports = try sliceFromRef(HostImport, base_ptr, image_size, header.host_imports),
+        .host_sites = try sliceFromRef(HostSite, base_ptr, image_size, header.host_sites),
+        .rebases = try sliceFromRef(Rebase, base_ptr, image_size, header.rebases),
     };
 }
 
@@ -663,6 +851,7 @@ fn relocationKindForData(kind: DataRelocationKind) RelocationKind {
         .rel32 => .linked_data_rel32,
         .page21 => .linked_data_page21,
         .pageoff12 => .linked_data_pageoff12,
+        .abs32s => base.invariant("run image invariant violated: an abs32s data relocation, which only a test unit emits, and no run image holds a test unit's code", .{}),
     };
 }
 
@@ -714,7 +903,7 @@ fn countReservedFunctionStubs(
             uses[@backingInt(data.symbol)] |= 2;
         },
         .local_data => return error.UnsupportedDevRunRelocation,
-        .retired, .runtime_number => {},
+        .retired => {},
     };
     var count: usize = 0;
     for (names, uses) |name, use| {
@@ -866,7 +1055,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     };
     var plan = try StaticDataPool.Plan.init(scratch, &data_exports, false);
     defer plan.deinit();
-    const capacity = try requiredCapacity(scratch, page_size, &code, &entrypoint_inputs, &code_symbol_inputs, symbols.names.items, &relocations, &data_exports, &plan, &.{});
+    const capacity = try requiredCapacity(scratch, page_size, &code, &entrypoint_inputs, &code_symbol_inputs, symbols.names.items, &relocations, &data_exports, &plan);
     const image_bytes = try scratch.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(page_size), capacity);
     defer scratch.free(image_bytes);
 
@@ -885,8 +1074,6 @@ test "writeToSharedMemory serializes only executable image sections" {
         &relocations,
         &data_exports,
         &plan,
-        &.{},
-        std.mem.zeroes(BoxySidecar),
     );
 
     try std.testing.expectEqual(MAGIC, header.magic);
@@ -964,9 +1151,9 @@ fn writePoolTestImage(
 
     var plan = try StaticDataPool.Plan.init(scratch, data_exports, true);
     defer plan.deinit();
-    const unpooled_end = try requiredCapacityFromOffset(scratch, page_size, start, &code, &.{}, &code_symbol_inputs, &.{}, &.{}, data_exports, &plan, &.{});
+    const unpooled_end = try requiredCapacityFromOffset(scratch, page_size, start, &code, &.{}, &code_symbol_inputs, &.{}, &.{}, data_exports, &plan);
     try plan.reusePool(data_exports, pool, start, unpooled_end);
-    const end = try requiredCapacityFromOffset(scratch, page_size, start, &code, &.{}, &code_symbol_inputs, &.{}, &.{}, data_exports, &plan, &.{});
+    const end = try requiredCapacityFromOffset(scratch, page_size, start, &code, &.{}, &code_symbol_inputs, &.{}, &.{}, data_exports, &plan);
     try std.testing.expect(end <= unpooled_end);
 
     var image_buffer = std.heap.FixedBufferAllocator.init(mapping[start..end]);
@@ -982,8 +1169,6 @@ fn writePoolTestImage(
         &.{},
         data_exports,
         &plan,
-        &.{},
-        std.mem.zeroes(BoxySidecar),
     );
     return .{
         .header = header,
@@ -1112,4 +1297,33 @@ test "static pool reuse stays within code-to-data displacement range" {
     const far_start: usize = @as(usize, std.math.maxInt(i32)) + mapping.len;
     try far.reusePool(&exports, pool, far_start, far_start + page_size);
     try std.testing.expect(far.placements[0] == .local);
+}
+
+test "boxy composition slots occupy separate pages and start empty in each run image" {
+    const page = std.heap.page_size_min;
+    const mapping = try std.testing.allocator.alignedAlloc(u8, .fromByteUnits(page), 64 * page);
+    defer std.testing.allocator.free(mapping);
+    @memset(mapping, 0);
+    const exports = [_]StaticDataExport{
+        .{ .symbol_name = "site", .bytes = &@as([8]u8, @splat(0)), .alignment = 8, .is_mutable = true },
+        .{ .symbol_name = "constant", .bytes = "readonly", .alignment = 1 },
+    };
+    const first = try writePoolTestImage(mapping, page, page, &exports, .empty);
+    const site = try poolTestSymbol(&first.view, "site");
+    try std.testing.expectEqual(DataLocation.mutable_image, try site.dataLocation());
+    const bytes = try first.view.dataSymbolBytes(site);
+    try std.testing.expectEqualSlices(u8, exports[0].bytes, bytes);
+    try std.testing.expectEqual(@as(usize, 0), @intFromPtr(bytes.ptr) % page);
+    try std.testing.expect(@intFromPtr(bytes.ptr) >= @intFromPtr(first.view.executable.ptr) + first.view.executable.len);
+    try std.testing.expect(@intFromPtr(bytes.ptr) + page <= @intFromPtr(first.view.data.ptr));
+    try std.testing.expect(@intFromPtr(bytes.ptr) - @intFromPtr(mapping.ptr) < first.header.static_pool.offset);
+    bytes[0] = 99;
+    const second = try writePoolTestImage(mapping, @intCast(first.header.image_size), page, &exports, .{
+        .mapping = mapping,
+        .head_offset = first.header.static_pool.offset,
+    });
+    const fresh = try second.view.dataSymbolBytes(try poolTestSymbol(&second.view, "site"));
+    try std.testing.expect(@intFromPtr(fresh.ptr) != @intFromPtr(bytes.ptr));
+    try std.testing.expectEqualSlices(u8, exports[0].bytes, fresh);
+    try std.testing.expectEqual(DataLocation.pool, try (try poolTestSymbol(&second.view, "constant")).dataLocation());
 }

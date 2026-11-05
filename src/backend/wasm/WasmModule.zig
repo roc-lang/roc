@@ -263,6 +263,14 @@ pub const Op = struct {
     pub const i32_extend8_s: u8 = 0xC0;
     pub const i32_extend16_s: u8 = 0xC1;
 
+    // Prefix of the bulk-memory and saturating-conversion instructions, and
+    // the bulk-memory sub-opcodes the backend emits. Sub-opcodes are varuint32
+    // values; each bulk-memory instruction then names its memory with one
+    // byte per memory operand.
+    pub const misc_prefix: u8 = 0xFC;
+    pub const memory_copy: u32 = 0x0A;
+    pub const memory_fill: u32 = 0x0B;
+
     // SIMD prefix and 128-bit integer SIMD sub-opcodes. Sub-opcodes are
     // varuint32 values from the WebAssembly SIMD specification.
     pub const simd_prefix: u8 = 0xFD;
@@ -505,6 +513,10 @@ data_segments: std.ArrayList(DataSegment),
 owned_segment_names: std.ArrayList([]u8),
 /// Symbol names this module allocated (`mergeLinkedObject`).
 owned_symbol_names: std.ArrayList([]u8),
+/// The undefined function symbol, by name, of each function a static data
+/// export's function pointer names before code defines it
+/// (`defineForwardFunction`).
+forward_functions: std.StringHashMapUnmanaged(u32) = .empty,
 omit_zero_fill_data_segments: bool,
 /// Next available offset for data placement in linear memory (grows up from 0).
 data_offset: u32,
@@ -519,6 +531,8 @@ stack_pointer_init: u32,
 /// Surgical merging therefore rejects them, while sealed-boundary inspection
 /// may accept them because it never re-encodes the object.
 preloaded_defined_global_count: u32,
+/// The defined globals of an object preloaded for an image, in index order.
+preloaded_globals: std.ArrayList(PreloadedGlobal) = .empty,
 /// Whether the module has a funcref table (for call_indirect).
 has_table: bool,
 /// Function indices to place in the table (element section).
@@ -612,10 +626,12 @@ pub fn deinit(self: *Self) void {
     self.data_segments.deinit(self.allocator);
     for (self.owned_segment_names.items) |name| self.allocator.free(name);
     self.owned_segment_names.deinit(self.allocator);
+    self.forward_functions.deinit(self.allocator);
     for (self.owned_symbol_names.items) |name| self.allocator.free(name);
     self.owned_symbol_names.deinit(self.allocator);
     self.table_func_indices.deinit(self.allocator);
     self.extra_globals.deinit(self.allocator);
+    self.preloaded_globals.deinit(self.allocator);
     self.code_bytes.deinit(self.allocator);
     self.function_offsets.deinit(self.allocator);
     self.linking.symbol_table.deinit(self.allocator);
@@ -1255,7 +1271,12 @@ pub fn addStaticDataExports(self: *Self, exports: []const StaticDataExport) Stat
             0,
         );
 
-        const symbol_flags: u32 = if (data_export.is_exported)
+        std.debug.assert(!data_export.content_named or !(data_export.is_exported or data_export.is_mutable));
+        const symbol_flags: u32 = if (data_export.content_named)
+            // A weak definition every unit carrying the constant repeats
+            // under the same name; a link keeps one of them.
+            WasmLinking.SymFlag.BINDING_WEAK
+        else if (data_export.is_exported)
             0
         else if (data_export.is_global)
             WasmLinking.SymFlag.VISIBILITY_HIDDEN
@@ -1322,7 +1343,18 @@ fn staticDataRelocationSymbol(
         .index = 0,
     });
     try function_index.record(relocation.target_symbol_name, raw_symbol);
+    try self.forward_functions.put(self.allocator, relocation.target_symbol_name, raw_symbol);
     return SymbolIndex.fromRaw(raw_symbol);
+}
+
+/// Define the function a static data export's function pointer named
+/// before code defined it: the export's relocations then resolve to
+/// `function`.
+pub fn defineForwardFunction(self: *Self, name: []const u8, function: u32, flags: u32) void {
+    const entry = self.forward_functions.fetchRemove(name) orelse return;
+    const sym = &self.linking.symbol_table.items[entry.value];
+    sym.flags = flags;
+    sym.index = function;
 }
 
 /// Enable the __stack_pointer global (global index 0).
@@ -2322,6 +2354,10 @@ pub fn resolveDataRelocations(self: *Self) RelocationError!void {
 
 /// Resolve both code and data relocations in place.
 pub fn resolveRelocations(self: *Self) RelocationError!void {
+    if (self.forward_functions.count() != 0) {
+        var names = self.forward_functions.keyIterator();
+        return logInvalidRelocation("static data names function {s}, which no code defines", .{names.next().?.*});
+    }
     try self.resolveCodeRelocations();
     try self.resolveDataRelocations();
 }
@@ -2373,24 +2409,6 @@ pub fn materializeFuncBodies(self: *Self) Allocator.Error!void {
 pub fn verifyNoBuiltinImports(self: *const Self) error{UnresolvedBuiltinImport}!void {
     for (self.imports.items) |imp| {
         if (!isAllowedBuiltinImport(imp.field_name) and std.mem.startsWith(u8, imp.field_name, "roc_")) {
-            return error.UnresolvedBuiltinImport;
-        }
-    }
-}
-
-/// Verify that a relocatable object's undefined function symbols contain no
-/// references in an explicitly owned ABI namespace. Resolved symbols can leave
-/// dead import entries until the final linker compacts function indices, so
-/// symbol state—not the raw import list—is the correctness boundary for an
-/// object.
-pub fn verifyNoUndefinedFunctionSymbolsInNamespace(
-    self: *const Self,
-    namespace: []const u8,
-) error{UnresolvedBuiltinImport}!void {
-    for (self.linking.symbol_table.items) |sym| {
-        if (sym.kind != .function or !sym.isUndefined()) continue;
-        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
-        if (std.mem.startsWith(u8, name, namespace)) {
             return error.UnresolvedBuiltinImport;
         }
     }
@@ -3071,6 +3089,20 @@ pub const PreloadMode = enum {
     /// original bytes, and are not externally visible unless exported or
     /// represented by a non-local linking symbol.
     relocatable_for_sealing,
+    /// Parse an object that is converted to an image (`ObjectImage`): its
+    /// defined globals are read with their initial values into
+    /// `preloaded_globals`, since an image represents them.
+    relocatable_for_image,
+};
+
+/// A global a preloaded object defines (`PreloadMode.relocatable_for_image`).
+pub const PreloadedGlobal = struct {
+    val_type: u8,
+    mutable: bool,
+    /// The initial value's bits when the initializer is a constant: an
+    /// `i32` sign-extended, an `i64`, or a float's bits. Null for any other
+    /// initializer.
+    init: ?u64,
 };
 
 /// Parse a WASM binary into a WasmModule according to its precise consumer.
@@ -3091,7 +3123,7 @@ pub fn preload(allocator: Allocator, bytes: []const u8, mode: PreloadMode) Parse
     try module.parseFunctionSection(bytes, &cursor);
     try module.parseTableSection_(bytes, &cursor);
     try module.parseMemorySection_(bytes, &cursor);
-    try module.parseGlobalSection_(bytes, &cursor);
+    try module.parseGlobalSection_(bytes, &cursor, mode);
     try module.parseExportSection(bytes, &cursor);
     try module.parseStartSection(bytes, &cursor);
     try module.parseElementSection_(bytes, &cursor);
@@ -3322,10 +3354,48 @@ fn parseMemorySection_(self: *Self, bytes: []const u8, cursor: *usize) ParseErro
     cursor.* = section_end;
 }
 
-fn parseGlobalSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!void {
+fn parseGlobalSection_(self: *Self, bytes: []const u8, cursor: *usize, mode: PreloadMode) ParseError!void {
     const section_size = try beginSection(bytes, cursor, .global_section) orelse return;
     const section_end = cursor.* + section_size;
+    if (section_end > bytes.len) return error.UnexpectedEnd;
     self.preloaded_defined_global_count = try readU32(bytes[0..section_end], cursor);
+    if (mode == .relocatable_for_image) {
+        const section = bytes[0..section_end];
+        try self.preloaded_globals.ensureTotalCapacity(self.allocator, self.preloaded_defined_global_count);
+        for (0..self.preloaded_defined_global_count) |_| {
+            if (cursor.* + 2 > section.len) return error.UnexpectedEnd;
+            const val_type = section[cursor.*];
+            const mutable = section[cursor.* + 1];
+            cursor.* += 2;
+            if (mutable > 1) return error.InvalidSection;
+            if (cursor.* >= section.len) return error.UnexpectedEnd;
+            const opcode = section[cursor.*];
+            cursor.* += 1;
+            // `i32.const`, `i64.const`, `f32.const`, `f64.const`, `global.get`.
+            const initial: ?u64 = switch (opcode) {
+                0x41 => @bitCast(@as(i64, try readI32(section, cursor))),
+                0x42 => @bitCast(try readI64Leb(section, cursor)),
+                0x43 => blk: {
+                    if (cursor.* + 4 > section.len) return error.UnexpectedEnd;
+                    defer cursor.* += 4;
+                    break :blk std.mem.readInt(u32, section[cursor.*..][0..4], .little);
+                },
+                0x44 => blk: {
+                    if (cursor.* + 8 > section.len) return error.UnexpectedEnd;
+                    defer cursor.* += 8;
+                    break :blk std.mem.readInt(u64, section[cursor.*..][0..8], .little);
+                },
+                0x23 => blk: {
+                    _ = try readU32(section, cursor);
+                    break :blk null;
+                },
+                else => return error.InvalidSection,
+            };
+            if (cursor.* >= section.len or section[cursor.*] != Op.end) return error.InvalidSection;
+            cursor.* += 1;
+            self.preloaded_globals.appendAssumeCapacity(.{ .val_type = val_type, .mutable = mutable == 1, .init = initial });
+        }
+    }
     cursor.* = section_end;
 }
 
@@ -4265,6 +4335,24 @@ pub fn readI32(bytes: []const u8, cursor: *usize) ParseError!i32 {
         }
     }
     return error.Overflow;
+}
+
+/// Read a signed LEB128 `i64` from `bytes[cursor.*]`, advancing cursor.
+pub fn readI64Leb(bytes: []const u8, cursor: *usize) ParseError!i64 {
+    var result: i64 = 0;
+    var shift: u7 = 0;
+    while (true) {
+        if (cursor.* >= bytes.len) return error.UnexpectedEnd;
+        const byte = bytes[cursor.*];
+        cursor.* += 1;
+        if (shift >= 64) return error.InvalidSection;
+        result |= @as(i64, byte & 0x7f) << @intCast(shift);
+        shift += 7;
+        if (byte & 0x80 == 0) {
+            if (shift < 64 and byte & 0x40 != 0) result |= @as(i64, -1) << @intCast(shift);
+            return result;
+        }
+    }
 }
 
 /// Read a length-prefixed string from `bytes[cursor.*]`, advancing cursor.
@@ -6471,23 +6559,6 @@ test "verifyNoBuiltinImports—allows roc_panic platform import" {
     _ = try module.addImport("env", "roc_panic", 0);
 
     try module.verifyNoBuiltinImports();
-}
-
-test "verifyNoUndefinedFunctionSymbolsInNamespace—uses relocatable symbol resolution state" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-
-    const type_idx = try module.addFuncType(&.{}, &.{});
-    const imported = try module.addFunctionImportWithSymbol("env", "roc_boxy_register_proc", type_idx);
-    try std.testing.expectError(
-        error.UnresolvedBuiltinImport,
-        module.verifyNoUndefinedFunctionSymbolsInNamespace("roc_boxy_"),
-    );
-
-    const symbol = &module.linking.symbol_table.items[imported.symbol.raw()];
-    symbol.flags &= ~WasmLinking.SymFlag.UNDEFINED;
-    try module.verifyNoUndefinedFunctionSymbolsInNamespace("roc_boxy_");
 }
 
 test "sealRocObject keeps only provides global and localizes compiler support" {

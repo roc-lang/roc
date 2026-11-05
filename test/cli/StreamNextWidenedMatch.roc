@@ -23,7 +23,7 @@ describe! = |source| match source.next!() {
 }
 
 main! = |_args| {
-    Stdout.line!(describe!(Stream.custom(3, Unknown, |n| if n < 4 Ok((n, n + 1)) else Err(NoMore))))
+    Stdout.line!(describe!(Stream.custom(3, Err(Unknown), |n| if n < 4 Ok((n, n + 1)) else Err(NoMore))))
     Stdout.line!(describe!([1, 5].iter().keep_if(|n| n > 1).stream()))
     Stdout.line!(describe!([].iter().stream()))
     Ok({})

@@ -82,6 +82,9 @@ const Dependencies = struct {
 const DependencyNode = struct {
     root: Var,
     formals: []bool,
+    /// Structural substitution dependencies, excluding private unknowns'
+    /// application ownership. Only these edges can expose a source variable.
+    source_formals: []bool,
     parents: std.ArrayList(u32) = .empty,
 };
 const absent_argument: Var = @fromBackingInt(std.math.maxInt(u32));
@@ -156,6 +159,32 @@ pub fn sourceVar(self: *const Self, view_id: Var) ?Var {
         return null;
     }
     return self.source.resolveVar(view_id).var_;
+}
+
+/// Whether this view's structural substitutions reach a source variable.
+/// A false answer proves that blocker collection can export nothing, without
+/// asking whether the template itself is inhabited. Source types always need
+/// ordinary analysis: their descriptors can change between reads.
+pub fn hasSourceDependencies(self: *const Self, view_id: Var) Allocator.Error!bool {
+    if (self.sourceVar(view_id) != null) return true;
+    var pending: std.ArrayList(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer seen.deinit(self.gpa);
+    var current = view_id;
+    while (true) {
+        const node = self.nodes.items[@backingInt(current) - self.source_len];
+        const env = self.environments.items[node.key.environment];
+        const deps = self.dependencies.get(env.declaration).?;
+        const required = deps.nodes.items[deps.indices.get(node.key.root).?].source_formals;
+        for (env.args, required) |actual, needed| {
+            if (!needed) continue;
+            std.debug.assert(actual != absent_argument);
+            if (self.sourceVar(actual) != null) return true;
+            if (!(try seen.getOrPut(self.gpa, actual)).found_existing) try pending.append(self.gpa, actual);
+        }
+        current = pending.pop() orelse return false;
+    }
 }
 
 /// Resolve identity without projecting a descriptor or allocating.
@@ -260,7 +289,9 @@ fn dependencyNode(self: *Self, alloc: Allocator, deps: *Dependencies, var_: Var,
     const index: u32 = @intCast(deps.nodes.items.len);
     const required = try alloc.alloc(bool, formal_count);
     @memset(required, false);
-    try deps.nodes.append(alloc, .{ .root = root_var, .formals = required });
+    const source_required = try alloc.alloc(bool, formal_count);
+    @memset(source_required, false);
+    try deps.nodes.append(alloc, .{ .root = root_var, .formals = required, .source_formals = source_required });
     try deps.indices.put(alloc, root_var, index);
     return index;
 }
@@ -307,6 +338,7 @@ fn computeDependencies(self: *Self, alloc: Allocator, declaration: types.Nominal
         for (formals, 0..) |formal, formal_index| {
             if (matchesFormal(resolved, self.source.resolveVar(formal))) {
                 deps.nodes.items[offset].formals[formal_index] = true;
+                deps.nodes.items[offset].source_formals[formal_index] = true;
                 substituted = true;
             }
         }
@@ -357,6 +389,12 @@ fn computeDependencies(self: *Self, alloc: Allocator, declaration: types.Nominal
             const parent = &deps.nodes.items[parent_index];
             var changed = false;
             for (child.formals, parent.formals) |needed, *known| {
+                if (needed and !known.*) {
+                    known.* = true;
+                    changed = true;
+                }
+            }
+            for (child.source_formals, parent.source_formals) |needed, *known| {
                 if (needed and !known.*) {
                     known.* = true;
                     changed = true;

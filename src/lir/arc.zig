@@ -36,6 +36,7 @@ const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const DynOps = core.DynOps;
 const GuardedList = collections.GuardedList;
 const TaskExecutor = @import("base").post_check_task_executor;
 
@@ -65,6 +66,11 @@ pub const InsertOptions = struct {
     /// analysis proves confined. Optimized builds enable this; everything
     /// else emits only atomic count updates and skips the analysis.
     thread_confined_rc: bool = false,
+    /// Prove values unique so a mutation can skip its runtime refcount check,
+    /// and a read of static data can take its fresh form. Optimized builds
+    /// and the tests of the analysis enable this; off, every mutation keeps
+    /// its check, which answers the same question at runtime.
+    prove_uniqueness: bool = true,
     /// Select consuming Box.unbox when its lender is dead. Compiled backends
     /// enable this; the value-model interpreter keeps an explicit borrow.
     consume_dead_boxes: bool = true,
@@ -503,21 +509,12 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .layouts = layouts,
         .options = options,
     };
-    const boxy_rc_descs = try store.snapshotLocalDescs(store.allocator);
-    defer boxy_rc_descs.deinit(store.allocator);
-    var boxy_desc_users = try BoxyDescUsers.init(store.allocator, boxy_rc_descs);
-    defer boxy_desc_users.deinit(store.allocator);
-
-    const borrow_anchor_refcounted = try arc_solve.computeLocalContainsRefcounted(store.allocator, store, layouts);
-    defer store.allocator.free(borrow_anchor_refcounted);
-    const emission_refcounted = try computeEmissionContainsRefcounted(store.allocator, store, layouts, borrow_anchor_refcounted);
-    defer emission_refcounted.deinit(store.allocator);
-    const local_contains_refcounted = emission_refcounted.slice();
+    const local_contains_refcounted = try arc_solve.computeLocalContainsRefcounted(store.allocator, store, layouts);
+    defer store.allocator.free(local_contains_refcounted);
     inserter.local_contains_refcounted = local_contains_refcounted;
-    inserter.boxy_rc_descs = boxy_rc_descs;
-    inserter.boxy_desc_users = boxy_desc_users;
 
     const uniqueness_options: arc_solve.UniquenessOptions = .{
+        .prove = options.prove_uniqueness,
         .executor = options.post_check_executor,
         .metrics = if (options.metrics_out) |metrics| &metrics.uniqueness else null,
     };
@@ -525,8 +522,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         store.allocator,
         store,
         layouts,
-        borrow_anchor_refcounted,
-        boxy_rc_descs,
+        local_contains_refcounted,
         options.roots,
         options.consume_dead_boxes,
         options.thread_confined_rc,
@@ -550,6 +546,38 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     // Dismantle rewrote canonicalized reads into aliases of their
     // representatives after the solve; the borrow facts must describe them.
     try solution.adoptProjectionAliases(store.allocator, &dismantles.projection_aliases);
+    // A binding solved borrowed whose read dismantle committed as a take
+    // holds a unit of its own where that take applies, so it leads its own
+    // liveness group and its container dies at the container's last use.
+    {
+        var held = std.ArrayList(LIR.LocalId).empty;
+        defer held.deinit(store.allocator);
+        for (0..store.localCount()) |local_index| {
+            const local: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(local_index))));
+            if (!solution.isBorrowed(local)) continue;
+            if (dismantles.isTakeBinding(local) or dismantles.ownedOnlyBindingRoot(local) != null) try held.append(store.allocator, local);
+        }
+        try solution.adoptHeldBindings(store.allocator, held.items);
+    }
+    // A borrowed parameter whose owned variant takes every stored unit on
+    // every returning path is owned by the base signature: the borrowed base
+    // would retain each unit where the variant takes it, so borrowing saves
+    // no caller any work and would only emit a second body. A position that
+    // lends the return, or holds a demand hole, keeps its borrowed mode.
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
+        if (solution.isPinnedProc(proc)) continue;
+        const sig = solution.sigOf(proc);
+        var mask = dismantles.ownedOnlyParamTotals(proc) & sig.borrowed_params;
+        if (sig.ret_mode == .borrowed) mask &= ~sig.ret_lenders;
+        if (mask == 0) continue;
+        const params = store.getLocalSpan(store.getProcSpecImmediate(proc).args);
+        for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
+            const bit = arc_sig.paramBit(position).?;
+            if ((mask & bit) != 0 and layouts.layoutHoldsHole(store.getLocal(GuardedList.at(params, position)).layout_idx)) mask &= ~bit;
+        }
+        if (mask != 0) solution.ownParams(proc, mask);
+    }
 
     // Committed takes carry field uniqueness to the locals they define;
     // the solver settled without them, so re-derive against the takes.
@@ -561,12 +589,12 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         take_stmts.set(@backingInt(stmt.*));
         any_take = true;
     }
-    if (any_take) {
-        try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, borrow_anchor_refcounted, &solution, .{ .set = &take_stmts }, options.consume_dead_boxes, uniqueness_options);
+    if (any_take and options.prove_uniqueness) {
+        try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, local_contains_refcounted, &solution, .{ .set = &take_stmts }, options.consume_dead_boxes, uniqueness_options);
     }
 
     const base_proc_count = store.procSpecCount();
-    try recordObjectCacheFacts(store, &solution, &dismantles, options.specialize);
+    try recordProcedureFacts(store, &solution);
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
     defer store.allocator.free(sources);
     for (sources, 0..) |*source, index| {
@@ -688,12 +716,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 }
 
-/// Records on every base proc with a body what an object-cache entry for it
-/// needs: its solved uniqueness facts, and `rc_variant_demandable` when a
-/// direct call could demand a variant of it (the capabilities
-/// `callArgOwnership` consults before upgrading a borrowed position or
-/// seeding an owned one, and the outcome spans it can select). A body-less
-/// proc keeps the facts its cache entry supplied.
 /// A demand-shaped procedure never consumes a value holding a hole: its
 /// body demands nothing of the hole's type, so its signature borrows every
 /// such parameter (design.md "Specialization By Demand").
@@ -706,22 +728,8 @@ fn requireHoleParamsBorrowed(store: *const LirStore, layouts: *const layout_mod.
     }
 }
 
-fn recordObjectCacheFacts(
-    store: *LirStore,
-    solution: *const arc_solve.Solution,
-    dismantles: *const arc_dismantle.Dismantles,
-    specialize: bool,
-) ResourceError!void {
+fn recordProcedureFacts(store: *LirStore, solution: *const arc_solve.Solution) ResourceError!void {
     const proc_count = store.procSpecCount();
-    var tail_targets = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, proc_count);
-    defer tail_targets.deinit(store.allocator);
-    for (0..proc_count) |proc_index| {
-        const caller: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        for (solution.tailCallsOf(caller)) |tail_call| {
-            const callee = store.getCFStmtImmediate(tail_call.stmt).assign_call.proc;
-            if (callee != caller) tail_targets.set(@backingInt(callee));
-        }
-    }
     try recordTailGroups(store, solution);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
@@ -737,21 +745,6 @@ fn recordObjectCacheFacts(
         spec.rc_ret_unique = sig.ret_unique;
         spec.rc_ret_unique_fields = sig.ret_unique_fields;
         spec.rc_ret_conditions = conditions;
-        spec.rc_variant_demandable = false;
-        if (solution.isPinnedProc(proc)) {
-            // A proc pinned only for stability still has its outcome
-            // variant, for callers compiled with its current body.
-            spec.rc_variant_demandable = solution.stability_pinned.isSet(proc_index) and !solution.availableOutcomeSpanOf(proc).isEmpty();
-            continue;
-        }
-        const borrowed = sig.borrowed_params;
-        const specialized_demand = specialize and
-            (solution.uniqueSeedMaskOf(proc) != 0 or
-                (sig.ret_mode == .borrowed and (sig.ret_lenders & borrowed) != 0));
-        spec.rc_variant_demandable = (dismantles.ownedOnlyParamBenefits(proc) & borrowed) != 0 or
-            !solution.availableOutcomeSpanOf(proc).isEmpty() or
-            (borrowed != 0 and tail_targets.isSet(proc_index)) or
-            specialized_demand;
     }
 }
 
@@ -809,7 +802,7 @@ fn runArcTasks(comptime Context: type, contexts: []Context, phase: ArcTaskPhase,
                 });
             }
         };
-        var session = executor.begin();
+        var session = try executor.begin();
         var submitted: usize = 0;
         var received: usize = 0;
         var failed = false;
@@ -828,7 +821,7 @@ fn runArcTasks(comptime Context: type, contexts: []Context, phase: ArcTaskPhase,
             }
             if (received < submitted) {
                 const completion = session.receive();
-                if (completion.id >= submitted or completion.worker_id >= executor.worker_count) arcInvariant("ARC received invalid task identity");
+                if (completion.id >= submitted or completion.worker_id >= executor.lane_count) arcInvariant("ARC received invalid task identity");
                 const context = &contexts[completion.id];
                 if (context.completed or completion.value != @as(*anyopaque, @ptrCast(context))) arcInvariant("ARC received invalid task completion");
                 context.completed = true;
@@ -895,6 +888,7 @@ const ArcLaneScratch = struct {
     transfer_positions: std.ArrayList(u32) = .empty,
     retain_args: std.ArrayList(LIR.LocalId) = .empty,
     dismantle_temps: std.ArrayList(LIR.LocalId) = .empty,
+    dyn_operands: std.ArrayList(LIR.LocalId) = .empty,
 
     const Key = struct {
         var value: u8 = 0;
@@ -909,6 +903,7 @@ const ArcLaneScratch = struct {
         self.transfer_positions.deinit(self.allocator);
         self.retain_args.deinit(self.allocator);
         self.dismantle_temps.deinit(self.allocator);
+        self.dyn_operands.deinit(self.allocator);
     }
 
     /// Empties every buffer, keeping its capacity.
@@ -917,6 +912,7 @@ const ArcLaneScratch = struct {
         self.transfer_positions.clearRetainingCapacity();
         self.retain_args.clearRetainingCapacity();
         self.dismantle_temps.clearRetainingCapacity();
+        self.dyn_operands.clearRetainingCapacity();
     }
 
     fn forLane(lane: *TaskExecutor.LaneState) Allocator.Error!*ArcLaneScratch {
@@ -1052,12 +1048,14 @@ const EmissionOwner = struct {
         // Variant parameter positions demanded owned override the solved
         // borrowed binding for this emission only; positions the demand
         // vector seeds unique are read through `isLocalUniqueHere`.
-        const solved_sig = solution.sigOf(source_proc);
+        // A parameter whose binding is solved borrowed but whose emitted
+        // signature owns the position: a demanded variant, or a base whose
+        // signature owns a totally taken position.
         const emit_params_for_overrides = store.getLocalSpan(emit_args);
         for (0..GuardedList.borrowLen(emit_params_for_overrides)) |position| {
             const param = GuardedList.at(emit_params_for_overrides, position);
             if (arc_sig.paramBit(position) == null) break;
-            if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
+            if (solution.isBorrowed(param) and emit_sig.paramMode(position) == .owned) {
                 try owned_binding_override.set(param);
             }
         }
@@ -1144,126 +1142,6 @@ const EmissionOwner = struct {
         }
     }
 };
-
-/// The locals whose Boxy descriptor is each descriptor local, in ascending
-/// local order, so a descriptor update visits only the values it invalidates.
-const BoxyDescUsers = struct {
-    /// `locals[starts[d]..starts[d + 1]]` are the users of descriptor local `d`.
-    starts: []u32 = &.{},
-    locals: []LIR.LocalId = &.{},
-
-    fn init(allocator: Allocator, descs: LirStore.LocalDescSnapshot) Allocator.Error!BoxyDescUsers {
-        if (descs.isEmpty()) return .{};
-        const local_count = descs.localCount();
-        const starts = try allocator.alloc(u32, local_count + 1);
-        errdefer allocator.free(starts);
-        @memset(starts, 0);
-        var user_count: usize = 0;
-        for (0..local_count) |index| {
-            const desc = descs.get(@fromBackingInt(@intCast(index))) orelse continue;
-            const desc_local = desc.localOrNull() orelse continue;
-            starts[@backingInt(desc_local) + 1] += 1;
-            user_count += 1;
-        }
-        for (1..starts.len) |index| starts[index] += starts[index - 1];
-        const locals = try allocator.alloc(LIR.LocalId, user_count);
-        errdefer allocator.free(locals);
-        const cursors = try allocator.dupe(u32, starts[0..local_count]);
-        defer allocator.free(cursors);
-        for (0..local_count) |index| {
-            const desc = descs.get(@fromBackingInt(@intCast(index))) orelse continue;
-            const desc_local = desc.localOrNull() orelse continue;
-            const cursor = &cursors[@backingInt(desc_local)];
-            locals[cursor.*] = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            cursor.* += 1;
-        }
-        return .{ .starts = starts, .locals = locals };
-    }
-
-    fn deinit(self: *BoxyDescUsers, allocator: Allocator) void {
-        allocator.free(self.starts);
-        allocator.free(self.locals);
-    }
-
-    fn usersOf(self: BoxyDescUsers, desc_local: LIR.LocalId) []const LIR.LocalId {
-        const index: usize = @backingInt(desc_local);
-        if (index + 1 >= self.starts.len) return &.{};
-        return self.locals[self.starts[index]..self.starts[index + 1]];
-    }
-};
-
-fn boxyDescForLocal(descs: LirStore.LocalDescSnapshot, local: LIR.LocalId) ?LIR.BoxyDescRef {
-    return descs.get(local);
-}
-
-/// Emission shares the immutable solver table unless a capture view must be
-/// excluded. Only the owned variant needs to be freed by the emission consumer.
-const EmissionRefcounted = union(enum) {
-    shared: []const bool,
-    owned: []bool,
-
-    fn slice(self: EmissionRefcounted) []const bool {
-        return switch (self) {
-            inline .shared, .owned => |values| values,
-        };
-    }
-
-    fn deinit(self: EmissionRefcounted, allocator: Allocator) void {
-        switch (self) {
-            .shared => {},
-            .owned => |values| allocator.free(values),
-        }
-    }
-
-    fn exclude(self: *EmissionRefcounted, allocator: Allocator, local: LIR.LocalId) Allocator.Error!void {
-        const index = @backingInt(local);
-        if (!self.slice()[index]) return;
-        const values = switch (self.*) {
-            .shared => |shared| values: {
-                const owned = try allocator.dupe(bool, shared);
-                self.* = .{ .owned = owned };
-                break :values owned;
-            },
-            .owned => |owned| owned,
-        };
-        values[index] = false;
-    }
-};
-
-/// Derive RC emission eligibility from the solver's representation table.
-/// A capture view anchors borrows but owns no aggregate RC unit.
-fn computeEmissionContainsRefcounted(
-    allocator: Allocator,
-    store: *const LirStore,
-    layouts: *const layout_mod.Store,
-    borrow_anchor_refcounted: []const bool,
-) ResourceError!EmissionRefcounted {
-    if (borrow_anchor_refcounted.len != store.localCount()) arcInvariant("ARC resource table did not cover every local");
-    var contains = EmissionRefcounted{ .shared = borrow_anchor_refcounted };
-    errdefer contains.deinit(allocator);
-    // An `erased_capture_load` whose aggregate contains descriptor-driven
-    // fields is an explicit borrowed view into the executing callable's capture
-    // allocation. The view has no aggregate descriptor of its own, so it cannot
-    // use a layout-driven concrete helper. Keep it out of emission;
-    // the solver table retains it so projected fields remain tied to the callable.
-    var visited = collections.DenseMap(layout_mod.Idx, void).init(allocator);
-    defer visited.deinit();
-    var stack = std.ArrayList(layout_mod.Idx).empty;
-    defer stack.deinit(allocator);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-        const stmt = store.getCFStmtImmediate(stmt_id);
-        if (stmt.* == .assign_low_level and stmt.assign_low_level.op == .erased_capture_load) {
-            const target = stmt.assign_low_level.target;
-            const target_layout = store.getLocal(target).layout_idx;
-            if (try arc_dismantle.layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) {
-                try contains.exclude(allocator, target);
-            }
-        }
-    }
-
-    return contains;
-}
 
 const VariantSelector = struct {
     source: LIR.LirProcSpecId,
@@ -1354,14 +1232,10 @@ const VariantTable = struct {
             .frame_locals = self.sources[@backingInt(callee)].frame,
             .body = self.sources[@backingInt(callee)].body,
             .ret_layout = source_spec.ret_layout,
-            .ret_desc = source_spec.ret_desc,
-            .runtime_ret_desc = source_spec.runtime_ret_desc,
-            .erased_arg_desc_offsets = source_spec.erased_arg_desc_offsets,
-            .erased_arg_layouts = source_spec.erased_arg_layouts,
-            .erased_arg_desc_params = source_spec.erased_arg_desc_params,
             .erased_capture_arg = source_spec.erased_capture_arg,
+            .dyn_result = source_spec.dyn_result,
             .abi = source_spec.abi,
-            .boxy_runtime_entry = source_spec.boxy_runtime_entry,
+            .emission_unit = source_spec.emission_unit,
             .is_static_initializer = source_spec.is_static_initializer,
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
@@ -1669,8 +1543,7 @@ const ArcPlanStep = struct {
     pre_release: ?ReleaseDecision = null,
     pre_release_extra: PlanSpan = .{},
     /// Why `pre_release_extra` was filled: the tail-call frame release of an
-    /// `assign_call`, or the descriptor-invalidated deaths of an
-    /// `assign_boxy_desc_ref`. Set by the planner that fills the list.
+    /// `assign_call`. Set by the planner that fills the list.
     pre_release_extra_reason: ?LIR.RcReason = null,
     pre_retain: PlanSpan = .{},
     retain_assign_ref_target: bool = true,
@@ -1807,11 +1680,6 @@ const ArcPlanTerminal = union(enum) {
         miss_plan: u32,
         capture_retain_count: u32,
     },
-    boxy_tag_match: struct {
-        stmt: LIR.CFStmtId,
-        match_plan: u32,
-        miss_plan: u32,
-    },
     str_match_set: struct {
         stmt: LIR.CFStmtId,
         match_plans: []u32,
@@ -1876,8 +1744,6 @@ const Inserter = struct {
     layouts: *const layout_mod.Store,
     options: InsertOptions,
     local_contains_refcounted: []const bool = &.{},
-    boxy_rc_descs: LirStore.LocalDescSnapshot = .{},
-    boxy_desc_users: BoxyDescUsers = .{},
     solution: *const arc_solve.Solution = undefined,
     /// Field takes solved against the ownership-neutral bodies; consulted by
     /// statement id, so base and variant emissions share one solve.
@@ -1942,6 +1808,7 @@ const Inserter = struct {
     death_scratch: *std.ArrayList(ReleaseDecision) = undefined,
     transfer_position_scratch: *std.ArrayList(u32) = undefined,
     retain_arg_scratch: *std.ArrayList(LIR.LocalId) = undefined,
+    dyn_operand_scratch: *std.ArrayList(LIR.LocalId) = undefined,
     lane_allocator: Allocator = undefined,
     /// Storage that dies when the current ARC task callback returns.
     task_scratch: Allocator = undefined,
@@ -1989,6 +1856,7 @@ const Inserter = struct {
         self.death_scratch = &env.lane.deaths;
         self.transfer_position_scratch = &env.lane.transfer_positions;
         self.retain_arg_scratch = &env.lane.retain_args;
+        self.dyn_operand_scratch = &env.lane.dyn_operands;
         self.dismantle_temps = &env.lane.dismantle_temps;
         self.lane_allocator = env.lane.allocator;
         self.task_scratch = env.scratch;
@@ -2124,17 +1992,6 @@ const Inserter = struct {
                 try self.pushMaterializePath(tasks, str_plan.miss_plan, &state.child_results[1]);
                 try self.pushMaterializePath(tasks, str_plan.match_plan, &state.child_results[0]);
             },
-            .boxy_tag_match => |tag_plan| {
-                const state = try self.task_scratch.create(MaterializeControlTask);
-                state.* = .{
-                    .plan_index = path.plan_index,
-                    .child_results = try self.task_scratch.alloc(LIR.CFStmtId, 2),
-                    .result = path.result,
-                };
-                try tasks.append(self.task_scratch, .{ .control = state });
-                try self.pushMaterializePath(tasks, tag_plan.miss_plan, &state.child_results[1]);
-                try self.pushMaterializePath(tasks, tag_plan.match_plan, &state.child_results[0]);
-            },
             .str_match_set => |str_plan| {
                 const state = try self.task_scratch.create(MaterializeControlTask);
                 state.* = .{
@@ -2223,16 +2080,6 @@ const Inserter = struct {
                     .source = source.source,
                     .data = source.data,
                     .on_match = on_match,
-                    .on_miss = state.child_results[1],
-                } });
-            },
-            .boxy_tag_match => |tag_plan| {
-                const source = self.store.getCFStmtImmediate(tag_plan.stmt).boxy_tag_match;
-                tail = try self.addCFStmtAtSource(tag_plan.stmt, .{ .boxy_tag_match = .{
-                    .source = source.source,
-                    .source_desc = source.source_desc,
-                    .tag_name = source.tag_name,
-                    .on_match = state.child_results[0],
                     .on_miss = state.child_results[1],
                 } });
             },
@@ -2466,11 +2313,6 @@ const Inserter = struct {
                         .data = try self.store.addStmtRow(LIR.ErasedCallData, .{
                             .closure = assign.closure,
                             .args = assign.args,
-                            .arg_layouts = assign.arg_layouts,
-                            .arg_descs = assign.arg_descs,
-                            .arg_desc_keys = assign.arg_desc_keys,
-                            .result_desc = assign.result_desc,
-                            .out_desc = assign.out_desc,
                             .arg_plan = assign.arg_plan,
                             .reuse_closure = assign.reuse_closure,
                             .reuse_source = assign.reuse_source,
@@ -2493,19 +2335,11 @@ const Inserter = struct {
                             .capture = assign.capture,
                             .capture_layout = assign.capture_layout,
                             .on_drop = assign.on_drop,
-                            .result_desc = assign.result_desc,
                             .reuse = assign.reuse,
                             .reuse_unique = step.reuse_unique,
                         }),
                         .next = next,
                     } }, origin);
-                };
-            },
-            .assign_call_dict => |assign_stmt| blk_assign: {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                break :blk_assign blk: {
-                    next = try self.retainSpanExcept(assign.args, step.transfer_mask, .{ .stmt = at, .reason = .dict_call_arg }, next);
-                    break :blk try self.addWithNext(stmt, next, origin);
                 };
             },
             .assign_low_level => |assign| blk: {
@@ -2563,20 +2397,39 @@ const Inserter = struct {
                 if (assign.target != assign.value and step.retain_set_target) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .alias_bind }, next);
                 break :blk try self.addWithNext(stmt, next, origin);
             },
-            inline .assign_boxy_unbox, .assign_boxy_tag_payload => |assign| blk: {
-                if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .alias_bind }, next);
+            .dyn => |dyn_stmt| blk: {
+                const op = self.store.stmtRow(dyn_stmt.data);
+                if (step.replaces_frame) {
+                    var deferred = op;
+                    deferred.call_erased.deferred = true;
+                    break :blk try self.store.addCFStmt(.{ .dyn = .{
+                        .target = dyn_stmt.target,
+                        .data = try self.store.addStmtRow(LIR.DynOp, deferred),
+                        .next = next,
+                    } }, origin);
+                }
+                switch (DynOps.ownership(op)) {
+                    .none, .borrow_operands, .call_erased => {},
+                    .borrow_component, .alias => if (step.retain_assign_ref_target) {
+                        next = try self.retainLocalIfRc(dyn_stmt.target.?, .{ .stmt = at, .reason = .alias_bind }, next);
+                    },
+                    .construct => {
+                        const operands = try self.dynOperands(op);
+                        next = try self.retainLocalsExceptPositions(operands, step.transfer_positions.of(u32, &self.arc_plans.positions), .{ .stmt = at, .reason = .stored_in_aggregate }, next);
+                        if (op == .closure and op.closure.reuse != null) {
+                            var repack = op;
+                            repack.closure.reuse_unique = step.reuse_unique;
+                            break :blk try self.store.addCFStmt(.{ .dyn = .{
+                                .target = dyn_stmt.target,
+                                .data = try self.store.addStmtRow(LIR.DynOp, repack),
+                                .next = next,
+                            } }, origin);
+                        }
+                    },
+                }
                 break :blk try self.addWithNext(stmt, next, origin);
             },
             .init_uninitialized,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
             .debug,
             .expect,
             => try self.addWithNext(stmt, next, origin),
@@ -2603,7 +2456,6 @@ const Inserter = struct {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .boxy_tag_match,
             .join,
             .jump,
             .ret,
@@ -2712,7 +2564,7 @@ const Inserter = struct {
                     }
                 },
                 .none => unreachable, // the check at the top of this loop rejects scheduled plans without a terminal
-                .switch_stmt, .initialized_payload_switch, .str_match, .boxy_tag_match, .str_match_set => {},
+                .switch_stmt, .initialized_payload_switch, .str_match, .str_match_set => {},
             }
             for (plan.steps.items[0..plan.step_count]) |*step| {
                 if (step.call_callee) |callee| {
@@ -2845,6 +2697,7 @@ const Inserter = struct {
                     const singles = [_]LIR.LocalId{ body_clone.refOpSource(assign.op), assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                 },
+                .dyn => |dyn_stmt| try self.planDynStmt(segment, dyn_stmt),
                 .init_uninitialized => |uninit| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     step.pre_release = if (try self.transferForInit(&segment.owned, uninit.target)) self.releaseDecision(uninit.target) else null;
@@ -2922,153 +2775,6 @@ const Inserter = struct {
                     if (transfer.preserve_reuse) try self.appendStepRetain(step, .{ .local = assign.reuse.?, .reason = .reuse_source_preserved });
                     const singles = [_]LIR.LocalId{ assign.capture orelse assign_stmt.target, assign.reuse orelse assign_stmt.target, assign_stmt.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .assign_boxy_desc_ref => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    self.death_scratch.clearRetainingCapacity();
-                    try self.planValuesInvalidatedByDescriptorUpdate(
-                        assign_stmt.target,
-                        &segment.owned,
-                        assign_stmt.next,
-                        self.death_scratch,
-                    );
-                    try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
-                    step.pre_release_extra_reason = .descriptor_invalidated;
-                    step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign_stmt.target)) self.releaseDecision(assign_stmt.target) else null;
-                    self.death_scratch.clearRetainingCapacity();
-                    const desc_local = assign.desc.localOrNull() orelse assign_stmt.target;
-                    const residual_local = if (assign.tag_residual_for) |desc| desc.localOrNull() orelse assign_stmt.target else assign_stmt.target;
-                    const singles = [_]LIR.LocalId{ desc_local, residual_local, assign_stmt.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.captures, assign_stmt.next, self.death_scratch);
-                    try self.copyDeathScratchToStep(step);
-                },
-                .assign_boxy_dict_ref => |assign| {
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
-                    const dict_local = assign.dict.localOrNull() orelse assign.target;
-                    const singles = [_]LIR.LocalId{ dict_local, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.captures, assign.next);
-                },
-                .assign_boxy_box => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = if (assign.payload_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.payload, assign_stmt.target, assign_stmt.next)
-                    else
-                        SingleTransfer{
-                            .transfer_single = false,
-                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target),
-                        };
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    step.transfer_single = transfer.transfer_single;
-                    if (assign.payload_mode == .move and !transfer.transfer_single) {
-                        try self.appendStepRetain(step, .{ .local = assign.payload, .reason = .stored_payload });
-                    }
-                    const singles = [_]LIR.LocalId{ assign.payload, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .assign_boxy_record_update => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForSingle(&segment.owned, assign.fields, assign_stmt.target, assign_stmt.next);
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    step.transfer_single = transfer.transfer_single;
-                    if (!transfer.transfer_single) {
-                        try self.appendStepRetain(step, .{ .local = assign.fields, .reason = .stored_payload });
-                    }
-                    const singles = [_]LIR.LocalId{ assign.fields, assign.base, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                inline .assign_boxy_unbox, .assign_boxy_tag_payload => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = if (assign.source_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.source, assign_stmt.target, assign_stmt.next)
-                    else
-                        SingleTransfer{
-                            .transfer_single = false,
-                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target),
-                        };
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    step.transfer_single = transfer.transfer_single;
-                    if (assign.source_mode == .move and !transfer.transfer_single) {
-                        try self.appendStepRetain(step, .{ .local = assign.source, .reason = .stored_payload });
-                    }
-                    step.retain_assign_ref_target = assign.source_mode == .borrow and !self.isBindingBorrowed(assign_stmt.target);
-                    const singles = [_]LIR.LocalId{ assign.source, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                inline .assign_boxy_adapt, .assign_boxy_inspect => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = if (assign.source_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.source, assign_stmt.target, assign_stmt.next)
-                    else
-                        SingleTransfer{
-                            .transfer_single = false,
-                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target),
-                        };
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    step.transfer_single = transfer.transfer_single;
-                    if (assign.source_mode == .move and !transfer.transfer_single) {
-                        try self.appendStepRetain(step, .{ .local = assign.source, .reason = .stored_payload });
-                    }
-                    const singles = [_]LIR.LocalId{ assign.source, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .assign_boxy_eq => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target);
-                    step.pre_release = if (release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    const singles = [_]LIR.LocalId{ assign.lhs, assign.rhs, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .assign_boxy_hash => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target);
-                    step.pre_release = if (release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    const singles = [_]LIR.LocalId{ assign.value, assign.hasher, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .assign_boxy_tag => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = if (assign.payload_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.payload, assign_stmt.target, assign_stmt.next)
-                    else
-                        SingleTransfer{
-                            .transfer_single = false,
-                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target),
-                        };
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    step.transfer_single = transfer.transfer_single;
-                    if (assign.payload_mode == .move and !transfer.transfer_single) {
-                        if (assign.payload) |payload| try self.appendStepRetain(step, .{ .local = payload, .reason = .stored_payload });
-                    }
-                    const singles = [_]LIR.LocalId{ assign.payload orelse assign_stmt.target, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .boxy_tag_match => |tag_match| {
-                    const terminal = try self.prepareBoxyTagMatchPlan(segment.plan_index, segment.cursor, tag_match.on_match, tag_match.on_miss);
-                    const child_plans = terminal.boxy_tag_match;
-                    try self.pushBranchSolveSegment(tasks, tag_match.on_match, &segment.owned, segment.ctx, child_plans.match_plan);
-                    try self.pushBranchSolveSegment(tasks, tag_match.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
-                    return;
-                },
-                .assign_call_dict => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    step.transfer_mask = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign_stmt.next, assign_stmt.target, &segment.owned, .no);
-                    step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign_stmt.target)) self.releaseDecision(assign_stmt.target) else null;
-                    self.death_scratch.clearRetainingCapacity();
-                    const singles = [_]LIR.LocalId{assign_stmt.target};
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign_stmt.next, self.death_scratch);
-                    try self.postStmtDeaths(&segment.owned, &.{}, assign.arg_descs, assign_stmt.next, self.death_scratch);
-                    try self.postStmtDeaths(&segment.owned, &.{}, assign.hidden_args, assign_stmt.next, self.death_scratch);
-                    try self.copyDeathScratchToStep(step);
                 },
                 .assign_low_level => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -3510,19 +3216,13 @@ const Inserter = struct {
 
     /// Whether an erased call is left pending for whoever awaits this
     /// procedure's result: the callee does not repack the closure's
-    /// allocation, and the call's value is the procedure's whole result,
-    /// either as it is or after nothing but representation conversions.
-    /// Unconverted, it has the procedure's return layout and any descriptor
-    /// that comes back with it is the one the procedure returns. Converted,
-    /// whoever makes the call applies the last conversion in the
-    /// procedure's place.
+    /// allocation, and the call's value is the procedure's whole result with
+    /// the procedure's return layout.
     fn erasedCallIsDeferred(self: *const Inserter, call: @FieldType(LIR.CFStmt, "assign_call_erased")) bool {
         if (self.store.stmtRow(call.data).reuse_closure) return false;
         const caller = self.store.getProcSpec(self.current_proc);
         if (caller.hosted != null) return false;
         const joins = self.solution.joinBodiesOf(self.current_source_proc);
-        var returned: LIR.LocalId = call.target;
-        var converted = false;
         var current: LIR.CFStmtId = call.next;
         // A join body that jumps back to its own join never returns, so more
         // jumps than joins is such a cycle.
@@ -3530,53 +3230,52 @@ const Inserter = struct {
         while (true) {
             const stmt = self.store.getCFStmt(current);
             if (stmt == .ret) {
-                if (stmt.ret.value != returned) return false;
-                if (self.store.getLocal(returned).layout_idx != caller.ret_layout) return false;
-                // The descriptor that comes back with an unconverted value
-                // is the one this procedure returns with it, or there is
-                // none on either side.
-                return converted or self.store.stmtRow(call.data).out_desc == caller.runtime_ret_desc;
+                if (stmt.ret.value != call.target) return false;
+                return self.store.getLocal(call.target).layout_idx == caller.ret_layout;
             }
-            if (stmt == .jump) {
-                if (jumps == joins.len) return false;
-                jumps += 1;
-                current = for (joins) |join| {
-                    if (join.id == stmt.jump.target) break join.body;
-                } else return false;
-                continue;
+            if (stmt != .jump) return false;
+            if (jumps == joins.len) return false;
+            jumps += 1;
+            current = for (joins) |join| {
+                if (join.id == stmt.jump.target) break join.body;
+            } else return false;
+        }
+    }
+
+    /// Whether a dynamic erased call writing `target` is deferred: its value
+    /// is the procedure's whole result, reached through jumps into join
+    /// bodies alone, and the procedure is not a hosted one.
+    fn dynErasedCallIsDeferred(self: *const Inserter, target: LIR.LocalId, call_next: LIR.CFStmtId) bool {
+        const caller = self.store.getProcSpec(self.current_proc);
+        if (caller.hosted != null) return false;
+        const joins = self.solution.joinBodiesOf(self.current_source_proc);
+        var current: LIR.CFStmtId = call_next;
+        // A join body that jumps back to its own join never returns, so more
+        // jumps than joins is such a cycle.
+        var jumps: usize = 0;
+        while (true) {
+            const stmt = self.store.getCFStmt(current);
+            if (stmt == .ret) {
+                if (stmt.ret.value != target) return false;
+                return self.store.getLocal(target).layout_idx == caller.ret_layout;
             }
-            if (stmt == .assign_boxy_desc_ref) {
-                // The frame is released before the call, so a descriptor
-                // reference after it reads nothing the frame owned.
-                const captures = self.store.getLocalSpan(self.store.stmtRow(stmt.assign_boxy_desc_ref.data).captures);
-                for (0..GuardedList.borrowLen(captures)) |index| {
-                    if (self.localContainsRefcounted(GuardedList.at(captures, index))) return false;
-                }
-                current = stmt.assign_boxy_desc_ref.next;
-                continue;
-            }
-            if (stmt != .assign_boxy_adapt) return false;
-            const adapt = stmt.assign_boxy_adapt;
-            const adapt_data = self.store.stmtRow(adapt.data);
-            if (adapt_data.source != returned or adapt_data.source_mode != .move) return false;
-            returned = adapt.target;
-            converted = true;
-            current = adapt.next;
+            if (stmt != .jump) return false;
+            if (jumps == joins.len) return false;
+            jumps += 1;
+            current = for (joins) |join| {
+                if (join.id == stmt.jump.target) break join.body;
+            } else return false;
         }
     }
 
     /// Whether the callee of a tail call can return on the current
-    /// procedure's behalf: both use the Roc procedure ABI, the callee's value
-    /// is the procedure's whole result, and a runtime descriptor the callee
-    /// returns alongside it is the one this procedure returns.
+    /// procedure's behalf: both use the Roc procedure ABI and the callee's
+    /// value is the procedure's whole result.
     fn sharesReturnContract(self: *const Inserter, call: anytype) bool {
         const caller = self.store.getProcSpec(self.current_proc);
         const callee = self.store.getProcSpec(call.proc);
-        const out_desc = self.store.stmtRowOrDefault(call.extra).out_desc;
         return caller.abi == .roc and callee.abi == .roc and
             callee.hosted == null and
-            out_desc == caller.runtime_ret_desc and
-            (out_desc != null) == (callee.runtime_ret_desc != null) and
             self.store.getLocal(call.target).layout_idx == caller.ret_layout and
             callee.ret_layout == caller.ret_layout;
     }
@@ -3620,6 +3319,9 @@ const Inserter = struct {
             const param = GuardedList.at(params, position);
             if (!owned.contains(param)) {
                 arcInvariant("ARC restitution boundary did not carry its exact entry parameter unit");
+            }
+            if (owned.residualMask(param) != owned.fullResidualMask(param)) {
+                arcInvariant("ARC restitution boundary carried a parameter with a field taken out of it");
             }
             try keep.copyResourceFrom(owned, param);
         }
@@ -3682,7 +3384,6 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -3717,7 +3418,6 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .terminal,
             => {},
@@ -3749,7 +3449,6 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -3814,7 +3513,6 @@ const Inserter = struct {
                 .join,
                 .initialized_payload_switch,
                 .str_match,
-                .boxy_tag_match,
                 .str_match_set,
                 .jump,
                 .terminal,
@@ -3842,7 +3540,6 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             => {},
@@ -3884,7 +3581,6 @@ const Inserter = struct {
             .join,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -3930,7 +3626,6 @@ const Inserter = struct {
             .join,
             .switch_stmt,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -3961,7 +3656,6 @@ const Inserter = struct {
             .join,
             .switch_stmt,
             .initialized_payload_switch,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -3976,35 +3670,6 @@ const Inserter = struct {
             .match_plan = children[0],
             .miss_plan = children[1],
             .capture_retain_count = capture_retain_count,
-        } };
-        return &self.arcPlan(plan_index).terminal;
-    }
-
-    fn prepareBoxyTagMatchPlan(self: *Inserter, plan_index: u32, stmt: LIR.CFStmtId, match_start: LIR.CFStmtId, miss_start: LIR.CFStmtId) ResourceError!*ArcPlanTerminal {
-        const previous_terminal = self.arcPlan(plan_index).previous_terminal;
-        const children = switch (previous_terminal) {
-            .boxy_tag_match => |previous| blk: {
-                if (previous.stmt != stmt) arcInvariant("ARC Boxy tag-match plan changed structural shape");
-                break :blk .{ previous.match_plan, previous.miss_plan };
-            },
-            .none,
-            .stop,
-            .join,
-            .switch_stmt,
-            .initialized_payload_switch,
-            .str_match,
-            .str_match_set,
-            .jump,
-            .terminal,
-            => .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) },
-        };
-        if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
-            arcInvariant("ARC Boxy tag-match child plan changed its structured start");
-        }
-        self.arcPlan(plan_index).terminal = .{ .boxy_tag_match = .{
-            .stmt = stmt,
-            .match_plan = children[0],
-            .miss_plan = children[1],
         } };
         return &self.arcPlan(plan_index).terminal;
     }
@@ -4029,7 +3694,6 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .jump,
             .terminal,
             => {
@@ -4836,15 +4500,13 @@ const Inserter = struct {
         };
     }
 
-    fn aliasesContain(aliases: []const LIR.LocalId, local: LIR.LocalId) bool {
-        for (aliases) |alias| if (alias == local) return true;
-        return false;
-    }
+    /// The same-value aliases of a carried root, by local.
+    const AliasSet = collections.DenseMapUnmanaged(LIR.LocalId, void);
 
-    fn spanContainsAlias(self: *const Inserter, span: LIR.LocalSpan, aliases: []const LIR.LocalId) bool {
+    fn spanContainsAlias(self: *const Inserter, span: LIR.LocalSpan, aliases: *const AliasSet) bool {
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |index| {
-            if (aliasesContain(aliases, GuardedList.at(locals, index))) return true;
+            if (aliases.contains(GuardedList.at(locals, index))) return true;
         }
         return false;
     }
@@ -4861,8 +4523,8 @@ const Inserter = struct {
         root: LIR.LocalId,
         next: LIR.CFStmtId,
     ) ResourceError!?OutcomeRestitution {
-        var aliases = std.ArrayList(LIR.LocalId).empty;
-        try aliases.append(self.emission_allocator, root);
+        var aliases: AliasSet = .empty;
+        try aliases.put(self.emission_allocator, root, {});
         var cursor = next;
         while (true) {
             const stmt = self.store.getCFStmt(cursor);
@@ -4870,27 +4532,25 @@ const Inserter = struct {
                 const assign = stmt.assign_ref;
                 switch (assign.op.kind) {
                     .local => {
-                        if (aliasesContain(aliases.items, assign.op.source)) {
-                            if (!aliasesContain(aliases.items, assign.target)) {
-                                try aliases.append(self.emission_allocator, assign.target);
-                            }
+                        if (aliases.contains(assign.op.source)) {
+                            try aliases.put(self.emission_allocator, assign.target, {});
                         }
                     },
                     .field => {
-                        if (aliasesContain(aliases.items, assign.op.source) and self.localContainsRefcounted(assign.target)) {
+                        if (aliases.contains(assign.op.source) and self.localContainsRefcounted(assign.target)) {
                             return null;
                         }
                     },
-                    .discriminant => if (aliasesContain(aliases.items, assign.op.source)) return null,
-                    .tag_payload => if (aliasesContain(aliases.items, assign.op.source)) return null,
-                    .tag_payload_struct => if (aliasesContain(aliases.items, assign.op.source)) return null,
-                    inline .list_reinterpret, .nominal => if (aliasesContain(aliases.items, assign.op.source)) return null,
+                    .discriminant => if (aliases.contains(assign.op.source)) return null,
+                    .tag_payload => if (aliases.contains(assign.op.source)) return null,
+                    .tag_payload_struct => if (aliases.contains(assign.op.source)) return null,
+                    inline .list_reinterpret, .nominal => if (aliases.contains(assign.op.source)) return null,
                 }
                 cursor = assign.next;
             } else if (stmt == .assign_literal) {
                 cursor = stmt.assign_literal.next;
             } else if (stmt == .assign_low_level) {
-                if (self.spanContainsAlias(stmt.assign_low_level.args, aliases.items)) return null;
+                if (self.spanContainsAlias(stmt.assign_low_level.args, &aliases)) return null;
                 cursor = stmt.assign_low_level.next;
             } else if (stmt == .assign_call) {
                 const args = self.store.getLocalSpan(stmt.assign_call.args);
@@ -4900,7 +4560,7 @@ const Inserter = struct {
                     if (arg == carrier) {
                         if (carrier_position != null) return null;
                         carrier_position = position;
-                    } else if (aliasesContain(aliases.items, arg)) {
+                    } else if (aliases.contains(arg)) {
                         return null;
                     }
                 }
@@ -5070,6 +4730,131 @@ const Inserter = struct {
         };
     }
 
+    /// Every operand local of a `dyn` operation in `DynOps.Operands` order,
+    /// in the lane's scratch. Descriptor, name, and dictionary operands are
+    /// never refcounted, so every refcounted operand is a value operand.
+    fn dynOperands(self: *Inserter, op: LIR.DynOp) ResourceError![]const LIR.LocalId {
+        self.dyn_operand_scratch.clearRetainingCapacity();
+        try DynOps.Operands.of(op).appendAll(self.store, self.lane_allocator, self.dyn_operand_scratch);
+        return self.dyn_operand_scratch.items;
+    }
+
+    /// Plans one `dyn` statement from `DynOps.ownership`, the same reading
+    /// the solver lifted its facts from: a component read binds like a
+    /// payload `assign_ref` (a borrowed view, or an owned target retained
+    /// after the read; the component of an immortal dictionary is owned
+    /// without a retain, as a static literal is); `copy` binds like an
+    /// `assign_ref .local` alias; a construction moves or retains each
+    /// refcounted operand into its owned target like `assign_struct`; an
+    /// operand-borrowing operation binds a fresh owned target; and
+    /// `call_erased` keeps its callable borrowed across the call, moves or
+    /// retains its argument record into the call, and binds an owned result.
+    fn planDynStmt(self: *Inserter, segment: *SolveSegment, dyn_stmt: @FieldType(LIR.CFStmt, "dyn")) ResourceError!void {
+        const op = self.store.stmtRow(dyn_stmt.data);
+        const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+        const owned = &segment.owned;
+        const next = dyn_stmt.next;
+        const operands = try self.dynOperands(op);
+        const target = dyn_stmt.target orelse {
+            try self.finishArcPlanStepDeaths(step, owned, operands, null, next);
+            return;
+        };
+        step.retain_assign_ref_target = false;
+        switch (DynOps.ownership(op)) {
+            .none, .borrow_operands => {
+                step.pre_release = if (try self.transferForFreshBind(owned, target)) self.releaseDecision(target) else null;
+            },
+            .borrow_component => {
+                if (!self.isBindingBorrowed(target)) {
+                    // An owned component reads its unit from storage that
+                    // keeps its own: the base's, or for a base outside the
+                    // procedure's values (a capture record, an immortal
+                    // dictionary) that storage's.
+                    step.pre_release = if (try self.transferForFreshBind(owned, target)) self.releaseDecision(target) else null;
+                    step.retain_assign_ref_target = self.localContainsRefcounted(target);
+                }
+            },
+            .alias => |source| {
+                if (source == target) arcInvariant("ARC dyn copy named its own source as target");
+                // A copy of a value with no reference-counted content is a
+                // fresh value.
+                if (!self.localContainsRefcounted(source)) {
+                    step.pre_release = if (try self.transferForFreshBind(owned, target)) self.releaseDecision(target) else null;
+                } else if (!self.isBindingBorrowed(target)) {
+                    const transfer = try self.transferForAliasBind(owned, target, source, next);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(target) else null;
+                    step.retain_assign_ref_target = transfer.retain_target;
+                }
+            },
+            .construct => {
+                if (op == .closure) {
+                    // A repacked allocation is unique when the frame owns its
+                    // unit, it is unique here, nothing reads it afterwards,
+                    // and the capture record is not an alias of it.
+                    if (op.closure.reuse) |reuse| {
+                        if (reuse == target) arcInvariant("ARC closure repack cannot reuse its result binding");
+                        step.reuse_unique = !(try self.groupUsedInPath(next, reuse)) and self.ownsUnit(owned, reuse) and self.isLocalUniqueHere(reuse) and
+                            self.solution.leaderOf(op.closure.capture) != self.solution.leaderOf(reuse);
+                    }
+                }
+                self.transfer_position_scratch.clearRetainingCapacity();
+                try self.localsTransferPositions(operands, next, target, owned, self.transfer_position_scratch);
+                const release_old_target = try self.takeRebindTarget(owned, target);
+                try self.placeUnit(owned, target);
+                step.pre_release = if (release_old_target) self.releaseDecision(target) else null;
+                try step.transfer_positions.append(u32, self.solve_allocator, &self.arc_plans.positions, self.transfer_position_scratch.items);
+            },
+            .call_erased => {
+                const call = op.call_erased;
+                if (call.args) |args| if (self.localContainsRefcounted(args)) {
+                    if (args == target or args == call.closure) arcInvariant("ARC dyn erased call named its argument record as its callable or result");
+                    const owner = self.unitOf(args);
+                    const shares_closure = self.solution.leaderOf(args) == self.solution.leaderOf(call.closure);
+                    const can_transfer = owned.contains(owner) and !shares_closure and !(try self.groupUsedInPath(next, args));
+                    if (can_transfer) {
+                        try owned.unset(owner);
+                    } else {
+                        try self.appendStepRetain(step, .{ .local = args, .reason = .owned_param_demand });
+                    }
+                };
+                // An owned call transfers one unit of its closure: the
+                // closure's own when it dies here, else a retained one.
+                var preserve_reuse_source = false;
+                if (call.reuse_closure) {
+                    if (call.closure == target) arcInvariant("owned erased call cannot consume and rebind the same local");
+                    const reuse_source = call.reuse_source orelse arcInvariant("owned erased call lacked its explicit reuse ownership source");
+                    preserve_reuse_source = try self.groupUsedInPath(next, reuse_source);
+                    if (!preserve_reuse_source) _ = try self.takeUnit(owned, reuse_source);
+                }
+                const release_old_target = if (target == call.closure) false else try self.takeRebindTarget(owned, target);
+                try self.placeCallResultUnit(owned, target, .owned);
+                step.pre_release = if (release_old_target) self.releaseDecision(target) else null;
+                self.death_scratch.clearRetainingCapacity();
+                if (self.dynErasedCallIsDeferred(target, next)) {
+                    // The call is left pending and made after this frame
+                    // returns. It keeps one reference to its closure: the
+                    // unit an owned call moved, or one retained here;
+                    // everything else the frame owns ends first.
+                    if (!call.reuse_closure or preserve_reuse_source) try self.appendStepRetain(step, .{ .local = call.closure, .reason = .closure_call_capture });
+                    try self.releaseTailCallerFrame(owned, target, self.death_scratch);
+                    try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
+                    step.pre_release_extra_reason = .tail_call_frame;
+                    step.replaces_frame = true;
+                    return;
+                }
+                if (preserve_reuse_source) try self.appendStepRetain(step, .{ .local = call.reuse_source.?, .reason = .reuse_source_preserved });
+                try self.noteCallResultDeathIfUnused(owned, target, .owned, next, self.death_scratch);
+                try self.postStmtDeaths(owned, operands, null, next, self.death_scratch);
+                try self.copyDeathScratchToStep(step);
+                return;
+            },
+        }
+        self.death_scratch.clearRetainingCapacity();
+        try self.postStmtDeaths(owned, operands, null, next, self.death_scratch);
+        try self.postStmtDeaths(owned, &.{target}, null, next, self.death_scratch);
+        try self.copyDeathScratchToStep(step);
+    }
+
     const LowLevelTransfer = struct {
         /// Consumed positions that pay a retain before the op, either because
         /// their group survives or because an owned variant needs a unit from
@@ -5152,7 +4937,7 @@ const Inserter = struct {
         }
         var transfer_mask: u64 = operand_take_mask & rc_effect.retain_args;
         if (rc_effect.retain_args != 0) {
-            transfer_mask |= try self.spanTransferMask(args, rc_effect.retain_args & ~operand_take_mask, next, target, owned, .yes);
+            transfer_mask |= try self.spanTransferMask(args, rc_effect.retain_args & ~operand_take_mask, next, target, owned);
         }
         try self.placeUnit(owned, target);
         return .{
@@ -5172,44 +4957,10 @@ const Inserter = struct {
         return true;
     }
 
-    /// A descriptor update releases each dead value its previous binding
-    /// described. A procedure parameter refers to its descriptor local for its
-    /// whole life, and a descriptor local is never rebound while a value
-    /// refers to it, so assigning a parameter's descriptor local defines it in
-    /// the procedure's prelude and invalidates no parameter.
-    fn planValuesInvalidatedByDescriptorUpdate(
-        self: *Inserter,
-        desc_local: LIR.LocalId,
-        owned: *OwnedSet,
-        next: LIR.CFStmtId,
-        releases: *std.ArrayList(ReleaseDecision),
-    ) ResourceError!void {
-        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_source_proc).args);
-        for (self.boxy_desc_users.usersOf(desc_local)) |local| {
-            if (!owned.contains(local)) continue;
-            if (localSpanContains(params, local)) continue;
-            if (try self.valueUsedInPath(next, local)) continue;
-            if (!try self.takeRebindTarget(owned, local)) arcInvariant("ARC descriptor invalidation lost an owned local");
-            try releases.append(self.lane_allocator, self.releaseDecision(local));
-        }
-    }
-
-    fn localSpanContains(locals: anytype, local: LIR.LocalId) bool {
-        for (0..GuardedList.borrowLen(locals)) |index| {
-            if (GuardedList.at(locals, index) == local) return true;
-        }
-        return false;
-    }
-
     /// Computes which low-level argument positions in `span` (restricted to
     /// `position_mask`) can move their ownership unit into the value being
     /// constructed: the operand is owned and its liveness group has no use
     /// after this statement. Transferred operands leave the owned set.
-    /// Whether a transferred operand's unit lands inside the statement's
-    /// result (`.yes`, for aggregate and low-level constructions) or is handed
-    /// off to a callee that owns it (`.no`, for dict calls).
-    const TargetHoldsUnit = enum { yes, no };
-
     fn spanTransferMask(
         self: *Inserter,
         span: LIR.LocalSpan,
@@ -5217,15 +4968,12 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         owned: *OwnedSet,
-        target_holds_unit: TargetHoldsUnit,
     ) ResourceError!u64 {
         var transfer: u64 = 0;
-        // Aggregate and low-level transfers move the operand's unit into the
-        // result, so a non-refcounted result has nothing to carry it and the
-        // operand must be retained instead. A dict call instead hands the unit
-        // to the callee, which owns it regardless of the result's layout, so
-        // that transfer stays valid even when the result is not refcounted.
-        if (target_holds_unit == .yes and !self.localContainsRefcounted(target)) return 0;
+        // Transfers move the operand's unit into the result, so a
+        // non-refcounted result has nothing to carry it and the operand must
+        // be retained instead.
+        if (!self.localContainsRefcounted(target)) return 0;
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |i| {
             const local = GuardedList.at(locals, i);
@@ -5255,8 +5003,19 @@ const Inserter = struct {
         owned: *OwnedSet,
         transferred_positions: ?*std.ArrayList(u32),
     ) ResourceError!void {
+        try self.localsTransferPositions(self.store.getLocalSpan(span), next, target, owned, transferred_positions);
+    }
+
+    /// `spanTransferPositions` over any list of operand locals.
+    fn localsTransferPositions(
+        self: *Inserter,
+        locals: anytype,
+        next: LIR.CFStmtId,
+        target: LIR.LocalId,
+        owned: *OwnedSet,
+        transferred_positions: ?*std.ArrayList(u32),
+    ) ResourceError!void {
         if (!self.localContainsRefcounted(target)) return;
-        const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |i| {
             const local = GuardedList.at(locals, i);
             if (local == target) continue;
@@ -5399,18 +5158,6 @@ const Inserter = struct {
         return current;
     }
 
-    fn retainSpanExcept(self: *Inserter, span: LIR.LocalSpan, skip_mask: u64, cause: RcCause, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        var current = next;
-        const locals = self.store.getLocalSpan(span);
-        var i = locals.len;
-        while (i > 0) {
-            i -= 1;
-            if (i < 64 and (skip_mask & argMaskBit(i)) != 0) continue;
-            current = try self.retainLocalIfRc(GuardedList.at(locals, i), cause, current);
-        }
-        return current;
-    }
-
     fn retainPlanned(self: *Inserter, stmt: LIR.CFStmtId, retains: []const PreRetain, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         var current = next;
         var i = retains.len;
@@ -5486,9 +5233,26 @@ const Inserter = struct {
             // after this statement; a group member appearing as another
             // operand of this same statement is still live at the op.
             if (self.groupSharesOtherOperand(locals, i, local)) continue;
+            if (self.valueHasAnotherOwnedUnit(local, owned)) continue;
             unique |= bit;
         }
         return unique;
+    }
+
+    /// True when another owned unit holds the same value as `local`. An owned
+    /// pure same-value alias whose binding retained, rather than moved, its
+    /// source's unit gives the value a second holder: both units stay owned
+    /// until one is released, so the count is above 1 even though the value
+    /// was born unique and the solver records the alias as the same value.
+    fn valueHasAnotherOwnedUnit(self: *const Inserter, local: LIR.LocalId, owned: *const OwnedSet) bool {
+        const root = self.solution.aliasRootOf(local);
+        var units = owned.iterator(.{});
+        while (units.next()) |bit_index| {
+            const other = owned.domain.resource_locals[bit_index];
+            if (other == local) continue;
+            if (self.solution.aliasRootOf(other) == root) return true;
+        }
+        return false;
     }
 
     /// True when the local's value is statically unique in the current
@@ -5757,7 +5521,7 @@ const Inserter = struct {
     /// whole-value operands and RC-bearing projections of any place member
     /// do. An owned pure alias of a member retains through the place at its
     /// bind, so that bind is a use even though the alias itself then carries
-    /// its own unit. String and Boxy tag matches use only their operands: a
+    /// its own unit. String matches use only their operands: a
     /// borrowed capture view reaches `source`'s place through its borrow
     /// link, and an owned capture retains through `source` at the match.
     fn stmtPlaceFacts(self: *const Inserter, stmt: LIR.CFStmtId, uses: *std.ArrayList(LIR.LocalId)) Allocator.Error!StmtPlaceFacts {
@@ -5782,36 +5546,7 @@ const Inserter = struct {
                 if (assign.capture) |capture| try uses.append(gpa, capture);
                 if (assign.reuse) |reuse| try uses.append(gpa, reuse);
             },
-            .assign_boxy_box => |assign_stmt| blk_assign: {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                break :blk_assign try uses.append(gpa, assign.payload);
-            },
-            .assign_boxy_record_update => |assign_stmt| {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                try uses.append(gpa, assign.base);
-                try uses.append(gpa, assign.fields);
-            },
-            inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag_payload => |assign_stmt| blk_assign: {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                break :blk_assign try uses.append(gpa, assign.source);
-            },
-            .assign_boxy_eq => |assign_stmt| {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                try uses.append(gpa, assign.lhs);
-                try uses.append(gpa, assign.rhs);
-            },
-            .assign_boxy_hash => |assign_stmt| {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                try uses.append(gpa, assign.value);
-                try uses.append(gpa, assign.hasher);
-            },
-            .assign_boxy_tag => |assign| if (self.store.stmtRow(assign.data).payload) |payload| try uses.append(gpa, payload),
             .assign_tag => |assign| if (assign.payload) |payload| try uses.append(gpa, payload),
-            .assign_call_dict => |assign_stmt| {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                try self.appendSpanLocals(uses, assign.args);
-                try self.appendSpanLocals(uses, assign.hidden_args);
-            },
             .assign_list => |assign| try self.appendSpanLocals(uses, assign.elems),
             .assign_struct => |assign| try self.appendSpanLocals(uses, assign.fields),
             .store_struct => |assign| {
@@ -5837,26 +5572,41 @@ const Inserter = struct {
                 try uses.append(gpa, switch_stmt.cond);
                 try uses.append(gpa, switch_stmt.payload);
             },
-            .ret => |ret_stmt| try uses.append(gpa, ret_stmt.value),
+            .ret => |ret_stmt| {
+                try uses.append(gpa, ret_stmt.value);
+                try self.appendRestitutionBoundaryUses(stmt, uses);
+            },
             .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try uses.append(gpa, message),
             .expect_err => |expect_err_stmt| try uses.append(gpa, expect_err_stmt.message),
             .decref, .decref_if_initialized, .free => return .{ .uses_every_place = true },
             inline .str_match, .str_match_set => |match| try uses.append(gpa, match.source),
-            .boxy_tag_match => |tag_match| {
-                try uses.append(gpa, tag_match.source);
-                if (self.store.stmtRow(tag_match.source_desc).localOrNull()) |local| try uses.append(gpa, local);
-            },
+            // Every operand of an opaque dynamic operation uses its place.
+            .dyn => |dyn_stmt| try DynOps.Operands.of(self.store.stmtRow(dyn_stmt.data)).appendAll(self.store, gpa, uses),
+            .jump => try self.appendRestitutionBoundaryUses(stmt, uses),
             .assign_literal,
             .init_uninitialized,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
             .join,
-            .jump,
             .runtime_error,
             .comptime_exhaustiveness_failed,
             => {},
         }
         return .{ .rebinds = body_clone.definedTarget(node) };
+    }
+
+    /// An emission with an outcome convention hands each restituted
+    /// parameter's exact entry unit back at a restitution boundary, so the
+    /// boundary uses that parameter's place. An emission without one releases
+    /// the parameter instead, and the boundary is no use of it.
+    fn appendRestitutionBoundaryUses(self: *const Inserter, stmt: LIR.CFStmtId, uses: *std.ArrayList(LIR.LocalId)) Allocator.Error!void {
+        if (self.current_sig.outcomes.isEmpty()) return;
+        const mask = self.solution.restitutionParamsAt(stmt);
+        if (mask == 0) return;
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_source_proc).args);
+        for (0..GuardedList.borrowLen(params)) |position| {
+            const bit = arc_sig.paramBit(position) orelse break;
+            if ((mask & bit) == 0) continue;
+            try uses.append(self.emission_allocator, GuardedList.at(params, position));
+        }
     }
 
     /// The statements control reaches after `stmt` for the place-use query.
@@ -5870,18 +5620,6 @@ const Inserter = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -5892,6 +5630,7 @@ const Inserter = struct {
             .debug,
             .expect,
             .incref,
+            .dyn,
             => |payload| try out.append(gpa, payload.next),
             .switch_stmt => |switch_stmt| {
                 if (switch_stmt.continuation) |continuation| try out.append(gpa, continuation);
@@ -5918,10 +5657,6 @@ const Inserter = struct {
                 const arms = self.store.getStrMatchArms(str_match_set.arms);
                 for (0..GuardedList.borrowLen(arms)) |index| try out.append(gpa, GuardedList.at(arms, index).on_match);
                 try out.append(gpa, str_match_set.on_miss);
-            },
-            .boxy_tag_match => |tag_match| {
-                try out.append(gpa, tag_match.on_match);
-                try out.append(gpa, tag_match.on_miss);
             },
             .decref,
             .decref_if_initialized,
@@ -6316,7 +6051,7 @@ const Inserter = struct {
         sig: arc_sig.RcSig,
     ) ResourceError!?OutcomeRestitution {
         const bit = arc_sig.paramBit(position) orelse return null;
-        const refinement = try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, sig.outcomes) orelse return null;
+        const refinement = try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, sig.outcomes, .absent) orelse return null;
         const switch_stmt = self.store.getCFStmtImmediate(refinement).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const outcomes = self.solution.sigTable().outcomesOf(sig);
@@ -6361,6 +6096,9 @@ const Inserter = struct {
         self.retain_arg_scratch.clearRetainingCapacity();
         var demanded = callee_sig;
         const locals = self.store.getLocalSpan(span);
+        // A call across emission units adapts to the callee's base signature
+        // (design.md "Mode Specialization", emission units).
+        const same_unit = if (callee) |direct| arc_solve.sharesEmissionUnit(self.store, self.current_source_proc, direct) else false;
         if (tail_call != null and self.current_sig.ret_mode == .owned and demanded.ret_mode == .borrowed) {
             // A recursive tail edge must use the caller's return ABI. Asking
             // an owned-return caller to forward a borrowed result would put a
@@ -6374,7 +6112,7 @@ const Inserter = struct {
             self.outcomeArgumentsHaveDistinctPlaces(span, outcome_sig);
         const outcome_mask = self.outcomeRestitutableMask(outcome_sig);
         const outcome_refinement = if (outcome_places_distinct)
-            try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, outcome_sig.outcomes)
+            try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, outcome_sig.outcomes, .absent)
         else
             null;
 
@@ -6498,13 +6236,14 @@ const Inserter = struct {
                 else
                     false;
                 const enables_field_take = if (callee) |direct|
-                    (self.dismantles.ownedOnlyParamBenefits(direct) & bit) != 0
+                    same_unit and (self.dismantles.ownedOnlyParamBenefits(direct) & bit) != 0
                 else
                     false;
                 // Recursive tail transfer and field takes are exact ownership
                 // schedules, so their variants are mandatory. General return
-                // and born-unique specialization remains opt-in.
-                if (!self.options.specialize and !enables_field_take and !requires_tail_transfer) continue;
+                // and born-unique specialization remains opt-in, and only
+                // within the callee's emission unit.
+                if (!(self.options.specialize and same_unit) and !enables_field_take and !requires_tail_transfer) continue;
                 const owner = self.unitOf(local);
                 const used_after_call = local != target and (if (enables_field_take)
                     try self.ownershipPlaceUsedInPath(next, owner)
@@ -6516,9 +6255,9 @@ const Inserter = struct {
                 // it, so a shared operand keeps its unit.
                 const shares_other_operand = self.groupSharesOtherOperand(locals, position, local);
                 const can_transfer = owned.contains(owner) and !used_after_call and !shares_other_operand;
-                const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
+                const return_borrows_param = same_unit and callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
                 const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
-                const seeds_unique_param = can_transfer and unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local);
+                const seeds_unique_param = can_transfer and unique_demand and same_unit and seed_can_reach_check and self.isLocalUniqueHere(local);
                 if (!can_transfer and !requires_tail_transfer) continue;
                 if (!return_borrows_param and !seeds_unique_param and !enables_field_take and !requires_tail_transfer) continue;
                 demanded.borrowed_params &= ~bit;
@@ -6936,19 +6675,6 @@ const Inserter = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -6971,64 +6697,13 @@ const Inserter = struct {
                 .str_match_set,
                 .ret,
                 .crash,
+                .dyn,
                 => {},
             }
             successors.clearRetainingCapacity();
             try body_clone.appendSuccessors(self.store, &successors, stmt, self.source_liveness.scratch_allocator);
             for (successors.items) |successor| try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, successor);
             if (body_clone.definedTarget(current)) |target| setReadBeforeRebindDef(&graph, node_index, target);
-            switch (current) {
-                .assign_call_erased => |inline_s| blk_s: {
-                    const s = self.store.stmtRow(inline_s.data);
-                    break :blk_s if (s.out_desc) |out_desc| setReadBeforeRebindDef(&graph, node_index, out_desc);
-                },
-                .assign_boxy_tag_payload => |inline_s| blk_s: {
-                    const s = self.store.stmtRow(inline_s.data);
-                    break :blk_s if (s.target_desc) |target_desc| setReadBeforeRebindDef(&graph, node_index, target_desc);
-                },
-                .init_uninitialized,
-                .assign_ref,
-                .assign_literal,
-                .assign_call,
-                .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .boxy_tag_match,
-                .assign_call_dict,
-                .assign_low_level,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .set_local,
-                .debug,
-                .expect,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                => {},
-            }
             const reads = &graph.nodes.items[node_index].reads;
             switch (current) {
                 .assign_ref => |assign| {
@@ -7038,110 +6713,32 @@ const Inserter = struct {
                 },
                 .assign_call => |assign| {
                     try self.noteLivenessUseSpan(reads, assign.args);
-                    if (self.store.stmtRowOrDefault(assign.extra).result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    }
                 },
                 .assign_call_erased => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteLivenessUseLocal(reads, assign.closure);
                     if (assign.reuse_source) |reuse_source| try self.noteLivenessUseLocal(reads, reuse_source);
                     try self.noteLivenessUseSpan(reads, assign.args);
-                    try self.noteLivenessUseSpan(reads, assign.arg_descs);
-                    if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    }
                 },
                 .assign_packed_erased_fn => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
                     if (assign.capture) |capture| try self.noteLivenessUseLocal(reads, capture);
                     if (assign.reuse) |reuse| try self.noteLivenessUseLocal(reads, reuse);
                 },
-                .assign_boxy_desc_ref => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    try self.noteLivenessUseSpan(reads, assign.captures);
-                },
-                .assign_boxy_dict_ref => |assign| {
-                    if (assign.dict.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    try self.noteLivenessUseSpan(reads, assign.captures);
-                },
-                .assign_boxy_box => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.payload);
-                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_record_update => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.base);
-                    try self.noteLivenessUseLocal(reads, assign.fields);
-                    if (assign.base_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.fields_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_unbox => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_adapt => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.source);
-                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_inspect => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_eq => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.lhs);
-                    try self.noteLivenessUseLocal(reads, assign.rhs);
-                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_hash => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.value);
-                    try self.noteLivenessUseLocal(reads, assign.hasher);
-                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_tag => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    if (assign.target_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.payload) |payload| try self.noteLivenessUseLocal(reads, payload);
-                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_tag_payload => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_call_dict => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    if (assign.dict.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.result_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    try self.noteLivenessUseSpan(reads, assign.args);
-                    try self.noteLivenessUseSpan(reads, assign.arg_descs);
-                    try self.noteLivenessUseSpan(reads, assign.hidden_args);
-                },
                 .assign_low_level => |assign| {
                     const args = self.store.getLocalSpan(assign.args);
                     const representation_args = assign.op.representationArgs();
                     for (0..GuardedList.borrowLen(args)) |index| {
-                        if (index < 64 and (representation_args & argMaskBit(index)) != 0) continue;
-                        try self.noteLivenessUseLocal(reads, GuardedList.at(args, index));
+                        const arg = GuardedList.at(args, index);
+                        // Only a closed list's inline header outlives its
+                        // buffer; a dynamic list is read through its address.
+                        if (index < 64 and (representation_args & argMaskBit(index)) != 0 and self.isClosedList(arg)) continue;
+                        try self.noteLivenessUseLocal(reads, arg);
                     }
                 },
                 .assign_list => |assign| try self.noteLivenessUseSpan(reads, assign.elems),
                 .assign_struct => |assign| try self.noteLivenessUseSpan(reads, assign.fields),
                 .assign_tag => |assign| {
-                    if (self.store.optionalStmtRow(assign.target_desc)) |target_desc| {
-                        if (target_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    }
                     if (assign.payload) |payload| try self.noteLivenessUseLocal(reads, payload);
                 },
                 .store_struct => |assign| {
@@ -7179,13 +6776,21 @@ const Inserter = struct {
                         try self.attachStrMatchEdgeKills(&graph, node_index, arm.steps, @intCast(arm_index));
                     }
                 },
-                .boxy_tag_match => |tag_match| {
-                    try self.noteLivenessUseLocal(reads, tag_match.source);
-                    if (self.store.stmtRow(tag_match.source_desc).localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
                 .ret => |ret_stmt| try self.noteLivenessUseLocal(reads, ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
                     try self.noteLivenessUseLocal(reads, message);
+                },
+                .dyn => |dyn_stmt| {
+                    const Note = struct {
+                        inserter: *const Inserter,
+                        reads: *Row,
+
+                        fn visit(note: *const @This(), operand: LIR.LocalId) ResourceError!void {
+                            try note.inserter.noteLivenessUseLocal(note.reads, operand);
+                        }
+                    };
+                    const note: Note = .{ .inserter = self, .reads = reads };
+                    try DynOps.Operands.of(self.store.stmtRow(dyn_stmt.data)).each(self.store, &note, Note.visit);
                 },
                 .assign_literal,
                 .init_uninitialized,
@@ -7352,8 +6957,17 @@ const Inserter = struct {
         cause: RcCause,
         next: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
+        return self.retainLocalsExceptPositions(self.store.getLocalSpan(span), skip_positions, cause, next);
+    }
+
+    fn retainLocalsExceptPositions(
+        self: *Inserter,
+        locals: anytype,
+        skip_positions: []const u32,
+        cause: RcCause,
+        next: LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
         var current = next;
-        const locals = self.store.getLocalSpan(span);
         var skip_index = skip_positions.len;
         var i = locals.len;
         while (i > 0) {
@@ -7731,9 +7345,14 @@ const Inserter = struct {
     }
 
     fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) LIR.RcHelper {
-        if (self.boxy_rc_descs.get(local)) |desc| return .{ .boxy = desc };
-
         const local_layout = self.store.getLocal(local).layout_idx;
+        // A dynamic local is reference counted through its runtime
+        // descriptor; its RC statements name the dynamic layout itself and
+        // have no layout plan.
+        if (self.layouts.getLayout(local_layout).tag == .dynamic) {
+            if (op == .free) arcInvariant("ARC requested a free of a dynamic local");
+            return LIR.RcHelper.fromConcrete(.{ .op = op, .layout_idx = local_layout });
+        }
         const helper = self.rcHelperForLayout(op, local_layout);
         if (self.layouts.rcHelperPlan(helper) == .noop) {
             if (comptime builtin.mode == .debug and builtin.target.os.tag == .freestanding) {
@@ -7748,18 +7367,15 @@ const Inserter = struct {
                     break :blk if (stmt.* == .assign_ref) body_clone.refOpSource(stmt.assign_ref.op) else null;
                 } else null;
                 const ref_source_layout: ?layout_mod.Idx = if (ref_source) |source| self.store.getLocal(source).layout_idx else null;
-                const ref_source_desc: ?LIR.BoxyDescRef = if (ref_source) |source| boxyDescForLocal(self.boxy_rc_descs, source) else null;
-                invariant("ARC attempted to emit a noop RC helper for refcounted local {d} layout={d} layout_data={any} desc={?} proc={d} stmt={?d} ref_source={?d} ref_source_layout={?d} ref_source_layout_data={any} ref_source_desc={?} stmt_data={any}", .{
+                invariant("ARC attempted to emit a noop RC helper for refcounted local {d} layout={d} layout_data={any} proc={d} stmt={?d} ref_source={?d} ref_source_layout={?d} ref_source_layout_data={any} stmt_data={any}", .{
                     @backingInt(local),
                     @backingInt(local_layout),
                     self.layouts.getLayout(local_layout),
-                    boxyDescForLocal(self.boxy_rc_descs, local),
                     @backingInt(self.current_proc),
                     if (self.current_rewrite_stmt) |stmt_id| @backingInt(stmt_id) else null,
                     if (ref_source) |source| @backingInt(source) else null,
                     if (ref_source_layout) |source_layout| @backingInt(source_layout) else null,
                     if (ref_source_layout) |source_layout| self.layouts.getLayout(source_layout) else null,
-                    ref_source_desc,
                     if (self.current_rewrite_stmt) |stmt_id| self.store.getCFStmt(stmt_id) else null,
                 });
             }
@@ -7789,6 +7405,11 @@ const Inserter = struct {
             .decref, .free => .decref,
             .host_drop => arcInvariant("ARC RC statement carried a host-shaped drop adapter"),
         };
+    }
+
+    fn isClosedList(self: *const Inserter, local: LIR.LocalId) bool {
+        const tag = self.layouts.getLayout(self.store.getLocal(local).layout_idx).tag;
+        return tag == .list or tag == .list_of_zst;
     }
 
     fn localContainsRefcounted(self: *const Inserter, local: LIR.LocalId) bool {
@@ -7993,8 +7614,8 @@ fn addCanonicalRetain(
 
 fn rcRetainReleasePair(retain: anytype, release: anytype) bool {
     if (retain.value != release.value or retain.atomicity != release.atomicity) return false;
-    const retain_helper = retain.rc.concreteOrNull() orelse return false;
-    const release_helper = release.rc.concreteOrNull() orelse return false;
+    const retain_helper = retain.rc.concrete;
+    const release_helper = release.rc.concrete;
     return retain_helper.op == .incref and
         release_helper.op == .decref and
         retain_helper.layout_idx == release_helper.layout_idx;
@@ -8007,11 +7628,6 @@ fn argMaskBit(index: usize) u64 {
 
 fn arcInvariant(comptime message: []const u8) noreturn {
     invariant(message, .{});
-}
-
-/// Convert an intentional fixture-table position while preserving enum inference.
-fn fixtureTableIndex(comptime index: u32) u32 {
-    return index;
 }
 
 test "arc insertion boundary exists" {
@@ -8517,21 +8133,9 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8588,21 +8192,9 @@ const ArcTest = struct {
                 inline .assign_ref, .assign_literal, .init_uninitialized, .incref, .decref, .decref_if_initialized, .free => |s| cursor = s.next,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8704,20 +8296,8 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8771,20 +8351,8 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8844,21 +8412,9 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8897,21 +8453,9 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8962,21 +8506,9 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -9007,21 +8539,9 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -9049,67 +8569,6 @@ const ArcTest = struct {
         return error.CyclicPath;
     }
 
-    fn expectReachableDecrefBeforeSet(
-        self: *const ArcTest,
-        start: LIR.CFStmtId,
-        value: LIR.LocalId,
-        set_target: LIR.LocalId,
-    ) error{ ExpectedDecref, SetBeforeDecref, NonLinearPath, CyclicPath }!void {
-        var cursor = start;
-        var remaining = self.store.cfStmtCount() + 1;
-        while (remaining > 0) : (remaining -= 1) {
-            const stmt = self.store.getCFStmtImmediate(cursor);
-            switch (stmt.*) {
-                .decref => |rc| if (rc.value == value) return,
-                .set_local => |set| if (set.target == set_target) return error.SetBeforeDecref,
-                .init_uninitialized,
-                .assign_ref,
-                .assign_literal,
-                .assign_call,
-                .assign_call_erased,
-                .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
-                .assign_low_level,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .debug,
-                .expect,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .incref,
-                .decref_if_initialized,
-                .free,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                => {},
-            }
-            cursor = body_clone.linearNextOrNull(stmt.*) orelse return if (fixtureTerminal(stmt.*)) error.ExpectedDecref else error.NonLinearPath;
-        }
-        return error.CyclicPath;
-    }
-
     /// Whether `stmt` ends its path without a successor.
     fn fixtureTerminal(stmt: LIR.CFStmt) bool {
         return switch (stmt) {
@@ -9120,19 +8579,6 @@ const ArcTest = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -9152,106 +8598,15 @@ const ArcTest = struct {
             .str_match_set,
             .join,
             .jump,
+            .dyn,
             => false,
         };
     }
 };
 
-test "ARC emission shares solver resources without allocating when no capture is excluded" {
-    var f = try ArcTest.init(testing.allocator);
-    defer f.deinit();
-
-    _ = try f.local(f.list_str);
-    const result = try f.local(.i64);
-    _ = try f.ret(result);
-    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(f.allocator, &f.store, &f.layouts);
-    defer f.allocator.free(borrow_anchors);
-
-    const emission = try computeEmissionContainsRefcounted(testing.failing_allocator, &f.store, &f.layouts, borrow_anchors);
-    defer emission.deinit(testing.failing_allocator);
-    try testing.expect(emission.slice().ptr == borrow_anchors.ptr);
-    try testing.expectEqualSlices(bool, &.{ true, false }, emission.slice());
-}
-
-test "ARC emission exclusions copy once and preserve solver resources on allocation failure" {
-    var f = try ArcTest.init(testing.allocator);
-    defer f.deinit();
-
-    const first_list = try f.local(f.list_str);
-    const scalar = try f.local(.i64);
-    const second_list = try f.local(f.list_str);
-    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(f.allocator, &f.store, &f.layouts);
-    defer f.allocator.free(borrow_anchors);
-
-    var emission = EmissionRefcounted{ .shared = borrow_anchors };
-    defer emission.deinit(testing.allocator);
-
-    // Already ineligible locals need no copy, even with an allocator that fails.
-    try emission.exclude(testing.failing_allocator, scalar);
-    try testing.expectError(error.OutOfMemory, emission.exclude(testing.failing_allocator, first_list));
-    try testing.expect(emission.slice().ptr == borrow_anchors.ptr);
-    try testing.expectEqualSlices(bool, &.{ true, false, true }, emission.slice());
-
-    try emission.exclude(testing.allocator, first_list);
-    const owned = emission.slice().ptr;
-    try testing.expect(owned != borrow_anchors.ptr);
-    try emission.exclude(testing.failing_allocator, second_list);
-    try testing.expect(emission.slice().ptr == owned);
-    try testing.expectEqualSlices(bool, &.{ false, false, false }, emission.slice());
-    try testing.expectEqualSlices(bool, &.{ true, false, true }, borrow_anchors);
-}
-
-test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const erased_box = try f.layouts.insertLayout(layout_mod.Layout.erasedBox());
-    const capture_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
-        .{ .index = 0, .layout = erased_box },
-        .{ .index = 1, .layout = .opaque_ptr },
-    });
-    const capture_ptr = try f.local(.opaque_ptr);
-    const capture_view = try f.local(capture_layout);
-    const captured_value = try f.local(erased_box);
-    try f.store.setLocalBoxyDesc(captured_value, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
-
-    const result = try f.local(.i64);
-    const ret = try f.ret(result);
-    const result_stmt = try f.assignI64(result, 0, ret);
-    const field_read = try f.assignRefField(captured_value, capture_view, 0, result_stmt);
-    _ = try f.store.addCFStmt(.{ .assign_low_level = .{
-        .target = capture_view,
-        .op = .erased_capture_load,
-        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
-        .args = try f.span(&.{capture_ptr}),
-        .next = field_read,
-    } }, .test_fixture);
-
-    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(
-        f.allocator,
-        &f.store,
-        &f.layouts,
-    );
-    defer f.allocator.free(borrow_anchors);
-    const local_contains_refcounted = try computeEmissionContainsRefcounted(
-        f.allocator,
-        &f.store,
-        &f.layouts,
-        borrow_anchors,
-    );
-    defer local_contains_refcounted.deinit(f.allocator);
-
-    try testing.expect(!local_contains_refcounted.slice()[@backingInt(capture_view)]);
-    try testing.expect(local_contains_refcounted.slice()[@backingInt(captured_value)]);
-    try testing.expect(borrow_anchors[@backingInt(capture_view)]);
-    try testing.expect(borrow_anchors[@backingInt(captured_value)]);
-}
-
 test "ARC preserves erased callable repack reuse" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
-    f.store.runtime_contract = .boxy;
 
     const erased_callable = try f.layouts.insertErasedCallable();
     const capture = try f.local(.str);
@@ -9269,7 +8624,6 @@ test "ARC preserves erased callable repack reuse" {
     }, .none);
 
     const ret = try f.ret(new_callable);
-    const result_desc: LIR.BoxyDescRef = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(2))) };
     const new_pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
         .target = new_callable,
         .data = try f.store.addStmtRow(LIR.PackedErasedFnData, .{
@@ -9277,7 +8631,6 @@ test "ARC preserves erased callable repack reuse" {
             .capture = capture,
             .capture_layout = .str,
             .on_drop = .none,
-            .result_desc = result_desc,
             .reuse = old_callable,
         }),
         .next = ret,
@@ -9307,7 +8660,6 @@ test "ARC preserves erased callable repack reuse" {
                     try testing.expect(cursor != new_pack);
                     try testing.expectEqual(old_callable, assign.reuse.?);
                     try testing.expect(assign.reuse_unique);
-                    try testing.expectEqual(result_desc, assign.result_desc.?);
                     found = true;
                     break;
                 }
@@ -9320,21 +8672,9 @@ test "ARC preserves erased callable repack reuse" {
             .assign_literal,
             .assign_call,
             .assign_call_erased,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -9361,19 +8701,12 @@ test "ARC preserves erased callable repack reuse" {
 test "ARC preserves erased call ABI metadata" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
-    f.store.runtime_contract = .boxy;
 
     const erased_callable = try f.layouts.insertErasedCallable();
     const closure = try f.local(erased_callable);
     const arg = try f.local(.u64);
-    const arg_desc = try f.local(.opaque_ptr);
     const result = try f.local(.u64);
-    const out_desc = try f.local(.opaque_ptr);
     const args = try f.span(&.{arg});
-    const arg_descs = try f.span(&.{arg_desc});
-    const arg_layouts: LIR.BoxySpan = .{ .start = 4, .len = 1 };
-    const arg_desc_keys: LIR.BoxySpan = .{ .start = 7, .len = 1 };
-    const result_desc: LIR.BoxyDescRef = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(3))) };
     const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{.u64});
 
     const ret = try f.ret(result);
@@ -9382,16 +8715,11 @@ test "ARC preserves erased call ABI metadata" {
         .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
             .closure = closure,
             .args = args,
-            .arg_layouts = arg_layouts,
-            .arg_descs = arg_descs,
-            .arg_desc_keys = arg_desc_keys,
-            .result_desc = result_desc,
-            .out_desc = out_desc,
             .arg_plan = arg_plan,
         }),
         .next = ret,
     } }, .test_fixture);
-    const caller = try f.addProc(&.{ closure, arg, arg_desc }, call, .u64);
+    const caller = try f.addProc(&.{ closure, arg }, call, .u64);
 
     try f.run();
 
@@ -9402,11 +8730,6 @@ test "ARC preserves erased call ABI metadata" {
         if (stmt == .assign_call_erased) {
             const rewritten = f.store.stmtRow(stmt.assign_call_erased.data);
             try testing.expectEqual(args, rewritten.args);
-            try testing.expectEqual(arg_layouts, rewritten.arg_layouts);
-            try testing.expectEqual(arg_descs, rewritten.arg_descs);
-            try testing.expectEqual(arg_desc_keys, rewritten.arg_desc_keys);
-            try testing.expectEqual(result_desc, rewritten.result_desc.?);
-            try testing.expectEqual(out_desc, rewritten.out_desc.?);
             try testing.expectEqual(arg_plan, rewritten.arg_plan);
             return;
         } else if (stmt == .incref) {
@@ -9475,21 +8798,9 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
             .assign_literal,
             .assign_call,
             .assign_call_erased,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -9561,21 +8872,9 @@ test "ARC transfers erased call ownership from an explicit outer source" {
             .assign_literal,
             .assign_call,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -9673,21 +8972,9 @@ test "ARC retains an erased call reuse source that is read after the call" {
             .assign_literal,
             .assign_call,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -9765,21 +9052,9 @@ test "ARC retains an erased callable whose repack input is used later" {
             .assign_literal,
             .assign_call,
             .assign_call_erased,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -9896,7 +9171,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     }, .none);
 
     const local_contains_refcounted = [_]bool{ true, false, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, &.{}, true);
     defer solution.deinit();
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer global_local_index.deinit();
@@ -9971,7 +9246,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     }, .none);
 
     const local_contains_refcounted = [_]bool{ true, true, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, &.{}, true);
     defer solution.deinit();
     try testing.expectEqual(leader, solution.leaderOf(local_alias));
 
@@ -10009,8 +9284,8 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
 
     // The solver knows `anchor` participates in ARC because it is a borrow
     // anchor, while emission knows only `concrete` has a concrete RC helper.
-    // This is the same split used by descriptor-driven projections: the
-    // anchor has a real liveness bit but must never receive an incref/decref.
+    // The anchor has a real liveness bit but must never receive an
+    // incref/decref.
     const anchor = try f.local(.str);
     const concrete = try f.local(.str);
     const result = try f.local(.i64);
@@ -10021,7 +9296,7 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
     const proc = try f.addProc(&.{anchor}, body, .i64);
 
     const solver_rc = [_]bool{ true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &solver_rc, .{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &solver_rc, &.{proc}, true);
     defer solution.deinit();
     try testing.expectEqual(anchor, solution.leaderOf(concrete));
 
@@ -10071,7 +9346,7 @@ test "ARC prepared source liveness survives transient domains and frozen reuse" 
     const body = try f.ret(local);
     const proc = try f.addProc(&.{local}, body, .str);
     const rc = [_]bool{true};
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{proc}, true);
     defer solution.deinit();
     var durable = collections.SingleThreadArena.init(testing.allocator);
     defer durable.deinit();
@@ -10128,7 +9403,7 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     defer testing.allocator.free(rc);
     @memset(rc, false);
     rc[@backingInt(local)] = true;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{proc}, true);
     defer solution.deinit();
     var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
@@ -10168,7 +9443,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     const proc = try f.addProc(&.{}, body, .i64);
     var rc = @as([(locals.len + 1)]bool, @splat(true));
     rc[locals.len] = false;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     for (locals, 0..) |local, i| try testing.expectEqual(locals[i % 3], solution.leaderOf(local));
     var indices = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
@@ -11261,6 +10536,89 @@ test "RC specialization: fields taken from one dying record select the owned var
     try f.expectRc(record, 0, 0, 0);
 }
 
+test "RC emission units: a call demands an owned variant only within its callee's unit" {
+    // The program of the test above, with the caller and the callee placed
+    // in emission units (design.md "Mode Specialization", emission units): a
+    // caller in the callee's module unit demands the owned variant as before;
+    // a caller in another module's unit, or any caller of an isolated callee,
+    // adapts to the callee's base signature and no variant is emitted.
+    const Case = struct { caller: LIR.EmissionUnit, callee: LIR.EmissionUnit, variants: usize };
+    const cases = [_]Case{
+        .{ .caller = LIR.EmissionUnit.module(0), .callee = LIR.EmissionUnit.module(0), .variants = 1 },
+        .{ .caller = LIR.EmissionUnit.module(1), .callee = LIR.EmissionUnit.module(0), .variants = 0 },
+        .{ .caller = LIR.EmissionUnit.module(0), .callee = .isolated, .variants = 0 },
+        .{ .caller = .program, .callee = .program, .variants = 1 },
+    };
+    for (cases) |case| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+
+        // Each callee parameter is a pair whose owned variant takes its first
+        // list; the caller passes two different fields of one dying record.
+        const left = try f.local(f.pair_list);
+        const right = try f.local(f.pair_list);
+        const left_field = try f.local(f.list_i64);
+        const right_field = try f.local(f.list_i64);
+        const elem = try f.local(.i64);
+        const left_appended = try f.local(f.list_i64);
+        const right_appended = try f.local(f.list_i64);
+        const callee_result = try f.local(.i64);
+        const callee_ret = try f.ret(callee_result);
+        const result_assign = try f.assignI64(callee_result, 1, callee_ret);
+        const append_right = try f.assignLowLevel(right_appended, &.{ right_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+        const read_right = try f.assignRefField(right_field, right, 0, append_right);
+        const append_left = try f.assignLowLevel(left_appended, &.{ left_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_right);
+        const elem_assign = try f.assignI64(elem, 5, append_left);
+        const read_left = try f.assignRefField(left_field, left, 0, elem_assign);
+        const callee = try f.addProc(&.{ left, right }, read_left, .i64);
+
+        const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+            .{ .index = 0, .layout = f.pair_list },
+            .{ .index = 1, .layout = f.pair_list },
+        });
+        const a = try f.local(f.list_i64);
+        const b = try f.local(f.list_i64);
+        const c = try f.local(f.list_i64);
+        const d = try f.local(f.list_i64);
+        const first_pair = try f.local(f.pair_list);
+        const second_pair = try f.local(f.pair_list);
+        const record = try f.local(record_layout);
+        const first_arg = try f.local(f.pair_list);
+        const second_arg = try f.local(f.pair_list);
+        const caller_result = try f.local(.i64);
+        const caller_ret = try f.ret(caller_result);
+        const call = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = caller_result,
+            .proc = callee,
+            .args = try f.span(&.{ first_arg, second_arg }),
+            .next = caller_ret,
+        } }, .test_fixture);
+        const read_second = try f.assignRefField(second_arg, record, 1, call);
+        const read_first = try f.assignRefField(first_arg, record, 0, read_second);
+        const record_assign = try f.assignStruct(record, &.{ first_pair, second_pair }, read_first);
+        const second_assign = try f.assignStruct(second_pair, &.{ c, d }, record_assign);
+        const first_assign = try f.assignStruct(first_pair, &.{ a, b }, second_assign);
+        const d_assign = try f.assignList(d, &.{}, first_assign);
+        const c_assign = try f.assignList(c, &.{}, d_assign);
+        const b_assign = try f.assignList(b, &.{}, c_assign);
+        const caller_body = try f.assignList(a, &.{}, b_assign);
+        const caller = try f.addProc(&.{}, caller_body, .i64);
+        f.store.getProcSpecPtr(callee).emission_unit = case.callee;
+        f.store.getProcSpecPtr(caller).emission_unit = case.caller;
+
+        const base_proc_count = f.store.procSpecCount();
+        try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+        try testing.expectEqual(base_proc_count + case.variants, f.store.procSpecCount());
+        // The base proc keeps its borrowed signature either way and retains
+        // each borrowed field once.
+        try testing.expectEqual(@as(u64, 0b11), f.store.getProcSpec(callee).rc_borrowed_params);
+        try testing.expectEqual(@as(usize, 1), f.countRc(left_field, .incref));
+        try testing.expectEqual(@as(usize, 1), f.countRc(right_field, .incref));
+        if (case.variants == 1) try f.expectRc(record, 0, 0, 0);
+    }
+}
+
 test "RC early_return emits correct number of decrefs for multi-use symbol" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -12040,7 +11398,7 @@ test "RC loop payload view preserves field units of a tag union defined outside 
 
     const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, &f.store, &f.layouts);
     defer testing.allocator.free(rc);
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, true);
     defer solution.deinit();
     var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution, .{});
     defer dismantles.deinit();
@@ -12103,7 +11461,7 @@ test "RC loop payload view takes fresh field units of a tag union rebuilt inside
 
     const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, &f.store, &f.layouts);
     defer testing.allocator.free(rc);
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, true);
     defer solution.deinit();
     var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution, .{});
     defer dismantles.deinit();
@@ -13008,6 +12366,29 @@ test "uniqueness: a cached proc's supplied facts reach its callers" {
 
         try f.run();
         try testing.expectEqual(@as(u64, @intFromBool(case.elided)), f.uniqueArgsFor(appended));
+    }
+}
+
+test "uniqueness: without proofs a mutation of a born-unique value keeps its runtime check" {
+    for ([_]bool{ true, false }) |prove| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const list = try f.local(f.list_i64);
+        const elem = try f.local(.i64);
+        const appended = try f.local(f.list_i64);
+        const result = try f.local(.i64);
+
+        const ret = try f.ret(result);
+        const result_assign = try f.assignI64(result, 1, ret);
+        const append = try f.assignLowLevel(appended, &.{ list, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+        const list_assign = try f.assignList(list, &.{}, append);
+        const body = try f.assignI64(elem, 5, list_assign);
+        const proc = try f.addProc(&.{}, body, .i64);
+
+        var metrics: ParallelMetrics = .{};
+        try insert(&f.store, &f.layouts, .{ .roots = &.{proc}, .prove_uniqueness = prove, .metrics_out = &metrics });
+        try testing.expectEqual(@as(u64, @intFromBool(prove)), f.uniqueArgsFor(appended));
+        try testing.expectEqual(prove, metrics.uniqueness.settlements != 0);
     }
 }
 
@@ -14580,20 +13961,9 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .assign_call => |a| cursor = a.next,
             .assign_call_erased => |a| cursor = a.next,
             .assign_packed_erased_fn => |a| cursor = a.next,
-            .assign_boxy_desc_ref => |a| cursor = a.next,
-            .assign_boxy_dict_ref => |a| cursor = a.next,
-            .assign_boxy_box => |a| cursor = a.next,
-            .assign_boxy_record_update => |a| cursor = a.next,
-            .assign_boxy_unbox => |a| cursor = a.next,
-            .assign_boxy_adapt => |a| cursor = a.next,
-            .assign_boxy_inspect => |a| cursor = a.next,
-            .assign_boxy_eq => |a| cursor = a.next,
-            .assign_boxy_hash => |a| cursor = a.next,
-            .assign_boxy_tag => |a| cursor = a.next,
-            .assign_boxy_tag_payload => |a| cursor = a.next,
-            .assign_call_dict => |a| cursor = a.next,
             .assign_low_level => |a| cursor = a.next,
             .assign_list => |a| cursor = a.next,
+            .dyn => |a| cursor = a.next,
             .assign_struct => |a| cursor = a.next,
             .assign_tag => |a| cursor = a.next,
             .set_local => |a| cursor = a.next,
@@ -14608,7 +13978,6 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .boxy_tag_match,
             .join,
             .jump,
             .ret,
@@ -14916,25 +14285,13 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
         const target_proc = while (true) switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_call => |assign| break assign.proc,
             .assign_list => |assign| cursor = assign.next,
+            .dyn => |assign| cursor = assign.next,
             inline .incref, .decref => |rc| cursor = rc.next,
             .init_uninitialized,
             .assign_ref,
             .assign_literal,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_struct,
             .assign_tag,
@@ -14971,20 +14328,8 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -15509,24 +14854,11 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
             break;
         }
         cursor = switch (stmt) {
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .dyn, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .store_struct,
             .store_tag,
@@ -15546,6 +14878,95 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     }
     try testing.expect(remaining > 0);
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+}
+
+/// A callee that hands its `List(Str)` argument back in variant
+/// `handback` and consumes it into the payload of the other variant. The
+/// caller refines the call with one switch, then switches on the same result
+/// again inside the handback arm, as ARC's own variant-specific release does,
+/// and reads the list there. Certification must replay the handback only at
+/// the refining switch: the call restitutes its argument once.
+fn checkRestitutionReplaysOnlyAtRefiningSwitch(handback: u32) (Allocator.Error || ResourceError || ArcTest.ExpectError)!void {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const try_list = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.list_str,
+    });
+    const consumed: u32 = 1 - handback;
+
+    const param = try f.local(f.list_str);
+    const choose = try f.local(.i64);
+    const changed = try f.local(f.list_str);
+    const callee_result = try f.local(try_list);
+    const consumed_ret = try f.ret(callee_result);
+    const consumed_tag = try f.assignTag(callee_result, consumed, changed, consumed_ret);
+    const mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = changed,
+        .op = .list_reverse,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
+        .args = try f.span(&.{param}),
+        .next = consumed_tag,
+    } }, .test_fixture);
+    const handback_ret = try f.ret(callee_result);
+    const handback_tag = try f.assignTag(callee_result, handback, null, handback_ret);
+    const callee_body = if (handback == 1)
+        try f.switchStmt(choose, handback_tag, mutate, null)
+    else
+        try f.switchStmt(choose, mutate, handback_tag, null);
+    const callee = try f.addProc(&.{ param, choose }, callee_body, try_list);
+
+    const item = try f.local(.str);
+    const input = try f.local(f.list_str);
+    const caller_choose = try f.local(.i64);
+    const call_result = try f.local(try_list);
+    const refining = try f.local(.u8);
+    const again = try f.local(.u8);
+    const handback_value = try f.local(.i64);
+    const other_value = try f.local(.i64);
+    const consumed_value = try f.local(.i64);
+
+    // The handback arm switches on the result again and reads the list in
+    // the arm that agrees with the refining switch.
+    const read_ret = try f.ret(handback_value);
+    const read_done = try f.assignI64(handback_value, 1, read_ret);
+    const read_list = try f.expectStmt(input, read_done);
+    const other_ret = try f.ret(other_value);
+    const other_done = try f.assignI64(other_value, 2, other_ret);
+    const inner = if (handback == 1)
+        try f.switchStmt(again, read_list, other_done, null)
+    else
+        try f.switchStmt(again, other_done, read_list, null);
+    const handback_body = try f.assignDiscriminant(again, call_result, inner);
+    const consumed_caller_ret = try f.ret(consumed_value);
+    const consumed_body = try f.assignI64(consumed_value, 0, consumed_caller_ret);
+    const refine = if (handback == 1)
+        try f.switchStmt(refining, handback_body, consumed_body, null)
+    else
+        try f.switchStmt(refining, consumed_body, handback_body, null);
+    const read_refining = try f.assignDiscriminant(refining, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = callee,
+        .args = try f.span(&.{ input, caller_choose }),
+        .next = read_refining,
+    } }, .test_fixture);
+    const choose_value = try f.assignI64(caller_choose, 1, call);
+    const make_input = try f.assignList(input, &.{item}, choose_value);
+    const caller_body = try f.assignStr(item, "kept", make_input);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    // Insertion certifies every procedure it rewrites.
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+}
+
+test "RC outcome restitution replays a listed-variant handback only at the refining switch" {
+    try checkRestitutionReplaysOnlyAtRefiningSwitch(1);
+}
+
+test "RC outcome restitution replays a default-variant handback only at the refining switch" {
+    try checkRestitutionReplaysOnlyAtRefiningSwitch(0);
 }
 
 test "RC outcome restitution moves an argument alias's source unit through a match join" {
@@ -15704,7 +15125,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
             is_rc.* = f.layouts.layoutContainsRefcounted(f.layouts.getLayout(local.layout_idx));
         }
         {
-            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{caller}, true);
+            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{caller}, true);
             defer solution.deinit();
             const outcomes = solution.availableOutcomeSpanOf(callee);
             try testing.expectEqual(@as(u32, 2), outcomes.len);
@@ -15894,24 +15315,11 @@ test "RC outcome restitution releases every returned argument before a nested jo
         }
         cursor = switch (stmt) {
             .join => |join| join.remainder,
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .dyn, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .store_struct,
             .store_tag,
@@ -15940,24 +15348,11 @@ test "RC outcome restitution releases every returned argument before a nested jo
         }
         cursor = switch (stmt) {
             .join => |join| join.remainder,
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .dyn, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .store_struct,
             .store_tag,
@@ -15975,6 +15370,275 @@ test "RC outcome restitution releases every returned argument before a nested jo
         };
     }
     try testing.expect(remaining > 0);
+}
+
+test "RC outcome restitution keeps a field a callee passes to a hosted call inside the returned record" {
+    // A stable procedure owns a record whose first field it passes to a
+    // hosted call, then returns a tag chosen by the hosted result without
+    // touching the record again. Every outcome hands the record's exact
+    // entry unit back to a caller that demands restitution, so the field
+    // must be retained for the hosted call rather than taken out of the
+    // record: certification rejects a returned record missing a field.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.list_i64,
+    });
+
+    const record = try f.local(f.pair_list);
+    const handle = try f.local(f.list_i64);
+    const status = try f.local(.i64);
+    const fresh = try f.local(f.list_i64);
+    const result = try f.local(outcome_layout);
+    const ok_ret = try f.ret(result);
+    const ok_tag = try f.assignTag(result, 1, fresh, ok_ret);
+    const ok_body = try f.assignList(fresh, &.{}, ok_tag);
+    const err_ret = try f.ret(result);
+    const err_body = try f.assignTag(result, 0, null, err_ret);
+    const choose = try f.switchStmt(status, ok_body, err_body, null);
+    const hosted = try f.assignHostedCall(status, &.{handle}, choose);
+    const project = try f.assignRefField(handle, record, 0, hosted);
+    const callee = try f.addProc(&.{record}, project, outcome_layout);
+    f.store.getProcSpecPtr(callee).stable_signature = true;
+
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const input = try f.local(f.pair_list);
+    const call_result = try f.local(outcome_layout);
+    const discriminant = try f.local(.u8);
+    const ok_value = try f.local(.i64);
+    const err_value = try f.local(.i64);
+    const caller_ok_ret = try f.ret(ok_value);
+    const caller_ok_done = try f.assignI64(ok_value, 1, caller_ok_ret);
+    const caller_ok = try f.expectStmt(input, caller_ok_done);
+    const caller_err_ret = try f.ret(err_value);
+    const caller_err_done = try f.assignI64(err_value, 0, caller_err_ret);
+    const caller_err = try f.expectStmt(input, caller_err_done);
+    const refine = try f.switchStmt(discriminant, caller_ok, caller_err, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = callee,
+        .args = try f.span(&.{input}),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const make_input = try f.assignStruct(input, &.{ first, second }, call);
+    const make_second = try f.assignList(second, &.{}, make_input);
+    const caller_body = try f.assignList(first, &.{}, make_second);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+    f.store.getProcSpecPtr(caller).code_key = @splat(1);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{});
+
+    // The caller lends its record to the outcome variant without a retain.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+}
+
+/// A stable procedure owning a record whose only refcounted field it passes to
+/// a hosted call, returning a tag chosen by the hosted result without touching
+/// the record again.
+const CompleteProjectionCallee = struct {
+    proc: LIR.LirProcSpecId,
+    handle: LIR.LocalId,
+    record_layout: layout_mod.Idx,
+    outcome_layout: layout_mod.Idx,
+
+    fn init(f: *ArcTest) Allocator.Error!CompleteProjectionCallee {
+        const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+            try f.layouts.ensureZstLayout(),
+            f.list_i64,
+        });
+        const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+            .{ .index = 0, .layout = f.list_i64 },
+            .{ .index = 1, .layout = .i64 },
+        });
+
+        const record = try f.local(record_layout);
+        const handle = try f.local(f.list_i64);
+        const status = try f.local(.i64);
+        const fresh = try f.local(f.list_i64);
+        const result = try f.local(outcome_layout);
+        const ok_ret = try f.ret(result);
+        const ok_tag = try f.assignTag(result, 1, fresh, ok_ret);
+        const ok_body = try f.assignList(fresh, &.{}, ok_tag);
+        const err_ret = try f.ret(result);
+        const err_body = try f.assignTag(result, 0, null, err_ret);
+        const choose = try f.switchStmt(status, ok_body, err_body, null);
+        const hosted = try f.assignHostedCall(status, &.{handle}, choose);
+        const project = try f.assignRefField(handle, record, 0, hosted);
+        const proc = try f.addProc(&.{record}, project, outcome_layout);
+        f.store.getProcSpecPtr(proc).stable_signature = true;
+        return .{ .proc = proc, .handle = handle, .record_layout = record_layout, .outcome_layout = outcome_layout };
+    }
+};
+
+test "RC outcome restitution retains a complete projection a callee passes to a hosted call" {
+    // The projection owns all of the record's refcounted state, so its read
+    // could move the record's unit into the hosted call. Every outcome hands
+    // that unit back to a caller that demands restitution, so the read must
+    // retain instead: certification rejects a boundary missing the unit.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const callee = try CompleteProjectionCallee.init(&f);
+
+    const list = try f.local(f.list_i64);
+    const scalar = try f.local(.i64);
+    const input = try f.local(callee.record_layout);
+    const call_result = try f.local(callee.outcome_layout);
+    const discriminant = try f.local(.u8);
+    const ok_value = try f.local(.i64);
+    const err_value = try f.local(.i64);
+    const caller_ok_ret = try f.ret(ok_value);
+    const caller_ok_done = try f.assignI64(ok_value, 1, caller_ok_ret);
+    const caller_ok = try f.expectStmt(input, caller_ok_done);
+    const caller_err_ret = try f.ret(err_value);
+    const caller_err_done = try f.assignI64(err_value, 0, caller_err_ret);
+    const caller_err = try f.expectStmt(input, caller_err_done);
+    const refine = try f.switchStmt(discriminant, caller_ok, caller_err, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = callee.proc,
+        .args = try f.span(&.{input}),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const make_input = try f.assignStruct(input, &.{ list, scalar }, call);
+    const make_scalar = try f.assignI64(scalar, 7, make_input);
+    const caller_body = try f.assignList(list, &.{}, make_scalar);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+    f.store.getProcSpecPtr(caller).code_key = @splat(1);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{});
+
+    // The caller lends its record to the outcome variant without a retain,
+    // and that variant retains the projection for the hosted call. The base
+    // procedure, which releases its parameter, moves the unit instead.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(callee.handle, .incref));
+}
+
+test "RC outcome restitution leaves a complete projection's move to a caller that lets the record die" {
+    // The caller never reads the record after the call, so it uses the base
+    // convention, whose returns are no restitution boundary: the projection
+    // read moves the record's unit into the hosted call without a retain.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const callee = try CompleteProjectionCallee.init(&f);
+
+    const list = try f.local(f.list_i64);
+    const scalar = try f.local(.i64);
+    const input = try f.local(callee.record_layout);
+    const call_result = try f.local(callee.outcome_layout);
+    const discriminant = try f.local(.u8);
+    const ok_value = try f.local(.i64);
+    const err_value = try f.local(.i64);
+    const caller_ok_ret = try f.ret(ok_value);
+    const caller_ok = try f.assignI64(ok_value, 1, caller_ok_ret);
+    const caller_err_ret = try f.ret(err_value);
+    const caller_err = try f.assignI64(err_value, 0, caller_err_ret);
+    const refine = try f.switchStmt(discriminant, caller_ok, caller_err, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = callee.proc,
+        .args = try f.span(&.{input}),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const make_input = try f.assignStruct(input, &.{ list, scalar }, call);
+    const make_scalar = try f.assignI64(scalar, 7, make_input);
+    const caller_body = try f.assignList(list, &.{}, make_scalar);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+    f.store.getProcSpecPtr(caller).code_key = @splat(1);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{});
+
+    try testing.expectEqual(base_proc_count, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(callee.handle, .incref));
+}
+
+test "RC outcome restitution keeps a parameter a callee could take fields from in the returned unit" {
+    // The inner procedure's parameter solves borrowed, but an owned variant
+    // could take its list field, which makes moving a dying argument into it
+    // an exact schedule. In the wrapper's outcome variant the argument is not
+    // dying: every outcome hands its exact entry unit back to the caller, so
+    // the wrapper keeps the unit and lends the record. Certification rejects
+    // a boundary missing the unit.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.list_i64,
+    });
+
+    const inner_param = try f.local(f.pair_list);
+    const inner_field = try f.local(f.list_i64);
+    const inner_elem = try f.local(.i64);
+    const inner_appended = try f.local(f.list_i64);
+    const inner_result = try f.local(.i64);
+    const inner_ret = try f.ret(inner_result);
+    const inner_result_assign = try f.assignI64(inner_result, 1, inner_ret);
+    const inner_append = try f.assignLowLevel(inner_appended, &.{ inner_field, inner_elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), inner_result_assign);
+    const inner_elem_assign = try f.assignI64(inner_elem, 5, inner_append);
+    const inner_field_read = try f.assignRefField(inner_field, inner_param, 0, inner_elem_assign);
+    const inner = try f.addProc(&.{inner_param}, inner_field_read, .i64);
+
+    const record = try f.local(f.pair_list);
+    const status = try f.local(.i64);
+    const fresh = try f.local(f.list_i64);
+    const result = try f.local(outcome_layout);
+    const ok_ret = try f.ret(result);
+    const ok_tag = try f.assignTag(result, 1, fresh, ok_ret);
+    const ok_body = try f.assignList(fresh, &.{}, ok_tag);
+    const err_ret = try f.ret(result);
+    const err_body = try f.assignTag(result, 0, null, err_ret);
+    const choose = try f.switchStmt(status, ok_body, err_body, null);
+    const inner_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = status,
+        .proc = inner,
+        .args = try f.span(&.{record}),
+        .next = choose,
+    } }, .test_fixture);
+    const wrapper = try f.addProc(&.{record}, inner_call, outcome_layout);
+    f.store.getProcSpecPtr(wrapper).stable_signature = true;
+
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const input = try f.local(f.pair_list);
+    const call_result = try f.local(outcome_layout);
+    const discriminant = try f.local(.u8);
+    const ok_value = try f.local(.i64);
+    const err_value = try f.local(.i64);
+    const caller_ok_ret = try f.ret(ok_value);
+    const caller_ok_done = try f.assignI64(ok_value, 1, caller_ok_ret);
+    const caller_ok = try f.expectStmt(input, caller_ok_done);
+    const caller_err_ret = try f.ret(err_value);
+    const caller_err_done = try f.assignI64(err_value, 0, caller_err_ret);
+    const caller_err = try f.expectStmt(input, caller_err_done);
+    const refine = try f.switchStmt(discriminant, caller_ok, caller_err, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = wrapper,
+        .args = try f.span(&.{input}),
+        .next = read_discriminant,
+    } }, .test_fixture);
+    const make_input = try f.assignStruct(input, &.{ first, second }, call);
+    const make_second = try f.assignList(second, &.{}, make_input);
+    const caller_body = try f.assignList(first, &.{}, make_second);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+    f.store.getProcSpecPtr(caller).code_key = @splat(1);
+
+    try insert(&f.store, &f.layouts, .{});
+
+    try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(record, .incref));
 }
 
 test "ARC outcome capability rejects a stale discriminant after return-local rebind" {
@@ -16014,7 +15678,6 @@ test "ARC outcome capability rejects a stale discriminant after return-local reb
         &f.store,
         &f.layouts,
         &rc_local,
-        .{},
         &.{},
         true,
     );
@@ -16087,7 +15750,6 @@ test "ARC outcome capability rejects stale witnesses across set-local and join r
         &f.store,
         &f.layouts,
         rc_local,
-        .{},
         &.{},
         true,
     );
@@ -16437,7 +16099,7 @@ fn outcomeScratchWork(proc_count: usize) (Allocator.Error || error{TestExpectedE
     defer testing.allocator.free(rc);
     for (rc, 0..) |*value, i| value.* = i % 4 != 1;
     const before = arc_solve.outcome_scratch_entries;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, true);
     defer solution.deinit();
     for (0..proc_count) |i| {
         const span = solution.availableOutcomeSpanOf(@fromBackingInt(@intCast(@as(u32, @intCast(i)))));
@@ -16754,6 +16416,320 @@ test "RC field takes through repeated dominating complete projections" {
     try testing.expectEqual(first_view, second_projection_stmt.assign_ref.op.source);
 }
 
+test "RC a closure taken from a dying record of closures through a borrowed wrapper leaves its sibling released before the call" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/12841: a tag holds a
+    // record of two closures capturing one list. `site_set` reads the second
+    // closure out of the tag's payload, unwraps its captures, and passes
+    // them to the closure body, which mutates the list on one path. The
+    // wrapper's base borrows the tag, so a caller passing a dying tag
+    // selects its owned variant: there the closure's field is taken, the
+    // sibling closure is released before the call, and the captures reach
+    // the body's owned variant without a retain.
+    const captures_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+    });
+    const closure_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{captures_layout});
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = closure_layout },
+        .{ .index = 1, .layout = closure_layout },
+    });
+    const site_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{record_layout});
+
+    // The closure body: consumes its captured list on one path only, so its
+    // base keeps the captures borrowed with an owned-only take.
+    const body_index = try f.local(.i64);
+    const body_captures = try f.local(captures_layout);
+    const body_list = try f.local(f.list_i64);
+    const body_changed = try f.local(f.list_i64);
+    const body_empty = try f.local(f.list_i64);
+    const consume_ret = try f.ret(body_changed);
+    const consume = try f.assignLowLevel(body_changed, &.{body_list}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), consume_ret);
+    const empty_ret = try f.ret(body_empty);
+    const make_empty = try f.assignList(body_empty, &.{}, empty_ret);
+    const body_switch = try f.switchStmt(body_index, consume, make_empty, null);
+    const body_read = try f.assignRefField(body_list, body_captures, 0, body_switch);
+    const closure_body = try f.addProc(&.{ body_index, body_captures }, body_read, f.list_i64);
+
+    // The wrapper: site_set = |Site(fs), i| (fs.set)(i)
+    const site = try f.local(site_layout);
+    const index = try f.local(.i64);
+    const record_view = try f.local(record_layout);
+    const closure = try f.local(closure_layout);
+    const captures = try f.local(captures_layout);
+    const wrapper_result = try f.local(f.list_i64);
+    const wrapper_ret = try f.ret(wrapper_result);
+    const wrapper_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = wrapper_result,
+        .proc = closure_body,
+        .args = try f.span(&.{ index, captures }),
+        .next = wrapper_ret,
+    } }, .test_fixture);
+    const read_captures = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = captures,
+        .op = .tagPayloadStruct(closure, 0, 0),
+        .next = wrapper_call,
+    } }, .test_fixture);
+    const read_closure = try f.assignRefField(closure, record_view, 1, read_captures);
+    const read_record = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = record_view,
+        .op = .tagPayloadStruct(site, 0, 0),
+        .next = read_closure,
+    } }, .test_fixture);
+    const wrapper = try f.addProc(&.{ site, index }, read_record, f.list_i64);
+
+    // The caller builds the site from one list captured twice and passes it
+    // dying.
+    const list = try f.local(f.list_i64);
+    const first_captures = try f.local(captures_layout);
+    const first_closure = try f.local(closure_layout);
+    const second_captures = try f.local(captures_layout);
+    const second_closure = try f.local(closure_layout);
+    const record = try f.local(record_layout);
+    const site_value = try f.local(site_layout);
+    const caller_index = try f.local(.i64);
+    const caller_result = try f.local(f.list_i64);
+    const caller_ret = try f.ret(caller_result);
+    const caller_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = caller_result,
+        .proc = wrapper,
+        .args = try f.span(&.{ site_value, caller_index }),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const assign_index = try f.assignI64(caller_index, 0, caller_call);
+    const make_site = try f.assignTag(site_value, 0, record, assign_index);
+    const make_record = try f.assignStruct(record, &.{ first_closure, second_closure }, make_site);
+    const make_second_closure = try f.assignTag(second_closure, 0, second_captures, make_record);
+    const make_second_captures = try f.assignStruct(second_captures, &.{list}, make_second_closure);
+    const make_first_closure = try f.assignTag(first_closure, 0, first_captures, make_second_captures);
+    const make_first_captures = try f.assignStruct(first_captures, &.{list}, make_first_closure);
+    const caller_body = try f.assignList(list, &.{}, make_first_captures);
+    const caller = try f.addProc(&.{}, caller_body, f.list_i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try f.run();
+
+    // The caller selects the wrapper's owned variant and moves the site.
+    const call_from_caller = try f.directCallTo(caller, caller_result);
+    try testing.expect(@backingInt(call_from_caller.proc) >= base_proc_count);
+    try testing.expectEqual(@as(usize, 0), f.countRc(site_value, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(site_value, .decref));
+    // The record view and the closure read never retain. In the owned
+    // variant nothing retains: the sibling closure is released before the
+    // call, and the captures move into an emission of the body that owns
+    // them.
+    try testing.expectEqual(@as(usize, 0), f.countRc(record_view, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(closure, .incref));
+    const variant_body = f.store.getProcSpecImmediate(call_from_caller.proc).body orelse return error.MissingProcBody;
+    var cursor = variant_body;
+    var released_before_call = false;
+    var retained_before_call = false;
+    var remaining: usize = f.store.cfStmtCount() + 1;
+    const variant_call = while (remaining > 0) : (remaining -= 1) {
+        const stmt = f.store.getCFStmt(cursor);
+        if (stmt == .decref) released_before_call = true;
+        if (stmt == .incref) retained_before_call = true;
+        if (stmt == .assign_call) break stmt.assign_call;
+        cursor = body_clone.linearNextOrNull(stmt) orelse return error.NonLinearPath;
+    } else return error.CyclicPath;
+    try testing.expect(released_before_call);
+    try testing.expect(!retained_before_call);
+    try testing.expectEqual(arc_sig.Mode.owned, arc_sig.RcSig.paramMode(.{ .borrowed_params = @intCast(f.store.getProcSpecImmediate(variant_call.proc).rc_borrowed_params) }, 1));
+}
+
+test "RC field takes through a complete projection repeated in a join body" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/12846: a record holding
+    // one record of a list and a scalar is projected before a switch whose
+    // taken branch consumes the list and jumps to a join, and projected again
+    // in the join's body to read the scalar. The body is entered only through
+    // that jump, so the first projection dominates the second: the second is
+    // its alias, and the list moves out of the dying record without a retain.
+    const inner_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const wrapper_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = inner_layout },
+    });
+    const list = try f.local(f.list_i64);
+    const scalar = try f.local(.i64);
+    const inner = try f.local(inner_layout);
+    const wrapper = try f.local(wrapper_layout);
+    const first_view = try f.local(inner_layout);
+    const taken = try f.local(f.list_i64);
+    const changed = try f.local(f.list_i64);
+    const cell = try f.local(f.list_i64);
+    const second_view = try f.local(inner_layout);
+    const tag = try f.local(.i64);
+    const result = try f.local(inner_layout);
+    const cond = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const make_result = try f.assignStruct(result, &.{ cell, tag }, ret);
+    const read_tag = try f.assignRefField(tag, second_view, 1, make_result);
+    const project_again = try f.assignRefField(second_view, wrapper, 0, read_tag);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const initialize = try f.setLocal(cell, changed, .initialize_join_param, jump);
+    const reverse = try f.assignLowLevel(changed, &.{taken}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), initialize);
+    const read_list = try f.assignRefField(taken, first_view, 0, reverse);
+    const branch = try f.switchStmt(cond, read_list, try f.crash("stop"), null);
+    const project_first = try f.assignRefField(first_view, wrapper, 0, branch);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{cell}),
+        .body = project_again,
+        .remainder = project_first,
+    } }, .test_fixture);
+    const make_wrapper = try f.assignStruct(wrapper, &.{inner}, join);
+    const make_inner = try f.assignStruct(inner, &.{ list, scalar }, make_wrapper);
+    const assign_scalar = try f.assignI64(scalar, 0, make_inner);
+    const body = try f.assignList(list, &.{}, assign_scalar);
+    _ = try f.addProc(&.{cond}, body, inner_layout);
+
+    try f.run();
+
+    try testing.expectEqual(@as(usize, 0), f.countRc(first_view, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(wrapper, .incref));
+    const second_projection_stmt = f.store.getCFStmt(project_again);
+    try testing.expect(second_projection_stmt == .assign_ref);
+    try testing.expect(second_projection_stmt.assign_ref.op.kind == .local);
+    try testing.expectEqual(first_view, second_projection_stmt.assign_ref.op.source);
+}
+
+test "RC complete projection after a rebind of its root keeps its own read" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // The root is written between two complete projections of it on a
+    // straight-line path. The first projection dominates the second, but the
+    // second reads the written record, whose scalar differs, so it is no
+    // alias of the first.
+    const inner_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const wrapper_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = inner_layout },
+    });
+    const list = try f.local(f.list_i64);
+    const scalar = try f.local(.i64);
+    const inner = try f.local(inner_layout);
+    const wrapper = try f.local(wrapper_layout);
+    const first_view = try f.local(inner_layout);
+    const taken = try f.local(f.list_i64);
+    const changed = try f.local(f.list_i64);
+    const next_list = try f.local(f.list_i64);
+    const next_scalar = try f.local(.i64);
+    const next_inner = try f.local(inner_layout);
+    const next_wrapper = try f.local(wrapper_layout);
+    const second_view = try f.local(inner_layout);
+    const tag = try f.local(.i64);
+    const result = try f.local(inner_layout);
+
+    const ret = try f.ret(result);
+    const make_result = try f.assignStruct(result, &.{ changed, tag }, ret);
+    const read_tag = try f.assignRefField(tag, second_view, 1, make_result);
+    const project_again = try f.assignRefField(second_view, wrapper, 0, read_tag);
+    const rebind = try f.setLocal(wrapper, next_wrapper, .replace_existing, project_again);
+    const make_next_wrapper = try f.assignStruct(next_wrapper, &.{next_inner}, rebind);
+    const make_next_inner = try f.assignStruct(next_inner, &.{ next_list, next_scalar }, make_next_wrapper);
+    const assign_next_scalar = try f.assignI64(next_scalar, 1, make_next_inner);
+    const make_next_list = try f.assignList(next_list, &.{}, assign_next_scalar);
+    const reverse = try f.assignLowLevel(changed, &.{taken}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), make_next_list);
+    const read_list = try f.assignRefField(taken, first_view, 0, reverse);
+    const project_first = try f.assignRefField(first_view, wrapper, 0, read_list);
+    const make_wrapper = try f.assignStruct(wrapper, &.{inner}, project_first);
+    const make_inner = try f.assignStruct(inner, &.{ list, scalar }, make_wrapper);
+    const assign_scalar = try f.assignI64(scalar, 0, make_inner);
+    const body = try f.assignList(list, &.{}, assign_scalar);
+    _ = try f.addProc(&.{}, body, inner_layout);
+
+    try f.run();
+
+    const second_projection_stmt = f.store.getCFStmt(project_again);
+    try testing.expect(second_projection_stmt == .assign_ref);
+    try testing.expect(second_projection_stmt.assign_ref.op.kind == .field);
+    try testing.expectEqual(wrapper, second_projection_stmt.assign_ref.op.source);
+}
+
+test "RC a parameter whose owned variant takes every unit on every return is owned by its base signature" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/12847: the body reads
+    // its captures' only list and consumes it on every path. A borrowed base
+    // would retain the list exactly where an owned body takes it, so the
+    // base owns the position and no second body exists: a dying argument
+    // moves, and an argument used again retains at its call.
+    const captures_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+    });
+    const body_captures = try f.local(captures_layout);
+    const body_list = try f.local(f.list_i64);
+    const body_changed = try f.local(f.list_i64);
+    const body_ret = try f.ret(body_changed);
+    const consume = try f.assignLowLevel(body_changed, &.{body_list}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), body_ret);
+    const body_read = try f.assignRefField(body_list, body_captures, 0, consume);
+    const callee = try f.addProc(&.{body_captures}, body_read, f.list_i64);
+
+    // A caller passing its captures dying.
+    const dying_list = try f.local(f.list_i64);
+    const dying_captures = try f.local(captures_layout);
+    const dying_result = try f.local(f.list_i64);
+    const dying_ret = try f.ret(dying_result);
+    const dying_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = dying_result,
+        .proc = callee,
+        .args = try f.span(&.{dying_captures}),
+        .next = dying_ret,
+    } }, .test_fixture);
+    const dying_make = try f.assignStruct(dying_captures, &.{dying_list}, dying_call);
+    const dying_body = try f.assignList(dying_list, &.{}, dying_make);
+    const dying_caller = try f.addProc(&.{}, dying_body, f.list_i64);
+
+    // A caller passing its captures twice: the first call keeps them alive.
+    const kept_list = try f.local(f.list_i64);
+    const kept_captures = try f.local(captures_layout);
+    const first_result = try f.local(f.list_i64);
+    const second_result = try f.local(f.list_i64);
+    const kept_ret = try f.ret(second_result);
+    const second_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = second_result,
+        .proc = callee,
+        .args = try f.span(&.{kept_captures}),
+        .next = kept_ret,
+    } }, .test_fixture);
+    const first_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = first_result,
+        .proc = callee,
+        .args = try f.span(&.{kept_captures}),
+        .next = second_call,
+    } }, .test_fixture);
+    const kept_make = try f.assignStruct(kept_captures, &.{kept_list}, first_call);
+    const kept_body = try f.assignList(kept_list, &.{}, kept_make);
+    const kept_caller = try f.addProc(&.{}, kept_body, f.list_i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    try testing.expectEqual(base_proc_count, f.store.procSpecCount());
+    try testing.expectEqual(@as(u64, 0), f.store.getProcSpecImmediate(callee).rc_borrowed_params);
+    try testing.expectEqual(callee, (try f.directCallTo(dying_caller, dying_result)).proc);
+    try testing.expectEqual(callee, (try f.directCallTo(kept_caller, first_result)).proc);
+    try testing.expectEqual(callee, (try f.directCallTo(kept_caller, second_result)).proc);
+    try f.expectRc(dying_captures, 0, 0, 0);
+    try f.expectRc(kept_captures, 1, 0, 0);
+    try testing.expectEqual(@as(usize, 0), f.countRc(body_list, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(body_captures, .incref));
+}
+
 test "RC borrowed field read takes its field at the last consuming operand" {
     for ([_]bool{ false, true }) |consumed_after| {
         try expectBorrowedReadTakesAtLastOperand(consumed_after);
@@ -16965,24 +16941,11 @@ test "RC field take restores the exact aggregate field on checked failure withou
                 break;
             }
             cursor = switch (stmt) {
-                inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
+                inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .dyn, .free => |linear| linear.next,
                 .init_uninitialized,
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .store_struct,
                 .store_tag,
@@ -17093,7 +17056,6 @@ test "RC field-take demand crosses complete tag payload and wrapper calls" {
 test "RC specialization: caller body survives variant proc append" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
-    f.store.runtime_contract = .boxy;
 
     // Callee returns its string parameter at position 1, so that parameter
     // and return solve borrowed.
@@ -17101,7 +17063,6 @@ test "RC specialization: caller body survives variant proc append" {
     const callee_param = try f.local(.str);
     const callee_ret = try f.ret(callee_param);
     const callee = try f.addProc(&.{ callee_flag, callee_param }, callee_ret, .str);
-    f.store.getProcSpecPtr(callee).runtime_ret_desc = callee_flag;
 
     // Caller builds an owned string and passes it as its final use. The
     // variant turns the borrowed return into an owned return. It is appended
@@ -17129,7 +17090,6 @@ test "RC specialization: caller body survives variant proc append" {
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
-    try testing.expectEqual(callee_flag, f.store.getProcSpecImmediate(variant).runtime_ret_desc.?);
 
     var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
@@ -17142,25 +17102,12 @@ test "RC specialization: caller body survives variant proc append" {
                 }
                 cursor = assign.next;
             },
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |stmt| {
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free, .dyn => |stmt| {
                 cursor = stmt.next;
             },
             .init_uninitialized,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .store_struct,
             .store_tag,
@@ -17805,7 +17752,7 @@ test "RC recursive tail carrier stops at an owned alias" {
     const own = try f.assignRefLocal(owned_alias, original, store);
     f.store.setProcSpecBody(proc, try f.assignStr(original, "still live", own));
     const rc = [_]bool{ true, true, true, true, true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     try testing.expect(!solution.isBorrowed(owned_alias));
     try testing.expect(solution.isBorrowed(borrowed_alias));
@@ -17842,7 +17789,7 @@ test "RC borrowed alias transfers its nearest owned carrier" {
     const body = try f.assignStr(original, "still live", own);
     _ = try f.addProc(&.{}, body, .str);
     const rc = [_]bool{ true, true, true, true, true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     try testing.expect(!solution.isBorrowed(owned_alias));
     try testing.expect(solution.isBorrowed(borrowed_alias));
@@ -17911,238 +17858,6 @@ test "RC alias into set_local moves the leader unit" {
     const alias_assign = try f.assignRefLocal(alias, value, set_result);
     const body = try f.assignStr(value, "through-set-local", alias_assign);
     _ = try f.addProc(&.{}, body, .str);
-    try f.run();
-    try testing.expectEqual(@as(usize, 0), f.countAllRc());
-}
-
-test "RC releases descriptor-backed old set_local value before immutable replacement" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const desc = try f.local(.opaque_ptr);
-    const current = try f.local(.str);
-    const replacement = try f.local(.str);
-    try f.store.setLocalBoxyDesc(current, .{ .local = desc });
-
-    const ret = try f.ret(current);
-    const set_current = try f.setLocal(current, replacement, .replace_existing, ret);
-    const assign_replacement = try f.assignStr(replacement, "new", set_current);
-    const assign_current = try f.assignStr(current, "old", assign_replacement);
-    const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-        .target = desc,
-        .data = try f.store.addStmtRow(LIR.BoxyDescRefData, .{
-            .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        }),
-        .next = assign_current,
-    } }, .test_fixture);
-    _ = try f.addProc(&.{}, init_desc, .str);
-
-    try f.run();
-    try f.expectReachableDecrefBeforeSet(f.procBody(), current, current);
-}
-
-test "RC descriptor updates scan only the current proc frame" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const unrelated = try f.local(.str);
-    const desc = try f.local(.opaque_ptr);
-    const current = try f.local(.str);
-    const result = try f.local(.i64);
-    try f.store.setLocalBoxyDesc(current, .{ .local = desc });
-
-    const unrelated_ret = try f.ret(unrelated);
-    const unrelated_body = try f.assignStr(unrelated, "other proc", unrelated_ret);
-    _ = try f.store.addProcSpec(.{
-        .name = f.store.freshSyntheticSymbol(),
-        .identity = LIR.ProcIdentity.forTest(13),
-        .args = LIR.LocalSpan.empty(),
-        .body = unrelated_body,
-        .frame_locals = try f.span(&.{unrelated}),
-        .ret_layout = .str,
-    }, .none);
-
-    const ret = try f.ret(result);
-    const assign_result = try f.assignI64(result, 1, ret);
-    const update_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-        .target = desc,
-        .data = try f.store.addStmtRow(LIR.BoxyDescRefData, .{
-            .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        }),
-        .next = assign_result,
-    } }, .test_fixture);
-    const assign_current = try f.assignStr(current, "old", update_desc);
-    const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-        .target = desc,
-        .data = try f.store.addStmtRow(LIR.BoxyDescRefData, .{
-            .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        }),
-        .next = assign_current,
-    } }, .test_fixture);
-    _ = try f.store.addProcSpec(.{
-        .name = f.store.freshSyntheticSymbol(),
-        .identity = LIR.ProcIdentity.forTest(14),
-        .args = LIR.LocalSpan.empty(),
-        .body = init_desc,
-        .frame_locals = try f.span(&.{ desc, current, result }),
-        .ret_layout = .i64,
-    }, .none);
-
-    try f.run();
-    try f.expectRc(current, 0, 1, 0);
-}
-
-test "RC descriptor snapshot owns an alias across source descriptor reuse" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const source_desc = try f.local(.opaque_ptr);
-    const alias_desc = try f.local(.opaque_ptr);
-    const source = try f.local(.str);
-    const alias = try f.local(.str);
-    const result = try f.local(.i64);
-    try f.store.setLocalBoxyDesc(source, .{ .local = source_desc });
-    try f.store.setLocalBoxyDesc(alias, .{ .local = alias_desc });
-
-    const ret = try f.ret(result);
-    const assign_result = try f.assignI64(result, 1, ret);
-    const use_alias = try f.expectStmt(alias, assign_result);
-    const reuse_source_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-        .target = source_desc,
-        .data = try f.store.addStmtRow(LIR.BoxyDescRefData, .{
-            .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(1))) },
-        }),
-        .next = use_alias,
-    } }, .test_fixture);
-    const assign_alias = try f.assignRefLocal(alias, source, reuse_source_desc);
-    const snapshot_desc = try f.setLocal(alias_desc, source_desc, .replace_existing, assign_alias);
-    const assign_source = try f.assignStr(source, "old", snapshot_desc);
-    const init_source_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-        .target = source_desc,
-        .data = try f.store.addStmtRow(LIR.BoxyDescRefData, .{
-            .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        }),
-        .next = assign_source,
-    } }, .test_fixture);
-    _ = try f.addProc(&.{}, init_source_desc, .i64);
-
-    try f.run();
-    try f.expectRc(source, 0, 0, 0);
-    try f.expectRc(alias, 0, 1, 0);
-}
-
-test "RC preserves a surviving source before a consuming boxy adapter" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const source = try f.local(f.list_i64);
-    const adapted = try f.local(f.list_i64);
-    const result = try f.local(.i64);
-    const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
-    try f.store.setLocalBoxyDesc(source, desc);
-    try f.store.setLocalBoxyDesc(adapted, desc);
-
-    const ret = try f.ret(result);
-    const assign_result = try f.assignI64(result, 1, ret);
-    const use_source = try f.expectStmt(source, assign_result);
-    const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
-        .target = adapted,
-        .data = try f.store.addStmtRow(LIR.BoxyAdaptData, .{
-            .source = source,
-            .adapter = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .source_desc = desc,
-            .target_desc = desc,
-            .source_mode = .move,
-        }),
-        .next = use_source,
-    } }, .test_fixture);
-    const body = try f.assignList(source, &.{}, adapt);
-    _ = try f.addProc(&.{}, body, .i64);
-
-    // Certification verifies that the retain precedes the consuming move.
-    try f.run();
-    try f.expectRc(source, 1, 1, 0);
-    try f.expectRc(adapted, 0, 1, 0);
-}
-
-test "RC descriptor-bearing tag aliases and aggregates follow their committed layout" {
-    for ([_]layout_mod.Idx{ .i64, .str }) |payload_layout| {
-        var f = try ArcTest.init(testing.allocator);
-        f.store.runtime_contract = .boxy;
-        defer f.deinit();
-
-        const tag_layout = try f.layouts.putTagUnion(&.{ .zst, payload_layout });
-        const record_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = tag_layout }});
-        const payload = try f.local(payload_layout);
-        const tag = try f.local(tag_layout);
-        const alias = try f.local(tag_layout);
-        const record = try f.local(record_layout);
-        const result = try f.local(.i64);
-        const ret = try f.ret(result);
-        const result_stmt = try f.assignI64(result, 0, ret);
-        const record_stmt = try f.assignStruct(record, &.{alias}, result_stmt);
-        const alias_stmt = try f.assignRefLocal(alias, tag, record_stmt);
-        const tag_stmt = try f.store.addCFStmt(.{ .assign_tag = .{
-            .target = tag,
-            .target_desc = try f.store.addStmtRowIfPresent(LIR.BoxyDescRef, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) }),
-            .variant_index = 1,
-            .discriminant = 1,
-            .payload = payload,
-            .next = alias_stmt,
-        } }, .test_fixture);
-        _ = try f.addProc(&.{payload}, tag_stmt, .i64);
-
-        // Certification checks the owning side too: a descriptor must neither
-        // invent a scalar resource nor hide the string stored in the record.
-        try f.run();
-        if (payload_layout == .i64) {
-            try testing.expectEqual(@as(usize, 0), f.countAllRc());
-        } else {
-            try testing.expect(f.countAllRc() > 0);
-        }
-    }
-}
-
-test "RC does not treat a descriptor-bearing scalar dictionary result as refcounted" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
-    const result = try f.local(.u32);
-    const adapted = try f.local(.u32);
-    try f.store.setLocalBoxyDesc(result, desc);
-    try f.store.setLocalBoxyDesc(adapted, desc);
-
-    const ret = try f.ret(result);
-    const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
-        .target = adapted,
-        .data = try f.store.addStmtRow(LIR.BoxyAdaptData, .{
-            .source = result,
-            .adapter = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .source_desc = desc,
-            .target_desc = desc,
-            .source_mode = .move,
-        }),
-        .next = ret,
-    } }, .test_fixture);
-    const body = try f.store.addCFStmt(.{ .assign_call_dict = .{
-        .target = result,
-        .data = try f.store.addStmtRow(LIR.CallDictData, .{
-            .dict = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .method_slot = 0,
-            .args = .empty(),
-            .result_desc = desc,
-        }),
-        .next = adapt,
-    } }, .test_fixture);
-    _ = try f.addProc(&.{}, body, .u32);
-
     try f.run();
     try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }
@@ -18318,6 +18033,213 @@ test "ARC ownership iteration skips absent resources and preserves release order
     for (keys) |key| try testing.expect(owned.contains(locals[key]));
 }
 
+/// A `.boxy` fixture: dynamic locals described by opaque-pointer descriptor
+/// locals, and procedures that return through a `dyn_result` local.
+const DynFixture = struct {
+    f: ArcTest,
+    dynamic: layout_mod.Idx,
+
+    fn init() Allocator.Error!DynFixture {
+        var f = try ArcTest.init(testing.allocator);
+        errdefer f.deinit();
+        const dynamic = try f.layouts.dynamicLayout();
+        return .{ .f = f, .dynamic = dynamic };
+    }
+
+    fn deinit(self: *DynFixture) void {
+        self.f.deinit();
+    }
+
+    fn desc(self: *DynFixture) Allocator.Error!LIR.LocalId {
+        return try self.f.local(.opaque_ptr);
+    }
+
+    fn value(self: *DynFixture, descriptor: LIR.LocalId, storage: LIR.DynStorage) Allocator.Error!LIR.LocalId {
+        return try self.f.store.addLocal(.{ .layout_idx = self.dynamic, .dyn = .{ .desc = descriptor, .storage = storage } });
+    }
+
+    fn op(self: *DynFixture, target: ?LIR.LocalId, dyn_op: LIR.DynOp, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.f.store.addDynStmt(target, dyn_op, next, .test_fixture);
+    }
+
+    /// A procedure whose frame is every local allocated so far.
+    fn proc(self: *DynFixture, args: []const LIR.LocalId, body: LIR.CFStmtId, ret_layout: layout_mod.Idx, dyn_result: ?LIR.LocalId) Allocator.Error!LIR.LirProcSpecId {
+        const id = try self.f.addProc(args, body, ret_layout);
+        self.f.store.getProcSpecPtr(id).dyn_result = dyn_result;
+        return id;
+    }
+
+    fn run(self: *DynFixture, roots: []const LIR.LirProcSpecId) ResourceError!void {
+        try insert(&self.f.store, &self.f.layouts, .{ .roots = roots });
+    }
+
+    /// Every RC statement on a dynamic local names the dynamic layout, and
+    /// none is a `free`.
+    fn expectDynamicRcShape(self: *const DynFixture) ArcTest.ExpectError!void {
+        for (0..self.f.store.cfStmtCount()) |stmt_index| {
+            const stmt = self.f.store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+            switch (stmt.*) {
+                inline .incref, .decref => |rc| if (self.f.store.getLocal(rc.value).dyn != null) {
+                    try testing.expectEqual(self.dynamic, rc.rc.concrete.layout_idx);
+                },
+                .free => |rc| try testing.expect(self.f.store.getLocal(rc.value).dyn == null),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .decref_if_initialized, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
+            }
+        }
+    }
+};
+
+test "ARC dyn copy of an owned dynamic parameter into the result moves its unit" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const result = try d.value(desc, .result);
+    const ret = try d.f.ret(result);
+    const body = try d.op(result, .{ .copy = .{ .src = param, .desc = desc } }, ret);
+    const proc = try d.proc(&.{ desc, param }, body, d.dynamic, result);
+    try d.run(&.{proc});
+    try d.f.expectRc(param, 0, 0, 0);
+    try d.f.expectRc(result, 0, 0, 0);
+    try d.expectDynamicRcShape();
+}
+
+test "ARC dyn identity called from an owning caller balances the dynamic argument" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const result = try d.value(desc, .result);
+    const identity_ret = try d.f.ret(result);
+    const identity_body = try d.op(result, .{ .copy = .{ .src = param, .desc = desc } }, identity_ret);
+    const identity = try d.proc(&.{ desc, param }, identity_body, d.dynamic, result);
+
+    const caller_desc = try d.desc();
+    const caller_param = try d.value(caller_desc, .param);
+    const caller_result = try d.value(caller_desc, .result);
+    const caller_ret = try d.f.ret(caller_result);
+    const call = try d.f.store.addCFStmt(.{ .assign_call = .{
+        .target = caller_result,
+        .proc = identity,
+        .args = try d.f.span(&.{ caller_desc, caller_param }),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const caller = try d.proc(&.{ caller_desc, caller_param }, call, d.dynamic, caller_result);
+    try d.run(&.{caller});
+    // The caller owns its parameter and its result; whichever way the
+    // identity's signature solved, the parameter's unit ends exactly once:
+    // moved into an owned position, or released after a borrowed one with
+    // the borrowed result retained.
+    const moved = d.f.countRc(caller_param, .decref) == 0;
+    try testing.expectEqual(@as(usize, if (moved) 0 else 1), d.f.countRc(caller_result, .incref));
+    try d.f.expectRc(param, 0, 0, 0);
+    try d.expectDynamicRcShape();
+}
+
+test "ARC dyn record consumes its values and retains a value stored twice" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const record_desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const text = try d.f.local(.str);
+    const result = try d.value(record_desc, .result);
+    const ret = try d.f.ret(result);
+    const body = try d.op(result, .{ .record = .{
+        .desc = record_desc,
+        .fields = try d.f.span(&.{ param, text, text }),
+    } }, ret);
+    const proc = try d.proc(&.{ desc, record_desc, param, text }, body, d.dynamic, result);
+    try d.run(&.{proc});
+    try d.f.expectRc(param, 0, 0, 0);
+    try d.f.expectRc(text, 1, 0, 0);
+    try d.f.expectRc(result, 0, 0, 0);
+    try d.expectDynamicRcShape();
+}
+
+test "ARC dyn field view returned through a copy is retained and its base released" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const field_desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const view = try d.value(field_desc, .view);
+    const result = try d.value(field_desc, .result);
+    const ret = try d.f.ret(result);
+    const copy = try d.op(result, .{ .copy = .{ .src = view, .desc = field_desc } }, ret);
+    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = 0 } }, copy);
+    const proc = try d.proc(&.{ desc, field_desc, param }, read, d.dynamic, result);
+    try d.run(&.{proc});
+    // The field borrows from the record until one retain gives the result
+    // its own unit; the owned record is then released whole.
+    try testing.expectEqual(@as(usize, 1), d.f.countRc(view, .incref) + d.f.countRc(result, .incref));
+    try d.f.expectRc(param, 0, 1, 0);
+    try testing.expectEqual(@as(usize, 0), d.f.countRc(view, .decref) + d.f.countRc(result, .decref));
+    try d.expectDynamicRcShape();
+}
+
+test "ARC dyn eq and inspect borrow their operand" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const equal = try d.f.local(.bool);
+    const text = try d.f.local(.str);
+    const ret = try d.f.ret(text);
+    const inspect = try d.op(text, .{ .inspect = .{ .value = param, .desc = desc } }, ret);
+    const eq = try d.op(equal, .{ .eq = .{ .lhs = param, .rhs = param, .desc = desc } }, inspect);
+    const proc = try d.proc(&.{ desc, param }, eq, .str, null);
+    try d.run(&.{proc});
+    try d.f.expectRc(param, 0, 1, 0);
+    try d.f.expectRc(text, 0, 0, 0);
+    try d.expectDynamicRcShape();
+    // The release comes after the last borrowing read.
+    try d.f.expectReachableRcBefore(d.f.store.getProcSpecImmediate(proc).body.?, .decref, param, .ret);
+}
+
+test "ARC dyn join parameter carries its unit around a loop" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const box_desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const done = try d.f.local(.bool);
+    const state = try d.value(desc, .frame);
+    const boxed = try d.value(box_desc, .frame);
+    const result = try d.value(desc, .result);
+    const join_id = d.f.freshJoinPointId();
+
+    // join j(state) {
+    //   switch done { 1 => result = copy state; ret result
+    //                 _ => boxed = box state; state = boxed; jump j }
+    // }
+    // remainder: frame_alloc; state = param; jump j
+    const ret = try d.f.ret(result);
+    const exit = try d.op(result, .{ .copy = .{ .src = state, .desc = desc } }, ret);
+    const back_jump = try d.f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const rebind = try d.f.setLocal(state, boxed, .initialize_join_param, back_jump);
+    const wrap = try d.op(boxed, .{ .box = .{ .desc = box_desc, .payload = state } }, rebind);
+    const body = try d.f.switchStmt(done, exit, wrap, null);
+    const entry_jump = try d.f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const initialize = try d.f.setLocal(state, param, .initialize_join_param, entry_jump);
+    const frame = try d.op(null, .frame_alloc, initialize);
+    const join = try d.f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try d.f.span(&.{state}),
+        .body = body,
+        .remainder = frame,
+    } }, .test_fixture);
+    const proc = try d.proc(&.{ desc, box_desc, param, done }, join, d.dynamic, result);
+    try d.run(&.{proc});
+    // Every unit moves: the parameter into the join, the state into the box
+    // or the result, and the box back into the state.
+    try d.f.expectRc(param, 0, 0, 0);
+    try d.f.expectRc(state, 0, 0, 0);
+    try d.f.expectRc(boxed, 0, 0, 0);
+    try d.f.expectRc(result, 0, 0, 0);
+    try d.expectDynamicRcShape();
+}
+
 test "ARC outcome capability excludes conventions that return no ownership units" {
     for ([_]bool{ false, true }) |stable| {
         var f = try ArcTest.init(testing.allocator);
@@ -18334,11 +18256,29 @@ test "ARC outcome capability excludes conventions that return no ownership units
         f.store.getProcSpecPtr(proc).stable_signature = stable;
         const rc = [_]bool{ true, false, true };
         {
-            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, true);
             defer solution.deinit();
             try testing.expect(solution.availableOutcomeSpanOf(proc).isEmpty());
         }
         try insert(&f.store, &f.layouts, .{ .specialize = false });
-        try testing.expect(!f.store.getProcSpec(proc).rc_variant_demandable);
+    }
+}
+
+test "ARC unary erased calls retain a directly passed value only when the caller reuses it" {
+    for ([_]bool{ false, true }) |reuse| {
+        var d = try DynFixture.init();
+        defer d.deinit();
+        const desc = try d.desc();
+        const param = try d.value(desc, .param);
+        const closure = try d.f.local(try d.f.layouts.insertErasedCallable());
+        const result = try d.value(desc, .result);
+        const called = if (reuse) try d.value(desc, .frame) else result;
+        var next = try d.f.ret(result);
+        if (reuse) next = try d.op(result, .{ .copy = .{ .src = param, .desc = desc } }, next);
+        const body = try d.op(called, .{ .call_erased = .{ .closure = closure, .args = param } }, next);
+        const proc = try d.proc(&.{ desc, param, closure }, body, d.dynamic, result);
+        try d.run(&.{proc});
+        try d.f.expectRc(param, if (reuse) 1 else 0, 0, 0);
+        try d.expectDynamicRcShape();
     }
 }

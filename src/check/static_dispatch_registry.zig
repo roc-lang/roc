@@ -31,16 +31,6 @@ const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 const PatternBinderId = checked_ids.PatternBinderId;
 const DispatchScopeId = checked_ids.DispatchScopeId;
 
-/// Shared policy for checked evidence publication and Boxy's dictionary
-/// inventory. Quote and interpolation conversion evidence carries its method
-/// implementation even when the constraint originated at a literal.
-pub fn requiresRuntimeDictionary(origin: types.StaticDispatchConstraint.Origin) bool {
-    return if (origin.literalKind()) |kind| switch (kind) {
-        .numeral => false,
-        .quote, .interpolation => true,
-    } else true;
-}
-
 const DispatchExprTag = enum {
     e_dispatch_call,
     e_interpolation,
@@ -1569,10 +1559,6 @@ pub const CheckedEvidence = struct {
     /// runtime representation still needs an explicit descriptor).
     dispatcher_ty: CheckedTypeId,
     resolution: Resolution,
-    /// Whether this obligation is represented by a runtime dictionary slot.
-    /// Literal-defaulting constraints remain in canonical evidence vectors for
-    /// specialization, but do not become Boxy dictionary requirements.
-    runtime_dictionary: bool,
     /// Independent callable contracts in `evidence_refs`, sharing one target slot.
     callable_contracts: artifact_serialize.Span = .{},
 
@@ -1584,7 +1570,8 @@ pub const CheckedEvidence = struct {
         /// evidence parameter projected from the concrete callable request.
         from_callable,
         /// The local declaration binds an abstract scheme requirement. A use
-        /// supplies its checked evidence; no codec is instantiated at declaration.
+        /// supplies its checked evidence; no codec is instantiated at declaration,
+        /// and a declaration nothing uses has no dispatch to reach.
         from_scheme,
         checked_error,
         /// The edge left this obligation's dispatcher unsolved: no value of that
@@ -1734,10 +1721,6 @@ pub const EvidenceParamRecord = struct {
     /// obligation's receiver is read from. Composite scheme requirements are
     /// supplied by checked evidence and have no quantified-variable slot.
     slot: ?u32,
-    /// Whether this parameter becomes a runtime method dictionary. Numeral
-    /// defaulting evidence remains an ABI input for descriptor selection; quote
-    /// evidence also carries the conversion implementation.
-    runtime_dictionary: bool,
     /// Checker-recorded derived implementation permitted when the concrete
     /// dispatcher has no registered method target.
     structural: ?StructuralKind = null,
@@ -1958,6 +1941,12 @@ pub const IteratorForPlanId = enum(u32) { _ };
 pub const IteratorDispatchOperand = union(enum) {
     checked_expr: CheckedExprId,
     loop_iterator_state,
+    /// The empty `List(item)` an interpolation's iterator is built from.
+    interpolation_seed,
+    /// The iterator an interpolation has built so far.
+    interpolation_iterator,
+    /// The interpolated value an interpolation appends next.
+    interpolation_value,
 };
 
 /// Public `IteratorDispatchCall` declaration.
@@ -1996,7 +1985,10 @@ pub const IteratorStepTopology = struct {
 pub const IteratorRepresentationTopology = struct {
     len_field: canonical.RecordFieldLabelId,
     step_field: canonical.RecordFieldLabelId,
-    known_tag: canonical.TagLabelId,
+    /// The length field's `Try(U64, [Unknown])`: its `Ok` and `Err` tags, and
+    /// the `Unknown` tag of `Err`'s payload.
+    ok_tag: canonical.TagLabelId,
+    err_tag: canonical.TagLabelId,
     unknown_tag: canonical.TagLabelId,
     done_tag: canonical.TagLabelId,
     one_tag: canonical.TagLabelId,
@@ -2006,14 +1998,47 @@ pub const IteratorRepresentationTopology = struct {
 };
 
 /// Public `IteratorForPlan` declaration.
+///
+/// The two synthetic iterator dispatches a construct owns: a `for` loop's
+/// `iter` over its iterable and `next` over its iterator state each round, or
+/// an interpolation's `iter` over an empty list and `append` over its
+/// iterator for each interpolated value.
 pub const IteratorForPlan = struct {
     iter: IteratorDispatchCall,
+    /// `next` for a loop, `append` for an interpolation.
     next: IteratorDispatchCall,
-    iterable: CheckedExprId,
     item_ty: CheckedTypeId,
     iterator_ty: CheckedTypeId,
-    step_ty: CheckedTypeId,
-    step_topology: IteratorStepTopology,
+    site: Site,
+
+    pub const Site = union(enum) {
+        for_loop: ForLoop,
+        interpolation: Interpolation,
+    };
+
+    pub const ForLoop = struct {
+        iterable: CheckedExprId,
+        step_ty: CheckedTypeId,
+        step_topology: IteratorStepTopology,
+    };
+
+    pub const Interpolation = struct {
+        expr: CheckedExprId,
+        /// The empty `List(item)` the iterator is built from.
+        seed_list_ty: CheckedTypeId,
+    };
+
+    /// The plan's `for` loop site; the plan is a loop's.
+    pub fn forLoopSite(self: IteratorForPlan) ForLoop {
+        std.debug.assert(self.site == .for_loop);
+        return self.site.for_loop;
+    }
+
+    /// The plan's interpolation site; the plan is an interpolation's.
+    pub fn interpolationSite(self: IteratorForPlan) Interpolation {
+        std.debug.assert(self.site == .interpolation);
+        return self.site.interpolation;
+    }
 };
 
 /// Public `StaticDispatchPlanTable` declaration.
@@ -2186,7 +2211,8 @@ pub const StaticDispatchPlanTable = struct {
             iterator_topologies[@backingInt(owner)] = .{
                 .len_field = try names.internRecordFieldLabel("len_if_known"),
                 .step_field = try names.internRecordFieldLabel(owner.stepFieldName()),
-                .known_tag = try names.internTagLabel("Known"),
+                .ok_tag = try names.internTagLabel("Ok"),
+                .err_tag = try names.internTagLabel("Err"),
                 .unknown_tag = try names.internTagLabel("Unknown"),
                 .done_tag = try names.internTagLabel("Done"),
                 .one_tag = try names.internTagLabel("One"),
@@ -2262,6 +2288,52 @@ pub const StaticDispatchPlanTable = struct {
                         .constraint_fn_var = constraint_fn_var,
                         .literal_kind = .interpolation,
                     });
+
+                    // The iterator the assembler receives: `iter` on an empty
+                    // `List(item)`, then `append` for each value.
+                    const item_var = interpolation.item_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no item variable", .{});
+                    const iterator_var = interpolation.iterator_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no iterator variable", .{});
+                    const seed_list_var = interpolation.seed_list_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no seed list variable", .{});
+                    const iter_fn_var = interpolation.iter_fn_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no iter dispatch variable", .{});
+                    const append_fn_var = interpolation.append_fn_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no append dispatch variable", .{});
+                    const iterator_ty = try checkedTypeIdForVar(allocator, module, checked_types, iterator_var);
+                    const seed_list_ty = try checkedTypeIdForVar(allocator, module, checked_types, seed_list_var);
+                    const iterator_for_id: IteratorForPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(iterator_for_plans.items.len))));
+                    var iter_args = [_]IteratorDispatchOperand{.interpolation_seed};
+                    const iter_ar = try pushOperands(IteratorDispatchOperand, &iter_operand_pool, allocator, &iter_args);
+                    var append_args = [_]IteratorDispatchOperand{ .interpolation_iterator, .interpolation_value };
+                    const append_ar = try pushOperands(IteratorDispatchOperand, &iter_operand_pool, allocator, &append_args);
+                    try iterator_for_plans.append(allocator, .{
+                        .iter = .{
+                            .method = try names.internMethodName("iter"),
+                            .dispatcher_ty = seed_list_ty,
+                            .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, iter_fn_var),
+                            .dispatcher_arg_index = 0,
+                            .args = iter_ar,
+                        },
+                        .next = .{
+                            .method = try names.internMethodName("append"),
+                            .dispatcher_ty = iterator_ty,
+                            .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, append_fn_var),
+                            .dispatcher_arg_index = 0,
+                            .args = append_ar,
+                        },
+                        .item_ty = try checkedTypeIdForVar(allocator, module, checked_types, item_var),
+                        .iterator_ty = iterator_ty,
+                        .site = .{ .interpolation = .{ .expr = checked_expr, .seed_list_ty = seed_list_ty } },
+                    });
+                    try iterator_plan_sources.append(allocator, .{
+                        .iter_dispatcher_var = seed_list_var,
+                        .next_dispatcher_var = iterator_var,
+                        .iter_fn_var = iter_fn_var,
+                        .next_fn_var = append_fn_var,
+                    });
+                    try iterator_for_by_node.append(allocator, .{ .key = @backingInt(expr_idx), .val = @backingInt(iterator_for_id) });
                 },
                 .e_type_dispatch_call => {
                     const dispatch_call = expr.data.e_type_dispatch_call;
@@ -2609,11 +2681,13 @@ pub const StaticDispatchPlanTable = struct {
                 try iterator_for_plans.append(allocator, .{
                     .iter = iter_call,
                     .next = next_call,
-                    .iterable = iterable_expr,
                     .item_ty = item_ty,
                     .iterator_ty = iterator_ty,
-                    .step_ty = step_ty,
-                    .step_topology = step_topology,
+                    .site = .{ .for_loop = .{
+                        .iterable = iterable_expr,
+                        .step_ty = step_ty,
+                        .step_topology = step_topology,
+                    } },
                 });
                 try iterator_plan_sources.append(allocator, .{
                     .iter_dispatcher_var = module.exprType(iterable_idx),
@@ -2658,6 +2732,16 @@ pub const StaticDispatchPlanTable = struct {
 
     pub fn lookupByExpr(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?StaticDispatchPlanId {
         return if (lookupPlanKV(self.by_expr, @backingInt(expr))) |v| @fromBackingInt(@intCast(v)) else null;
+    }
+
+    /// The `from_numeral` plan of the numeric literal at source node `node`.
+    pub fn lookupNumeralByNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
+        return if (lookupPlanKV(self.numeral_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
+    }
+
+    /// The `from_quote` plan of the string literal at source node `node`.
+    pub fn lookupQuoteByNode(self: *const StaticDispatchPlanTable, node: u32) ?StaticDispatchPlanId {
+        return if (lookupPlanKV(self.quote_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
     }
 
     pub fn evidenceNode(self: *const StaticDispatchPlanTable, id: EvidenceNodeId) EvidenceNode {
@@ -3050,6 +3134,7 @@ fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callabl
         const variable = switch (store.payload(type_arg)) {
             .flex, .rigid => |variable| variable,
             .pending,
+            .field_kind,
             .err,
             .alias,
             .record,
@@ -3349,12 +3434,12 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
             .nested = .{ .resolved = .{ .start = 0, .len = 1 } },
         }};
         var evidence_refs = [_]CheckedEvidence{
-            .{ .dispatcher_ty = @fromBackingInt(@intCast(14)), .runtime_dictionary = true, .resolution = .{ .structural = .{
+            .{ .dispatcher_ty = @fromBackingInt(@intCast(14)), .resolution = .{ .structural = .{
                 .derivation = .encoder,
                 .dispatcher_ty = @fromBackingInt(@intCast(14)),
                 .callable_ty = @fromBackingInt(@intCast(15)),
             } } },
-            .{ .dispatcher_ty = @fromBackingInt(@intCast(12)), .runtime_dictionary = false, .resolution = .{ .direct = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+            .{ .dispatcher_ty = @fromBackingInt(@intCast(12)), .resolution = .{ .direct = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
         };
         var site_evidence = [_]SiteEvidenceEntry{.{
             .key = 16,
@@ -3364,7 +3449,8 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
         var iterator_topologies = [_]IteratorRepresentationTopology{.{
             .len_field = @fromBackingInt(@intCast(20)),
             .step_field = @fromBackingInt(@intCast(21)),
-            .known_tag = @fromBackingInt(@intCast(22)),
+            .ok_tag = @fromBackingInt(@intCast(22)),
+            .err_tag = @fromBackingInt(@intCast(29)),
             .unknown_tag = @fromBackingInt(@intCast(23)),
             .done_tag = @fromBackingInt(@intCast(24)),
             .one_tag = @fromBackingInt(@intCast(25)),
@@ -3409,13 +3495,11 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
         try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(13))), node.instantiation.callable);
         const nested = loaded.nestedEvidence(node);
         try std.testing.expectEqual(@as(usize, 1), nested.len);
-        try std.testing.expect(nested[0].runtime_dictionary);
         try std.testing.expectEqual(StructuralKind.encoder, nested[0].resolution.structural.derivation.kind());
         try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(14))), nested[0].resolution.structural.dispatcher_ty);
         try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(15))), nested[0].resolution.structural.callable_ty);
         const site = loaded.siteEvidence(@fromBackingInt(@intCast(16))) orelse return error.TestExpectedEqual;
         try std.testing.expectEqual(@as(usize, 1), site.len);
-        try std.testing.expect(!site[0].runtime_dictionary);
         try std.testing.expectEqual(@as(EvidenceNodeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))), site[0].resolution.direct);
     }
 }

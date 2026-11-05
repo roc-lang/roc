@@ -27,6 +27,6 @@ Scalar :: { code : U32 }.{
 				}
 			}
 		}
-		Iter.custom({ bytes, offset: 0 }, Unknown, next_located)
+		Iter.custom({ bytes, offset: 0 }, Err(Unknown), next_located)
 	}
 }

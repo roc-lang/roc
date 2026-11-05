@@ -21,18 +21,16 @@ pub const DataRelocationKind = enum {
     rel32,
     page21,
     pageoff12,
+    /// A 4-byte field holding the symbol's value plus the field's own
+    /// little-endian contents (its addend), sign-extended by the instruction
+    /// (x86_64 `R_X86_64_32S`). A test unit's expect-site immediates take
+    /// this form against `expect_site_base_symbol`.
+    abs32s,
 };
 
-/// A number the Boxy runtime reads its sidecar tables by, loaded into a
-/// register by a fixed-width instruction sequence at the relocation's offset.
-/// An arranged image renumbers what its code uses (design.md "Deterministic Dev
-/// Images") and patches each load, so these are never linker relocations.
-pub const RuntimeNumber = union(enum) {
-    /// A layout index.
-    layout: u32,
-    /// The start of a run of the program's erased argument layouts.
-    erased_arg_layouts: struct { start: u32, len: u32 },
-};
+/// The symbol a test unit's expect-site immediates are relative to: each
+/// loaded image binds it to the first program-wide site id of its sites.
+pub const expect_site_base_symbol = "roc__expect_site_base";
 
 /// A named relocation at a linker or process boundary. Machine-code producers
 /// use IndexedRelocation and carry its symbol-name column alongside the code.
@@ -91,9 +89,6 @@ pub const IndexedRelocation = union(enum) {
         kind: DataRelocationKind = .abs64,
     },
     local_data: @FieldType(Relocation, "local_data"),
-    /// A runtime table number's patchable load; `offset` is the encoding's
-    /// patch site (`CodeGen.patchRuntimeNumber`).
-    runtime_number: struct { offset: u64, ref: RuntimeNumber },
     /// A relocation superseded by a stub that carries its own relocations.
     /// Consumers skip it; it keeps its slot so recorded relocation indices
     /// stay valid.
@@ -101,14 +96,14 @@ pub const IndexedRelocation = union(enum) {
 
     pub fn getOffset(self: IndexedRelocation) u64 {
         return switch (self) {
-            inline .linked_function, .linked_data, .local_data, .runtime_number => |r| r.offset,
+            inline .linked_function, .linked_data, .local_data => |r| r.offset,
             .retired => 0,
         };
     }
 
     pub fn adjustOffset(self: *IndexedRelocation, delta: u64) void {
         switch (self.*) {
-            inline .linked_function, .linked_data, .local_data, .runtime_number => |*r| r.offset += delta,
+            inline .linked_function, .linked_data, .local_data => |*r| r.offset += delta,
             .retired => {},
         }
     }
@@ -216,6 +211,13 @@ fn patchLinkedDataRelocation(
         },
         .page21 => return patchAarch64AdrpRelocation(code, reloc_offset, code_base_addr + reloc_offset, target_addr),
         .pageoff12 => return patchAarch64PageOffset12Relocation(code, reloc_offset, target_addr),
+        .abs32s => {
+            if (reloc_offset + 4 > code.len) return error.InvalidOffset;
+            const field = code[reloc_offset..][0..4];
+            const value = @as(i128, @intCast(target_addr)) + std.mem.readInt(i32, field, .little);
+            if (value < std.math.minInt(i32) or value > std.math.maxInt(i32)) return error.BranchOutOfRange;
+            std.mem.writeInt(i32, field, @intCast(value), .little);
+        },
     }
 }
 

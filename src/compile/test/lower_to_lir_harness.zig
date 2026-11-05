@@ -24,17 +24,19 @@ const ReverseCompletionExecutor = struct {
     inner_outstanding: usize = 0,
     buffered_len: usize = 0,
 
-    fn begin(context: *anyopaque) void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.inner_session == null);
         std.debug.assert(self.completion_buffer.len >= self.inner.worker_count);
-        self.inner_session = self.inner.begin();
+        self.inner_session = try self.inner.begin();
         self.inner_outstanding = 0;
         self.buffered_len = 0;
+        return context;
     }
 
     fn submit(
         context: *anyopaque,
+        _: *anyopaque,
         task: base.post_check_task_executor.Task,
     ) std.mem.Allocator.Error!void {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
@@ -46,7 +48,7 @@ const ReverseCompletionExecutor = struct {
         }
     }
 
-    fn receive(context: *anyopaque) base.post_check_task_executor.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) base.post_check_task_executor.Completion {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
         if (self.buffered_len == 0) {
             if (self.inner_session) |*session| {
@@ -66,7 +68,11 @@ const ReverseCompletionExecutor = struct {
         return self.completion_buffer[self.buffered_len];
     }
 
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?base.post_check_task_executor.Completion {
+        return null;
+    }
+
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *ReverseCompletionExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.buffered_len == 0);
         std.debug.assert(self.inner_outstanding == 0);
@@ -82,9 +88,11 @@ const ReverseCompletionExecutor = struct {
         return .{
             .context = self,
             .worker_count = self.inner.worker_count,
+            .lane_count = self.inner.lane_count,
             .beginFn = ReverseCompletionExecutor.begin,
             .submitFn = ReverseCompletionExecutor.submit,
             .receiveFn = ReverseCompletionExecutor.receive,
+            .tryReceiveFn = ReverseCompletionExecutor.tryReceive,
             .endFn = ReverseCompletionExecutor.end,
         };
     }
@@ -151,9 +159,8 @@ pub const LirInspectFn = *const fn (
     layouts: *const layout.Store,
 ) LowerToLirHarnessError!void;
 
-/// Callback type for tests that inspect the whole lowered program. Backend
-/// codegen needs the boxy side tables alongside the store and layout store,
-/// so those tests take the lowering result rather than the two stores.
+/// Callback type for tests that inspect the whole lowered program, which
+/// take the lowering result rather than the store and layout store.
 pub const LoweredInspectFn = *const fn (
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) LowerToLirHarnessError!void;
@@ -165,6 +172,7 @@ pub const LirLoweringOptions = struct {
     shared_comptime_reads: bool = false,
 
     specialization_strategy: base.SpecializationStrategy = .lss,
+    boxy_composition_sites: bool = true,
     /// Number of coordinator workers available to post-check lowering.
     /// The default retains the harness's existing single-threaded behavior.
     specialization_workers: usize = 1,
@@ -213,9 +221,6 @@ pub const LirLoweringOptions = struct {
     /// Stop after Monotype lowering. Focused postcheck regressions use this
     /// boundary when later LIR passes are outside the behavior under test.
     monotype_only: bool = false,
-    /// Verify checked evidence consumption and worker ABIs at the Boxy planning
-    /// boundary, independently of codec body generation in Boxy lowering.
-    boxy_plan_inspect: ?*const fn (*const postcheck.Boxy.Plan.ProgramPlan) LowerToLirHarnessError!void = null,
     /// Receives deterministic Monotype work counters. This is independent of
     /// elapsed-time measurement and is available at the `monotype_only` boundary.
     monotype_diagnostics_out: ?*postcheck.Monotype.Lower.Diagnostics = null,
@@ -260,6 +265,15 @@ pub fn expectAppPathLowersToMonotype(app_path: []const u8) LowerToLirHarnessErro
 /// against the actual lowered store and layout store.
 pub fn expectAppPathLirInspection(app_path: []const u8, inspect: LirInspectFn) LowerToLirHarnessError!void {
     try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, inspect, null);
+}
+
+/// The static data a lowered `.boxy` program's interpreter reads (its
+/// descriptors, dictionaries, and name table), or null for a program that
+/// froze none. The caller installs it on its interpreter and deinitializes it
+/// after the interpreter.
+pub fn interpreterStaticData(lowered: *const lir.CheckedPipeline.LoweredProgram) std.mem.Allocator.Error!?eval.InterpreterStaticData {
+    const frozen = lowered.frozen_static_data orelse return null;
+    return try eval.InterpreterStaticData.init(std.testing.allocator, frozen.exports, lowered.lir_result.static_data_values.items.len);
 }
 
 /// Lower an app at `app_path` to LIR with explicit lowering options, then run
@@ -948,7 +962,7 @@ fn expectPostCheckParallelismDeterministicLir(
                 try std.testing.expectEqual(@as(u64, 2), parallel.root_tasks_submitted);
                 try std.testing.expectEqual(@as(u64, 2), parallel.root_tasks_committed);
                 try std.testing.expectEqual(
-                    @as(u64, @intCast(specialization_workers)),
+                    @as(u64, @intCast(specialization_workers + 1)),
                     parallel.peak_worker_lanes_available,
                 );
                 try std.testing.expect(parallel.peak_worker_lanes_used > 0);
@@ -1257,17 +1271,6 @@ fn lowerAppPathToLir(
         return;
     }
 
-    if (opts.boxy_plan_inspect) |inspect_plan| {
-        var plan = try postcheck.Boxy.Plan.analyzeProgram(gpa, .{
-            .root_module = check.CheckedArtifact.loweringViewWithRelations(root, relations),
-            .imports = imports,
-            .roots = lir_roots,
-        }, .{});
-        defer plan.deinit();
-        try inspect_plan(&plan);
-        return;
-    }
-
     var timing = lir.CheckedPipeline.Timing.init(std.testing.io);
     if (opts.detailed_monotype_diagnostics) timing.enableDetailedMonotypeBody();
     const coordinator_executor = if (opts.specialization_workers > 1)
@@ -1301,9 +1304,11 @@ fn lowerAppPathToLir(
     const lower_target: lir.CheckedPipeline.TargetConfig = .{
         .comptime_value_reads = opts.shared_comptime_reads,
         .specialization_strategy = opts.specialization_strategy,
+        .boxy_composition_sites = opts.boxy_composition_sites,
         .target_usize = opts.target_usize,
         .inline_mode = opts.inline_mode,
         .spec_constr_clone_inlining = opts.spec_constr_clone_inlining,
+        .prove_uniqueness = true,
         .consume_dead_boxes = opts.consume_dead_boxes,
         .list_in_place_map = opts.list_in_place_map,
         .proc_debug_names = opts.proc_debug_names,

@@ -4500,10 +4500,10 @@ pub const tests = [_]TestCase{
         \\{
         \\iter = Str.iter_utf8("A\u(0000)é🎉")
         \\bytes = Iter.fold(iter, [], |list, byte| List.append(list, byte))
-        \\{ bytes, size: Iter.size_hint(Str.iter_utf8("A\u(0000)é🎉")) }
+        \\{ bytes, size: Iter.len_if_known(Str.iter_utf8("A\u(0000)é🎉")) }
         \\}
         ,
-        .expected = .{ .inspect_str = "{ bytes: [65, 0, 195, 169, 240, 159, 142, 137], size: Known(8) }" },
+        .expected = .{ .inspect_str = "{ bytes: [65, 0, 195, 169, 240, 159, 142, 137], size: Ok(8) }" },
     },
     .{
         .name = "low_level - Str.iter_utf8 empty SSO and heap strings",
@@ -4511,10 +4511,10 @@ pub const tests = [_]TestCase{
         \\{
         \\small = Iter.fold(Str.iter_utf8("Roc"), 0, |sum, byte| sum + U8.to_u64(byte))
         \\large = Iter.fold(Str.iter_utf8("abcdefghijklmnopqrstuvwxyz0123456789"), 0, |sum, byte| sum + U8.to_u64(byte))
-        \\{ empty: Iter.size_hint(Str.iter_utf8("")), small, large }
+        \\{ empty: Iter.len_if_known(Str.iter_utf8("")), small, large }
         \\}
         ,
-        .expected = .{ .inspect_str = "{ empty: Known(0), large: 3372, small: 292 }" },
+        .expected = .{ .inspect_str = "{ empty: Ok(0), large: 3372, small: 292 }" },
     },
     .{
         .name = "low_level - Str.iter_utf8 repeated next and for consumption",

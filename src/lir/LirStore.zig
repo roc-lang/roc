@@ -57,25 +57,12 @@ pub const stmt_row_types = .{
     lir_defs.StrMatchData,
     lir_defs.LiteralExtra,
     lir_defs.JoinExtra,
-    lir_defs.BoxyDescRef,
     lir_defs.I128Literal,
-    lir_defs.BoxyDynamicNumLiteral,
-    lir_defs.BoxyDynamicFracLiteral,
     lir_defs.ErasedCallData,
     lir_defs.PackedErasedFnData,
-    lir_defs.BoxyDescRefData,
-    lir_defs.BoxyBoxData,
-    lir_defs.BoxyRecordUpdateData,
-    lir_defs.BoxyUnboxData,
-    lir_defs.BoxyAdaptData,
-    lir_defs.BoxyInspectData,
-    lir_defs.BoxyEqData,
-    lir_defs.BoxyHashData,
-    lir_defs.BoxyTagData,
-    lir_defs.BoxyTagPayloadData,
-    lir_defs.CallDictData,
     lir_defs.DecrefIfInitializedData,
     lir_defs.CrashExtra,
+    lir_defs.DynOp,
 };
 
 /// Number of out-of-line statement row columns.
@@ -456,10 +443,9 @@ pub fn procRewriteChanged(self: *const Self) bool {
     }
     if (!std.meta.eql(rewrite.proc, source.getProcSpec(rewrite.proc_id))) return true;
     inline for (.{
-        "cf_stmts",     "cf_switch_branches", "str_match_steps",       "str_match_arms",
-        "join_points",  "locals",             "local_descs",           "local_ids",
-        "u64s",         "u32s",               "erased_call_arg_plans", "inline_scopes",
-        "stmt_sources",
+        "cf_stmts",    "cf_switch_branches",    "str_match_steps", "str_match_arms",
+        "join_points", "locals",                "local_ids",       "u64s",
+        "u32s",        "erased_call_arg_plans", "inline_scopes",   "stmt_sources",
     }) |field| {
         if (@field(self, field).len() != 0) return true;
     }
@@ -498,7 +484,6 @@ pub const BodyPrefix = struct {
     str_match_arms: u32,
     join_points: u32,
     locals: u32,
-    local_descs: u32,
     local_ids: u32,
     u64s: u32,
     u32s: u32,
@@ -507,7 +492,6 @@ pub const BodyPrefix = struct {
     inline_scopes: u32,
     stmt_sources: u32,
     string_bytes: u32,
-    boxy_names: u32,
     proc_specs: u32,
     proc_locs: u32,
     proc_debug_names: u32,
@@ -523,9 +507,6 @@ pub const BodyPrefix = struct {
 pub const BodyShard = struct {
     store: *const Self,
     prefix: BodyPrefix,
-    /// Destination base for the shard's separately owned erased-call layouts.
-    /// Zero preserves spans for callers already using the destination domain.
-    erased_arg_layout_base: u32 = 0,
 };
 
 /// Explicit phase allocator boundary: identities below it belong to the frozen
@@ -544,7 +525,6 @@ pub const BodyRelocation = struct {
     str_match_arms: u32,
     join_points: u32,
     locals: u32,
-    local_descs: u32,
     local_ids: u32,
     u64s: u32,
     u32s: u32,
@@ -556,7 +536,6 @@ pub const BodyRelocation = struct {
     join_point_id_base: u32,
     relocate_join_point_ids: bool,
     join_point_id_first_fresh: u32 = 0,
-    erased_arg_layout_base: u32 = 0,
 
     pub fn local(self: BodyRelocation, prefix: BodyPrefix, id: LocalId) LocalId {
         return relocateBodyValue(LocalId, id, prefix, self);
@@ -585,8 +564,8 @@ pub const AppendedBody = struct {
 
 /// Failures while validating or appending a private body suffix.
 pub const AppendBodyError = Allocator.Error || error{
-    /// A shard attempted to publish coordinator-owned procedure, source-file,
-    /// or Boxy-name metadata.
+    /// A shard attempted to publish coordinator-owned procedure or source-file
+    /// metadata.
     UnsupportedShardMetadata,
     InvalidBodyPrefix,
 };
@@ -635,7 +614,6 @@ pub fn captureBodyPrefix(self: *const Self) BodyPrefix {
         .str_match_arms = @intCast(self.str_match_arms.len()),
         .join_points = @intCast(self.join_points.len()),
         .locals = @intCast(self.locals.len()),
-        .local_descs = @intCast(self.local_descs.len()),
         .local_ids = @intCast(self.local_ids.len()),
         .u64s = @intCast(self.u64s.len()),
         .u32s = @intCast(self.u32s.len()),
@@ -644,7 +622,6 @@ pub fn captureBodyPrefix(self: *const Self) BodyPrefix {
         .inline_scopes = @intCast(self.inline_scopes.len()),
         .stmt_sources = @intCast(self.stmt_sources.len()),
         .string_bytes = self.stringByteCount(),
-        .boxy_names = self.boxyNameCount(),
         .proc_specs = @intCast(self.proc_specs.len()),
         .proc_locs = @intCast(self.proc_locs.len()),
         .proc_debug_names = @intCast(self.proc_debug_names.len()),
@@ -673,7 +650,6 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
     if (self.body_coordinator) |coordinator| {
         if (!std.meta.eql(prefix, self.body_prefix)) return error.InvalidBodyPrefix;
         if (self.next_synthetic_symbol != coordinator.next_synthetic_symbol or
-            self.boxy_names.count() != 0 or
             self.proc_specs.len() != 0 or
             self.proc_locs.len() != 0 or
             self.proc_debug_names.len() != 0 or
@@ -693,7 +669,6 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.str_match_arms > self.str_match_arms.len() or
         prefix.join_points > self.join_points.len() or
         prefix.locals > self.locals.len() or
-        prefix.local_descs > self.local_descs.len() or
         prefix.local_ids > self.local_ids.len() or
         prefix.u64s > self.u64s.len() or
         prefix.u32s > self.u32s.len() or
@@ -702,7 +677,6 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.inline_scopes > self.inline_scopes.len() or
         prefix.stmt_sources > self.stmt_sources.len() or
         prefix.string_bytes > self.stringByteCount() or
-        prefix.boxy_names > self.boxyNameCount() or
         prefix.proc_specs > self.proc_specs.len() or
         prefix.proc_locs > self.proc_locs.len() or
         prefix.proc_debug_names > self.proc_debug_names.len() or
@@ -717,8 +691,7 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
     if (self.body_coordinator == null and !self.strings.isEntryBoundary(prefix.string_bytes)) {
         return error.InvalidBodyPrefix;
     }
-    if (prefix.boxy_names != self.boxyNameCount() or
-        prefix.proc_specs != self.proc_specs.len() or
+    if (prefix.proc_specs != self.proc_specs.len() or
         prefix.proc_locs != self.proc_locs.len() or
         prefix.proc_debug_names != self.proc_debug_names.len() or
         prefix.source_file_bytes != self.source_file_bytes.len() or
@@ -748,10 +721,6 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         return .site(relocateBodyValue(CFStmtId, next, prefix, bases));
     }
     if (T == LocalId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.locals, bases.locals)));
-    if (T == LocalDescId) {
-        if (value == .none) return value;
-        return @fromBackingInt(movedIndex(@backingInt(value), prefix.local_descs, bases.local_descs));
-    }
     if (T == CFStmtId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.cf_stmts, bases.cf_stmts)));
     if (T == ErasedCallArgsPlanId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.erased_call_arg_plans, bases.erased_call_arg_plans)));
     if (T == base.StringLiteral.Idx) {
@@ -788,9 +757,6 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         var result = value;
         inline for (type_info.@"struct".field_names, type_info.@"struct".field_types) |field_name, field_type| {
             @field(result, field_name) = relocateBodyValue(field_type, @field(value, field_name), prefix, bases);
-        }
-        if (T == lir_defs.ErasedCallData) {
-            if (result.arg_layouts.len != 0) result.arg_layouts.start += bases.erased_arg_layout_base;
         }
         return result;
     }
@@ -858,7 +824,6 @@ pub fn appendBodyShardWithJoinRelocation(
         .str_match_arms = @intCast(self.str_match_arms.len()),
         .join_points = @intCast(self.join_points.len()),
         .locals = @intCast(self.locals.len()),
-        .local_descs = @intCast(self.local_descs.len()),
         .local_ids = @intCast(self.local_ids.len()),
         .u64s = @intCast(self.u64s.len()),
         .u32s = @intCast(self.u32s.len()),
@@ -870,7 +835,6 @@ pub fn appendBodyShardWithJoinRelocation(
         .join_point_id_base = if (relocation) |joins| joins.offset else 0,
         .relocate_join_point_ids = relocation != null,
         .join_point_id_first_fresh = if (relocation) |joins| joins.first_fresh else 0,
-        .erased_arg_layout_base = shard.erased_arg_layout_base,
     };
     const stmt_len = source.cf_stmts.len() - source_prefix.cf_stmts;
     if (stmt_len > lir_defs.max_cf_stmt_count - bases.cf_stmts) return error.OutOfMemory;
@@ -903,7 +867,6 @@ pub fn appendBodyShardWithJoinRelocation(
     try self.join_points.ensureUnusedCapacity(self.allocator, source.join_points.len() - source_prefix.join_points);
     try self.locals.ensureUnusedCapacity(self.allocator, local_len);
     try self.local_names.ensureUnusedCapacity(self.allocator, local_len);
-    try self.local_descs.ensureUnusedCapacity(self.allocator, source.local_descs.len() - source_prefix.local_descs);
     try self.local_ids.ensureUnusedCapacity(self.allocator, source.local_ids.len() - source_prefix.local_ids);
     try self.u64s.ensureUnusedCapacity(self.allocator, source.u64s.len() - source_prefix.u64s);
     try self.u32s.ensureUnusedCapacity(self.allocator, source.u32s.len() - source_prefix.u32s);
@@ -938,7 +901,6 @@ pub fn appendBodyShardWithJoinRelocation(
         }
     }
     for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| self.locals.appendAssumeCapacity(relocateBodyValue(StoredLocal, item, prefix, bases));
-    for (source.local_descs.unsafeRawItemsForView()[source_prefix.local_descs..]) |item| self.local_descs.appendAssumeCapacity(relocateBodyValue(lir_defs.BoxyDescRef, item, prefix, bases));
     for (source.local_names.unsafeRawItemsForView()[source_prefix.locals..]) |name| {
         self.local_names.appendAssumeCapacity(
             if (name == no_local_name)
@@ -990,7 +952,6 @@ pub fn StoreSpanBorrowMut(comptime T: type, comptime field_name: []const u8) typ
 }
 
 /// Producer-owned execution capability, retained in serialized images.
-/// Only explicit Boxy lowering enables descriptor execution.
 runtime_contract: lir_defs.RuntimeContract = .specialized,
 
 cf_stmts: GuardedList.List(CFStmt, "LirStore.cf_stmts"),
@@ -998,11 +959,8 @@ cf_switch_branches: GuardedList.List(CFSwitchBranch, "LirStore.cf_switch_branche
 str_match_steps: GuardedList.List(StrMatchStep, "LirStore.str_match_steps"),
 str_match_arms: GuardedList.List(StrMatchArm, "LirStore.str_match_arms"),
 join_points: GuardedList.List(JoinPoint, "LirStore.join_points"),
-/// Per local: its layout and, when it has one, its Boxy descriptor's row in
-/// `local_descs`.
+/// Per local: its layout.
 locals: GuardedList.List(StoredLocal, "LirStore.locals"),
-/// Boxy descriptors of the locals that have one.
-local_descs: GuardedList.List(lir_defs.BoxyDescRef, "LirStore.local_descs"),
 local_ids: GuardedList.List(LocalId, "LirStore.local_ids"),
 u64s: GuardedList.List(u64, "LirStore.u64s"),
 u32s: GuardedList.List(u32, "LirStore.u32s"),
@@ -1012,8 +970,6 @@ erased_call_arg_plans: GuardedList.List(ErasedCallArgsPlan, "LirStore.erased_cal
 stmt_rows: StmtRowColumns,
 proc_specs: GuardedList.List(LirProcSpec, "LirStore.proc_specs"),
 strings: base.StringLiteral.Store,
-/// Boxy semantic names and their transient insertion index.
-boxy_names: @import("BoxyNames.zig") = .{},
 string_builder: base.StringLiteral.BuilderState,
 /// Retained in the serialized store layout; body shards now keep it enabled
 /// because their strings are relocated during ordered commit.
@@ -1093,7 +1049,6 @@ pub fn init(allocator: Allocator) Self {
         .str_match_arms = .empty,
         .join_points = .empty,
         .locals = .empty,
-        .local_descs = .empty,
         .local_ids = .empty,
         .u64s = .empty,
         .u32s = .empty,
@@ -1148,15 +1103,9 @@ pub fn releaseCode(self: *Self) void {
         spec.join_points = JoinPointSpan.empty();
         spec.erased_reuse_arg = null;
         spec.erased_capture_arg = null;
-        spec.runtime_ret_desc = null;
         spec.erased_call_args = null;
         spec.tail_calls = null;
         spec.tail_transform = .none;
-        // A descriptor that names a frame local names released storage; a
-        // static or runtime descriptor source is ordinary metadata.
-        if (spec.ret_desc) |ret_desc| {
-            if (ret_desc.localOrNull() != null) spec.ret_desc = null;
-        }
     }
     inline for (.{
         "cf_stmts",
@@ -1165,7 +1114,6 @@ pub fn releaseCode(self: *Self) void {
         "str_match_arms",
         "join_points",
         "locals",
-        "local_descs",
         "local_ids",
         "u64s",
         "u32s",
@@ -1197,7 +1145,6 @@ pub fn deinit(self: *Self) void {
     self.str_match_arms.deinit(self.allocator);
     self.join_points.deinit(self.allocator);
     self.locals.deinit(self.allocator);
-    self.local_descs.deinit(self.allocator);
     self.local_ids.deinit(self.allocator);
     self.u64s.deinit(self.allocator);
     self.u32s.deinit(self.allocator);
@@ -1206,7 +1153,6 @@ pub fn deinit(self: *Self) void {
     self.proc_specs.deinit(self.allocator);
     self.string_builder.deinit(self.allocator);
     self.strings.deinit(self.allocator);
-    self.boxy_names.deinit(self.allocator);
     self.source_file_bytes.deinit(self.allocator);
     self.source_file_ends.deinit(self.allocator);
     self.source_file_qualified_bytes.deinit(self.allocator);
@@ -1364,19 +1310,6 @@ pub fn failureMeaning(self: *const Self, stmt: CFStmtId) ?lir_defs.FailureMeanin
         .assign_call,
         .assign_call_erased,
         .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
         .assign_low_level,
         .assign_list,
         .assign_struct,
@@ -1384,6 +1317,7 @@ pub fn failureMeaning(self: *const Self, stmt: CFStmtId) ?lir_defs.FailureMeanin
         .store_struct,
         .store_tag,
         .set_local,
+        .dyn,
         .debug,
         .expect,
         .expect_err,
@@ -1609,24 +1543,6 @@ pub fn freshSyntheticSymbol(self: *Self) Symbol {
     return symbol;
 }
 
-fn boxyNameCount(self: *const Self) u32 {
-    if (self.body_coordinator) |coordinator| return coordinator.boxyNameCount();
-    return self.boxy_names.count();
-}
-
-/// Assigns a Boxy identity without inserting bytes into the literal store.
-pub fn insertBoxyName(self: *Self, text: []const u8) Allocator.Error!lir_defs.BoxyNameId {
-    self.requireBoxy();
-    self.assertBodyMetadataImmutable();
-    return self.boxy_names.insert(self.allocator, text);
-}
-
-/// Resolves a Boxy name in the same identity domain used by generated code.
-pub fn getBoxyName(self: *const Self, id: lir_defs.BoxyNameId) []const u8 {
-    if (self.body_coordinator) |coordinator| return coordinator.getBoxyName(id);
-    return self.boxy_names.get(id);
-}
-
 /// Interns a string literal in the store-level string table.
 pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLiteral.Idx {
     return try self.insertStringAligned(text, 1);
@@ -1712,17 +1628,25 @@ fn assertBodyMetadataImmutable(self: *const Self) void {
     base.invariant("LirStore invariant violated: attempted to mutate coordinator metadata from body worker", .{});
 }
 
-/// A row in `local_descs`.
-pub const LocalDescId = enum(u32) {
-    none = std.math.maxInt(u32),
-    _,
-};
-
-/// A local as the store keeps it: the layout every consumer reads, and the
-/// row of its Boxy descriptor, which only Boxy programs have.
+/// A local as the store keeps it: the layout every consumer reads and, for a
+/// dynamic local, its descriptor local and storage (`LIR.DynLocal`).
 pub const StoredLocal = struct {
     layout_idx: layout.Idx,
-    desc: LocalDescId = .none,
+    /// The descriptor local of a dynamic local; `no_dyn_desc` otherwise.
+    dyn_desc: u32 = no_dyn_desc,
+    dyn_storage: lir_defs.DynStorage = .frame,
+
+    pub const no_dyn_desc: u32 = std.math.maxInt(u32);
+
+    fn fromLocal(local: Local) StoredLocal {
+        const dyn = local.dyn orelse return .{ .layout_idx = local.layout_idx };
+        return .{ .layout_idx = local.layout_idx, .dyn_desc = @backingInt(dyn.desc), .dyn_storage = dyn.storage };
+    }
+
+    pub fn toLocal(self: StoredLocal) Local {
+        if (self.dyn_desc == no_dyn_desc) return .{ .layout_idx = self.layout_idx };
+        return .{ .layout_idx = self.layout_idx, .dyn = .{ .desc = @fromBackingInt(self.dyn_desc), .storage = self.dyn_storage } };
+    }
 };
 
 /// Registers one LIR local and returns its id.
@@ -1730,63 +1654,9 @@ pub fn addLocal(self: *Self, local: Local) Allocator.Error!LocalId {
     const idx = self.locals.len() + if (self.body_coordinator != null) self.body_prefix.locals else 0;
     try self.locals.ensureUnusedCapacity(self.allocator, 1);
     try self.local_names.ensureUnusedCapacity(self.allocator, 1);
-    const desc: LocalDescId = if (local.boxy_desc) |boxy_desc| try self.addLocalDesc(boxy_desc) else .none;
-    self.locals.appendAssumeCapacity(.{ .layout_idx = local.layout_idx, .desc = desc });
+    self.locals.appendAssumeCapacity(StoredLocal.fromLocal(local));
     self.local_names.appendAssumeCapacity(no_local_name);
     return @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
-}
-
-fn addLocalDesc(self: *Self, desc: lir_defs.BoxyDescRef) Allocator.Error!LocalDescId {
-    self.requireBoxy();
-    const idx = self.local_descs.len() + if (self.body_coordinator != null) self.body_prefix.local_descs else 0;
-    if (idx >= @backingInt(LocalDescId.none)) return error.OutOfMemory;
-    try self.local_descs.append(self.allocator, desc);
-    return @fromBackingInt(@intCast(idx));
-}
-
-/// Every local's descriptor row as of one moment, read through the store.
-/// Locals added later read as having none. Empty when no local has a
-/// descriptor.
-pub const LocalDescSnapshot = struct {
-    store: ?*const Self = null,
-    ids: []const LocalDescId = &.{},
-
-    pub fn get(self: LocalDescSnapshot, local: LocalId) ?lir_defs.BoxyDescRef {
-        const index = @backingInt(local);
-        if (index >= self.ids.len) return null;
-        return self.store.?.localDesc(self.ids[index]);
-    }
-
-    pub fn isEmpty(self: LocalDescSnapshot) bool {
-        return self.ids.len == 0;
-    }
-
-    pub fn localCount(self: LocalDescSnapshot) usize {
-        return self.ids.len;
-    }
-
-    pub fn deinit(self: LocalDescSnapshot, allocator: Allocator) void {
-        allocator.free(self.ids);
-    }
-};
-
-/// Snapshot every local's descriptor row; empty when no local has one.
-pub fn snapshotLocalDescs(self: *const Self, allocator: Allocator) Allocator.Error!LocalDescSnapshot {
-    const desc_count = self.local_descs.len() + if (self.body_coordinator != null) self.body_prefix.local_descs else 0;
-    if (desc_count == 0) return .{};
-    const ids = try allocator.alloc(LocalDescId, self.localCount());
-    for (ids, 0..) |*id, index| id.* = self.storedLocal(@fromBackingInt(@intCast(index))).desc;
-    return .{ .store = self, .ids = ids };
-}
-
-fn localDesc(self: *const Self, id: LocalDescId) ?lir_defs.BoxyDescRef {
-    if (id == .none) return null;
-    const index = @backingInt(id);
-    if (self.body_coordinator) |coordinator| {
-        if (index < self.body_prefix.local_descs) return coordinator.localDesc(id);
-        return self.local_descs.get(index - self.body_prefix.local_descs);
-    }
-    return self.local_descs.get(index);
 }
 
 /// Number of stored LIR locals.
@@ -1810,8 +1680,12 @@ fn storedLocal(self: *const Self, id: LocalId) StoredLocal {
 
 /// Returns one stored LIR local.
 pub fn getLocal(self: *const Self, id: LocalId) Local {
-    const stored = self.storedLocal(id);
-    return .{ .layout_idx = stored.layout_idx, .boxy_desc = self.localDesc(stored.desc) };
+    return self.storedLocal(id).toLocal();
+}
+
+/// The descriptor and storage of a dynamic local, or null for any other.
+pub fn localDyn(self: *const Self, id: LocalId) ?lir_defs.DynLocal {
+    return self.storedLocal(id).toLocal().dyn;
 }
 
 /// The layout of one stored LIR local.
@@ -1828,22 +1702,6 @@ pub fn getLocalPtr(self: *Self, id: LocalId) *StoredLocal {
     return self.locals.getPtrImmediate(index - if (self.body_coordinator != null) self.body_prefix.locals else 0);
 }
 
-/// Records the boxy descriptor governing a local's runtime payload.
-pub fn setLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) Allocator.Error!void {
-    const local = self.getLocalPtr(id);
-    if (self.localDesc(local.desc)) |existing| {
-        if (!std.meta.eql(existing, desc)) {
-            base.invariant(
-                "LIR store invariant violated: local {d} was assigned two different boxy descriptors: existing={any} new={any}",
-                .{ @backingInt(id), existing, desc },
-            );
-        }
-        return;
-    }
-    local.desc = try self.addLocalDesc(desc);
-}
-
-/// Attaches descriptor metadata without mutating existing LIR statements.
 /// Stores local ids and returns the corresponding flat-storage span.
 pub fn addLocalSpan(self: *Self, ids: []const LocalId) Allocator.Error!LocalSpan {
     return self.appendStoreSpan(LocalSpan, "local_ids", ids);
@@ -1973,27 +1831,6 @@ pub fn stmtRowCount(self: *const Self, comptime column: usize) usize {
 
 /// Adds an immutable out-of-line statement row and returns its id.
 pub fn addStmtRow(self: *Self, comptime T: type, row: T) Allocator.Error!lir_defs.StmtRowId(T) {
-    if (T == lir_defs.BoxyDescRef or
-        T == lir_defs.BoxyDynamicNumLiteral or
-        T == lir_defs.BoxyDynamicFracLiteral or
-        T == lir_defs.BoxyDescRefData or
-        T == lir_defs.BoxyBoxData or
-        T == lir_defs.BoxyRecordUpdateData or
-        T == lir_defs.BoxyUnboxData or
-        T == lir_defs.BoxyAdaptData or
-        T == lir_defs.BoxyInspectData or
-        T == lir_defs.BoxyEqData or
-        T == lir_defs.BoxyHashData or
-        T == lir_defs.BoxyTagData or
-        T == lir_defs.BoxyTagPayloadData or
-        T == lir_defs.CallDictData) self.requireBoxy();
-    if (T == lir_defs.ErasedCallData and self.runtime_contract == .specialized) {
-        if (row.arg_layouts.len != 0 or row.arg_descs.len != 0 or row.arg_desc_keys.len != 0 or row.result_desc != null or row.out_desc != null or row.returns_pending != null)
-            @import("base").invariant("specialized callable carried Boxy adaptation metadata", .{});
-    }
-    if (T == lir_defs.PackedErasedFnData and self.runtime_contract == .specialized) {
-        if (row.result_desc != null or row.on_drop == .boxy_capture) @import("base").invariant("specialized callable carried a Boxy descriptor", .{});
-    }
     const column = comptime stmtRowColumn(T);
     const index = self.stmtRowCount(column);
     // The largest id names no row.
@@ -2050,18 +1887,16 @@ pub fn literalExtra(self: *const Self, value: lir_defs.LiteralValue) lir_defs.Li
 
 /// Adds the compact form of a reference-count helper for an `incref`,
 /// `decref`, or `free`.
-pub fn addRcHelperRef(self: *Self, helper: lir_defs.RcHelper) Allocator.Error!lir_defs.RcHelperRef {
+pub fn addRcHelperRef(_: *Self, helper: lir_defs.RcHelper) Allocator.Error!lir_defs.RcHelperRef {
     return switch (helper) {
         .concrete => |concrete| .{ .concrete = concrete },
-        .boxy => |desc| .{ .boxy = try self.addStmtRow(lir_defs.BoxyDescRef, desc) },
     };
 }
 
 /// The reference-count helper a compact helper names.
-pub fn rcHelper(self: *const Self, helper: lir_defs.RcHelperRef) lir_defs.RcHelper {
+pub fn rcHelper(_: *const Self, helper: lir_defs.RcHelperRef) lir_defs.RcHelper {
     return switch (helper) {
         .concrete => |concrete| .{ .concrete = concrete },
-        .boxy => |desc| .{ .boxy = self.stmtRow(desc) },
     };
 }
 
@@ -2080,21 +1915,8 @@ pub fn addRcEffect(self: *Self, effect: lir_defs.LowLevel.RcEffect) Allocator.Er
 // statement-replacement entry points; every producer states the origin of the
 // statement it creates. There is no ambient location state.
 
-/// Only a Boxy producer authorizes descriptor-bearing operations.
-pub fn requireBoxy(self: *const Self) void {
-    if (self.runtime_contract != .boxy) @import("base").invariant("specialized LIR cannot construct Boxy metadata or operations", .{});
-}
-
-fn validateStatementContract(self: *const Self, stmt: CFStmt) void {
-    switch (stmt) {
-        .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => self.requireBoxy(),
-        .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
-    }
-}
-
 /// Appends a statement with its explicit provenance and returns its id.
 pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!CFStmtId {
-    self.validateStatementContract(stmt);
     const idx = self.cf_stmts.len() + if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
     if (idx >= lir_defs.max_cf_stmt_count) return error.OutOfMemory;
     try self.cf_stmts.ensureUnusedCapacity(self.allocator, 1);
@@ -2117,7 +1939,6 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!
 /// publishes it on commit; any other body worker's prefix metadata is
 /// immutable, so it must restate a prefix statement's existing origin.
 pub fn replaceCFStmt(self: *Self, id: CFStmtId, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!void {
-    self.validateStatementContract(stmt);
     const source = try self.internStmtSource(.{ .loc = origin.loc, .region = origin.region });
     self.getCFStmtPtr(id).* = stmt;
     const index = @backingInt(id);
@@ -2225,6 +2046,21 @@ pub fn addLowLevelStmt(
     } }, origin);
 }
 
+/// Appends `target = op` (a `dyn` statement) followed by `next`.
+pub fn addDynStmt(
+    self: *Self,
+    target: ?LocalId,
+    op: lir_defs.DynOp,
+    next: CFStmtId,
+    origin: StmtOrigin,
+) Allocator.Error!CFStmtId {
+    return self.addCFStmt(.{ .dyn = .{
+        .target = target,
+        .data = try self.addStmtRow(lir_defs.DynOp, op),
+        .next = next,
+    } }, origin);
+}
+
 /// Appends switch branches and returns the corresponding flat-storage span.
 pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Allocator.Error!CFSwitchBranchSpan {
     return self.appendStoreSpan(CFSwitchBranchSpan, "cf_switch_branches", branches);
@@ -2282,11 +2118,6 @@ pub fn getJoinPointSpanMut(self: *Self, span: JoinPointSpan) StoreSpanBorrowMut(
 
 /// Appends a proc specification and returns its id.
 pub fn addProcSpec(self: *Self, proc: LirProcSpec, loc: base.SourceLoc) Allocator.Error!LirProcSpecId {
-    if (self.runtime_contract == .specialized and
-        (proc.ret_desc != null or proc.runtime_ret_desc != null or
-            proc.erased_arg_desc_offsets.len != 0 or proc.erased_arg_layouts.len != 0 or
-            proc.erased_arg_desc_params.len != 0 or proc.static_erased_capture_layout != null or
-            proc.boxy_runtime_entry)) @import("base").invariant("specialized procedure carried Boxy runtime metadata", .{});
     self.assertBodyMetadataImmutable();
     const idx = self.proc_specs.len();
     // A procedure created with a body was built from statements this store
@@ -2300,7 +2131,7 @@ pub fn addProcSpec(self: *Self, proc: LirProcSpec, loc: base.SourceLoc) Allocato
 }
 
 /// Record the statement-level procedure shapes one appended statement implies.
-fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
+pub fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
     switch (stmt) {
         .assign_call => |call| {
             // Only a tail-call builder names the procedure a statement belongs
@@ -2321,7 +2152,7 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         },
         .assign_literal => |assign| switch (assign.value) {
             .static_data, .bytes_literal => self.shapes.static_literal = true,
-            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => {},
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .proc_ref => {},
         },
         .assign_low_level => |assign| {
             if (assign.op == .box_box) self.shapes.box_box = true;
@@ -2343,20 +2174,8 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         .assign_ref,
         .assign_call_erased,
         .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
         .assign_list,
+        .dyn,
         .store_struct,
         .store_tag,
         .set_local,
@@ -3219,26 +3038,6 @@ pub fn procNeedsStackProbe(self: *const Self, layouts: *const layout.Store, proc
     return false;
 }
 
-test "body shards borrow Boxy identities and reject added Boxy metadata" {
-    const allocator = std.testing.allocator;
-    var coordinator = Self.init(allocator);
-    coordinator.runtime_contract = .boxy;
-    defer coordinator.deinit();
-    const name = try coordinator.insertBoxyName("Only");
-    var worker = try coordinator.cloneForBodyShard(allocator);
-    defer worker.deinit();
-    try std.testing.expectEqualStrings("Only", worker.getBoxyName(name));
-    try std.testing.expectEqual(@as(u32, 0), worker.boxy_names.count());
-    const prefix = worker.captureBodyPrefix();
-    _ = try worker.captureBodyShard(prefix);
-    // A shard must never publish locally assigned ids into the coordinator.
-    _ = try worker.boxy_names.insert(allocator, "Different");
-    try std.testing.expectError(error.UnsupportedShardMetadata, worker.captureBodyShard(prefix));
-    const coordinator_prefix = coordinator.captureBodyPrefix();
-    _ = try coordinator.insertBoxyName("Later");
-    try std.testing.expectError(error.UnsupportedShardMetadata, coordinator.captureBodyShard(coordinator_prefix));
-}
-
 test "source file table stores names and module identity per entry" {
     const gpa = std.testing.allocator;
     var store = Self.init(gpa);
@@ -3264,46 +3063,6 @@ test "source file table stores names and module identity per entry" {
     try std.testing.expectEqual(@as([32]u8, @splat(1)), store.sourceFileModuleIdentity(0));
     try std.testing.expectEqual(@as([32]u8, @splat(2)), store.sourceFileModuleIdentity(1));
     try std.testing.expectEqual(@as([32]u8, @splat(3)), store.sourceFileModuleIdentity(2));
-}
-
-test "body shard relocates erased-call layouts into the program table" {
-    const allocator = std.testing.allocator;
-    var layouts = try layout.Store.init(allocator, .u64);
-    defer layouts.deinit();
-    var coordinator = Self.init(allocator);
-    coordinator.runtime_contract = .boxy;
-    defer coordinator.deinit();
-    const closure = try coordinator.addLocal(.{ .layout_idx = .u64 });
-    var worker = try coordinator.cloneForBodyShard(allocator);
-    defer worker.deinit();
-    const prefix = worker.captureBodyPrefix();
-    const arg = try worker.addLocal(.{ .layout_idx = .u64 });
-    const result = try worker.addLocal(.{ .layout_idx = .u64 });
-    const ret = try worker.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
-    const call = try worker.addCFStmt(.{ .assign_call_erased = .{
-        .target = result,
-        .data = try worker.addStmtRow(lir_defs.ErasedCallData, .{
-            .closure = closure,
-            .args = try worker.addLocalSpan(&.{arg}),
-            .arg_layouts = .{ .start = 1, .len = 1 },
-            .arg_plan = try worker.internErasedCallArgsPlan(&layouts, &.{.u64}),
-        }),
-        .next = ret,
-    } }, .test_fixture);
-    var runtime_layouts: std.ArrayList(layout.Idx) = .empty;
-    defer runtime_layouts.deinit(allocator);
-    try runtime_layouts.appendSlice(allocator, &.{ .u8, .u16 });
-    var shard = try worker.captureBodyShard(prefix);
-    shard.erased_arg_layout_base = @intCast(runtime_layouts.items.len);
-    try runtime_layouts.appendSlice(allocator, &.{ .u32, .u64 });
-    const appended = try coordinator.appendBodyShard(shard, call, .empty(), null);
-    const relocated_stmt = coordinator.getCFStmt(appended.root.?).assign_call_erased;
-    const relocated = coordinator.stmtRow(relocated_stmt.data);
-    try std.testing.expectEqual(@as(u32, 3), relocated.arg_layouts.start);
-    try std.testing.expectEqual(@as(u32, 1), relocated.arg_layouts.len);
-    try std.testing.expectEqual(layout.Idx.u64, runtime_layouts.items[relocated.arg_layouts.start]);
-    try std.testing.expectEqual(appended.relocation.local(prefix, result), relocated_stmt.target);
-    try std.testing.expectEqual(closure, relocated.closure);
 }
 
 test "body shard relocates producer tail-call links" {

@@ -51,6 +51,7 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 
 const eval_mod = @import("eval");
+const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 
 /// Backend used to execute the glue spec.
 pub const GlueOpt = enum {
@@ -94,8 +95,8 @@ pub const GlueError = error{
 
 /// Print platform glue information for a platform's main.roc file using the checked-artifact pipeline.
 /// Hosted function ordering comes from published `HostedProcTable` records.
-pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, roc_ctx: compile.CoreCtx, std_io: std.Io) GlueError!void {
-    rocGlueInner(gpa, stderr, stdout, args, roc_ctx, std_io) catch |err| {
+pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, std_io: std.Io) GlueError!void {
+    rocGlueInner(gpa, stderr, stdout, args, std_io) catch |err| {
         (switch (err) {
             error.GlueSpecNotFound => printPath(gpa, stderr, "Error: Glue spec file not found: '{s}'\n", args.glue_spec, args.report_config),
             error.NotPlatformFile => blk: {
@@ -110,7 +111,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
             error.DevBackendUnavailable => stderr.print("Error: The dev backend is not available for this host.\n", .{}),
             error.GluePluginUnavailable => stderr.print("Error: Could not load the compiled glue plugin.\n", .{}),
-            error.GluePluginStampMismatch => stderr.print("Error: The compiled glue plugin cache entry did not match this compiler.\n", .{}),
+            error.GluePluginStampMismatch => stderr.print("Error: The compiled glue plugin did not match this compiler.\n", .{}),
             error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
             error.WriteFailed => stderr.print("Error: Write failed\n", .{}),
@@ -119,8 +120,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
     };
 }
 
-fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, roc_ctx: compile.CoreCtx, std_io: std.Io) GlueError!void {
-
+fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, std_io: std.Io) GlueError!void {
     // 0. Validate glue spec file exists
     std.Io.Dir.cwd().access(std_io, args.glue_spec, .{}) catch {
         return error.GlueSpecNotFound;
@@ -237,6 +237,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             const source_name, const ffi_symbol = switch (provided) {
                 .procedure => |procedure| .{ procedure.source_name, procedure.ffi_symbol },
                 .data => |data| .{ data.source_name, data.ffi_symbol },
+                // Glue runs only on modules that checked without errors.
+                .checked_error => base.invariant("glue invariant violated: a provided export with no ABI reached glue", .{}),
             };
             type_table.boundary_value_name = artifact.canonical_names.exportNameText(source_name);
             defer type_table.boundary_value_name = null;
@@ -249,6 +251,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
                     error.OutOfMemory => return error.OutOfMemory,
                     error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
                 } },
+                .checked_error => base.invariant("glue invariant violated: a provided export with no ABI reached glue", .{}),
             };
             var entry = CollectedProvidesEntry{ .name = &.{}, .ffi_symbol = &.{}, .exported = exported };
             errdefer entry.deinit(gpa);
@@ -304,7 +307,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             &runtime_env,
             root_artifact.executableIdentity(),
             args,
-            roc_ctx,
             std_io,
         ),
     }
@@ -564,16 +566,12 @@ const GluePluginStampV1 = extern struct {
     artifact_input_hash: [32]u8,
 };
 
-/// A glue plugin object ready to load: its bytes, and the cache entry they
-/// came from when a stamp mismatch should evict it.
+/// A glue plugin object ready to load.
 const BuiltGluePlugin = struct {
     bytes: []u8,
-    cache_root: ?[]u8,
-    cache_identity: ?compile.artifacts.Identity = null,
 
     fn deinit(self: BuiltGluePlugin, allocator: Allocator) void {
         allocator.free(self.bytes);
-        if (self.cache_root) |path| allocator.free(path);
     }
 };
 
@@ -588,74 +586,27 @@ fn runGlueSpecPlugin(
     runtime_env: *eval_mod.RuntimeHostEnv,
     executable_identity: [32]u8,
     args: GlueArgs,
-    roc_ctx: compile.CoreCtx,
     std_io: std.Io,
 ) GlueError!void {
     if (builtin.target.os.tag == .freestanding) return error.GluePluginUnavailable;
 
     const stamp = gluePluginStamp(executable_identity, args.specialization_strategy);
-    var plugin: ?BuiltGluePlugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, executable_identity, stamp, args, roc_ctx, std_io);
-    defer if (plugin) |built| built.deinit(gpa);
-
-    var lib = blk: {
-        const first = plugin.?;
-        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, lowered.lir_result.store.runtime_contract, args.no_cache) catch |err| {
-            switch (err) {
-                error.GluePluginUnavailable, error.GluePluginStampMismatch => {},
-                error.BuildEnvInit,
-                error.CompilationFailed,
-                error.DevBackendUnavailable,
-                error.FileNotFound,
-                error.GlueSpecNotFound,
-                error.ModuleRetrieval,
-                error.NotPlatformFile,
-                error.OutOfMemory,
-                error.ParseFailed,
-                error.PlatformPathResolution,
-                error.TempDirCreation,
-                error.WriteFailed,
-                => return err,
-            }
-            // An installed plugin is a managed artifact: never rebuild past a
-            // failure to load it; the remedy is reinstalling the shorthand.
-            if (args.no_cache or args.installed_plugin_path != null or first.cache_root == null) return err;
-
-            deleteGluePluginCacheEntry(first, std_io);
-            first.deinit(gpa);
-            plugin = null;
-
-            plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, executable_identity, stamp, args, roc_ctx, std_io);
-            break :blk try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, lowered.lir_result.store.runtime_contract, true);
-        };
-    };
+    const plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args, std_io);
+    defer plugin.deinit(gpa);
+    var lib = try loadVerifiedGluePlugin(gpa, stderr, plugin, &stamp, true);
     defer lib.deinit();
 
     const GlueEntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
     const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
 
     runtime_env.resetObservation();
+    const composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(gpa) else null;
+    defer if (composition) |owned| owned.destroy();
+    const composing = if (composition) |owned| owned.enter() else null;
+    defer if (composing) |entered| BoxyInProcessState.leave(entered);
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
 
-    const boxy_tables = eval_mod.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result);
-    const boxy_runtime = if (eval_mod.boxy_runtime.storeNeedsRuntime(&lowered.lir_result.store))
-        try eval_mod.boxy_abi.createRuntimeFromStores(
-            gpa,
-            &lowered.lir_result.store,
-            &lowered.lir_result.layouts,
-            boxy_tables,
-            runtime_env.get_ops(),
-        )
-    else
-        null;
-    defer if (boxy_runtime) |runtime| eval_mod.boxy_abi.deinitRuntime(runtime);
-    const previous_boxy_runtime = if (boxy_runtime) |runtime|
-        eval_mod.boxy_abi.swapActiveRuntime(runtime)
-    else
-        null;
-    defer if (boxy_runtime != null) {
-        _ = eval_mod.boxy_abi.swapActiveRuntime(previous_boxy_runtime);
-    };
     const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
     defer builtins.in_process_host.leave(entered);
 
@@ -681,38 +632,16 @@ fn getOrBuildGluePlugin(
     lowered: *lir.CheckedPipeline.LoweredProgram,
     glue_proc: lir.LirProcSpecId,
     arg_layouts: []const layout.Idx,
-    executable_identity: [32]u8,
     stamp: GluePluginStampV1,
     args: GlueArgs,
-    roc_ctx: compile.CoreCtx,
     std_io: std.Io,
 ) GlueError!BuiltGluePlugin {
     if (args.installed_plugin_path) |installed_path| {
         const bytes = readPluginFile(gpa, installed_path, std_io) orelse return error.GluePluginUnavailable;
-        return .{ .bytes = bytes, .cache_root = null };
+        return .{ .bytes = bytes };
     }
 
-    if (args.no_cache) {
-        return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io), .cache_root = null };
-    }
-
-    const logical_path = gluePluginCachePath(gpa, executable_identity, stamp, args.opt, roc_ctx) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.NoHomeDirectory => return error.BuildEnvInit,
-    };
-    defer gpa.free(logical_path);
-    const config: compile.CacheConfig = .{ .roc_ctx = roc_ctx };
-    const root = config.getEffectiveCacheDir(gpa) catch return error.BuildEnvInit;
-    errdefer gpa.free(root);
-    var store = try compile.artifacts.Store.init(gpa, std_io, root);
-    defer store.deinit();
-    var id: compile.artifacts.Identity = .{ .namespace = undefined, .family = .glue_plugin, .key = undefined, .variant = compile.artifacts.hashBytes(@tagName(args.opt)) };
-    std.crypto.hash.sha2.Sha256.hash(build_options.compiler_compatibility_id, &id.namespace, .{});
-    std.crypto.hash.sha2.Sha256.hash(logical_path, &id.key, .{});
-    if (store.read(gpa, id, store.now()) catch null) |bytes| return .{ .bytes = bytes, .cache_root = root, .cache_identity = id };
-    const bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io);
-    store.write(id, bytes, store.now()) catch {};
-    return .{ .bytes = bytes, .cache_root = root, .cache_identity = id };
+    return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io) };
 }
 
 /// The bytes of a plugin object file, or null when it cannot be read.
@@ -737,13 +666,7 @@ fn buildGluePlugin(
         .ret_layout = proc.ret_layout,
     }};
     var bitcode = generate: {
-        var codegen = llvm_compile.MonoLlvmCodeGen.init(
-            gpa,
-            &lowered.lir_result.store,
-            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-            lowered.lir_result.boxy_erased_arg_desc_params.items,
-            lowered.lir_result.boxy_worker_procs.items,
-        );
+        var codegen = llvm_compile.MonoLlvmCodeGen.init(gpa, &lowered.lir_result.store);
         codegen.layout_store = &lowered.lir_result.layouts;
         codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
         codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
@@ -778,10 +701,9 @@ fn loadVerifiedGluePlugin(
     stderr: *std.Io.Writer,
     plugin: BuiltGluePlugin,
     expected: *const GluePluginStampV1,
-    runtime_contract: lir.LIR.RuntimeContract,
     report_errors: bool,
 ) GlueError!eval_mod.object_image.Image {
-    var image = eval_mod.object_image.load(gpa, plugin.bytes, runtime_contract) catch |err| switch (err) {
+    var image = eval_mod.object_image.load(gpa, plugin.bytes) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedObject,
         error.MalformedObject,
@@ -834,38 +756,6 @@ fn glueLlvmCompileOptions(opt: GlueOpt) llvm_compile.CompileOptions {
 
 fn targetPtrWidthBits(target_usize: base.target.TargetUsize) u8 {
     return @intCast(target_usize.size() * 8);
-}
-
-fn gluePluginCachePath(
-    allocator: Allocator,
-    executable_identity: [32]u8,
-    stamp: GluePluginStampV1,
-    opt: GlueOpt,
-    roc_ctx: compile.CoreCtx,
-) (Allocator.Error || error{NoHomeDirectory})![:0]u8 {
-    const config = compile.CacheConfig{ .roc_ctx = roc_ctx };
-    const version_dir = try config.getVersionCacheDir(allocator);
-    defer allocator.free(version_dir);
-
-    const digest = gluePluginOutputHash(executable_identity, stamp);
-    const digest_hex = std.fmt.bytesToHex(digest, .lower);
-    const filename = try std.fmt.allocPrint(allocator, "{s}{s}", .{ digest_hex[0..], objectExtension() });
-    defer allocator.free(filename);
-
-    return std.fs.path.joinZ(allocator, &.{
-        version_dir,
-        "glue-plugin",
-        RocTarget.detectNative().toName(),
-        @tagName(opt),
-        filename,
-    });
-}
-
-fn deleteGluePluginCacheEntry(plugin: BuiltGluePlugin, std_io: std.Io) void {
-    const root = plugin.cache_root orelse return;
-    var store = compile.artifacts.Store.init(std.heap.page_allocator, std_io, root) catch return;
-    defer store.deinit();
-    store.invalidate(plugin.cache_identity.?) catch {};
 }
 
 fn gluePluginOutputHash(executable_identity: [32]u8, stamp: GluePluginStampV1) [32]u8 {
@@ -933,13 +823,6 @@ fn hashTaggedBytes(hasher: *std.crypto.hash.Blake3, tag: []const u8, bytes: []co
     hasher.update(&len_buf);
     hasher.update(bytes);
     hasher.update(&[_]u8{0});
-}
-
-fn objectExtension() []const u8 {
-    return switch (roc_target.classifyOs(builtin.os.tag)) {
-        .windows => ".obj",
-        .macos, .linux, .freebsd, .openbsd, .netbsd, .other => ".o",
-    };
 }
 
 fn writeHostEvents(stderr: *std.Io.Writer, runtime_env: *const eval_mod.RuntimeHostEnv) GlueError!void {
@@ -1824,7 +1707,7 @@ const TypeTable = struct {
                 return try self.collectRecordFieldsForRootBound(src.artifact, record.ext, fields);
             },
             .empty_record => return true,
-            .pending, .err, .flex, .rigid, .tuple, .function, .tag_union, .empty_tag_union => return false,
+            .pending, .field_kind, .err, .flex, .rigid, .tuple, .function, .tag_union, .empty_tag_union => return false,
         }
     }
 
@@ -1859,7 +1742,7 @@ const TypeTable = struct {
 
         switch (checkedTypePayload(src.artifact, src.checked_type)) {
             .pending => glueInvariant("pending checked type reached glue bound type string", .{}),
-            .err => glueInvariant("erroneous checked type reached glue bound type string", .{}),
+            .field_kind, .err => glueInvariant("erroneous checked type reached glue bound type string", .{}),
             .flex => try buf.appendSlice(self.gpa, "flex"),
             .rigid => try buf.appendSlice(self.gpa, "rigid"),
             .alias => |alias| try self.writeTypeStringBound(src.artifact, alias.backing, buf, active),
@@ -2200,7 +2083,7 @@ const TypeTable = struct {
         if (visited.contains(key)) return false;
         try visited.put(key, {});
         switch (checkedTypePayload(artifact, checked_type)) {
-            .pending, .err, .empty_record, .empty_tag_union => return false,
+            .pending, .field_kind, .err, .empty_record, .empty_tag_union => return false,
             .flex, .rigid => return self.template_bindings.contains(key),
             .alias => |alias| return self.mentionsBoundFormalInner(artifact, alias.backing, visited),
             .record => |record| {
@@ -2417,7 +2300,7 @@ const TypeTable = struct {
             switch (checkedTypePayload(artifact, current)) {
                 .alias => |alias| current = alias.backing,
                 .flex, .rigid => |variable| return defaultedVariableRepr(variable) == null,
-                .pending, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return false,
+                .pending, .field_kind, .err, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => return false,
             }
         }
     }
@@ -2467,13 +2350,13 @@ const TypeTable = struct {
             const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the loop above lowered every root's artifact
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse
                 glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@backingInt(root.checked_type)});
-            try self.boxRootInPlace(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
+            try self.boxRootInPlace(lowering.abi_layouts.layouts(), entry_idx, layout_idx);
         }
 
         for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
             const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the first loop lowered every root's artifact
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse unreachable; // the previous loop checked every root's layout exists
-            try self.attachEntryLayout(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
+            try self.attachEntryLayout(lowering.abi_layouts.layouts(), entry_idx, layout_idx);
         }
 
         for (self.entries.items, 0..) |entry, idx| {
@@ -2683,7 +2566,7 @@ const TypeTable = struct {
                     .list => layout_val.getIdx(),
                     .hole => unreachable, // glue reads only host-boundary layouts, and a hole appears only in a demand-shaped specialization's parameters
                     .list_of_zst => .zst,
-                    .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .erased_box => glueInvariant("list glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
+                    .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .dynamic => glueInvariant("list glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
                 };
                 const slot = try self.childSlotFor(store, list_repr.elem_id, elem_layout);
                 self.entries.items[@intCast(entry_idx)].repr.list.elem_id = slot.entry;
@@ -2715,7 +2598,7 @@ const TypeTable = struct {
                 const inner_layout: layout.Idx = switch (layout_val.tag) {
                     .box => layout_val.getIdx(),
                     .box_of_zst => .zst,
-                    .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .hole, .tag_union, .ptr, .erased_box, .erased_callable => glueInvariant("box glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
+                    .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .hole, .tag_union, .ptr, .dynamic, .erased_callable => glueInvariant("box glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
                 };
                 const slot = try self.childSlotFor(store, box_repr.inner_id, inner_layout);
                 self.entries.items[@intCast(entry_idx)].repr.box.inner_id = slot.entry;
@@ -3106,7 +2989,7 @@ const TypeTable = struct {
         const payload = checkedTypePayload(artifact, checked_type);
         return switch (payload) {
             .pending => glueInvariant("pending checked type reached glue type table", .{}),
-            .err => glueInvariant("erroneous checked type reached glue type table", .{}),
+            .field_kind, .err => glueInvariant("erroneous checked type reached glue type table", .{}),
             .flex => |variable| try self.convertTypeVariable(variable, position, "flex"),
             .rigid => |variable| try self.convertTypeVariable(variable, position, "rigid"),
             .alias => |alias| try self.convertCheckedType(artifact, alias.backing, position),
@@ -3652,7 +3535,7 @@ const GlueRocValueWriter = struct {
             .list => list_layout.getIdx(),
             .hole => unreachable, // glue reads only host-boundary layouts, and a hole appears only in a demand-shaped specialization's parameters
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
+            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .dynamic => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
         };
     }
 
@@ -4328,7 +4211,7 @@ fn appendRecordRowFields(
                 try fields.appendSlice(gpa, record.fields);
                 current = record.ext;
             },
-            .pending, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => glueInvariant("non-record checked row reached glue record conversion", .{}),
+            .pending, .field_kind, .err, .tuple, .nominal, .function, .tag_union, .empty_tag_union => glueInvariant("non-record checked row reached glue record conversion", .{}),
         }
     }
 }
@@ -4376,7 +4259,7 @@ fn appendTagRowTags(
                 try tags.appendSlice(gpa, tag_union.tags);
                 current = tag_union.ext;
             },
-            .pending, .err, .record, .tuple, .nominal, .function, .empty_record => glueInvariant("non-tag checked row reached glue tag-union conversion", .{}),
+            .pending, .field_kind, .err, .record, .tuple, .nominal, .function, .empty_record => glueInvariant("non-tag checked row reached glue tag-union conversion", .{}),
         }
     }
 }
@@ -4410,7 +4293,7 @@ fn writeTypeString(
 
     switch (checkedTypePayload(artifact, checked_type)) {
         .pending => glueInvariant("pending checked type reached glue type string", .{}),
-        .err => glueInvariant("erroneous checked type reached glue type string", .{}),
+        .field_kind, .err => glueInvariant("erroneous checked type reached glue type string", .{}),
         .flex => try buf.appendSlice(gpa, "flex"),
         .rigid => try buf.appendSlice(gpa, "rigid"),
         .alias => |alias| try writeTypeString(gpa, artifact, alias.backing, buf, active),

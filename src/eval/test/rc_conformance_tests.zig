@@ -215,6 +215,26 @@ const cases = [_]Case{
         ,
     },
     .{
+        // An interpolated literal writes its parts once into a fresh string
+        // and borrows every part: a shared heap part keeps its count, and a
+        // part used again after the literal is still live.
+        .name = "interpolated literals write their parts once",
+        .source =
+        \\{
+        \\    shared = Str.concat("a string long enough to need the heap ", "plus a tail")
+        \\    holder = [shared, shared]
+        \\    small = Str.concat("ab", "c")
+        \\    joined = "<${shared}|${small}>${shared}"
+        \\    tiny = "${small}${small}"
+        \\    Str.count_utf8_bytes(joined)
+        \\        + Str.count_utf8_bytes(tiny)
+        \\        + Str.count_utf8_bytes(shared)
+        \\        + Str.count_utf8_bytes(small)
+        \\        + List.len(holder)
+        \\}
+        ,
+    },
+    .{
         // Concatenating nothing onto a value is the path where a
         // copy-on-write op can hand back its argument without either copying
         // it or checking whether anyone else holds it.
@@ -685,6 +705,59 @@ const cases = [_]Case{
         \\    shared_mapped = List.map(shared, |text| Str.concat(text, "!"))
         \\    lengths = List.map(shared, |text| Str.count_utf8_bytes(text))
         \\    List.len(unique_mapped) + List.len(shared_mapped) + List.len(lengths) + List.len(holder)
+        \\}
+        ,
+    },
+    .{
+        .name = "list keep_if compacts or copies its input",
+        .source =
+        \\{
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique_kept = List.keep_if(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() > 33,
+        \\    )
+        \\    unique_dropped = List.drop_if(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() > 33,
+        \\    )
+        \\    unique_none = List.keep_if(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |_| False,
+        \\    )
+        \\    shared_kept = List.keep_if(shared, |text| text.count_utf8_bytes() > 33)
+        \\    shared_all = List.keep_if(shared, |_| True)
+        \\    shared_none = List.keep_if(shared, |_| False)
+        \\    oks = List.keep_oks(shared, |text| if text.count_utf8_bytes() > 33 { Ok(text) } else { Err(text) })
+        \\    errs = List.keep_errs(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| if text.count_utf8_bytes() > 33 { Ok(text) } else { Err(text) },
+        \\    )
+        \\    List.len(unique_kept)
+        \\        + List.len(unique_dropped)
+        \\        + List.len(unique_none)
+        \\        + List.len(shared_kept)
+        \\        + List.len(shared_all)
+        \\        + List.len(shared_none)
+        \\        + List.len(oks)
+        \\        + List.len(errs)
+        \\        + List.len(holder)
         \\}
         ,
     },
@@ -1205,11 +1278,10 @@ fn runCase(allocator: Allocator, case: Case) SweepError!void {
 
     var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
     defer static_strings.deinit();
-    var interp = try Interpreter.initWithBoxyTables(
+    var interp = try Interpreter.init(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
-        Interpreter.BoxyTables.fromImageView(&lowered.view),
         static_strings.view(),
         runtime_env.get_ops(),
     );

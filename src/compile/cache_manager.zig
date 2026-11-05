@@ -10,6 +10,8 @@ const ctx_mod = @import("ctx");
 const threading = @import("threading.zig");
 
 pub const CacheModule = @import("cache_module.zig").CacheModule;
+/// An acquired cache entry: its open file and lease.
+pub const AcquiredArtifact = @import("artifact_store.zig").Artifact;
 const Allocator = std.mem.Allocator;
 const CoreCtx = ctx_mod.CoreCtx;
 const CacheStats = @import("cache_config.zig").CacheStats;
@@ -28,6 +30,10 @@ pub const CacheManager = struct {
     /// compiler worker threads, so every recording path goes through here while
     /// the file work itself stays outside the lock.
     stats_mutex: threading.Mutex = .init,
+    /// The store every read and write of this manager goes through,
+    /// opened on first use and closed by `deinit`.
+    store: ?*artifacts.Store = null,
+    store_mutex: threading.Mutex = .init,
 
     const Self = @This();
 
@@ -62,6 +68,33 @@ pub const CacheManager = struct {
             .allocator = allocator,
             .stats = CacheStats{},
         };
+    }
+
+    /// Release the cache directory owned by this manager.
+    pub fn deinit(self: *Self) void {
+        if (comptime threading.is_freestanding) return;
+        if (self.store) |store| {
+            store.deinit();
+            self.allocator.destroy(store);
+            self.store = null;
+        }
+    }
+
+    /// The manager's store, opened on first use. Null when the cache
+    /// directory cannot be resolved, which every caller counts as a miss or a
+    /// store failure.
+    fn storeHandle(self: *Self) ?*artifacts.Store {
+        if (comptime threading.is_freestanding) return null;
+        self.store_mutex.lockUncancelable(self.roc_ctx.std_io);
+        defer self.store_mutex.unlock(self.roc_ctx.std_io);
+        if (self.store) |store| return store;
+        const store = self.allocator.create(artifacts.Store) catch return null;
+        store.* = self.openStore(self.allocator) catch {
+            self.allocator.destroy(store);
+            return null;
+        };
+        self.store = store;
+        return store;
     }
 
     pub fn recordStoreFailure(self: *Self) void {
@@ -106,8 +139,7 @@ pub const CacheManager = struct {
         self.stats.recordStoreFor(kind, bytes_written);
     }
 
-    /// The caller's cache scope is explicit identity data. It is no longer a
-    /// directory that maintenance must discover by walking the filesystem.
+    /// Keep each producer's scope in the direct file identity.
     pub fn identity(family: artifacts.Family, key: [32]u8, scope: []const u8) artifacts.Identity {
         return .{
             .namespace = artifacts.hashBytes(@import("build_options").compiler_compatibility_id),
@@ -155,16 +187,11 @@ pub const CacheManager = struct {
     fn storeEntry(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, source: EntrySource, size: usize, scope: []const u8, name: []const u8) void {
         if (comptime threading.is_freestanding) return;
         if (!self.config.enabled) return;
-        var store = self.openStore(allocator) catch {
+        const store = self.storeHandle() orelse {
             self.recordStoreFailureFor(kind);
             return;
         };
-        defer store.deinit();
-        var stage = store.reserve(identity(family, key, scope), size, store.now()) catch |err| {
-            switch (err) {
-                error.Busy => return,
-                else => {},
-            }
+        var stage = store.reserve(identity(family, key, scope)) catch |err| {
             self.verboseLog(allocator, "Failed to reserve {s} cache entry for {s}: {}\n", .{ @tagName(kind), name, err });
             self.recordStoreFailureFor(kind);
             return;
@@ -180,10 +207,6 @@ pub const CacheManager = struct {
             return;
         };
         stage.publish() catch |err| {
-            switch (err) {
-                error.Busy => return,
-                else => {},
-            }
             self.verboseLog(allocator, "Failed to publish {s} cache entry for {s}: {}\n", .{ @tagName(kind), name, err });
             self.recordStoreFailureFor(kind);
             return;
@@ -192,7 +215,6 @@ pub const CacheManager = struct {
     }
 
     pub const StagedPart = struct {
-        store: *artifacts.Store,
         stage: artifacts.Staging,
         len: usize,
     };
@@ -200,33 +222,21 @@ pub const CacheManager = struct {
     pub fn stageCheckedPart(self: *Self, key: [32]u8, stream: CoreCtx.FileStream, size: usize, scope: []const u8, name: []const u8) ?StagedPart {
         if (comptime threading.is_freestanding) return null;
         if (!self.config.enabled) return null;
-        const store = self.allocator.create(artifacts.Store) catch {
+        const store = self.storeHandle() orelse {
             self.recordStoreFailure();
             return null;
         };
-        store.* = self.openStore(self.allocator) catch {
-            self.allocator.destroy(store);
+        var stage = store.reserve(identity(.checked, key, scope)) catch {
             self.recordStoreFailure();
-            return null;
-        };
-        var stage = store.reserve(identity(.checked, key, scope), size, store.now()) catch |err| {
-            store.deinit();
-            self.allocator.destroy(store);
-            switch (err) {
-                error.Busy => {},
-                else => self.recordStoreFailure(),
-            }
             return null;
         };
         self.roc_ctx.writeFileStream(stage.path, stream) catch |err| {
             self.verboseLog(self.allocator, "Failed to stage checked cache part for {s}: {}\n", .{ name, err });
             stage.deinit();
-            store.deinit();
-            self.allocator.destroy(store);
             self.recordStoreFailure();
             return null;
         };
-        return .{ .store = store, .stage = stage, .len = size };
+        return .{ .stage = stage, .len = size };
     }
 
     pub fn readStagedPart(self: *Self, part: StagedPart, allocator: Allocator) ?[]u8 {
@@ -243,13 +253,10 @@ pub const CacheManager = struct {
     }
 
     pub fn discardStagedPart(self: *Self, part: StagedPart) void {
+        if (comptime threading.is_freestanding) return;
         self.roc_ctx.deleteFile(part.stage.path) catch {};
         var stage = part.stage;
         stage.deinit();
-        // The catalog owns reclamation if this process exits or cannot acquire
-        // metadata ownership here. It never depends on this destructor running.
-        part.store.deinit();
-        self.allocator.destroy(part.store);
     }
 
     pub fn loadRawBytes(self: *Self, key: [32]u8, scope: []const u8) ?[]const u8 {
@@ -259,12 +266,11 @@ pub const CacheManager = struct {
     pub fn loadFamilyBytes(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8) ?[]const u8 {
         if (comptime threading.is_freestanding) return null;
         if (!self.config.enabled) return null;
-        var store = self.openStore(self.allocator) catch {
+        const store = self.storeHandle() orelse {
             self.recordMissFor(.checked);
             return null;
         };
-        defer store.deinit();
-        const bytes = (store.read(self.allocator, identity(family, key, scope), store.now()) catch null) orelse {
+        const bytes = (store.read(self.allocator, identity(family, key, scope)) catch null) orelse {
             self.recordMissFor(.checked);
             return null;
         };
@@ -284,15 +290,60 @@ pub const CacheManager = struct {
         return self.loadMapped(allocator, kind, family, key, scope, true);
     }
 
+    /// File a copy of the file at `source_path` as `family`'s entry for
+    /// `key`, staged beside the entry and renamed into place.
+    pub fn storeFamilyFile(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8, source_path: []const u8, name: []const u8) void {
+        if (comptime threading.is_freestanding) return;
+        if (!self.config.enabled) return;
+        const store = self.storeHandle() orelse {
+            self.recordStoreFailureFor(.checked);
+            return;
+        };
+        var stage = store.reserve(identity(family, key, scope)) catch |err| {
+            self.verboseLog(self.allocator, "Failed to reserve {s} cache entry for {s}: {}\n", .{ @tagName(family), name, err });
+            self.recordStoreFailureFor(.checked);
+            return;
+        };
+        defer stage.deinit();
+        self.roc_ctx.copyFile(source_path, stage.path) catch |err| {
+            self.verboseLog(self.allocator, "Failed to copy {s} into its cache entry: {}\n", .{ name, err });
+            self.recordStoreFailureFor(.checked);
+            return;
+        };
+        stage.publish() catch |err| {
+            self.verboseLog(self.allocator, "Failed to publish {s} cache entry: {}\n", .{ name, err });
+            self.recordStoreFailureFor(.checked);
+            return;
+        };
+        self.recordStoreFor(.checked, 0);
+    }
+
+    /// Acquire `key`'s entry of `family` as an open file, owned by the
+    /// caller until its `deinit`, for a consumer that copies its bytes by
+    /// file range. Null for a miss.
+    pub fn acquireFamily(self: *Self, family: artifacts.Family, key: [32]u8, scope: []const u8) ?artifacts.Artifact {
+        if (comptime threading.is_freestanding) return null;
+        if (!self.config.enabled) return null;
+        const store = self.storeHandle() orelse {
+            self.recordMissFor(.checked);
+            return null;
+        };
+        const artifact = (store.acquire(identity(family, key, scope)) catch null) orelse {
+            self.recordMissFor(.checked);
+            return null;
+        };
+        self.recordHitFor(.checked, artifact.size);
+        return artifact;
+    }
+
     fn loadMapped(self: *Self, allocator: Allocator, kind: Kind, family: artifacts.Family, key: [32]u8, scope: []const u8, counted: bool) ?CacheModule.CacheData {
         if (comptime threading.is_freestanding) return null;
         if (!self.config.enabled) return null;
-        var store = self.openStore(allocator) catch {
+        const store = self.storeHandle() orelse {
             if (counted) self.recordMissFor(kind);
             return null;
         };
-        defer store.deinit();
-        var artifact = (store.acquire(identity(family, key, scope), store.now()) catch null) orelse {
+        var artifact = (store.acquire(identity(family, key, scope)) catch null) orelse {
             if (counted) self.recordMissFor(kind);
             return null;
         };
@@ -318,39 +369,6 @@ pub const CacheManager = struct {
         }
         if (counted) self.recordHitFor(kind, size);
         return .{ .allocated = bytes };
-    }
-
-    const placement_pointer_magic = "roc-mod-latest-v1";
-    const placement_pointer_len = placement_pointer_magic.len + 32;
-
-    pub fn storePlacementPointer(self: *Self, placement: [32]u8, key: [32]u8) void {
-        var contents: [placement_pointer_len]u8 = undefined;
-        @memcpy(contents[0..placement_pointer_magic.len], placement_pointer_magic);
-        @memcpy(contents[placement_pointer_magic.len..], &key);
-        self.storeFamilyBytes(.placement, placement, &contents, "placement", "placement");
-    }
-
-    pub fn loadPlacementPointer(self: *Self, placement: [32]u8) ?[32]u8 {
-        const bytes = self.loadFamilyBytes(.placement, placement, "placement") orelse return null;
-        defer self.allocator.free(bytes);
-        if (bytes.len != placement_pointer_len or !std.mem.eql(u8, bytes[0..placement_pointer_magic.len], placement_pointer_magic)) return null;
-        return bytes[placement_pointer_magic.len..][0..32].*;
-    }
-
-    pub fn storeLiteralValues(self: *Self, placement: [32]u8, bytes: []const u8) void {
-        self.storeFamilyBytes(.literals, placement, bytes, "literals", "literals");
-    }
-
-    pub fn loadLiteralValues(self: *Self, placement: [32]u8) ?[]u8 {
-        return if (self.loadFamilyBytes(.literals, placement, "literals")) |bytes| @constCast(bytes) else null;
-    }
-
-    pub fn loadCheckedEntryUncounted(self: *Self, key: [32]u8) ?CacheModule.CacheData {
-        const directory = self.config.getCheckedArtifactCacheDir(self.allocator) catch return null;
-        defer self.allocator.free(directory);
-        // This is a real cache acquisition for retention, even though it is a
-        // reuse probe rather than the ordinary current-key lookup.
-        return self.loadMapped(self.allocator, .checked, .checked, key, directory, false);
     }
 
     pub fn getStats(self: *const Self) CacheStats {

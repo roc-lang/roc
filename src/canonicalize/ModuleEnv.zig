@@ -660,6 +660,10 @@ pub const DispatchRelationMerge = extern struct {
 /// them to stable checked type ids before post-check compilation.
 pub const GeneratedCodecDerivation = extern struct {
     kind: u32,
+    /// The scheme relation this derivation answers for. It differs from
+    /// `source_constraint_fn_var` when checking validated a private instance
+    /// of that relation instead of the relation itself.
+    template_constraint_fn_var: u32,
     source_constraint_fn_var: u32,
     source_runtime_fn_var: u32,
     source_shape_var: u32,
@@ -4211,10 +4215,9 @@ pub const Serialized = extern struct {
         return env;
     }
 
-    /// Deserialize with mutable type store and node store for cache modules.
-    /// Allocates fresh memory for the type store and node store arrays,
-    /// allowing them to be mutated (e.g., during type checking).
-    /// Use this for disk cache modules that may need to add new types.
+    /// Deserialize a checked module from the checked-module cache.
+    /// Allocates fresh memory for the type store and node store arrays. The
+    /// type store holds the module's solved types, so it is sealed.
     pub fn deserializeWithMutableTypes(
         self: *const Serialized,
         base_addr: usize,
@@ -4229,7 +4232,6 @@ pub const Serialized = extern struct {
         env.* = Self{
             .gpa = gpa,
             .common = self.common.deserializeInto(base_addr, source),
-            // Use deserializeWithCopy to get mutable type store
             .types = try self.types.deserializeWithCopy(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
             .module_role = self.module_role,
@@ -4291,6 +4293,7 @@ pub const Serialized = extern struct {
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
         };
+        env.types.seal();
 
         env.debugAssertModuleBasename();
 
@@ -4789,6 +4792,7 @@ pub fn recordSchemeUse(
 pub fn recordGeneratedCodecDerivation(
     self: *Self,
     kind: GeneratedCodecDerivation.Kind,
+    template_constraint_fn_var: TypeVar,
     source_constraint_fn_var: TypeVar,
     source_runtime_fn_var: TypeVar,
     source_shape_var: TypeVar,
@@ -4831,6 +4835,7 @@ pub fn recordGeneratedCodecDerivation(
     _ = try self.generated_codec_renamings.appendSlice(self.gpa, renamings);
     const derivation = GeneratedCodecDerivation{
         .kind = @backingInt(kind),
+        .template_constraint_fn_var = @backingInt(template_constraint_fn_var),
         .source_constraint_fn_var = @backingInt(source_constraint_fn_var),
         .source_runtime_fn_var = @backingInt(source_runtime_fn_var),
         .source_shape_var = @backingInt(source_shape_var),

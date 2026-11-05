@@ -64,6 +64,7 @@ pub const BuiltinFn = enum {
     str_trim_end,
     str_split,
     str_join_with,
+    str_from_parts,
     str_reserve,
     str_release_excess_capacity,
     str_with_capacity,
@@ -127,7 +128,7 @@ pub const BuiltinFn = enum {
     native_callable_call,
     native_callable_defer,
     native_callable_drive,
-    native_callable_caller_drives,
+    native_callable_caller_cell,
     erased_callable_free,
     hot_reload_enter,
     hot_reload_leave,
@@ -240,6 +241,17 @@ pub const BuiltinFn = enum {
         break :blk result;
     };
 
+    /// The builtins through which generated code tracks the loaded image it
+    /// runs in during a hot-reload session. Their behavior belongs to the
+    /// process the code runs in: the machine-code shim defines them to track
+    /// its images, and everywhere else they return at once.
+    pub const image_tracking = [_]BuiltinFn{
+        .hot_reload_enter,
+        .hot_reload_leave,
+        .hot_reload_retain_current,
+        .hot_reload_erased_callable_drop,
+    };
+
     /// The linker symbol this builtin is exported and resolved under.
     pub fn symbolName(self: BuiltinFn) [:0]const u8 {
         return symbol_names[@backingInt(self)];
@@ -301,7 +313,7 @@ pub const BuiltinFn = enum {
             .native_callable_call,
             .native_callable_defer,
             .native_callable_drive,
-            .native_callable_caller_drives,
+            .native_callable_caller_cell,
             .expect_err_str,
             .free_data_ptr,
             .i16_mod_by,
@@ -368,6 +380,7 @@ pub const BuiltinFn = enum {
 
             .str_from_utf8_result,
             .str_join_with,
+            .str_from_parts,
             .str_release_excess_capacity,
             .str_repeat,
             .str_reserve,
@@ -422,6 +435,7 @@ pub const BuiltinFn = enum {
             .str_trim_end,
             .str_split,
             .str_join_with,
+            .str_from_parts,
             .str_reserve,
             .str_release_excess_capacity,
             .str_with_capacity,

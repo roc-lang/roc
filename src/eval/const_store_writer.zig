@@ -38,6 +38,15 @@ pub const ErasedCallableResolution = struct {
 };
 
 /// Resolves erased-callable runtime data for the active evaluator.
+/// How a `.boxy` program's function values are read.
+pub const BoxyFunctions = struct {
+    retained: *lir.CheckedPipeline.BoxyStoredFunctions,
+    /// The program's result, which reading a value extends.
+    result: *LirProgram.Result,
+    composition: *@import("boxy_runtime").compiled.InProcessState,
+};
+
+/// Resolves erased-callable runtime data for the active evaluator.
 pub const ErasedCallableResolver = struct {
     context: ?*anyopaque = null,
     resolve: *const fn (?*anyopaque, [*]u8) error{RuntimeError}!ErasedCallableResolution = interpreterErasedCallable,
@@ -53,33 +62,6 @@ const StrBacking = struct {
     len: usize,
 };
 
-/// One checked module of the program a value was lowered in: the checked
-/// types a Monotype named type's occurrence (`ty_module`, `ty`) indexes, and
-/// the module's direct imports.
-pub const ProgramModule = struct {
-    types: checked.CheckedTypeStoreView,
-    direct_imports: []const checked.CheckedModuleArtifactKey,
-};
-
-/// The program's checked modules by checked module key.
-pub const ProgramTypes = struct {
-    context: *const anyopaque,
-    find: *const fn (context: *const anyopaque, key: [32]u8) ?ProgramModule,
-};
-
-/// How a writer into a checked module's ConstStore rebinds each closed named
-/// type to an occurrence the storing module's identity covers (design.md
-/// "Compile-Time Value Reuse Across Edits"): the storing module, whose key,
-/// checked types and imports the rebinding reads, and the program's checked
-/// modules the lowered occurrence is read from.
-pub const OccurrenceRebinding = struct {
-    storing_module: *const checked.CheckedModuleArtifact,
-    program: ProgramTypes,
-    /// The storing module's transitive imports within the program, by
-    /// ascending key, built on first use.
-    import_closure: ?[]const [32]u8 = null,
-};
-
 /// Stores interpreted compile-time roots into a checked ConstStore.
 pub const Writer = struct {
     allocator: Allocator,
@@ -88,14 +70,11 @@ pub const Writer = struct {
     /// stores values only (`storeLiteral`).
     names: ?*check.CanonicalNames.CanonicalNameStore,
     program: *const LirProgram.Result,
-    /// Present for a writer into a checked module's ConstStore. A writer into
-    /// a program-owned store (literal values, which belong to no checked
-    /// module) keeps the program's occurrences.
-    occurrences: ?OccurrenceRebinding,
     stored_values: std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId),
     visited_str_values: std.AutoHashMap(RuntimeValueAddress, void),
     str_backings: std.AutoHashMap(usize, StrBacking),
     erased_callable_resolver: ErasedCallableResolver,
+    boxy_functions: ?BoxyFunctions = null,
     product_plans: std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan),
     product_eligibility: collections.DenseMap(LirProgram.ConstPlanId, bool),
     /// Composites being stored, innermost last, and the shared stacks their
@@ -107,35 +86,26 @@ pub const Writer = struct {
 
     const ProductPlanKey = struct { plan: LirProgram.ConstPlanId, layout_idx: layout.Idx };
 
-    /// A writer into `module`'s ConstStore. `program_types` supplies the
-    /// checked types of every module the values were lowered against.
     pub fn init(
         allocator: Allocator,
         module: *checked.CheckedModuleArtifact,
         program: *const LirProgram.Result,
-        program_types: ProgramTypes,
     ) Writer {
-        return initStore(allocator, &module.const_store, &module.canonical_names, program, .{
-            .storing_module = module,
-            .program = program_types,
-        });
+        return initStore(allocator, &module.const_store, &module.canonical_names, program);
     }
 
-    /// A writer into `store`, translating stored types into `names` and
-    /// named occurrences through `occurrences`.
+    /// A writer into `store`, translating stored types into `names`.
     pub fn initStore(
         allocator: Allocator,
         store: *const_store.ConstStore,
         names: ?*check.CanonicalNames.CanonicalNameStore,
         program: *const LirProgram.Result,
-        occurrences: ?OccurrenceRebinding,
     ) Writer {
         return .{
             .allocator = allocator,
             .store = store,
             .names = names,
             .program = program,
-            .occurrences = occurrences,
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
             .visited_str_values = std.AutoHashMap(RuntimeValueAddress, void).init(allocator),
             .str_backings = std.AutoHashMap(usize, StrBacking).init(allocator),
@@ -149,8 +119,49 @@ pub const Writer = struct {
         self.erased_callable_resolver = resolver;
     }
 
+    /// Store this `.boxy` program's function values, reading them through
+    /// `functions` (`postcheck.Boxy.StoredFn`).
+    pub fn setBoxyFunctions(self: *Writer, functions: BoxyFunctions) void {
+        self.boxy_functions = functions;
+    }
+
+    /// Whether a value of plan `id` holds a function value a `.boxy`
+    /// compile-time program stores anywhere.
+    pub fn planHoldsBoxyFunction(self: *Writer, id: LirProgram.ConstPlanId) Allocator.Error!bool {
+        var seen = collections.DenseMap(LirProgram.ConstPlanId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(LirProgram.ConstPlanId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, id);
+        while (pending.pop()) |plan_id| {
+            if (seen.contains(plan_id)) continue;
+            try seen.put(plan_id, {});
+            switch (self.constPlan(plan_id)) {
+                .boxy_fn => return true,
+                .pending, .layout_only, .zst, .scalar, .str, .fn_value, .erased_fn => {},
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .tuple, .record => |children| try pending.appendSlice(self.allocator, children),
+                .tag_union => |variants| for (variants) |variant| try pending.appendSlice(self.allocator, variant.payloads),
+                .named => |named| try pending.append(self.allocator, named.backing),
+            }
+        }
+        return false;
+    }
+
+    fn pushBoxyFn(self: *Writer, node: checked.ConstNodeId, value: Value) Error!void {
+        const functions = self.boxy_functions orelse writerInvariant("a function value reached a program that stores none");
+        const data_ptr = self.readErasedCallablePointer(value);
+        const resolved = try self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
+        const described = try functions.retained.describe(self.allocator, functions.result, resolved.proc, resolved.capture_ptr, functions.composition);
+        defer self.allocator.free(described.captures);
+        const requests_start = self.store_requests.items.len;
+        for (described.captures) |capture| {
+            try self.store_requests.append(self.allocator, .{ .plan = capture.plan, .layout_idx = capture.layout_idx, .value = .{ .ptr = capture.ptr } });
+        }
+        try self.pushStoreFrame(.{ .boxy_fn = .{ .node = node, .recipe = described.recipe } }, requests_start, &.{});
+    }
+
     pub fn deinit(self: *Writer) void {
-        if (self.occurrences) |rebinding| if (rebinding.import_closure) |closure| self.allocator.free(closure);
         self.store_capture_types.deinit(self.allocator);
         self.store_nodes.deinit(self.allocator);
         self.store_requests.deinit(self.allocator);
@@ -183,8 +194,8 @@ pub const Writer = struct {
             .compile_time_callable => switch (plan) {
                 .fn_value => |set| .{ .fn_value = try self.storeFnValue(set, root.ret_layout, value) },
                 .erased_fn => |set| .{ .fn_value = try self.storeErasedFn(set, value) },
+                .boxy_fn => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, value) },
                 .pending,
-                .boxy_box,
                 .layout_only,
                 .zst,
                 .scalar,
@@ -235,83 +246,21 @@ pub const Writer = struct {
             &self.program.const_types,
             &self.program.const_type_names,
             self.typeNames(),
-            self.occurrenceTranslation(),
             root.ret_type,
         );
     }
 
-    /// The clone-time rebinding of named occurrences into this writer's
-    /// store; none for a program-owned store.
-    fn occurrenceTranslation(self: *Writer) ?const_store.OccurrenceTranslation {
-        if (self.occurrences == null) return null;
-        return .{ .context = self, .rebind = rebindNamedOccurrenceCallback };
-    }
-
-    fn rebindNamedOccurrenceCallback(context: *anyopaque, named: const_store.NamedType) const_store.NamedType {
-        const self: *Writer = @ptrCast(@alignCast(context));
-        return self.rebindNamedOccurrence(named);
-    }
-
-    /// The occurrence a stored named type carries in this writer's store. The
-    /// program's representative occurrence of a closed named type may belong
-    /// to any module of the program the value was lowered in, which a later
-    /// program reusing the stored value need not contain, so a closed
-    /// occurrence is rebound to one the storing module's identity covers: the
-    /// storing module's own, which holds every closed named type of the
-    /// stored root's checked type, or else the lowest-keyed module of its
-    /// transitive imports that holds one, where a stored closure's captures,
-    /// lowered in the callee's module, are found. An open occurrence is exact
-    /// and is already the lowering view's, which that identity covers.
-    fn rebindNamedOccurrence(self: *Writer, named: const_store.NamedType) const_store.NamedType {
-        const rebinding = &(self.occurrences orelse return named);
-        const storing_key = rebinding.storing_module.key;
-        if (std.meta.eql(named.ty_module.bytes, storing_key.bytes)) return named;
-        const occurrence = rebinding.program.find(rebinding.program.context, named.ty_module.bytes) orelse
-            writerInvariant("a stored named type's checked occurrence named a module outside the program");
-        const root = occurrence.types.rootRows()[@backingInt(named.ty)];
-        if (root.contains_identity_variables) return named;
-        if (rebinding.storing_module.checked_types.view().rootForKey(root.key)) |local| {
-            return .{ .module = named.module, .ty = local, .ty_module = storing_key.digest() };
-        }
-        const closure = rebinding.import_closure orelse closure: {
-            const built = self.buildImportClosure(rebinding.*) catch writerInvariant("import closure allocation failed");
-            rebinding.import_closure = built;
-            break :closure built;
-        };
-        for (closure) |key| {
-            const imported = rebinding.program.find(rebinding.program.context, key) orelse continue;
-            const found = imported.types.rootForKey(root.key) orelse continue;
-            if (imported.types.rootRows()[@backingInt(found)].contains_identity_variables) continue;
-            return .{ .module = named.module, .ty = found, .ty_module = .{ .bytes = key } };
-        }
-        writerInvariant("a stored closed named type has no checked occurrence in the module storing it or its imports");
-    }
-
-    /// The storing module's transitive imports that are in the program, by
-    /// ascending key. A direct import outside the program (a type-only
-    /// dependency the lowering did not need) holds no occurrence the values
-    /// were lowered from and contributes nothing.
-    fn buildImportClosure(self: *Writer, rebinding: OccurrenceRebinding) Allocator.Error![]const [32]u8 {
-        var seen = std.AutoHashMap([32]u8, void).init(self.allocator);
-        defer seen.deinit();
-        var pending = std.ArrayList([32]u8).empty;
-        defer pending.deinit(self.allocator);
-        var closure = std.ArrayList([32]u8).empty;
-        errdefer closure.deinit(self.allocator);
-        try seen.put(rebinding.storing_module.key.bytes, {});
-        for (rebinding.storing_module.direct_import_module_keys) |key| try pending.append(self.allocator, key.bytes);
-        while (pending.pop()) |key| {
-            if ((try seen.getOrPut(key)).found_existing) continue;
-            const module = rebinding.program.find(rebinding.program.context, key) orelse continue;
-            try closure.append(self.allocator, key);
-            for (module.direct_imports) |imported| try pending.append(self.allocator, imported.bytes);
-        }
-        std.mem.sort([32]u8, closure.items, {}, struct {
-            fn lessThan(_: void, a: [32]u8, b: [32]u8) bool {
-                return std.mem.order(u8, &a, &b) == .lt;
-            }
-        }.lessThan);
-        return closure.toOwnedSlice(self.allocator);
+    /// Preserve the concrete type a literal root converted its literal at.
+    pub fn storeLiteralType(
+        self: *Writer,
+        root: LirProgram.LiteralRootPlan,
+    ) Error!const_store.ConstTypeId {
+        return self.store.type_store.cloneTypeFromTranslated(
+            &self.program.const_types,
+            &self.program.const_type_names,
+            self.typeNames(),
+            root.ret_type,
+        );
     }
 
     /// One value to store or scan.
@@ -332,6 +281,8 @@ pub const Writer = struct {
         /// A function value; `node` is null for a callable root, whose
         /// function id is the store's result.
         fn_value: struct { node: ?checked.ConstNodeId, template: LirProgram.FnTemplate },
+        /// A `.boxy` function value; `recipe` is the writer's to free.
+        boxy_fn: struct { node: checked.ConstNodeId, recipe: []const u8 },
     };
 
     /// A composite value whose components are stored in order, each
@@ -458,7 +409,6 @@ pub const Writer = struct {
         const requests_start = self.store_requests.items.len;
         const children = &self.store_requests;
         const finish: StoreFinish = switch (self.constPlan(request.plan)) {
-            .boxy_box => writerInvariant("Boxy-only box reached ConstStore writer"),
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
             .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
             .zst => return self.store.fill(node, .zst),
@@ -494,6 +444,7 @@ pub const Writer = struct {
             },
             .fn_value => |set| return self.pushFnValue(node, set, layout_idx, value),
             .erased_fn => |set| return self.pushErasedFn(node, set, value),
+            .boxy_fn => return self.pushBoxyFn(node, value),
         };
         try self.pushStoreFrame(finish, requests_start, &.{});
     }
@@ -546,7 +497,7 @@ pub const Writer = struct {
         const entry = try self.resolveErasedEntry(set_id, value);
         const requests_start = self.store_requests.items.len;
         try self.appendCaptureRequests(&self.store_requests, entry.entry.captures, entry.entry.capture_layout, .{ .ptr = entry.capture_ptr });
-        const template = entry.entry.template orelse writerInvariant("Boxy frozen environment has no ConstStore provenance");
+        const template = entry.entry.template orelse writerInvariant("erased callable entry has no ConstStore template");
         try self.pushStoreFrame(.{ .fn_value = .{ .node = node, .template = template } }, requests_start, entry.entry.captures);
     }
 
@@ -577,7 +528,7 @@ pub const Writer = struct {
             .tuple => |node| self.store.fill(node, .{ .tuple = nodes }),
             .record => |node| self.store.fill(node, .{ .record = nodes }),
             .nominal => |nominal| self.store.fill(nominal.node, .{ .nominal = .{
-                .named_type = self.rebindNamedOccurrence(nominal.named.named_type),
+                .named_type = nominal.named.named_type,
                 .backing = nodes[0],
             } }),
             .tag => |tag| {
@@ -587,6 +538,10 @@ pub const Writer = struct {
                     .tag_name = tag_name,
                     .payloads = nodes,
                 } });
+            },
+            .boxy_fn => |function| {
+                defer self.allocator.free(function.recipe);
+                self.store.fill(function.node, .{ .boxy_fn = .{ .recipe = try self.storeBytes(function.recipe), .captures = nodes } });
             },
             .fn_value => |fn_value| {
                 const captures = try self.store.allocator.alloc(const_store.ConstCapture, frame.slots.len);
@@ -599,6 +554,7 @@ pub const Writer = struct {
                     .fn_def = template.fn_def,
                     .source_fn_ty = template.source_fn_ty,
                     .source_fn_key = template.source_fn_key,
+                    .owner_fn_ty = if (template.owner_fn_ty) |owner_fn_ty| try self.cloneCaptureType(owner_fn_ty) else null,
                     .captures = captures,
                     .evidence = template.evidence,
                     .evidence_frames = template.evidence_frames,
@@ -680,6 +636,7 @@ pub const Writer = struct {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         try out.append(self.allocator, switch (layout_value.tag) {
             .hole => writerInvariant("a demand hole reached a compile-time value"),
+            .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
             .box_of_zst => .{ .plan = elem_plan, .layout_idx = .zst, .value = Value.zst },
             .box => .{
                 .plan = elem_plan,
@@ -688,7 +645,6 @@ pub const Writer = struct {
             },
             .erased_callable => .{ .plan = elem_plan, .layout_idx = layout_idx, .value = value },
             .scalar,
-            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -856,6 +812,10 @@ pub const Writer = struct {
         } };
     }
 
+    fn storeBytes(self: *Writer, bytes: []const u8) Allocator.Error!const_store.ConstStr {
+        return .{ .data = try self.store.addBlobData(bytes), .offset = 0, .len = @intCast(bytes.len) };
+    }
+
     fn planIsProduct(self: *Writer, root: LirProgram.ConstPlanId) Allocator.Error!bool {
         const Frame = struct {
             id: LirProgram.ConstPlanId,
@@ -899,7 +859,7 @@ pub const Writer = struct {
             .named => |*named| (&named.backing)[0..1],
             .record, .tuple => |children| children,
             .pending, .layout_only => writerInvariant("product eligibility reached an unfinished const plan"),
-            .str, .list, .box, .boxy_box, .tag_union, .fn_value, .erased_fn => return false,
+            .str, .list, .box, .tag_union, .fn_value, .erased_fn, .boxy_fn => return false,
         };
         try frames.append(self.allocator, .{ .id = id, .children = children });
         return null;
@@ -947,7 +907,6 @@ pub const Writer = struct {
                 continue;
             },
             .pending,
-            .boxy_box,
             .layout_only,
             .zst,
             .str,
@@ -958,6 +917,7 @@ pub const Writer = struct {
             .tag_union,
             .fn_value,
             .erased_fn,
+            .boxy_fn,
             => false,
         };
     }
@@ -1035,7 +995,6 @@ pub const Writer = struct {
             &self.program.const_types,
             &self.program.const_type_names,
             self.typeNames(),
-            self.occurrenceTranslation(),
             ty,
         );
     }
@@ -1081,11 +1040,11 @@ pub const Writer = struct {
         }
 
         switch (self.constPlan(request.plan)) {
-            .boxy_box => writerInvariant("Boxy-only box reached ConstStore writer"),
             .pending => writerInvariant("pending const plan reached string backing collection"),
             .layout_only => writerInvariant("layout-only const plan reached string backing collection"),
             .zst,
             .scalar,
+            .boxy_fn,
             => {},
             .str => try self.collectStrValue(value),
             .list => |elem_plan| {
@@ -1172,12 +1131,12 @@ pub const Writer = struct {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         return switch (layout_value.tag) {
             .hole => writerInvariant("a demand hole reached a compile-time value"),
+            .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
             .zst => 0,
             .tag_union => self.program.layouts.getTagUnionData(layout_value.getTagUnion().idx).readDiscriminant(value.ptr, self.program.layouts.targetUsize()),
             .scalar,
             .box,
             .box_of_zst,
-            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -1209,6 +1168,7 @@ pub const Writer = struct {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         return switch (layout_value.tag) {
             .hole => writerInvariant("a demand hole reached a compile-time value"),
+            .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
             .zst, .tag_union => .{
                 .value = value,
                 .layout_idx = layout_idx,
@@ -1221,7 +1181,6 @@ pub const Writer = struct {
             },
             .scalar,
             .box_of_zst,
-            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -1264,8 +1223,8 @@ pub const Writer = struct {
                 break :blk @intFromPtr(roc_str.asSlice().ptr);
             } else null,
             .hole => writerInvariant("a demand hole reached a compile-time value"),
+            .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
             .box_of_zst,
-            .erased_box,
             .list_of_zst,
             .struct_,
             .closure,
@@ -1287,9 +1246,9 @@ pub const Writer = struct {
                     break :blk roc_str.len();
                 } else 0,
                 .hole => writerInvariant("a demand hole reached a compile-time value"),
+                .dynamic => writerInvariant("a dynamic value reached a compile-time value"),
                 .box,
                 .box_of_zst,
-                .erased_box,
                 .list_of_zst,
                 .struct_,
                 .closure,
@@ -1416,17 +1375,6 @@ fn deinitTestArtifact(artifact: *checked.CheckedModuleArtifact, allocator: Alloc
     artifact.canonical_names.deinit();
 }
 
-/// A one-module program: the module's own checked types under its key.
-fn testProgramTypes(artifact: *const checked.CheckedModuleArtifact) ProgramTypes {
-    return .{ .context = artifact, .find = findTestProgramTypes };
-}
-
-fn findTestProgramTypes(context: *const anyopaque, key: [32]u8) ?ProgramModule {
-    const artifact: *const checked.CheckedModuleArtifact = @ptrCast(@alignCast(context));
-    if (!std.meta.eql(artifact.key.bytes, key)) return null;
-    return .{ .types = artifact.checked_types.view(), .direct_imports = artifact.direct_import_module_keys };
-}
-
 fn testConstRoot(plan: LirProgram.ConstPlanId, ret_layout: layout.Idx) LirProgram.ConstRootPlan {
     return .{
         .root_order = 0,
@@ -1461,7 +1409,7 @@ test "const store writer pointer memoization is scoped to one root" {
     const str_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(testing.allocator, .str);
 
-    var writer = Writer.init(testing.allocator, &artifact, &program, testProgramTypes(&artifact));
+    var writer = Writer.init(testing.allocator, &artifact, &program);
     defer writer.deinit();
 
     const root = testConstRoot(str_plan, .str);
@@ -1507,7 +1455,7 @@ test "const store writer stores every NaN as Roc's one NaN" {
     const scalar_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(testing.allocator, .scalar);
 
-    var writer = Writer.init(testing.allocator, &artifact, &program, testProgramTypes(&artifact));
+    var writer = Writer.init(testing.allocator, &artifact, &program);
     defer writer.deinit();
 
     var f64_payload: u64 = 0xfff9_2345_6789_abcd;
@@ -1549,7 +1497,7 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     const u8_list_layout = try program.layouts.insertLayout(layout.Layout.list(.u8));
     const u16_list_layout = try program.layouts.insertLayout(layout.Layout.list(.u16));
 
-    var writer = Writer.init(testing.allocator, &artifact, &program, testProgramTypes(&artifact));
+    var writer = Writer.init(testing.allocator, &artifact, &program);
     defer writer.deinit();
 
     const bytes = try testing.allocator.alloc(u8, 20 * 1024);

@@ -1,6 +1,7 @@
 //! Regression test for issue #11199.
 
 const std = @import("std");
+const base = @import("base");
 const build_options = @import("build_options");
 const collections = @import("collections");
 const eval = @import("eval");
@@ -70,8 +71,10 @@ test "issue 11199: generic record and tuple codecs forward through runtime calls
         \\    Ok({})
         \\}
     ;
-    try harness.expectLowersToLirWithOptions(source, .{ .specialization_strategy = .lss });
-    try harness.expectLowersToLirWithOptions(source, .{ .boxy_plan_inspect = expectForwardedSchemeDictionaries });
+    // `.boxy` forwards scheme dictionaries through its runtime calls.
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        try harness.expectLowersToLirWithOptions(source, .{ .specialization_strategy = strategy });
+    }
 }
 
 test "issue 11199: generic parser requirements forward through runtime calls" {
@@ -103,7 +106,8 @@ test "issue 11199: unified codec callable relations retain their schema evidence
         \\}
     ;
     try harness.expectLowersToLirWithOptions(source, .{ .monotype_only = true });
-    try harness.expectLowersToLirWithOptions(source, .{ .boxy_plan_inspect = expectForwardedSchemeDictionaries });
+    // `.boxy` forwards scheme dictionaries through its runtime calls.
+    try harness.expectLowersToLirWithOptions(source, .{ .specialization_strategy = .boxy });
 }
 
 test "issue 11199: imported generic codecs retain their complete evidence schema" {
@@ -138,29 +142,13 @@ test "issue 11199: imported generic codecs retain their complete evidence schema
     });
     const path = try dir.dir.realPathFileAlloc(std.testing.io, "main.roc", std.testing.allocator);
     defer std.testing.allocator.free(path);
-    try harness.expectAppPathLowersToLirWithOptions(path, .{ .specialization_strategy = .lss });
-    try harness.expectAppPathLowersToLirWithOptions(path, .{ .boxy_plan_inspect = expectForwardedSchemeDictionaries });
+    // `.boxy` forwards scheme dictionaries through its runtime calls.
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        try harness.expectAppPathLowersToLirWithOptions(path, .{ .specialization_strategy = strategy });
+    }
 }
 
 const postcheck = @import("postcheck");
-
-fn expectForwardedSchemeDictionaries(plan: *const postcheck.Boxy.Plan.ProgramPlan) harness.LowerToLirHarnessError!void {
-    var forwarded: usize = 0;
-    for (plan.direct_calls.items) |call| {
-        for (plan.directCallHiddenDictionaryArgSlice(call.hidden_dict_args)) |arg| {
-            if (arg.source != .bound_dictionaries) continue;
-            const source = arg.source.bound_dictionaries;
-            const caller = plan.workers.items[@backingInt(call.caller)];
-            for (plan.hiddenDictionaryParamSlice(caller.hidden_dicts)) |param| {
-                if (param.scheme_param != null and param.dictionaries.start == source.start) {
-                    forwarded += 1;
-                    break;
-                }
-            }
-        }
-    }
-    try std.testing.expect(forwarded > 0);
-}
 
 test "issue 11199: a local codec closure retains its evidence schema" {
     const source =

@@ -282,6 +282,10 @@ pub const aarch64_gp_registers: u8 = 8;
 pub const simd_argument_registers: u8 = 8;
 /// Windows x64 argument positions, shared between general and SSE registers.
 pub const win64_argument_registers: u8 = 4;
+/// The most parameters a wasm function type can declare and still load: the
+/// limit the WebAssembly JS API sets for every engine it hosts. Wasm itself has
+/// no argument registers, so this is the budget `markRegisterOverflow` spends.
+pub const wasm_max_function_params: u32 = 1000;
 
 /// Marks each argument of `lowered` that the target's argument registers
 /// cannot hold, for a parameter list that ends with `trailing_pointers`
@@ -340,8 +344,34 @@ pub fn markRegisterOverflow(target: Target, lowered: LoweredCall, trailing_point
                 }
             }
         },
-        .wasm32, .wasm32v1, .wasm64 => unreachable, // the LLVM backend calls this only when usesTailDrivers is false, which excludes wasm
+        .wasm32, .wasm32v1, .wasm64 => {
+            var used: u32 = @as(u32, @intFromBool(lowered.ret == .indirect)) + @intFromBool(lowered.leading_ops) + trailing_pointers;
+            for (lowered.args, overflow) |placement, *overflows| {
+                const count = wasmPlacementParamCount(placement);
+                if (count == 0) continue;
+                if (used + count <= wasm_max_function_params) used += count else overflows.* = true;
+            }
+        },
     }
+}
+
+/// The wasm parameters one lowered argument takes.
+fn wasmPlacementParamCount(placement: Placement) u32 {
+    return switch (placement) {
+        .none => 0,
+        .indirect => 1,
+        .registers => |registers| @intCast(registers.pieces.len),
+    };
+}
+
+/// The parameters the wasm function type of a C-ABI signature declares. A
+/// count past `wasm_max_function_params` is a signature no engine loads, and
+/// nothing can move its arguments into memory, because the other side of the
+/// boundary fixes the signature.
+pub fn wasmCAbiParamCount(lowered: LoweredCall) u32 {
+    var count: u32 = @as(u32, @intFromBool(lowered.ret == .indirect)) + @intFromBool(lowered.leading_ops);
+    for (lowered.args) |placement| count += wasmPlacementParamCount(placement);
+    return count;
 }
 
 const PieceCounts = struct { gp: u8, sse: u8 };
@@ -384,7 +414,7 @@ fn isCAbiAggregate(store: *const Store, start: Idx) bool {
         .scalar => lay.getScalar().tag == .frac and lay.getScalar().getFrac() == .dec,
         // A union with a runtime discriminant is a C struct.
         .tag_union => true,
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .hole, .ptr => false,
+        .box, .box_of_zst, .list, .list_of_zst, .zst, .hole, .ptr, .dynamic => false,
     };
 }
 
@@ -395,7 +425,7 @@ fn isCAbiI128Scalar(store: *const Store, start: Idx) bool {
         .scalar => lay.getScalar().tag == .int and store.layoutSize(lay) == 16,
         // A union with a runtime discriminant is a C struct.
         .tag_union => false,
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr => false,
+        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => false,
     };
 }
 
@@ -409,7 +439,7 @@ fn cAbiI128VectorKind(store: *const Store, start: Idx) ?layout.Vector {
             null,
         // A union with a runtime discriminant is a C struct.
         .tag_union => null,
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr => null,
+        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => null,
     };
 }
 
@@ -641,7 +671,7 @@ fn narrowScalarExtension(store: *const Store, start: Idx) RegExtension {
             }
             break :blk .zero;
         },
-        .struct_, .closure, .erased_callable, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .hole, .ptr => .none,
+        .struct_, .closure, .erased_callable, .box, .box_of_zst, .list, .list_of_zst, .zst, .hole, .ptr, .dynamic => .none,
     };
 }
 
@@ -744,7 +774,7 @@ fn placementAarch64(
                 }
                 return integerPieces(arena, size, if (size == 16) .integer else .piecewise, extend);
             },
-            .box, .box_of_zst, .erased_box, .ptr => return integerPieces(arena, size, .piecewise, .none),
+            .box, .box_of_zst, .ptr, .dynamic => return integerPieces(arena, size, .piecewise, .none),
             .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .zst, .hole => unreachable, // aarch64.classifyType returns byval only for scalar and pointer-like layouts
         },
     }
@@ -904,7 +934,7 @@ fn findVectorKind(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.m
                     try pending.append(pending_allocator, info.variants.get(0).payload_layout);
                 }
             },
-            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .zst, .hole, .ptr => {},
+            .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .zst, .hole, .ptr, .dynamic => {},
         }
     }
     return null;
@@ -1349,6 +1379,23 @@ test "physical Apple arm64 stack arguments use compact natural alignment" {
     try testing.expectEqual(@as(u32, 8), elf.args[9].stack_value.offset);
     try testing.expectEqual(@as(u32, 16), elf.args[10].stack_value.offset);
     try testing.expectEqual(@as(u32, 24), elf.stack_size);
+}
+
+test "markRegisterOverflow spends wasm's parameter limit in order" {
+    var args: [wasm_max_function_params + 2]Placement = undefined;
+    @memset(&args, .indirect);
+    args[0] = .none;
+    var overflow: [args.len]bool = undefined;
+
+    const within = args[0 .. wasm_max_function_params + 1];
+    markRegisterOverflow(.wasm32, .{ .leading_ops = false, .ret = .none, .args = within }, 0, overflow[0..within.len]);
+    for (overflow[0..within.len]) |overflowed| try std.testing.expect(!overflowed);
+    try std.testing.expectEqual(@as(u32, wasm_max_function_params), wasmCAbiParamCount(.{ .leading_ops = false, .ret = .none, .args = within }));
+
+    const lowered: LoweredCall = .{ .leading_ops = false, .ret = .indirect, .args = &args };
+    try std.testing.expectEqual(@as(u32, wasm_max_function_params + 2), wasmCAbiParamCount(lowered));
+    markRegisterOverflow(.wasm32, lowered, 1, &overflow);
+    for (overflow, 0..) |overflowed, index| try std.testing.expectEqual(index >= wasm_max_function_params - 1, overflowed);
 }
 
 test "markRegisterOverflow leaves trailing pointers their registers" {

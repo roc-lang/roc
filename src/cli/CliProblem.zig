@@ -19,6 +19,14 @@ const lir = @import("lir");
 const unbundle = @import("unbundle");
 const cli_args = @import("cli_args.zig");
 
+/// A symbol a wasm image needs that nothing it may resolve to defines.
+pub const WasmMissingSymbol = struct {
+    name: []const u8,
+    kind: enum { data, table },
+    /// The image that needs it.
+    needed_by: enum { host, support, unit },
+};
+
 /// Errors that can be attached to structured CLI problem reports.
 pub const ReportedError =
     Allocator.Error ||
@@ -121,6 +129,17 @@ pub const CliProblem = union(enum) {
 
     /// The command line arguments could not be parsed
     invalid_arguments: cli_args.ArgProblem,
+
+    // Target Limit Problems
+
+    /// A platform boundary function takes more wasm parameters than an engine
+    /// loads, and the host fixes its signature
+    wasm_host_parameter_limit: struct {
+        symbol: []const u8,
+        direction: WasmHostDirection,
+        param_count: u32,
+        limit: u32,
+    },
 
     // File I/O Problems
 
@@ -260,6 +279,63 @@ pub const CliProblem = union(enum) {
     /// The platform's host inputs do not define symbols the app references
     missing_host_symbols: struct {
         symbols: []const []const u8,
+        target: []const u8,
+    },
+
+    /// A value the app provides to the host is larger than the room a dev
+    /// executable keeps for one
+    provided_value_too_large: struct {
+        symbol: []const u8,
+        size: u64,
+        limit: u64,
+        target: []const u8,
+    },
+
+    /// The app's code and data do not fit the addresses a dev executable
+    /// keeps for them
+    dev_program_too_large: struct {
+        target: []const u8,
+    },
+
+    /// A wasm module would exceed a limit every WebAssembly engine enforces
+    wasm_engine_limit: struct {
+        what: []const u8,
+        count: u64,
+        limit: u64,
+        target: []const u8,
+    },
+
+    /// The platform's wasm `exports:` name symbols nothing defines
+    wasm_exports_undefined: struct {
+        symbols: []const []const u8,
+        target: []const u8,
+    },
+
+    /// Parts of a wasm program need data symbols or tables nothing that
+    /// may define them defines
+    wasm_symbols_undefined: struct {
+        symbols: []const WasmMissingSymbol,
+        target: []const u8,
+    },
+
+    /// Two parts of a wasm program import one host function with
+    /// different signatures
+    wasm_import_conflict: struct {
+        symbol: []const u8,
+        target: []const u8,
+    },
+
+    /// The platform's wasm memory configuration does not fit the program
+    wasm_memory_layout: struct {
+        what: []const u8,
+        needed: u64,
+        configured: u64,
+        target: []const u8,
+    },
+
+    /// A wasm host input holds something a dev build cannot link
+    wasm_host_unsupported: struct {
+        reason: []const u8,
         target: []const u8,
     },
 
@@ -406,6 +482,7 @@ pub const CliProblem = union(enum) {
         return switch (self) {
             // Fatal errors - cannot continue
             .invalid_arguments,
+            .wasm_host_parameter_limit,
             .file_not_found,
             .no_platform_found,
             .platform_requires_app,
@@ -418,6 +495,14 @@ pub const CliProblem = union(enum) {
             .linker_failed,
             .undefined_compiler_symbols,
             .missing_host_symbols,
+            .provided_value_too_large,
+            .dev_program_too_large,
+            .wasm_engine_limit,
+            .wasm_exports_undefined,
+            .wasm_symbols_undefined,
+            .wasm_import_conflict,
+            .wasm_memory_layout,
+            .wasm_host_unsupported,
             => .fatal,
 
             // Runtime errors - operation failed
@@ -462,6 +547,7 @@ pub const CliProblem = union(enum) {
     pub fn toReport(self: CliProblem, allocator: Allocator) Allocator.Error!Report {
         return switch (self) {
             .invalid_arguments => |problem| try createInvalidArgumentsReport(allocator, problem),
+            .wasm_host_parameter_limit => |info| try createWasmHostParameterLimitReport(allocator, info),
             .file_not_found => |info| try createFileNotFoundReport(allocator, info),
             .file_read_failed => |info| try createFileReadFailedReport(allocator, info),
             .file_write_failed => |info| try createFileWriteFailedReport(allocator, info),
@@ -485,6 +571,14 @@ pub const CliProblem = union(enum) {
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
             .undefined_compiler_symbols => |info| try createUndefinedCompilerSymbolsReport(allocator, info),
             .missing_host_symbols => |info| try createMissingHostSymbolsReport(allocator, info),
+            .provided_value_too_large => |info| try createProvidedValueTooLargeReport(allocator, info),
+            .dev_program_too_large => |info| try createDevProgramTooLargeReport(allocator, info),
+            .wasm_engine_limit => |info| try createWasmEngineLimitReport(allocator, info),
+            .wasm_exports_undefined => |info| try createWasmExportsUndefinedReport(allocator, info),
+            .wasm_symbols_undefined => |info| try createWasmSymbolsUndefinedReport(allocator, info),
+            .wasm_import_conflict => |info| try createWasmImportConflictReport(allocator, info),
+            .wasm_memory_layout => |info| try createWasmMemoryLayoutReport(allocator, info),
+            .wasm_host_unsupported => |info| try createWasmHostUnsupportedReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
             .invalid_url => |info| try createInvalidUrlReport(allocator, info),
@@ -509,6 +603,13 @@ pub const CliProblem = union(enum) {
             .no_exports_found => |info| try createNoExportsFoundReport(allocator, info),
         };
     }
+};
+
+/// Which side of a platform boundary defines a function the host calls or
+/// provides.
+pub const WasmHostDirection = enum {
+    provided_to_host,
+    hosted,
 };
 
 /// Context for file operations - helps generate better error messages
@@ -887,6 +988,22 @@ fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Alloca
     return createPathErrorNameReport(allocator, "Directory Create Failed", "I could not create the directory ", info.path, ".", .runtime_error, @errorName(info.err));
 }
 
+fn createWasmHostParameterLimitReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = try Report.init(allocator, "Too Many Wasm Parameters", "A platform function has more wasm parameters than an engine will load.", .runtime_error);
+
+    try report.document.addText(switch (info.direction) {
+        .provided_to_host => "The platform provides ",
+        .hosted => "The platform's host defines ",
+    });
+    try report.document.addAnnotated(info.symbol, .path);
+    try report.document.addText(try std.fmt.allocPrint(allocator, " with {d} wasm parameters, and WebAssembly engines reject a function with more than {d}.", .{ info.param_count, info.limit }));
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Roc passes extra arguments in memory between its own functions, but the host fixes this function's signature. Grouping arguments into a record crosses the boundary as a single parameter.");
+
+    return report;
+}
+
 fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = try Report.init(allocator, "Directory Not Found", "The directory does not exist.", .runtime_error);
 
@@ -1108,6 +1225,119 @@ fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator
     try report.document.addAnnotated("targets", .emphasized);
     try report.document.addText(" section.");
 
+    return report;
+}
+
+fn createProvidedValueTooLargeReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The value the application provides to the host as {s} is {d} bytes, and a dev executable for target {s} keeps room for at most {d} bytes per provided value.", .{ info.symbol, info.size, info.target, info.limit });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Provided Value Too Large", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("A dev build places each value named in the platform header's ");
+    try report.document.addAnnotated("provides", .emphasized);
+    try report.document.addText(" section at a fixed address the host is linked against. Build with ");
+    try report.document.addAnnotated("--opt=size", .emphasized);
+    try report.document.addText(" or ");
+    try report.document.addAnnotated("--opt=speed", .emphasized);
+    try report.document.addText(", or provide the value behind a pointer (for example in a List or a Box).");
+    return report;
+}
+
+fn createDevProgramTooLargeReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The application's code and data are too large for a dev executable for target {s}, which keeps them within 2 GiB of the host.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Dev Program Too Large", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Build with ");
+    try report.document.addAnnotated("--opt=size", .emphasized);
+    try report.document.addText(" or ");
+    try report.document.addAnnotated("--opt=speed", .emphasized);
+    try report.document.addText(".");
+    return report;
+}
+
+fn createWasmEngineLimitReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The wasm module for target {s} would have {d} {s}, and WebAssembly engines reject a module with more than {d}.", .{ info.target, info.count, info.what, info.limit });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Wasm Module Too Large", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Build with ");
+    try report.document.addAnnotated("--opt=size", .emphasized);
+    try report.document.addText(", whose optimizer removes and merges code, or split the program.");
+    return report;
+}
+
+fn createWasmExportsUndefinedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The platform's exports for target {s} name these symbols, and neither the host nor the application defines them.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Undefined Wasm Exports", headline, .fatal);
+    for (info.symbols) |symbol| {
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(symbol, .emphasized);
+    }
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Every name in the platform header's ");
+    try report.document.addAnnotated("exports", .emphasized);
+    try report.document.addText(" list must be defined by the host inputs or provided by the application.");
+    return report;
+}
+
+fn createWasmSymbolsUndefinedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The wasm program for target {s} needs these symbols, and nothing that may define them does.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Undefined Wasm Symbols", headline, .fatal);
+    for (info.symbols) |symbol| {
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(symbol.name, .emphasized);
+        try report.document.addText(switch (symbol.kind) {
+            .data => ", a data symbol ",
+            .table => ", a table ",
+        });
+        try report.document.addText(switch (symbol.needed_by) {
+            .host => "the platform's host needs, which only a name the application provides to the host can define",
+            .support => "the compiler's support code needs, which the application or the platform's host inputs must define",
+            .unit => "the application needs, which the application or the platform's host inputs must define",
+        });
+    }
+    try report.document.addLineBreaks(2);
+    try report.document.addText("The host inputs are the ones listed in the platform header's ");
+    try report.document.addAnnotated("targets", .emphasized);
+    try report.document.addText(" section, and the names the application provides to the host are its ");
+    try report.document.addAnnotated("provides", .emphasized);
+    try report.document.addText(" and the data it exports.");
+    return report;
+}
+
+fn createWasmImportConflictReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The wasm program for target {s} imports {s} from its embedder with two different signatures.", .{ info.target, info.symbol });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Conflicting Wasm Imports", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Every declaration of a function the embedder provides must agree on its parameters and results.");
+    return report;
+}
+
+fn createWasmMemoryLayoutReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The wasm memory configuration for target {s} does not fit the program: {s} (needs {d}, configured {d}).", .{ info.target, info.what, info.needed, info.configured });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Wasm Memory Configuration", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Adjust the memory and stack settings in the platform header's ");
+    try report.document.addAnnotated("targets", .emphasized);
+    try report.document.addText(" section, or the --wasm-memory and --wasm-stack-size options.");
+    return report;
+}
+
+fn createWasmHostUnsupportedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "A dev build cannot link the platform's wasm host for target {s}: {s}.", .{ info.target, info.reason });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unsupported Wasm Host", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Build with ");
+    try report.document.addAnnotated("--no-cache", .emphasized);
+    try report.document.addText(", which links the host with LLD, or rebuild the host without it.");
     return report;
 }
 

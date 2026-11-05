@@ -970,6 +970,126 @@ test "a compile-time record of an empty list and a scalar lowers as its construc
     }.inspect);
 }
 
+test "an empty list with capacity in a record frozen into static data is the empty list" {
+    // The record's initializer restores the list as `list_with_capacity(4)`.
+    // Static data is never appended to in place, so it freezes as the empty
+    // list rather than as a pointer into the readonly image.
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\state : { name : Str, items : List(Str) }
+        \\state = { name: "a", items: List.with_capacity(4) }
+        \\
+        \\fill : { name : Str, items : List(Str) }, Str -> U64
+        \\fill = |record, item| List.len(List.prepend(record.items, item)) + Str.count_utf8_bytes(record.name)
+        \\
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(fill(state, List.len(args).to_str())))
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        .x64linux,
+        builtin_modules,
+        build_options.compiler_compatibility_id,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finishCheckedProgram(.executable_artifacts);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        .{
+            .requests = lir_roots,
+            .include_provided_data_exports = true,
+            .include_internal_static_data = true,
+        },
+        .{ .target_usize = base.target.TargetUsize.u64 },
+    );
+    defer lowered.deinit();
+    try expectLowLevelPresent(&lowered.lir_result, .list_with_capacity);
+
+    const exports = try static_data_exports.buildStaticData(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        &lowered,
+        .x64linux,
+        .{ .include_provided_exports = true },
+    );
+    defer static_data_exports.deinitStaticData(gpa, exports);
+
+    // Every list field of a frozen record: null pointer, zero length and
+    // capacity, and no relocation.
+    const layouts = &lowered.lir_result.layouts;
+    var frozen_lists: usize = 0;
+    for (lowered.lir_result.static_data_values.items, 0..) |value, index| {
+        if (value.initializer == null) continue;
+        const record = layouts.getLayout(value.layout_idx);
+        if (record.tag != .struct_) continue;
+        const struct_idx = record.getStruct().idx;
+        const symbol = try lir.Program.staticDataSymbolName(gpa, @fromBackingInt(@intCast(index)));
+        defer gpa.free(symbol);
+        const static_export = for (exports) |static_export| {
+            if (std.mem.eql(u8, static_export.symbol_name, symbol)) break static_export;
+        } else return error.StaticDataSymbolNotFound;
+        for (0..layouts.getStructData(struct_idx).getFields().count) |field| {
+            const field_index: u32 = @intCast(field);
+            if (layouts.getLayout(layouts.getStructFieldLayout(struct_idx, field_index)).tag != .list) continue;
+            const offset = static_export.symbol_offset + layouts.getStructFieldOffset(struct_idx, field_index);
+            const size = layouts.getStructFieldSize(struct_idx, field_index);
+            try std.testing.expect(std.mem.allEqual(u8, static_export.bytes[offset..][0..size], 0));
+            for (static_export.relocations) |relocation| try std.testing.expect(relocation.offset != offset);
+            frozen_lists += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), frozen_lists);
+}
+
 /// Checks and lowers an app over the echo platform, handing the lowered
 /// program to `inspect` while it is alive.
 fn lowerEchoApp(source: []const u8, comptime inspect: fn (*lir.Program.Result) HoistedConstantsTestError!usize) HoistedConstantsTestError!usize {
@@ -1069,7 +1189,7 @@ fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) Hoist
         switch (stmt.assign_literal.value) {
             .i128_literal => |id| if (result.store.stmtRow(id).value == value) return,
             .i64_literal => |literal| if (literal.value == value) return,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => {},
         }
     }
     return error.StaticDataLiteralNotFound;
@@ -2434,6 +2554,7 @@ fn expectCompileTimeRootKindsPresent(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .literal_argument,
             .repl_expr,
             => {},
         }
@@ -2517,7 +2638,7 @@ fn compileTimeRootKindMatchesRequest(
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .repl_expr => request_kind == .repl_expr,
-        .numeral_conversion, .quote_conversion => request_kind == .compile_time_constant,
+        .numeral_conversion, .quote_conversion, .literal_argument => request_kind == .compile_time_constant,
     };
 }
 
@@ -2839,8 +2960,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
                 .f64_literal,
                 .f32_literal,
                 .dec_literal,
-                .boxy_dynamic_num_literal,
-                .boxy_dynamic_frac_literal,
                 .str_literal,
                 .bytes_literal,
                 .proc_ref,
@@ -2848,22 +2967,10 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             },
             .init_uninitialized,
             .assign_ref,
+            .dyn,
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -2981,6 +3088,7 @@ fn scalarConstNodeI64(
         .tag,
         .nominal,
         .fn_value,
+        .boxy_fn,
         => return error.HoistedConstWasNotScalar,
     };
     return actual;

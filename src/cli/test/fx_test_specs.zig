@@ -313,6 +313,14 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>1122",
         .description = "Nominal record declared-order + unnamed padding matches the host C struct layout",
     },
+    // The same for generic nominals: their records are built by one body whose
+    // field offsets a descriptor composed at runtime has to give, and a padding
+    // type can be the nominal's own type parameter.
+    .{
+        .roc_file = "test/fx/host_interop_generic_padding.roc",
+        .io_spec = "1>1122|1>3344|1>held across the host|1>110|1>mixed across the host|1>3|1>6677|1>77|1>8899",
+        .description = "Generic nominal records with unnamed padding match the host C struct layout",
+    },
 
     // Lookup tests
     .{
@@ -777,6 +785,31 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/issue_12438_input_list_overfree.roc",
         .io_spec = "0<aa|1>ok: True, len: 2, first: 97",
         .description = "Regression test for #12438: a list passed through cursor records into helper calls is not decremented more often than it is owned",
+    },
+    .{
+        .roc_file = "test/fx/issue_12692_handle_shape.roc",
+        .io_spec = "1>method call: closed|1>qualified call: closed|1>recursive helper: closed|1>wrapper call: closed",
+        .description = "Regression test for #12692: a record argument returned to its caller on a switched result outcome keeps the field its callee passed to a hosted call",
+    },
+    .{
+        .roc_file = "test/fx/issue_12746_single_field_handle.roc",
+        .io_spec = "1>method call: 1|1>qualified call: 2|1>match return: 3|1>recursive helper: 4|1>scalar sibling: 5|1>tag payload: 6",
+        .description = "Regression test for #12746: an argument returned to its caller on a switched result outcome keeps the handle its callee reads through an ownership-complete projection and passes to a hosted call",
+    },
+    .{
+        .roc_file = "test/fx/issue_12746_connection_handle.roc",
+        .io_spec = "1>connection: 16 1",
+        .description = "Regression test for #12746: a record of a handle and scalar settings returned to its caller on a switched result outcome keeps the handle its callee passes to a hosted call alongside a method call on a sibling field",
+    },
+    .{
+        .roc_file = "test/fx/issue_12706_shared_case_arm.roc",
+        .io_spec = "1>small 2001|1>small 1001|1>small 2008|1>big 1060|1>small 2099|1>small missing101",
+        .description = "Regression test for #12706: a case-of-case arm shared through a join keeps the arms of the code after a match whose result reaches that code along several paths",
+    },
+    .{
+        .roc_file = "test/fx/issue_12707_try_split_first_map_err_not_found.roc",
+        .io_spec = "1>Ok(\"0\")",
+        .description = "Regression test for #12707: an unannotated function whose `?` on Str.split_first and whose map_err both produce NotFound builds and runs",
     },
     .{
         .roc_file = "test/fx/tailcc_stack_args.roc",

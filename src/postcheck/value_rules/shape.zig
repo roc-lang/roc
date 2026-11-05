@@ -2,8 +2,7 @@
 //!
 //! Inspection, structural equality, and structural hashing are value
 //! rules: they depend on a type's shape, not on which lowering strategy
-//! produced it. Each consumer (Monotype lowering, Boxy lowering, the Boxy
-//! runtime) reads its own type representation into one of these shapes, and
+//! produced it. Each consumer reads its own type representation into one of these shapes, and
 //! the shared walkers decide what each shape means.
 
 /// Every shape a consumer's type representation reads as.

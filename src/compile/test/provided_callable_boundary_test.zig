@@ -68,7 +68,6 @@ fn expectHostAbiCallablesUseErasedRepresentation(
                     try std.testing.expectEqual(lir.LIR.RcAtomicity.atomic, release.atomicity);
                     found_release = true;
                 },
-                .boxy => {},
             }
         }
         try std.testing.expect(found_release);

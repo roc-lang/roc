@@ -178,6 +178,7 @@ const BranchRewriter = struct {
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,
@@ -193,19 +194,6 @@ const BranchRewriter = struct {
             .jump,
             .ret,
             .crash,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             => return .none,
         }
         const assign = stmt.assign_ref;
@@ -277,7 +265,7 @@ const BranchRewriter = struct {
                 },
                 .local, .discriminant, .field, .list_reinterpret, .nominal => unreachable, // interceptStmt claims an assign_ref only for tag_payload and tag_payload_struct reads
             },
-            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => unreachable, // interceptStmt claims only decref, decref_if_initialized, and assign_ref
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => unreachable, // interceptStmt claims only decref, decref_if_initialized, and assign_ref
         }
     }
 };
@@ -369,23 +357,31 @@ fn runProcWithStats(
 ) ResourceError!void {
     const body = rewritableProcBody(store, proc) orelse return;
     var indexed = false;
-    while (try findCandidate(store, layouts, proc, stats, allocator, analysis)) |found| {
-        var candidate = found;
-        defer candidate.deinit(allocator);
+    // An iteration's scratch is as large as the procedure and no fact survives
+    // its rewrite, so each iteration gives it back. Otherwise scratch grows with
+    // the procedure's size times its number of fusions. `join_params` keeps
+    // accumulating across iterations, and `analysis` keeps its pools for reuse,
+    // so both stay on the allocators their owners gave them.
+    var iteration = collections.SingleThreadArena.init(allocator);
+    defer iteration.deinit();
+    while (true) : (_ = iteration.reset(.retain_capacity)) {
+        const iteration_allocator = iteration.allocator();
+        var candidate = (try findCandidate(store, layouts, proc, stats, iteration_allocator, analysis)) orelse return;
+        defer candidate.deinit(iteration_allocator);
         if (!indexed) {
             try join_params.indexReachable(store, body);
             indexed = true;
         }
         if (candidate.shared_wrappers) {
-            try cloneSharedConsumer(store, layouts, join_params, &candidate, allocator);
+            try cloneSharedConsumer(store, layouts, join_params, &candidate, iteration_allocator);
             // Cloning changes binder and statement identities. Discover the
             // fusion plan from that committed graph, never reuse old facts.
             continue;
         }
         const fused_id = store.getCFStmtImmediate(candidate.join_stmt).join.id;
-        try applyCandidate(store, layouts, join_params, &candidate, stats, allocator);
+        try applyCandidate(store, layouts, join_params, &candidate, stats, iteration_allocator);
         stats.fusions += 1;
-        try debugCheckJumpScopes(store, proc, fused_id, allocator);
+        try debugCheckJumpScopes(store, proc, fused_id, iteration_allocator);
     }
 }
 
@@ -446,6 +442,7 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,
@@ -461,19 +458,6 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
             .str_match_set,
             .ret,
             .crash,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             => {
                 successors.clearRetainingCapacity();
                 try body_clone.appendSuccessors(store, &successors, item.stmt, allocator);
@@ -524,7 +508,7 @@ fn findCandidate(
         if (store.getLocalSpan(store.stmtRowOrDefault(join.extra).retained).len != 0) continue;
         const param = GuardedList.at(params, 0);
         const param_layout = layouts.getLayout(store.getLocal(param).layout_idx);
-        if (param_layout.tag != .tag_union or store.getLocal(param).boxy_desc != null) continue;
+        if (param_layout.tag != .tag_union) continue;
         if (!tag_targets.contains(param)) continue;
 
         var wrappers = std.ArrayList(LIR.CFStmtId).empty;
@@ -622,7 +606,7 @@ fn findCandidate(
             if (stmt.* == .jump and stmt.jump.target == join.id) jump_count += 1;
             if (stmt.* != .assign_tag) continue;
             const assign = stmt.assign_tag;
-            if (assign.target != param or assign.target_desc != .none) continue;
+            if (assign.target != param) continue;
             const edge_jump = producerEdgeJump(store, assign.next, param, assign.payload, join.id) orelse continue;
             const build: BuildSite = .{
                 .stmt = stmt_id,
@@ -814,6 +798,7 @@ fn producerEdgeJump(
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,
@@ -827,19 +812,6 @@ fn producerEdgeJump(
             .join,
             .ret,
             .crash,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             => return null,
         }
     }
@@ -934,6 +906,7 @@ const ArmRewrite = struct {
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,
@@ -949,19 +922,6 @@ const ArmRewrite = struct {
             .jump,
             .ret,
             .crash,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             => false,
         };
     }
@@ -1304,19 +1264,6 @@ fn edgeStmt(store: *const LirStore, stmt_id: LIR.CFStmtId) struct { stmt: LIR.CF
         .assign_call,
         .assign_call_erased,
         .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
         .assign_low_level,
         .assign_list,
         .assign_struct,
@@ -1324,6 +1271,7 @@ fn edgeStmt(store: *const LirStore, stmt_id: LIR.CFStmtId) struct { stmt: LIR.CF
         .store_struct,
         .store_tag,
         .set_local,
+        .dyn,
         .debug,
         .expect,
         .expect_err,
@@ -1594,6 +1542,48 @@ test "tag case fusion releases candidate on every allocation failure including i
     // Heap-layout dependent remaps would vary the allocation count between runs.
     var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
     try std.testing.checkAllAllocationFailures(deterministic.allocator(), testFusionAllocationFailures, .{});
+}
+
+/// The scratch one procedure's fixed point holds when it finishes, for a body
+/// of `candidate_count` independent fusions under one switch.
+fn testFusionScratchCapacity(candidate_count: usize) TestError!usize {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    var graph: TestGraph = .{ .store = &store };
+    defer graph.deinit();
+    const selector = try graph.local(.u64);
+    const result = try graph.local(.u64);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    var branches = std.ArrayList(LIR.CFSwitchBranch).empty;
+    defer branches.deinit(testing.allocator);
+    for (0..candidate_count) |index| {
+        const candidate = try graph.candidate(selector, .{ ret, ret }, 2);
+        try branches.append(testing.allocator, .{ .value = index, .body = candidate });
+    }
+    const root = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = selector,
+        .branches = try store.addCFSwitchBranches(branches.items),
+        .default_branch = ret,
+    } }, .test_fixture);
+    const proc = try graph.proc(root);
+    var scratch = collections.SingleThreadArena.init(testing.allocator);
+    defer scratch.deinit();
+    var joins = body_clone.JoinParamIndex.init(scratch.allocator());
+    defer joins.deinit();
+    joins.next_join_point = body_clone.firstFreshJoinPoint(&store);
+    try runProc(&store, &layouts, proc, scratch.allocator(), &joins);
+    return scratch.queryCapacity();
+}
+
+test "tag case fusion scratch scales with the procedure and not with its fusion count" {
+    const small = try testFusionScratchCapacity(64);
+    const large = try testFusionScratchCapacity(1024);
+    // Sixteen times the body holds about sixteen times one iteration's scratch.
+    // Scratch every iteration kept would hold about 256 times as much.
+    try std.testing.expect(large < small * 32);
 }
 
 test "tag case fusion inventories scale with producers and not unrelated store size" {

@@ -196,15 +196,16 @@ test "empty SemanticTokens serializes correctly" {
     try std.testing.expect(std.mem.find(u8, output, "\"data\":[]") != null);
 }
 
-test "initialize rejects non-boolean workspace trust" {
+test "initialize ignores obsolete workspace trust options" {
     const allocator = std.testing.allocator;
-    for ([_][]const u8{ "\"true\"", "1", "null", "{}" }) |trust| {
+    for ([_][]const u8{ "true", "false", "\"true\"", "1", "null", "{}" }) |trust| {
         const body = try std.fmt.allocPrint(allocator,
             \\{{"processId":null,"rootUri":null,"capabilities":{{}},"initializationOptions":{{"trustedWorkspace":{s}}}}}
         , .{trust});
         defer allocator.free(body);
         const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
         defer parsed.deinit();
-        try std.testing.expectError(error.InvalidParams, protocol.InitializeParams.fromJson(allocator, parsed.value));
+        var params = try protocol.InitializeParams.fromJson(allocator, parsed.value);
+        defer params.deinit(allocator);
     }
 }

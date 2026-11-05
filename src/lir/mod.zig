@@ -16,10 +16,11 @@ pub const RootMetadata = core.RootMetadata;
 pub const Hosted = core.Hosted;
 /// LIR program result shared by post-check lowering and consumers.
 pub const Program = core.Program;
+/// Operand and ownership facts of `dyn` statements.
+pub const DynOps = core.DynOps;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// One module's closed exports lowered as a program of their own.
-pub const PackProgram = @import("pack_program.zig");
 /// Direct boxed update wrapper rewrite before ARC.
 pub const BoxReuse = @import("box_reuse.zig");
 /// Internal aggregate return-slot variants before ARC.
@@ -31,6 +32,7 @@ pub const BodyClone = @import("body_clone.zig");
 /// Exact procedure-local stack lifetimes, shared by the native and LLVM
 /// backends.
 pub const StackPlan = @import("StackPlan.zig");
+pub const LocalWrites = @import("LocalWrites.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const PruneJoinParams = @import("prune_join_params.zig");
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
@@ -72,8 +74,6 @@ pub const ErasedOwner = @import("erased_owner.zig");
 pub const ArcDismantle = @import("arc_dismantle.zig");
 /// Shared-memory ARC-inserted LIR image for interpreter-shim execution.
 pub const LirImage = @import("lir_image.zig");
-/// The Boxy runtime table numbers a arranged dev image uses.
-pub const RuntimeTables = @import("runtime_tables.zig");
 
 test "LIR image tests" {
     @import("std").testing.refAllDecls(LirImage);
@@ -170,7 +170,6 @@ test "lir tests" {
     std.testing.refAllDecls(RootMetadata);
     std.testing.refAllDecls(Hosted);
     std.testing.refAllDecls(Program);
-    std.testing.refAllDecls(RuntimeTables);
     std.testing.refAllDecls(ReachableProcs);
     std.testing.refAllDecls(CheckedPipeline);
     std.testing.refAllDecls(BoxReuse);
@@ -192,7 +191,6 @@ test "lir tests" {
     std.testing.refAllDecls(@import("arc_liveness.zig"));
     std.testing.refAllDecls(ArcDismantle);
     std.testing.refAllDecls(LirImage);
-    std.testing.refAllDecls(PackProgram);
 }
 
 /// Canonical packed product data and committed-layout copy plans.

@@ -46,6 +46,10 @@ pub const LowLevel = enum(u16) {
     str_from_utf8,
     str_split_on,
     str_join_with,
+    /// An interpolated `Str` literal's parts (its non-empty segments and its
+    /// values, in order, any number of them) written once: the lengths summed,
+    /// one string allocated, each part copied in. Every part is borrowed.
+    str_from_parts,
     str_inspect,
 
     // Numeric to_str operations
@@ -110,8 +114,15 @@ pub const LowLevel = enum(u16) {
     list_map_prepare_reuse,
     list_map_can_reuse,
     list_map_cast_unsafe,
+    /// `list_move_out_unsafe` for a buffer retyped to `List.map`'s output item.
+    /// Its third operand is `typeOnlyOperands`' `transform`: the buffer's type
+    /// does not say what its unwritten slots hold, so this operand tells
+    /// Lambda Solved.
     list_map_extract_unsafe,
     list_map_write_unsafe,
+    /// Moves the item at an index out of a uniquely owned list's buffer. The
+    /// result is an item of the list's own type.
+    list_move_out_unsafe,
     /// Whether the list's item layout occupies at most the given number of
     /// bytes: 1 or 0. A `match` on it with a literal bound folds at lowering
     /// (see `layoutResolved`); anywhere else a backend answers it from the
@@ -906,6 +917,13 @@ pub const LowLevel = enum(u16) {
         return op_info[@backingInt(self)].keyed_by_layout;
     }
 
+    /// How many trailing operands exist only for their types. Lambda Solved
+    /// reads them, every lowerer drops them unevaluated, and no later stage
+    /// sees them.
+    pub fn typeOnlyOperands(self: LowLevel) u32 {
+        return op_info[@backingInt(self)].type_only_operands;
+    }
+
     /// Return the explicit RC metadata for this primitive. The masks identify
     /// argument positions whose refcount may be inspected for copy-on-write.
     pub fn rcEffect(self: LowLevel) RcEffect {
@@ -945,17 +963,26 @@ pub const LowLevel = enum(u16) {
     const ElementDemands = [max_element_demand_args]ElementDemand;
 
     /// The per-operation properties behind `procedureKeyedByLayout`,
-    /// `rcEffect`, and `elementDemand`.
+    /// `rcEffect`, `elementDemand`, and `typeOnlyOperands`.
     const OpInfo = struct {
         keyed_by_layout: bool,
         rc_effect: RcEffect,
         element_demands: ElementDemands = @splat(.full),
+        type_only_operands: u32 = 0,
 
         /// This operation with the given argument demands, in argument
         /// order; arguments past the end stay `full`.
         fn elements(self: OpInfo, comptime demands: []const ElementDemand) OpInfo {
             var out = self;
             for (demands, 0..) |demand, index| out.element_demands[index] = demand;
+            return out;
+        }
+
+        /// This operation with its last `count` operands existing only for
+        /// their types.
+        fn typeOnly(self: OpInfo, comptime count: u32) OpInfo {
+            var out = self;
+            out.type_only_operands = count;
             return out;
         }
     };
@@ -1130,7 +1157,13 @@ pub const LowLevel = enum(u16) {
         // Moves one element's ownership out of a unique list's buffer.
         // The buffer slot keeps stale bytes until `list_map_write_unsafe`
         // stores the replacement; the op itself performs no RC work.
-        .list_map_extract_unsafe = byLayout(.none()).elements(&.{ .layout, .none }),
+        // Its `transform` operand puts a function in every request's type,
+        // and a function's type is program-specific, so it is not layout-keyed.
+        .list_map_extract_unsafe = byType(.none()).elements(&.{ .layout, .none, .none }).typeOnly(1),
+
+        // The move `list_map_extract_unsafe` performs, on a list whose item
+        // type does not change.
+        .list_move_out_unsafe = byLayout(.none()).elements(&.{ .layout, .none }),
 
         // Stores an owned element into the slot vacated by
         // `list_map_extract_unsafe`, mirroring `list_append_unsafe`.
@@ -1196,6 +1229,7 @@ pub const LowLevel = enum(u16) {
         .crypto_blake3_hasher_finish = byType(.allocates()),
 
         .str_join_with = byType(.allocatesConsumingArgs(arg_0)),
+        .str_from_parts = byType(.allocates()),
 
         .box_box = byLayout(.allocatesRetainingArgs(arg_0)).elements(&.{.layout}),
 

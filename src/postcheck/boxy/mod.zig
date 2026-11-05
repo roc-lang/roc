@@ -1,15 +1,21 @@
-//! Boxy post-check planning.
-//!
-//! This module consumes checked checked_modules directly. It does not depend on
-//! Monotype, Lambda Solved, Lambda Mono, lambda sets, or backend details.
+//! `.boxy` runtime lowering: the layout-polymorphic strategy described in
+//! design.md's "`.boxy` Runtime Lowering" section.
 
-pub const Plan = @import("plan.zig");
-pub const Layouts = @import("layouts.zig");
 pub const Lower = @import("lower.zig");
-pub const LiteralRequirements = @import("literal_requirements.zig");
+pub const Types = @import("types.zig");
+pub const Layouts = @import("layouts.zig");
+pub const StaticDescs = @import("static_descs.zig");
+pub const Body = @import("body.zig");
+pub const Match = @import("match.zig");
+/// Stored function values of compile-time evaluation.
+pub const StoredFn = @import("stored_fn.zig");
 
-/// Shared checked-type fixtures for the Boxy stage tests.
-pub const TestFixtures = @import("test_fixtures.zig");
+/// Lower checked modules to LIR under `.boxy`.
+pub const run = Lower.run;
+/// Everything one `.boxy` lowering reads.
+pub const Input = Lower.Input;
+/// The lowered program and the static data it carries.
+pub const Output = Lower.Output;
 
 test "boxy declarations are referenced" {
     @import("std").testing.refAllDecls(@This());

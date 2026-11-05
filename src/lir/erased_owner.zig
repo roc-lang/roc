@@ -65,19 +65,6 @@ pub const Owners = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -85,6 +72,7 @@ pub const Owners = struct {
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,
@@ -156,15 +144,29 @@ pub fn resolveProcReuseSources(
     while (try stmts.next()) |current| {
         const stmt = store.getCFStmtImmediate(current);
         try owners.noteStmt(store, layouts, stmt.*);
-        if (stmt.* == .assign_call_erased and store.stmtRow(stmt.assign_call_erased.data).reuse_source != null) {
-            try calls.append(allocator, current);
+        switch (stmt.*) {
+            .assign_call_erased => |call| if (store.stmtRow(call.data).reuse_source != null) try calls.append(allocator, current),
+            .dyn => |dyn_stmt| {
+                const op = store.stmtRow(dyn_stmt.data);
+                if (op == .call_erased and op.call_erased.reuse_source != null) try calls.append(allocator, current);
+            },
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
         }
     }
 
     for (calls.items) |call_id| {
-        const call = &store.getCFStmtPtr(call_id).assign_call_erased;
-        var data = store.stmtRow(call.data);
-        data.reuse_source = owners.reuseSource(store, layouts, data.closure);
-        call.data = try store.addStmtRow(LIR.ErasedCallData, data);
+        switch (store.getCFStmtPtr(call_id).*) {
+            .assign_call_erased => |*call| {
+                var data = store.stmtRow(call.data);
+                data.reuse_source = owners.reuseSource(store, layouts, data.closure);
+                call.data = try store.addStmtRow(LIR.ErasedCallData, data);
+            },
+            .dyn => |*dyn_stmt| {
+                var op = store.stmtRow(dyn_stmt.data);
+                op.call_erased.reuse_source = owners.reuseSource(store, layouts, op.call_erased.closure);
+                dyn_stmt.data = try store.addStmtRow(LIR.DynOp, op);
+            },
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => unreachable, // only erased calls were collected above
+        }
     }
 }

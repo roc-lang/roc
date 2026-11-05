@@ -12,7 +12,12 @@ const COMPILER_STACK_OVERFLOW_MESSAGE = "\nThe Roc compiler overflowed its stack
 
 /// Error message to display when the recursion that exhausted the stack is
 /// the interpreted Roc program's own.
-const PROGRAM_STACK_OVERFLOW_MESSAGE = "\nThis Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.\n\n";
+const PROGRAM_STACK_OVERFLOW_MESSAGE = "\n" ++ program_message ++ "\n\n";
+
+/// The message a Roc program's own stack overflow crashes with, wherever
+/// the overflow is caught: the interpreter's native stack, compiled
+/// compile-time code, and a compile-time read of a value that needs itself.
+pub const program_message = "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
 
 /// Set while the current thread is interpreting a Roc program. The
 /// interpreter runs each Roc call on the native stack, so an overflow on such

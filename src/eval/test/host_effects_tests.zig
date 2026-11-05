@@ -1187,7 +1187,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : () => {}
         \\main = || {
-        \\    _stream = Stream.custom(0, Unknown, counter!)
+        \\    _stream = Stream.custom(0, Err(Unknown), counter!)
         \\    dbg "built"
         \\    {}
         \\}
@@ -1206,7 +1206,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : () => {}
         \\main = || {
-        \\    stream = Stream.custom(1, Unknown, counter!)
+        \\    stream = Stream.custom(1, Err(Unknown), counter!)
         \\    first = match Stream.next!(stream) {
         \\        One({ item, rest }) => {
         \\            dbg "pulled"
@@ -1235,7 +1235,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : () => {}
         \\main = || {
-        \\    items = Stream.collect!(Stream.custom(7, Unknown, none!))
+        \\    items = Stream.collect!(Stream.custom(7, Err(Unknown), none!))
         \\    expect items == []
         \\    {}
         \\}
@@ -1254,8 +1254,8 @@ pub const tests = [_]TestCase{
         \\
         \\main : () => {}
         \\main = || {
-        \\    stream = Stream.custom(0, Known(3), up_to_three!)
-        \\    expect Stream.size_hint(stream) == Known(3)
+        \\    stream = Stream.custom(0, Ok(3), up_to_three!)
+        \\    expect Stream.len_if_known(stream) == Ok(3)
         \\    items = Stream.collect!(stream)
         \\    expect items == [0, 1, 2]
         \\    {}
@@ -1266,19 +1266,19 @@ pub const tests = [_]TestCase{
         0,
     ),
     moduleTestWithLiveAllocations(
-        "Stream.custom: an undercounted Known hint degrades to Unknown and still collects every item",
+        "Stream.custom: an undercounted Ok hint degrades to Err(Unknown) and still collects every item",
         \\count! : U64 => Try((U64, U64), [NoMore])
         \\count! = |n| if n < 4 { Ok((n, n + 1)) } else { Err(NoMore) }
         \\
         \\main : () => {}
         \\main = || {
-        \\    stream = Stream.custom(0, Known(1), count!)
+        \\    stream = Stream.custom(0, Ok(1), count!)
         \\    match Stream.next!(stream) {
         \\        One({ rest, .. }) => {
-        \\            expect Stream.size_hint(rest) == Known(0)
+        \\            expect Stream.len_if_known(rest) == Ok(0)
         \\            match Stream.next!(rest) {
         \\                One({ rest: after, .. }) => {
-        \\                    expect Stream.size_hint(after) == Unknown
+        \\                    expect Stream.len_if_known(after) == Err(Unknown)
         \\                }
         \\                _ => {
         \\                    crash "expected a second item"
@@ -1289,9 +1289,9 @@ pub const tests = [_]TestCase{
         \\            crash "expected an item"
         \\        }
         \\    }
-        \\    actual0 = Stream.collect!(Stream.custom(0, Known(0), count!))
+        \\    actual0 = Stream.collect!(Stream.custom(0, Ok(0), count!))
         \\    expect actual0 == [0, 1, 2, 3]
-        \\    actual1 = Stream.collect!(Stream.custom(0, Known(2), count!))
+        \\    actual1 = Stream.collect!(Stream.custom(0, Ok(2), count!))
         \\    expect actual1 == [0, 1, 2, 3]
         \\    {}
         \\}
@@ -1311,7 +1311,7 @@ pub const tests = [_]TestCase{
         \\main : () => {}
         \\main = || {
         \\    var $sum = 0
-        \\    for! item in Stream.custom(0, Unknown, up_to_three!) {
+        \\    for! item in Stream.custom(0, Err(Unknown), up_to_three!) {
         \\        dbg "body"
         \\        $sum = $sum + item
         \\    }
@@ -1355,7 +1355,7 @@ pub const tests = [_]TestCase{
         \\main : () => {}
         \\main = || {
         \\    var $last = 0
-        \\    for! n in Stream.custom(0, Unknown, counter!) {
+        \\    for! n in Stream.custom(0, Err(Unknown), counter!) {
         \\        $last = n
         \\        if n == 2 {
         \\            break
@@ -1379,7 +1379,7 @@ pub const tests = [_]TestCase{
         \\
         \\first_above! : U64 => U64
         \\first_above! = |limit| {
-        \\    for! n in Stream.custom(0, Unknown, counter!) {
+        \\    for! n in Stream.custom(0, Err(Unknown), counter!) {
         \\        if n > limit {
         \\            return n
         \\        }
@@ -1449,7 +1449,7 @@ pub const tests = [_]TestCase{
         \\
         \\make_custom : U64 -> ({} => U64)
         \\make_custom = |value| {
-        \\    stream = Stream.custom(value, Unknown, |s| if s > 50 { Err(NoMore) } else { Ok((s, s + 100)) })
+        \\    stream = Stream.custom(value, Err(Unknown), |s| if s > 50 { Err(NoMore) } else { Ok((s, s + 100)) })
         \\    |{}| first!(stream)
         \\}
         \\
@@ -1492,8 +1492,8 @@ pub const tests = [_]TestCase{
         \\    expect actual8 == [5, 6]
         \\    actual9 = nums.drop_first(10).collect!()
         \\    expect actual9 == []
-        \\    expect nums.take_first(3).size_hint() == Known(3)
-        \\    expect nums.drop_first(4).size_hint() == Known(2)
+        \\    expect nums.take_first(3).len_if_known() == Ok(3)
+        \\    expect nums.drop_first(4).len_if_known() == Ok(2)
         \\    {}
         \\}
     ,
@@ -1511,7 +1511,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : () => {}
         \\main = || {
-        \\    actual10 = Stream.custom(0, Unknown, counter!).take_first(2).collect!()
+        \\    actual10 = Stream.custom(0, Err(Unknown), counter!).take_first(2).collect!()
         \\    expect actual10 == [0, 1]
         \\    {}
         \\}
@@ -1557,25 +1557,25 @@ pub const tests = [_]TestCase{
         0,
     ),
     moduleTestWithLiveAllocations(
-        "Stream.custom: size hint counts down per pull and Unknown stays Unknown",
+        "Stream.custom: len_if_known counts down per pull and Err(Unknown) stays Err(Unknown)",
         \\count! : U64 => Try((U64, U64), [NoMore])
         \\count! = |n| if n < 3 { Ok((n, n + 1)) } else { Err(NoMore) }
         \\
         \\main : () => {}
         \\main = || {
-        \\    known = Stream.custom(0, Known(3), count!)
+        \\    known = Stream.custom(0, Ok(3), count!)
         \\    match Stream.next!(known) {
         \\        One({ rest, .. }) => {
-        \\            expect Stream.size_hint(rest) == Known(2)
+        \\            expect Stream.len_if_known(rest) == Ok(2)
         \\        }
         \\        _ => {
         \\            crash "expected an item"
         \\        }
         \\    }
-        \\    unknown = Stream.custom(0, Unknown, count!)
+        \\    unknown = Stream.custom(0, Err(Unknown), count!)
         \\    match Stream.next!(unknown) {
         \\        One({ rest, .. }) => {
-        \\            expect Stream.size_hint(rest) == Unknown
+        \\            expect Stream.len_if_known(rest) == Err(Unknown)
         \\        }
         \\        _ => {
         \\            crash "expected an item"
@@ -1598,7 +1598,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : () => {}
         \\main = || {
-        \\    mapped = Stream.custom(0, Unknown, up_to_two!).map(|x| {
+        \\    mapped = Stream.custom(0, Err(Unknown), up_to_two!).map(|x| {
         \\        dbg x * 10
         \\        x * 10
         \\    })
@@ -1622,7 +1622,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : () => {}
         \\main = || {
-        \\    stream = Stream.custom("a heap string definitely long enough to allocate outside small-string storage", Unknown, forever!)
+        \\    stream = Stream.custom("a heap string definitely long enough to allocate outside small-string storage", Err(Unknown), forever!)
         \\    match Stream.next!(stream) {
         \\        One({ rest, .. }) => {
         \\            match Stream.next!(rest) {
@@ -1658,7 +1658,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : () => {}
         \\main = || {
-        \\    items = Stream.collect!(Stream.custom(Open("a heap handle definitely long enough to allocate outside small-string storage"), Unknown, read!))
+        \\    items = Stream.collect!(Stream.custom(Open("a heap handle definitely long enough to allocate outside small-string storage"), Err(Unknown), read!))
         \\    expect List.len(items) == 1
         \\    {}
         \\}

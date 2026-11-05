@@ -429,6 +429,12 @@ pub const Program = struct {
     /// A shard owns only its raw list suffixes. Source rows remain immutable
     /// until all workers have stopped reading; row commits use saved boundaries.
     body_prefix: ?BodyShard.Prefix = null,
+    /// Lifting declares each lambda's `stored_captures`, and capture
+    /// finalization keeps every capture a function declares whether or not
+    /// its rewritten body still reads it (design.md "Stored Function Capture
+    /// Contract"). Set on a program that evaluates compile-time roots, whose
+    /// function values enter a `ConstStore`.
+    retains_declared_captures: bool = false,
     allocator: std.mem.Allocator,
     names: names.NameStore,
     next_symbol: u32,
@@ -1359,16 +1365,6 @@ pub const Program = struct {
         if (dependencies.reaching.bit_length != self.fnCount())
             Common.invariant("consumer read a stale platform dependency record");
         return dependencies;
-    }
-
-    /// Whether `fn_id`'s code reaches the app, from the frozen record
-    /// preparation computed before any consumer borrows it. Such code is
-    /// never offered under a specialization key: Monotype would skip its
-    /// body, and with it the app functions the program must lower for it
-    /// (`appCalleesReachedBy`).
-    pub fn fnReachesAppRecord(self: *const Program, fn_id: FnId) bool {
-        if (self.platform_requirement_filling == null) return false;
-        return self.frozenAppDependencies().reaching.isSet(@backingInt(fn_id));
     }
 
     /// Append each app function `fn_id`'s code reaches from outside the app.

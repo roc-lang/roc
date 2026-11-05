@@ -268,6 +268,7 @@ pub fn lowLevelAccess(op: LowLevel) OpAccess {
         .str_from_utf8,
         .str_split_on,
         .str_join_with,
+        .str_from_parts,
         .str_inspect,
         .u8_to_str,
         .i8_to_str,
@@ -308,6 +309,7 @@ pub fn lowLevelAccess(op: LowLevel) OpAccess {
         .list_map_can_reuse,
         .list_map_cast_unsafe,
         .list_map_extract_unsafe,
+        .list_move_out_unsafe,
         .list_map_write_unsafe,
         .list_item_size_at_most,
         .dict_pseudo_seed,
@@ -755,8 +757,9 @@ pub fn clear(self: *Self) void {
 /// (how the prologue binds parameter `index`), `callAccess(call, operand)`
 /// (how a direct call passes argument `operand.arg` or receives its result),
 /// `isShared(stmt)` (the emitter enters `stmt` through a shared block),
-/// `borrowParam(index)` (the ABI supplies stable parameter storage), and
-/// `memoryView(assign)` (the committed byte range of an aggregate alias).
+/// `borrowParam(index)` (the ABI supplies stable parameter storage),
+/// `memoryView(assign)` (the committed byte range of an aggregate alias), and
+/// `returnAccess()` (how a `ret` reads its value).
 pub fn plan(
     self: *Self,
     store: *const LirStore,
@@ -865,12 +868,7 @@ fn planMemory(self: *Self, store: *const LirStore, stack: *StackPlan, params: Lo
     }
     for (self.planned.items) |id| {
         const stmt = store.getCFStmt(id);
-        if (stmt == .join) {
-            const locals = store.getLocalSpan(stmt.join.params);
-            for (0..locals.len) |i| {
-                if (stack.localIndex(GuardedList.at(locals, i))) |index| stack.values.items[index].mutable = true;
-            }
-        } else if (stmt == .set_local) {
+        if (stmt == .set_local and stmt.set_local.mode != .initialize_join_param) {
             if (stack.localIndex(stmt.set_local.target)) |index| stack.values.items[index].mutable = true;
         } else if (stmt == .init_uninitialized) {
             if (stack.localIndex(stmt.init_uninitialized.target)) |index| stack.values.items[index].mutable = true;
@@ -1077,19 +1075,21 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
         },
         .assign_literal => |assign| switch (assign.value) {
             .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal => {},
-            .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => self.markAddressed(assign.target),
+            .str_literal, .static_data, .bytes_literal, .proc_ref => self.markAddressed(assign.target),
         },
         .assign_call => |call| {
             const extra = store.stmtRowOrDefault(call.extra);
-            if (extra.out_desc) |out_desc| self.markAddressed(out_desc);
-            if (extra.result_desc) |desc| if (desc.localOrNull()) |local| self.markAddressed(local);
             // A pending drive writes the result through its address.
             if (extra.drive.canDriveHere()) self.markAddressed(call.target);
             if (!extra.replaces_frame) self.noteAccess(call.target, ops.callAccess(call, .result));
             const args = store.getLocalSpan(call.args);
             for (0..args.len) |i| self.noteAccess(GuardedList.at(args, i), ops.callAccess(call, .{ .arg = i }));
         },
-        .assign_low_level => |assign| {
+        // A list operation over an element descriptor reaches every
+        // operand through its address.
+        .assign_low_level => |assign| if (store.stmtRowOrDefault(assign.extra).dyn_elem_desc) {
+            self.noteAllAddressed(store, stmt);
+        } else {
             const access = lowLevelAccess(assign.op);
             self.noteAccess(assign.target, access.target());
             const args = store.getLocalSpan(assign.args);
@@ -1097,35 +1097,25 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
         },
         // The aggregate is built in memory from field values.
         inline .assign_list, .assign_struct => |assign| self.markAddressed(assign.target),
-        .assign_tag => |assign| {
-            self.markAddressed(assign.target);
-            if (store.optionalStmtRow(assign.target_desc)) |desc| if (desc.localOrNull()) |local| self.markAddressed(local);
-        },
+        .assign_tag => |assign| self.markAddressed(assign.target),
         .store_struct => |assign| self.markAddressed(assign.dest),
         .store_tag => |assign| self.markAddressed(assign.dest),
-        // A copy reads and writes values in either representation.
-        .set_local => {},
+        // A copy reads and writes values in either representation, except
+        // a copy to or from a dynamic local, which copies the bytes at the
+        // two addresses.
+        .set_local => |assign| if (store.getLocal(assign.target).dyn != null or store.getLocal(assign.value).dyn != null) {
+            self.markAddressed(assign.target);
+            self.markAddressed(assign.value);
+        },
         .expect => {},
         .switch_stmt => {},
         .switch_initialized_payload => |sw| self.markAddressed(sw.payload),
         .decref_if_initialized => |dec| self.markAddressed(dec.value),
-        .ret => {},
+        .ret => |ret| self.noteAccess(ret.value, ops.returnAccess()),
         .join, .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
         .assign_call_erased,
         .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
+        .dyn,
         .debug,
         .expect_err,
         .crash,
@@ -1169,13 +1159,17 @@ const TestOps = struct {
     pub fn isShared(_: TestOps, _: CFStmtId) bool {
         return false;
     }
+
+    pub fn returnAccess(_: TestOps) Access {
+        return .value;
+    }
 };
 
 /// Join point ids a fixture mints in order, like a lowerer's per-proc counter.
-const JoinPointIds = struct {
+pub const JoinPointIds = struct {
     next: u32 = 0,
 
-    fn fresh(self: *JoinPointIds) lir.LIR.JoinPointId {
+    pub fn fresh(self: *JoinPointIds) lir.LIR.JoinPointId {
         const id: lir.LIR.JoinPointId = @fromBackingInt(self.next);
         self.next += 1;
         return id;
@@ -1348,6 +1342,9 @@ test "a local live into a shared continuation from two arms merges there" {
         pub fn isShared(self: @This(), stmt: CFStmtId) bool {
             return stmt == self.shared;
         }
+        pub fn returnAccess(self: @This()) Access {
+            return self.inner.returnAccess();
+        }
     };
     var value_plan = Self.init(gpa);
     defer value_plan.deinit();
@@ -1405,11 +1402,42 @@ test "issue 12505 memory aliases share immutable parameters but retain mutable s
     try std.testing.expect(plan_value.place(snapshot) == .slot);
     try std.testing.expectEqual(snapshot, plan_value.place(alias).view.source);
 
-    // Joining mutable storage also prevents treating the join's value as a
-    // permanently immutable origin, even when the join has no body writes.
+    // Multiple incoming writes require a snapshot even when both incoming
+    // values are themselves immutable.
     var join_points = JoinPointIds{};
-    const join = try store.addCFStmt(.{ .join = .{ .id = join_points.fresh(), .params = try store.addLocalSpan(&.{snapshot}), .body = read_snapshot, .remainder = original } }, .test_fixture);
-    try plan_value.plan(&store, params, frame, join, ops);
+    const join_id = join_points.fresh();
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const first = try store.addCFStmt(.{ .set_local = .{ .target = snapshot, .value = input, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const second = try store.addCFStmt(.{ .set_local = .{ .target = snapshot, .value = replacement, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const cond = try store.addLocal(.{ .layout_idx = .bool });
+    const choose = try store.addCFStmt(.{ .switch_stmt = .{ .cond = cond, .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = first }}), .default_branch = second } }, .test_fixture);
+    const join = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = try store.addLocalSpan(&.{snapshot}), .body = read_snapshot, .remainder = choose } }, .test_fixture);
+    try plan_value.plan(&store, try store.addLocalSpan(&.{ input, replacement, cond }), frame, join, ops);
     try std.testing.expect(plan_value.place(snapshot) == .slot);
     try std.testing.expect(plan_value.place(alias) == .slot);
+}
+
+test "issue 12819 single-definition join views are refreshed on each loop iteration" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    const input = try store.addLocal(.{ .layout_idx = .str });
+    const done = try store.addLocal(.{ .layout_idx = .bool });
+    const joined = try store.addLocal(.{ .layout_idx = .str });
+    const alias = try store.addLocal(.{ .layout_idx = .str });
+    const chained = try store.addLocal(.{ .layout_idx = .str });
+    var join_points = JoinPointIds{};
+    const join_id = join_points.fresh();
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const initialize = try store.addCFStmt(.{ .set_local = .{ .target = joined, .value = input, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = chained } }, .test_fixture);
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{ .cond = done, .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret }}), .default_branch = initialize } }, .test_fixture);
+    const chain = try store.addCFStmt(.{ .assign_ref = .{ .target = chained, .op = .local(alias), .next = branch } }, .test_fixture);
+    const read = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(joined), .next = chain } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .join = .{ .id = join_id, .params = try store.addLocalSpan(&.{joined}), .body = read, .remainder = initialize } }, .test_fixture);
+    var value_plan = Self.init(gpa);
+    defer value_plan.deinit();
+    try value_plan.plan(&store, try store.addLocalSpan(&.{ input, done }), try store.addLocalSpan(&.{ joined, alias, chained }), body, TestOps{ .store = &store, .local_alias_views = true });
+    try std.testing.expectEqual(joined, value_plan.place(alias).view.source);
+    try std.testing.expectEqual(joined, value_plan.place(chained).view.source);
 }
