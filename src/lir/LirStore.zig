@@ -3174,7 +3174,7 @@ test "dynamic product metadata relocates with a body shard" {
     for (0..3) |_| _ = try coordinator.addLocal(.{ .layout_idx = .u64 });
     _ = try coordinator.addU32Span(&.{99});
     _ = try coordinator.addStmtRow(lir_defs.ProductShape, .{ .layouts = .empty(), .slots = .empty(), .descriptors = .empty() });
-    const appended = try coordinator.appendBodyShard(&worker, prefix, shard, ret, frame);
+    const appended = try coordinator.appendBodyShard(shard, ret, frame, null);
     const moved = coordinator.getLocalSpan(appended.frame_locals);
     const moved_desc = GuardedList.at(moved, 0);
     const moved_product = coordinator.getLocal(GuardedList.at(moved, 1));
