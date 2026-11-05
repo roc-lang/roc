@@ -505,9 +505,11 @@ const SourceAdapter = struct {
     detect_invalid_nominals: bool = false,
     /// Whether a nominal's description lists its declaration's context
     /// variables after its arguments (design.md "Body-Local Type Context").
-    /// Keys do, so two instantiations of a body never share one. Identity
-    /// enumeration does not: a context variable is a variable of an
-    /// enclosing function's scheme, never of a scheme the walk enumerates.
+    /// Keys do, so two instantiations of a body never share one, and so does
+    /// identity enumeration: the variables are named by every published use
+    /// of the type, and a scheme whose type holds such a use quantifies them
+    /// when they are generalized with it (a method of the type annotated
+    /// with it, whose type generalizes with the enclosing function's).
     nominal_context: bool = false,
     rank_scratch: base.TextRankCache,
     text_ranks: []const u32 = &.{},
@@ -1060,7 +1062,11 @@ const Inspector = struct {
     fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Inspector {
         return .{
             .allocator = allocator,
-            .adapter = SourceAdapter.init(allocator, store, env),
+            .adapter = adapter: {
+                var adapter = SourceAdapter.init(allocator, store, env);
+                adapter.nominal_context = true;
+                break :adapter adapter;
+            },
             .visited = collections.DenseMap(u32, void).init(allocator),
         };
     }

@@ -5846,6 +5846,14 @@ own; Boxy reads the same arguments. A stored constant's type lists only the
 declared arguments; restoring it takes the context arguments from the
 restoring scope.
 
+Because every published use lists the context variables, identity
+enumeration lists them too (`canonical_type_keys`, `nominal_context`). A
+method of the type annotated with it (`label : Local -> Str`) has a type
+whose application ranks with the enclosing function's variable, so it
+generalizes with that function and its published type names the variable;
+its scheme therefore quantifies the variable, and checking and Boxy agree
+that it opens an evidence scope of its own.
+
 A local function that names such a type depends on the body, so it stays a
 local procedure, and so does any method whose signature names its own type.
 A codec dispatched inside one is built in that function's lexical scope: a
