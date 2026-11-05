@@ -4696,7 +4696,7 @@ pub const Coordinator = struct {
         const platform_keys = platform.checked_types.sealed_keys orelse coordinatorInvariant("a platform was paired before its key slots were attached", .{});
         // The pairing reads the platform's capabilities and the types they
         // name, so they exist before the pairing borrows the platform's types.
-        _ = platform.typesView().interfaceCapabilities() catch return null;
+        _ = platform.typesView().interfaceCapabilities(self.moduleResolver()) catch return null;
         const synthesized_keys = CheckedArtifact.SynthesizedTypeKeys.create(platform_keys.allocator, platform_keys.io, header.synthesizedTypeCount(platform)) catch return null;
         const body_analyses = CheckedArtifact.BodyAnalyses.create(
             platform_keys.allocator,

@@ -4940,12 +4940,23 @@ representatives. Five columns beside the module's synthesized-type store
 complete what a reader needs: the name each identifier the store's types use
 stands for, interned once into the module's name store; the checked identity
 and owning checked module of every module the store's named types come from;
-the checked data of every nominal declaration in the store; per variable,
+the checked data of every nominal declaration the module makes; per variable,
 whether the module's checked output reaches it and through which row-tail
 positions, which is all a variable's row default depends on; and the box
 payload capability each local nominal type was given. With those columns a
 reader renders a source type (`SealedTypeView`) without allocating, interning
 or resolving anything.
+
+A module's checked data holds the declarations of its own nominal types and
+no other module's. A nominal type's representation names the module that
+declares it and the declaration there (a builtin's names the Builtin module
+through its owner), and a reader that needs the declaration reads it in that
+module (`nominalDeclarationSite`), through the `ModuleResolver` its consumer
+passes; a walk over types that reaches a nominal's backing continues in the
+declaring module's types. A creation that instantiates another module's
+declaration in its own store projects that declaration's formals and backing
+into the store once, under the creation lock, and remembers the projection
+by declaring module and declaration.
 
 There is no second representation of any of this. No pass copies types,
 bodies, templates, names, plans or roots into another table after checking.
@@ -5340,7 +5351,8 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   reached and every local nominal synthesized type the module held when
   it was published, the instance's capability, its instantiated backing
   and padding types, which the computation creates, and whether an opaque
-  instance's backing holds no callable), and the module's dispatch
+  instance's backing holds no callable, read through the declaring modules
+  of the nominal types the backing reaches), and the module's dispatch
   resolution, which the module's dispatch reader (`CheckedDispatch`)
   answers from: the indexes of the checker's dispatch records
   (`dispatchIndex`), the schema of each template and of each generalized
@@ -5394,8 +5406,13 @@ A slot's result is:
 These are compiler invariants, so each is a debug assertion in debug builds
 and `unreachable` in release builds:
 
-- A thread never waits on a slot while it holds a lock another thread might
-  need.
+- A thread never acquires a slot (waits on it, claims it, or reads it
+  through the claiming path) while it holds a lock another thread might
+  need: a type store's creation lock or a name interner's writer lock. Each
+  such lock counts itself in a per-thread ledger while held
+  (`collections.HeldLocks`), and acquiring a slot asserts the ledger is
+  empty. Whatever a creation reads from slots it acquires before taking the
+  lock; under the lock it compares types structurally, never by key.
 - A thread never waits on a slot of a kind it currently holds a claim of in
   the same module. This is why fixpoint analyses are claimed per component:
   two roots of one component would otherwise each hold a claim while waiting

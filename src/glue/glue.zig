@@ -194,11 +194,14 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     // their declaration owners without reconstructing ownership from names.
     var artifacts_by_key = ArtifactKeyMap.init(gpa);
     defer artifacts_by_key.deinit();
+    const builtin_artifact = &build_env.builtin_modules.checked_artifact;
+    try artifacts_by_key.put(builtin_artifact.key.digest(), builtin_artifact);
+    _ = try builtin_artifact.typesView().interfaceCapabilities(build_env.moduleResolver());
     for (modules) |mod| {
         const artifact = mod.semantic.checked_artifact orelse continue;
         try artifacts_by_key.put(artifact.key.digest(), artifact);
         // Glue reads every module's nominal representations.
-        _ = try artifact.typesView().interfaceCapabilities();
+        _ = try artifact.typesView().interfaceCapabilities(build_env.moduleResolver());
     }
 
     var type_table = TypeTable.init(gpa, &artifacts_by_key);
@@ -3181,10 +3184,8 @@ const TypeTable = struct {
         }
     };
 
-    /// Artifact-independent identity of a nominal declaration: its declaring
-    /// module's content identity plus its source declaration. The artifact a
-    /// lookup resolves through is not part of it, since self-contained
-    /// artifacts embed copies of the imported declarations they use.
+    /// Identity of a nominal declaration: its declaring module's content
+    /// identity plus its source declaration.
     const NominalDeclIdentity = struct {
         module: [32]u8,
         source_decl: u32,
@@ -3199,16 +3200,6 @@ const TypeTable = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         nominal: CheckedArtifact.CheckedNominalType,
     ) ?NominalDeclarationLookup {
-        // Self-contained artifacts embed a copy of every imported/builtin
-        // nominal declaration they use, keyed by content identity. Resolve
-        // locally first so no owner artifact must be loaded.
-        const local_key = check.CanonicalNames.NominalTypeKey{
-            .module = nominal.origin_module,
-            .source_decl = nominal.source_decl,
-        };
-        if (artifact.checked_types.nominalDeclaration(local_key)) |declaration| {
-            return .{ .artifact = artifact, .declaration = declaration };
-        }
         return switch (nominal.representation) {
             .local_declaration => |declaration_id| .{
                 .artifact = artifact,
@@ -3236,9 +3227,15 @@ const TypeTable = struct {
                     glueInvariant("imported boxed payload capability referenced a nominal declaration that is not in the owner artifact", .{});
                 break :blk .{ .artifact = owner, .declaration = declaration };
             },
-            .builtin,
-            .opaque_without_backing,
-            => null,
+            .builtin => |builtin_nominal| blk: {
+                if (!CheckedArtifact.builtinNominalHasDeclarationBacking(builtin_nominal)) break :blk null;
+                const owner = self.artifacts_by_key.get(nominal.owner_module.*) orelse
+                    glueInvariant("builtin nominal referenced an owner artifact that glue did not load", .{});
+                const declaration = owner.typesView().builtinNominalDeclaration(builtin_nominal) orelse
+                    glueInvariant("builtin nominal's owner artifact has no declaration for it", .{});
+                break :blk .{ .artifact = owner, .declaration = declaration };
+            },
+            .opaque_without_backing => null,
         };
     }
 

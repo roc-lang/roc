@@ -17,6 +17,12 @@
 //! over several roots claim one slot for the whole group instead of nesting
 //! claims. Debug builds assert the rule; release builds treat a violation as
 //! unreachable.
+//!
+//! A thread holding a lock another thread may need (a type store's creation
+//! lock, a name interner's writer lock) acquires no slot: the slot may be
+//! claimed by a thread that needs that lock. Each such lock records itself
+//! in `HeldLocks` while held, and debug builds assert that a thread acquiring
+//! a slot holds none.
 
 const std = @import("std");
 
@@ -41,6 +47,29 @@ fn ClaimLedger(comptime kind: @EnumLiteral()) type {
         }
     };
 }
+
+/// Per-thread count of held locks that another thread may need while it
+/// holds a slot's claim.
+pub const HeldLocks = struct {
+    threadlocal var held: u32 = 0;
+
+    /// Record that this thread took such a lock.
+    pub fn acquired() void {
+        if (std.debug.runtime_safety) held += 1;
+    }
+
+    /// Record that this thread released such a lock.
+    pub fn released() void {
+        if (std.debug.runtime_safety) {
+            std.debug.assert(held > 0);
+            held -= 1;
+        }
+    }
+
+    fn assertNone() void {
+        if (held != 0) std.debug.panic("a thread acquired a slot while holding {d} lock(s) another thread may need", .{held});
+    }
+};
 
 /// A write-once slot holding a `T`. Slots sharing a `kind` share the rule
 /// that a thread holding a claim of that kind never waits on another.
@@ -70,6 +99,7 @@ pub fn OnceSlot(comptime T: type, comptime kind: @EnumLiteral()) type {
         /// The published result, or the claim on the slot when it is empty.
         /// Waits while another thread holds the claim.
         pub fn acquire(self: *Self, io: Io) Acquired {
+            if (std.debug.runtime_safety) HeldLocks.assertNone();
             var observed = self.state.load(.acquire);
             while (true) switch (observed) {
                 .done => return .{ .done = self.result },
@@ -210,6 +240,15 @@ test "waiters park until the claimant publishes, and every consumer reads one re
     try std.testing.expectEqual(@as(u32, 1), shared.computations.load(.acquire));
     for (shared.results) |result| try std.testing.expectEqual(@as(u64, 0xfeed), result);
     try std.testing.expectEqual(@as(?u64, 0xfeed), shared.slot.peek());
+}
+
+test "held locks are counted per thread" {
+    HeldLocks.acquired();
+    HeldLocks.acquired();
+    if (std.debug.runtime_safety) try std.testing.expectEqual(@as(u32, 2), HeldLocks.held);
+    HeldLocks.released();
+    HeldLocks.released();
+    if (std.debug.runtime_safety) try std.testing.expectEqual(@as(u32, 0), HeldLocks.held);
 }
 
 test "claims of one kind are tracked per thread" {

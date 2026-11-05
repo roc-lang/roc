@@ -457,6 +457,7 @@ pub fn rootHoldsFunction(
     defer seen.deinit(allocator);
     var pending = std.ArrayList(Pending).empty;
     defer pending.deinit(allocator);
+    const program = ProgramModules{ .modules = modules, .imports = imports };
     const own_types = artifact.typesView();
     const own_key = artifact.key.digest().bytes;
     // The root's checked type is its wrapper's function type; its value is
@@ -468,7 +469,7 @@ pub fn rootHoldsFunction(
     while (pending.pop()) |item| {
         const seen_entry = try seen.getOrPut(allocator, .{ .key = item.key, .ty = item.ty });
         if (seen_entry.found_existing) continue;
-        _ = try item.types.interfaceCapabilities();
+        _ = try item.types.interfaceCapabilities(program.resolver());
         switch (item.types.payload(item.ty)) {
             .function => return true,
             .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
@@ -501,9 +502,12 @@ pub fn rootHoldsFunction(
                         .parse_tag_union_spec => return true,
                         .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
                         .iterator => {
-                            const declaration = item.types.builtinNominalDeclaration(builtin_nominal) orelse
-                                base.invariant("compile-time finalization invariant violated: a module has no declaration for the builtin iterator", .{});
-                            try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = declaration.backing });
+                            const owner = nominal.owner_module.*;
+                            const declaring = typesOf(modules, imports, owner) orelse
+                                base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
+                            const declaration = declaring.builtinNominalDeclaration(builtin_nominal) orelse
+                                base.invariant("compile-time finalization invariant violated: the Builtin module has no declaration for the builtin iterator", .{});
+                            try pending.append(allocator, .{ .key = owner.bytes, .types = declaring, .ty = declaration.backing });
                         },
                     },
                     .local_declaration => |declaration_id| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = item.types.nominalDeclarationById(declaration_id).backing }),
@@ -525,7 +529,7 @@ pub fn rootHoldsFunction(
                     .imported_box_payload_capability => |imported| {
                         const declaring = typesOf(modules, imports, imported.artifact) orelse
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
-                        const capabilities = try declaring.interfaceCapabilities();
+                        const capabilities = try declaring.interfaceCapabilities(program.resolver());
                         const declaration = declaring.nominalDeclaration(capabilities.boxPayloadCapability(imported.capability).nominal) orelse
                             base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
                         try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaration.backing });
@@ -537,6 +541,27 @@ pub fn rootHoldsFunction(
     }
     return false;
 }
+
+/// The modules of one program, resolved by key.
+const ProgramModules = struct {
+    modules: []const *const checked.CheckedModuleArtifact,
+    imports: []const checked.ImportedModuleView,
+
+    fn resolver(self: *const ProgramModules) checked.ModuleResolver {
+        return .{ .context = self, .resolve_fn = resolve };
+    }
+
+    fn resolve(context: *const anyopaque, key: canonical.CheckedModuleDigest) ?checked.ImportedModuleView {
+        const self: *const ProgramModules = @ptrCast(@alignCast(context));
+        for (self.modules) |module| {
+            if (module.key.digest().eql(key)) return checked.importedView(module);
+        }
+        for (self.imports) |import| {
+            if (import.key.digest().eql(key)) return import;
+        }
+        return null;
+    }
+};
 
 fn typesOf(modules: []const *const checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?checked.CheckedTypeStoreView {
     for (modules) |module| {

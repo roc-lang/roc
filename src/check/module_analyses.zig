@@ -16,6 +16,7 @@ const Allocator = std.mem.Allocator;
 const CheckedModuleArtifact = checked_artifact.CheckedModuleArtifact;
 const ImportedModuleView = checked_artifact.ImportedModuleView;
 const ModuleResolver = checked_artifact.ModuleResolver;
+const ModuleId = checked_artifact.ModuleId;
 const ExportClosures = checked_artifact.ExportClosures;
 const PublicApiDependencies = checked_artifact.PublicApiDependencies;
 const LoweringVisibility = checked_artifact.LoweringVisibility;
@@ -156,8 +157,20 @@ pub const ModuleAnalyses = struct {
 
     /// The box payload capabilities of the local nominal types of `store`,
     /// the store of this module's types.
-    pub fn interfaceCapabilities(self: *ModuleAnalyses, store: *CheckedTypeStore, current_module: canonical.ModuleIdentityId) Allocator.Error!*const ModuleInterfaceCapabilities {
-        return self.interface_capabilities.getOrCompute(self.io, Allocator.Error, CapabilityRequest{ .analyses = self, .store = store, .current_module = current_module }, CapabilityRequest.compute);
+    pub fn interfaceCapabilities(
+        self: *ModuleAnalyses,
+        store: *CheckedTypeStore,
+        current_module: canonical.ModuleIdentityId,
+        module: ModuleId,
+        resolver: ModuleResolver,
+    ) Allocator.Error!*const ModuleInterfaceCapabilities {
+        return self.interface_capabilities.getOrCompute(self.io, Allocator.Error, CapabilityRequest{
+            .analyses = self,
+            .store = store,
+            .current_module = current_module,
+            .module = module,
+            .resolver = resolver,
+        }, CapabilityRequest.compute);
     }
 
     /// The interface capabilities when a consumer has demanded them.
@@ -169,6 +182,8 @@ pub const ModuleAnalyses = struct {
         analyses: *ModuleAnalyses,
         store: *CheckedTypeStore,
         current_module: canonical.ModuleIdentityId,
+        module: ModuleId,
+        resolver: ModuleResolver,
 
         fn compute(request: CapabilityRequest) Allocator.Error!*ModuleInterfaceCapabilities {
             const analyses = request.analyses;
@@ -177,7 +192,7 @@ pub const ModuleAnalyses = struct {
             errdefer allocator.destroy(capabilities);
             request.store.beginCreation(analyses.io);
             defer request.store.endCreation(analyses.io);
-            capabilities.* = try ModuleInterfaceCapabilities.compute(allocator, request.store, request.current_module);
+            capabilities.* = try ModuleInterfaceCapabilities.compute(allocator, request.store, request.current_module, request.module, request.resolver);
             return capabilities;
         }
     };

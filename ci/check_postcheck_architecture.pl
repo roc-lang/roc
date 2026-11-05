@@ -131,6 +131,12 @@ my @RULES = (
     { category => 'checked-body-store', regex => qr/\bpatternIdForSource\b/, allowed => {} },
     { category => 'checked-body-store', regex => qr/\bSyntheticExprOrigin\b/, allowed => {} },
     { category => 'checked-row-coerce-variant', regex => qr/\brow_coerce\b/, scope => qr{\Asrc/check/}, allowed => {} },
+    # A module's checked data holds only its own nominal declarations; a
+    # reader reads an imported declaration in the module that declares it.
+    { category => 'imported-nominal-embedding', regex => qr/\bembedReachableImportedNominalDecls\b/, allowed => {} },
+    { category => 'imported-nominal-embedding', regex => qr/\bembedOneImportedNominalDecl\b/, allowed => {} },
+    { category => 'imported-nominal-embedding', regex => qr/\bembedImportedNominalDeclFor\b/, allowed => {} },
+    { category => 'imported-nominal-embedding', regex => qr/\bownerViewAndDeclForImportedNominal\b/, allowed => {} },
     # Post-check code reads sealed solver stores through the checked type
     # reader and never writes one.
     {
