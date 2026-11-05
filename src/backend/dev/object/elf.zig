@@ -390,9 +390,13 @@ pub const ElfWriter = struct {
 
         // Add section names to shstrtab
         const shname_text = try self.addString(&self.shstrtab, ".text");
-        const shname_rodata = try self.addString(&self.shstrtab, ".rodata");
+        // Read-only data holding absolute pointers is writable, as a
+        // compiler's `.data.rel.ro` is, so a loader can relocate it in a
+        // position-independent output without writing to code pages.
+        const pointer_bearing = self.rodata_relocs.items.len != 0;
+        const shname_rodata = try self.addString(&self.shstrtab, if (pointer_bearing) ".data.rel.ro" else ".rodata");
         const shname_rela_text = try self.addString(&self.shstrtab, ".rela.text");
-        const shname_rela_rodata = try self.addString(&self.shstrtab, ".rela.rodata");
+        const shname_rela_rodata = try self.addString(&self.shstrtab, if (pointer_bearing) ".rela.data.rel.ro" else ".rela.rodata");
         const shname_symtab = try self.addString(&self.shstrtab, ".symtab");
         const shname_strtab = try self.addString(&self.shstrtab, ".strtab");
         const shname_shstrtab = try self.addString(&self.shstrtab, ".shstrtab");
@@ -605,7 +609,7 @@ pub const ElfWriter = struct {
         appendShdr(output, .{ .sh_name = shname_text, .sh_type = ELF.SHT_PROGBITS, .sh_flags = ELF.SHF_ALLOC | ELF.SHF_EXECINSTR, .sh_offset = text_offset, .sh_size = self.text.len, .sh_addralign = 16 });
 
         // 2: .rodata
-        appendShdr(output, .{ .sh_name = shname_rodata, .sh_type = ELF.SHT_PROGBITS, .sh_flags = ELF.SHF_ALLOC, .sh_offset = rodata_offset, .sh_size = self.rodata.len, .sh_addralign = 16 });
+        appendShdr(output, .{ .sh_name = shname_rodata, .sh_type = ELF.SHT_PROGBITS, .sh_flags = if (pointer_bearing) ELF.SHF_ALLOC | ELF.SHF_WRITE else ELF.SHF_ALLOC, .sh_offset = rodata_offset, .sh_size = self.rodata.len, .sh_addralign = 16 });
 
         // 3: .rela.text
         appendShdr(output, .{ .sh_name = shname_rela_text, .sh_type = ELF.SHT_RELA, .sh_flags = ELF.SHF_INFO_LINK, .sh_offset = rela_text_offset, .sh_size = rela_text_size, .sh_link = SHIDX_SYMTAB, .sh_info = SHIDX_TEXT, .sh_addralign = 8, .sh_entsize = @sizeOf(Elf64_Rela) });

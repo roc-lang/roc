@@ -24683,19 +24683,39 @@ qualified source names.
 
 ## Fast Dev Link
 
-A `roc build --opt=dev --specialize=no` with a cache of an executable for any
-64-bit x86 or ARM target (Linux, the BSDs, macOS and Windows; every target
-with a dev backend other than wasm, whose link is below) links its executable
-without composing a program object and without LLD, whatever host the
-compiler runs on: the link is a function of the target's format (ELF, Mach-O
-or COFF, `fastDevLinkFormat`), and the compiler host only supplies the system
-calls the output file is written with (`link_output`).
-The per-build work after the edited module's code exists is a function of
-that module and of the output's size, never of the program's module count or
-the host's size. Every other target, output kind and `--no-cache` composes a
-program object and links it with LLD; the choice is a switch on target,
-output kind and cache presence (`fastDevLinkApplies`), never a reaction to a
+A `roc build --opt=dev --specialize=no` of an executable or a shared library
+for any 64-bit x86 or ARM target (Linux, the BSDs, macOS and Windows; every target with a dev
+backend other than wasm, whose link is below) links its executable without
+composing a program object and without LLD, whatever host the compiler runs
+on: the link is a function of the target's format (ELF, Mach-O or COFF,
+`fastDevLinkFormat`), and the compiler host only supplies the system calls
+the output file is written with (`link_output`). An app without a platform
+header builds against the synthetic default platform, whose host inputs are
+the compiler's embedded startup object and, where the platform is
+freestanding, its compiler-rt carrier, prelinked and keyed like any
+platform's inputs. With a cache, the per-build work after the edited
+module's code exists is a function of that module and of the output's size,
+never of the program's module count or the host's size; `--no-cache` builds
+every unit's image and prelinks the host for the one build and files
+nothing. A static archive is written, never linked; the choice is a switch
+on target and output kind (`fastDevLinkApplies`), never a reaction to a
 failure.
+
+A shared library's host is prelinked as one (`-shared`, `-dylib`, `/dll`),
+exporting the provides and the host inputs' own exports, with its windows in
+sections of the host as a Mach-O or COFF executable's are, so its key waits
+for the provides' layouts in every format. An ELF shared host's generated
+object also carries one absolute word against its reserve, whose relocation
+makes LLD write a dynamic relocation table; the patch link places a new
+table after the app's code holding the host's entries and one relative
+relocation per absolute word the app and the provided values' windows hold,
+and points `DT_RELA` and `DT_RELASZ` at it. The dev backend's ELF writer
+names pointer-bearing read-only data `.data.rel.ro` and makes it writable,
+so no absolute word lands in an image's block. A DLL is published with its
+import library beside it, written from its export directory by LLVM's COFF
+import library writer (`coff/ImportLibrary.zig`). A Mach-O link puts the
+unmapped `__DWARF` segment at `__LINKEDIT`'s address, as dyld requires a
+dylib's segments in address order.
 
 **Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries,
 beside its pieces, a unit image (`backend.dev.UnitImage`): the unit's text
@@ -24730,8 +24750,8 @@ Compile-time failure locations and cached test observations bind those
 identities to the current compilation's source environments before reporting.
 
 **Wasm unit images.** Units are lowered and cached per target. A `.boxy`
-dev build of `wasm32` or `wasm32v1` with a cache restores or builds a unit
-per module for its own target after checking (`buildWasmUnits`, the same
+dev build of `wasm32` or `wasm32v1` restores or builds a unit per module
+for its own target after checking (`buildWasmUnits`, the same
 scheduling `roc build` gives a native link's units), plus the root unit,
 while compile-time evaluation keeps running the native units; such a build
 has two entries per module. A wasm unit's entry is keyed by the unit key

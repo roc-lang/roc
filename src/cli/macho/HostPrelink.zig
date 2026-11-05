@@ -661,7 +661,8 @@ pub const Executable = struct {
         pub fn parse(self: *Parsed, bytes: []const u8) ParseError!Executable {
             if (bytes.len < 32 or std.mem.readInt(u32, bytes[0..4], .little) != macho.MH_MAGIC_64) return error.InvalidExecutable;
             const cputype = std.mem.readInt(u32, bytes[4..8], .little);
-            if ((cputype != macho.CPU_TYPE_ARM64 and cputype != macho.CPU_TYPE_X86_64) or std.mem.readInt(u32, bytes[12..16], .little) != macho.MH_EXECUTE) return error.InvalidExecutable;
+            const filetype = std.mem.readInt(u32, bytes[12..16], .little);
+            if ((cputype != macho.CPU_TYPE_ARM64 and cputype != macho.CPU_TYPE_X86_64) or (filetype != macho.MH_EXECUTE and filetype != macho.MH_DYLIB)) return error.InvalidExecutable;
             const ncmds = std.mem.readInt(u32, bytes[16..20], .little);
             const sizeofcmds = std.mem.readInt(u32, bytes[20..24], .little);
             if (32 + @as(u64, sizeofcmds) > bytes.len) return error.InvalidExecutable;

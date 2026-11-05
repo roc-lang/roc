@@ -189,6 +189,7 @@ comptime {
         std.testing.refAllDecls(macho_host_prelink);
         std.testing.refAllDecls(macho_patch_link);
         std.testing.refAllDecls(coff_host_prelink);
+        std.testing.refAllDecls(coff_import_library);
         std.testing.refAllDecls(coff_patch_link);
         std.testing.refAllDecls(@import("patch_fanout.zig"));
         std.testing.refAllDecls(@import("link_output.zig"));
@@ -207,6 +208,7 @@ const patch_link = @import("patch_link.zig");
 const macho_host_prelink = @import("macho/HostPrelink.zig");
 const macho_patch_link = @import("macho/PatchLink.zig");
 const coff_host_prelink = @import("coff/HostPrelink.zig");
+const coff_import_library = @import("coff/ImportLibrary.zig");
 const coff_patch_link = @import("coff/PatchLink.zig");
 const wasm_link = @import("wasm_link.zig");
 const wasm_host_image = @import("wasm_host_image.zig");
@@ -11175,29 +11177,21 @@ fn fastDevLinkFormat(target: RocTarget) ?fast_dev_link.Format {
 /// composes a program object and links it with LLD.
 fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args: cli_args.BuildArgs) bool {
     if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
-    // The fast dev link reads unit images and the pre-linked host from the
-    // cache; without one, a build composes and links with LLD as before
-    // rather than prelinking the host for a single use.
-    if (args.no_cache) return false;
-    // The synthetic default platform's host is the compiler's own startup
-    // object, which the fast dev link does not prelink.
-    if (args.synthetic_default_platform) return false;
-    const executable = switch (link_type) {
-        .exe => true,
-        .shared, .archive => false,
+    if (fastDevLinkFormat(target) == null) return false;
+    return switch (link_type) {
+        .exe, .shared => true,
+        // An archive is never linked.
+        .archive => false,
     };
-    if (!executable) return false;
-    return fastDevLinkFormat(target) != null;
 }
 
-/// Whether a build lowers and files per-module wasm units for its wasm
-/// target: a `.boxy` dev build of `wasm32` or `wasm32v1` with a cache.
+/// Whether a build lowers per-module wasm units for its wasm target, filing
+/// them when it has a cache: a `.boxy` dev build of `wasm32` or `wasm32v1`.
 /// Compile-time evaluation keeps running native units, so such a build has
 /// two units per module: the native one compile-time evaluation runs and
 /// the wasm one for the link.
 fn wasmUnitsApply(target: RocTarget, args: cli_args.BuildArgs) bool {
     if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
-    if (args.no_cache) return false;
     return compile.boxy_unit.imageKind(target) == .wasm;
 }
 
@@ -11220,7 +11214,6 @@ const WasmUnits = struct {
 /// (`wasmUnitsApply`), on any compiler host, for any output: a module
 /// (`exe` or `shared`) or an archive.
 fn wasmFastLinkApplies(target: RocTarget, args: cli_args.BuildArgs) bool {
-    if (args.synthetic_default_platform) return false;
     return wasmUnitsApply(target, args);
 }
 
@@ -11313,11 +11306,10 @@ const WasmFastLink = struct {
             .hosted = hosted,
         };
         errdefer if (self.output) |*output| output.discard();
-        std.debug.assert(!no_cache); // `wasmFastLinkApplies` requires the cache
         self.job = .{
             .gpa = ctx.gpa,
             .std_io = ctx.io.std_io,
-            .manager = build_env.cache_manager orelse base.invariant("roc build invariant violated: a build with a cache has no cache manager", .{}),
+            .manager = if (no_cache) null else build_env.cache_manager,
             .spec = &self.spec,
         };
         self.job.start() catch |err| {
@@ -11587,7 +11579,7 @@ fn buildWasmUnits(
     target: RocTarget,
     targets_config: roc_target.TargetsConfig,
 ) CliMainError!WasmUnits {
-    const cache_manager = build_env.cache_manager orelse base.invariant("roc build invariant violated: wasm units are built without a cache", .{});
+    const cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
     var policy = BoxyUnitPolicy.ofBuild(args);
     policy.wasm_stack_checks = wasmStackChecks(if (targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
     var interfaces = postcheck.Boxy.Lower.ExportInterfaces.init(ctx.gpa, ctx.io.std_io);
@@ -11686,7 +11678,9 @@ const FastDevLink = struct {
         build_env: *BuildEnv,
         platform_dir: []const u8,
         target: RocTarget,
+        link_type: roc_target.OutputKind,
         final_output_path: []const u8,
+        build_scratch_dir: []const u8,
     ) CliMainError!*FastDevLink {
         const embedded = EmbeddedTargetObjects.forTarget(target);
         const support_bytes = embedded.support_image orelse base.invariant("roc build invariant violated: a fast dev link target has no support image", .{});
@@ -11706,25 +11700,54 @@ const FastDevLink = struct {
             .app => try link_items.append(ctx.arena, "<app>"),
             .win_gui => {},
         };
+        // The synthetic default platform's host is the compiler's own
+        // startup object before the app and, where the platform is
+        // freestanding, its compiler-rt carrier after it
+        // (`appendDefaultPlatformLinkInputs`); the host's key names them
+        // as link items and digests their contents like any input.
+        var platform_files_pre: std.ArrayList([]const u8) = .empty;
+        try platform_files_pre.appendSlice(ctx.arena, link_inputs.platform_files_pre);
+        var platform_files_post: std.ArrayList([]const u8) = .empty;
+        if (args.synthetic_default_platform) {
+            var default_inputs = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 2);
+            try appendDefaultPlatformLinkInputs(ctx, &default_inputs, build_scratch_dir, target);
+            try platform_files_pre.append(ctx.arena, default_inputs.items[0]);
+            try platform_files_post.appendSlice(ctx.arena, default_inputs.items[1..]);
+            for (default_inputs.items) |path| try link_items.append(ctx.arena, std.fs.path.basename(path));
+        }
+        try platform_files_post.appendSlice(ctx.arena, link_inputs.platform_files_post);
         const symbols = build_env.getPlatformLinkSymbols() orelse base.invariant("roc build invariant violated: a resolved platform has no header symbols", .{});
         const provides = try ctx.arena.alloc([]const u8, symbols.provides.len);
         for (symbols.provides, provides) |entry, *name| name.* = entry.ffi_symbol;
         const support_imports = try ctx.arena.alloc([]const u8, support_view.imports().len);
         for (support_view.imports(), support_imports) |import, *name| name.* = try ctx.arena.dupe(u8, support_view.name(import.name));
+        // A shared library exports the provides and the host inputs' own
+        // exports, as a composed link's does (`sharedLibraryExports`).
+        const shared = switch (link_type) {
+            .exe => false,
+            .shared => true,
+            .archive => unreachable, // fastDevLinkApplies admits no archive
+        };
+        const exports: []const []const u8 = if (shared) try fast_dev_link.sortedUnion(ctx.arena, &.{
+            provides,
+            try host_symbols.collectHostExports(ctx.arena, ctx.io.std_io, try hostInputPaths(ctx, link_inputs)),
+        }) else &.{};
 
         self.* = .{
             .spec = .{
                 .format = fastDevLinkFormat(target) orelse unreachable, // fastDevLinkApplies chose the target
                 .target = target,
                 .link_abi = buildLinkAbi(target, args.synthetic_default_platform),
-                .platform_files_pre = link_inputs.platform_files_pre,
-                .platform_files_post = link_inputs.platform_files_post,
+                .platform_files_pre = platform_files_pre.items,
+                .platform_files_post = platform_files_post.items,
                 .platform_files_dir = link_inputs.platform_files_dir,
                 .link_items = link_items.items,
                 .bundle_hash = build_env.getPlatformBundleHash(),
                 .provides = try fast_dev_link.sortedUnion(ctx.arena, &.{provides}),
                 .keep = try fast_dev_link.sortedUnion(ctx.arena, &.{ symbols.hosted, &host_symbols.runtime_symbols, support_imports }),
                 .host_required = try fast_dev_link.sortedUnion(ctx.arena, &.{ symbols.hosted, &host_symbols.runtime_symbols, support_imports }),
+                .shared = shared,
+                .exports = exports,
             },
             .output = fast_dev_link.OutputFile.create(ctx.arena, final_output_path) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
@@ -11733,11 +11756,10 @@ const FastDevLink = struct {
             .job = undefined,
             .support = support,
         };
-        std.debug.assert(!args.no_cache); // `fastDevLinkApplies` requires the cache
         self.job = .{
             .gpa = ctx.gpa,
             .std_io = ctx.io.std_io,
-            .manager = build_env.cache_manager orelse base.invariant("roc build invariant violated: a build with a cache has no cache manager", .{}),
+            .manager = build_env.cache_manager,
             .spec = &self.spec,
             .output = &self.output,
         };
@@ -11747,6 +11769,39 @@ const FastDevLink = struct {
             return error.NativeCompilationFailed;
         };
         return self;
+    }
+
+    /// Write the import library of the published DLL beside it: the DLL's
+    /// name with a `.lib` extension, listing the DLL's exports.
+    fn writeImportLibrary(self: *FastDevLink, ctx: *CliCtx, reporter: *progress.Reporter, scratch_dir: []const u8) CliMainError!void {
+        const target_name = @tagName(self.spec.target);
+        const dll_path = self.output.dest;
+        const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, dll_path, ctx.gpa, .unlimited) catch |err| {
+            reporter.fail();
+            return ctx.fail(.{ .file_read_failed = .{ .path = dll_path, .err = err } });
+        };
+        defer ctx.gpa.free(bytes);
+        const def = coff_import_library.moduleDefinition(ctx.gpa, std.fs.path.basename(dll_path), bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidExecutable => base.invariant("roc build invariant violated: a DLL this build linked does not parse", .{}),
+        };
+        defer ctx.gpa.free(def);
+        const def_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_import_library.def" });
+        std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = def_path, .data = def }) catch |err| {
+            reporter.fail();
+            return ctx.fail(.{ .file_write_failed = .{ .path = def_path, .err = err } });
+        };
+        const stem = dll_path[0 .. dll_path.len - std.fs.path.extension(dll_path).len];
+        const lib_path = try std.fmt.allocPrint(ctx.arena, "{s}.lib", .{stem});
+        // A COFF fast dev link target is x86_64 or aarch64.
+        const machine: u16 = if (self.spec.target.toCpuArch() == .aarch64) coff_host_prelink.IMAGE_FILE_MACHINE_ARM64 else coff_host_prelink.IMAGE_FILE_MACHINE_AMD64;
+        builder.writeImportLibrary(ctx.gpa, def_path, machine, lib_path) catch |err| {
+            reporter.fail();
+            return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                error.ImportLibraryWriteFailed, error.LLVMNotAvailable => ctx.fail(.{ .linker_failed = .{ .err = err, .target = target_name } }),
+            };
+        };
     }
 
     /// Each `provides` symbol's kind and layout size, as the program's
@@ -11815,7 +11870,7 @@ const FastDevLink = struct {
         // A Mach-O or COFF host's key covers the provides' kinds and layout
         // sizes, which the images tell; its lookup waits for them.
         var provides: []const host_prelink.Provide = &.{};
-        if (self.spec.format == .macho or self.spec.format == .coff) {
+        if (self.spec.format == .macho or self.spec.format == .coff or self.spec.shared) {
             provides = try self.provideLayouts(ctx, support_view, units);
             if (self.job.outcome == .hashed) self.job.lookupWithLayouts(provides);
         }
@@ -11914,6 +11969,9 @@ const FastDevLink = struct {
             };
         };
         self.published = true;
+        // A DLL is published with its import library beside it, as a
+        // composed link's LLD writes one.
+        if (self.spec.shared and self.spec.format == .coff) try self.writeImportLibrary(ctx, reporter, scratch_dir);
         timing.finalize_ns += @intCast(@max(0, std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - publish_started));
         reporter.endWithBreakdown(&.{
             .{ .name = if (prelink_ns != 0) "Host Prelink (link)" else "Host Prelink (cache hit)", .ns = if (prelink_ns != 0) prelink_ns else self.job.lookup_ns },
@@ -11978,12 +12036,16 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
 
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
     try prepareBuildOutput(ctx, final_output_path);
+    const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    defer releaseScratchDir(ctx, build_scratch_dir);
 
     // A dev executable of a `.boxy` program for a target with a fast dev
     // link format is linked by a fast dev link, whose output file and host
     // job start before any compile work.
     const fast_link: ?*FastDevLink = if (fastDevLinkApplies(target, link_type, args))
-        try FastDevLink.start(ctx, args, &build_env, platform_dir, target, final_output_path)
+        try FastDevLink.start(ctx, args, &build_env, platform_dir, target, link_type, final_output_path, build_scratch_dir)
     else
         null;
     defer if (fast_link) |fast| fast.deinit(ctx.gpa);
@@ -12024,10 +12086,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         if (lowering.target == target) lowering.interfaces = interfaces;
     };
     build_env.setRuntimeLowering(runtime_lowering);
-    const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
-        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
-    };
-    defer releaseScratchDir(ctx, build_scratch_dir);
     var link_objects = link_artifacts.Objects.init(ctx.coreCtx(), ctx.arena, build_scratch_dir);
     // The link reads every unit's object, so compile-time evaluation
     // builds the units the link needs as their modules are checked, with
@@ -12157,7 +12215,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
         // The root unit's image goes into its cache entry for later fast
         // dev links, and into this build's own when it links that way.
-        const root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = if (compile.boxy_unit.producesImage(target) and !args.no_cache) image: {
+        const root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = if (compile.boxy_unit.producesImage(target) and (fast_link != null or !args.no_cache)) image: {
             reporter.begin("Unit Image");
             const image = object_compiler.buildUnitImage(&root_pieces, target, .entrypoints, null) catch |err| {
                 reporter.fail();

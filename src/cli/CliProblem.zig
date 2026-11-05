@@ -57,6 +57,7 @@ pub const ReportedError =
     std.process.SpawnError ||
     error{
         ArchiveWriteFailed,
+        ImportLibraryWriteFailed,
         BrokenDocLinks,
         BuiltinsExtractionFailed,
         CheckFailed,
@@ -828,6 +829,7 @@ fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Er
         error.AntivirusInterference,
         error.ApiLevelQueryFailed,
         error.ArchiveWriteFailed,
+        error.ImportLibraryWriteFailed,
         error.BadPathName,
         error.BrokenDocLinks,
         error.BrokenPipe,
@@ -1401,6 +1403,7 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.AntivirusInterference,
         error.ApiLevelQueryFailed,
         error.ArchiveWriteFailed,
+        error.ImportLibraryWriteFailed,
         error.BadPathName,
         error.BrokenDocLinks,
         error.BrokenPipe,

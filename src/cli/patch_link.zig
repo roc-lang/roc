@@ -154,6 +154,24 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     }.lessThan);
     timing.images_placed = order.items.len;
 
+    const reached_atoms = try gpa.alloc([]const bool, images.items.len);
+    defer gpa.free(reached_atoms);
+    for (walk.states, reached_atoms) |state, *atoms| atoms.* = if (state) |placed| placed.atoms else &.{};
+
+    // Each provide's definition. An executable's provided values must fit
+    // their fixed windows; a shared library's windows are sized by them.
+    const provided = try gpa.alloc(SymbolRef, inputs.host.provideCount());
+    defer gpa.free(provided);
+    for (provided, 0..) |*slot, index| {
+        const name = inputs.host.provideName(index);
+        slot.* = exports.get(name) orelse unreachable; // the walk above resolved every provided symbol
+        const symbol = images.items[slot.image].view.symbols()[slot.symbol];
+        if (!inputs.host.shared() and @as(UnitImage.SymbolType, @fromBackingInt(symbol.type)) != .func and symbol.size > host_prelink.provide_window) {
+            outcome.too_large = .{ .symbol = try arena.dupe(u8, name), .size = symbol.size };
+            return error.ProvidedValueTooLarge;
+        }
+    }
+
     // Layout.
     const host = inputs.host;
     const arm64 = host.arm64();
@@ -171,7 +189,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     const places = try gpa.alloc(Place, images.items.len);
     defer gpa.free(places);
     @memset(places, .{});
-    var rx_size: u64 = std.mem.alignForward(u64, provide_count * host_prelink.provide_window, page_size);
+    // An executable's provide windows open the app region; a shared
+    // library's are in the host.
+    var rx_size: u64 = if (host.shared()) 0 else std.mem.alignForward(u64, provide_count * host_prelink.provide_window, page_size);
     for (order.items) |index| {
         const view = images.items[index].view;
         rx_size = std.mem.alignForward(u64, rx_size, page_size);
@@ -182,6 +202,24 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
             places[index].veneers = host_prelink.app_base + rx_size;
             rx_size += view.imports().len * jump_window.veneer_size;
         }
+    }
+    // A shared library's dynamic relocation table, the host's entries then
+    // one relative relocation per absolute word the app holds, follows the
+    // code.
+    var rela_vaddr: u64 = 0;
+    var rela_size: u64 = 0;
+    if (host.shared()) {
+        var count: u64 = 0;
+        for (order.items) |index| count += relativeSiteCount(images.items[index].view, reached_atoms[index], null);
+        for (provided, host.windows()) |found, window| {
+            if (window.kind != @backingInt(host_prelink.ProvideKind.data)) continue;
+            const view = images.items[found.image].view;
+            count += relativeSiteCount(view, reached_atoms[found.image], valueRange(view, found, window));
+        }
+        rx_size = std.mem.alignForward(u64, rx_size, 8);
+        rela_vaddr = host_prelink.app_base + rx_size;
+        rela_size = host.header.rela_size + count * rela_size_bytes;
+        rx_size += rela_size;
     }
     const rw_offset = std.mem.alignForward(u64, app_offset + rx_size, segment_align);
     const rw_base = host_prelink.app_base + (rw_offset - app_offset);
@@ -223,9 +261,6 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     // Symbols of code the link leaves as a hole get no entry: each placed
     // image's symbol table index maps to its entry's position among the
     // image's kept symbols, or `no_symbol`.
-    const reached_atoms = try gpa.alloc([]const bool, images.items.len);
-    defer gpa.free(reached_atoms);
-    for (walk.states, reached_atoms) |state, *atoms| atoms.* = if (state) |placed| placed.atoms else &.{};
     const symbol_slots = try gpa.alloc([]u32, images.items.len);
     @memset(symbol_slots, &.{});
     defer {
@@ -330,19 +365,6 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
             };
         }
     }
-    // Provided values must fit their windows.
-    const provided = try gpa.alloc(SymbolRef, provide_count);
-    defer gpa.free(provided);
-    for (provided, 0..) |*slot, index| {
-        const name = host.provideName(index);
-        slot.* = exports.get(name) orelse unreachable; // the walk above resolved every provided symbol
-        const symbol = images.items[slot.image].view.symbols()[slot.symbol];
-        if (@as(UnitImage.SymbolType, @fromBackingInt(symbol.type)) != .func and symbol.size > host_prelink.provide_window) {
-            outcome.too_large = .{ .symbol = try arena.dupe(u8, name), .size = symbol.size };
-            return error.ProvidedValueTooLarge;
-        }
-    }
-
     try output.resize(file_size);
     const mapped = try output.map(file_size);
     var unmapped = false;
@@ -426,8 +448,13 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     // header, section names and headers.
     const finalize_started = now(std_io);
     for (provided, 0..) |found, index| {
-        const window = host_prelink.provideAddress(index);
-        const window_bytes = mapped[@intCast(app_offset + (window - host_prelink.app_base))..][0..@intCast(host_prelink.provide_window)];
+        const window, const window_bytes = if (host.shared()) shared: {
+            const record = host.windows()[index];
+            break :shared .{ record.vaddr, mapped[@intCast(record.offset)..][0..@intCast(record.size)] };
+        } else fixed: {
+            const address = host_prelink.provideAddress(index);
+            break :fixed .{ address, mapped[@intCast(app_offset + (address - host_prelink.app_base))..][0..@intCast(host_prelink.provide_window)] };
+        };
         const symbol = images.items[found.image].view.symbols()[found.symbol];
         const region: UnitImage.Region = @fromBackingInt(symbol.region);
         const address = places[found.image].base(region) + symbol.value;
@@ -438,13 +465,39 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         switch (region) {
             .block, .data => {
                 const from = context.fileOffsetOf(address);
-                @memcpy(window_bytes[0..symbol.size], mapped[@intCast(from)..][0..symbol.size]);
+                const size: usize = @intCast(@min(symbol.size, window_bytes.len));
+                @memcpy(window_bytes[0..size], mapped[@intCast(from)..][0..size]);
             },
             // Zero-fill: the window is already zero.
             .bss => {},
             .debug_line, .debug_info, .debug_abbrev => unreachable, // image symbols live only in allocated regions
             .pdata, .xdata => unreachable, // an ELF image carries no unwind regions
         }
+    }
+    if (host.shared()) {
+        // The relocation table: the host's entries, then the app's, then
+        // the provided values' in their windows; `.dynamic` names it.
+        const table = mapped[@intCast(context.fileOffsetOf(rela_vaddr))..][0..@intCast(rela_size)];
+        @memcpy(table[0..@intCast(host.header.rela_size)], hostBytes(host, host.header.rela_offset, host.header.rela_size));
+        var at: usize = @intCast(host.header.rela_size);
+        const r_type: u64 = if (arm64) R_AARCH64_RELATIVE else R_X86_64_RELATIVE;
+        for (order.items) |index| {
+            at = writeRelatives(table, at, r_type, images.items[index].view, places[index], resolved[index], reached_atoms[index], null, 0);
+        }
+        for (provided, host.windows()) |found, window| {
+            if (window.kind != @backingInt(host_prelink.ProvideKind.data)) continue;
+            const view = images.items[found.image].view;
+            const range = valueRange(view, found, window) orelse continue;
+            at = writeRelatives(table, at, r_type, view, places[found.image], resolved[found.image], reached_atoms[found.image], range, window.vaddr - range[0]);
+        }
+        std.debug.assert(at == table.len);
+        const dynamic = host.header.dynamic_offset;
+        std.mem.writeInt(u64, mapped[@intCast(dynamic + host.header.rela_entry * 16 + 8)..][0..8], rela_vaddr, .little);
+        std.mem.writeInt(u64, mapped[@intCast(dynamic + host.header.relasz_entry * 16 + 8)..][0..8], rela_size, .little);
+        const rela_header = &headers.items[host.header.rela_section];
+        rela_header.addr = rela_vaddr;
+        rela_header.offset = context.fileOffsetOf(rela_vaddr);
+        rela_header.size = rela_size;
     }
     const phdrs = mapped[@intCast(host.header.phdr_offset)..][0 .. host.header.phnum * 56];
     writeLoad(phdrs[host.header.first_spare * 56 ..][0..56], app_offset, host_prelink.app_base, rx_size, rx_size, PF_R | PF_X, segment_align);
@@ -654,6 +707,65 @@ const Task = struct {
         self.sites = range.count;
     }
 };
+
+/// The bytes of one `Elf64_Rela`.
+const rela_size_bytes: u64 = 24;
+const R_X86_64_RELATIVE: u64 = 8;
+const R_AARCH64_RELATIVE: u64 = 1027;
+
+/// The image offsets of the bytes of the provided value `found` that its
+/// shared library window copies, when they are in the image's writable data
+/// (a value in the block holds no absolute word, and zero-fill no bytes).
+fn valueRange(view: UnitImage.View, found: SymbolRef, window: host_prelink.Window) ?[2]u64 {
+    const symbol = view.symbols()[found.symbol];
+    return switch (@as(UnitImage.Region, @fromBackingInt(symbol.region))) {
+        .data => .{ symbol.value, symbol.value + @min(symbol.size, window.size) },
+        .block, .bss => null,
+        .debug_line, .debug_info, .debug_abbrev, .pdata, .xdata => unreachable, // image symbols live only in the block, the data and the zero-fill
+    };
+}
+
+/// Whether `site` is an absolute word a shared library's loader relocates:
+/// one in a reached atom's data, within `range` when there is one.
+fn relativeSite(site: UnitImage.Site, atoms_reached: []const bool, range: ?[2]u64) bool {
+    if (@as(UnitImage.SiteKind, @fromBackingInt(site.kind)) != .abs64) return false;
+    if (site.atom != UnitImage.no_atom and !atoms_reached[site.atom]) return false;
+    switch (@as(UnitImage.Region, @fromBackingInt(site.region))) {
+        .data => {},
+        // The object writer keeps pointer-bearing read-only data writable.
+        .block => base.invariant("fast dev link invariant violated: a shared library's code holds an absolute word", .{}),
+        // Debug words are not loaded.
+        .debug_line, .debug_info, .debug_abbrev => return false,
+        .bss, .pdata, .xdata => unreachable, // a site is a field in an ELF image's block, data or debug sections
+    }
+    if (range) |bounds| return site.offset >= bounds[0] and site.offset + 8 <= bounds[1];
+    return true;
+}
+
+fn relativeSiteCount(view: UnitImage.View, atoms_reached: []const bool, range: ?[2]u64) u64 {
+    var count: u64 = 0;
+    for (view.sites()) |site| count += @intFromBool(relativeSite(site, atoms_reached, range));
+    return count;
+}
+
+/// Write the relative relocations of the image's absolute words at
+/// `table[at..]`, each at its site's address, or for a provided value's
+/// copy at `shift` past it, holding the value its site holds. Returns the
+/// end of the entries written.
+fn writeRelatives(table: []u8, at_start: usize, r_type: u64, view: UnitImage.View, place: Place, resolved: []const u64, atoms_reached: []const bool, range: ?[2]u64, shift: u64) usize {
+    var at = at_start;
+    for (view.sites()) |site| {
+        if (!relativeSite(site, atoms_reached, range)) continue;
+        const target = if (site.target_region == UnitImage.import_target) resolved[site.target] else place.base(@fromBackingInt(site.target_region));
+        const address = if (range != null) shift + site.offset else place.data + site.offset;
+        const entry = table[at..][0..@intCast(rela_size_bytes)];
+        std.mem.writeInt(u64, entry[0..8], address, .little);
+        std.mem.writeInt(u64, entry[8..16], r_type, .little);
+        std.mem.writeInt(i64, entry[16..24], @as(i64, @intCast(target)) + site.addend, .little);
+        at += @intCast(rela_size_bytes);
+    }
+    return at;
+}
 
 fn writeLoad(entry: *[56]u8, offset: u64, vaddr: u64, filesz: u64, memsz: u64, flags: u32, alignment: u64) void {
     std.mem.writeInt(u32, entry[0..4], PT_LOAD, .little);

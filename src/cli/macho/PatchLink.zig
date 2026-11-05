@@ -1002,7 +1002,9 @@ fn rewriteLoadCommands(out: []u8, exe: HostPrelink.Executable, layout: Layout) v
         .{ .name = "__data", .addr = layout.data_vmaddr, .size = layout.data_content, .offset = layout.data_fileoff, .flags = macho.S_REGULAR, .@"align" = 12 },
         .{ .name = "__bss", .addr = layout.data_vmaddr + layout.data_content, .size = layout.bss_size, .offset = 0, .flags = macho.S_ZEROFILL, .@"align" = 4 },
     });
-    at = writeSegment(out, at, "__DWARF", 0, 0, layout.dwarf_fileoff, layout.dwarf_size, 0, &.{
+    // Unmapped, but in address order before `__LINKEDIT`, as dyld requires
+    // of a dylib's segments.
+    at = writeSegment(out, at, "__DWARF", layout.linkedit_vmaddr, 0, layout.dwarf_fileoff, layout.dwarf_size, 0, &.{
         .{ .name = "__debug_abbrev", .addr = layout.debug_offsets[0] - layout.dwarf_fileoff, .size = layout.debug_sizes[0], .offset = layout.debug_offsets[0], .flags = macho.S_ATTR_DEBUG, .@"align" = 0 },
         .{ .name = "__debug_info", .addr = layout.debug_offsets[1] - layout.dwarf_fileoff, .size = layout.debug_sizes[1], .offset = layout.debug_offsets[1], .flags = macho.S_ATTR_DEBUG, .@"align" = 0 },
         .{ .name = "__debug_line", .addr = layout.debug_offsets[2] - layout.dwarf_fileoff, .size = layout.debug_sizes[2], .offset = layout.debug_offsets[2], .flags = macho.S_ATTR_DEBUG, .@"align" = 0 },

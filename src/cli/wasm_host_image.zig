@@ -143,7 +143,9 @@ pub const Lookup = union(enum) {
 pub const ImageJob = struct {
     gpa: Allocator,
     std_io: std.Io,
-    manager: *CacheManager,
+    /// Null for a build without a cache, whose lookups miss and whose
+    /// conversions file nothing.
+    manager: ?*CacheManager,
     spec: *const Spec,
     thread: ?std.Thread = null,
     /// By stack-check mode: without checks, then with them.
@@ -216,7 +218,8 @@ pub const ImageJob = struct {
     /// The record filed under `key`, mapped: a miss when there is none or
     /// it does not read as an image this compiler wrote.
     fn lookup(self: *ImageJob, key: [32]u8) Lookup {
-        var artifact = self.manager.acquireFamily(.prelinked_host, key, scope) orelse return .miss;
+        const manager = self.manager orelse return .miss;
+        var artifact = manager.acquireFamily(.prelinked_host, key, scope) orelse return .miss;
         const size = std.math.cast(usize, artifact.size) orelse {
             artifact.deinit();
             return .miss;
@@ -238,8 +241,9 @@ pub const ImageJob = struct {
 pub const ConvertError = linker.LinkError || ObjectImage.Error || error{ReadFailed};
 
 /// Convert the compiler's support objects, `objects`, to the support image
-/// for `stack_checks` and file it under `key`. The caller owns the result.
-pub fn convertSupport(ctx: *CliCtx, objects: []const SupportObject, stack_checks: bool, key: [32]u8, manager: *CacheManager, scratch_dir: []const u8, unsupported: *?ObjectImage.Unsupported) ConvertError![]align(WasmUnitImage.alignment.toByteUnits()) u8 {
+/// for `stack_checks` and file it under `key` when there is a cache. The
+/// caller owns the result.
+pub fn convertSupport(ctx: *CliCtx, objects: []const SupportObject, stack_checks: bool, key: [32]u8, manager: ?*CacheManager, scratch_dir: []const u8, unsupported: *?ObjectImage.Unsupported) ConvertError![]align(WasmUnitImage.alignment.toByteUnits()) u8 {
     var paths: std.ArrayList([]const u8) = .empty;
     for (objects) |object| {
         const path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, object.name });
@@ -247,15 +251,15 @@ pub fn convertSupport(ctx: *CliCtx, objects: []const SupportObject, stack_checks
         try paths.append(ctx.arena, path);
     }
     const image = try composeAndConvert(ctx, paths.items, scratch_dir, "roc_wasm_support.o", .{ .whole_archive = false, .strip_debug = true }, .{ .stack_checks = stack_checks, .retain = false }, unsupported);
-    manager.storeFamilyBytes(.prelinked_host, key, image, scope, "wasm support image");
+    if (manager) |cache| cache.storeFamilyBytes(.prelinked_host, key, image, scope, "wasm support image");
     return image;
 }
 
 /// Convert the platform's host inputs to the host image and file it under
 /// `key`. The caller owns the result.
-pub fn convertHost(ctx: *CliCtx, spec: *const Spec, key: [32]u8, manager: *CacheManager, scratch_dir: []const u8, unsupported: *?ObjectImage.Unsupported) ConvertError![]align(WasmUnitImage.alignment.toByteUnits()) u8 {
+pub fn convertHost(ctx: *CliCtx, spec: *const Spec, key: [32]u8, manager: ?*CacheManager, scratch_dir: []const u8, unsupported: *?ObjectImage.Unsupported) ConvertError![]align(WasmUnitImage.alignment.toByteUnits()) u8 {
     const image = try composeAndConvert(ctx, spec.platform_files, scratch_dir, "roc_wasm_host.o", .{ .whole_archive = true, .strip_debug = true }, .{ .stack_checks = false, .retain = true }, unsupported);
-    manager.storeFamilyBytes(.prelinked_host, key, image, scope, "wasm host image");
+    if (manager) |cache| cache.storeFamilyBytes(.prelinked_host, key, image, scope, "wasm host image");
     return image;
 }
 

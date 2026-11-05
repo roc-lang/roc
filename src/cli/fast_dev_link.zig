@@ -59,6 +59,12 @@ pub const HostSpec = struct {
     /// than a compiler invariant: every symbol in `keep`. Sorted and
     /// distinct.
     host_required: []const []const u8,
+    /// Whether the output is a shared library rather than an executable.
+    shared: bool,
+    /// For a shared library, the symbols it exports: the provides and the
+    /// host inputs' own exports. Sorted and distinct; empty for an
+    /// executable.
+    exports: []const []const u8,
 };
 
 /// The background job that hashes the host inputs and, for an ELF host,
@@ -66,7 +72,9 @@ pub const HostSpec = struct {
 pub const HostJob = struct {
     gpa: Allocator,
     std_io: std.Io,
-    manager: *CacheManager,
+    /// Null for a build without a cache, whose lookup misses and whose
+    /// prelink files nothing.
+    manager: ?*CacheManager,
     spec: *const HostSpec,
     output: *OutputFile,
     thread: ?std.Thread = null,
@@ -139,12 +147,13 @@ pub const HostJob = struct {
             }
         }
         self.hash_ns = elapsed(self.std_io, hash_started);
-        switch (self.spec.format) {
-            .elf => {
-                self.key = self.keyFor(&.{});
-                self.lookup();
-            },
-            .macho, .coff => self.outcome = .hashed,
+        // An ELF executable's windows are fixed; every other host's are
+        // sized by the provides' layouts, which its key waits for.
+        if (self.spec.format == .elf and !self.spec.shared) {
+            self.key = self.keyFor(&.{});
+            self.lookup();
+        } else {
+            self.outcome = .hashed;
         }
     }
 
@@ -161,14 +170,17 @@ pub const HostJob = struct {
             .provides = self.spec.provides,
             .provide_layouts = provides,
             .keep = self.spec.keep,
+            .shared = self.spec.shared,
+            .exports = self.spec.exports,
             .link_items = self.spec.link_items,
             .bundle_hash = self.spec.bundle_hash,
             .input_digests = self.digests.items,
         });
     }
 
-    /// Look a Mach-O or COFF host up once the provides' layouts are known,
-    /// after the job ran. The host goes into the output on a hit.
+    /// Look a host whose windows are sized by layouts up once the provides'
+    /// layouts are known, after the job ran. The host goes into the output
+    /// on a hit.
     pub fn lookupWithLayouts(self: *HostJob, provides: []const host_prelink.Provide) void {
         std.debug.assert(self.thread == null and self.outcome == .hashed);
         self.key = self.keyFor(provides);
@@ -178,7 +190,11 @@ pub const HostJob = struct {
     /// Find the host under `key` and put it into the output.
     fn lookup(self: *HostJob) void {
         const lookup_started = now(self.std_io);
-        var artifact = self.manager.acquireFamily(.prelinked_host, self.key, host_scope) orelse {
+        const manager = self.manager orelse {
+            self.outcome = .miss;
+            return;
+        };
+        var artifact = manager.acquireFamily(.prelinked_host, self.key, host_scope) orelse {
             self.outcome = .miss;
             return;
         };
@@ -303,13 +319,14 @@ pub fn contentDigests(gpa: Allocator, std_io: std.Io, paths: []const []const u8,
 pub const PrelinkError = linker.LinkError || host_prelink.FinishError || HostPrelink.FinishError || CoffHostPrelink.FinishError || error{ReadFailed};
 
 /// Link the platform's host with LLD into a host record (cold path) and
-/// file it in the cache. The caller owns the record. `provides` carries
-/// the provides' layouts, which a Mach-O or COFF host's windows are sized
-/// by.
-pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: *CacheManager, scratch_dir: []const u8, provides: []const host_prelink.Provide) PrelinkError![]align(16) u8 {
+/// file it in the cache, when there is one. The caller owns the record.
+/// `provides` carries the provides' layouts, which a Mach-O or COFF host's
+/// windows are sized by.
+pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: ?*CacheManager, scratch_dir: []const u8, provides: []const host_prelink.Provide) PrelinkError![]align(16) u8 {
     const arm64 = spec.target.toCpuArch() == .aarch64;
+    const output_kind: linker.OutputKind = if (spec.shared) .shared_lib else .exe;
     const object = switch (spec.format) {
-        .elf => try host_prelink.linkObject(ctx.gpa, arm64, spec.provides),
+        .elf => if (spec.shared) try host_prelink.linkSharedObject(ctx.gpa, arm64, provides) else try host_prelink.linkObject(ctx.gpa, arm64, spec.provides),
         .macho => try HostPrelink.linkObject(ctx.gpa, arm64, provides, spec.keep),
         .coff => try CoffHostPrelink.linkObject(ctx.gpa, arm64, provides, spec.keep),
     };
@@ -324,7 +341,8 @@ pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: *Cache
             .target_os = spec.target.toOsTag(),
             .target_arch = spec.target.toCpuArch(),
             .output_path = exe_path,
-            .output_kind = .exe,
+            .output_kind = output_kind,
+            .export_symbols = spec.exports,
             .lazy_platform_archives = true,
             .object_files = &.{object_path},
             .platform_files_pre = spec.platform_files_pre,
@@ -350,7 +368,8 @@ pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: *Cache
                 .target_os = .macos,
                 .target_arch = spec.target.toCpuArch(),
                 .output_path = exe_path,
-                .output_kind = .exe,
+                .output_kind = output_kind,
+                .export_symbols = spec.exports,
                 .lazy_platform_archives = true,
                 .object_files = &.{object_path},
                 .platform_files_pre = spec.platform_files_pre,
@@ -375,7 +394,8 @@ pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: *Cache
                 .target_os = .windows,
                 .target_arch = spec.target.toCpuArch(),
                 .output_path = exe_path,
-                .output_kind = .exe,
+                .output_kind = output_kind,
+                .export_symbols = spec.exports,
                 .lazy_platform_archives = true,
                 .object_files = &.{object_path},
                 .platform_files_pre = spec.platform_files_pre,
@@ -390,11 +410,11 @@ pub fn prelink(ctx: *CliCtx, spec: *const HostSpec, key: [32]u8, manager: *Cache
     const exe = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, exe_path, ctx.gpa, .unlimited) catch return error.ReadFailed;
     defer ctx.gpa.free(exe);
     const record = switch (spec.format) {
-        .elf => try host_prelink.finish(ctx.gpa, exe, spec.provides, spec.keep),
+        .elf => try host_prelink.finish(ctx.gpa, exe, spec.provides, spec.keep, if (spec.shared) provides else null),
         .macho => try HostPrelink.finish(ctx.gpa, exe, provides, spec.keep),
         .coff => try CoffHostPrelink.finish(ctx.gpa, exe, provides, spec.keep),
     };
-    manager.storeFamilyBytes(.prelinked_host, key, record, host_scope, "prelinked host");
+    if (manager) |cache| cache.storeFamilyBytes(.prelinked_host, key, record, host_scope, "prelinked host");
     return record;
 }
 
