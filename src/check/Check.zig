@@ -1449,6 +1449,12 @@ local_type_contexts_final: bool = false,
 /// variable, owner); the bindings whose types `rejectEscapingLocalTypes`
 /// walks. Empty in a module with no such type.
 local_type_context_owners: std.ArrayListUnmanaged(LocalTypeContextOwner) = .empty,
+/// The bindings whose annotation introduces a type variable whose
+/// definitions are checked, generalization boundary included. Recorded only
+/// in a module with a body-local type whose context is not empty: a relation
+/// against such a type's context variable checked once the binding owning it
+/// is in this set is outside that binding's body (`probeContextVariable`).
+checked_polymorphic_bindings: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
 /// Type declarations being generated, innermost last.
 type_decl_generation_frames: std.ArrayListUnmanaged(TypeDeclGenerationFrame) = .empty,
 /// The declaration statement of each local declaration, by binding pattern.
@@ -2053,6 +2059,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .local_type_contexts = .keyed,
     .local_type_contexts_final = .keyed,
     .local_type_context_owners = .keyed,
+    .checked_polymorphic_bindings = .keyed,
     .type_decl_generation_frames = .frame_stack,
     .local_decl_by_pattern = .keyed,
     .local_decls_indexed = .keyed,
@@ -5668,18 +5675,22 @@ const LocalTypeEscapeJudge = struct {
 /// A relation or requirement that failed only because a body-local type left
 /// the functions its identity depends on (`problem.LocalTypeEscapeCause`:
 /// values of two instantiations met, or a context variable it carried out met
-/// another type or a requirement it does not declare) is withdrawn once the
+/// another type or a requirement it does not declare outside the body of the
+/// binding owning the variable) is withdrawn once the
 /// escape rule reports that type: the escape is the problem, reported at the
 /// binding the type left through, and the failure is its consequence. This
 /// runs once every relation is checked.
 fn withdrawLocalTypeEscapeConsequences(
     self: *Self,
     escaped: *const collections.DenseMapUnmanaged(CIR.Statement.Idx, void),
-) void {
+) Allocator.Error!void {
+    try self.claimRecordedProblems();
     const self_module = self.cir.selfModuleIdentity();
     const items = self.problems.problems.items;
+    const owners = self.problem_owners.items;
+    std.debug.assert(owners.len == items.len);
     var kept: usize = 0;
-    for (items) |item| {
+    for (items, owners) |item, owner| {
         const cause: ?problem.LocalTypeEscapeCause = if (item == .type_mismatch)
             item.type_mismatch.local_type_escape
         else if (item == .static_dispatch) switch (item.static_dispatch) {
@@ -5708,9 +5719,10 @@ fn withdrawLocalTypeEscapeConsequences(
         } else false;
         if (withdrawn) continue;
         items[kept] = item;
+        owners[kept] = owner;
         kept += 1;
     }
-    self.problems.truncate(kept);
+    self.truncateProblems(kept);
 }
 
 /// The context variable of a body-local type (design.md "Body-Local Type
@@ -5722,9 +5734,22 @@ fn probeContextVariable(ctx: *const anyopaque, var_: Var) ?Var {
     if (resolved.desc.content != .rigid) return null;
     for (self.local_type_context_rigids.items) |rigid| {
         const variable = ModuleEnv.varFrom(rigid);
-        if (self.types.resolveVar(variable).var_ == resolved.var_) return variable;
+        if (self.types.resolveVar(variable).var_ != resolved.var_) continue;
+        // Inside the body of the binding that owns it, the variable is that
+        // body's own, and a relation against it is the body's.
+        if (!self.checked_polymorphic_bindings.contains(self.rigidVarOwner(rigid))) return null;
+        return variable;
     }
     return null;
+}
+
+/// Record that a binding's definition is checked, generalization boundary
+/// included (`checked_polymorphic_bindings`).
+fn recordCheckedPolymorphicBinding(self: *Self, annotation: ?CIR.Annotation.Idx, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+    if (self.local_type_context_rigids.items.len == 0) return;
+    const annotation_idx = annotation orelse return;
+    if (!self.cir.store.getAnnotation(annotation_idx).introduces_type_var) return;
+    try self.checked_polymorphic_bindings.put(self.gpa, pattern, {});
 }
 
 /// POLICY: a body-local type stays inside the functions its identity depends
@@ -5827,7 +5852,7 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
     }
     const escaped = &judge.escaped;
     if (escaped.count() == 0) return;
-    self.withdrawLocalTypeEscapeConsequences(escaped);
+    try self.withdrawLocalTypeEscapeConsequences(escaped);
 
     // Values of an escaped type exist outside its context, where its methods
     // have no declaration context to run in, so every method is rejected.
@@ -21967,6 +21992,10 @@ fn finishGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.
     try self.popTryRowFixpoint(state.try_row_fixpoint, env);
     try self.popGroupFrame(state.group_index);
     self.group_states.items[state.group_index] = .checked;
+    for (self.check_order.?.sccs[state.group_index].defs) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        try self.recordCheckedPolymorphicBinding(def.annotation, def.pattern);
+    }
     self.active_scheme_root = state.saved_active_scheme_root;
     return checkActivityDone(.none);
 }
@@ -32052,6 +32081,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 env.var_pool.popRank();
                 self.active_scheme_root = decl.saved_active_scheme_root;
             }
+            try self.recordCheckedPolymorphicBinding(decl_stmt.anno, decl_stmt.pattern);
 
             _ = try self.unify(stmt_var, decl_pattern_var, env);
             try self.bindTypeSchemeVar(decl_expr_var, stmt_var);
