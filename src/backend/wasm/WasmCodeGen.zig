@@ -7022,9 +7022,11 @@ fn emitProcSpecBody(
         const own_cell = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
         try self.emitFpOffset(cell_offset);
         try self.emitLocalSet(own_cell);
-        try self.emitLocalGet(own_cell);
-        try self.emitI32Const(0);
-        try self.emitStoreOp(.i32, 0);
+        for (0..builtins.native_callable.zeroed_words) |i| {
+            try self.emitLocalGet(own_cell);
+            try self.emitI32Const(0);
+            try self.emitStoreOp(.i32, @intCast(i * 4));
+        }
         self.pending_cell = .{ .idx = own_cell, .val_type = .i32 };
         if (proc.reads_caller_drives) {
             // A cell in the erased ABI's last argument belongs to the runtime

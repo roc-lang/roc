@@ -20393,6 +20393,23 @@ A cell is empty whenever a statement that can fill it starts, because whoever
 fills it returns straight to whoever drives it. One cell therefore serves every
 statement of a procedure.
 
+A cell holds up to `native_callable.inline_args_words` words of the pending
+call's argument bytes itself, so recording a pending call allocates nothing; a
+larger argument block is copied to a heap block. A callee may read its
+arguments for as long as it runs (a dynamic argument stays where it arrived),
+and the cell is refilled while it runs: by the call it leaves pending, and by
+any chain a procedure handed this cell drives in it. So the driver never makes
+a call with the cell's own bytes: it copies inline arguments into its own frame
+first, and lets go of a heap block only once the call returns. That block then
+becomes the cell's spare, which the next large block is copied to when it fits
+(otherwise the spare is replaced by a block of the larger size), so a chain of
+large-argument calls holds two blocks however long it runs: the one the
+running call reads and the one it leaves pending. Every drive frees the spare
+when its chain ends. Backends size the cell from `native_callable.pending_words`
+and zero its first `native_callable.zeroed_words` words (the pending callable
+and the spare) when they reserve it; the runtime writes everything else before
+reading it.
+
 The pass also commits `LirProcSpec.may_leave_pending`, its exact procedure
 summary, into native cache offers. Reusing a body-less native entry seeds the
 consumer's propagation with that producer result, including when no locally
