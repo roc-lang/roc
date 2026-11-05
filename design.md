@@ -14506,6 +14506,16 @@ interpreter or native dev evaluator and store the same checked values, so a
 `.boxy` runtime program restores constants the same way under either, and
 reports the same diagnostics.
 
+Selecting a root's compile-time evaluator by whether its value contains a
+function resolves nominal backings against the **complete checked program**:
+the lowering root, its platform relation modules, and its imports. The pending
+evaluation module list is not a type lookup universe. In particular, a cached
+module with no pending roots can still declare a nominal used by a fresh root
+in another module; `roc test` can also use that cached module as its program's
+ownership anchor, which is deliberately absent from the ordinary import list.
+Cache hits change which roots need evaluation, not which type declarations
+are visible when classifying their values.
+
 Where a cache exists and the compiler runs native code, a module's roots first
 run in a program linked against its imports' cached objects: a module unit
 (`TargetConfig.boxy_unit`) lowering only what those roots reach, compiled into

@@ -665,6 +665,7 @@ const CustomCase = enum {
     ctfe_static_cache_runtime,
     ctfe_evaluation_order,
     ctfe_cache_mixing,
+    ctfe_cached_nominal_anchor,
     literal_root_rejected_every_build,
     issue_11673_callable_cache,
     issue_12595_lambda_solved,
@@ -3686,6 +3687,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "CTFE static cache: a helper read at compile time and at runtime prints the same result uncached, cold and warm", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_static_cache_runtime } },
     .{ .id = 0, .suite = .subcommands, .name = "compile-time evaluation order keeps values and diagnostics across uncached, seeded, repeated and edited compilations", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_evaluation_order } },
     .{ .id = 0, .suite = .subcommands, .name = "CTFE cache mixing: warm callable tests and compile-time failures after a runtime build match uncached results", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_cache_mixing } },
+    .{ .id = 0, .suite = .subcommands, .name = "Boxy CTFE resolves a cached nominal anchor after editing another test module", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_cached_nominal_anchor } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a specialization's rejected literal on every build, cached or not", .timeout_ms = 600_000, .body = .{ .custom = .literal_root_rejected_every_build } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a rejected literal whose type holds a callable", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/literal_root_rejected/CallableLiteral.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "invalid string" }}, .occurrences = &.{.{ .stream = .stderr, .text = "invalid string", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
@@ -6213,6 +6215,7 @@ fn runCustomCase(
         .ctfe_static_cache_runtime => customCtfeStaticCacheRuntime(io, allocator, &env, &timer, timeout_ms),
         .ctfe_evaluation_order => customCtfeEvaluationOrder(io, allocator, &env, &timer, timeout_ms),
         .ctfe_cache_mixing => customCtfeCacheMixing(io, allocator, &env, &timer, timeout_ms),
+        .ctfe_cached_nominal_anchor => customCtfeCachedNominalAnchor(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
@@ -11876,6 +11879,62 @@ fn customCtfeEvaluationOrder(
                 baseline = run;
             }
         }
+    }
+    return null;
+}
+
+/// A cached ownership anchor still supplies nominal declarations to fresh CTFE.
+fn customCtfeCachedNominalAnchor(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const dir = createWorkSubdir(io, allocator, env, "cached_nominal_anchor") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create the case directory: {}", .{err});
+    const cache = std.fs.path.join(allocator, &.{ dir, "cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    const main_path = std.fs.path.join(allocator, &.{ dir, "Main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the entrypoint: {}", .{err});
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to clone the environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
+        return customInfraFailure(allocator, timer, "failed to isolate the cache: {}", .{err});
+    if (writeCaseFile(io, allocator, timer, dir, "Main.roc", "import Anchor\nimport Consumer\n")) |failure| return failure;
+    if (writeCaseFile(io, allocator, timer, dir, "Anchor.roc",
+        \\Anchor := { value : I64 }.{
+        \\    make : I64 -> Anchor
+        \\    make = |n| { value: n }
+        \\    get : Anchor -> I64
+        \\    get = |r| r.value
+        \\}
+        \\expect Anchor.get(Anchor.make(1)) == 1
+        \\
+    )) |failure| return failure;
+    const consumer =
+        \\Consumer := []
+        \\import Anchor
+        \\value = Anchor.make(42)
+        \\
+    ;
+    // Anchor owns the test program, but after the edit its checked artifact
+    // is cached and it has no pending roots. Consumer's fresh constant still
+    // needs Anchor's nominal backing when selecting its CTFE evaluator.
+    for ([_][]const u8{
+        consumer ++ "expect Anchor.get(value) == 42\n",
+        consumer ++ "expect Anchor.get(value) == 42\n",
+        consumer ++ "expect Anchor.get(value) == 41 + 1\n",
+        consumer ++ "expect Anchor.get(value) == 41 + 1\n",
+    }) |source| {
+        if (writeCaseFile(io, allocator, timer, dir, "Consumer.roc", source)) |failure| return failure;
+        if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = &.{ "test", "--opt=dev", "--specialize=no", "--no-color" },
+            .roc_file = main_path,
+            .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }},
+            .stderr_exact = "",
+        })) |failure| return failure;
     }
     return null;
 }
