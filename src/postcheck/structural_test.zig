@@ -412,7 +412,7 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
 
     const entry_wrapper = sourceSliceBetween(
         lower_source,
-        "fn lowerEntryWrapperAtCell(",
+        "fn lowerRootEntryAtCell(",
         "fn instantiateTemplateDispatchRelations(",
     );
     try expectContains(entry_wrapper, "try relateRequestComponent(self.graph, declared_ret_node, body_ret_node)");
@@ -1102,7 +1102,7 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
     const template_body = sourceSliceBetween(
         lower_source,
         "fn lowerTemplateBodyAtNode(",
-        "fn lowerEntryWrapperAtCell(",
+        "fn lowerRootEntryAtCell(",
     );
     try expectContains(template_body, "self.function_entry_demand_guards = fn_nodes.args");
 

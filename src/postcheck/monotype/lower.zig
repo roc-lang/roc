@@ -7345,10 +7345,7 @@ const Builder = struct {
         defer solved_source_modules.deinit(self.allocator);
         var discovery_start = unfiltered_discovery_start;
         for (unfiltered_requests, 0..) |request, i| {
-            const literal_argument = if (request.compile_time_root) |root_id|
-                self.moduleForId(self.rootSourceModule(unfiltered_source_modules, i)).compile_time_roots.root(root_id).kind == .literal_argument
-            else
-                false;
+            const literal_argument = if (request.compile_time_root) |root_id| root_id.kind() == .literal_argument else false;
             if (literal_argument) {
                 if (unfiltered_discovery_start) |start| if (i < start) {
                     discovery_start.? -= 1;
@@ -67524,7 +67521,7 @@ test "draft specialization lookup preserves family evidence and request identity
                 var different_family = family;
                 if (@typeInfo(@FieldType(Family, field_name)) == .array) {
                     @field(different_family, field_name)[byte] = 1;
-                } else if (@FieldType(Family, field_name) == u32) {
+                } else if (@FieldType(Family, field_name) == u32 or @FieldType(Family, field_name) == u128) {
                     @field(different_family, field_name) = 1;
                 } else if (@FieldType(Family, field_name) == bool) {
                     @field(different_family, field_name) = true;

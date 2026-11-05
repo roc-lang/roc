@@ -5024,7 +5024,13 @@ pub const CheckedTypeStore = struct {
     /// A column that aliases `source`'s column.
     fn borrowedColumn(source: *const CheckedTypeStore, comptime column: BorrowedColumn) @FieldType(CheckedTypeStore, @tagName(column)) {
         const Column = @FieldType(CheckedTypeStore, @tagName(column));
-        if (comptime isPublishedColumn(column)) return Column.borrowing(@field(source, @tagName(column)).items());
+        if (comptime isPublishedColumn(column)) {
+            // A pairing reads the types its platform held when it was
+            // published, whatever the platform's analyses created since.
+            const items = @field(source, @tagName(column)).items();
+            const count = if (source.published_counts) |counts| counts[@backingInt(column)] else items.len;
+            return Column.borrowing(items[0..count]);
+        }
         return @field(source, @tagName(column));
     }
 
@@ -21883,8 +21889,10 @@ fn dispatchImportViews(dispatch: CheckedDispatch) CheckedImportViews {
 }
 
 /// Demand, holding no claim, the interface capabilities of the module `dispatch`
-/// reads and of `modules`, whose types a creation in the module's store reads.
-fn demandLiteralCapabilities(dispatch: CheckedDispatch, modules: []const ModuleId) Allocator.Error!void {
+/// reads and of `modules`, whose types a creation in the module's store or a
+/// dispatch analysis reads, so every analysis reads their nominal types at
+/// the representation the capabilities give them.
+pub fn demandDispatchCapabilities(dispatch: CheckedDispatch, modules: []const ModuleId) Allocator.Error!void {
     const import_views = dispatchImportViews(dispatch);
     const store = dispatch.source.types.store;
     if (store.capability_source != null) _ = try store.view().interfaceCapabilities(import_views.resolver());
@@ -21930,7 +21938,7 @@ pub fn computeUnitLiteralConversions(allocator: Allocator, dispatch: CheckedDisp
     errdefer allocator.free(records);
     const import_views = dispatchImportViews(dispatch);
     const store = source.types.store;
-    try demandLiteralCapabilities(dispatch, &.{});
+    try demandDispatchCapabilities(dispatch, &.{});
     for (candidates.items, nodes, records) |candidate, *node, *record| {
         node.* = candidate.literal.node();
         const eligible = try checkedTypeIsContextFreeCompileTimeRoot(allocator, source.key.digest(), store.view(), import_views.resolver(), false, candidate.ty);
@@ -22733,10 +22741,13 @@ pub fn computeLiteralGraph(allocator: Allocator, dispatch: CheckedDispatch) Allo
 /// around a recursive cycle that maps each variable back to itself.
 fn literalRequirementTypeIdentity(
     store: *const CheckedTypeStore,
+    names: *const canonical.CanonicalNameStore,
     orderer: *CheckedIdentityOrderer,
     ty: CheckedTypeId,
 ) Allocator.Error![32]u8 {
-    const key = try store.view().rootKey(ty);
+    var view = store.view();
+    view.names = names;
+    const key = try view.rootKey(ty);
     if (!try store.rootContainsIdentityVariables(ty)) return key.bytes;
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(&key.bytes);
@@ -23038,7 +23049,7 @@ pub fn computeLiteralComponent(
         for (graph.own_sites[graph.own_starts[node]..graph.own_starts[node + 1]]) |own| {
             const entry = try states.getOrPut(allocator, own.scope);
             if (!entry.found_existing) entry.value_ptr.* = .{};
-            const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = own.site, .ty = try literalRequirementTypeIdentity(store, &orderer, own.ty) });
+            const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = own.site, .ty = try literalRequirementTypeIdentity(store, names, &orderer, own.ty) });
             if (slot.found_existing) continue;
             slot.value_ptr.* = @intCast(entry.value_ptr.list.items.len);
             try entry.value_ptr.list.append(allocator, .{ .site = own.site, .ty = own.ty, .edge = .literal, .callee_requirement = 0 });
@@ -23120,7 +23131,7 @@ pub fn computeLiteralComponent(
 
     // Read the nominal representations of every module whose types the
     // creations below copy before taking the creation lock.
-    try demandLiteralCapabilities(dispatch, modules.items);
+    try demandDispatchCapabilities(dispatch, modules.items);
     {
         store.beginCreation(io);
         defer store.endCreation(io);
@@ -23166,7 +23177,7 @@ pub fn computeLiteralComponent(
                     const projected = if (state.projector) |projector| try projector.project(obligation.ty) else obligation.ty;
                     break :created if (state.substitution) |*substitution| try store.cloneCheckedTypeRootSubstituting(allocator, projected, substitution) else projected;
                 };
-                const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, &orderer, ty) };
+                const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, names, &orderer, ty) };
                 if (!try store.rootContainsIdentityVariables(ty)) {
                     const slot = try root_index.getOrPut(allocator, key);
                     if (!slot.found_existing) {
@@ -24392,7 +24403,7 @@ pub const PlatformPairing = struct {
         /// cover.
         pub fn synthesizedTypeCount(self: *const Serialized, platform: *const CheckedModuleArtifact) usize {
             const roots_bit = @backingInt(CheckedTypeStore.BorrowedColumn.roots);
-            if (self.borrowed_types & (@as(u32, 1) << roots_bit) != 0) return platform.checked_types.roots.items().len;
+            if (self.borrowed_types & (@as(u32, 1) << roots_bit) != 0) return CheckedTypeStore.borrowedColumn(&platform.checked_types, .roots).items().len;
             return @intCast(self.checked_types.roots.len);
         }
 

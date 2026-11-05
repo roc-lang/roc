@@ -9486,7 +9486,7 @@ fn hashPatternExtractionRegionsForView(
 
         const store = &view.module_env.store;
         hasher.update(&view.key.bytes);
-        hashU32IntoSha256(hasher, @backingInt(root.id));
+        hashU32IntoSha256(hasher, root.id.index());
         hashU32IntoSha256(hasher, @backingInt(root.rootExpr()));
         hashU32IntoSha256(hasher, @backingInt(extraction.base_expr));
         hashU32IntoSha256(hasher, @backingInt(extraction.scrutinee_pattern));
@@ -9564,11 +9564,11 @@ fn hashExhaustivenessOwnerIntoSha256(
             hashU32IntoSha256(hasher, 1);
             hasher.update(&template.artifact.bytes);
             hashU32IntoSha256(hasher, @backingInt(template.proc_base));
-            hashU32IntoSha256(hasher, @backingInt(template.template));
+            template.template.digestInto(hasher);
         },
         .root => |root| {
             hashU32IntoSha256(hasher, 2);
-            hashU32IntoSha256(hasher, @backingInt(root));
+            root.digestInto(hasher);
         },
     } else {
         hashU32IntoSha256(hasher, 0);
@@ -9582,7 +9582,7 @@ fn hashExhaustivenessPolicyIntoSha256(
     switch (policy) {
         .compile_time_replaced_by_root => |root| {
             hashU32IntoSha256(hasher, 0);
-            hashU32IntoSha256(hasher, @backingInt(root));
+            root.digestInto(hasher);
         },
         .compile_time_only => hashU32IntoSha256(hasher, 1),
         .runtime_reachable => hashU32IntoSha256(hasher, 2),

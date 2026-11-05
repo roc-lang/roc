@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const roc_target = @import("roc_target");
+const check = @import("check");
 const compile_build = @import("../compile_build.zig");
 const BuildEnv = compile_build.BuildEnv;
 

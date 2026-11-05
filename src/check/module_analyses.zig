@@ -428,6 +428,7 @@ pub const ModuleAnalyses = struct {
     };
 
     fn dispatchSlots(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*DispatchSlots {
+        if (self.dispatch_slots.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
         return self.dispatch_slots.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.createSlots);
     }
 
@@ -469,12 +470,14 @@ pub const ModuleAnalyses = struct {
     /// The module-wide indexes dispatch resolution reads.
     pub fn dispatchIndex(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*const DispatchIndex {
         self.assertPublished();
+        if (self.dispatch_index.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
         return self.dispatch_index.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.index);
     }
 
     /// The module's dispatch resolution of what no template resolves.
     pub fn moduleDispatch(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*const ModuleDispatch {
         self.assertPublished();
+        if (self.module_dispatch.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
         return self.module_dispatch.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.moduleResolution);
     }
 
@@ -482,6 +485,7 @@ pub const ModuleAnalyses = struct {
     /// solutions.
     pub fn platformRequirementRootEvidence(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*const PlatformRequirementRootEvidence {
         self.assertPublished();
+        if (self.platform_root_evidence.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
         return self.platform_root_evidence.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.platformRootEvidence);
     }
 
@@ -529,6 +533,7 @@ pub const ModuleAnalyses = struct {
     /// its demand edges and the strongly connected components they form.
     pub fn templateDemandGraph(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*TemplateDemandGraph {
         self.assertPublished();
+        if (self.template_demand_graph.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
         return self.template_demand_graph.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.demandGraph);
     }
 
@@ -588,6 +593,7 @@ pub const ModuleAnalyses = struct {
     /// the edges between templates.
     pub fn literalGraph(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*LiteralGraph {
         self.assertPublished();
+        if (self.literal_graph.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
         return self.literal_graph.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.literalGraph);
     }
 

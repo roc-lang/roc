@@ -917,6 +917,9 @@ pub fn finalizeProgram(
     defer if (unfiltered_options.timing) |timing| timing.finish(total_started_ns, .total);
     if (unfiltered_program_roots.source_modules.len != 0 and unfiltered_program_roots.source_modules.len != unfiltered_program_roots.requests.len)
         finalizationInvariant("program roots omitted their checked owners");
+    // Every literal root a module's requests evaluate has its evaluation
+    // output entry before any evaluation reads or fills one.
+    for (modules) |entry| try entry.module.prepareLiteralRootPayloads(entry.module.evaluationAllocator());
     if (unfiltered_options.strategy == .boxy) return finalizeProgramBoxy(allocator, modules, lowering_modules, unfiltered_program_roots, runtime_roots, runtime_target, unfiltered_options);
     // A literal argument root is the `.boxy` evaluator's: a Solved program
     // neither specializes nor discovers through it (design.md "Literal

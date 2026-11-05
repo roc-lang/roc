@@ -1688,7 +1688,7 @@ fn lowerCheckedRootWithViews(
     // them, as the coordinator does (design.md "Literal Arguments").
     const reopened = options.specialization_strategy == .boxy and
         root_module.evaluation_state == .finalized and
-        root_module.hasUnevaluatedRequests(.boxy);
+        try root_module.hasUnevaluatedRequests(.boxy);
     if (reopened) try root_module.reopenForEvaluation(allocator);
 
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{

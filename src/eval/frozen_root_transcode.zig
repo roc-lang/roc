@@ -663,8 +663,8 @@ test "frozen root transcode preserves failure flag and message using explicit fi
     const root_id: checked.ComptimeRootId = @fromBackingInt(@intCast(roots.items.len));
     // Transcoding reads only the published root identity, not its source body/type.
     try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
-    const source_id = try failureSlot(allocator, &source, roots.items[@backingInt(root_id)].id);
-    const target_id = try failureSlot(allocator, &target, roots.items[@backingInt(root_id)].id);
+    const source_id = try failureSlot(allocator, &source, roots.items[root_id.index()].id);
+    const target_id = try failureSlot(allocator, &target, roots.items[root_id.index()].id);
     const slot = source.static_data_values.items[@backingInt(source_id)];
     const fields = slot.compile_time_root.?.role.failure_message;
     const bytes = try allocator.alloc(u8, source.layouts.layoutSize(source.layouts.getLayout(slot.layout_idx)));
@@ -814,7 +814,7 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     // Transcoding reads only the published root identity, not its source body/type.
     try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
 
-    const source_slot_id = try boxedValueSlot(&source, source_box, source_plan, roots.items[@backingInt(root_id)].id);
+    const source_slot_id = try boxedValueSlot(&source, source_box, source_plan, roots.items[root_id.index()].id);
     const native = try @import("native_root_export.zig").freezeRootIntoSlot(
         allocator,
         &source,
@@ -830,7 +830,7 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     try std.testing.expectEqual(@sizeOf(usize), native[0].bytes.len);
     try std.testing.expectEqual(@as(usize, 1), native[0].relocations.len);
 
-    const target_slot_id = try boxedValueSlot(&target, target_box, target_plan, roots.items[@backingInt(root_id)].id);
+    const target_slot_id = try boxedValueSlot(&target, target_box, target_plan, roots.items[root_id.index()].id);
     const converted = try transcodeValueSlot(
         allocator,
         &source,

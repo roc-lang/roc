@@ -2577,7 +2577,7 @@ fn expectPendingProcedureAliasRoot(
         const root = (try artifact.compileTimeRoot(root_id));
         try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootKind.callable_binding, root.kind);
         try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootPayload.pending, root.payload);
-        try std.testing.expect(compileTimeRequestIndexForRoot(artifact, root.id) == null);
+        try std.testing.expect(try compileTimeRequestIndexForRoot(artifact, root.id) == null);
         return;
     }
     try std.testing.expect(false);
@@ -2603,15 +2603,15 @@ fn expectRootRequestBefore(
     before: check.CheckedArtifact.ComptimeRootId,
     after: check.CheckedArtifact.ComptimeRootId,
 ) HoistedConstantsTestError!void {
-    const before_index = compileTimeRequestIndexForRoot(artifact, before) orelse return error.BeforeRootHadNoRequest;
-    const after_index = compileTimeRequestIndexForRoot(artifact, after) orelse return error.AfterRootHadNoRequest;
+    const before_index = (try compileTimeRequestIndexForRoot(artifact, before)) orelse return error.BeforeRootHadNoRequest;
+    const after_index = (try compileTimeRequestIndexForRoot(artifact, after)) orelse return error.AfterRootHadNoRequest;
     try std.testing.expect(before_index < after_index);
 }
 
 fn compileTimeRequestIndexForRoot(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     root_id: check.CheckedArtifact.ComptimeRootId,
-) ?usize {
+) std.mem.Allocator.Error!?usize {
     const root = (try artifact.compileTimeRoot(root_id));
     for ((try artifact.rootRequests()).compile_time_requests, 0..) |request, i| {
         if (rootRequestMatchesCompileTimeRoot(root, request)) return i;
