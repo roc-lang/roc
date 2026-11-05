@@ -2394,7 +2394,12 @@ const Pass = struct {
     /// value-substituting rewrite that leaves a reference resolving to a
     /// vanished binding produces no diagnostic until code generation reads an
     /// undeclared register; this walk turns that whole class into a
-    /// deterministic panic in every Debug suite. A body cloned or specialized
+    /// deterministic panic in every Debug suite. The same walk checks that an
+    /// `uninitialized_payload` still sits in a loop slot position (a loop
+    /// initial value, a `continue` value or a jump argument): moved behind a
+    /// binding, it loses the presence condition direct LIR lowering reads
+    /// from the initial value, and ARC would retain a slot nothing wrote.
+    /// A body cloned or specialized
     /// by this pass is checked; original bodies left in place are the lift
     /// output, already covered by their own invariants.
     fn verifyRewrittenBodyLocals(self: *Pass, original_fn_count: usize) Allocator.Error!void {
@@ -15199,6 +15204,10 @@ const BodyLocalScope = struct {
         bind_pat: Ast.PatId,
         bind_local: Ast.LocalId,
         bind_typed_locals: Ast.Span(Ast.TypedLocal),
+        /// An expression written into a loop slot: a loop initial value, a
+        /// `continue` value, or a jump argument. These are the only positions
+        /// an `uninitialized_payload` may hold.
+        slot_value: Ast.ExprId,
         open_scope,
         close_scope,
         close_join: Ast.JoinPointId,
@@ -15223,6 +15232,11 @@ const BodyLocalScope = struct {
         fn pushExprSpan(walk: *Walk, span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
             const values = walk.scope.program.exprSpan(span);
             for (0..values.len) |index| try walk.push(.{ .expr = GuardedList.at(values, index) });
+        }
+
+        fn pushSlotValues(walk: *Walk, span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
+            const values = walk.scope.program.exprSpan(span);
+            for (0..values.len) |index| try walk.push(.{ .slot_value = GuardedList.at(values, index) });
         }
 
         fn pushStmtSpan(walk: *Walk, span: Ast.Span(Ast.StmtId)) Allocator.Error!void {
@@ -15300,6 +15314,13 @@ const BodyLocalScope = struct {
                     .crash, .checked_error => {},
                 },
                 .expr => |expr_id| try walk.stepExpr(expr_id),
+                // An `uninitialized_payload` in a slot position names its
+                // presence flag, a loop param bound after the initial values;
+                // the capture walk exempts that forward reference, and so
+                // does this one.
+                .slot_value => |expr_id| if (self.program.getExpr(expr_id).data != .uninitialized_payload) {
+                    try walk.stepExpr(expr_id);
+                },
             }
         }
 
@@ -15315,12 +15336,18 @@ const BodyLocalScope = struct {
                 .str_lit,
                 .bytes_lit,
                 .uninitialized,
-                .uninitialized_payload,
                 .crash,
                 .checked_error,
                 .comptime_exhaustiveness_failed,
                 .@"unreachable",
                 => {},
+                // The marker means "write nothing to this slot": only a loop
+                // initial value, a `continue` value or a jump argument (the
+                // `slot_value` step) can carry it. Anywhere else, a rewrite
+                // moved it, and the slot it guarded lost its presence
+                // condition: direct LIR lowering reads that condition from
+                // the loop's initial value alone.
+                .uninitialized_payload => Common.invariant("rewritten body holds an uninitialized payload outside a loop slot position"),
                 .lambda,
                 .def_ref,
                 .fn_def,
@@ -15434,14 +15461,14 @@ const BodyLocalScope = struct {
                     try walk.push(.close_scope);
                 },
                 .loop_ => |loop| {
-                    try walk.pushExprSpan(loop.initial_values);
+                    try walk.pushSlotValues(loop.initial_values);
                     try walk.push(.open_scope);
                     try walk.push(.{ .bind_typed_locals = loop.params });
                     try walk.push(.{ .expr = loop.body });
                     try walk.push(.close_scope);
                 },
                 .break_ => |maybe| if (maybe) |value| try walk.push(.{ .expr = value }),
-                .continue_ => |continue_| try walk.pushExprSpan(continue_.values),
+                .continue_ => |continue_| try walk.pushSlotValues(continue_.values),
                 .join_point => |join_point| {
                     const join_entry = try self.joins.getOrPut(join_point.id);
                     if (join_entry.found_existing) {
@@ -15468,8 +15495,8 @@ const BodyLocalScope = struct {
                         Common.invariant("rewritten body jump loop-update arity differed");
                     }
                     for (0..update_params.len) |index| self.checkUse(GuardedList.at(update_params, index).local);
-                    try walk.pushExprSpan(jump.loop_values);
-                    try walk.pushExprSpan(jump.args);
+                    try walk.pushSlotValues(jump.loop_values);
+                    try walk.pushSlotValues(jump.args);
                 },
             }
         }

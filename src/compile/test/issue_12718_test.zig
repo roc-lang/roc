@@ -1,9 +1,12 @@
 //! Regression test for https://github.com/roc-lang/roc/issues/12718.
 //!
 //! At `--opt speed`, `Json.parse` into a record with a `Dict` field must
-//! lower to LIR that passes ARC certification. SpecConstr's direct-call
-//! inlining (#12689) left the dictionary loop's entry reading a value whose
-//! binding it had not kept, which a release build read as garbage.
+//! lower to LIR that passes ARC certification. SpecConstr's loop exit
+//! selection bound the record parser's `uninitialized_payload` initializers
+//! to fresh locals, so each payload slot entered its loop as a plain read of
+//! a local nothing wrote and lost its presence guard; ARC retained the slot,
+//! and a release build read garbage. Direct-call inlining (#12689) first
+//! brought this parser into that shape.
 const harness = @import("lower_to_lir_harness.zig");
 
 const app =
