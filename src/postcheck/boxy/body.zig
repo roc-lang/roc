@@ -9668,6 +9668,7 @@ pub const Builder = struct {
     /// runs structurally ends the chain as an iterator value.
     fn iteratorChain(self: *Builder, plan_id: static_dispatch.IteratorForPlanId) Allocator.Error!?[]const ChainLayer {
         const plan = self.view.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)];
+        const for_site = plan.forLoopSite();
         const iterator_ty = try self.convert(plan.iterator_ty);
         // The loop steps the chain's result and every iterator value in it
         // through the builtin protocol, whose step field the loop calls.
@@ -9676,11 +9677,11 @@ pub const Builder = struct {
         defer layers.deinit(self.allocator);
         const iter_stamp = self.dispatchStamp(plan.iter.resolution);
         switch (iter_stamp orelse return null) {
-            .list_iter => try layers.append(self.allocator, .{ .list = .{ .list = plan.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
-            .list_iter_rev => try layers.append(self.allocator, .{ .list_rev = .{ .list = plan.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
-            .str_iter_utf8 => try layers.append(self.allocator, .{ .str = .{ .str = plan.iterable } }),
+            .list_iter => try layers.append(self.allocator, .{ .list = .{ .list = for_site.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
+            .list_iter_rev => try layers.append(self.allocator, .{ .list_rev = .{ .list = for_site.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
+            .str_iter_utf8 => try layers.append(self.allocator, .{ .str = .{ .str = for_site.iterable } }),
             .identity => {
-                var current = plan.iterable;
+                var current = for_site.iterable;
                 walk: while (true) {
                     const call = try self.chainCall(current) orelse {
                         try layers.append(self.allocator, .{ .value = .{ .iterator = current } });
@@ -9832,6 +9833,7 @@ pub const Builder = struct {
     fn forChainStart(self: *Builder, pattern: CheckedPatternId, body: CheckedExprId, plan_id: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId, chain: []const ChainLayer) Allocator.Error!void {
         const table = self.view.view.static_dispatch_plans;
         const plan = table.iterator_for_plans[@backingInt(plan_id)];
+        const for_site = plan.forLoopSite();
         const store = &self.program.store;
         const names = self.view.nameStore();
 
@@ -9990,11 +9992,11 @@ pub const Builder = struct {
                     .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an iterator's step field is not a function"),
                 };
                 const step_value = try self.emitErasedCall(thunk.value, thunk.ty, &.{}, step_ty);
-                const done_name = try store.internName(names.tagLabelText(plan.step_topology.done_tag));
-                const skip_name = try store.internName(names.tagLabelText(plan.step_topology.skip_tag));
-                const one_name = try store.internName(names.tagLabelText(plan.step_topology.one_tag));
-                const item_name = try store.internName(names.recordFieldLabelText(plan.step_topology.item_field));
-                const rest_name = try store.internName(names.recordFieldLabelText(plan.step_topology.rest_field));
+                const done_name = try store.internName(names.tagLabelText(for_site.step_topology.done_tag));
+                const skip_name = try store.internName(names.tagLabelText(for_site.step_topology.skip_tag));
+                const one_name = try store.internName(names.tagLabelText(for_site.step_topology.one_tag));
+                const item_name = try store.internName(names.recordFieldLabelText(for_site.step_topology.item_field));
+                const rest_name = try store.internName(names.recordFieldLabelText(for_site.step_topology.rest_field));
                 const not_done_hole = try self.newHole();
                 try self.branchOnTag(step_value, step_ty, done_name, not_done_hole);
                 try self.emitJump(exit, null);
