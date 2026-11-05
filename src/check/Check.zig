@@ -429,6 +429,10 @@ final_codec_instance_copy_pairs: std.ArrayListUnmanaged(Instantiator.SharedSubtr
 /// The copies a generated codec method target's instantiation reads instead
 /// of copying those variables again (`instantiateGeneratedCodecMethodTarget`).
 codec_instance_copies: []const Instantiator.SharedSubtree = &.{},
+/// The context arguments of the application a method target is selected on,
+/// each with the context variable of the method's type it substitutes, while
+/// that target's scheme is instantiated (`receiverContext`).
+method_receiver_context: []const Instantiator.SharedSubtree = &.{},
 /// Every generated codec derivation validated so far, in order (design.md
 /// "Codec Derivation Recurrence"). A derivation's method instantiations can
 /// require another generated codec; that relation's derivation records the
@@ -1765,6 +1769,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .final_codec_instance_copies = .keyed,
     .final_codec_instance_copy_pairs = .keyed,
     .codec_instance_copies = .lexical,
+    .method_receiver_context = .lexical,
     .codec_derivation_frames = .keyed,
     .codec_derivation_children = .keyed,
     .codec_derivation_frame_by_child_fn_var = .keyed,
@@ -11912,6 +11917,9 @@ fn instantiateVarHelpFromScheme(
     }
     for (self.codec_instance_copies) |copy| {
         try instantiator.var_map.put(self.types.resolveVar(copy.source).var_, copy.copy);
+    }
+    for (self.method_receiver_context) |sub| {
+        try instantiator.var_map.put(self.types.resolveVar(sub.source).var_, sub.copy);
     }
     // An instance of a body-local type declaration's template shares the
     // declaration's context variables, which the template lists themselves
@@ -46532,6 +46540,52 @@ fn includeTryRowDirected(self: *Self, edge: DeferredTryRowEdge, env: *Env) Alloc
     }
 }
 
+/// The context arguments of the application a method target is selected on,
+/// each paired with the context variable of the application's declaration it
+/// substitutes (design.md "Body-Local Type Context"). A method of a type
+/// declared in a function body names the declaration's context variables as
+/// the enclosing functions' own variables; selected on an application, its
+/// instance reads them as that application's context arguments, as opening
+/// the application's backing does.
+const ReceiverContext = struct {
+    inline_subs: [4]Instantiator.SharedSubtree = undefined,
+    allocated: []Instantiator.SharedSubtree = &.{},
+    len: u32 = 0,
+
+    fn subs(self: *const ReceiverContext) []const Instantiator.SharedSubtree {
+        if (self.allocated.len != 0) return self.allocated;
+        return self.inline_subs[0..self.len];
+    }
+
+    fn deinit(self: *ReceiverContext, gpa: Allocator) void {
+        if (self.allocated.len != 0) gpa.free(self.allocated);
+    }
+};
+
+fn receiverContext(self: *Self, receiver_var: Var) Allocator.Error!ReceiverContext {
+    var result: ReceiverContext = .{};
+    const nominal = self.types.resolveVar(receiver_var).desc.content.unwrapNominalType() orelse return result;
+    const decl_idx = self.types.lookupNominalDecl(nominal) orelse return result;
+    const decl = self.types.getNominalDecl(decl_idx);
+    if (decl.flags.context_len == 0) return result;
+    const declared = decl.declaredFormalCount();
+    const formals = self.types.sliceVars(decl.formals);
+    const args = self.types.sliceNominalArgs(nominal);
+    std.debug.assert(formals.len == args.len);
+    const context_len = formals.len - declared;
+    const out = if (context_len <= result.inline_subs.len)
+        result.inline_subs[0..context_len]
+    else out: {
+        result.allocated = try self.gpa.alloc(Instantiator.SharedSubtree, context_len);
+        break :out result.allocated;
+    };
+    result.len = @intCast(context_len);
+    for (formals[declared..], args[declared..], out) |formal, arg, *sub| {
+        sub.* = .{ .source = formal, .copy = arg };
+    }
+    return result;
+}
+
 /// Check static dispatch constraints
 ///
 /// Note that new constraints can be added as we are processing. For example:
@@ -47979,6 +48033,11 @@ fn instantiateDispatchTargetMethodVar(
         break :blk expr_var_for_method;
     } else if (method_lookup.is_this_module) blk: {
         const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
+        var receiver_context = try self.receiverContext(dispatcher_var);
+        defer receiver_context.deinit(self.gpa);
+        const context_before = self.method_receiver_context;
+        defer self.method_receiver_context = context_before;
+        self.method_receiver_context = receiver_context.subs();
         break :blk try self.instantiateBindingVar(local_method_type_var, env, .use_last_var, evidence);
     } else blk: {
         const imported_scheme = try self.importedMethodScheme(method_lookup);
@@ -57364,6 +57423,7 @@ fn hasReusableGeneratedCodecCall(
 fn instantiateGeneratedCodecMethodTarget(
     self: *Self,
     method_lookup: StaticDispatchMethodBinding,
+    receiver_var: Var,
     evidence_var: Var,
     env: *Env,
     region: Region,
@@ -57399,6 +57459,11 @@ fn instantiateGeneratedCodecMethodTarget(
             const copies = self.codec_derivation_frames.items[frame].instance_copies;
             self.codec_instance_copies = self.final_codec_instance_copy_pairs.items[copies.start..][0..copies.len];
         }
+        var receiver_context = try self.receiverContext(receiver_var);
+        defer receiver_context.deinit(self.gpa);
+        const context_before = self.method_receiver_context;
+        defer self.method_receiver_context = context_before;
+        self.method_receiver_context = receiver_context.subs();
         break :local try self.instantiateBindingVar(scheme_var, env, .use_last_var, evidence);
     } else try self.instantiateVar(scheme_var, env, .{ .explicit = region }, evidence);
 
@@ -57738,7 +57803,7 @@ fn parseFormatMethodVarForEncoding(
                     method_name,
                 ) orelse break :blk null;
                 break :blk .{
-                    .var_ = try self.instantiateGeneratedFormatMethodTarget(method_lookup, env, region),
+                    .var_ = try self.instantiateGeneratedFormatMethodTarget(method_lookup, encoding_var, env, region),
                     .dispatcher_name = nominal.ident.ident_idx,
                 };
             },
@@ -57766,7 +57831,7 @@ fn parseFormatMethodVarForEncoding(
                 method_name,
             ) orelse break :blk null;
             break :blk .{
-                .var_ = try self.instantiateGeneratedFormatMethodTarget(method_lookup, env, region),
+                .var_ = try self.instantiateGeneratedFormatMethodTarget(method_lookup, encoding_var, env, region),
                 .dispatcher_name = alias.ident.ident_idx,
             };
         },
@@ -57781,11 +57846,12 @@ fn parseFormatMethodVarForEncoding(
 fn instantiateGeneratedFormatMethodTarget(
     self: *Self,
     method_lookup: StaticDispatchMethodBinding,
+    encoding_var: Var,
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
     const evidence_var = try self.fresh(env, region);
-    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, evidence_var, env, region);
+    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, encoding_var, evidence_var, env, region);
     _ = try self.unify(evidence_var, method_var, env);
     return evidence_var;
 }
@@ -59621,7 +59687,7 @@ fn stepDerivedParseNominal(
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
     const dispatchers_start = self.instantiation_dispatchers.items.len;
     const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
-    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, expected_fn, env, region);
+    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, nominal_var, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
             .constraint_var = nominal_var,
@@ -59873,7 +59939,7 @@ fn validateGeneratedNominalMethodCall(
         method_name,
     ) orelse return try self.reportDerivedParseMissingMethod(dispatcher_var, method_name, constraint, env);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(arg_vars, ret_var), env, region);
-    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, expected_fn, env, region);
+    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, dispatcher_var, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
             .constraint_var = dispatcher_var,
@@ -60196,7 +60262,7 @@ fn stepDerivedEncodeNominal(
     const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
     const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ nominal_var, state_var }, expected_ret), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
-    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, expected_fn, env, region);
+    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, nominal_var, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
             .constraint_var = nominal_var,

@@ -5854,7 +5854,15 @@ rather than copying them (`typeDeclTemplateContext`), so every application
 inside the body means the body's own variables, and an application inside the
 declaration's own backing lists them too. Opening an application's backing
 substitutes its trailing arguments for the context formals by variable, as it
-substitutes its declared arguments for the declared formals. Instantiation
+substitutes its declared arguments for the declared formals, and so does
+instantiating a method of the declaration for a dispatch on an application,
+a source dispatch or a generated codec's call of a format method alike
+(`receiverContext`): the method's scheme names the context variables as the
+enclosing functions' own, and its instance reads them as the receiver's
+context arguments. A method whose signature does not name its type (a
+format's `encode_str : Str, s -> Try(s, e)`) is otherwise related to the
+receiver by nothing, so a fresh copy would make each derivation that
+instantiates it ask for a format no derivation in its chain matches. Instantiation
 and unification then treat context arguments like any other argument: an
 instantiation of the enclosing function's scheme substitutes its variables in
 every application of the type the scheme holds, including those in a
