@@ -5853,10 +5853,11 @@ const GeneratedTryTypeAddress = struct {
 
 /// Process-local O(1) reuse key for a checker-classified closed direct
 /// procedure call. `evidence` is an interned producer identity in `module`;
-/// the plan's closed callable type is named by its module's canonical id for
-/// it, so every call of one closed type shares the key. The key is a
-/// complete identity only for specializations independent of the caller's
-/// local context, so caller-owned specializations are never stored under it.
+/// the plan's closed callable type is named by the one id its module's key
+/// index holds for it (`canonicalId`), so every call of one closed type
+/// shares the key. The key is a complete identity only for specializations
+/// independent of the caller's local context, so caller-owned specializations
+/// are never stored under it.
 const ClosedDirectCallIdentity = struct {
     callable: CheckedTypeAddress,
     evidence: static_dispatch.EvidenceNodeId,
@@ -27677,8 +27678,9 @@ const BodyContext = struct {
 
     /// The id a scope's node map holds `checked_ty` under. A type that
     /// reaches no identity variable is one type wherever it occurs, whichever
-    /// ids name it, so it is memoized under its module's canonical id for it
-    /// and instantiates once per scope (design.md "Synthesized Types").
+    /// ids name it, so it is memoized under the one id its module's key index
+    /// holds for it and instantiates once per scope (design.md "Synthesized
+    /// Types").
     fn nodeMapType(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!checked.CheckedTypeId {
         if (!try self.checkedTypeIsClosed(checked_ty)) return checked_ty;
         return try self.view.types.canonicalId(checked_ty);
