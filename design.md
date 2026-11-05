@@ -5825,53 +5825,86 @@ behavior, so the type's identity includes those variables: one declaration
 used at two instantiations is two types, exactly as if it had declared a
 parameter for each and every use applied it to the variable.
 
-Checking decides each such declaration's context once solving settles
-(`finalizeLocalTypeContexts`, before growing polymorphic recursion is judged
-and before promotion is decided): the rigid type
-variables of enclosing functions it depends on, in source order. That is each
-one its annotation names other than its own parameters, each one its methods
-name (a method's candidate records each enclosing rigid variable it looks up,
-and follows its references and dispatches to other candidates), and the
-context of each local type its annotation or those methods name, as a least
-fixpoint. A variable introduced inside the declaration's own block never
-belongs to it. A nominal declaration records its context in the declaration
-table (`NominalDecl.context`). The checker's own nominal applications never
-list the context: within the body every use means the body's own variables,
-so nothing inside checking can tell instantiations apart, and diagnostics and
-printed types never show it.
+Checking decides each such declaration's context from the canonical IR
+before any type declaration is generated (`decideLocalTypeContexts`): the
+rigid type variables of enclosing functions it depends on, in source order.
+A declaration's parts are its annotation, its methods' annotations and
+right-hand sides, and, transitively, the annotations and right-hand sides of
+the local functions those refer to; methods never capture values (Methods
+Never Capture), so a local function is the only other binding a method can
+reach. Its context is each rigid variable its parts look up that none of
+them introduces (its own parameters, its methods' own variables, and those of
+the local functions they reach are introduced by its parts), and each
+variable of the context of a body-local type its parts name that none of
+them introduces, as a least fixpoint, so mutually referring types share their
+variables. A type variable alias whose variable a type-rooted call in its
+parts goes through counts as a lookup of that variable. A dispatch inside a
+method contributes nothing of its own: the value it dispatches on has a type
+whose application lists that type's own context.
 
-Generalization still needs the variables a declaration's backing names
-while solving is under way, because opening the backing of an application
-reaches them. An application that lists no arguments is otherwise ground and
-ranks outermost, so an opening made at that rank would hold a variable of a
-deeper scope, and the enclosing function's generalization would pull that
-variable down with it and leave the function monomorphic in it. The
-generalizer therefore ranks a nominal application over its arguments and the
-enclosing variables its declaration's backing names, directly or through the
-other body-local types it names (`Check.nominalRankContext`). These are read
-from the annotation references the declarations' generation recorded; the
-variables the methods name join only the final context, since they change
-what a declaration's methods do, not what its values contain.
+The context is part of every application in the checker's type store. A
+nominal declaration's formals are its header's variables followed by its
+context variables (`NominalDecl.formals`, the last `flags.context_len` of
+them), and its template application, built when the declaration is
+generated, lists the context variables themselves after its header's. An
+instance of a body-local declaration's template shares the context variables
+rather than copying them (`typeDeclTemplateContext`), so every application
+inside the body means the body's own variables, and an application inside the
+declaration's own backing lists them too. Opening an application's backing
+substitutes its trailing arguments for the context formals by variable, as it
+substitutes its declared arguments for the declared formals. Instantiation
+and unification then treat context arguments like any other argument: an
+instantiation of the enclosing function's scheme substitutes its variables in
+every application of the type the scheme holds, including those in a
+requirement the scheme carries (a codec requirement naming a body-local
+format), and the generalizer ranks an application over all its arguments, so
+an application inside the body is no more general than the body's
+variables. Source types never write context arguments and printed types and
+diagnostics never show them (`Store.nominalDeclaredArgs`); arity checks and
+argument positions read the declared arguments, and a context argument is an
+invariant position. The escape rule (Body-Local Types Stay In Their Context)
+keeps a value of such a type inside the functions it depends on, so no
+diagnostic compares two applications that differ only in context arguments.
 
-Checked publication treats the context as hidden trailing parameters. A
-nominal use of such a declaration lists, after its own arguments, the
-variables of its context (the rigid variables themselves, as the body's types
-name them), and its canonical key includes them; the published
-`CheckedNominalDeclaration` takes the same variables as formals after its
-declared ones (`context_len` of them). The declaration's backing names those
-variables directly, so binding the formals to a use's arguments substitutes
-them like any other formal. Monotype's declaration scopes and its nominal
-caches, keyed by arguments, therefore tell `Wrap` at `U64` from `Wrap` at
-`Str`, and give each its own methods' specializations, with no rule of their
-own; Boxy reads the same arguments. A stored constant's type lists only the
-declared arguments; restoring it takes the context arguments from the
-restoring scope.
+Once every body is checked, `finalizeLocalTypeContexts` makes each candidate
+enclosing a recorded reference to a type with a context contextual from the
+shallowest of its variables, and records the binding that owns each context
+variable of a nominal declaration (`local_type_context_owners`).
 
-Because every published use lists the context variables, identity
-enumeration lists them too (`canonical_type_keys`, `nominal_context`). A
-method of the type annotated with it (`label : Local -> Str`) has a type
-whose application ranks with the enclosing function's variable, so it
-generalizes with that function and its published type names the variable;
+Checked publication reads the arguments as they are. A nominal use of such a
+declaration lists, after its own arguments, its context arguments, and its
+canonical key includes them; the published `CheckedNominalDeclaration` takes
+the same variables as formals after its declared ones (`context_len` of
+them). The declaration's backing names those variables directly, so binding
+the formals to a use's arguments substitutes them like any other formal.
+Monotype's declaration scopes and its nominal caches, keyed by arguments,
+therefore tell `Wrap` at `U64` from `Wrap` at `Str`, and give each its own
+methods' specializations, with no rule of their own; Boxy reads the same
+arguments. A stored constant's type lists only the declared arguments;
+restoring it takes the context arguments from the restoring scope.
+
+A requirement the enclosing function's scheme carries can name such a type
+(a codec requirement whose format is a body-local type), so a caller in
+another module resolves it at its own instantiation of the scheme, and its
+evidence selects methods of the type, which are local procedures of the
+declaring module. Method lookup across checked views therefore returns a
+local procedure target of an imported module like any other target
+(`lookupCheckedMethodTarget`); the target names its declaring module
+(`MethodTarget.module_idx`), and both backends build the procedure in that
+module, from the declaration context of the call instance of the declaring
+function whose dictionaries the caller is building, while reading the
+dispatch's evidence and substitution in the caller's view. Monotype resolves
+the target's view by that module index (`moduleForModuleIdx`); Boxy lowers
+the procedure's value with its declaring module's view and switches back to
+the caller's view to read the evidence (`localMethodValue`,
+`localProcInstanceValue`). The instantiated context arguments give the
+procedure's declaration context its types.
+
+Because every application lists the context variables, identity
+enumeration lists them too (`canonical_type_keys`). A method of the type
+annotated with it (`label : Local -> Str`) has a type whose application
+ranks with the enclosing function's variable, so it generalizes with that
+function and its published type names the variable;
 its scheme therefore quantifies the variable, and checking and Boxy agree
 that it opens an evidence scope of its own.
 
@@ -6014,9 +6047,9 @@ instantiation and may leave its body like any other type. A static dispatch
 requirement whose relation names such a type is not a value of it, so a
 requirement captured into the owner's scheme is not an escape.
 
-Checking applies the rule once contexts are final
-(`rejectEscapingLocalTypes`). Deciding a context records, for each of its
-variables, the binding that owns it (`local_type_context_owners`): a rigid
+Checking applies the rule once every body is checked
+(`rejectEscapingLocalTypes`). Finalizing the contexts records, for each
+context variable, the binding that owns it (`local_type_context_owners`): a rigid
 variable remembers the binding annotation that introduced it, and each
 binding annotation that introduces a type variable remembers its binding. A
 module whose body-local types have empty contexts, or that has none, records

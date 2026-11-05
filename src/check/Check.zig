@@ -1415,23 +1415,15 @@ dispatch_candidate_frame_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .em
 /// variable of an enclosing function, the shallowest candidate depth of such
 /// a variable: checking still writes its backing template through them.
 local_type_context_depths: collections.DenseMapUnmanaged(CIR.Statement.Idx, u32) = .empty,
-/// Each rigid type variable a type declaration's annotation names, other
-/// than its own parameters, as (declaration, variable).
-local_type_annotation_rigids: std.ArrayListUnmanaged(LocalTypeRigidRef) = .empty,
-/// Each type declared in a function body that a type declaration's
-/// annotation names, as (declaration, named declaration).
-local_type_annotation_decls: std.ArrayListUnmanaged(LocalTypeDeclRef) = .empty,
-/// For each type declared in a function body, the type variables of
-/// enclosing functions its backing names, directly or through the other such
-/// types it names, as a range of `nominal_rank_context_vars`
-/// (`nominalRankContext`). Built from `local_type_annotation_rigids` and
-/// `local_type_annotation_decls` when their combined length was
-/// `nominal_rank_context_inputs_len`.
-nominal_rank_contexts: collections.DenseMapUnmanaged(CIR.Statement.Idx, NominalRankContext) = .empty,
-nominal_rank_context_vars: std.ArrayListUnmanaged(Var) = .empty,
-nominal_rank_context_inputs_len: usize = 0,
-/// Each rigid type variable of an enclosing function a candidate names.
-local_procedure_rigid_refs: std.ArrayListUnmanaged(LocalProcedureRigidRef) = .empty,
+/// For each type declared in a function body whose context is not empty
+/// (design.md "Body-Local Type Context"), its context: the rigid type
+/// variable annotations of enclosing functions its identity depends on, in
+/// source order, as a range of `local_type_context_rigids`. Decided from the
+/// canonical IR before any type declaration is generated
+/// (`decideLocalTypeContexts`).
+local_type_context_ranges: collections.DenseMapUnmanaged(CIR.Statement.Idx, LocalTypeContextRange) = .empty,
+local_type_context_rigids: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty,
+local_type_contexts_decided: bool = false,
 /// Each reference to a type declared in a function body made inside
 /// candidates, with the candidates enclosing it, read once every type's
 /// context is final (`finalizeLocalTypeContexts`).
@@ -1449,11 +1441,12 @@ local_type_contexts_final: bool = false,
 local_type_context_owners: std.ArrayListUnmanaged(LocalTypeContextOwner) = .empty,
 /// Type declarations being generated, innermost last.
 type_decl_generation_frames: std.ArrayListUnmanaged(TypeDeclGenerationFrame) = .empty,
-/// The right-hand side of each local declaration, by binding pattern. Built on
-/// first use by local method resolution or diagnostic provenance tracing.
-local_decl_expr_by_pattern: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+/// The declaration statement of each local declaration, by binding pattern.
+/// Built on first use by local method resolution, body-local type contexts,
+/// or diagnostic provenance tracing.
+local_decl_by_pattern: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Statement.Idx) = .empty,
 /// Whether the declaration index has been built, including an empty index.
-local_decl_exprs_indexed: bool = false,
+local_decls_indexed: bool = false,
 /// Reusable scratch for the receiver-embedding walk of recursive-dispatch
 /// detection: the in-progress (small, big) pair stack that cuts cyclic
 /// structure, and the completed-pair memo that keeps shared substructure
@@ -2040,20 +2033,17 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .dispatch_candidate_frames = .keyed,
     .dispatch_candidate_frame_patterns = .keyed,
     .local_type_context_depths = .keyed,
-    .local_type_annotation_rigids = .keyed,
-    .local_type_annotation_decls = .keyed,
-    .nominal_rank_contexts = .keyed,
-    .nominal_rank_context_vars = .keyed,
-    .nominal_rank_context_inputs_len = .keyed,
-    .local_procedure_rigid_refs = .keyed,
+    .local_type_context_ranges = .keyed,
+    .local_type_context_rigids = .keyed,
+    .local_type_contexts_decided = .keyed,
     .local_type_references = .keyed,
     .local_type_reference_frame_patterns = .keyed,
     .local_type_contexts = .keyed,
     .local_type_contexts_final = .keyed,
     .local_type_context_owners = .keyed,
     .type_decl_generation_frames = .frame_stack,
-    .local_decl_expr_by_pattern = .keyed,
-    .local_decl_exprs_indexed = .keyed,
+    .local_decl_by_pattern = .keyed,
+    .local_decls_indexed = .keyed,
     .scratch_embed_active_pairs = .scratch,
     .scratch_embed_memo = .scratch,
     .scratch_embed_cut_count = .scratch,
@@ -3481,16 +3471,6 @@ const LocalProcedureOuterRef = struct {
     referenced: CIR.Pattern.Idx,
 };
 
-const LocalTypeRigidRef = struct {
-    decl: CIR.Statement.Idx,
-    rigid: CIR.TypeAnno.Idx,
-};
-
-const LocalTypeDeclRef = struct {
-    decl: CIR.Statement.Idx,
-    referenced: CIR.Statement.Idx,
-};
-
 /// A binding whose annotation introduced `rigid`, a context variable of the
 /// body-local nominal type `decl` (`local_type_context_owners`).
 const LocalTypeContextOwner = struct {
@@ -3499,15 +3479,10 @@ const LocalTypeContextOwner = struct {
     owner: CIR.Pattern.Idx,
 };
 
-/// A range of `Check.nominal_rank_context_vars`.
-const NominalRankContext = struct {
+/// A range of `Check.local_type_context_rigids`.
+const LocalTypeContextRange = struct {
     start: u32,
     len: u32,
-};
-
-const LocalProcedureRigidRef = struct {
-    candidate: CIR.Pattern.Idx,
-    rigid: CIR.TypeAnno.Idx,
 };
 
 /// A reference to a type declared in a function body, and the candidate
@@ -4941,9 +4916,9 @@ fn noteLocalLookupForLocalProcedures(self: *Self, pattern: CIR.Pattern.Idx) Allo
 
 /// A lookup of a rigid type variable introduced at a shallower candidate
 /// depth names a type variable of a function enclosing the deeper candidates,
-/// and each of them records it. Inside a type declaration being generated, a
-/// lookup of one of its own parameters names no enclosing function; any
-/// other lookup makes the declaration name that variable too.
+/// which makes each of them contextual. Inside a type declaration being
+/// generated, a lookup of one of its own parameters names no enclosing
+/// function; any other lookup records its depth on the declaration.
 fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx) Allocator.Error!void {
     const depth = self.rigidVarCandidateDepth(rigid_var);
     if (self.type_decl_generation_frames.items.len > 0) {
@@ -4952,13 +4927,8 @@ fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx
             if (parameter == rigid_var) return;
         }
         frame.noteContextDepth(depth);
-        try self.local_type_annotation_rigids.append(self.gpa, .{ .decl = frame.decl, .rigid = rigid_var });
     }
-    const stack = self.local_procedure_candidate_stack.items;
-    if (depth >= stack.len) return;
-    for (stack[depth..]) |candidate| {
-        try self.local_procedure_rigid_refs.append(self.gpa, .{ .candidate = candidate, .rigid = rigid_var });
-    }
+    if (depth >= self.local_procedure_candidate_stack.items.len) return;
     self.markLocalProcedureCandidatesContextualFrom(depth);
 }
 
@@ -4976,9 +4946,6 @@ fn noteTypeDeclReferenceForLocalProcedures(self: *Self, decl_idx: CIR.Statement.
     if (self.type_decl_generation_frames.items.len > 0) {
         const frame = &self.type_decl_generation_frames.items[self.type_decl_generation_frames.items.len - 1];
         if (self.local_type_context_depths.get(decl_idx)) |depth| frame.noteContextDepth(depth);
-        if (frame.decl != decl_idx) {
-            try self.local_type_annotation_decls.append(self.gpa, .{ .decl = frame.decl, .referenced = decl_idx });
-        }
     }
     const stack = self.local_procedure_candidate_stack.items;
     if (stack.len == 0) return;
@@ -5026,7 +4993,7 @@ fn finalizePromotedLocalProcedures(self: *Self) Allocator.Error!void {
     defer dispatch_refs.deinit(self.gpa);
     try self.appendLocalProcedureDispatchRefs(&dispatch_refs);
 
-    try self.finalizeLocalTypeContexts(dispatch_refs.items);
+    try self.finalizeLocalTypeContexts();
 
     var candidates = self.local_procedure_candidates.constIterator();
     while (candidates.next()) |entry| {
@@ -5084,60 +5051,30 @@ fn appendLocalProcedureDispatchRefs(self: *Self, dispatch_refs: *std.ArrayListUn
     }
 }
 
-/// Decide every body-local type's context once dispatches have settled,
-/// for a pass that reads contexts before local procedures are promoted.
-fn settleLocalTypeContexts(self: *Self) Allocator.Error!void {
+/// Settle what checking reads from body-local type contexts once every body
+/// is checked (design.md "Body-Local Type Context"): each recorded reference
+/// to a type with a context makes the candidates enclosing it from the
+/// shallowest of its variables contextual, and each context variable of a
+/// nominal declaration records the binding that owns it, for
+/// `rejectEscapingLocalTypes`. Runs once.
+fn finalizeLocalTypeContexts(self: *Self) Allocator.Error!void {
     if (self.local_type_contexts_final) return;
-    // With no enclosing type variable named, every context is empty.
-    if (self.local_type_annotation_rigids.items.len == 0 and self.local_procedure_rigid_refs.items.len == 0) {
-        self.local_type_contexts_final = true;
-        return;
-    }
-    var dispatch_refs: std.ArrayListUnmanaged(LocalProcedureOuterRef) = .empty;
-    defer dispatch_refs.deinit(self.gpa);
-    try self.appendLocalProcedureDispatchRefs(&dispatch_refs);
-    try self.finalizeLocalTypeContexts(dispatch_refs.items);
-}
-
-/// Per-declaration inputs of `finalizeLocalTypeContexts`.
-const LocalTypeContextInputs = struct {
-    /// Enclosing type variables its annotation and its methods name.
-    rigids: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty,
-    /// Types declared in function bodies its annotation or its methods name.
-    decls: std.ArrayListUnmanaged(CIR.Statement.Idx) = .empty,
-    /// The candidate depth of its methods' bindings, which is the depth of
-    /// the declaration itself, when it declares a method.
-    method_depth: ?u32 = null,
-    /// Its context so far, sorted by annotation.
-    context: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty,
-
-    fn deinit(self: *LocalTypeContextInputs, gpa: Allocator) void {
-        self.rigids.deinit(gpa);
-        self.decls.deinit(gpa);
-        self.context.deinit(gpa);
-    }
-};
-
-/// Decide the context of every type declared in a function body (design.md
-/// "Body-Local Type Context"): the rigid type variables of enclosing
-/// functions its identity depends on. That is each one its annotation names
-/// other than its own parameters, each one its methods name, directly or
-/// through the local procedures they refer to or dispatch to, and the
-/// context of each such type its annotation or those methods name. The
-/// rule is a least fixpoint, so mutually referring types share their
-/// variables. A nominal declaration records its context in the declaration
-/// table, which checked publication reads to list the variables after the
-/// declaration's own arguments at every use. Each recorded reference to a
-/// type with a context then makes the candidates enclosing it from the
-/// shallowest of its variables contextual.
-fn finalizeLocalTypeContexts(self: *Self, dispatch_refs: []const LocalProcedureOuterRef) Allocator.Error!void {
-    if (!self.local_type_contexts_final) {
-        self.local_type_contexts_final = true;
-        if (self.local_type_annotation_rigids.items.len != 0 or self.local_procedure_rigid_refs.items.len != 0) {
-            try self.computeLocalTypeContexts(dispatch_refs);
+    self.local_type_contexts_final = true;
+    try self.decideLocalTypeContexts();
+    if (self.local_type_context_ranges.count() == 0) return;
+    const gpa = self.gpa;
+    var ranges = self.local_type_context_ranges.iterator();
+    while (ranges.next()) |entry| {
+        const decl = entry.key_ptr.*;
+        const context = self.localTypeContext(decl);
+        var depth: u32 = std.math.maxInt(u32);
+        for (context) |rigid| depth = @min(depth, self.rigidVarCandidateDepth(rigid));
+        try self.local_type_contexts.put(gpa, decl, depth);
+        if (self.cir.store.getStatement(decl) != .s_nominal_decl) continue;
+        for (context) |rigid| {
+            try self.local_type_context_owners.append(gpa, .{ .decl = decl, .rigid = rigid, .owner = self.rigidVarOwner(rigid) });
         }
     }
-    if (self.local_type_contexts.count() == 0) return;
     for (self.local_type_references.items) |reference| {
         const depth = self.local_type_contexts.get(reference.decl) orelse continue;
         if (depth >= reference.frames.len) continue;
@@ -5148,133 +5085,428 @@ fn finalizeLocalTypeContexts(self: *Self, dispatch_refs: []const LocalProcedureO
     }
 }
 
-fn computeLocalTypeContexts(self: *Self, dispatch_refs: []const LocalProcedureOuterRef) Allocator.Error!void {
+/// The context of the type declaration whose template `var_` is, or nothing
+/// when `var_` is no type declaration's variable.
+fn typeDeclTemplateContext(self: *const Self, var_: Var) []const CIR.TypeAnno.Idx {
+    if (self.local_type_context_rigids.items.len == 0) return &.{};
+    const raw: u32 = @backingInt(var_);
+    if (raw >= self.cir.store.nodes.len()) return &.{};
+    switch (self.cir.store.nodes.get(@fromBackingInt(raw)).tag) {
+        .statement_nominal_decl, .statement_alias_decl => {},
+        else => return &.{},
+    }
+    return self.localTypeContext(@fromBackingInt(raw));
+}
+
+/// The context of a type declaration (design.md "Body-Local Type Context"):
+/// the rigid type variable annotations of enclosing functions its identity
+/// depends on, in source order. Empty for a module-level declaration and for
+/// a body-local one that depends on none.
+fn localTypeContext(self: *const Self, decl: CIR.Statement.Idx) []const CIR.TypeAnno.Idx {
+    std.debug.assert(self.local_type_contexts_decided);
+    const range = self.local_type_context_ranges.get(decl) orelse return &.{};
+    return self.local_type_context_rigids.items[range.start..][0..range.len];
+}
+
+/// What one body-local type declaration's own parts name, for
+/// `decideLocalTypeContexts`.
+const LocalTypeContextInputs = struct {
+    /// Rigid type variable annotations its parts look up.
+    lookups: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty,
+    /// Rigid type variable annotations its parts introduce: its parameters,
+    /// its methods' own variables, and those of the local functions they
+    /// refer to.
+    intros: collections.DenseMapUnmanaged(CIR.TypeAnno.Idx, void) = .empty,
+    /// Other body-local type declarations its parts name.
+    named: std.ArrayListUnmanaged(CIR.Statement.Idx) = .empty,
+    /// Its context so far, sorted by annotation.
+    context: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty,
+
+    fn deinit(self: *LocalTypeContextInputs, gpa: Allocator) void {
+        self.lookups.deinit(gpa);
+        self.intros.deinit(gpa);
+        self.named.deinit(gpa);
+        self.context.deinit(gpa);
+    }
+
+    /// Add `rigid` unless one of the declaration's own parts introduces it;
+    /// returns whether the context grew.
+    fn add(self: *LocalTypeContextInputs, gpa: Allocator, rigid: CIR.TypeAnno.Idx) Allocator.Error!bool {
+        if (self.intros.contains(rigid)) return false;
+        const items = self.context.items;
+        var lo: usize = 0;
+        var hi: usize = items.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (@backingInt(items[mid]) < @backingInt(rigid)) lo = mid + 1 else hi = mid;
+        }
+        if (lo < items.len and items[lo] == rigid) return false;
+        try self.context.insert(gpa, lo, rigid);
+        return true;
+    }
+};
+
+/// One pending part of a body-local type declaration's walk in
+/// `decideLocalTypeContexts`.
+const LocalTypeContextWalkItem = union(enum) {
+    anno: CIR.TypeAnno.Idx,
+    annotation: CIR.Annotation.Idx,
+    where: CIR.WhereClause.Span,
+    expr: CIR.Expr.Idx,
+    pattern: CIR.Pattern.Idx,
+};
+
+/// Decide the context of every type declared in a function body (design.md
+/// "Body-Local Type Context") from the canonical IR, before any type
+/// declaration is generated, so every application checking builds lists it.
+///
+/// A declaration's parts are its annotation, its methods' annotations and
+/// right-hand sides, and, transitively, the annotations and right-hand sides
+/// of the local functions those refer to (methods never capture values, so a
+/// local function is the only other binding a method can reach). Its context
+/// is each rigid type variable its parts look up that none of them
+/// introduces, and each variable of the context of a body-local type its
+/// parts name that none of them introduces, as a least fixpoint, so
+/// mutually referring types share their variables. Any such variable is one
+/// an enclosing function's annotation introduced.
+///
+/// A dispatch inside a method needs nothing of its own here: the value it
+/// dispatches on has a type whose application lists that type's context.
+fn decideLocalTypeContexts(self: *Self) Allocator.Error!void {
+    if (self.local_type_contexts_decided) return;
+    self.local_type_contexts_decided = true;
     const gpa = self.gpa;
+
     var inputs: std.AutoArrayHashMapUnmanaged(CIR.Statement.Idx, LocalTypeContextInputs) = .empty;
     defer {
         for (inputs.values()) |*input| input.deinit(gpa);
         inputs.deinit(gpa);
     }
-    for (self.local_type_annotation_rigids.items) |ref| {
-        const entry = try inputs.getOrPut(gpa, ref.decl);
-        if (!entry.found_existing) entry.value_ptr.* = .{};
-        try entry.value_ptr.rigids.append(gpa, ref.rigid);
+    for (self.cir.store.sliceStatements(self.cir.all_statements)) |statement| {
+        switch (self.cir.store.getStatement(statement)) {
+            .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => {},
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => continue,
+        }
+        if (try self.isModuleTypeDecl(statement)) continue;
+        try inputs.put(gpa, statement, .{});
     }
-    for (self.local_type_annotation_decls.items) |ref| {
-        const entry = try inputs.getOrPut(gpa, ref.decl);
-        if (!entry.found_existing) entry.value_ptr.* = .{};
-        try entry.value_ptr.decls.append(gpa, ref.referenced);
-    }
+    if (inputs.count() == 0) return;
 
-    if (try self.moduleDeclaresLocalMethods()) {
-        // What each candidate names and refers to.
-        var candidate_rigids: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, std.ArrayListUnmanaged(CIR.TypeAnno.Idx)) = .empty;
-        var candidate_decls: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, std.ArrayListUnmanaged(CIR.Statement.Idx)) = .empty;
-        var candidate_refs: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, std.ArrayListUnmanaged(CIR.Pattern.Idx)) = .empty;
-        defer {
-            var rigid_lists = candidate_rigids.valueIterator();
-            while (rigid_lists.next()) |list| list.deinit(gpa);
-            candidate_rigids.deinit(gpa);
-            var decl_lists = candidate_decls.valueIterator();
-            while (decl_lists.next()) |list| list.deinit(gpa);
-            candidate_decls.deinit(gpa);
-            var ref_lists = candidate_refs.valueIterator();
-            while (ref_lists.next()) |list| list.deinit(gpa);
-            candidate_refs.deinit(gpa);
+    var work: std.ArrayListUnmanaged(LocalTypeContextWalkItem) = .empty;
+    defer work.deinit(gpa);
+    var walked_bindings: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty;
+    defer walked_bindings.deinit(gpa);
+    var scratch_patterns: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer scratch_patterns.deinit(gpa);
+    for (inputs.keys(), inputs.values()) |decl, *input| {
+        work.clearRetainingCapacity();
+        walked_bindings.clearRetainingCapacity();
+        switch (self.cir.store.getStatement(decl)) {
+            .s_alias_decl => |alias| {
+                for (self.typeDeclHeaderArgs(decl)) |parameter| try work.append(gpa, .{ .anno = parameter });
+                if (alias.anno != .placeholder) try work.append(gpa, .{ .anno = alias.anno });
+            },
+            .s_nominal_decl => |nominal| {
+                for (self.typeDeclHeaderArgs(decl)) |parameter| try work.append(gpa, .{ .anno = parameter });
+                if (nominal.anno != .placeholder) try work.append(gpa, .{ .anno = nominal.anno });
+            },
+            .s_where_alias_decl => |where_alias| {
+                for (self.typeDeclHeaderArgs(decl)) |parameter| try work.append(gpa, .{ .anno = parameter });
+                if (where_alias.receiver != .placeholder) {
+                    try work.append(gpa, .{ .anno = where_alias.receiver });
+                    try work.append(gpa, .{ .where = where_alias.where });
+                }
+            },
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => unreachable, // only type declarations were gathered above
         }
-        for (self.local_procedure_rigid_refs.items) |ref| {
-            const entry = try candidate_rigids.getOrPut(gpa, ref.candidate);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.append(gpa, ref.rigid);
-        }
-        for (self.local_type_references.items) |reference| {
-            const frames = self.local_type_reference_frame_patterns.items[reference.frames.start .. reference.frames.start + reference.frames.len];
-            for (frames) |candidate| {
-                const entry = try candidate_decls.getOrPut(gpa, candidate);
-                if (!entry.found_existing) entry.value_ptr.* = .empty;
-                try entry.value_ptr.append(gpa, reference.decl);
-            }
-        }
-        for ([_][]const LocalProcedureOuterRef{ self.local_procedure_outer_refs.items, dispatch_refs }) |refs| {
-            for (refs) |ref| {
-                const entry = try candidate_refs.getOrPut(gpa, ref.candidate);
-                if (!entry.found_existing) entry.value_ptr.* = .empty;
-                try entry.value_ptr.append(gpa, ref.referenced);
-            }
-        }
-
-        var reached: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty;
-        defer reached.deinit(gpa);
-        var pending: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty;
-        defer pending.deinit(gpa);
         for (self.cir.method_defs.entries.items) |method_entry| {
+            if (method_entry.key.owner != decl) continue;
             if (self.cir.store.nodes.get(method_entry.value.type_node_idx).tag != .statement_decl) continue;
             const method = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(method_entry.value.type_node_idx)))).s_decl;
-            if (!self.local_procedure_candidates.contains(method.pattern)) continue;
-            const owner = method_entry.key.owner;
-            const entry = try inputs.getOrPut(gpa, owner);
-            if (!entry.found_existing) entry.value_ptr.* = .{};
-            entry.value_ptr.method_depth = self.local_pattern_candidate_depths.get(method.pattern) orelse 0;
-            reached.clearRetainingCapacity();
-            pending.clearRetainingCapacity();
-            try reached.put(gpa, method.pattern, {});
-            try pending.append(gpa, method.pattern);
-            while (pending.pop()) |candidate| {
-                if (candidate_rigids.get(candidate)) |rigids| try entry.value_ptr.rigids.appendSlice(gpa, rigids.items);
-                if (candidate_decls.get(candidate)) |decls| try entry.value_ptr.decls.appendSlice(gpa, decls.items);
-                const refs = candidate_refs.get(candidate) orelse continue;
-                for (refs.items) |referenced| {
-                    if (!self.local_procedure_candidates.contains(referenced)) continue;
-                    if ((try reached.getOrPut(gpa, referenced)).found_existing) continue;
-                    try pending.append(gpa, referenced);
-                }
-            }
+            try walked_bindings.put(gpa, method.pattern, {});
+            if (method.anno) |annotation| try work.append(gpa, .{ .annotation = annotation });
+            try work.append(gpa, .{ .expr = method.expr });
         }
+        while (work.pop()) |item| try self.walkLocalTypeContextItem(item, decl, input, &work, &walked_bindings, &scratch_patterns);
     }
 
-    // Seed each context with its own variables, then grow every context by
-    // those of the types it names until nothing changes.
-    for (inputs.keys(), inputs.values()) |decl, *input| {
-        if (try self.isModuleTypeDecl(decl)) continue;
-        for (input.rigids.items) |rigid| _ = try self.addLocalTypeContextRigid(decl, input, rigid);
+    // Seed each context with the variables its own parts look up, then grow
+    // every context by those of the types its parts name until nothing
+    // changes.
+    for (inputs.values()) |*input| {
+        for (input.lookups.items) |rigid| _ = try input.add(gpa, rigid);
     }
     var changed = true;
     while (changed) {
         changed = false;
         for (inputs.keys(), inputs.values()) |decl, *input| {
-            if (try self.isModuleTypeDecl(decl)) continue;
-            for (input.decls.items) |referenced| {
-                if (referenced == decl) continue;
-                const named = inputs.getPtr(referenced) orelse continue;
+            for (input.named.items) |named_decl| {
+                if (named_decl == decl) continue;
+                const named = inputs.getPtr(named_decl) orelse continue;
                 var index: usize = 0;
                 while (index < named.context.items.len) : (index += 1) {
-                    if (try self.addLocalTypeContextRigid(decl, input, named.context.items[index])) changed = true;
+                    if (try input.add(gpa, named.context.items[index])) changed = true;
                 }
             }
         }
     }
 
-    const self_module = self.cir.selfModuleIdentity();
     for (inputs.keys(), inputs.values()) |decl, *input| {
         if (input.context.items.len == 0) continue;
-        var depth: u32 = std.math.maxInt(u32);
-        for (input.context.items) |rigid| depth = @min(depth, self.rigidVarCandidateDepth(rigid));
-        try self.local_type_contexts.put(gpa, decl, depth);
+        const start = std.math.cast(u32, self.local_type_context_rigids.items.len) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, input.context.items.len) orelse return error.OutOfMemory;
+        try self.local_type_context_rigids.appendSlice(gpa, input.context.items);
+        try self.local_type_context_ranges.put(gpa, decl, .{ .start = start, .len = len });
+    }
+}
 
-        if (self.cir.store.getStatement(decl) != .s_nominal_decl) continue;
-        // A declaration with no table entry has no application in this
-        // store, so no use lists its context.
-        const decl_entry = self.types.lookupNominalDeclByKey(self_module, @backingInt(decl)) orelse continue;
-        var nominal_decl = self.types.getNominalDecl(decl_entry);
-        const vars = try gpa.alloc(Var, input.context.items.len);
-        defer gpa.free(vars);
-        for (input.context.items, vars) |rigid, *var_| var_.* = ModuleEnv.varFrom(rigid);
-        nominal_decl.context = try self.types.appendVars(vars);
-        self.types.setNominalDecl(decl_entry, nominal_decl);
+/// Record what one part of a body-local type declaration names, and queue
+/// its children (`decideLocalTypeContexts`).
+fn walkLocalTypeContextItem(
+    self: *Self,
+    item: LocalTypeContextWalkItem,
+    decl: CIR.Statement.Idx,
+    input: *LocalTypeContextInputs,
+    work: *std.ArrayListUnmanaged(LocalTypeContextWalkItem),
+    walked_bindings: *collections.DenseMapUnmanaged(CIR.Pattern.Idx, void),
+    scratch_patterns: *std.ArrayList(CIR.Pattern.Idx),
+) Allocator.Error!void {
+    const gpa = self.gpa;
+    const store = &self.cir.store;
+    switch (item) {
+        .annotation => |annotation_idx| {
+            const annotation = store.getAnnotation(annotation_idx);
+            try work.append(gpa, .{ .anno = annotation.anno });
+            if (annotation.where) |where_span| try work.append(gpa, .{ .where = where_span });
+        },
+        .where => |where_span| {
+            for (store.sliceWhereClauseOwners(where_span)) |owner| {
+                try work.append(gpa, .{ .anno = @fromBackingInt(@intCast(owner.rigid_var)) });
+            }
+            for (store.sliceWhereClauses(where_span)) |where_idx| switch (store.getWhereClause(where_idx)) {
+                .w_method => |method| {
+                    try work.append(gpa, .{ .anno = method.var_ });
+                    try work.append(gpa, .{ .anno = method.anno });
+                },
+                .w_alias => |alias| {
+                    try work.append(gpa, .{ .anno = alias.var_ });
+                    try work.append(gpa, .{ .anno = alias.alias });
+                },
+                .w_malformed => {},
+            };
+        },
+        .anno => |anno_idx| switch (store.getTypeAnno(anno_idx)) {
+            .rigid_var => try input.intros.put(gpa, anno_idx, {}),
+            .rigid_var_lookup => |lookup| try input.lookups.append(gpa, lookup.ref),
+            .underscore, .malformed => {},
+            .lookup => |lookup| try self.noteLocalTypeContextNamed(lookup.base, decl, input),
+            .apply => |apply| {
+                try self.noteLocalTypeContextNamed(apply.base, decl, input);
+                for (store.sliceTypeAnnos(apply.args)) |arg| try work.append(gpa, .{ .anno = arg });
+            },
+            .tag_union => |tag_union| {
+                for (store.sliceTypeAnnos(tag_union.tags)) |tag| try work.append(gpa, .{ .anno = tag });
+                if (tag_union.ext) |ext| try work.append(gpa, .{ .anno = ext });
+            },
+            .tag => |tag| for (store.sliceTypeAnnos(tag.args)) |arg| try work.append(gpa, .{ .anno = arg }),
+            .tuple => |tuple| for (store.sliceTypeAnnos(tuple.elems)) |elem| try work.append(gpa, .{ .anno = elem }),
+            .record => |record| {
+                for (store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                    try work.append(gpa, .{ .anno = store.getAnnoRecordField(field_idx).ty });
+                }
+                if (record.ext) |ext| try work.append(gpa, .{ .anno = ext });
+            },
+            .@"fn" => |func| {
+                for (store.sliceTypeAnnos(func.args)) |arg| try work.append(gpa, .{ .anno = arg });
+                try work.append(gpa, .{ .anno = func.ret });
+            },
+            .parens => |parens| try work.append(gpa, .{ .anno = parens.anno }),
+        },
+        .pattern => |pattern| {
+            switch (store.getPattern(pattern)) {
+                .nominal => |nominal| try self.noteLocalTypeContextDecl(nominal.nominal_type_decl, decl, input),
+                else => {},
+            }
+            scratch_patterns.clearRetainingCapacity();
+            try self.pushCirSubpatterns(scratch_patterns, pattern);
+            for (scratch_patterns.items) |subpattern| try work.append(gpa, .{ .pattern = subpattern });
+        },
+        .expr => |expr| {
+            switch (store.getExpr(expr)) {
+                .e_lookup_local => |lookup| try self.queueLocalTypeContextBinding(lookup.pattern_idx, work, walked_bindings),
+                .e_nominal => |nominal| try self.noteLocalTypeContextDecl(nominal.nominal_type_decl, decl, input),
+                .e_lookup_associated_local => |lookup| {
+                    try self.noteLocalTypeContextStatement(@fromBackingInt(@intCast(lookup.type_node_idx)), decl, input, work);
+                },
+                .e_type_method_call => |call| try self.noteLocalTypeContextStatement(call.type_dispatch_stmt, decl, input, work),
+                .e_type_dispatch_call => |call| switch (call.owner) {
+                    .statement => |statement| try self.noteLocalTypeContextStatement(statement, decl, input, work),
+                    .dispatcher => {},
+                },
+                .e_block => |block| for (store.sliceStatements(block.stmts)) |statement| {
+                    switch (store.getStatement(statement)) {
+                        .s_decl => |local| if (local.anno) |annotation| try work.append(gpa, .{ .annotation = annotation }),
+                        .s_var => |local| if (local.anno) |annotation| try work.append(gpa, .{ .annotation = annotation }),
+                        .s_var_uninitialized => |local| if (local.anno) |annotation| try work.append(gpa, .{ .annotation = annotation }),
+                        .s_type_anno => |type_anno| {
+                            try work.append(gpa, .{ .anno = type_anno.anno });
+                            if (type_anno.where) |where_span| try work.append(gpa, .{ .where = where_span });
+                        },
+                        .s_type_var_alias => |alias| try work.append(gpa, .{ .anno = alias.type_var_anno }),
+                        .s_reassign,
+                        .s_crash,
+                        .s_dbg,
+                        .s_expr,
+                        .s_expect,
+                        .s_for,
+                        .s_while,
+                        .s_infinite_loop,
+                        .s_breakable_loop,
+                        .s_break,
+                        .s_return,
+                        .s_import,
+                        .s_alias_decl,
+                        .s_nominal_decl,
+                        .s_where_alias_decl,
+                        .s_runtime_error,
+                        => {},
+                    }
+                },
+                else => {},
+            }
+            try self.visitExprChildren(expr, LocalTypeContextPusher{ .gpa = gpa, .work = work });
+        },
+    }
+}
 
-        for (input.context.items) |rigid| {
-            try self.local_type_context_owners.append(gpa, .{ .decl = decl, .rigid = rigid, .owner = self.rigidVarOwner(rigid) });
-        }
+const LocalTypeContextPusher = struct {
+    gpa: Allocator,
+    work: *std.ArrayListUnmanaged(LocalTypeContextWalkItem),
+
+    fn expr(p: LocalTypeContextPusher, child: CIR.Expr.Idx) Allocator.Error!void {
+        try p.work.append(p.gpa, .{ .expr = child });
+    }
+
+    fn boundPattern(p: LocalTypeContextPusher, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+        try p.work.append(p.gpa, .{ .pattern = pattern });
+    }
+
+    fn reassignTarget(_: LocalTypeContextPusher, _: CIR.Pattern.Idx) Allocator.Error!void {}
+};
+
+/// Queue the annotation and right-hand side of the local function a lookup
+/// in a declaration's parts reads, once. Any other binding is a value, which
+/// a method never reaches (design.md "Methods Never Capture").
+fn queueLocalTypeContextBinding(
+    self: *Self,
+    pattern: CIR.Pattern.Idx,
+    work: *std.ArrayListUnmanaged(LocalTypeContextWalkItem),
+    walked_bindings: *collections.DenseMapUnmanaged(CIR.Pattern.Idx, void),
+) Allocator.Error!void {
+    if (self.patternIsTopLevel(pattern)) return;
+    if (walked_bindings.contains(pattern)) return;
+    const statement = (try self.localDeclForPattern(pattern)) orelse return;
+    const local = self.cir.store.getStatement(statement).s_decl;
+    switch (self.cir.store.getExpr(local.expr)) {
+        .e_lambda, .e_closure, .e_lookup_local => {},
+        else => return,
+    }
+    try walked_bindings.put(self.gpa, pattern, {});
+    if (local.anno) |annotation| try work.append(self.gpa, .{ .annotation = annotation });
+    try work.append(self.gpa, .{ .expr = local.expr });
+}
+
+/// A type reference in a declaration's parts names that type.
+fn noteLocalTypeContextNamed(
+    self: *Self,
+    base_ref: CIR.TypeAnno.LocalOrExternal,
+    decl: CIR.Statement.Idx,
+    input: *LocalTypeContextInputs,
+) Allocator.Error!void {
+    switch (base_ref) {
+        .local => |local| try self.noteLocalTypeContextDecl(local.decl_idx, decl, input),
+        .builtin, .external, .external_identity, .pending => {},
+    }
+}
+
+fn noteLocalTypeContextDecl(
+    self: *Self,
+    named: CIR.Statement.Idx,
+    decl: CIR.Statement.Idx,
+    input: *LocalTypeContextInputs,
+) Allocator.Error!void {
+    if (named == decl) return;
+    if (try self.isModuleTypeDecl(named)) return;
+    try input.named.append(self.gpa, named);
+}
+
+/// A statement a type-rooted call or associated lookup in a declaration's
+/// parts goes through: a type declaration it names, or a type variable alias
+/// whose variable it looks up.
+fn noteLocalTypeContextStatement(
+    self: *Self,
+    statement: CIR.Statement.Idx,
+    decl: CIR.Statement.Idx,
+    input: *LocalTypeContextInputs,
+    work: *std.ArrayListUnmanaged(LocalTypeContextWalkItem),
+) Allocator.Error!void {
+    switch (self.cir.store.getStatement(statement)) {
+        .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => try self.noteLocalTypeContextDecl(statement, decl, input),
+        .s_type_var_alias => |alias| try work.append(self.gpa, .{ .anno = alias.type_var_anno }),
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_type_anno,
+        .s_runtime_error,
+        => {},
     }
 }
 
@@ -5376,7 +5608,7 @@ const LocalTypeEscapeJudge = struct {
 /// only the bodies of top-level definitions that enclose an owner declared in
 /// a function body are walked, judging each binding they bind once.
 fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
-    try self.settleLocalTypeContexts();
+    try self.finalizeLocalTypeContexts();
     const owners = self.local_type_context_owners.items;
     if (owners.len == 0) return;
     const gpa = self.gpa;
@@ -5473,112 +5705,9 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
     }
 }
 
-/// Generalize the variables of `env`'s current rank. A nominal application
-/// of a type declared in a function body ranks with the enclosing variables
-/// its declaration's backing names (`nominalRankContext`).
+/// Generalize the variables of `env`'s current rank.
 fn generalizeRank(self: *Self, env: *Env) Allocator.Error!void {
-    self.generalizer.nominal_context = .{ .context = self, .resolve = nominalRankContextFor };
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
-}
-
-fn nominalRankContextFor(context: *anyopaque, nominal: types_mod.NominalType) Allocator.Error![]const Var {
-    const self: *Self = @ptrCast(@alignCast(context));
-    return try self.nominalRankContext(nominal);
-}
-
-/// The type variables of enclosing functions a nominal application depends
-/// on through its declaration's backing (design.md "Body-Local Type
-/// Context"): those the backing of a type declared in a function body names,
-/// directly or through the other such types it names, other than its own
-/// parameters. Checking lists none of them in the application, yet opening
-/// the backing reaches each one, so the application is no more general than
-/// any of them. The context `finalizeLocalTypeContexts` decides adds the
-/// variables the declaration's methods name, which affect its behavior but
-/// not what its values contain.
-///
-/// The ranges are built once per state of the annotation references they are
-/// read from, so a slice returned during one generalization stays valid
-/// through it: annotations are generated only between generalizations.
-fn nominalRankContext(self: *Self, nominal: types_mod.NominalType) Allocator.Error![]const Var {
-    if (self.local_type_annotation_rigids.items.len == 0) return &.{};
-    if (nominal.origin_module != self.cir.selfModuleIdentity()) return &.{};
-    const inputs_len = self.local_type_annotation_rigids.items.len + self.local_type_annotation_decls.items.len;
-    if (inputs_len != self.nominal_rank_context_inputs_len) try self.buildNominalRankContexts(inputs_len);
-    const range = self.nominal_rank_contexts.get(@fromBackingInt(nominal.statement())) orelse return &.{};
-    return self.nominal_rank_context_vars.items[range.start..][0..range.len];
-}
-
-/// Whether `list` holds the annotation `anno`.
-fn typeAnnoListContains(list: []const CIR.TypeAnno.Idx, anno: CIR.TypeAnno.Idx) bool {
-    for (list) |item| {
-        if (item == anno) return true;
-    }
-    return false;
-}
-
-fn buildNominalRankContexts(self: *Self, inputs_len: usize) Allocator.Error!void {
-    self.nominal_rank_context_inputs_len = inputs_len;
-    self.nominal_rank_contexts.clearRetainingCapacity();
-    self.nominal_rank_context_vars.clearRetainingCapacity();
-    var decls: collections.DenseMapUnmanaged(CIR.Statement.Idx, void) = .empty;
-    defer decls.deinit(self.gpa);
-    for (self.local_type_annotation_rigids.items) |ref| try decls.put(self.gpa, ref.decl, {});
-    for (self.local_type_annotation_decls.items) |ref| try decls.put(self.gpa, ref.decl, {});
-    var visited: collections.DenseMapUnmanaged(CIR.Statement.Idx, void) = .empty;
-    defer visited.deinit(self.gpa);
-    var pending: std.ArrayListUnmanaged(CIR.Statement.Idx) = .empty;
-    defer pending.deinit(self.gpa);
-    var rigids: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty;
-    defer rigids.deinit(self.gpa);
-    var decl_iter = decls.keyIterator();
-    while (decl_iter.next()) |decl_ptr| {
-        const decl = decl_ptr.*;
-        if (try self.isModuleTypeDecl(decl)) continue;
-        visited.clearRetainingCapacity();
-        pending.clearRetainingCapacity();
-        rigids.clearRetainingCapacity();
-        try visited.put(self.gpa, decl, {});
-        try pending.append(self.gpa, decl);
-        while (pending.pop()) |current| {
-            for (self.local_type_annotation_rigids.items) |ref| {
-                if (ref.decl != current) continue;
-                if (typeAnnoListContains(self.typeDeclHeaderArgs(decl), ref.rigid)) continue;
-                if (typeAnnoListContains(rigids.items, ref.rigid)) continue;
-                try rigids.append(self.gpa, ref.rigid);
-            }
-            for (self.local_type_annotation_decls.items) |ref| {
-                if (ref.decl != current) continue;
-                if ((try visited.getOrPut(self.gpa, ref.referenced)).found_existing) continue;
-                try pending.append(self.gpa, ref.referenced);
-            }
-        }
-        if (rigids.items.len == 0) continue;
-        const start: u32 = @intCast(self.nominal_rank_context_vars.items.len);
-        for (rigids.items) |rigid| try self.nominal_rank_context_vars.append(self.gpa, ModuleEnv.varFrom(rigid));
-        try self.nominal_rank_contexts.put(self.gpa, decl, .{ .start = start, .len = @intCast(rigids.items.len) });
-    }
-}
-
-/// Add `rigid` to the context of `decl` unless it is one of the
-/// declaration's own parameters or is introduced inside the declaration's
-/// block; returns whether the context grew.
-fn addLocalTypeContextRigid(self: *Self, decl: CIR.Statement.Idx, input: *LocalTypeContextInputs, rigid: CIR.TypeAnno.Idx) Allocator.Error!bool {
-    for (self.typeDeclHeaderArgs(decl)) |parameter| {
-        if (parameter == rigid) return false;
-    }
-    if (input.method_depth) |method_depth| {
-        if (self.rigidVarCandidateDepth(rigid) > method_depth) return false;
-    }
-    const items = input.context.items;
-    var lo: usize = 0;
-    var hi: usize = items.len;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        if (@backingInt(items[mid]) < @backingInt(rigid)) lo = mid + 1 else hi = mid;
-    }
-    if (lo < items.len and items[lo] == rigid) return false;
-    try input.context.insert(self.gpa, lo, rigid);
-    return true;
 }
 
 /// Mark every dispatch edge that selected an unpromoted local procedure,
@@ -6351,17 +6480,23 @@ fn moduleDeclaresLocalMethodNamed(self: *Self, name: Ident.Idx) Allocator.Error!
 
 /// The right-hand side of the local declaration binding `pattern`.
 fn localDeclExprForPattern(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!?CIR.Expr.Idx {
-    if (!self.local_decl_exprs_indexed) {
+    const statement = (try self.localDeclForPattern(pattern)) orelse return null;
+    return self.cir.store.getStatement(statement).s_decl.expr;
+}
+
+/// The `s_decl` statement binding `pattern`.
+fn localDeclForPattern(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!?CIR.Statement.Idx {
+    if (!self.local_decls_indexed) {
         var raw_node: u32 = 0;
         const node_count: u32 = @intCast(self.cir.store.nodes.len());
         while (raw_node < node_count) : (raw_node += 1) {
             if (self.cir.store.nodes.get(@fromBackingInt(@intCast(raw_node))).tag != .statement_decl) continue;
-            const decl = self.cir.store.getStatement(@fromBackingInt(@intCast(raw_node))).s_decl;
-            try self.local_decl_expr_by_pattern.put(self.gpa, decl.pattern, decl.expr);
+            const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
+            try self.local_decl_by_pattern.put(self.gpa, self.cir.store.getStatement(statement).s_decl.pattern, statement);
         }
-        self.local_decl_exprs_indexed = true;
+        self.local_decls_indexed = true;
     }
-    return self.local_decl_expr_by_pattern.get(pattern);
+    return self.local_decl_by_pattern.get(pattern);
 }
 
 fn finalizeComptimeConditions(self: *Self) Allocator.Error!void {
@@ -11628,18 +11763,21 @@ fn instantiateVarWithSubsPolarized(
     polarity: Polarity,
     reach: Instantiator.AdapterReach,
 ) std.mem.Allocator.Error!Var {
-    return self.instantiateVarWithSubsPolarizedFromScheme(var_to_instantiate, var_to_instantiate, subs, env, region_behavior, polarity_behavior, polarity, reach, .instantiation);
+    return self.instantiateVarWithSubsPolarizedFromScheme(var_to_instantiate, var_to_instantiate, subs, &.{}, env, region_behavior, polarity_behavior, polarity, reach, .instantiation);
 }
 
 /// A constructor projection changes the structural copy root, not the source
 /// of the declaration's off-root obligations.
 const NominalOpeningPurpose = enum { instantiation, diagnostic };
 
+/// `var_subs` substitutes variables of the instantiated type by variable
+/// rather than by rigid name.
 fn instantiateVarWithSubsPolarizedFromScheme(
     self: *Self,
     var_to_instantiate: Var,
     scheme_source: Var,
     subs: *RigidSubstitutions,
+    var_subs: []const Instantiator.SharedSubtree,
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
     polarity_behavior: PolarityVarBehavior,
@@ -11661,8 +11799,10 @@ fn instantiateVarWithSubsPolarizedFromScheme(
     instantiate_ctx.preserved_marker_exts = self.alias_hidden_exts;
     instantiate_ctx.nominal_argument_position = .{ .context = self, .resolve = nominalArgumentPosition };
     instantiate_ctx.alias_argument_unused = .{ .context = self, .resolve = aliasArgumentUnused };
+    instantiate_ctx.shared_subtrees = var_subs;
     if (purpose == .diagnostic) {
         self.var_map.clearRetainingCapacity();
+        for (var_subs) |sub| try self.var_map.put(self.types.resolveVar(sub.source).var_, sub.copy);
         const fresh_start = self.types.len();
         const copied = try instantiate_ctx.instantiateVar(var_to_instantiate);
         try self.registerExpectedShapeVars(fresh_start, env);
@@ -11757,6 +11897,18 @@ fn instantiateVarHelpFromScheme(
     }
     for (self.codec_instance_copies) |copy| {
         try instantiator.var_map.put(self.types.resolveVar(copy.source).var_, copy.copy);
+    }
+    // An instance of a body-local type declaration's template shares the
+    // declaration's context variables, which the template lists themselves
+    // (design.md "Body-Local Type Context"): every use inside the body means
+    // the body's own variables, including uses generated before the
+    // enclosing annotation makes its variable rigid. Once the enclosing
+    // function generalizes its rigid variable, an instance copies it like
+    // any other generalized variable.
+    for (self.typeDeclTemplateContext(var_to_instantiate)) |rigid| {
+        const context = self.types.resolveVar(ModuleEnv.varFrom(rigid));
+        if (context.desc.content == .rigid and context.desc.rank == .generalized) continue;
+        try instantiator.var_map.put(context.var_, context.var_);
     }
 
     // Then, instantiate the variable with the provided context
@@ -12303,12 +12455,7 @@ fn appendGrowthChildren(self: *Self, content: types_mod.Content, stack: *std.Arr
         .structure => |flat| switch (flat) {
             .empty_record, .empty_tag_union => {},
             .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
-            .nominal_type => |nominal| {
-                try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal));
-                // A body-local type's context variables are hidden trailing
-                // arguments (design.md "Body-Local Type Context").
-                try stack.appendSlice(self.gpa, self.types.nominalContextVars(nominal));
-            },
+            .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
             .fn_pure, .fn_effectful, .fn_unbound => |func| {
                 try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
                 try stack.append(self.gpa, func.ret);
@@ -12416,8 +12563,6 @@ const GrowthEdge = struct {
 fn rejectGrowingPolymorphicRecursion(self: *Self) Allocator.Error!void {
     if (self.growth_uses.items.len == 0) return;
     const gpa = self.gpa;
-    // A use at a body-local type also uses that type's context variables.
-    try self.settleLocalTypeContexts();
 
     var node_of = collections.DenseMap(Var, u32).init(gpa);
     defer node_of.deinit();
@@ -22526,6 +22671,7 @@ fn predeclareNominalDecl(
         @backingInt(decl_var),
         header.relative_name,
         header_vars,
+        &.{},
         backing_var,
         nominal.is_opaque,
     );
@@ -22535,15 +22681,22 @@ fn predeclareNominalDecl(
 /// type declaration. The entry carries exactly the identity bits that nominal
 /// applications of this declaration embed, so keyed lookups resolve for every
 /// application in this store.
+/// Its formals are the header's variables followed by the variables of its
+/// context (design.md "Body-Local Type Context").
 fn registerLocalNominalDecl(
     self: *Self,
     decl_statement: u32,
     name: Ident.Idx,
     header_vars: []const Var,
+    context: []const CIR.TypeAnno.Idx,
     backing_var: Var,
     is_opaque: bool,
 ) Allocator.Error!void {
     const builtin_origin = self.cir.module_role == .builtin;
+    const formals_top = self.scratch_vars.top();
+    defer self.scratch_vars.clearFrom(formals_top);
+    for (header_vars) |header_var| try self.scratch_vars.append(header_var);
+    for (context) |rigid| try self.scratch_vars.append(ModuleEnv.varFrom(rigid));
     _ = try self.types.registerNominalDecl(.{
         .ident = .{ .ident_idx = name },
         .origin_module = self.cir.selfModuleIdentity(),
@@ -22552,10 +22705,38 @@ fn registerLocalNominalDecl(
             is_opaque,
             builtin_origin,
         ),
-        .formals = try self.types.appendVars(header_vars),
+        .formals = try self.types.appendVars(self.scratch_vars.sliceFromStart(formals_top)),
         .backing = backing_var,
-        .flags = .{ .valid = true },
+        .flags = .{ .valid = true, .context_len = std.math.cast(u16, context.len) orelse return error.OutOfMemory },
     });
+}
+
+/// The content of an application of the nominal type declaration
+/// `decl_idx` in this module to `args`, followed by its context variables
+/// (design.md "Body-Local Type Context"): its declaration's template lists
+/// the enclosing variables themselves, and so does every application inside
+/// its own declaration.
+fn mkSelfNominalApplication(
+    self: *Self,
+    decl_idx: CIR.Statement.Idx,
+    name: Ident.Idx,
+    args: []const Var,
+    is_opaque: bool,
+) Allocator.Error!Content {
+    try self.decideLocalTypeContexts();
+    const context = self.localTypeContext(decl_idx);
+    const args_top = self.scratch_vars.top();
+    defer self.scratch_vars.clearFrom(args_top);
+    for (args) |arg| try self.scratch_vars.append(arg);
+    for (context) |rigid| try self.scratch_vars.append(ModuleEnv.varFrom(rigid));
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+        .{ .ident_idx = name },
+        self.scratch_vars.sliceFromStart(args_top),
+        self.cir.selfModuleIdentity(),
+        @backingInt(decl_idx),
+        is_opaque,
+        self.cir.module_role == .builtin,
+    );
 }
 
 fn predeclaredAliasArgs(self: *const Self, decl_var: Var) ?[]Var {
@@ -24337,7 +24518,7 @@ fn walkApplicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *
     const formals = switch (content) {
         .alias => |alias| self.types.sliceAliasArgs(alias),
         .structure => |flat| switch (flat) {
-            .nominal_type => |nominal| self.types.sliceNominalArgs(nominal),
+            .nominal_type => |nominal| self.types.nominalDeclaredArgs(nominal),
             .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .tag_union, .empty_record, .empty_tag_union => base.invariant("check invariant violated: a type declaration's variable holds non-nominal structure", .{}),
         },
         .err => return,
@@ -24455,7 +24636,13 @@ fn nominalArgumentPosition(context: *anyopaque, nominal: types_mod.NominalType, 
     const statement = nominal.sourceDeclOptional() orelse return .{ .at = surrounding };
     const owner = self.moduleEnvForIdentity(self.cir, nominal.origin_module).env;
     const positions = (try self.declarationPositions(owner, @fromBackingInt(@intCast(statement)))) orelse return null; // Rejected source has no position transfer.
-    std.debug.assert(index < positions.len);
+    // A body-local declaration's context arguments follow its declared ones
+    // (design.md "Body-Local Type Context"); each is a whole variable of an
+    // enclosing scheme, the same on every side.
+    if (index >= positions.len) {
+        std.debug.assert(index < self.types.sliceNominalArgs(nominal).len);
+        return .both;
+    }
     if (positions[index].isInvariant()) return .both;
     return .{ .at = positions[index].polarity(surrounding) };
 }
@@ -24707,7 +24894,9 @@ fn unappliedTypeConstructorArity(self: *const Self, decl_var: Var) u32 {
             },
             .structure => |flat_type| switch (flat_type) {
                 .nominal_type => |nominal| {
-                    const args = self.types.sliceNominalArgs(nominal);
+                    // A body-local declaration's context arguments are never
+                    // written.
+                    const args = self.types.nominalDeclaredArgs(nominal);
                     return if (declared) @intCast(args.len) else self.countUnboundTypeVars(args);
                 },
                 .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return 0,
@@ -25608,23 +25797,15 @@ fn beginNominalDeclBody(
         }
     }
     if (predeclared_header_vars == null) {
-        try self.unifyWithTargetRank(
-            decl_var,
-            try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-                .{ .ident_idx = header.relative_name },
-                header_vars,
-                self.cir.selfModuleIdentity(),
-                @backingInt(decl_idx),
-                nominal.is_opaque,
-                self.cir.module_role == .builtin,
-            ),
-            env,
-        );
-
+        // A declaration in a function body takes its context variables as
+        // formals after its header's (design.md "Body-Local Type Context").
+        const template = try self.mkSelfNominalApplication(decl_idx, header.relative_name, header_vars, nominal.is_opaque);
+        try self.unifyWithTargetRank(decl_var, template, env);
         try self.registerLocalNominalDecl(
             @backingInt(decl_idx),
             header.relative_name,
             header_vars,
+            self.localTypeContext(decl_idx),
             ModuleEnv.varFrom(nominal.anno),
             nominal.is_opaque,
         );
@@ -25763,13 +25944,11 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                                         },
                                         .nominal => {
                                             // Nominal types can be recursive
-                                            try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-                                                .{ .ident_idx = this_decl.name },
+                                            try self.unifyWith(anno_var, try self.mkSelfNominalApplication(
+                                                this_decl.idx,
+                                                this_decl.name,
                                                 &.{},
-                                                self.cir.selfModuleIdentity(),
-                                                @backingInt(this_decl.idx),
                                                 this_decl.is_opaque,
-                                                self.cir.module_role == .builtin,
                                             ), env);
                                         },
                                     }
@@ -26282,13 +26461,11 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
                                 },
                                 .nominal => {
                                     // Nominal types can be recursive
-                                    try self.unifyWith(anno_var, try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-                                        .{ .ident_idx = this_decl.name },
+                                    try self.unifyWith(anno_var, try self.mkSelfNominalApplication(
+                                        this_decl.idx,
+                                        this_decl.name,
                                         anno_arg_vars,
-                                        self.cir.selfModuleIdentity(),
-                                        @backingInt(this_decl.idx),
                                         this_decl.is_opaque,
-                                        self.cir.module_role == .builtin,
                                     ), env);
                                 },
                             }
@@ -26425,8 +26602,11 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
             const decl_alias = decl_resolved.alias;
             break :blk .{ self.types.sliceAliasArgs(decl_alias), decl_alias.ident.ident_idx };
         } else if (decl_resolved == .structure and decl_resolved.structure == .nominal_type) {
+            // A body-local declaration's template lists its context
+            // variables after its header's; an application writes only the
+            // header's, and instantiating the template keeps the context.
             const decl_nominal = decl_resolved.structure.nominal_type;
-            break :blk .{ self.types.sliceNominalArgs(decl_nominal), decl_nominal.ident.ident_idx };
+            break :blk .{ self.types.nominalDeclaredArgs(decl_nominal), decl_nominal.ident.ident_idx };
         } else if (decl_resolved == .err) {
             try self.markErroneous(anno_var);
             return anno_gen_done;
@@ -37554,13 +37734,27 @@ fn openNominalBackingFromTemplate(
 
     // Substitute the application's args for the declaration's formals by
     // rigid name (formals are rigid vars with distinct names; the same
-    // mapping the annotation application path builds).
+    // mapping the annotation application path builds). A body-local
+    // declaration's context formals are the enclosing variables themselves,
+    // which its backing names directly, so they are substituted by variable
+    // (design.md "Body-Local Type Context").
     const formals = self.types.sliceVars(decl.formals);
     const args = self.types.sliceNominalArgs(nominal_type);
     std.debug.assert(formals.len == args.len);
+    const declared_count = decl.declaredFormalCount();
+    var inline_context_subs: [8]Instantiator.SharedSubtree = undefined;
+    const context_count = formals.len - declared_count;
+    const context_subs = if (context_count <= inline_context_subs.len)
+        inline_context_subs[0..context_count]
+    else
+        try self.gpa.alloc(Instantiator.SharedSubtree, context_count);
+    defer if (context_count > inline_context_subs.len) self.gpa.free(context_subs);
+    for (formals[declared_count..], args[declared_count..], context_subs) |formal_var, arg_var, *sub| {
+        sub.* = .{ .source = formal_var, .copy = arg_var };
+    }
 
     self.rigid_var_substitutions.clearRetainingCapacity();
-    for (formals, args) |formal_var, arg_var| {
+    for (formals[0..declared_count], args[0..declared_count]) |formal_var, arg_var| {
         const formal_resolved = self.types.resolveVar(formal_var).desc.content;
         // A malformed header arg (underscore/malformed anno) is err, not
         // rigid; the template cannot reference it by name, so it has no
@@ -37574,6 +37768,7 @@ fn openNominalBackingFromTemplate(
         projected_template orelse decl.backing,
         decl.backing,
         &self.rigid_var_substitutions,
+        context_subs,
         env,
         .{ .explicit = region },
         .close,

@@ -411,11 +411,12 @@ pub const Instantiator = struct {
     /// variables—every use constrains the same var the body's annotation
     /// regeneration constrains—instead of an independent unconstrained copy.
     share_vars: []const Var = &.{},
-    /// Source subtrees this instantiation reads from an earlier copy: each
-    /// source var maps to that copy in `var_map` before the walk starts, so
-    /// the walk shares the copy instead of copying the subtree again. Only
-    /// sound for a subtree whose copy is a ground type identical to what a
-    /// fresh copy would produce (see `Check.instantiateVarPolarized`).
+    /// Source vars this instantiation maps to given vars: each source var
+    /// maps to its copy in `var_map` before the walk starts. Either a
+    /// subtree read from an earlier copy, sound only for a subtree whose
+    /// copy is a ground type identical to what a fresh copy would produce
+    /// (see `Check.instantiateVarPolarized`), or a variable substituted by
+    /// variable (`Check.openNominalBackingFromTemplate`).
     shared_subtrees: []const SharedSubtree = &.{},
     /// Share every leaf (flex, rigid, field presence, error) whatever its
     /// rank, copying only structure and resolving polarity markers. This is

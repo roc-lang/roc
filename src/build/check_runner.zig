@@ -230,7 +230,7 @@ const CheckTypeCheckerPatternsStep = struct {
         // sealed_type_view.zig's debug-only publication gate checks that a
         // published variable name, which publication copies out of the ident
         // store, spells the solver variable's name. The text is what it verifies.
-        .{ .file = "sealed_type_view.zig", .start = 981, .end = 981 },
+        .{ .file = "sealed_type_view.zig", .start = 972, .end = 972 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
