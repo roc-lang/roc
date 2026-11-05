@@ -5646,7 +5646,9 @@ const LocalTypeEscapeJudge = struct {
                     if (nominal.sourceDeclOptional()) |statement| {
                         for (owners, 0..) |entry, entry_index| {
                             if (@backingInt(entry.decl) != statement) continue;
-                            if (std.mem.findScalar(CIR.Pattern.Idx, judge.inside.items, entry.owner) == null) break :search entry_index;
+                            for (judge.inside.items) |inside| {
+                                if (inside == entry.owner) break;
+                            } else break :search entry_index;
                         }
                     }
                 }
