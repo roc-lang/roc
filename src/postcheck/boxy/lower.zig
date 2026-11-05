@@ -505,6 +505,9 @@ pub const OmittedField = struct { module: ModuleIndex, expr: checked.CheckedExpr
 /// A checked expression by its module in this lowering.
 pub const ExprKey = struct { module: ModuleIndex, expr: checked.CheckedExprId };
 
+/// A pattern binder by its module in this lowering.
+pub const BinderKey = struct { module: ModuleIndex, binder: checked.PatternBinderId };
+
 /// A procedure template by its module in this lowering.
 pub const TemplateKey = struct { module: ModuleIndex, template: checked_names.CheckedProcedureTemplateId };
 
@@ -560,6 +563,8 @@ pub const Program = struct {
     local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
     /// The lambda and closure expressions local procedures bind.
     local_procs: std.AutoHashMapUnmanaged(ExprKey, void) = .empty,
+    /// Each local procedure by the binder that binds it.
+    local_proc_bindings: std.AutoHashMapUnmanaged(BinderKey, checked.LocalProcedureBinding) = .empty,
     /// `nominalOverrides` of each nominal type asked about.
     nominal_overrides: collections.DenseMapUnmanaged(TypeId, NominalOverrides) = .empty,
     /// `composedInBody` of each type asked about.
@@ -754,6 +759,7 @@ pub const Program = struct {
         self.hosted.deinit(self.allocator);
         self.local_scopes.deinit(self.allocator);
         self.local_procs.deinit(self.allocator);
+        self.local_proc_bindings.deinit(self.allocator);
         self.by_identity.deinit(self.allocator);
         self.sites_by_expr.deinit(self.allocator);
         self.nominal_overrides.deinit(self.allocator);
@@ -2495,6 +2501,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             switch (target.kind) {
                 .local_proc => |local| {
                     try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
+                    try program.local_proc_bindings.put(allocator, .{ .module = view.index, .binder = local.binder }, .{ .binder = local.binder, .expr = local.expr, .dispatch_scope = local.dispatch_scope });
                     switch (bodies.expr(local.expr).data) {
                         .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
                         .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
@@ -2511,6 +2518,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => continue,
             };
             try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
+            try program.local_proc_bindings.put(allocator, .{ .module = view.index, .binder = local.binder }, local);
             switch (bodies.expr(local.expr).data) {
                 .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
                 .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
