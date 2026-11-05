@@ -5236,7 +5236,11 @@ enclosing template root name one variable by different ids. The build-only
 `CheckedTypeStore.identity_origins` records the identity instance each
 substitution-cloned variable was minted from, and `identityOrigin` follows
 that record (through nested clones) so the specialization question compares
-origins, never raw clone ids. Every variable root filled through the
+origins, never raw clone ids. A substitution matches its formals by origin
+too (`enterSubstitutingClone`): a literal requirement a nested generalized
+local forwards to its enclosing generalized local names the enclosing
+scheme's variable through such a clone, and the enclosing local's use edge
+must still substitute it. Every variable root filled through the
 synthetic path must declare an origin—its clone source, or itself when it
 is a fresh instance such as an imported or viewed variable brought into
 this store—and `identityOrigin` refuses one that declares none, so a
@@ -13816,6 +13820,16 @@ way. A nested lambda that is not generalized has no scheme of its own: the
 descriptors and dictionaries its body mentions belong to the enclosing worker
 and reach it as captures (see Function Values).
 
+Checking can give a local function a dispatch scope that quantifies nothing
+and takes no hidden argument: no variable, dictionary, or literal argument
+(`LocalScheme.isEmpty`), such as `g = |s| Str.concat(r.to_str(), s)` inside a
+generalized local. Its procedure is called and stored like a monomorphic one,
+but the scope stays a link of the evidence and literal chains, whose depths
+count every checked scope: its worker carries an empty entry in
+`dict_scopes`, `dict_scope_params`, and `literal_scopes`
+(`Program.lambdaWorker`), so the depth of the enclosing function's `to_str`
+names that function's scope from inside `g` as it does in checking.
+
 A checked parameter or result whose type mentions a type variable in scope is
 *dynamic*. A dynamic parameter is passed as the address of storage the caller
 owns; the callee reads it through the descriptor it composes for that
@@ -14520,8 +14534,11 @@ closure the body packs repacks it when the worker's own closure is dynamic,
 a packing of the worker's own closed capture layout repacks it when that
 closure is closed, and otherwise ARC releases it. A worker's capture record is
 a view whose owner is that argument, so a packing that would repack the
-allocation while a later read of the captures is still to come retains it,
-and the runtime then packs afresh.
+allocation while a later read of the captures is still to come retains it
+before the packing statement, and the runtime then packs afresh. The retain
+must precede the packing because the packing decides by the allocation's
+count whether to repack in place; a retain after it would let the packing
+overwrite the captures that later reads still view.
 
 An erased call passes its arguments as one record in the uniform ABI. When the
 call's argument types are closed, that record has a static layout; when they

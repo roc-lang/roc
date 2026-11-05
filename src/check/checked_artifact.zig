@@ -5537,8 +5537,15 @@ pub const CheckedTypeStore = struct {
         substitution: *CheckedTypeSubstitution,
     ) Allocator.Error!union(enum) { done: CheckedTypeId, clone: struct { target: CheckedTypeId, snapshot: CheckedTypePayloadBuild } } {
         const adapter = &substitution.keys.adapter;
+        // A formal is matched by identity: an earlier substitution that
+        // passed over a variable it did not bind cloned it as a synthetic
+        // root naming the variable as its identity origin, so a scheme's
+        // variable reaches a later instantiation under another root, as a
+        // literal requirement of a nested local function forwarded through
+        // its enclosing generalized local does.
+        const source_origin = self.identityOrigin(source);
         for (adapter.formals, adapter.actuals) |formal, actual| {
-            if (source == formal) return .{ .done = actual };
+            if (source == formal or source_origin == self.identityOrigin(formal)) return .{ .done = actual };
         }
         if (substitution.images.get(source)) |existing| return .{ .done = existing };
 

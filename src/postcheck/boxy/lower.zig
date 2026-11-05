@@ -407,6 +407,14 @@ pub const LocalScheme = struct {
     /// local procedure's), or the function value captures them at its
     /// construction (any other generalized lambda's).
     per_call: bool,
+
+    /// Whether the scope quantifies nothing and takes no hidden argument: no
+    /// variable, dictionary, or literal argument. Its procedure is called
+    /// and stored like a monomorphic one, though it stays a link of the
+    /// evidence chain (`Program.lambdaWorker`).
+    pub fn isEmpty(self: LocalScheme) bool {
+        return self.scheme_vars.len == 0 and self.dictionaries.len == 0 and self.literal_requirements.len == 0;
+    }
 };
 
 /// A nominal method override: its dictionary entry, the types the method's
@@ -946,6 +954,15 @@ pub const Program = struct {
         own: ?LocalScheme,
     ) Allocator.Error!WorkerId {
         const outer_worker = self.worker(outer).*;
+        // A lambda that checking gave a dispatch scope is a link of every
+        // evidence and literal chain that reaches through it, even when the
+        // scope quantifies nothing: an empty scope takes an empty entry, so
+        // a chain depth names the same scope here as in checking.
+        const empty_scope: ?LocalScheme = if (own == null and self.local_scopes.contains(.{ .module = outer_worker.module, .expr = lambda_expr }))
+            .{ .scheme_vars = &.{}, .dictionaries = &.{}, .per_call = false }
+        else
+            null;
+        const scope = own orelse empty_scope;
         const key: WorkerKey = .{ .lambda = .{ .module = outer_worker.module, .expr = lambda_expr, .outer = outer, .captured_scheme = if (own) |scheme| scheme.per_call == false and self.local_procs.contains(.{ .module = outer_worker.module, .expr = lambda_expr }) else false } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const signature = switch (self.store.get(fn_ty)) {
@@ -974,11 +991,11 @@ pub const Program = struct {
             .ret = signature.ret,
             .captures = try self.arena.allocator().dupe(checked.CheckedCapture, captures),
             .capture_types = try self.arena.allocator().dupe(TypeId, capture_types),
-            .dict_scopes = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const u32, &.{ &.{scheme.dictionaries}, outer_worker.dict_scopes }) else outer_worker.dict_scopes,
-            .dict_scope_params = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const static_dispatch.EvidenceParamRecord, &.{ &.{scheme.params}, outer_worker.dict_scope_params }) else outer_worker.dict_scope_params,
+            .dict_scopes = if (scope) |scheme| try std.mem.concat(self.arena.allocator(), []const u32, &.{ &.{scheme.dictionaries}, outer_worker.dict_scopes }) else outer_worker.dict_scopes,
+            .dict_scope_params = if (scope) |scheme| try std.mem.concat(self.arena.allocator(), []const static_dispatch.EvidenceParamRecord, &.{ &.{scheme.params}, outer_worker.dict_scope_params }) else outer_worker.dict_scope_params,
             .own_descs = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.scheme_vars.len) else 0) else 0,
             .own_dicts = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.dictionaries.len) else 0) else 0,
-            .literal_scopes = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const checked.LiteralRequirement, &.{ &.{scheme.literal_requirements}, outer_worker.literal_scopes }) else outer_worker.literal_scopes,
+            .literal_scopes = if (scope) |scheme| try std.mem.concat(self.arena.allocator(), []const checked.LiteralRequirement, &.{ &.{scheme.literal_requirements}, outer_worker.literal_scopes }) else outer_worker.literal_scopes,
             .own_literals = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.literal_requirements.len) else 0) else 0,
             .imported = imported,
             .lowered = imported,
