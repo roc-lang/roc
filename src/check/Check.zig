@@ -43082,8 +43082,20 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
             // sibling module-level group checked one rank deeper inside this
             // boundary (resolving a pending dispatch target) owns live
             // module-level schemes that this boundary must leave intact.
+            //
+            // A generated-codec requirement is published for downstream
+            // revalidation. So is a requirement whose callable reaches a
+            // variable the scheme quantifies but its type does not: such a
+            // variable is related to the program only through the
+            // requirement, as the type of `"."` in
+            // `h = |_| { g = |s| r.to_str().concat(s); g(".") }` is related
+            // to `r`'s method only through `h`'s copy of `g`'s requirement.
+            // Evidence for the binding's body reads that variable as a
+            // parameter of the binding's scheme, found through the
+            // published requirement, and each use substitutes it.
             for (scheme.dispatch_requirements.items) |requirement| {
-                if (requirement.deferred_generated_codec and !self.staticDispatchConstraintIsInactive(requirement.constraint))
+                if (self.staticDispatchConstraintIsInactive(requirement.constraint)) continue;
+                if (requirement.deferred_generated_codec or try self.requirementReachesUnrootedSchemeVar(scheme.root_var, requirement))
                     try self.publishBindingSchemeCodecRequirement(scheme, requirement, .retired);
             }
             self.removeTypeSchemeAt(scheme_idx);
@@ -43129,8 +43141,26 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
     }
 }
 
-/// Publish a final-codec relation for every source node that names its binding
-/// scheme. The exact constraint is placed in the serialized TypeStore once and
+/// Whether `requirement`'s callable reaches a quantified variable that the
+/// scheme rooted at `scheme_root` does not reach through its type and the
+/// constraints on it.
+fn requirementReachesUnrootedSchemeVar(self: *Self, scheme_root: Var, requirement: SchemeDispatchRequirement) Allocator.Error!bool {
+    var rooted = collections.DenseMap(Var, void).init(self.gpa);
+    defer rooted.deinit();
+    try self.collectReachableVars(scheme_root, &rooted);
+    var reached = collections.DenseMap(Var, void).init(self.gpa);
+    defer reached.deinit();
+    try self.collectReachableVars(requirement.constraint.fn_var, &reached);
+    var iter = reached.iterator();
+    while (iter.next()) |entry| {
+        if (rooted.contains(entry.key_ptr.*)) continue;
+        if (self.types.resolveVar(entry.key_ptr.*).desc.rank == .generalized) return true;
+    }
+    return false;
+}
+
+/// Publish a binding-scheme relation (`ModuleEnv.BindingSchemeCodecRequirement`)
+/// for every source node that names its binding scheme. The exact constraint is placed in the serialized TypeStore once and
 /// every alias points to it; import copying later copies the scheme root,
 /// receiver, and callable under one substitution map.
 fn publishBindingSchemeCodecRequirement(
