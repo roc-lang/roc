@@ -4667,8 +4667,9 @@ the owning relation and its error report.
 The checker records scheme-ness as explicit binding metadata at each
 generalization boundary. After rank adjustment, it walks the binding's type
 interface once and classifies the binding as a scheme exactly when a reachable
-variable was promoted to generalized rank, or reachable anonymous structure is
-copied per use (Anonymous Structure Is Copied Per Use, below). This producer-side classification
+variable was promoted to generalized rank. The same walk records a binding
+that is no scheme but whose type reaches anonymous structure copied per use
+(Anonymous Structure Is Copied Per Use, below). This producer-side classification
 is necessary because generalization is per variable: a partially generalized
 scheme can have a monomorphic structural root and quantified descendants. Root
 rank is therefore not a valid proxy for whether a binding is a scheme. The walk
@@ -4891,12 +4892,19 @@ returning it returns that same class. A merge keeps the mark only when both
 sides had it, so a class that joins an enclosing scope's class is shared like
 that class.
 
-Binding classification treats a marked class like a quantified variable: a
-binding whose type reaches one is a scheme. Scheme instantiation copies each
-marked class and every monomorphic node from which one is reachable, by the
-same reachability walk that reaches quantified variables, and gives the copy
-no mark; the copy is a new class at its use's rank. A scheme with a marked
-class therefore always walks its reachability. Imported checked types are
+Binding classification records a binding whose type reaches a marked class
+(`Check.typeCopiedPerUse`). A binding that also reaches a quantified variable
+is a scheme; one that does not stays monomorphic, in
+`Check.per_use_copy_bindings`. Instantiation copies each marked class and
+every monomorphic node from which one is reachable, by the same reachability
+walk that reaches quantified variables, and gives the copy no mark; the copy
+is a new class at its use's rank. A scheme with a marked class therefore
+always walks its reachability. A monomorphic binding's copy quantifies
+nothing, so its uses record no scheme-use evidence, it carries no codec
+requirement, and post-check stages give it no dispatch scope of its own: a
+local function such as `g = |{}| Json.to_str(W.(r))` inside `|r| ...` reads
+the enclosing function's evidence for `r` exactly as if each use shared its
+type. Imported checked types are
 generalized templates whose nodes every use copies, so the mark needs no
 cross-module form; an exporting module's own lifts stay out of its exported
 types by the same rule.
@@ -4924,7 +4932,8 @@ unions, with their field and tag runs, and of the nodes above them.
 The accepted and rejected sides are pinned by
 `test/cli/LiftedUseLeavesOtherUses.roc`,
 `test/cli/LiftedUseLeavesOtherUsesRejected.roc`,
-`test/cli/OptionalFieldsPerUse.roc`, and
+`test/cli/OptionalFieldsPerUse.roc`,
+`test/cli/issue_12482_encoder_for_in_nested_function.roc`, and
 `test/cli/lifted_use_leaves_other_uses/`.
 
 ### Value Bindings Generalize By Expression

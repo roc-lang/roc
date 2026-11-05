@@ -630,6 +630,12 @@ binding_scheme_nodes: std.DynamicBitSetUnmanaged,
 /// Scheme identities without a source node, currently pristine annotation
 /// schemes created by the annotated-definition pre-pass.
 synthetic_binding_schemes: collections.DenseMapUnmanaged(Var, void) = .empty,
+/// Bindings that are not schemes but whose type holds per-use structure
+/// (`DescriptorFlags.per_use_structure`): each use copies that structure and
+/// shares everything else. Such a binding is monomorphic, so it has no
+/// scheme-use evidence, codec requirements, or dispatch scope of its own
+/// (design.md "Anonymous Structure Is Copied Per Use").
+per_use_copy_bindings: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// Reused exact graph walk for classifying a freshly generalized binding.
 /// Classification happens once at the producer boundary, never on lookup.
 binding_scheme_classification_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
@@ -1822,6 +1828,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .type_scheme_by_var = .keyed,
     .binding_scheme_nodes = .keyed,
     .synthetic_binding_schemes = .keyed,
+    .per_use_copy_bindings = .keyed,
     .binding_scheme_classification_seen = .scratch,
     .binding_scheme_classification_stack = .scratch,
     .settled_static_dispatch_constraint_fns = .keyed,
@@ -10695,35 +10702,34 @@ fn verifyPredeclaredSchemeUsesRecorded(self: *Self) Allocator.Error!void {
 fn bindBindingSchemeVar(self: *Self, scheme_var: Var, alias_var: Var) Allocator.Error!void {
     if (self.isBindingSchemeVar(scheme_var)) {
         try self.markBindingSchemeVar(alias_var);
+    } else if (self.per_use_copy_bindings.contains(scheme_var)) {
+        try self.per_use_copy_bindings.put(self.gpa, alias_var, {});
     }
 }
 
 /// Whether the post-generalization graph reachable from `root_var` contains a
 /// quantified variable.
 fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
-    return self.typeReaches(root_var, .generalized);
+    return try self.typeCopiedPerUse(root_var) == .generalized;
 }
 
-/// What `typeReaches` looks for.
-const TypeReachTarget = enum {
-    /// A quantified variable.
+/// What each use of a binding must copy of its type.
+const PerUseCopy = enum {
+    /// Nothing: every use shares the binding's type.
+    none,
+    /// Per-use structure (`DescriptorFlags.per_use_structure`) and the
+    /// nodes above it, though nothing is quantified.
+    per_use_structure,
+    /// A quantified variable: the binding is a scheme.
     generalized,
-    /// A quantified variable or per-use structure
-    /// (`DescriptorFlags.per_use_structure`): anything a scheme
-    /// instantiation must copy.
-    copied_per_use,
-
-    fn found(self: TypeReachTarget, desc: types_mod.Descriptor) bool {
-        return desc.rank == .generalized or (self == .copied_per_use and desc.flags.per_use_structure);
-    }
 };
 
-/// Whether the post-generalization graph reachable from `root_var` contains
-/// a node `target` looks for. This exact producer-side walk classifies a
-/// rank-1 binding once; use sites consume the recorded classification in
-/// O(1).
-fn typeReaches(self: *Self, root_var: Var, target: TypeReachTarget) Allocator.Error!bool {
-    if (target.found(self.types.resolveVar(root_var).desc)) return true;
+/// What the post-generalization graph reachable from `root_var` makes each
+/// use copy. This exact producer-side walk classifies a rank-1 binding once;
+/// use sites consume the recorded classification in O(1).
+fn typeCopiedPerUse(self: *Self, root_var: Var) Allocator.Error!PerUseCopy {
+    var result: PerUseCopy = .none;
+    if (self.types.resolveVar(root_var).desc.rank == .generalized) return .generalized;
 
     self.binding_scheme_classification_seen.clearRetainingCapacity();
     self.binding_scheme_classification_stack.clearRetainingCapacity();
@@ -10732,7 +10738,8 @@ fn typeReaches(self: *Self, root_var: Var, target: TypeReachTarget) Allocator.Er
     try self.binding_scheme_classification_stack.append(self.gpa, root_var);
     while (self.binding_scheme_classification_stack.pop()) |pending_var| {
         const resolved = self.types.resolveVar(pending_var);
-        if (target.found(resolved.desc)) return true;
+        if (resolved.desc.rank == .generalized) return .generalized;
+        if (resolved.desc.flags.per_use_structure) result = .per_use_structure;
         const seen = try self.binding_scheme_classification_seen.getOrPut(self.gpa, resolved.var_);
         if (seen.found_existing) continue;
 
@@ -10785,15 +10792,18 @@ fn typeReaches(self: *Self, root_var: Var, target: TypeReachTarget) Allocator.Er
             },
         }
     }
-    return false;
+    return result;
 }
 
-/// A binding is a scheme exactly when its uses must copy part of its type:
-/// a quantified variable, or anonymous structure a use may lift into a
-/// nominal type (design.md "Anonymous Structure Is Copied Per Use").
+/// A binding is a scheme exactly when its type reaches a quantified
+/// variable. A binding whose type reaches only anonymous structure a use may
+/// lift into a nominal type is monomorphic, but each use still copies that
+/// structure (design.md "Anonymous Structure Is Copied Per Use").
 fn publishBindingScheme(self: *Self, root_var: Var) Allocator.Error!void {
-    if (try self.typeReaches(root_var, .copied_per_use)) {
-        try self.markBindingSchemeVar(root_var);
+    switch (try self.typeCopiedPerUse(root_var)) {
+        .none => {},
+        .per_use_structure => try self.per_use_copy_bindings.put(self.gpa, root_var, {}),
+        .generalized => try self.markBindingSchemeVar(root_var),
     }
 }
 
@@ -11326,8 +11336,25 @@ fn instantiateBindingVar(
     if (self.types.resolveVar(binding_var).desc.rank == .generalized) {
         return self.instantiateVar(binding_var, env, region_behavior, evidence);
     }
+    if (self.per_use_copy_bindings.contains(binding_var)) {
+        return self.instantiatePerUseCopy(binding_var, env, region_behavior);
+    }
     self.var_map.clearRetainingCapacity();
     return binding_var;
+}
+
+/// A use's copy of a monomorphic binding's per-use structure
+/// (`per_use_copy_bindings`). It quantifies nothing, so it records no
+/// scheme-use evidence.
+fn instantiatePerUseCopy(
+    self: *Self,
+    binding_var: Var,
+    env: *Env,
+    region_behavior: InstantiateRegionBehavior,
+) std.mem.Allocator.Error!Var {
+    var instantiate_ctx = self.baseInstantiator(env.rank(), .fresh_flex);
+    instantiate_ctx.polarity_var_behavior = .close;
+    return self.instantiateVarHelp(binding_var, &instantiate_ctx, env, region_behavior, true, .none);
 }
 
 /// Cross-module graph copies are cached templates whose descriptors all carry
@@ -30050,7 +30077,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             }
 
             const resolved_pat = self.types.resolveVar(pat_var);
-            if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var)) {
+            if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var) or self.per_use_copy_bindings.contains(pat_var)) {
                 const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var, .{ .value_use = expr_idx });
                 _ = try self.unify(expr_var, instantiated, env);
             } else {
