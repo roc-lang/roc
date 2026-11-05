@@ -565,6 +565,7 @@ test "CTFE root classification resolves nominal backings throughout the checked 
         var parsed = try @import("inspected.zig").parseProgram(allocator, .module,
             \\module [value]
             \\import Holder
+            \\value : Holder
             \\value = Holder.make(7)
         , &.{.{ .name = "Holder", .source = case.source }}, .{ .roots = .published_only });
         defer parsed.deinit(allocator);
