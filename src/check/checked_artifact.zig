@@ -15751,14 +15751,21 @@ const EvidencePass = struct {
         candidate: static_dispatch.EvidenceNode,
     ) Allocator.Error!static_dispatch.EvidenceNodeId {
         // Bucket selector only; `evidenceNodesEql` decides identity, so a
-        // collision costs one extra chain step.
+        // collision costs one extra chain step. A checked type is hashed by
+        // its identity as a type (`hashCheckedTypeIdentity`), which equal
+        // types share whichever ids name them.
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, candidate.target);
-        std.hash.autoHash(&hasher, candidate.dispatcher_ty);
+        std.hash.autoHash(&hasher, candidate.dispatcher_ty != null);
+        if (candidate.dispatcher_ty) |ty| try self.hashCheckedTypeIdentity(&hasher, ty);
         std.hash.autoHash(&hasher, candidate.generated_codec_derivation);
-        std.hash.autoHash(&hasher, candidate.instantiation);
+        std.hash.autoHash(&hasher, std.meta.activeTag(candidate.instantiation));
+        switch (candidate.instantiation) {
+            .monomorphic => {},
+            .callable, .alias, .derived_from_callable => |ty| try self.hashCheckedTypeIdentity(&hasher, ty),
+        }
         for (self.site_substitutions.items[candidate.subst.start .. candidate.subst.start + candidate.subst.len]) |ty| {
-            std.hash.autoHash(&hasher, ty);
+            try self.hashCheckedTypeIdentity(&hasher, ty);
         }
         switch (candidate.nested) {
             .from_callable => std.hash.autoHash(&hasher, @as(u8, 0)),
@@ -15766,13 +15773,17 @@ const EvidencePass = struct {
                 std.hash.autoHash(&hasher, @as(u8, if (candidate.nested == .resolved) 1 else 2));
                 const refs = self.evidence_refs.items[span.start .. span.start + span.len];
                 std.hash.autoHash(&hasher, refs.len);
-                for (refs) |ref| std.hash.autoHash(&hasher, ref);
+                for (refs) |ref| {
+                    try self.hashCheckedTypeIdentity(&hasher, ref.dispatcher_ty);
+                    std.hash.autoHash(&hasher, ref.resolution);
+                    std.hash.autoHash(&hasher, ref.callable_contracts);
+                }
             },
         }
         const hash = hasher.final();
         var existing = self.evidence_node_buckets.get(hash);
         while (existing) |node_id| {
-            if (self.evidenceNodesEql(self.evidence_nodes.items[@backingInt(node_id)], candidate)) {
+            if (try self.evidenceNodesEql(self.evidence_nodes.items[@backingInt(node_id)], candidate)) {
                 return node_id;
             }
             existing = self.evidence_node_next.items[@backingInt(node_id)];
@@ -15785,20 +15796,45 @@ const EvidencePass = struct {
         return node_id;
     }
 
+    /// Hash `ty` as the type it is: a type that reaches no identity variable
+    /// is one type wherever it occurs, so it hashes by its canonical key, and
+    /// any other type is identified by its id alone (design.md "Synthesized
+    /// Types").
+    fn hashCheckedTypeIdentity(self: *const EvidencePass, hasher: *std.hash.Wyhash, ty: CheckedTypeId) Allocator.Error!void {
+        const type_view = self.checked_types.store.view();
+        if (try type_view.rootHasIdentityVariables(ty)) {
+            std.hash.autoHash(hasher, @as(u8, 0));
+            std.hash.autoHash(hasher, ty);
+        } else {
+            std.hash.autoHash(hasher, @as(u8, 1));
+            hasher.update(&(try type_view.rootKey(ty)).bytes);
+        }
+    }
+
     fn evidenceNodesEql(
         self: *const EvidencePass,
         left: static_dispatch.EvidenceNode,
         right: static_dispatch.EvidenceNode,
-    ) bool {
+    ) Allocator.Error!bool {
+        const type_view = self.checked_types.store.view();
         if (!std.meta.eql(left.target, right.target) or
-            left.dispatcher_ty != right.dispatcher_ty or
             left.generated_codec_derivation != right.generated_codec_derivation or
-            !std.meta.eql(left.instantiation, right.instantiation)) return false;
+            std.meta.activeTag(left.instantiation) != std.meta.activeTag(right.instantiation)) return false;
+        if ((left.dispatcher_ty == null) != (right.dispatcher_ty == null)) return false;
+        if (left.dispatcher_ty) |left_ty| {
+            if (!try type_view.sameType(left_ty, right.dispatcher_ty.?)) return false;
+        }
+        switch (left.instantiation) {
+            .monomorphic => {},
+            inline .callable, .alias, .derived_from_callable => |left_ty, tag| {
+                if (!try type_view.sameType(left_ty, @field(right.instantiation, @tagName(tag)))) return false;
+            },
+        }
         const left_subst = self.site_substitutions.items[left.subst.start .. left.subst.start + left.subst.len];
         const right_subst = self.site_substitutions.items[right.subst.start .. right.subst.start + right.subst.len];
         if (left_subst.len != right_subst.len) return false;
         for (left_subst, right_subst) |left_ty, right_ty| {
-            if (left_ty != right_ty) return false;
+            if (!try type_view.sameType(left_ty, right_ty)) return false;
         }
         if (std.meta.activeTag(left.nested) != std.meta.activeTag(right.nested)) return false;
         return switch (left.nested) {
@@ -15812,7 +15848,9 @@ const EvidencePass = struct {
                 const right_refs = self.evidence_refs.items[right_span.start .. right_span.start + right_span.len];
                 if (left_refs.len != right_refs.len) break :blk false;
                 for (left_refs, right_refs) |left_ref, right_ref| {
-                    if (!std.meta.eql(left_ref, right_ref)) break :blk false;
+                    if (!std.meta.eql(left_ref.resolution, right_ref.resolution) or
+                        !std.meta.eql(left_ref.callable_contracts, right_ref.callable_contracts) or
+                        !try type_view.sameType(left_ref.dispatcher_ty, right_ref.dispatcher_ty)) break :blk false;
                 }
                 break :blk true;
             },

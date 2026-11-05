@@ -5853,8 +5853,8 @@ const GeneratedTryTypeAddress = struct {
 
 /// Process-local O(1) reuse key for a checker-classified closed direct
 /// procedure call. `evidence` is an interned producer identity in `module`;
-/// the plan's closed callable type is likewise structurally interned there.
-/// The key is a
+/// the plan's closed callable type is named by its module's canonical id for
+/// it, so every call of one closed type shares the key. The key is a
 /// complete identity only for specializations independent of the caller's
 /// local context, so caller-owned specializations are never stored under it.
 const ClosedDirectCallIdentity = struct {
@@ -26970,7 +26970,7 @@ const BodyContext = struct {
     /// the task marked probed, when it must be instantiated.
     fn probeInstNode(self: *BodyContext, task: *InstNodeTask) Allocator.Error!?NodeId {
         self.builder.countBodyDiagnostic("checked_node_requests");
-        task.scoped_ty = self.scopedCheckedType(task.checked_ty);
+        task.scoped_ty = try self.nodeMapType(self.scopedCheckedType(task.checked_ty));
         if (try self.scopedNode(task.scoped_ty)) |existing| {
             self.builder.countBodyDiagnostic("checked_node_cache_hits");
             return existing;
@@ -27005,7 +27005,8 @@ const BodyContext = struct {
     /// measuring context, where every closed type whose Monotype is known
     /// stays a leaf, and sealed together with every closed type the build
     /// reached.
-    fn closedCheckedMono(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
+    fn closedCheckedMono(self: *BodyContext, any_checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
+        const checked_ty = try self.view.types.canonicalId(any_checked_ty);
         if (self.graph.closedCheckedMono(checkedTypeAddress(self.view, checked_ty))) |known| return known;
         const previous = self.instantiation;
         self.instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
@@ -27674,7 +27675,17 @@ const BodyContext = struct {
         return scopes[scopes.len - 1];
     }
 
-    fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!?NodeId {
+    /// The id a scope's node map holds `checked_ty` under. A type that
+    /// reaches no identity variable is one type wherever it occurs, whichever
+    /// ids name it, so it is memoized under its module's canonical id for it
+    /// and instantiates once per scope (design.md "Synthesized Types").
+    fn nodeMapType(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!checked.CheckedTypeId {
+        if (!try self.checkedTypeIsClosed(checked_ty)) return checked_ty;
+        return try self.view.types.canonicalId(checked_ty);
+    }
+
+    fn scopedNode(self: *BodyContext, any_checked_ty: checked.CheckedTypeId) Allocator.Error!?NodeId {
+        const checked_ty = try self.nodeMapType(any_checked_ty);
         const map = try self.scopedNodeMap(checked_ty);
         var entry = map.get(checked_ty) orelse return null;
         if (entry == .node) return entry.node;
@@ -27683,7 +27694,8 @@ const BodyContext = struct {
         return node;
     }
 
-    fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
+    fn putScopedNode(self: *BodyContext, any_checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
+        const checked_ty = try self.nodeMapType(any_checked_ty);
         try (try self.scopedNodeMap(checked_ty)).put(checked_ty, .{ .node = node });
         // A leaf read later reaches a closed component through its leaf
         // scope, so the scope names the same node for it.
@@ -36719,7 +36731,7 @@ const BodyContext = struct {
         const evidence_node = self.view.static_dispatch_plans.evidenceNode(evidence_id);
         const lookup = self.methodLookupForResolvedTarget(evidence_node.target);
         const direct_key = ClosedDirectCallIdentity{
-            .callable = checkedTypeAddress(self.view, plan.callable_ty),
+            .callable = checkedTypeAddress(self.view, try self.view.types.canonicalId(plan.callable_ty)),
             .evidence = evidence_id,
         };
         const slot = if (self.draft.closed_direct_specializations.get(direct_key)) |existing| blk: {
@@ -47582,9 +47594,13 @@ const BodyContext = struct {
         node: checked.ConstNodeId,
         ty: Type.TypeId,
         const_locator: checked.ConstLocator,
-        checked_type: checked.CheckedTypeId,
+        any_checked_type: checked.CheckedTypeId,
         bare_fn: Builder.BareFnCandidate,
     ) Allocator.Error!DraftExprId {
+        // A closed type is one type wherever it occurs, so every read of the
+        // constant at it requests one static datum (design.md "Synthesized
+        // Types").
+        const checked_type = try type_view.types.canonicalId(any_checked_type);
         if (!moduleBytesEqual(checked.constModuleId(const_locator).bytes, store_view.key.bytes)) {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
@@ -47632,9 +47648,13 @@ const BodyContext = struct {
         node: checked.ConstNodeId,
         request_node: NodeId,
         const_locator: checked.ConstLocator,
-        checked_type: checked.CheckedTypeId,
+        any_checked_type: checked.CheckedTypeId,
         bare_fn: Builder.BareFnCandidate,
     ) Allocator.Error!DraftExprId {
+        // A closed type is one type wherever it occurs, so every read of the
+        // constant at it requests one static datum (design.md "Synthesized
+        // Types").
+        const checked_type = try type_view.types.canonicalId(any_checked_type);
         if (!moduleBytesEqual(checked.constModuleId(const_locator).bytes, store_view.key.bytes)) {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
