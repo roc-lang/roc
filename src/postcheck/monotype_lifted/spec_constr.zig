@@ -233,7 +233,7 @@ const check = @import("check");
 const names = @import("check").CheckedNames;
 
 const ExitDemand = @import("loop_exit_demand.zig");
-const InlineProductivity = @import("inline_productivity.zig");
+const InlineCrossing = @import("inline_crossing.zig");
 const Allocator = std.mem.Allocator;
 const GuardedList = collections.GuardedList;
 const TaskExecutor = @import("base").post_check_task_executor;
@@ -1195,10 +1195,9 @@ const LoopExitSelection = struct {
 /// step calls no further `next`.
 const InlineFrame = struct {
     fn_id: Ast.FnId,
-    /// What the code around the inlined call consumes of its result, which
-    /// the inlined body's own result reaches. Empty for a frame whose result
-    /// no surrounding code reads, such as a specialization worker's own body.
-    result_demand: []const InlineProductivity.ResolvedRead = &.{},
+    /// The source call this frame inlines, in the enclosing frame's body: a
+    /// value that reaches this frame's result is read there.
+    call_expr: ?Ast.ExprId = null,
     /// Null means this acyclic entry had no finite constructor-size proof. A
     /// recursive re-entry may proceed only when both frames have exact sizes
     /// and the new measure is strictly smaller.
@@ -1382,11 +1381,12 @@ const Pass = struct {
     /// Direct callers recorded per function while the first argument-use walk
     /// runs; null outside `collectArgUses`.
     arg_use_callers: ?[]std.ArrayList(Ast.FnId) = null,
-    /// Where each source function consumes its parameters, captures, and
-    /// calls' results, and which result parts it constructs. Present while
-    /// `run` clones, and borrowed by its discovery workers; a clone that admits
-    /// only productive direct inlines reads it.
-    inline_productivity: ?*const InlineProductivity.Analysis = null,
+    /// The program-wide data of `InlineCrossing`: built before any clone or
+    /// discovery task runs, then read-only.
+    crossing_index: ?*const InlineCrossing.Index = null,
+    /// This pass's own crossing query state. A discovery task's pass owns a
+    /// session of its own, so queries never share mutable state.
+    crossing_session: ?*InlineCrossing.Session = null,
     /// Per source function: whether the whole-body value clone has already
     /// satisfied value-aware call rewriting, shape demand, and known-loop
     /// scalarization. Those analyses can all request the same clone, but the
@@ -1471,8 +1471,11 @@ const Pass = struct {
                 .static_data_structure = .init(scratch),
                 .discovery_admission = self.discovery_admission,
                 .borrowed_worker = true,
-                .inline_productivity = self.source.inline_productivity,
+                .crossing_index = self.source.crossing_index,
             };
+            var session: ?InlineCrossing.Session = if (pass.crossing_index) |index| try InlineCrossing.Session.init(scratch, index, &output.program) else null;
+            defer if (session) |*owned| owned.deinit();
+            if (session) |*owned| pass.crossing_session = owned;
             defer pass.arena.deinit();
             defer pass.static_data_structure.deinit();
             defer pass.callable_workers.deinit();
@@ -1488,6 +1491,7 @@ const Pass = struct {
                     cloner.emit_callable_workers = false;
                     cloner.inline_calls = .iterator_fusion;
                     cloner.inline_direct_requires_productivity = true;
+                    cloner.crossing_root_fn = self.fn_id;
                     try cloner.collectCallPatternsInExpr(self.fn_id, pass.sourceBody(self.fn_id).roc);
                     pass.rewindAnalysis(mark);
                 },
@@ -2034,10 +2038,17 @@ const Pass = struct {
 
         try self.specializeBranchAppendTails(original_fn_count);
         try self.collectArgUses(original_fn_count);
-        var productivity = try self.analyzeInlineProductivity();
-        defer productivity.deinit();
-        self.inline_productivity = &productivity;
-        defer self.inline_productivity = null;
+        const crossing_index = try self.buildCrossingIndex();
+        defer crossing_index.deinit();
+        var crossing_session = try InlineCrossing.Session.init(self.allocator, crossing_index, self.program);
+        defer crossing_session.deinit();
+        try crossing_index.classifyWrappers(&crossing_session);
+        self.crossing_index = crossing_index;
+        self.crossing_session = &crossing_session;
+        defer {
+            self.crossing_index = null;
+            self.crossing_session = null;
+        }
         if (self.clone_inlining.specializesCallPatterns()) {
             try self.collectCallPatterns(original_fn_count);
             try self.collectValueAwareCallPatterns(original_fn_count);
@@ -2058,15 +2069,15 @@ const Pass = struct {
         return procedure_usage;
     }
 
-    /// Summarize the source bodies for the clones' direct-inline admission.
-    fn analyzeInlineProductivity(self: *Pass) Allocator.Error!InlineProductivity.Analysis {
+    /// Index the source bodies for the clones' direct-inline admission.
+    fn buildCrossingIndex(self: *Pass) Allocator.Error!*InlineCrossing.Index {
         const bodies = try self.allocator.alloc(?Ast.ExprId, self.plans.len);
         defer self.allocator.free(bodies);
         for (bodies, self.plans) |*body, plan| body.* = switch (plan.source.body) {
             .roc => |roc_body| roc_body,
             .hosted => null,
         };
-        return InlineProductivity.analyze(self.allocator, self.program, bodies);
+        return InlineCrossing.Index.build(self.allocator, self.program, bodies);
     }
 
     fn runIteratorFusion(self: *Pass) Common.LowerError!void {
@@ -4668,6 +4679,7 @@ const Pass = struct {
             .iterator_fusion => Cloner.initForRewrite(self),
         };
         defer cloner.deinit();
+        cloner.crossing_root_fn = fn_id;
         switch (mode) {
             .normalize => {
                 cloner.inline_calls = switch (self.clone_inlining) {
@@ -5900,10 +5912,18 @@ const Cloner = struct {
     inline_calls: InlineCallMode,
     iterator_inline_depth: usize,
     /// Inline a direct call only when inlining lets a known value meet a
-    /// consumer that gains from it (`InlineProductivity`). Calls to the
+    /// consumer that gains from it (`InlineCrossing`). Calls to the
     /// checker-stamped iterator protocol or to a wrapper, and calls whose
     /// captures this context substituted, inline regardless.
     inline_direct_requires_productivity: bool,
+    /// The inline frames beneath this index belong to no context the body
+    /// being cloned sits in: a callable worker's body is a root context, so
+    /// its result is read by the worker's callers, not by the frames that
+    /// were active where the worker was created.
+    result_boundary: usize = 0,
+    /// The function whose body this clone reads beneath every inline frame
+    /// above `result_boundary`.
+    crossing_root_fn: ?Ast.FnId = null,
     rewrite_call_patterns: bool,
     /// Pattern discovery and detect-only walks do not own output functions.
     /// Production clones reserve callable workers through the pass-wide table.
@@ -11439,7 +11459,7 @@ const Cloner = struct {
         try self.inline_stack.append(self.pass.allocator, .{
             .fn_id = callable.fn_id,
             .known_size = task.exact_call_size,
-            .result_demand = try self.inlineResultDemand(task.original_expr),
+            .call_expr = task.original_expr,
         });
         for (task.source_args, task.prepared_args) |source_arg, arg_value| {
             try self.subst.put(self.pass.program, source_arg.local, arg_value);
@@ -11606,7 +11626,7 @@ const Cloner = struct {
         try self.inline_stack.append(self.pass.allocator, .{
             .fn_id = callee,
             .known_size = task.exact_call_size,
-            .result_demand = try self.inlineResultDemand(task.original_expr),
+            .call_expr = task.original_expr,
         });
         for (task.captures, task.prepared_captures) |capture, capture_value| {
             try self.subst.put(self.pass.program, capture.local, capture_value);
@@ -12147,6 +12167,8 @@ const Cloner = struct {
         worker_capture_values: []CaptureValue = &.{},
         change_start: usize = 0,
         saved_strip_depth: usize = 0,
+        saved_result_boundary: usize = 0,
+        saved_root_fn: ?Ast.FnId = null,
         outer_shapes: Ast.Program.FnShapesScope = undefined,
     };
 
@@ -12159,6 +12181,8 @@ const Cloner = struct {
                 const worker_body = input.?.get(.expr);
                 const worker_shapes = self.pass.program.finishFnShapes(task.outer_shapes);
                 self.materialize_strip_depth = task.saved_strip_depth;
+                self.result_boundary = task.saved_result_boundary;
+                self.crossing_root_fn = task.saved_root_fn;
                 self.pass.program.setFn(task.worker_fn_id, .{
                     .symbol = task.symbol,
                     .source = task.source_fn.source,
@@ -12308,6 +12332,10 @@ const Cloner = struct {
         // start their strip depth from zero.
         task.saved_strip_depth = self.materialize_strip_depth;
         self.materialize_strip_depth = 0;
+        task.saved_result_boundary = self.result_boundary;
+        self.result_boundary = self.inline_stack.items.len;
+        task.saved_root_fn = self.crossing_root_fn;
+        self.crossing_root_fn = source_fn_id;
         task.outer_shapes = self.pass.program.beginFnShapes(task.worker_fn_id);
         frame.cursor = 1;
         return .{ .call = try self.withoutReuseTask(.{ .expr = source_body }) };
@@ -12848,7 +12876,7 @@ const Cloner = struct {
     fn admitsDirectInline(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!bool {
         if (!self.inline_direct_requires_productivity) return true;
         if (call.iterator_procedure != null) return true;
-        if (self.productivity().summary(callee).wrapper) return true;
+        if (self.crossingIndex().isWrapper(callee)) return true;
         // A direct call carries its callee's captures by the callee's own
         // capture locals: the residual call imports those locals into the
         // enclosing function. In a context where a capture operand has been
@@ -12856,74 +12884,108 @@ const Cloner = struct {
         // local the context does not have, so the call cannot stay residual
         // and must inline.
         if (self.callCapturesAreForeign(call.captures)) return true;
-        return self.directInlineIsProductive(expr_id, callee, call);
+        return self.crossingIsProductive(expr_id, callee, call);
     }
 
-    fn productivity(self: *const Cloner) *const InlineProductivity.Analysis {
-        return self.pass.inline_productivity orelse
-            Common.invariant("a clone that admits only productive inlines ran without inline productivity");
+    fn crossingIndex(self: *const Cloner) *const InlineCrossing.Index {
+        return self.pass.crossing_index orelse
+            Common.invariant("a clone that admits only productive inlines ran without a crossing index");
     }
 
-    /// What the code around the source call `call_expr` consumes of its
-    /// result in this clone's context. Where the call's result reaches the
-    /// enclosing function's result, it is read by whatever reads that result
-    /// around the innermost inlined call.
-    fn callResultDemand(self: *Cloner, call_expr: Ast.ExprId) Allocator.Error![]const InlineProductivity.ResolvedRead {
-        const analysis = self.productivity();
-        const enclosing: []const InlineProductivity.ResolvedRead = if (self.inline_stack.items.len == 0)
-            &.{}
-        else
-            self.inline_stack.items[self.inline_stack.items.len - 1].result_demand;
-        return analysis.resolve(self.arena.allocator(), analysis.callDemand(call_expr), enclosing);
+    fn crossingSession(self: *const Cloner) *InlineCrossing.Session {
+        return self.pass.crossing_session orelse
+            Common.invariant("a clone that admits only productive inlines ran without a crossing session");
     }
 
-    /// The result demand of the frame that inlines `call_expr`.
-    fn inlineResultDemand(self: *Cloner, call_expr: Ast.ExprId) Allocator.Error![]const InlineProductivity.ResolvedRead {
-        if (!self.inline_direct_requires_productivity) return &.{};
-        return self.callResultDemand(call_expr);
-    }
-
-    /// Whether inlining lets a known value meet a consumer that simplifies on
-    /// it: the caller consumes a result part the callee constructs on every
-    /// path that returns, or a known part of an argument or capture reaches a
-    /// consumer in the callee.
-    fn directInlineIsProductive(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!bool {
-        // The query's resolved reads and step paths are its own: only the
-        // answer leaves it, so the arena gives them back when it returns.
+    /// Whether inlining `expr_id` lets a known value cross the call and meet
+    /// a consumer that simplifies on it: a part of the result the callee
+    /// builds on every path that returns, met in the caller's continuation,
+    /// or a known part of an argument or capture, met in the callee's extent
+    /// or, through its result, in the caller's continuation.
+    fn crossingIsProductive(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!bool {
+        // A query's scratch is its own: only the answer leaves it.
         const position = self.arena.mark();
         defer self.arena.restore(position);
-        const analysis = self.productivity();
-        const result_demand = try self.callResultDemand(expr_id);
-        for (result_demand) |read| {
-            if (analysis.constructs(callee, read.steps, read.consumers)) return true;
-        }
-        const summary = analysis.summary(callee);
-        const args = self.pass.program.exprSpan(call.args);
+        const session = self.crossingSession();
+        const arena = self.arena.allocator();
+        const boundary = self.result_boundary;
+        const frames = try arena.alloc(InlineCrossing.RootFrame, self.inline_stack.items.len - boundary);
+        for (frames, self.inline_stack.items[boundary..]) |*frame, active| frame.* = .{ .fn_id = active.fn_id, .call_expr = active.call_expr };
+
+        const root_fn = self.crossing_root_fn;
+        var result_seed: ResultSeed = .{ .cloner = self, .callee = callee, .call = call };
+        if (try session.resultCrosses(result_seed.oracle(), root_fn, frames, expr_id)) return true;
+
+        const program = self.pass.program;
+        const args = program.exprSpan(call.args);
         for (0..args.len) |index| {
-            if (try self.demandedPartKnown(GuardedList.at(args, index), summary.params[index].view(), result_demand)) return true;
+            var seed: ArgumentSeed = .{ .cloner = self, .expr = GuardedList.at(args, index) };
+            if (try session.argumentCrosses(seed.oracle(), root_fn, frames, expr_id, callee, .{ .kind = .arg, .index = @intCast(index) })) return true;
         }
-        const operands = self.pass.program.captureOperandSpan(call.captures);
+        const operands = program.captureOperandSpan(call.captures);
         for (0..operands.len) |index| {
             const operand = GuardedList.at(operands, index);
-            const slot = analysis.captureSlot(callee, operand.id);
-            if (try self.demandedPartKnown(operand.value, summary.captures[slot].view(), result_demand)) return true;
+            var seed: ArgumentSeed = .{ .cloner = self, .expr = operand.value };
+            const slot = InlineCrossing.captureSlot(program, callee, operand.id);
+            if (try session.argumentCrosses(seed.oracle(), root_fn, frames, expr_id, callee, .{ .kind = .capture, .index = slot })) return true;
         }
         return false;
     }
 
-    /// Whether this clone knows a part of `source_expr` that `demand` reads,
-    /// where `result_demand` reads the result `demand`'s placements reach.
-    fn demandedPartKnown(
-        self: *Cloner,
-        source_expr: Ast.ExprId,
-        demand: InlineProductivity.Demand,
-        result_demand: []const InlineProductivity.ResolvedRead,
-    ) Allocator.Error!bool {
-        const reads = try self.productivity().resolve(self.arena.allocator(), demand, result_demand);
-        for (reads) |read| {
-            const consumers = read.consumers.intersectWith(InlineProductivity.argument_consumers);
-            if (consumers.count() == 0) continue;
-            if (try self.exprKnownAt(source_expr, read.steps, consumers)) return true;
+    /// The parts of an argument or capture this clone knows.
+    const ArgumentSeed = struct {
+        cloner: *Cloner,
+        expr: Ast.ExprId,
+
+        fn oracle(self: *ArgumentSeed) InlineCrossing.Oracle {
+            return .{ .ctx = self, .known = known };
+        }
+
+        fn known(ctx: *anyopaque, path: []const InlineCrossing.Step, kinds: InlineCrossing.Consumers) Allocator.Error!bool {
+            const self: *ArgumentSeed = @ptrCast(@alignCast(ctx));
+            return self.cloner.crossingKnownAt(self.expr, path, kinds);
+        }
+    };
+
+    /// The parts of a direct call's result its callee builds on every path
+    /// that returns, and the parts it passes through from an argument or
+    /// capture this clone knows.
+    const ResultSeed = struct {
+        cloner: *Cloner,
+        callee: Ast.FnId,
+        call: Mono.CallProc,
+
+        fn oracle(self: *ResultSeed) InlineCrossing.Oracle {
+            return .{ .ctx = self, .known = known };
+        }
+
+        fn known(ctx: *anyopaque, path: []const InlineCrossing.Step, kinds: InlineCrossing.Consumers) Allocator.Error!bool {
+            const self: *ResultSeed = @ptrCast(@alignCast(ctx));
+            const session = self.cloner.crossingSession();
+            const program = self.cloner.pass.program;
+            const built = try session.builtAt(self.callee, try session.pathOf(path));
+            if (built.kinds.intersectWith(kinds).count() != 0) return true;
+            return self.cloner.passesKnown(built.passes, self.callee, self.call, kinds, program);
+        }
+    };
+
+    /// Whether this clone knows the part a pass-through names, at the call
+    /// whose operands supply it.
+    fn passesKnown(self: *Cloner, passes: []const InlineCrossing.Built.Pass, callee: Ast.FnId, call: Mono.CallProc, kinds: InlineCrossing.Consumers, program: *const Ast.Program) Allocator.Error!bool {
+        const session = self.crossingSession();
+        const args = program.exprSpan(call.args);
+        const operands = program.captureOperandSpan(call.captures);
+        for (passes) |pass| {
+            var through: std.ArrayList(InlineCrossing.Step) = .empty;
+            try session.stepsOf(self.arena.allocator(), pass.path, &through);
+            const source = switch (pass.slot.kind) {
+                .arg => GuardedList.at(args, pass.slot.index),
+                .capture => for (0..operands.len) |index| {
+                    const operand = GuardedList.at(operands, index);
+                    if (InlineCrossing.captureSlot(program, callee, operand.id) == pass.slot.index) break operand.value;
+                } else Common.invariant("direct call supplied no operand for a capture its callee passes through"),
+            };
+            if (try self.crossingKnownAt(source, through.items, kinds)) return true;
         }
         return false;
     }
@@ -12934,19 +12996,19 @@ const Cloner = struct {
     /// direct call is known at a part its callee constructs on every path
     /// that returns, and at a part it always passes through from a known
     /// argument or capture.
-    fn exprKnownAt(
+    fn crossingKnownAt(
         self: *Cloner,
         source_expr: Ast.ExprId,
-        source_steps: []const InlineProductivity.Step,
-        consumers: InlineProductivity.Consumers,
+        source_steps: []const InlineCrossing.Step,
+        consumers: InlineCrossing.Consumers,
     ) Allocator.Error!bool {
-        const Step = InlineProductivity.Step;
+        const Step = InlineCrossing.Step;
         const Item = union(enum) {
             expr: struct { id: Ast.ExprId, steps: []const Step },
             value: struct { value: Value, steps: []const Step },
         };
         const program = self.pass.program;
-        const analysis = self.productivity();
+        const session = self.crossingSession();
         const arena = self.arena.allocator();
         const known_constructor = consumers.contains(.loop);
         const known_tag = consumers.contains(.match) or known_constructor;
@@ -13078,20 +13140,18 @@ const Cloner = struct {
                     },
                     .call_proc => |call| {
                         const callee = Ast.localDirectCallee(call) orelse continue;
-                        if (analysis.constructs(callee, steps, consumers)) return true;
+                        const built = try session.builtAt(callee, try session.pathOf(steps));
+                        if (built.kinds.intersectWith(consumers).count() != 0) return true;
                         const args = program.exprSpan(call.args);
                         const operands = program.captureOperandSpan(call.captures);
-                        for (analysis.summary(callee).passes) |pass| {
-                            const placed = try analysis.stepsOf(arena, pass.result);
-                            if (!InlineProductivity.startsWith(steps, placed)) continue;
+                        for (built.passes) |pass| {
                             var through: std.ArrayList(Step) = .empty;
-                            try through.appendSlice(arena, try analysis.stepsOf(arena, pass.value));
-                            for (steps[placed.len..]) |step| try InlineProductivity.appendStep(arena, &through, step);
+                            try session.stepsOf(arena, pass.path, &through);
                             const source = switch (pass.slot.kind) {
                                 .arg => GuardedList.at(args, pass.slot.index),
                                 .capture => for (0..operands.len) |index| {
                                     const operand = GuardedList.at(operands, index);
-                                    if (analysis.captureSlot(callee, operand.id) == pass.slot.index) break operand.value;
+                                    if (InlineCrossing.captureSlot(program, callee, operand.id) == pass.slot.index) break operand.value;
                                 } else Common.invariant("direct call supplied no operand for a capture its callee passes through"),
                             };
                             try work.append(self.pass.allocator, .{ .expr = .{ .id = source, .steps = through.items } });
@@ -17028,9 +17088,13 @@ test "compile-time root reads remain opaque through specialization and cloning" 
     } } });
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
-    var productivity = try InlineProductivity.analyze(allocator, &program, &.{});
-    defer productivity.deinit();
-    pass.inline_productivity = &productivity;
+    const crossing_index = try pass.buildCrossingIndex();
+    defer crossing_index.deinit();
+    var crossing_session = try InlineCrossing.Session.init(pass.allocator, crossing_index, pass.program);
+    defer crossing_session.deinit();
+    try crossing_index.classifyWrappers(&crossing_session);
+    pass.crossing_index = crossing_index;
+    pass.crossing_session = &crossing_session;
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
     const value = try cloner.cloneExprValueDemandingShape(read);
@@ -17038,7 +17102,7 @@ test "compile-time root reads remain opaque through specialization and cloning" 
     try std.testing.expect(value.value == .expr);
     try std.testing.expectEqual(read, value.value.expr);
     try std.testing.expectEqual(read, try cloner.cloneExprPlain(read));
-    try std.testing.expect(!try cloner.exprKnownAt(read, &.{}, .full));
+    try std.testing.expect(!try cloner.crossingKnownAt(read, &.{}, .full));
     try std.testing.expect((try cloner.peekKnownValue(read)) == null);
     try std.testing.expect((try pass.staticDataStructure(read)).* == .expr);
     var renames = collections.DenseMap(Ast.LocalId, Ast.LocalId).init(allocator);
@@ -18005,9 +18069,13 @@ test "staged SpecConstr phase entry capacity fixes discovery budgets across wave
         }
         var pass = try Pass.init(allocator, &program);
         defer pass.deinit();
-        var productivity = try pass.analyzeInlineProductivity();
-        defer productivity.deinit();
-        pass.inline_productivity = &productivity;
+        const crossing_index = try pass.buildCrossingIndex();
+        defer crossing_index.deinit();
+        var crossing_session = try InlineCrossing.Session.init(pass.allocator, crossing_index, pass.program);
+        defer crossing_session.deinit();
+        try crossing_index.classifyWrappers(&crossing_session);
+        pass.crossing_index = crossing_index;
+        pass.crossing_session = &crossing_session;
         pass.plans[0].used_args[0] = true;
         pass.plans[1].used_args[0] = true;
         var executor: ReverseSpecConstrExecutor = .{ .worker_count = worker_count };
@@ -18639,6 +18707,77 @@ test "SpecConstr redirects a call to its most specific accepting worker" {
     try std.testing.expectEqual(@as(usize, 0), program.exprSpan(redirected.args).len);
 }
 
+test "a callable worker's body is a root context for inline productivity" {
+    // `outer` matches the result of `middle`, and `middle` returns what
+    // `make` builds. Inlining `make` inside an inlined `middle` lets the
+    // built tag meet `outer`'s match. A callable worker cloned from
+    // `middle`'s body, created while `outer`'s frames were active, has
+    // callers of its own: those frames never read its result.
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.zst);
+    const tag_a = try program.names.internTagLabel("A");
+
+    const built = try program.addExpr(.{ .ty = ty, .data = .{ .tag = .{ .name = tag_a, .payloads = .empty() } } });
+    const make = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(1),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = built },
+        .ret = ty,
+    });
+    const make_call = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = make }, .args = .empty() } } });
+    const middle = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(2),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = make_call },
+        .ret = ty,
+    });
+    const middle_call = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = middle }, .args = .empty() } } });
+    const a_pat = try program.addPat(.{ .ty = ty, .data = .{ .tag = .{ .name = tag_a, .payloads = .empty() } } });
+    const unit_expr = try program.addExpr(.{ .ty = ty, .data = .unit });
+    const outer_body = try program.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
+        .scrutinee = middle_call,
+        .branches = try program.addBranchSpan(&.{.{ .pat = a_pat, .body = unit_expr }}),
+    } } });
+    const outer = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(3),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = outer_body },
+        .ret = ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    const index = try pass.buildCrossingIndex();
+    defer index.deinit();
+    var session = try InlineCrossing.Session.init(allocator, index, &program);
+    defer session.deinit();
+    pass.crossing_index = index;
+    pass.crossing_session = &session;
+
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    cloner.inline_direct_requires_productivity = true;
+    cloner.crossing_root_fn = outer;
+    try cloner.inline_stack.append(allocator, .{ .fn_id = middle, .known_size = null, .call_expr = middle_call });
+    const make_call_data = program.getExpr(make_call).data.call_proc;
+
+    // Inlined into `outer` through `middle`: the built tag meets the match.
+    try std.testing.expect(try cloner.crossingIsProductive(make_call, make, make_call_data));
+
+    // A worker body cloned from `middle` while that frame is active.
+    cloner.result_boundary = cloner.inline_stack.items.len;
+    cloner.crossing_root_fn = middle;
+    try std.testing.expect(!try cloner.crossingIsProductive(make_call, make, make_call_data));
+}
+
 test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
@@ -18784,11 +18923,31 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
         result_ty = wrapper_ty;
     }
 
+    // The call the test clones sits in a body of its own, the body its
+    // inline productivity queries read.
+    const root_call = try program.addExpr(.{ .ty = result_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = callee },
+        .args = try program.addExprSpan(&.{pair_expr}),
+        .captures = Ast.Span(Ast.CaptureOperand).empty(),
+    } } });
+    const root_fn = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(@intCast(@as(u32, 1000))),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = root_call },
+        .ret = result_ty,
+    });
+
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
-    var productivity = try pass.analyzeInlineProductivity();
-    defer productivity.deinit();
-    pass.inline_productivity = &productivity;
+    const crossing_index = try pass.buildCrossingIndex();
+    defer crossing_index.deinit();
+    var crossing_session = try InlineCrossing.Session.init(pass.allocator, crossing_index, pass.program);
+    defer crossing_session.deinit();
+    try crossing_index.classifyWrappers(&crossing_session);
+    pass.crossing_index = crossing_index;
+    pass.crossing_session = &crossing_session;
 
     for (0..pass.plans.len) |index| {
         try pass.cloneFnBody(.normalize, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
@@ -18807,11 +18966,6 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
     };
     try std.testing.expect(rewritten_work > source_work);
 
-    const root_call = try program.addExpr(.{ .ty = result_ty, .data = .{ .call_proc = .{
-        .callee = .{ .lifted = callee },
-        .args = try program.addExprSpan(&.{pair_expr}),
-        .captures = Ast.Span(Ast.CaptureOperand).empty(),
-    } } });
     const root_source_size = switch (try exprBodySizeWithin(std.testing.allocator, &program, root_call, spec_constr_body_expr_threshold)) {
         .exact => |size| size,
         .over_limit => return error.TestUnexpectedResult,
@@ -18820,6 +18974,7 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
     cloner.inline_direct_requires_productivity = true;
+    cloner.crossing_root_fn = root_fn;
     const before_exprs = program.exprCount();
     const before_work = cloner.inline_body_growth.remaining;
     _ = try cloner.cloneExpr(root_call);
@@ -19008,7 +19163,7 @@ test "a direct call inlines only where its surroundings consume the result it co
             .args = Ast.Span(Ast.ExprId).empty(),
         } },
     });
-    _ = try program.addFn(.{
+    const discarding = try program.addFn(.{
         .shapes = program.finishFnShapes(.{}),
         .symbol = @fromBackingInt(@intCast(2)),
         .args = Ast.Span(Ast.TypedLocal).empty(),
@@ -19031,7 +19186,7 @@ test "a direct call inlines only where its surroundings consume the result it co
         .payloads = Ast.Span(Ast.PatId).empty(),
     } } });
     const arm = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
-    _ = try program.addFn(.{
+    const matching = try program.addFn(.{
         .shapes = program.finishFnShapes(.{}),
         .symbol = @fromBackingInt(@intCast(3)),
         .args = Ast.Span(Ast.TypedLocal).empty(),
@@ -19045,19 +19200,25 @@ test "a direct call inlines only where its surroundings consume the result it co
 
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
-    var productivity = try pass.analyzeInlineProductivity();
-    defer productivity.deinit();
-    pass.inline_productivity = &productivity;
+    const crossing_index = try pass.buildCrossingIndex();
+    defer crossing_index.deinit();
+    var crossing_session = try InlineCrossing.Session.init(pass.allocator, crossing_index, pass.program);
+    defer crossing_session.deinit();
+    try crossing_index.classifyWrappers(&crossing_session);
+    pass.crossing_index = crossing_index;
+    pass.crossing_session = &crossing_session;
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
     cloner.inline_direct_requires_productivity = true;
 
     // A result the caller discards gains nothing from the constructed tag.
+    cloner.crossing_root_fn = discarding;
     const unconsumed = try cloner.cloneExprValueDemandingShape(unconsumed_call);
     if (unconsumed.value != .expr) return error.TestUnexpectedResult;
     try std.testing.expect(program.getExpr(unconsumed.value.expr).data == .call_proc);
 
     // A match selects its arm from the constructed tag, so either clone inlines.
+    cloner.crossing_root_fn = matching;
     try std.testing.expect((try cloner.cloneExprValueDemandingShape(matched_call)).value == .tag);
     try std.testing.expect((try cloner.cloneExprValue(matched_call)).value == .tag);
 }

@@ -9066,14 +9066,17 @@ which cannot stay residual. A body like `|msg| for_each!(msg, Stdout.line!)`
 inlines `for_each!` into itself on the function reference it supplies, so its
 clone is a whole loop wherever it lands; it stays one procedure, and copies of
 it at each caller are admitted only where they are productive there.
-Any other call qualifies only when inlining lets a known value meet a consumer
-that gains from it:
+Any other call qualifies only when a known value crosses the call's boundary
+and meets a consumer that gains from it on the other side:
 
-- a `match` on a known tag, a call of a known callable, or a loop entered with
-  a known constructor, reached by a known part of an argument or capture;
-- a part of the result that the callee constructs on every path that returns,
-  where the caller matches, calls, enters a loop with, or projects a field or
-  item from it. A projected result is read without building the aggregate. A
+- a known part of an argument or capture reaches a `match` on a known tag, a
+  call of a known callable, or a loop entered with a known constructor, inside
+  the callee's extent, or through the callee's result in the caller's
+  continuation;
+- a part of the result that the callee constructs on every path that returns
+  (or passes through from an argument or capture the clone knows) reaches a
+  `match`, a call, a loop entry, or a field or item read in the caller's
+  continuation. A projected result is read without building the aggregate. A
   projected argument gains nothing from inlining, since the call-pattern
   worker already takes a known argument apart. Returning a result, or storing
   it in a constructor, is not such a use: the callee already builds it where
@@ -9087,30 +9090,70 @@ Storing a known value, reading an unrelated field, or computing a scalar result
 is not a reason to copy a body: a callee that only stores a `Bool` literal it
 is passed stays a call.
 
-`inline_productivity.zig` derives this before any clone runs, as summaries of
-source bodies. For each function it records how the body consumes each part of
-each parameter and capture, either directly or by placing it in the function's
-result, and which result parts the body constructs or passes through on every
-path that returns; it records each call's demand on its result too. Demand
-flows from consumers to the values that reach them through bindings,
-field and payload reads, constructors, branches, loops, join points, and calls, including
-a function value's captures when the value may be called. Parts are paths of
-field, item, and tag-payload steps, each carrying the label that names the
-part within its parent and the part's own Monotype. A part whose type equals
-the type of a part above it on the path sits at a recursive position of that
-type, so the path folds to that part; a type that contains itself is
-recursive whatever labels lead back to it, and labels alone cannot decide
-this, since unrelated types share tag and field labels. The steps of a path
-therefore have distinct types, so a recursive type contributes as many paths
-as its unfolded shape has parts, not one per ordering of its recursive
-positions. Paths share one root, the value itself, so demand passes through a
-nominal wrap, row coercion, or typed boundary unchanged; a read meets the part
-it names by label, since a row coercion can show one part at two types. Each
-summary only grows within that finite set of paths, so the interprocedural
-fixed point ends without a round limit. The
-clone resolves a call's result demand against the demand on the result of the
-innermost call it is inlining, and checks the arguments it knows against the
-callee's summaries; it never reanalyzes a body.
+`inline_crossing.zig` decides this with a query at each call the clone asks
+about; nothing is summarized for the whole program, and no part of a type is
+ever enumerated. Before any clone or discovery task runs, `Index` records, in
+one pass over the source bodies, every use of every expression and local (a
+lifted body may share an expression node between parents, and bodies may share
+nodes with each other, so a node keeps one list of uses per body), each body's
+loops, its single definitions and slots, and the strongly connected components
+of the call graph over direct calls and function values. The index is
+read-only afterwards. Each task owns a `Session` with its own memo tables, so
+queries share no mutable state and take no locks.
+
+A query walks forward from the crossing value: from the callee's parameter or
+capture slot for a known argument, from the call itself for a known result
+part, and from each enclosing inline frame's call when the value reaches the
+result of the body it is in. The seed (the clone's knowledge of the argument,
+or the callee's built result, `builtAt`) answers whether a part at a path is
+known; the walk descends into a part only where the seed knows it, so a value
+of a huge type costs only the parts the clone actually holds. A constructor
+the walk puts around the known part pushes a frame (a step, or a record update
+whose replaced fields no longer come from the part); a read of a matching step
+pops it, and a read through an update pops it and reads the field beneath
+unless the update replaced that field. A consumer counts only when no frame is
+on top. A function value built around the known part is entered at its capture
+when the walk calls it, and when it reaches a function's result, since any
+caller may call it.
+
+The walk is a pushdown reachability problem solved by saturation. No stack is
+stored: a pushed frame is a node keyed by the pushing body, the push site, the
+frame, and the seed path, and each node keeps the set of nodes that can lie
+beneath it. A configuration is a body position, a seed path, and a top node;
+a pop resumes every node beneath the popped one, now and as beneath-sets grow.
+Calls are summarized per entry (callee, slot, seed path, top node): each caller
+receives each of the entry's exits at its own call site, so a walk returns
+where it was called from, and a callee that pops the caller's frame resumes
+beneath it within the same entry. Nodes are shared by every invocation of a
+body within one query, so a pop can resume a node another invocation of that
+body pushed over; this adds states and never drops one, so it can admit an
+inline the exact walk would not, never refuse one it would admit.
+
+Two structural rules keep the walk to what the clone can realize. A loop's
+back edge (a `continue` value or a jump's loop value) does not carry a part
+wrapped in a frame pushed inside the loop it re-enters, and a recursive binding
+re-enters its own pattern only unwrapped: a structure that grows on every pass
+is no loop fixed point. Within a cycle of the call graph, a call does not carry
+a part wrapped in a frame that a function of the cycle pushed: the clone never
+inlines a recursive call whose argument grows.
+
+A callable worker's body is a root context. The inline frames active where the
+worker is created belong to that context, not to the worker, whose own callers
+read its result; `Cloner.result_boundary` marks them, so a query in a worker
+body climbs only the frames above it, and the body beneath them is the worker's
+source function (`crossing_root_fn`). A call-pattern worker's root frame, which
+names no call, ends the climb the same way.
+
+The cost of a query is polynomial in the program and the seed, and independent
+of type shape and composition depth. With U uses in the index (one per
+expression and parent body), S slots, N source expressions and K paths the seed
+knows, there are at most U·K + 1 nodes, at most S·K·(U·K + 1) call entries,
+and at most one visit to each (entry, body position, seed path, node), so a
+query does O(S·N·U²·K⁴) work in the worst case; in practice the seed prunes the
+walk to the parts the clone holds. `builtAt` is evaluated on an explicit stack
+with memoized (function or expression, path) results, a function whose result
+reaches itself at the same part building nothing there. Building the index is
+linear in U.
 
 When the continuation never observes a tuple loop result whole, SpecConstr
 gives the loop an exit ABI of the components it reads, dropping any it cannot
@@ -9283,8 +9326,9 @@ value graphs do not accumulate across functions. Within one clone, work whose
 results are discarded gives its scratch back as well, so scratch is bounded by
 the output a clone keeps rather than by how often it retries:
 
-- A direct-inline productivity query returns only its answer; the resolved
-  reads and step paths it builds are released when it returns.
+- A direct-inline productivity query returns only its answer; the step
+  paths it builds in the clone arena are released when it returns, and its
+  walk state lives in the session's query arena, reset after every query.
 - Loop scalarization decides a split by attempt (clone the body, let each
   `continue` supply or demote the slot leaves, retry while any demoted). A
   rejected attempt releases everything it allocated in the clone arena; only
