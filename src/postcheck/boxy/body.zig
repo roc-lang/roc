@@ -397,6 +397,7 @@ pub const Builder = struct {
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
     foreign_scopes: ?usize = null,
     type_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
+    product_shapes: collections.DenseMapUnmanaged(TypeId, LIR.StmtRowId(LIR.ProductShape)) = .empty,
     /// Complete argument layouts already emitted in this entry chain. Keys
     /// name the exact ordered descriptor locals, not an approximation of types.
     args_descs: std.HashMapUnmanaged(ArgsDescKey, LocalId, ArgsDescContext, std.hash_map.default_max_load_percentage) = .empty,
@@ -530,6 +531,7 @@ pub const Builder = struct {
         self.declared_captures.deinit(self.allocator);
         self.root_thunks.deinit(self.allocator);
         self.type_descs.deinit(self.allocator);
+        self.product_shapes.deinit(self.allocator);
         var args_keys = self.args_descs.keyIterator();
         while (args_keys.next()) |key| self.allocator.free(key.descs);
         self.args_descs.deinit(self.allocator);
@@ -584,7 +586,42 @@ pub const Builder = struct {
     pub fn localOf(self: *Builder, ty: TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
         if (try self.closed(ty)) return self.closedLocal(try self.program.layouts.layoutOf(ty));
         const desc = try self.descOf(ty);
-        return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage } });
+        return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage }, .product = try self.productShape(ty) });
+    }
+
+    /// Preserve checked product ownership without inventing a byte layout.
+    /// The row is shared by locals of this type in this worker. Descriptors
+    /// are already prepared at entry; ARC never discovers types or offsets.
+    fn productShape(self: *Builder, ty: TypeId) Allocator.Error!LIR.StmtRowId(LIR.ProductShape) {
+        if (self.product_shapes.get(ty)) |shape| return shape;
+        const structural = try self.structuralType(ty);
+        switch (self.program.store.get(structural)) {
+            .record => |record| if (record.ext != null) return .none,
+            .tuple => {},
+            else => return .none,
+        }
+        const components = try self.structComponentTypes(structural);
+        defer self.allocator.free(components);
+        const field_layouts = try self.allocator.alloc(u32, components.len);
+        defer self.allocator.free(field_layouts);
+        const descriptors = try self.allocator.alloc(LocalId, components.len);
+        defer self.allocator.free(descriptors);
+        const slots = try self.allocator.alloc(u32, components.len + 1);
+        defer self.allocator.free(slots);
+        slots[0] = 0;
+        for (components, field_layouts, descriptors, 0..) |component, *field_layout, *descriptor, index| {
+            const field = if (try self.closed(component)) try self.program.layouts.layoutOf(component) else try self.program.result.layouts.dynamicLayout();
+            field_layout.* = @backingInt(field);
+            slots[index + 1] = slots[index] + self.program.result.layouts.ownershipSlotCount(field);
+            descriptor.* = try self.descOf(component);
+        }
+        const shape = try self.store.addStmtRow(LIR.ProductShape, .{
+            .layouts = try self.store.addU32Span(field_layouts),
+            .slots = try self.store.addU32Span(slots),
+            .descriptors = try self.store.addLocalSpan(descriptors),
+        });
+        try self.product_shapes.put(self.allocator, ty, shape);
+        return shape;
     }
 
     /// Whether values of `ty` have one committed layout (see
@@ -892,7 +929,7 @@ pub const Builder = struct {
                 const dyn = self.store.localDyn(current);
                 if (!params.contains(current) and (dyn == null or dyn.?.storage != .view)) continue;
                 if (dyn) |dyn_info| {
-                    const staged = try self.addLocal(.{ .layout_idx = self.store.getLocal(current).layout_idx, .dyn = .{ .desc = dyn_info.desc, .storage = .frame } });
+                    const staged = try self.addLocal(.{ .layout_idx = self.store.getLocal(current).layout_idx, .dyn = .{ .desc = dyn_info.desc, .storage = .frame }, .product = self.store.getLocal(current).product });
                     try self.emitDyn(staged, .{ .copy = .{ .src = current, .desc = dyn_info.desc } });
                     source.* = staged;
                 } else {
@@ -8768,7 +8805,7 @@ pub const Builder = struct {
     /// Field `field_index` (of type `field_ty`) of the record or tuple
     /// `base` of type `ty`, as a borrowed read.
     pub fn readField(self: *Builder, ty: TypeId, base_local: LocalId, field_index: u32, field_ty: TypeId) Allocator.Error!LocalId {
-        const local = try self.localOf(field_ty, if (try self.closed(ty)) .frame else .view);
+        const local = try self.localOf(field_ty, if (try self.closed(ty) or self.store.getLocal(base_local).product != .none) .frame else .view);
         try self.readFieldInto(local, ty, base_local, field_index, field_ty);
         return local;
     }
@@ -8782,6 +8819,12 @@ pub const Builder = struct {
                 return;
             }
             return try self.readSlotInto(target, LIR.RefOp.field(base_local, field_index), field_ty, self.structFieldLayout(base_layout, field_index));
+        }
+        if (self.store.getLocal(base_local).product != .none) {
+            // Independent representation storage permits an ownership take;
+            // retaining contents would not keep an interior address alive.
+            if (self.store.localDyn(target) != null) self.store.getLocalPtr(target).dyn_storage = .frame;
+            return self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.field(base_local, field_index), .next = undefined } });
         }
         // A field of an open row ranks among the remainder's fields too, so
         // it is addressed by name.

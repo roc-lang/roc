@@ -704,7 +704,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
     }
 
-    if (builtin.mode == .debug) {
+    if (builtin.mode == .debug or @import("base").dev_diagnostics.isSet(.verify_arc)) {
         const all_sigs = try store.allocator.alloc(arc_sig.RcSig, store.procSpecCount());
         defer store.allocator.free(all_sigs);
         for (all_sigs, 0..) |*sig, proc_index| {
@@ -7275,20 +7275,24 @@ const Inserter = struct {
         cause: RcCause,
         next: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
+        std.debug.assert(self.store.getLocal(source).layout_idx == layout_idx);
         const atomicity = self.rcAtomicity(local);
-        const info = self.layouts.getStructInfo(self.layouts.getLayout(layout_idx));
+        const fields = arc_dismantle.ProductFields.of(self.store, self.layouts, source) orelse arcInvariant("residual product has no ownership shape");
         var tail = next;
-        var index = info.fields.len;
+        var index = fields.len();
         while (index > 0) {
             index -= 1;
-            const field = info.fields.get(@intCast(index));
+            const field = fields.at(@intCast(index));
             if (field.is_padding) continue;
             if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
-            const first = slot_base + self.layouts.ownershipSlotBase(layout_idx, field.index);
+            const first = slot_base + fields.slotBase(field.index);
             var coverage: SlotCoverage = .{};
             self.residualCoverage(container, residual_mask, field.layout, first, &coverage);
             if (!coverage.residual) continue;
-            const temp = try self.store.addLocal(.{ .layout_idx = field.layout });
+            const temp = try self.store.addLocal(.{
+                .layout_idx = field.layout,
+                .dyn = if (self.layouts.getLayout(field.layout).tag == .dynamic) .{ .desc = field.desc.?, .storage = .view } else null,
+            });
             try self.dismantle_temps.append(self.lane_allocator, temp);
             const read_op: LIR.RefOp = LIR.RefOp.field(source, @intCast(field.index));
             if (coverage.absent) {
@@ -7306,13 +7310,10 @@ const Inserter = struct {
                 } }, self.dismantleOrigin(cause, local));
                 continue;
             }
-            const rc = self.rcHelperForLayout(.decref, field.layout);
-            if (self.layouts.rcHelperPlan(rc) == .noop) {
-                arcInvariant("ARC dismantle selected a noop RC helper for a refcounted residual field");
-            }
+            const rc = self.rcHelperForLocal(.decref, temp);
             tail = try self.store.addCFStmt(.{ .decref = .{
                 .value = temp,
-                .rc = try self.store.addRcHelperRef(LIR.RcHelper.fromConcrete(rc)),
+                .rc = try self.store.addRcHelperRef(rc),
                 .atomicity = atomicity,
                 .next = tail,
             } }, self.rcOrigin(cause, .decref, local));
@@ -18149,6 +18150,38 @@ const DynFixture = struct {
         }
     }
 };
+
+test "ARC dynamic product takes independently stored fields and preserves aliases" {
+    for ([_]bool{ false, true }) |keep_record| {
+        var d = try DynFixture.init();
+        defer d.deinit();
+        const record_desc = try d.desc();
+        const field_desc = try d.desc();
+        const param = try d.value(record_desc, .param);
+        const field = try d.value(field_desc, .frame);
+        const result = try d.value(field_desc, .result);
+        d.f.store.getLocalPtr(param).product = try d.f.store.addStmtRow(LIR.ProductShape, .{
+            .layouts = try d.f.store.addU32Span(&.{ @backingInt(d.dynamic), @backingInt(d.dynamic) }),
+            .slots = try d.f.store.addU32Span(&.{ 0, 1, 2 }),
+            .descriptors = try d.f.span(&.{ field_desc, field_desc }),
+        });
+        const ret = try d.f.ret(if (keep_record) param else result);
+        const append = try d.f.assignLowLevel(result, &.{field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
+        const read = try d.f.assignRefField(field, param, 0, append);
+        const proc = try d.proc(&.{ record_desc, field_desc, param }, read, d.dynamic, if (keep_record) param else result);
+        try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
+        try testing.expectEqual(@as(usize, if (keep_record) 1 else 0), d.f.countRc(field, .incref));
+        // Whole decref is forbidden after taking a field; the untouched field
+        // is separately projected and released. A kept record stays intact.
+        try d.f.expectRc(param, 0, 0, 0);
+        var diag: arc_certify.Diagnostic = .{};
+        const sigs = [_]arc_sig.RcSig{.{}};
+        arc_certify.certifyStore(testing.allocator, &d.f.store, &d.f.layouts, .{ .sigs = &sigs }, &.{proc}, &diag) catch |err| {
+            std.debug.print("dynamic product certification failed: {any}\n", .{diag});
+            return err;
+        };
+    }
+}
 
 test "ARC dyn copy of an owned dynamic parameter into the result moves its unit" {
     var d = try DynFixture.init();

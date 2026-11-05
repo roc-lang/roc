@@ -63,6 +63,7 @@ pub const stmt_row_types = .{
     lir_defs.DecrefIfInitializedData,
     lir_defs.CrashExtra,
     lir_defs.DynOp,
+    lir_defs.ProductShape,
 };
 
 /// Number of out-of-line statement row columns.
@@ -719,6 +720,12 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         if (!value.isSite()) return value;
         const next = value.next() orelse return value;
         return .site(relocateBodyValue(CFStmtId, next, prefix, bases));
+    }
+    if (T == StoredLocal) {
+        var result = value;
+        if (value.dyn_desc != StoredLocal.no_dyn_desc) result.dyn_desc = movedIndex(value.dyn_desc, prefix.locals, bases.locals);
+        result.product = relocateBodyValue(lir_defs.StmtRowId(lir_defs.ProductShape), value.product, prefix, bases);
+        return result;
     }
     if (T == LocalId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.locals, bases.locals)));
     if (T == CFStmtId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.cf_stmts, bases.cf_stmts)));
@@ -1635,17 +1642,18 @@ pub const StoredLocal = struct {
     /// The descriptor local of a dynamic local; `no_dyn_desc` otherwise.
     dyn_desc: u32 = no_dyn_desc,
     dyn_storage: lir_defs.DynStorage = .frame,
+    product: lir_defs.StmtRowId(lir_defs.ProductShape) = .none,
 
     pub const no_dyn_desc: u32 = std.math.maxInt(u32);
 
     fn fromLocal(local: Local) StoredLocal {
         const dyn = local.dyn orelse return .{ .layout_idx = local.layout_idx };
-        return .{ .layout_idx = local.layout_idx, .dyn_desc = @backingInt(dyn.desc), .dyn_storage = dyn.storage };
+        return .{ .layout_idx = local.layout_idx, .dyn_desc = @backingInt(dyn.desc), .dyn_storage = dyn.storage, .product = local.product };
     }
 
     pub fn toLocal(self: StoredLocal) Local {
         if (self.dyn_desc == no_dyn_desc) return .{ .layout_idx = self.layout_idx };
-        return .{ .layout_idx = self.layout_idx, .dyn = .{ .desc = @fromBackingInt(self.dyn_desc), .storage = self.dyn_storage } };
+        return .{ .layout_idx = self.layout_idx, .dyn = .{ .desc = @fromBackingInt(self.dyn_desc), .storage = self.dyn_storage }, .product = self.product };
     }
 };
 
@@ -3136,4 +3144,44 @@ fn testTailCallRelocation(existing_join: ?u32) (AppendBodyError || error{ TestEx
     try std.testing.expectEqual(appended.relocation.stmt(prefix, first), link);
     try std.testing.expect(coordinator.getCFStmt(link).assign_call.tail_call.next() == null);
     try std.testing.expect(coordinator.tail_call_builder == null);
+}
+
+test "dynamic product metadata relocates with a body shard" {
+    const allocator = std.testing.allocator;
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const dynamic = try layouts.dynamicLayout();
+    var coordinator = Self.init(allocator);
+    defer coordinator.deinit();
+    _ = try coordinator.addLocal(.{ .layout_idx = .opaque_ptr });
+    var worker = try coordinator.cloneForBodyShard(allocator);
+    defer worker.deinit();
+    const prefix = worker.captureBodyPrefix();
+    const desc = try worker.addLocal(.{ .layout_idx = .opaque_ptr });
+    const product = try worker.addLocal(.{
+        .layout_idx = dynamic,
+        .dyn = .{ .desc = desc, .storage = .param },
+        .product = try worker.addStmtRow(lir_defs.ProductShape, .{
+            .layouts = try worker.addU32Span(&.{@backingInt(dynamic)}),
+            .slots = try worker.addU32Span(&.{ 0, 1 }),
+            .descriptors = try worker.addLocalSpan(&.{desc}),
+        }),
+    });
+    const frame = try worker.addLocalSpan(&.{ desc, product });
+    const ret = try worker.addCFStmt(.{ .ret = .{ .value = product } }, .test_fixture);
+    const shard = try worker.captureBodyShard(prefix);
+    // Simulate a different worker committing first, shifting each suffix.
+    for (0..3) |_| _ = try coordinator.addLocal(.{ .layout_idx = .u64 });
+    _ = try coordinator.addU32Span(&.{99});
+    _ = try coordinator.addStmtRow(lir_defs.ProductShape, .{ .layouts = .empty(), .slots = .empty(), .descriptors = .empty() });
+    const appended = try coordinator.appendBodyShard(&worker, prefix, shard, ret, frame);
+    const moved = coordinator.getLocalSpan(appended.frame_locals);
+    const moved_desc = GuardedList.at(moved, 0);
+    const moved_product = coordinator.getLocal(GuardedList.at(moved, 1));
+    try std.testing.expect(moved_desc != desc);
+    try std.testing.expectEqual(moved_desc, moved_product.dyn.?.desc);
+    const shape = coordinator.stmtRow(moved_product.product);
+    try std.testing.expectEqual(moved_desc, GuardedList.at(coordinator.getLocalSpan(shape.descriptors), 0));
+    try std.testing.expectEqual(@as(u32, @backingInt(dynamic)), GuardedList.at(coordinator.getU32Span(shape.layouts), 0));
+    try std.testing.expectEqual(@as(u32, 1), GuardedList.at(coordinator.getU32Span(shape.slots), 1));
 }

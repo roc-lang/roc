@@ -519,12 +519,25 @@ pub const Local = struct {
     layout_idx: layout.Idx,
     /// Set exactly for a local of `dynamic` layout.
     dyn: ?DynLocal = null,
+    /// Checked, closed-row product structure, independent of runtime offsets.
+    /// Present only for descriptor-sized records/tuples. Field layouts may
+    /// themselves be dynamic; their descriptors are explicit producer data.
+    product: StmtRowId(ProductShape) = .none,
+};
+
+/// Closed product ownership metadata. Physical offsets remain descriptor-defined.
+pub const ProductShape = struct {
+    /// Layout indices in semantic field order (not runtime offset order).
+    layouts: U32Span,
+    /// First ownership slot per field, followed by the total slot count.
+    slots: U32Span,
+    /// One descriptor per field, in the same order as `layouts`.
+    descriptors: LocalSpan,
 };
 
 /// What a `dynamic` local's value is (design.md "Dynamic Values In LIR"):
-/// bytes the runtime type descriptor in `desc` describes, which the local
-/// addresses. `desc` is a local of `opaque_ptr` layout holding the
-/// descriptor; it is defined before the dynamic local is.
+/// bytes described by the runtime descriptor in `desc`, a local defined
+/// before the dynamic local's storage is allocated or addressed.
 pub const DynLocal = struct {
     desc: LocalId,
     storage: DynStorage,

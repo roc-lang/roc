@@ -2569,6 +2569,11 @@ fn callBoolRoot(
     base.dev_diagnostics.countTestWork(.test_root_execution, 1);
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
+    defer if (base.dev_diagnostics.available) {
+        if (base.dev_diagnostics.isSet(.test_command_work)) {
+            std.debug.print("test-alloc root={d} calls={d} bytes={d}\n", .{ call_index, runtime_env.allocationCallCount(), runtime_env.requested_bytes });
+        }
+    };
     var event_forwarder: RuntimeHostEventForwarder = undefined;
     if (event_callback) |callback| {
         event_forwarder = .{

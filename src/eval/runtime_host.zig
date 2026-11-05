@@ -6,6 +6,7 @@
 //! clean up any surviving runtime allocations at the end of a run.
 
 const std = @import("std");
+const dev_diagnostics = @import("base").dev_diagnostics;
 const Allocator = std.mem.Allocator;
 const builtins = @import("builtins");
 const crash_boundary_mod = @import("crash_boundary.zig");
@@ -212,6 +213,7 @@ live_blocks: ?*Header = null,
 live_count: usize = 0,
 live_set: LiveSet = if (std.debug.runtime_safety) .empty else {},
 allocation_call_count: u32 = 0,
+requested_bytes: if (dev_diagnostics.available) usize else void = if (dev_diagnostics.available) 0 else {},
 event_callback: ?EventCallback = null,
 expect_passed: []u64 = &.{},
 expect_failed: []u64 = &.{},
@@ -242,6 +244,7 @@ pub fn resetObservation(self: *RuntimeHostEnv) void {
 pub fn resetAllocationTracker(self: *RuntimeHostEnv) void {
     self.freeRemainingAllocations();
     self.allocation_call_count = 0;
+    if (dev_diagnostics.available) self.requested_bytes = 0;
 }
 
 /// Public function `checkForLeaks`.
@@ -420,6 +423,7 @@ fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void 
 fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     self.allocation_call_count += 1;
+    if (dev_diagnostics.available) self.requested_bytes += length;
     return @ptrCast(self.allocateBlock(length, alignment).payload());
 }
 
@@ -437,6 +441,7 @@ fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) vo
 fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     self.allocation_call_count += 1;
+    if (dev_diagnostics.available) self.requested_bytes += new_length;
     const old_header = self.liveHeader(ptr, "realloc of untracked memory");
     old_header.expectAlignment(alignment, "realloc");
     const new_header = self.allocateBlock(new_length, alignment);

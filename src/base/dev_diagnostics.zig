@@ -36,6 +36,8 @@ pub const Var = enum {
     dev_excerpt_roundtrip,
     /// Append one record to the named file per in-process LLVM object compile.
     test_llvm_object_compile_count_file,
+    /// Run the independent ARC certifier in a diagnostics-enabled compiler.
+    verify_arc,
     /// Print deterministic work counters for one test command.
     test_command_work,
     /// Write the bytes of a dev run's first run image, as published and
@@ -65,6 +67,7 @@ pub const Var = enum {
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",
             .dev_excerpt_roundtrip => "ROC_DEV_EXCERPT_ROUNDTRIP",
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
+            .verify_arc => "ROC_VERIFY_ARC",
             .test_command_work => "ROC_TEST_COMMAND_WORK",
             .dump_run_image => "ROC_DUMP_RUN_IMAGE",
             .verify_sealed_type_view => "ROC_VERIFY_SEALED_TYPE_VIEW",

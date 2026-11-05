@@ -19841,10 +19841,25 @@ into the earlier place. One place under a recursive box therefore stands for
 every unrolled occurrence, which matches the typing rule below that nested
 modes are uniform through an owning rc.
 
-A dynamic local is one opaque owned unit to ARC: its payload ownership graph
-is descriptor-defined at runtime, so ARC attaches one resource to the whole
-local and never splits it into positions. ARC consumes the descriptor local
-the dynamic local names; it never treats a dynamic local as refcount-free.
+A dynamic local normally carries one opaque owned unit. For a closed-row
+record or tuple, Boxy lowering also publishes its checked product shape:
+the semantic fields' layouts and descriptor locals. This is ownership data,
+not a physical layout: field addresses and representation sizes still come
+from runtime descriptors. A dynamic field occupies one ownership slot;
+a concrete struct field expands into its concrete slots. An open row or an
+unknown type has no enumerated product shape and remains opaque.
+
+ARC uses this explicit shape for the same field-take and residual-release
+rules as concrete products. Generic record projections copy representation
+bytes into independent frame storage; owning a projected value therefore
+never relies on its container's storage remaining alive. This copy does not
+retain payloads. ARC alone emits the retains, takes and residual decrefs.
+Runtime-sized list/box interior views continue to borrow their backing
+storage. ARC's temporary projections used only for an immediate residual
+release may also address the field in place. Every dynamic RC statement uses
+the value's own descriptor. `ROC_VERIFY_ARC` in a developer-diagnostic build
+runs independent certification even when the compiler uses ReleaseFast;
+ordinary release compilers do not read the variable.
 
 Nested resources carry two modes, following the paper's storage/access split:
 
@@ -21091,7 +21106,7 @@ whole.
 
 A container qualifies for dismantling when all of the following hold:
 
-- its committed layout is a struct containing at least one refcounted field
+- its committed layout or explicit descriptor-backed product shape contains at least one refcounted field
 - its binding is owned and bound exactly once, or is a join parameter whose
   definitions are explicit `initialize_join_param` writes. Lowering gives
   every `if`/`match` value join whose result is a struct holding refcounted
