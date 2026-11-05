@@ -112,6 +112,54 @@ byte list and `str_from_utf8_validated`, without a validation rescan. Successful
 decoding allocates at most once and leaves input unchanged. Output encoders
 (`to_utf16`/`to_utf32`) remain a separate API addition.
 
+## LSP compiler-input live updates
+
+The LSP watches the exact mutable disk inputs recorded by compilation for
+currently open documents. Saved changes refresh affected documents even while
+client input is idle, without editor file-watch support. Inputs include imported
+Roc modules, file imports, and explicitly consumed local package/platform roots.
+Missing or unreadable explicit inputs remain eligible for repair after failed
+checks. Immutable URL packages remain excluded. Negative probes used only to
+find a candidate workspace owner do not establish input ownership.
+
+Each check uses the target's latest editor buffer and saved dependency contents;
+another open document's unsaved buffer is not a shared dependency overlay. The
+target's buffer-backed input is not compared against its disk bytes, but that
+same path remains a disk input for other roots that consume it. Dependency
+changes invalidate diagnostic skips and checked-feature snapshots, even when
+the target text has not changed.
+
+Diagnostic contributions belong to active open roots. An open URI's independent
+latest-buffer result takes precedence, including an empty result. While that
+result is pending, disk reports or older buffer results are not substituted as
+current. Closed dependency URIs receive the stable, deduplicated union of active
+root contributions; equality covers the complete diagnostic payload. Closing a
+root or removing an import removes only that root's contribution. Closing an
+independently open dependency exposes applicable saved reports from other roots.
+
+Watch consumers use compiler-produced consumed states, not post-build samples or
+reconstructed dependencies. Mutable resolution headers retain raw-byte watch
+identity separately from normalized-source cache identity. Explicit resolution
+inputs survive failure. Inconsistent repeated consumption cannot establish a
+stable completed result. After installing or replacing coverage, compare inputs
+against consumed states so changes during checking or registration are not lost.
+Coverage follows the existing exact-path watcher contracts, including missing
+ancestors, symlinks and aliases. Metadata-only events, identical-byte replacement
+and unrelated paths do not trigger checks. Bursts may coalesce; after changes
+stop, results converge without a hard latency guarantee.
+
+Closing a document releases independent buffer/check/watch ownership without
+removing inputs still owned by another root. Reopening uses the newly supplied
+buffer and version. Obsolete work cannot restore closed ownership or replace
+newer diagnostic or semantic state. Shutdown stops new watch/compiler work and
+watch-driven publication; exit, EOF, transport failure and partial initialization
+release owned resources. Transport output remains serialized and correctly framed.
+
+Initial, replacement and runtime watch failures are user-visible, including
+with idle client input. Failed coverage is not presented as working live
+updates, and no alternate silent watcher is used. Ordinary document checking
+remains available where the failure permits it.
+
 ## LSP document checks
 
 Opening or editing a document schedules a check of it rather than checking it

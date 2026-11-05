@@ -2503,6 +2503,17 @@ pub const CtxFetcher = struct {
     /// Optional root for materialized compiler-owned source packages.
     compiler_owned_source_dir: ?[]const u8 = null,
 
+    /// Receives raw local input observations before normalization or header parsing.
+    /// URL package reads do not call this hook.
+    input_observer: ?struct {
+        ctx: *anyopaque,
+        observe: *const fn (*anyopaque, []const u8, @import("watch_inputs.zig").State) Allocator.Error!void,
+    } = null,
+
+    fn observeInput(self: *CtxFetcher, path: []const u8, state: @import("watch_inputs.zig").State) Allocator.Error!void {
+        if (self.input_observer) |observer| try observer.observe(observer.ctx, path, state);
+    }
+
     pub fn fetcher(self: *CtxFetcher) Fetcher {
         return .{
             .ctx = self,
@@ -2515,12 +2526,13 @@ pub const CtxFetcher = struct {
 
     fn canonicalizeImpl(ctx: ?*anyopaque, allocator: Allocator, path: []const u8) CanonicalizeError![]const u8 {
         const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
-        return self.fs.canonicalize(path, allocator) catch |err| switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            error.FileNotFound,
-            error.AccessDenied,
-            error.IoError,
-            => error.CannotCanonicalize,
+        return self.fs.canonicalize(path, allocator) catch |err| {
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.FileNotFound => try self.observeInput(path, .missing),
+                error.AccessDenied, error.IoError => try self.observeInput(path, .unreadable),
+            }
+            return error.CannotCanonicalize;
         };
     }
 
@@ -2626,7 +2638,17 @@ pub const CtxFetcher = struct {
 
     fn loadLocalImpl(ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8, rejection_reports: *HeaderReports) FetchError!FetchedPackage {
         const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
-        const src = try self.readNormalizedSource(allocator, root_file_abs);
+        var src = self.fs.readFile(root_file_abs, allocator) catch |err| {
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.FileNotFound => try self.observeInput(root_file_abs, .missing),
+                else => try self.observeInput(root_file_abs, .unreadable),
+            }
+            return error.FileNotFound;
+        };
+        errdefer allocator.free(src);
+        try self.observeInput(root_file_abs, .{ .hash = @import("watch_inputs.zig").hashBytes(src) });
+        src = try base.source_utils.normalizeLineEndingsRealloc(allocator, src);
         return try scanHeaderSource(allocator, self.gpa, root_file_abs, src, rejection_reports);
     }
 
@@ -2636,8 +2658,7 @@ pub const CtxFetcher = struct {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.Unsupported,
         };
-        const src = try self.readNormalizedSource(allocator, materialized.root_file);
-        var scanned = try scanHeaderSource(allocator, self.gpa, materialized.root_file, src, rejection_reports);
+        var scanned = try loadLocalImpl(ctx, allocator, materialized.root_file, rejection_reports);
         scanned.content_bytes = materialized.content_bytes;
         scanned.compiler_owned_platform = platform;
         return scanned;

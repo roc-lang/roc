@@ -65,6 +65,8 @@ pub fn Inbox(comptime ReadError: type) type {
         /// What the server does next.
         pub const Next = union(enum) {
             message: Message,
+            /// No message is pending and a compiler-recorded input needs comparison.
+            inputs_changed,
             /// No message is pending and the reader is waiting for client input.
             idle,
             /// The client input ended, cleanly when the error is null.
@@ -86,6 +88,8 @@ pub fn Inbox(comptime ReadError: type) type {
         messages: std.Deque(Message) = .empty,
         input: Input = .reading,
         end_error: ?ReadError = null,
+        /// Set by a watcher and read by the server.
+        inputs_changed: bool = false,
         /// The document of the cancelable check in progress, borrowed from the
         /// server for the duration of that check.
         checking_uri: ?[]const u8 = null,
@@ -135,13 +139,33 @@ pub fn Inbox(comptime ReadError: type) type {
             self.changed.signal(self.std_io);
         }
 
-        /// Server: wait for the next message, or for the reader to be idle
-        /// when `has_scheduled_checks`, or for the input to end.
+        /// Watcher: wake the server to compare compiler-recorded inputs.
+        pub fn noteInputsChanged(self: *Self) void {
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
+            self.inputs_changed = true;
+            self.changed.signal(self.std_io);
+        }
+
+        /// Whether a comparison of compiler-recorded inputs is pending.
+        pub fn inputsChangePending(self: *Self) bool {
+            self.mutex.lockUncancelable(self.std_io);
+            defer self.mutex.unlock(self.std_io);
+            return self.inputs_changed;
+        }
+
+        /// Server: wait for the next message, or for a change of compiler-recorded
+        /// inputs, or for the reader to be idle when `has_scheduled_checks`, or
+        /// for the input to end.
         pub fn next(self: *Self, has_scheduled_checks: bool) Next {
             self.mutex.lockUncancelable(self.std_io);
             defer self.mutex.unlock(self.std_io);
             while (true) {
                 if (self.messages.popFront()) |message| return .{ .message = message };
+                if (self.inputs_changed and self.input != .ended) {
+                    self.inputs_changed = false;
+                    return .inputs_changed;
+                }
                 switch (self.input) {
                     .reading => {},
                     .waiting => if (has_scheduled_checks) return .idle,

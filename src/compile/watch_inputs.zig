@@ -13,6 +13,9 @@ pub const State = union(enum) {
 };
 
 /// Filesystem input path plus the state read by the compiler for that path.
+/// A run can consume one path more than once. Differing observations must remain
+/// separate inputs: reconciliation must compare every observation, not deduplicate
+/// by path, so a mixed-input run cannot be accepted as a stable snapshot.
 pub const Input = struct {
     path: []const u8,
     state: State,
