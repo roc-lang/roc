@@ -5328,6 +5328,13 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
 - Per-component slots: analyses that are fixpoints over the call graph
   (template demand vectors, literal requirements) are claimed for a whole
   strongly connected component of the module's call graph, never per root.
+  The graph and its components are a per-module slot (for demand vectors,
+  `templateDemandGraph`: every template's base vector and edges, read from
+  its body, its schema and its plans' dispatch resolution). A consumer
+  demands, holding no claim, every component a component reaches and every
+  imported callee's result before it claims the component, so a
+  component's computation reads only finished results and never waits on a
+  slot of its own kind, in its own module or another.
 - Per-module slots: the key index (one over source types, one over
   synthesized types), the method registry view, provided exports, the
   nodes whose dispatch plan cannot run, diagnostic errors, single-source
@@ -5361,27 +5368,30 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   (`templateDispatchRelations`), the module's resolution of what no
   template binds, with its generated codecs (`moduleDispatch`), and an
   app's root evidence for its platform requirement solutions
-  (`platformRequirementRootEvidence`), and the module's nested procedure
-  sites by expression with the runtime captures of each
-  (`moduleNestedProcSites`), and every exhaustiveness check with the owner
-  and policy that decide it (`exhaustivenessSites`: the first compile-time
-  root, in root order, whose evaluation replaces the check's source,
-  otherwise the first template, in template order, whose body reaches it,
-  decided by whether the module's root requests reach that template at
-  runtime, only at compile time, or only through a pairing). Runtime
-  captures are one slot for the module rather than one per component of
-  the call graph: the relation that defines them crosses owners (a
-  promoted local procedure's body selects local procedures its enclosing
-  template's body declares) and its components are not the call graph's.
-  Each resolution owns the evidence pool its evidence ids name, and a
-  plan's or site's resolution is the first template's, in template order,
-  that holds it, otherwise the module's. A platform/app pairing has
+  (`platformRequirementRootEvidence`), the module's demand call graph
+  (`templateDemandGraph`) with one slot per strongly connected component
+  for its templates' demand vectors ("Specialization By Demand"), the
+  module's nested procedure sites by expression with the runtime captures
+  of each (`moduleNestedProcSites`), and every exhaustiveness check with
+  the owner and policy that decide it (`exhaustivenessSites`: the first
+  compile-time root, in root order, whose evaluation replaces the check's
+  source, otherwise the first template, in template order, whose body
+  reaches it, decided by whether the module's root requests reach that
+  template at runtime, only at compile time, or only through a pairing).
+  Runtime captures are one slot for the module rather than one per
+  component of the call graph: the relation that defines them crosses
+  owners (a promoted local procedure's body selects local procedures its
+  enclosing template's body declares) and its components are not the call
+  graph's. Each resolution owns the evidence pool its evidence ids name,
+  and a plan's or site's resolution is the first template's, in template
+  order, that holds it, otherwise the module's. A platform/app pairing has
   analyses of its own; its export closures, public API dependencies,
-  interface capabilities, dispatch resolution, nested procedure sites and
-  per-template exhaustiveness sites are its platform's, its exhaustiveness
-  policies are its own (it decides its platform's checks by its own root
-  requests, after demanding its platform's), and a pairing demands its
-  platform's capabilities before it borrows the platform's types. A constant's
+  interface capabilities, dispatch resolution, demand vectors, nested
+  procedure sites and per-template exhaustiveness sites are its
+  platform's, its exhaustiveness policies are its own (it decides its
+  platform's checks by its own root requests, after demanding its
+  platform's), and a pairing demands its platform's capabilities before it
+  borrows the platform's types. A constant's
   closure follows the template its compile-time root evaluates
   whether or not evaluation has stored the constant's value, so the result
   is the same before and after evaluation.
@@ -16998,18 +17008,25 @@ The demand of a variable is one of three values, the same scale
   `FieldName`, `ParseTagUnionSpec`, `Iter`, `Stream`), a variable used as a row
   extension, and a variable the scheme's root type does not mention.
 
-A template's demand vector is a per-component on-demand analysis
-(`TemplateDemandPass`): the first consumer that needs one claims the strongly
-connected component of the module's call graph that holds the template,
-computes the vector of every template in it, and stores them together.
-Every later consumer reads the done slot, and no cache entry stores a demand
-vector; a cache hit recomputes it on first demand. Each body is
-walked once into a base vector and a set of edges: a direct call or a
-dispatch that checking resolved to one procedure template relates each
-caller variable that the callee slot's checked substitution mentions to that
-slot's demand. An imported callee's vector is final and applies directly; a
-local one is an edge, and edges propagate to a fixed point, so recursion
-through any number of templates converges. A direct operand of a call or a
+A template's demand vector is a per-component on-demand analysis read
+through the module's dispatch reader (`CheckedDispatch.templateDemands`).
+The module's demand call graph is a per-module slot
+(`ModuleAnalyses.templateDemandGraph`): each body is walked once into a
+base vector and a set of edges, and the edges between the module's own
+templates are split into strongly connected components, numbered so every
+component's callee components come before it. A direct call or a dispatch
+that checking resolved to one procedure template relates each caller
+variable that the callee slot's checked substitution mentions to that
+slot's demand: fully where the mention needs the variable's exact type,
+and otherwise through an edge to the callee's slot, whether the callee is a
+template of the module or of a module dispatch resolution reads. Each
+component's vectors are a slot of their own: before it claims one, a
+consumer demands, holding no claim, every component the component reaches
+and every imported callee's vector, so the component's computation raises
+its base vectors along its edges to a fixed point reading only finished
+vectors, and recursion through any number of templates converges. No cache
+entry stores a demand vector; a cache hit recomputes it on first demand. A
+direct operand of a call or a
 low-level operation that reads a local materializes nothing; every other
 expression or pattern whose type mentions a variable demands its layout. A
 variable a parameter holds by value rather than as a `List` item or `Box` payload

@@ -47,7 +47,7 @@ fn expectDemands(source: []const u8, expected: []const struct { []const u8, []co
             std.debug.print("no template named {s}\n", .{name});
             return error.TestUnexpectedResult;
         };
-        std.testing.expectEqualSlices(Demand, demands, templates.templateDemands(template)) catch |err| {
+        std.testing.expectEqualSlices(Demand, demands, try artifact.dispatch().templateDemands(template.template_id)) catch |err| {
             std.debug.print("template {s}\n", .{name});
             return err;
         };

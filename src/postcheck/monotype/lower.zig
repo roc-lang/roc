@@ -14872,7 +14872,7 @@ const Builder = struct {
         defer resolution_profile.end();
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
-        const demands = view.templates.templateDemands(&template);
+        const demands = try view.dispatch.templateDemands(template_ref.template);
         if (demands.len != subst.len) Common.invariant("specialization substitution length differed from its template's demand vector");
         const types_ = &self.program.types;
         const name_store = &self.program.names;

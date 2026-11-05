@@ -13800,8 +13800,11 @@ pub const DispatchSource = struct {
     names: *canonical.CanonicalNameStore,
     types: DispatchTypes,
     module_index: *const ModuleIndex,
+    /// The module's body analyses, whose index `module_index` is.
+    body_analyses: *BodyAnalyses,
     method_registry: *const static_dispatch.MethodRegistry,
     templates: *const CheckedProcedureTemplateTable,
+    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     plans: *const static_dispatch.StaticDispatchPlanTable,
     refs: *const ResolvedValueRefTable,
     entry_wrappers: *const EntryWrapperTable,
@@ -13959,6 +13962,20 @@ pub const CheckedDispatch = struct {
     /// `solution` (an index into the module's solutions).
     pub fn platformRequirementRootEvidence(self: CheckedDispatch, solution: usize) Error!static_dispatch.EvidenceSpan {
         return (try self.analyses().platformRequirementRootEvidence(self)).spans[solution];
+    }
+
+    /// The module `key` names among the modules dispatch resolution reads.
+    pub fn importedView(self: CheckedDispatch, key: ModuleId) ?ImportedModuleView {
+        const imports = CheckedImportViews{ .current_owner = self.source.key.digest(), .direct = &.{}, .available = self.source.analyses.dispatch_imports };
+        return imports.viewForKey(key);
+    }
+
+    /// How much of each of template `template`'s quantified variables
+    /// (`SchemaView.vars`) its body demands, in slot order. Monotype
+    /// specializes the template over only this much of each variable's
+    /// substitution (design.md "Specialization By Demand").
+    pub fn templateDemands(self: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Error![]const SchemeVarDemand {
+        return self.analyses().templateDemands(self, template);
     }
 };
 /// Resolve every static-dispatch plan and instantiation-site obligation to an
@@ -18561,12 +18578,6 @@ pub const CheckedProcedureTemplate = struct {
     /// The `literal_argument` roots the template's body demands (a range
     /// into `CheckedProcedureTemplateTable.literal_argument_demand_pool`).
     literal_argument_demand: artifact_serialize.Span = .{},
-    /// How much of each scheme variable (`SchemaView.vars`) the body
-    /// demands, in the same
-    /// order (a range into `CheckedProcedureTemplateTable.demand_pool`).
-    /// Monotype specializes the template over only this much of each
-    /// variable's substitution (design.md "Specialization By Demand").
-    demands: artifact_serialize.Span = .{},
 };
 
 fn checkedTypeIsClosedTagRow(
@@ -18694,8 +18705,6 @@ pub const CheckedProcedureTemplateTable = struct {
     specialization_interface_relations: []SpecializationInterfaceRelation = &.{},
     /// Checked argument types backing call-relation spans.
     specialization_interface_types: []CheckedTypeId = &.{},
-    /// Flat pool backing each template's `demands` span.
-    demand_pool: []SchemeVarDemand = &.{},
 
     pub const Serialized = extern struct {
         templates: SerializedSlice(CheckedProcedureTemplate) = .{},
@@ -18713,7 +18722,6 @@ pub const CheckedProcedureTemplateTable = struct {
         dispatch_scopes: SerializedSlice(DispatchRefScope) = .{},
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
-        demand_pool: SerializedSlice(SchemeVarDemand) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -18978,12 +18986,6 @@ pub const CheckedProcedureTemplateTable = struct {
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-
-    /// How much of each of a template's quantified variables its body
-    /// demands, in slot order.
-    pub fn templateDemands(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const SchemeVarDemand {
-        return self.demand_pool[template.demands.start .. template.demands.start + template.demands.len];
-    }
 
     /// The template's literal requirements (design.md "Literal Arguments").
     pub fn templateLiteralRequirements(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const LiteralRequirement {
@@ -22538,16 +22540,16 @@ fn publishLiteralArgumentRoots(
         allocator.free(templates.literal_use_edges);
         templates.literal_use_edges = try use_edges.toOwnedSlice(allocator);
 
-        var demand_pool = std.ArrayListUnmanaged(ComptimeRootId).empty;
-        errdefer demand_pool.deinit(allocator);
+        var argument_demand_pool = std.ArrayListUnmanaged(ComptimeRootId).empty;
+        errdefer argument_demand_pool.deinit(allocator);
         for (templates.templates.items[0..template_count], demand) |*template, list| {
-            const start: u32 = @intCast(demand_pool.items.len);
+            const start: u32 = @intCast(argument_demand_pool.items.len);
             std.sort.pdq(ComptimeRootId, list.items, {}, comptimeRootIdLessThan);
-            try demand_pool.appendSlice(allocator, list.items);
-            template.literal_argument_demand = .{ .start = start, .len = @intCast(demand_pool.items.len - start) };
+            try argument_demand_pool.appendSlice(allocator, list.items);
+            template.literal_argument_demand = .{ .start = start, .len = @intCast(argument_demand_pool.items.len - start) };
         }
         allocator.free(templates.literal_argument_demand_pool);
-        templates.literal_argument_demand_pool = try demand_pool.toOwnedSlice(allocator);
+        templates.literal_argument_demand_pool = try argument_demand_pool.toOwnedSlice(allocator);
     }
 }
 
@@ -25314,28 +25316,264 @@ const TypeVarMentions = struct {
     }
 };
 
-/// Computes every local procedure template's demand vector: for each
-/// quantified variable of its scheme, the most its body asks of the type a
-/// specialization substitutes for it (design.md "Specialization By Demand").
-/// Each template body is walked once into a base vector and a set of edges
-/// to the templates it calls; the edges then propagate demand to a fixed
-/// point, so recursion through any number of templates converges.
-const TemplateDemandPass = struct {
+/// The demand of a caller's `caller_slot` is at least that of `callee_slot`
+/// of the template `callee` names.
+pub const TemplateDemandEdge = struct {
+    caller_slot: u32,
+    callee: TemplateDemandCallee,
+    callee_slot: u32,
+};
+
+/// The callee of a demand edge: a template of the module itself (its raw
+/// template id), or a template of a module dispatch resolution reads.
+pub const TemplateDemandCallee = union(enum) {
+    local: u32,
+    imported: canonical.ProcedureTemplateRef,
+};
+
+/// One strongly connected component's demand vectors, in the component's
+/// member order (`TemplateDemandGraph.componentMembers`).
+pub const TemplateDemandComponent = struct {
+    starts: []const u32,
+    demands: []const SchemeVarDemand,
+
+    pub fn member(self: *const TemplateDemandComponent, index: u32) []const SchemeVarDemand {
+        return self.demands[self.starts[index]..self.starts[index + 1]];
+    }
+
+    pub fn destroy(self: *TemplateDemandComponent, allocator: Allocator) void {
+        allocator.free(self.starts);
+        allocator.free(self.demands);
+        allocator.destroy(self);
+    }
+};
+
+/// The slot holding one component's demand vectors.
+pub const TemplateDemandComponentSlot = collections.OnceSlot(*TemplateDemandComponent, .module_template_demand);
+
+/// A module's demand call graph (`ModuleAnalyses.templateDemandGraph`):
+/// every template's demand vector as its own body sets it, the edges along
+/// which its callees' demands raise it, and the strongly connected
+/// components of the graph the local edges form, numbered callees first.
+/// Each component's vectors are a slot of their own.
+pub const TemplateDemandGraph = struct {
+    /// Template `t`'s vector before propagation:
+    /// `bases[base_starts[t]..base_starts[t + 1]]`.
+    base_starts: []const u32,
+    bases: []const SchemeVarDemand,
+    /// Template `t`'s edges: `edges[edge_starts[t]..edge_starts[t + 1]]`.
+    edge_starts: []const u32,
+    edges: []const TemplateDemandEdge,
+    /// Each template's component and its index among the component's members.
+    component_of: []const u32,
+    member_index: []const u32,
+    /// Component `c`'s templates, ascending:
+    /// `members[member_starts[c]..member_starts[c + 1]]`.
+    member_starts: []const u32,
+    members: []const u32,
+    /// Component `c`'s local callee components other than itself, each once:
+    /// `callees[callee_starts[c]..callee_starts[c + 1]]`.
+    callee_starts: []const u32,
+    callees: []const u32,
+    component_slots: []TemplateDemandComponentSlot,
+
+    pub fn base(self: *const TemplateDemandGraph, template: u32) []const SchemeVarDemand {
+        return self.bases[self.base_starts[template]..self.base_starts[template + 1]];
+    }
+
+    pub fn templateEdges(self: *const TemplateDemandGraph, template: u32) []const TemplateDemandEdge {
+        return self.edges[self.edge_starts[template]..self.edge_starts[template + 1]];
+    }
+
+    pub fn componentMembers(self: *const TemplateDemandGraph, component: u32) []const u32 {
+        return self.members[self.member_starts[component]..self.member_starts[component + 1]];
+    }
+
+    pub fn componentCallees(self: *const TemplateDemandGraph, component: u32) []const u32 {
+        return self.callees[self.callee_starts[component]..self.callee_starts[component + 1]];
+    }
+
+    pub fn destroy(self: *TemplateDemandGraph, allocator: Allocator) void {
+        for (self.component_slots) |*slot| if (slot.peek()) |result| result.destroy(allocator);
+        allocator.free(self.component_slots);
+        allocator.free(self.base_starts);
+        allocator.free(self.bases);
+        allocator.free(self.edge_starts);
+        allocator.free(self.edges);
+        allocator.free(self.component_of);
+        allocator.free(self.member_index);
+        allocator.free(self.member_starts);
+        allocator.free(self.members);
+        allocator.free(self.callee_starts);
+        allocator.free(self.callees);
+        allocator.destroy(self);
+    }
+};
+
+/// The reader over a module's bodies that its dispatch source describes.
+fn dispatchSourceBodies(source: DispatchSource) CheckedBodies {
+    var types_view = source.types.store.view();
+    types_view.names = source.names;
+    return .{
+        .env = source.env,
+        .names = source.names,
+        .types = types_view,
+        .analyses = source.body_analyses,
+        .tables = .{
+            .module = source.key.digest(),
+            .plans = source.plans,
+            .refs = source.refs,
+            .roots = source.compile_time_roots,
+            .pairing_types = source.types.pairing,
+            .dispatch = .{ .source = source },
+        },
+    };
+}
+
+/// The module's demand call graph: each template's body walked once into
+/// its own demand vector and the edges to the templates it calls.
+pub fn computeTemplateDemandGraph(allocator: Allocator, dispatch: CheckedDispatch) Allocator.Error!*TemplateDemandGraph {
+    const source = dispatch.source;
+    var pass = TemplateDemandWalk{
+        .allocator = allocator,
+        .artifact_key = source.key,
+        .checked_types = source.types.store,
+        .bodies = dispatchSourceBodies(source),
+        .templates = source.templates,
+        .resolved_value_refs = source.refs,
+        .top_level_procedure_bindings = source.top_level_procedure_bindings,
+        .static_dispatch_plans = source.plans,
+        .dispatch = dispatch,
+        .current_slots = collections.DenseMap(CheckedTypeId, u32).init(allocator),
+        .mentions = .{
+            .allocator = allocator,
+            .checked_types = source.types.store,
+            .memo = collections.DenseMap(CheckedTypeId, artifact_serialize.Span).init(allocator),
+            .found = collections.DenseMap(CheckedTypeId, TypeVarMentionFlags).init(allocator),
+        },
+    };
+    defer pass.deinit();
+    return pass.graph();
+}
+
+/// The demand vectors of the templates of component `component` of
+/// `graph`: their own vectors raised along their edges to a fixed point.
+/// Every callee component and every imported callee's vector is done
+/// before the component is claimed (`ModuleAnalyses.templateDemandComponent`).
+pub fn computeTemplateDemandComponent(
+    allocator: Allocator,
+    dispatch: CheckedDispatch,
+    graph: *const TemplateDemandGraph,
+    component: u32,
+) Allocator.Error!*TemplateDemandComponent {
+    const members = graph.componentMembers(component);
+    const starts = try allocator.alloc(u32, members.len + 1);
+    errdefer allocator.free(starts);
+    starts[0] = 0;
+    for (members, 0..) |template, index| starts[index + 1] = starts[index] + @as(u32, @intCast(graph.base(template).len));
+    const demands = try allocator.alloc(SchemeVarDemand, starts[members.len]);
+    errdefer allocator.free(demands);
+    for (members, 0..) |template, index| @memcpy(demands[starts[index]..starts[index + 1]], graph.base(template));
+
+    // The edges between members, grouped by callee, so a changed member
+    // revisits only its callers.
+    const by_callee_starts = try allocator.alloc(u32, members.len + 1);
+    defer allocator.free(by_callee_starts);
+    @memset(by_callee_starts, 0);
+    for (members) |template| for (graph.templateEdges(template)) |edge| switch (edge.callee) {
+        .local => |callee| if (graph.component_of[callee] == component) {
+            by_callee_starts[graph.member_index[callee] + 1] += 1;
+        },
+        .imported => {},
+    };
+    for (1..by_callee_starts.len) |index| by_callee_starts[index] += by_callee_starts[index - 1];
+    const InnerEdge = struct { caller: u32, edge: TemplateDemandEdge };
+    const by_callee = try allocator.alloc(InnerEdge, by_callee_starts[members.len]);
+    defer allocator.free(by_callee);
+    const cursor = try allocator.dupe(u32, by_callee_starts[0..members.len]);
+    defer allocator.free(cursor);
+
+    // Edges to templates outside the component read final vectors; raise
+    // along them once.
+    for (members, 0..) |template, index| {
+        const vector = demands[starts[index]..starts[index + 1]];
+        for (graph.templateEdges(template)) |edge| {
+            const callee_demand = switch (edge.callee) {
+                .local => |callee| blk: {
+                    const callee_component = graph.component_of[callee];
+                    if (callee_component == component) {
+                        const member = graph.member_index[callee];
+                        by_callee[cursor[member]] = .{ .caller = @intCast(index), .edge = edge };
+                        cursor[member] += 1;
+                        continue;
+                    }
+                    const done = graph.component_slots[callee_component].peek() orelse
+                        checkedArtifactInvariant("a demand component was computed before its callee component", .{});
+                    break :blk done.member(graph.member_index[callee])[edge.callee_slot];
+                },
+                .imported => |callee| (try importedTemplateDemands(dispatch, callee))[edge.callee_slot],
+            };
+            vector[edge.caller_slot] = maxSchemeVarDemand(vector[edge.caller_slot], callee_demand);
+        }
+    }
+
+    // Edges between members, to a fixed point. Demands only rise and each
+    // has three values, so every caller slot changes at most twice.
+    var queued = try std.DynamicBitSetUnmanaged.initFull(allocator, members.len);
+    defer queued.deinit(allocator);
+    var pending: std.ArrayList(u32) = .empty;
+    defer pending.deinit(allocator);
+    try pending.ensureTotalCapacity(allocator, members.len);
+    for (0..members.len) |index| pending.appendAssumeCapacity(@intCast(members.len - 1 - index));
+    while (pending.pop()) |callee| {
+        queued.unset(callee);
+        for (by_callee[by_callee_starts[callee]..by_callee_starts[callee + 1]]) |inner| {
+            const demand = demands[starts[callee] + inner.edge.callee_slot];
+            const caller_demand = &demands[starts[inner.caller] + inner.edge.caller_slot];
+            const raised = maxSchemeVarDemand(caller_demand.*, demand);
+            if (raised == caller_demand.*) continue;
+            caller_demand.* = raised;
+            if (!queued.isSet(inner.caller)) {
+                queued.set(inner.caller);
+                try pending.append(allocator, inner.caller);
+            }
+        }
+    }
+
+    const result = try allocator.create(TemplateDemandComponent);
+    result.* = .{ .starts = starts, .demands = demands };
+    return result;
+}
+
+/// The demand vector of a template of a module dispatch resolution reads.
+pub fn importedTemplateDemands(dispatch: CheckedDispatch, callee: canonical.ProcedureTemplateRef) Allocator.Error![]const SchemeVarDemand {
+    const view = dispatch.importedView(callee.artifact) orelse
+        checkedArtifactInvariant("a demand edge named a module dispatch resolution does not read", .{});
+    return view.dispatch().templateDemands(callee.template);
+}
+
+/// Walks every local procedure template's body into its own demand vector
+/// (for each quantified variable of its scheme, the most its body asks of
+/// the type a specialization substitutes for it; design.md "Specialization
+/// By Demand") and the edges to the templates it calls
+/// (`TemplateDemandGraph`).
+const TemplateDemandWalk = struct {
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
     checked_types: *const CheckedTypeStore,
     bodies: CheckedBodies,
-    templates: *CheckedProcedureTemplateTable,
+    templates: *const CheckedProcedureTemplateTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     dispatch: CheckedDispatch,
-    imports: CheckedImportViews,
 
     mentions: TypeVarMentions,
-    /// Every local template's vector, at the template's `demands` span.
+    /// Every template's own vector, at `base_starts`.
     demands: std.ArrayList(SchemeVarDemand) = .empty,
-    edges: std.ArrayList(Edge) = .empty,
+    base_starts: std.ArrayList(u32) = .empty,
+    edges: std.ArrayList(TemplateDemandEdge) = .empty,
+    edge_starts: std.ArrayList(u32) = .empty,
     work: std.ArrayList(Work) = .empty,
     imported_templates: std.AutoHashMapUnmanaged(ImportedDefKey, ?canonical.ProcedureTemplateRef) = .empty,
 
@@ -25353,15 +25591,6 @@ const TemplateDemandPass = struct {
     current_slots: collections.DenseMap(CheckedTypeId, u32),
     current_demands: []SchemeVarDemand = &.{},
 
-    /// The demand of the caller's `caller_slot` is at least that of the local
-    /// callee's `callee_slot`.
-    const Edge = struct {
-        caller: canonical.CheckedProcedureTemplateId,
-        caller_slot: u32,
-        callee: canonical.CheckedProcedureTemplateId,
-        callee_slot: u32,
-    };
-
     const ImportedDefKey = struct {
         artifact: ModuleId,
         def: CIR.Def.Idx,
@@ -25377,7 +25606,7 @@ const TemplateDemandPass = struct {
 
     /// The sink `TypeVarMentions.expandStep` drives during a raise walk.
     const RaiseSink = struct {
-        pass: *TemplateDemandPass,
+        pass: *TemplateDemandWalk,
         demand: SchemeVarDemand,
 
         pub fn push(sink: RaiseSink, ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
@@ -25416,39 +25645,189 @@ const TemplateDemandPass = struct {
         statement: CIR.Statement.Idx,
     };
 
-    fn deinit(self: *TemplateDemandPass) void {
+    fn deinit(self: *TemplateDemandWalk) void {
         self.mentions.deinit();
         self.current_slots.deinit();
         self.raised.deinit(self.allocator);
         self.raise_pending.deinit(self.allocator);
         self.demands.deinit(self.allocator);
+        self.base_starts.deinit(self.allocator);
         self.edges.deinit(self.allocator);
+        self.edge_starts.deinit(self.allocator);
         self.work.deinit(self.allocator);
         self.imported_templates.deinit(self.allocator);
     }
 
-    fn publish(self: *TemplateDemandPass) Allocator.Error!void {
+    fn graph(self: *TemplateDemandWalk) Allocator.Error!*TemplateDemandGraph {
+        const allocator = self.allocator;
         const templates = self.templates.templates.items;
-        for (templates, 0..) |*template, raw| {
+        try self.base_starts.ensureTotalCapacity(allocator, templates.len + 1);
+        for (0..templates.len) |raw| {
+            self.base_starts.appendAssumeCapacity(@intCast(self.demands.items.len));
             const vars = try self.dispatch.templateSchemeVars(@fromBackingInt(@intCast(raw)));
-            template.demands = .{ .start = @intCast(self.demands.items.len), .len = @intCast(vars.len) };
-            try self.demands.appendNTimes(self.allocator, .none, vars.len);
+            try self.demands.appendNTimes(allocator, .none, vars.len);
         }
+        self.base_starts.appendAssumeCapacity(@intCast(self.demands.items.len));
+        try self.edge_starts.ensureTotalCapacity(allocator, templates.len + 1);
         for (templates, 0..) |*template, raw| {
+            self.edge_starts.appendAssumeCapacity(@intCast(self.edges.items.len));
             self.current = @fromBackingInt(@intCast(raw));
             self.current_vars = try self.dispatch.templateSchemeVars(self.current);
             self.current_slots.clearRetainingCapacity();
             for (self.current_vars, 0..) |var_ty, slot| try self.current_slots.put(var_ty, @intCast(slot));
             self.raised.clearRetainingCapacity();
-            self.current_demands = self.demands.items[template.demands.start .. template.demands.start + template.demands.len];
+            self.current_demands = self.demands.items[self.base_starts.items[raw]..self.base_starts.items[raw + 1]];
             try self.analyzeTemplate(template);
         }
-        try self.propagate();
-        self.allocator.free(self.templates.demand_pool);
-        self.templates.demand_pool = try self.demands.toOwnedSlice(self.allocator);
+        self.edge_starts.appendAssumeCapacity(@intCast(self.edges.items.len));
+        return self.components();
     }
 
-    fn analyzeTemplate(self: *TemplateDemandPass, template: *const CheckedProcedureTemplate) Allocator.Error!void {
+    /// The strongly connected components of the local edges (Tarjan's
+    /// algorithm, iteratively), numbered as they complete, so every
+    /// component's callee components precede it.
+    fn components(self: *TemplateDemandWalk) Allocator.Error!*TemplateDemandGraph {
+        const allocator = self.allocator;
+        const count = self.edge_starts.items.len - 1;
+        const unvisited = std.math.maxInt(u32);
+        const order = try allocator.alloc(u32, count);
+        defer allocator.free(order);
+        @memset(order, unvisited);
+        const low = try allocator.alloc(u32, count);
+        defer allocator.free(low);
+        var on_stack = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
+        defer on_stack.deinit(allocator);
+        var stack: std.ArrayList(u32) = .empty;
+        defer stack.deinit(allocator);
+        const Frame = struct { template: u32, next_edge: u32 };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer frames.deinit(allocator);
+
+        const component_of = try allocator.alloc(u32, count);
+        errdefer allocator.free(component_of);
+        var members: std.ArrayList(u32) = .empty;
+        defer members.deinit(allocator);
+        var member_starts: std.ArrayList(u32) = .empty;
+        defer member_starts.deinit(allocator);
+        try member_starts.append(allocator, 0);
+        var next_order: u32 = 0;
+
+        for (0..count) |start| {
+            if (order[start] != unvisited) continue;
+            order[start] = next_order;
+            low[start] = next_order;
+            next_order += 1;
+            try stack.append(allocator, @intCast(start));
+            on_stack.set(start);
+            try frames.append(allocator, .{ .template = @intCast(start), .next_edge = self.edge_starts.items[start] });
+            while (frames.items.len != 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const template = frame.template;
+                if (frame.next_edge < self.edge_starts.items[template + 1]) {
+                    const edge = self.edges.items[frame.next_edge];
+                    frame.next_edge += 1;
+                    const callee = switch (edge.callee) {
+                        .local => |callee| callee,
+                        .imported => continue,
+                    };
+                    if (order[callee] == unvisited) {
+                        order[callee] = next_order;
+                        low[callee] = next_order;
+                        next_order += 1;
+                        try stack.append(allocator, callee);
+                        on_stack.set(callee);
+                        try frames.append(allocator, .{ .template = callee, .next_edge = self.edge_starts.items[callee] });
+                    } else if (on_stack.isSet(callee)) {
+                        low[template] = @min(low[template], order[callee]);
+                    }
+                    continue;
+                }
+                _ = frames.pop();
+                if (frames.items.len != 0) {
+                    const parent = frames.items[frames.items.len - 1].template;
+                    low[parent] = @min(low[parent], low[template]);
+                }
+                if (low[template] != order[template]) continue;
+                const component: u32 = @intCast(member_starts.items.len - 1);
+                const first = members.items.len;
+                while (stack.pop()) |member| {
+                    on_stack.unset(member);
+                    component_of[member] = component;
+                    try members.append(allocator, member);
+                    if (member == template) break;
+                }
+                std.mem.sort(u32, members.items[first..], {}, std.sort.asc(u32));
+                try member_starts.append(allocator, @intCast(members.items.len));
+            }
+        }
+
+        const component_count = member_starts.items.len - 1;
+        const member_index = try allocator.alloc(u32, count);
+        errdefer allocator.free(member_index);
+        for (0..component_count) |component| {
+            for (members.items[member_starts.items[component]..member_starts.items[component + 1]], 0..) |member, index| member_index[member] = @intCast(index);
+        }
+        var callees: std.ArrayList(u32) = .empty;
+        defer callees.deinit(allocator);
+        var callee_starts: std.ArrayList(u32) = .empty;
+        defer callee_starts.deinit(allocator);
+        try callee_starts.append(allocator, 0);
+        for (0..component_count) |component| {
+            const first = callees.items.len;
+            for (members.items[member_starts.items[component]..member_starts.items[component + 1]]) |member| {
+                for (self.edges.items[self.edge_starts.items[member]..self.edge_starts.items[member + 1]]) |edge| switch (edge.callee) {
+                    .local => |callee| if (component_of[callee] != component) try callees.append(allocator, component_of[callee]),
+                    .imported => {},
+                };
+            }
+            const added = callees.items[first..];
+            std.mem.sort(u32, added, {}, std.sort.asc(u32));
+            var kept: usize = 0;
+            for (added, 0..) |callee, index| {
+                if (index != 0 and added[index - 1] == callee) continue;
+                added[kept] = callee;
+                kept += 1;
+            }
+            callees.shrinkRetainingCapacity(first + kept);
+            try callee_starts.append(allocator, @intCast(callees.items.len));
+        }
+
+        const component_slots = try allocator.alloc(TemplateDemandComponentSlot, component_count);
+        errdefer allocator.free(component_slots);
+        @memset(component_slots, .empty);
+        const result = try allocator.create(TemplateDemandGraph);
+        errdefer allocator.destroy(result);
+        const base_starts = try self.base_starts.toOwnedSlice(allocator);
+        errdefer allocator.free(base_starts);
+        const bases = try self.demands.toOwnedSlice(allocator);
+        errdefer allocator.free(bases);
+        const edge_starts = try self.edge_starts.toOwnedSlice(allocator);
+        errdefer allocator.free(edge_starts);
+        const edges = try self.edges.toOwnedSlice(allocator);
+        errdefer allocator.free(edges);
+        const owned_member_starts = try member_starts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_member_starts);
+        const owned_members = try members.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_members);
+        const owned_callee_starts = try callee_starts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_callee_starts);
+        result.* = .{
+            .base_starts = base_starts,
+            .bases = bases,
+            .edge_starts = edge_starts,
+            .edges = edges,
+            .component_of = component_of,
+            .member_index = member_index,
+            .member_starts = owned_member_starts,
+            .members = owned_members,
+            .callee_starts = owned_callee_starts,
+            .callees = try callees.toOwnedSlice(allocator),
+            .component_slots = component_slots,
+        };
+        return result;
+    }
+
+    fn analyzeTemplate(self: *TemplateDemandWalk, template: *const CheckedProcedureTemplate) Allocator.Error!void {
         if (self.current_vars.len == 0) return;
         const root_expr = switch (template.body) {
             .checked_body => |root| root,
@@ -25518,7 +25897,7 @@ const TemplateDemandPass = struct {
     }
 
     /// The function type a template's root names, through aliases.
-    fn rootFunction(self: *const TemplateDemandPass, root: CheckedTypeId) ?CheckedFunctionType {
+    fn rootFunction(self: *const TemplateDemandWalk, root: CheckedTypeId) ?CheckedFunctionType {
         var current = root;
         var remaining = self.checked_types.typeCount();
         while (remaining != 0) : (remaining -= 1) {
@@ -25531,22 +25910,22 @@ const TemplateDemandPass = struct {
         checkedArtifactInvariant("procedure template root alias chain was cyclic", .{});
     }
 
-    fn noteRootMentions(self: *TemplateDemandPass, flags: []?TypeVarMentionFlags, ty: CheckedTypeId) Allocator.Error!void {
+    fn noteRootMentions(self: *TemplateDemandWalk, flags: []?TypeVarMentionFlags, ty: CheckedTypeId) Allocator.Error!void {
         for (try self.mentions.of(ty)) |mention| {
             const slot = self.slotOf(mention.var_ty) orelse continue;
             flags[slot] = if (flags[slot]) |existing| existing.merge(mention.flags) else mention.flags;
         }
     }
 
-    fn slotOf(self: *const TemplateDemandPass, var_ty: CheckedTypeId) ?usize {
+    fn slotOf(self: *const TemplateDemandWalk, var_ty: CheckedTypeId) ?usize {
         return if (self.current_slots.get(var_ty)) |slot| slot else null;
     }
 
-    fn raiseSlot(self: *TemplateDemandPass, slot: usize, demand: SchemeVarDemand) void {
+    fn raiseSlot(self: *TemplateDemandWalk, slot: usize, demand: SchemeVarDemand) void {
         self.current_demands[slot] = maxSchemeVarDemand(self.current_demands[slot], demand);
     }
 
-    fn raiseEverything(self: *TemplateDemandPass) void {
+    fn raiseEverything(self: *TemplateDemandWalk) void {
         @memset(self.current_demands, .full);
     }
 
@@ -25555,13 +25934,13 @@ const TemplateDemandPass = struct {
     /// skips every step an earlier raise in this template already walked at
     /// this demand, so the raises of one template cost the size of the types
     /// they reach, however many of its expressions share those types.
-    fn raiseMentions(self: *TemplateDemandPass, ty: CheckedTypeId, demand: SchemeVarDemand) Allocator.Error!void {
+    fn raiseMentions(self: *TemplateDemandWalk, ty: CheckedTypeId, demand: SchemeVarDemand) Allocator.Error!void {
         try self.pushRaise(.{ .step = .{ .ty = ty, .flags = .{ .outside_container = true } }, .demand = demand });
         const sink: RaiseSink = .{ .pass = self, .demand = demand };
         while (self.raise_pending.pop()) |raise| try TypeVarMentions.expandStep(self.checked_types, raise.step, sink);
     }
 
-    fn pushRaise(self: *TemplateDemandPass, raise: RaiseStep) Allocator.Error!void {
+    fn pushRaise(self: *TemplateDemandWalk, raise: RaiseStep) Allocator.Error!void {
         const entry = try self.raised.getOrPut(self.allocator, raise);
         if (entry.found_existing) return;
         try self.raise_pending.append(self.allocator, raise);
@@ -25576,23 +25955,23 @@ const TemplateDemandPass = struct {
 
     /// Raise every quantified variable whose exact type `ty` needs to `full`:
     /// a raise to `none` leaves every other mention as it is.
-    fn raiseFunctionMentions(self: *TemplateDemandPass, ty: CheckedTypeId) Allocator.Error!void {
+    fn raiseFunctionMentions(self: *TemplateDemandWalk, ty: CheckedTypeId) Allocator.Error!void {
         try self.raiseMentions(ty, .none);
     }
 
-    fn pushExpr(self: *TemplateDemandPass, id: CIR.Expr.Idx, role: ExprRole) Allocator.Error!void {
+    fn pushExpr(self: *TemplateDemandWalk, id: CIR.Expr.Idx, role: ExprRole) Allocator.Error!void {
         try self.work.append(self.allocator, .{ .expr = .{ .id = id, .role = role } });
     }
 
-    fn pushExprs(self: *TemplateDemandPass, ids: []const CIR.Expr.Idx, role: ExprRole) Allocator.Error!void {
+    fn pushExprs(self: *TemplateDemandWalk, ids: []const CIR.Expr.Idx, role: ExprRole) Allocator.Error!void {
         for (ids) |id| try self.pushExpr(id, role);
     }
 
-    fn pushPattern(self: *TemplateDemandPass, id: CIR.Pattern.Idx, role: PatternRole) Allocator.Error!void {
+    fn pushPattern(self: *TemplateDemandWalk, id: CIR.Pattern.Idx, role: PatternRole) Allocator.Error!void {
         try self.work.append(self.allocator, .{ .pattern = .{ .id = id, .role = role } });
     }
 
-    fn visitExpr(self: *TemplateDemandPass, id: CIR.Expr.Idx, role: ExprRole) Allocator.Error!void {
+    fn visitExpr(self: *TemplateDemandWalk, id: CIR.Expr.Idx, role: ExprRole) Allocator.Error!void {
         const bodies = self.bodies;
         const data = bodies.exprData(id);
         const ty = bodies.exprType(id);
@@ -25749,7 +26128,7 @@ const TemplateDemandPass = struct {
         }
     }
 
-    fn visitFor(self: *TemplateDemandPass, pattern: CIR.Pattern.Idx, iterable: CIR.Expr.Idx, body: CIR.Expr.Idx) Allocator.Error!void {
+    fn visitFor(self: *TemplateDemandWalk, pattern: CIR.Pattern.Idx, iterable: CIR.Expr.Idx, body: CIR.Expr.Idx) Allocator.Error!void {
         // Iteration dispatches on the iterable's type.
         try self.raiseMentions(self.bodies.valueType(iterable), .full);
         try self.raiseMentions(self.bodies.patternType(pattern), .full);
@@ -25758,7 +26137,7 @@ const TemplateDemandPass = struct {
         try self.pushExpr(body, .value);
     }
 
-    fn visitStatement(self: *TemplateDemandPass, id: CIR.Statement.Idx) Allocator.Error!void {
+    fn visitStatement(self: *TemplateDemandWalk, id: CIR.Statement.Idx) Allocator.Error!void {
         switch (self.bodies.statementData(id)) {
             .decl => |decl| {
                 try self.pushPattern(decl.pattern, .binding);
@@ -25801,7 +26180,7 @@ const TemplateDemandPass = struct {
         }
     }
 
-    fn visitPattern(self: *TemplateDemandPass, id: CIR.Pattern.Idx, role: PatternRole) Allocator.Error!void {
+    fn visitPattern(self: *TemplateDemandWalk, id: CIR.Pattern.Idx, role: PatternRole) Allocator.Error!void {
         const bodies = self.bodies;
         const pattern_ty = bodies.patternType(id);
         switch (bodies.patternData(id)) {
@@ -25851,13 +26230,13 @@ const TemplateDemandPass = struct {
 
     /// A custom literal pattern compares the matched value with its literal
     /// converted at the pattern's type: both inspect their dispatchers.
-    fn visitLiteralPatternGuard(self: *TemplateDemandPass, guard: checked_bodies_mod.LiteralPatternGuard) Allocator.Error!void {
+    fn visitLiteralPatternGuard(self: *TemplateDemandWalk, guard: checked_bodies_mod.LiteralPatternGuard) Allocator.Error!void {
         try self.raiseMentions(guard.equality_ty, .layout);
         try self.visitInspectingPlan(guard.equality_plan orelse return self.raiseEverything());
         if (guard.conversion.plan) |plan| try self.visitInspectingPlan(plan);
     }
 
-    fn visitCall(self: *TemplateDemandPass, call_expr: CIR.Expr.Idx, call: anytype) Allocator.Error!void {
+    fn visitCall(self: *TemplateDemandWalk, call_expr: CIR.Expr.Idx, call: anytype) Allocator.Error!void {
         if (self.bodies.callDirectTarget(call_expr)) |target| {
             if (try self.directCallTemplate(target)) |callee| {
                 if (try self.dispatch.siteSubstitution(call.func)) |subst| {
@@ -25879,7 +26258,7 @@ const TemplateDemandPass = struct {
     /// A dispatch whose checked resolution selected one procedure template
     /// behaves like a direct call to it; any other dispatch inspects its
     /// dispatcher.
-    fn visitDispatchPlan(self: *TemplateDemandPass, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+    fn visitDispatchPlan(self: *TemplateDemandWalk, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         const plan = try self.dispatch.plan(plan_id);
         if (try self.dispatchTemplate(plan)) |selected| {
             if (try self.relateCall(selected.template, selected.subst)) {
@@ -25892,14 +26271,14 @@ const TemplateDemandPass = struct {
         try self.pushPlanOperands(plan, .operand);
     }
 
-    fn visitInspectingPlan(self: *TemplateDemandPass, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+    fn visitInspectingPlan(self: *TemplateDemandWalk, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         const plan = try self.dispatch.plan(plan_id);
         try self.raiseMentions(plan.dispatcher_ty, .full);
         try self.raiseMentions(plan.callable_ty, .full);
         try self.pushPlanOperands(plan, .value);
     }
 
-    fn pushPlanOperands(self: *TemplateDemandPass, plan: static_dispatch.StaticDispatchCallPlan, role: ExprRole) Allocator.Error!void {
+    fn pushPlanOperands(self: *TemplateDemandWalk, plan: static_dispatch.StaticDispatchCallPlan, role: ExprRole) Allocator.Error!void {
         for (plan.argsSlice(self.static_dispatch_plans)) |operand| switch (operand) {
             .checked_expr => |expr| try self.pushExpr(expr, role),
             .generated_interpolation_segments => |expr| try self.pushExpr(expr, .value),
@@ -25912,7 +26291,7 @@ const TemplateDemandPass = struct {
         subst: []const CheckedTypeId,
     };
 
-    fn dispatchTemplate(self: *TemplateDemandPass, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!?SelectedTemplate {
+    fn dispatchTemplate(self: *TemplateDemandWalk, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!?SelectedTemplate {
         const direct = switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| direct,
             .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => return null,
@@ -25934,7 +26313,7 @@ const TemplateDemandPass = struct {
     }
 
     /// The checked template a direct call's target names, when it names one.
-    fn directCallTemplate(self: *TemplateDemandPass, target: ResolvedValueRefId) Allocator.Error!?canonical.ProcedureTemplateRef {
+    fn directCallTemplate(self: *TemplateDemandWalk, target: ResolvedValueRefId) Allocator.Error!?canonical.ProcedureTemplateRef {
         const procedure = switch (self.resolved_value_refs.records[@backingInt(target)].ref) {
             .top_level_proc, .imported_proc, .promoted_top_level_proc => |procedure| procedure,
             .local_param,
@@ -25964,10 +26343,10 @@ const TemplateDemandPass = struct {
         return directProcedureBindingTemplate(body);
     }
 
-    fn importedTemplate(self: *TemplateDemandPass, imported: ImportedProcedureBindingRef) Allocator.Error!?canonical.ProcedureTemplateRef {
+    fn importedTemplate(self: *TemplateDemandWalk, imported: ImportedProcedureBindingRef) Allocator.Error!?canonical.ProcedureTemplateRef {
         const key: ImportedDefKey = .{ .artifact = imported.artifact, .def = imported.def };
         if (self.imported_templates.get(key)) |cached| return cached;
-        const view = self.imports.viewForKey(imported.artifact) orelse return null;
+        const view = self.dispatch.importedView(imported.artifact) orelse return null;
         const template = if (importedProcedureBindingForDef(view, imported.def)) |binding|
             directProcedureBindingTemplate(binding.body)
         else
@@ -25988,81 +26367,33 @@ const TemplateDemandPass = struct {
 
     /// Relate a call to `callee` under `subst` (one caller type per callee
     /// quantified variable): every caller variable a slot's type mentions is
-    /// demanded at least as much as the callee demands that slot. False when
-    /// the callee's demand vector is not available to this module.
-    fn relateCall(self: *TemplateDemandPass, callee: canonical.ProcedureTemplateRef, subst: []const CheckedTypeId) Allocator.Error!bool {
-        if (callee.artifact.eql(self.artifact_key.digest())) {
-            if (subst.len != (try self.dispatch.templateSchemeVars(callee.template)).len) return false;
-            for (subst, 0..) |slot_ty, callee_slot| {
-                for (try self.mentions.of(slot_ty)) |mention| {
-                    const caller_slot = self.slotOf(mention.var_ty) orelse continue;
-                    if (exactMention(mention.flags)) {
-                        self.raiseSlot(caller_slot, .full);
-                        continue;
-                    }
-                    try self.edges.append(self.allocator, .{
-                        .caller = self.current,
-                        .caller_slot = @intCast(caller_slot),
-                        .callee = callee.template,
-                        .callee_slot = @intCast(callee_slot),
-                    });
+    /// demanded at least as much as the callee demands that slot, and fully
+    /// where the slot needs the variable's exact type. False when the callee
+    /// is not a template this module reads.
+    fn relateCall(self: *TemplateDemandWalk, callee: canonical.ProcedureTemplateRef, subst: []const CheckedTypeId) Allocator.Error!bool {
+        const local = callee.artifact.eql(self.artifact_key.digest());
+        const callee_vars = if (local)
+            try self.dispatch.templateSchemeVars(callee.template)
+        else blk: {
+            const view = self.dispatch.importedView(callee.artifact) orelse return false;
+            break :blk try view.dispatch().templateSchemeVars(callee.template);
+        };
+        if (subst.len != callee_vars.len) return false;
+        for (subst, 0..) |slot_ty, callee_slot| {
+            for (try self.mentions.of(slot_ty)) |mention| {
+                const caller_slot = self.slotOf(mention.var_ty) orelse continue;
+                if (exactMention(mention.flags)) {
+                    self.raiseSlot(caller_slot, .full);
+                    continue;
                 }
+                try self.edges.append(self.allocator, .{
+                    .caller_slot = @intCast(caller_slot),
+                    .callee = if (local) .{ .local = @backingInt(callee.template) } else .{ .imported = callee },
+                    .callee_slot = @intCast(callee_slot),
+                });
             }
-            return true;
         }
-        const view = self.imports.viewForKey(callee.artifact) orelse return false;
-        const callee_templates = view.checked_procedure_templates;
-        const callee_template = &callee_templates.templates.items[@backingInt(callee.template)];
-        const callee_demands = callee_templates.templateDemands(callee_template);
-        if (subst.len != callee_demands.len) return false;
-        for (subst, callee_demands) |slot_ty, demand| try self.raiseMentions(slot_ty, demand);
         return true;
-    }
-
-    /// Propagate local call edges to a fixed point. Demands only rise and
-    /// each has three values, so every caller slot changes at most twice.
-    fn propagate(self: *TemplateDemandPass) Allocator.Error!void {
-        if (self.edges.items.len == 0) return;
-        const templates = self.templates.templates.items;
-        // Edges grouped by callee, so a changed callee revisits only its callers.
-        const by_callee = try self.allocator.alloc(u32, self.edges.items.len);
-        defer self.allocator.free(by_callee);
-        const starts = try self.allocator.alloc(u32, templates.len + 1);
-        defer self.allocator.free(starts);
-        @memset(starts, 0);
-        for (self.edges.items) |edge| starts[@backingInt(edge.callee) + 1] += 1;
-        for (1..starts.len) |index| starts[index] += starts[index - 1];
-        const cursor = try self.allocator.dupe(u32, starts[0..templates.len]);
-        defer self.allocator.free(cursor);
-        for (self.edges.items, 0..) |edge, index| {
-            by_callee[cursor[@backingInt(edge.callee)]] = @intCast(index);
-            cursor[@backingInt(edge.callee)] += 1;
-        }
-
-        var queued = try std.DynamicBitSetUnmanaged.initFull(self.allocator, templates.len);
-        defer queued.deinit(self.allocator);
-        var pending: std.ArrayList(u32) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.ensureTotalCapacity(self.allocator, templates.len);
-        for (0..templates.len) |raw| pending.appendAssumeCapacity(@intCast(raw));
-        while (pending.pop()) |raw_callee| {
-            queued.unset(raw_callee);
-            for (by_callee[starts[raw_callee]..starts[raw_callee + 1]]) |edge_index| {
-                const edge = self.edges.items[edge_index];
-                const callee_template = templates[raw_callee];
-                const caller_template = templates[@backingInt(edge.caller)];
-                const demand = self.demands.items[callee_template.demands.start + edge.callee_slot];
-                const caller_demand = &self.demands.items[caller_template.demands.start + edge.caller_slot];
-                const raised = maxSchemeVarDemand(caller_demand.*, demand);
-                if (raised == caller_demand.*) continue;
-                caller_demand.* = raised;
-                const raw_caller = @backingInt(edge.caller);
-                if (!queued.isSet(raw_caller)) {
-                    queued.set(raw_caller);
-                    try pending.append(self.allocator, raw_caller);
-                }
-            }
-        }
     }
 };
 
@@ -30255,15 +30586,18 @@ pub const CheckedModuleArtifact = struct {
     pub fn dispatchSource(self: *const CheckedModuleArtifact) DispatchSource {
         const analyses = self.module_analyses orelse checkedArtifactInvariant("dispatch was read from an artifact without module analyses", .{});
         if (analyses.platform) |platform| return platform.dispatchSource();
+        const module_body_analyses = self.body_analyses orelse checkedArtifactInvariant("dispatch was read from an artifact without body analyses", .{});
         return .{
             .env = self.moduleEnvConst(),
             .module_idx = self.module_identity.module_idx,
             .key = self.key,
             .names = @constCast(&self.canonical_names),
             .types = .{ .store = @constCast(&self.checked_types), .pairing = if (self.pairing_types.images.len != 0) &self.pairing_types else null },
-            .module_index = &(self.body_analyses orelse checkedArtifactInvariant("dispatch was read from an artifact without body analyses", .{})).index,
+            .module_index = &module_body_analyses.index,
+            .body_analyses = module_body_analyses,
             .method_registry = &self.method_registry,
             .templates = &self.checked_procedure_templates,
+            .top_level_procedure_bindings = &self.top_level_procedure_bindings,
             .plans = &self.static_dispatch_plans,
             .refs = &self.resolved_value_refs,
             .entry_wrappers = &self.entry_wrappers,
@@ -30511,7 +30845,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 169);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 168);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -30635,7 +30969,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 116;
+    const serialized_layout_version: u32 = 117;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -33190,8 +33524,10 @@ pub fn publishFromTypedModule(
         .names = &canonical_names,
         .types = .{ .store = checked_types, .pairing = body_tables.pairing_types },
         .module_index = module_index,
+        .body_analyses = analyses,
         .method_registry = &method_registry,
         .templates = &checked_procedure_templates,
+        .top_level_procedure_bindings = &top_level_procedure_bindings,
         .plans = &static_dispatch_plans,
         .refs = &resolved_value_refs,
         .entry_wrappers = &entry_wrappers,
@@ -33229,29 +33565,6 @@ pub fn publishFromTypedModule(
         &top_level_procedure_bindings,
         &callable_eval_templates,
     );
-    {
-        var demand_pass = TemplateDemandPass{
-            .allocator = allocator,
-            .artifact_key = artifact_key,
-            .checked_types = checked_types,
-            .bodies = publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
-            .templates = &checked_procedure_templates,
-            .resolved_value_refs = &resolved_value_refs,
-            .top_level_procedure_bindings = &top_level_procedure_bindings,
-            .static_dispatch_plans = &static_dispatch_plans,
-            .dispatch = dispatch,
-            .imports = import_views,
-            .current_slots = collections.DenseMap(CheckedTypeId, u32).init(allocator),
-            .mentions = .{
-                .allocator = allocator,
-                .checked_types = checked_types,
-                .memo = collections.DenseMap(CheckedTypeId, artifact_serialize.Span).init(allocator),
-                .found = collections.DenseMap(CheckedTypeId, TypeVarMentionFlags).init(allocator),
-            },
-        };
-        defer demand_pass.deinit();
-        try demand_pass.publish();
-    }
 
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,

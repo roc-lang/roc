@@ -143,6 +143,11 @@ my @RULES = (
     { category => 'eager-single-source-calls', regex => qr/\bSingleSourceCalls\b/, allowed => {} },
     { category => 'eager-exhaustiveness-sites', regex => qr/\bpublishCheckedExhaustivenessSites\b/, allowed => {} },
     { category => 'eager-exhaustiveness-sites', regex => qr/\bexhaustivenessOwnerTemplateForSource\b/, allowed => {} },
+    # Template demand vectors are per-component slots of the module's
+    # analyses (`CheckedDispatch.templateDemands`). Nothing publishes them
+    # into the template table or the cache entry.
+    { category => 'eager-template-demand', regex => qr/\bTemplateDemandPass\b/, allowed => {} },
+    { category => 'eager-template-demand', regex => qr/\bdemand_pool\b/, allowed => {} },
     # Post-check code reads sealed solver stores through the checked type
     # reader and never writes one.
     {
