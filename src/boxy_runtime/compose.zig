@@ -419,13 +419,29 @@ pub fn scratchFree(comptime T: type, items: []T, ops: *RocOps) void {
 
 threadlocal var scratch_arena: ?std.heap.ArenaAllocator = null;
 threadlocal var scratch_live: usize = 0;
+threadlocal var scratch_depth: usize = 0;
 
-/// The current thread has completed its in-process composition scope.
+pub fn enterScratchScope() void {
+    if (comptime experiment.pool and builtins.host_abi.host_role != .platform) scratch_depth += 1;
+}
+
+pub fn leaveScratchScope() void {
+    if (comptime experiment.pool and builtins.host_abi.host_role != .platform) {
+        std.debug.assert(scratch_depth != 0);
+        scratch_depth -= 1;
+        releaseScratchPool();
+    }
+}
+
+/// Nested executions share the thread's scratch lifetime. At the outermost
+/// boundary no scratch escapes, including temporaries abandoned by a caught
+/// Roc crash that longjmp'd past their operation's cleanup.
 pub fn releaseScratchPool() void {
     if (comptime experiment.pool and builtins.host_abi.host_role != .platform) {
-        std.debug.assert(scratch_live == 0);
+        if (scratch_depth != 0) return;
         if (scratch_arena) |*arena| arena.deinit();
         scratch_arena = null;
+        scratch_live = 0;
     }
 }
 

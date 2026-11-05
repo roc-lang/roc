@@ -902,6 +902,7 @@ pub const InProcessState = struct {
     /// enters, runs, and leaves, restoring the outer one.
     pub fn enter(self: *InProcessState) Entered {
         comptime assertInProcess("enter");
+        compose.enterScratchScope();
         const entered = Entered{ .saved = current_state };
         current_state = self;
         return entered;
@@ -910,7 +911,7 @@ pub const InProcessState = struct {
     /// Restore what `enter` displaced.
     pub fn leave(entered: Entered) void {
         comptime assertInProcess("leave");
-        compose.releaseScratchPool();
+        compose.leaveScratchScope();
         current_state = entered.saved;
     }
 
