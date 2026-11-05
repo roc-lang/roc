@@ -9380,8 +9380,8 @@ test "literal conversion ownership includes nested codec evidence" {
             const expr_id: check.CheckedBodies.ExprId = @fromBackingInt(@intCast(raw));
             const raw_expr = @backingInt(expr_id);
             const plan_id, const conversion_root = switch (bodies.exprData(expr_id)) {
-                .numeral => .{ bodies.numeralPlan(raw_expr) orelse continue, bodies.literalConversionRoot(raw_expr) },
-                .str => if (bodies.quoteIsCustom(raw_expr)) .{ bodies.quotePlan(raw_expr) orelse continue, bodies.literalConversionRoot(raw_expr) } else continue,
+                .numeral => .{ bodies.numeralPlan(raw_expr) orelse continue, try bodies.literalConversionRoot(raw_expr) },
+                .str => if (bodies.quoteIsCustom(raw_expr)) .{ bodies.quotePlan(raw_expr) orelse continue, try bodies.literalConversionRoot(raw_expr) } else continue,
                 .str_segment,
                 .bytes_literal,
                 .lookup_local,
@@ -9472,8 +9472,8 @@ test "custom literal field default gets an ordinary conversion root" {
     var quote_roots: usize = 0;
     const bodies = resources.checked_artifact.bodies();
     for (bodies.defaultExprs()) |default_expr| {
-        const conversion = (try resources.checked_artifact.compileTimeRoot(bodies.literalConversion(default_expr).conversion_root orelse
-            return error.TestUnexpectedResult));
+        const conversion = try resources.checked_artifact.compileTimeRoot((try bodies.literalConversionRoot(default_expr)) orelse
+            return error.TestUnexpectedResult);
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,

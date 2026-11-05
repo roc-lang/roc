@@ -2549,7 +2549,7 @@ pub fn exportedProcedureRoots(
         // pack root must have a checked body of its own.
         switch (checked_template.body) {
             .checked_body => {},
-            .intrinsic_wrapper, .entry_wrapper, .unimplemented => continue,
+            .intrinsic_wrapper, .entry_wrapper, .literal_root, .unimplemented => continue,
         }
         // Only a Roc procedure has code of its own to cache: a hosted
         // function's callers reach the host directly, and the other targets
@@ -9655,6 +9655,7 @@ test "body analyses read state merges, divergence and inspect elision from the c
 
     const analyses = try BodyAnalyses.create(allocator, std.testing.io, module.moduleEnvConst(), &.{});
     defer analyses.destroy();
+    analyses.markPublished();
     const publication_keys = try SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
     defer publication_keys.destroy();
     var checked_type_publication = try CheckedTypeStore.fromModule(
@@ -9738,6 +9739,7 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
 
     const analyses = try BodyAnalyses.create(allocator, std.testing.io, module.moduleEnvConst(), &.{});
     defer analyses.destroy();
+    analyses.markPublished();
     const publication_keys = try SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
     defer publication_keys.destroy();
     var checked_type_publication = try CheckedTypeStore.fromModule(
@@ -10457,6 +10459,7 @@ const TestImportViewTables = struct {
     ) Allocator.Error!ImportedModuleView {
         const checked_types = store.view();
         const analyses = try BodyAnalyses.create(self.allocator, std.testing.io, module_env, &.{});
+        analyses.markPublished();
         {
             errdefer analyses.destroy();
             try self.analyses.append(self.allocator, analyses);
@@ -21952,12 +21955,14 @@ pub fn computeUnitLiteralConversions(allocator: Allocator, dispatch: CheckedDisp
             .relation = undefined, // Set below from the created function type.
         };
     }
-    store.beginCreation(source.analyses.io);
-    for (records) |*record| {
-        record.checked_fn_root = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{}, record.root.checked_type);
-        record.checked_fn_scheme = try store.ensureSchemeForRoot(allocator, record.checked_fn_root);
+    {
+        store.beginCreation(source.analyses.io);
+        defer store.endCreation(source.analyses.io);
+        for (records) |*record| {
+            record.checked_fn_root = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{}, record.root.checked_type);
+            record.checked_fn_scheme = try store.ensureSchemeForRoot(allocator, record.checked_fn_root);
+        }
     }
-    store.endCreation(source.analyses.io);
     for (records) |*record| record.relation = literalRootWrapperRelation(record.checked_fn_root, record.root.checked_type);
     const result = try allocator.create(UnitLiteralConversions);
     result.* = .{ .nodes = nodes, .records = records };
@@ -23116,26 +23121,28 @@ pub fn computeLiteralComponent(
     // Read the nominal representations of every module whose types the
     // creations below copy before taking the creation lock.
     try demandLiteralCapabilities(dispatch, modules.items);
-    store.beginCreation(io);
-    for (edge_states.items) |*state| {
-        if (state.alias_steps.items.len != 0) {
-            const composed = try composeLiteralAliasChain(allocator, store, names, state.subst, state.alias_steps.items);
-            state.owned_subst = composed;
-            state.subst = composed;
-        }
-        state.formals = try allocator.alloc(CheckedTypeId, state.callee.vars.len);
-        if (state.callee.module) |view| {
-            const projector = try allocator.create(CheckedTypeStoreImportProjector);
-            projector.* = CheckedTypeStoreImportProjector.init(allocator, store, names, view);
-            state.projector = projector;
-            for (state.callee.vars, state.formals) |variable, *out| out.* = try projector.project(variable);
-        } else @memcpy(state.formals, state.callee.vars);
-        if (state.subst.len != 0) {
-            if (state.subst.len != state.formals.len) checkedArtifactInvariant("an edge's substitution differs from its callee's scheme", .{});
-            state.substitution = CheckedTypeSubstitution.init(allocator, state.formals, state.subst);
+    {
+        store.beginCreation(io);
+        defer store.endCreation(io);
+        for (edge_states.items) |*state| {
+            if (state.alias_steps.items.len != 0) {
+                const composed = try composeLiteralAliasChain(allocator, store, names, state.subst, state.alias_steps.items);
+                state.owned_subst = composed;
+                state.subst = composed;
+            }
+            state.formals = try allocator.alloc(CheckedTypeId, state.callee.vars.len);
+            if (state.callee.module) |view| {
+                const projector = try allocator.create(CheckedTypeStoreImportProjector);
+                projector.* = CheckedTypeStoreImportProjector.init(allocator, store, names, view);
+                state.projector = projector;
+                for (state.callee.vars, state.formals) |variable, *out| out.* = try projector.project(variable);
+            } else @memcpy(state.formals, state.callee.vars);
+            if (state.subst.len != 0) {
+                if (state.subst.len != state.formals.len) checkedArtifactInvariant("an edge's substitution differs from its callee's scheme", .{});
+                state.substitution = CheckedTypeSubstitution.init(allocator, state.formals, state.subst);
+            }
         }
     }
-    store.endCreation(io);
 
     const NewRoot = struct { id: ComptimeRootId, site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, owner_expr: CIR.Expr.Idx };
     var new_roots: std.ArrayListUnmanaged(NewRoot) = .empty;
@@ -23153,10 +23160,12 @@ pub fn computeLiteralComponent(
             // A self-recursive edge appends to the list it instantiates.
             while (j < literalCalleeRequirements(callee, &states).len) : (j += 1) {
                 const obligation = literalCalleeRequirements(callee, &states)[j];
-                store.beginCreation(io);
-                const projected = if (state.projector) |projector| try projector.project(obligation.ty) else obligation.ty;
-                const ty = if (state.substitution) |*substitution| try store.cloneCheckedTypeRootSubstituting(allocator, projected, substitution) else projected;
-                store.endCreation(io);
+                const ty = created: {
+                    store.beginCreation(io);
+                    defer store.endCreation(io);
+                    const projected = if (state.projector) |projector| try projector.project(obligation.ty) else obligation.ty;
+                    break :created if (state.substitution) |*substitution| try store.cloneCheckedTypeRootSubstituting(allocator, projected, substitution) else projected;
+                };
                 const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, &orderer, ty) };
                 if (!try store.rootContainsIdentityVariables(ty)) {
                     const slot = try root_index.getOrPut(allocator, key);
@@ -23266,12 +23275,14 @@ pub fn computeLiteralComponent(
             .relation = undefined, // Set below from the created function type.
         };
     }
-    store.beginCreation(io);
-    for (roots) |*record| {
-        record.checked_fn_root = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{}, record.root.checked_type);
-        record.checked_fn_scheme = try store.ensureSchemeForRoot(allocator, record.checked_fn_root);
+    {
+        store.beginCreation(io);
+        defer store.endCreation(io);
+        for (roots) |*record| {
+            record.checked_fn_root = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{}, record.root.checked_type);
+            record.checked_fn_scheme = try store.ensureSchemeForRoot(allocator, record.checked_fn_root);
+        }
     }
-    store.endCreation(io);
     for (roots) |*record| record.relation = literalRootWrapperRelation(record.checked_fn_root, record.root.checked_type);
 
     const owned_scope_keys = try scope_keys.toOwnedSlice(allocator);
@@ -31874,7 +31885,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 117;
+    const serialized_layout_version: u32 = 118;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -34029,7 +34040,10 @@ pub fn publishFromTypedModule(
     const idents = module.identStoreConst();
 
     var canonical_names = canonical.CanonicalNameStore.init(allocator);
-    errdefer canonical_names.deinit();
+    // The artifact owns the name store and the type store once it is formed:
+    // its slots grow them from then on.
+    var stores_moved = false;
+    errdefer if (!stores_moved) canonical_names.deinit();
     const module_name = try canonical_names.internModuleName(module_env.module_name);
     const display_module_name = try canonical_names.internModuleIdent(idents, module_env.display_module_name_idx);
     const module_identity = ModuleIdentity{
@@ -34113,7 +34127,7 @@ pub fn publishFromTypedModule(
     errdefer if (sealed_keys_owned) sealed_keys.destroy();
     var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key.digest(), inputs.imports, inputs.available_artifacts, module_index, selected_hoisted_roots, promoted_local_procedures, sealed_keys);
     defer checked_type_publication.deinitIndex(allocator);
-    errdefer checked_type_publication.store.deinit(allocator);
+    errdefer if (!stores_moved) checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
     const requires = try publishRequiresMetadata(allocator, module, &canonical_names, &checked_type_publication);
     errdefer allocator.free(requires);
@@ -34503,9 +34517,16 @@ pub fn publishFromTypedModule(
     // analyses intern into them, exactly as they read its types.
     artifact.canonical_names.markPublished();
     artifact.attachCapabilitySource();
+    stores_moved = true;
+    errdefer {
+        if (artifact.checked_types.sealed_keys) |keys| keys.destroy();
+        artifact.checked_types.deinit(allocator);
+        artifact.canonical_names.deinit();
+    }
     artifact.finishPublication();
     checked_const_store = ConstStore.init(allocator);
     errdefer artifact.const_store.deinit();
+    errdefer artifact.literal_root_payloads.deinit(allocator);
 
     if (inputs.evaluation_phase == .immediate) {
         try inputs.compile_time_finalizer.run(
@@ -34591,11 +34612,11 @@ fn expectProvidedExportKind(
     defer artifact.deinitRetainingModuleEnv(allocator);
 
     var provided_runtime_roots: usize = 0;
-    for (artifact.root_requests.runtime_requests) |root| {
+    for ((try artifact.rootRequests()).runtime_requests) |root| {
         if (root.kind == .provided_export) provided_runtime_roots += 1;
     }
     var deferred_procedure_roots: usize = 0;
-    for (artifact.root_requests.requests) |root| {
+    for ((try artifact.rootRequests()).requests) |root| {
         if (root.kind == .provided_export and root.requires_pairing) deferred_procedure_roots += 1;
     }
     try std.testing.expectEqual(expected.deferred_procedure_roots, deferred_procedure_roots);
@@ -34684,7 +34705,7 @@ test "checked module owns post-check inputs at the checked boundary" {
     try std.testing.expect(@hasField(CheckedModuleArtifact, "intrinsic_wrappers"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_procedure_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "callable_eval_templates"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "root_requests"));
+    try std.testing.expect(!@hasField(CheckedModuleArtifact, "root_requests"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "hosted_procs"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "hosted_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_declarations"));
@@ -35152,7 +35173,6 @@ test "relation projection preserves anonymous row identity and provenance" {
         .checked_procedure_templates = .{},
         .intrinsic_wrappers = .{},
         .top_level_procedure_bindings = .{},
-        .root_requests = .{},
         .hosted_procs = .{},
         .platform_required_declarations = .{},
         .platform_required_bindings = .{},
@@ -35403,7 +35423,6 @@ test "artifact views are read-only projections" {
         .checked_procedure_templates = .{},
         .intrinsic_wrappers = .{},
         .top_level_procedure_bindings = .{},
-        .root_requests = .{},
         .hosted_procs = .{},
         .platform_required_declarations = .{},
         .platform_required_bindings = .{},
@@ -35422,9 +35441,7 @@ test "artifact views are read-only projections" {
     }
 
     const imported = importedView(&artifact);
-    const lowering = try loweringView(&artifact);
     try std.testing.expect(imported.exports.defs.ptr == artifact.exports.defs.ptr);
-    try std.testing.expect(lowering.roots == try artifact.rootRequests());
 }
 
 // Round-trip tests for transform-A sub-stores (POD-element slices). Each store
@@ -35448,6 +35465,8 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestEr
     inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
         // A nested store round-trips through its own `Serialized` form.
         if (comptime isNestedStoreField(@FieldType(Store, field_name))) continue;
+        // A scalar field is written inline, with no buffer to round-trip.
+        if (comptime @typeInfo(@FieldType(Store, field_name)) == .@"enum") continue;
         const slice = comptime isSliceField(@FieldType(Store, field_name));
         const Elem = std.meta.Child(if (slice) @FieldType(Store, field_name) else @FieldType(@FieldType(Store, field_name), "items"));
         // Give lists spare capacity to prove serialization only writes live rows.
@@ -35459,7 +35478,7 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestEr
     defer inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
         if (comptime isSliceField(@FieldType(Store, field_name))) {
             gpa.free(@field(store, field_name));
-        } else {
+        } else if (comptime @typeInfo(@FieldType(Store, field_name)) != .@"enum") {
             @field(store, field_name).deinit(gpa);
         }
     };
@@ -35468,6 +35487,8 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestEr
     defer gpa.free(rt.buffer);
     inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
         if (comptime isNestedStoreField(@FieldType(Store, field_name))) continue;
+        // A scalar field is written inline, with no buffer to round-trip.
+        if (comptime @typeInfo(@FieldType(Store, field_name)) == .@"enum") continue;
         const slice = comptime isSliceField(@FieldType(Store, field_name));
         const before = if (slice) @field(store, field_name) else @field(store, field_name).items;
         const after = if (slice) @field(rt.loaded, field_name) else @field(rt.loaded, field_name).items;
@@ -35510,6 +35531,7 @@ fn testPublishedModuleAnalyses(allocator: Allocator, dependencies: PublicApiDepe
 
     const analyses = try ModuleAnalyses.create(allocator, std.testing.io, null);
     errdefer analyses.destroy();
+    analyses.markPublished();
     const published = try allocator.create(PublicApiDependencies);
     errdefer allocator.destroy(published);
     const artifacts = try allocator.dupe(ModuleId, dependencies.artifacts);
@@ -35625,13 +35647,16 @@ test "lowering visibility follows recursive public API and type-owner dependenci
     };
 
     const checked_types = CheckedTypeStore{};
-    const root_requests = RootRequestTable{};
+    // The owner's root requests are empty.
+    const root_requests = try gpa.create(RootRequestTable);
+    root_requests.* = .{};
+    std.debug.assert(analyses[0].root_requests.acquire(std.testing.io) == .claimed);
+    analyses[0].root_requests.publish(std.testing.io, root_requests);
     const platform_required_bindings = PlatformRequiredBindingTable{};
     const direct_imports = [_]CheckedModuleArtifactKey{ key_d, key_a, key_a, key_builtin };
     var owner = testVisibilityImportedView(root_key, &env_root, analyses[0]);
     owner.direct_import_module_keys = &direct_imports;
     owner.checked_types = checked_types.view();
-    owner.root_requests = &root_requests;
     owner.platform_required_bindings = &platform_required_bindings;
     owner.exported_procedure_templates = .{};
     owner.exported_procedure_bindings = .{};
@@ -35989,7 +36014,6 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
         .top_level_procedure_bindings = .{},
-        .root_requests = .{},
         .hosted_procs = .{},
         .platform_required_declarations = .{},
         .platform_required_bindings = .{},
@@ -36110,8 +36134,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xA8, 0x49, 0xCE, 0xC2, 0x08, 0x18, 0xBC, 0x2E, 0xD9, 0x87, 0xE2, 0x29, 0x95, 0x72, 0x1B, 0xA2,
-        0xF8, 0xAF, 0xA4, 0xFD, 0xB2, 0x14, 0x47, 0x59, 0x83, 0xE5, 0xD6, 0x13, 0x5F, 0x7E, 0xCC, 0xF9,
+        0x80, 0x76, 0x06, 0x44, 0x82, 0x74, 0xEC, 0xC9, 0x1D, 0x7D, 0x98, 0x42, 0xDA, 0x7C, 0x60, 0x49,
+        0x0F, 0xDC, 0x26, 0x8B, 0x63, 0xCD, 0x8D, 0xDE, 0xED, 0x8E, 0xA5, 0xFA, 0x17, 0x31, 0xA8, 0xB5,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -36226,7 +36250,7 @@ test "publishing a module releases each resource exactly once under allocation f
             _: []const ImportedModuleView,
             _: ?*problem.Store,
         ) CompileTimeFinalizer.Error!void {
-            std.debug.assert(artifact.root_requests.requests.len == 0);
+            std.debug.assert((try artifact.rootRequests()).requests.len == 0);
         }
     };
     const finalizer = CompileTimeFinalizer{ .finalize = &NoRoots.finalize };
