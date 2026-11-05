@@ -7069,9 +7069,11 @@ pub const Builder = struct {
             const owner = self.program.module(key.module);
             const template = owner.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
             if (template.provided_low_level) |op| {
-                try self.emitLowLevelCall(op, explicit, ret, arg_types);
-                const value = self.popValue();
-                return try self.pushValue(try self.adaptValue(value, ret, result_ty));
+                if (worker.scheme_vars.len == 0 or op == .list_len) {
+                    try self.emitLowLevelCall(op, explicit, ret, arg_types);
+                    const value = self.popValue();
+                    return try self.pushValue(try self.adaptValue(value, ret, result_ty));
+                }
             }
         }
         const passed = try self.callDescriptorArgs(callee, bound);
