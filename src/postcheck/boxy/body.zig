@@ -4522,7 +4522,7 @@ pub const Builder = struct {
         defer self.allocator.free(values);
         const declared = self.declared_captures.get(lambda_expr);
         for (per_call_worker.captures, values, 0..) |capture, *value, index| {
-            value.* = if (declared) |captured| captured[index] else self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is used");
+            value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
         }
         const declaring_dicts = scope.dicts.len;
         const descs = try self.allocator.alloc(LocalId, vars.len);
@@ -4644,7 +4644,7 @@ pub const Builder = struct {
     /// `closure_expr`, capturing `captures`) declared in `outer`'s body,
     /// created now when that body was never lowered here: it ran at compile
     /// time, and a closure it built was stored.
-    fn declaredLambdaWorker(self: *Builder, outer: WorkerId, lambda_expr: CheckedExprId, closure_ty: checked.CheckedTypeId, captures: []const checked.CheckedCapture, chain: bool) Allocator.Error!WorkerId {
+    fn declaredLambdaWorker(self: *Builder, outer: WorkerId, lambda_expr: CheckedExprId, closure_ty: checked.CheckedTypeId, captures: []const checked.CheckedCapture) Allocator.Error!WorkerId {
         const scope = self.program.worker(outer).*;
         const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr })) |scope_id| blk: {
             const scheme = try self.localScheme(scope_id);
@@ -4659,7 +4659,6 @@ pub const Builder = struct {
         const fn_ty = try self.program.converter().convert(self.module, closure_ty, env);
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
-        if (!chain and captures.len != 0) invariant("a local procedure built from a declaration context captures values");
         for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.capturedType(capture.pattern, try self.program.converter().convert(self.module, self.bodies().pattern(capture.pattern).ty, env));
         return try self.program.lambdaWorker(outer, lambda_expr, captures, capture_types, fn_ty, own);
     }
@@ -4686,7 +4685,7 @@ pub const Builder = struct {
                     // its declaration here: the chain is a stored closure
                     // of that procedure, whose body ran at compile time.
                     .template => if (self.localProcOwner(lambda_expr) == scope_worker)
-                        break try self.declaredLambdaWorker(scope_worker, lambda_expr, closure_expr.ty, captures, true)
+                        break try self.declaredLambdaWorker(scope_worker, lambda_expr, closure_expr.ty, captures)
                     else
                         invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
                     .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
@@ -4709,13 +4708,14 @@ pub const Builder = struct {
         };
         // A procedure built from a declaration context is a method of a type
         // its callee's body declares, outside every generalized local other
-        // than its own scheme's, and methods capture no values.
+        // than its own scheme's. What it captures are the other local
+        // procedures of that body it refers to (`localProcCaptureValue`).
         switch (self.view.view.nested_proc_sites.sites[self.program.sites_by_expr.get(.{ .module = self.module, .expr = lambda_expr }).?].lexical_scope) {
             .root => {},
             .generalized => |scope_id| if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }) != scope_id)
                 invariant("a local procedure built from a declaration context is declared in a generalized local"),
         }
-        const worker = try self.declaredLambdaWorker(context.worker, lambda_expr, closure_expr.ty, captures, false);
+        const worker = try self.declaredLambdaWorker(context.worker, lambda_expr, closure_expr.ty, captures);
         const dicts = try self.program.arena.allocator().alloc(LocalId, context.dicts.len);
         for (dicts, 0..) |*dict, slot| dict.* = (try self.declarationDictionary(context, slot)) orelse try self.nullWord();
         const words = try self.declarationWords(context);
@@ -4728,6 +4728,25 @@ pub const Builder = struct {
             .literals = words.literals,
             .declaration = context,
         };
+    }
+
+    /// What a function value of a local procedure captures for `capture`:
+    /// the value its declaration captured (`declared`), when this body
+    /// declared it; built from the declaration context `declaration`, the
+    /// function value of the other local procedure of the callee's body it
+    /// names, built from the same context, since a method of a type declared
+    /// in a function body captures only the local procedures it refers to;
+    /// otherwise the value visible here.
+    fn localProcCaptureValue(self: *Builder, capture: checked.CheckedCapture, declared: ?LocalId, declaration: ?*Declaration) Allocator.Error!LocalId {
+        if (declared) |value| return value;
+        if (declaration != null) {
+            const binder = self.bodies().pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
+                invariant("a closure capture named a pattern without a binder");
+            const local = self.program.local_proc_bindings.get(.{ .module = self.module, .binder = binder }) orelse
+                invariant("a local procedure built from a declaration context captures a value that is not a local procedure");
+            return try self.localProcValue(local);
+        }
+        return self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is used");
     }
 
     /// The type a callable captures `pattern`'s binder at: its value's type
@@ -4864,7 +4883,7 @@ pub const Builder = struct {
         defer self.allocator.free(values);
         const declared = self.declared_captures.get(target_worker.key.lambda.expr);
         for (target_worker.captures, values, 0..) |capture, *value, index| {
-            value.* = if (declared) |captured| captured[index] else self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is referenced");
+            value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
         }
         const descs = scope.descs;
         const dicts = try std.mem.concat(self.program.arena.allocator(), LocalId, &.{ scope.dicts, scope.literals });

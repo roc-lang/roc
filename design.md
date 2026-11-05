@@ -6925,7 +6925,10 @@ in that instance's declaration context, since a caller-supplied codec
 requirement of the callee's scheme calls the callee's local procedures. The
 procedure's worker is then a lambda of the callee's procedure worker,
 capturing the instance's words; a procedure with its own scheme resolves its
-own dictionaries in the callee's scope. A body building the dictionaries of a
+own dictionaries in the callee's scope. A method captures no value of its
+body other than the body's local procedures it refers to (a sibling method
+it calls), and built from a declaration context each of those is itself
+built from the same context. A body building the dictionaries of a
 call of its own procedure builds its own local procedures from its worker
 chain, since they are this body's values. Restoring a stored generated runtime builds
 those values in the declaration context of the instance of the stored value's
