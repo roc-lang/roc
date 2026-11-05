@@ -438,14 +438,10 @@ const StaticInitializerMachine = struct {
     /// input holds.
     fn constStoreOf(self: *const StaticInitializerMachine, module: Checked.ModuleId) *const Checked.ConstStore {
         const root = self.modules.root orelse staticDataInvariant("stored static data had no root checked module");
-        if (std.mem.eql(u8, &root.module.key.bytes, &module.bytes)) return &root.module.const_store;
-        for (root.relation_modules) |view| {
-            if (std.mem.eql(u8, &view.key.bytes, &module.bytes)) return view.const_store;
-        }
-        for (self.modules.imports) |view| {
-            if (std.mem.eql(u8, &view.key.bytes, &module.bytes)) return view.const_store;
-        }
-        staticDataInvariant("stored static data named a checked module outside the lowering input");
+        const program: lir.CheckedPipeline.CheckedModuleSet = .{ .root = root, .imports = self.modules.imports };
+        const view = program.moduleByKey(module) orelse
+            staticDataInvariant("stored static data named a checked module outside the lowering input");
+        return view.const_store;
     }
 
     /// The value of a stored list frozen at `value_layout`
