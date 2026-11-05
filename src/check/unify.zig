@@ -538,8 +538,6 @@ pub fn snapshotMismatchEvidence(env: *const Env) std.mem.Allocator.Error!TypeMis
         .none;
 }
 
-/// Snapshot the pair whose relation failed, before the top-level operands are
-/// poisoned, so a reporter that recognizes it can show the conflicting types.
 /// The body-local type whose escape a failed relation follows from (design.md
 /// "Body-Local Types Stay In Their Context"): two of its applications
 /// disagreed at a context argument, or a root operand or the failed leaf pair
@@ -559,6 +557,8 @@ pub fn localTypeEscapeCause(env: *const Env, a: Var, b: Var) ?problem_mod.LocalT
     return null;
 }
 
+/// Snapshot the pair whose relation failed, before the top-level operands are
+/// poisoned, so a reporter that recognizes it can show the conflicting types.
 pub fn snapshotMismatchLeaf(env: *const Env) std.mem.Allocator.Error!?problem_mod.TypePair {
     const raw = env.unify_scratch.mismatch_evidence.leaf orelse return null;
     return .{

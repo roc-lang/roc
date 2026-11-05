@@ -6673,10 +6673,8 @@ const DeclarationAnnoWalk = struct {
                 // A declaration in a function body keeps its context
                 // arguments, which its template lists after its declared
                 // ones: each is the enclosing variable itself.
-                const generic_args = switch (self.store.payload(generic_root)) {
-                    .nominal => |nominal| nominal.args,
-                    else => &.{},
-                };
+                const generic_payload = self.store.payload(generic_root);
+                const generic_args: []const CheckedTypeId = if (generic_payload == .nominal) generic_payload.nominal.args else &.{};
                 if (generic_args.len <= actual_args.len) return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.names, self.store, generic_root, actual_args);
                 const all_args = try gpa.alloc(CheckedTypeId, generic_args.len);
                 defer gpa.free(all_args);

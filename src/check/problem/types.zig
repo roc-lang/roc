@@ -669,19 +669,21 @@ pub const UnusedValue = struct {
 
 // type mismatch //
 
-/// These two variables mismatch. This should usually be cast into a more
-/// specific error depending on context.
 /// Why a failed relation follows from a body-local type leaving the
 /// functions its identity depends on.
 pub const LocalTypeEscapeCause = union(enum) {
     /// Two applications of the declaration disagreed at a context argument:
     /// values of two instantiations of its functions met.
     context_argument: types_mod.NominalDecl.Idx,
-    /// A root operand was this context variable (its annotation's variable),
-    /// which a value of the type carried outside the bodies that introduce it.
+    /// A root operand, a side of the failed leaf pair, or a failed
+    /// requirement's dispatcher was this context variable (its annotation's
+    /// variable), which a value of the type carried outside the body that
+    /// introduces it.
     context_variable: Var,
 };
 
+/// These two variables mismatch. This should usually be cast into a more
+/// specific error depending on context.
 pub const TypeMismatch = struct {
     types: TypePair,
     /// Where this type mismatch occurred (for contextual error messages)

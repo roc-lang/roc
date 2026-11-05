@@ -5096,10 +5096,8 @@ fn typeDeclTemplateContext(self: *const Self, var_: Var) []const CIR.TypeAnno.Id
     if (self.local_type_context_rigids.items.len == 0) return &.{};
     const raw: u32 = @backingInt(var_);
     if (raw >= self.cir.store.nodes.len()) return &.{};
-    switch (self.cir.store.nodes.get(@fromBackingInt(raw)).tag) {
-        .statement_nominal_decl, .statement_alias_decl => {},
-        else => return &.{},
-    }
+    const tag = self.cir.store.nodes.get(@fromBackingInt(raw)).tag;
+    if (tag != .statement_nominal_decl and tag != .statement_alias_decl) return &.{};
     return self.localTypeContext(@fromBackingInt(raw));
 }
 
@@ -5364,10 +5362,8 @@ fn walkLocalTypeContextItem(
             .parens => |parens| try work.append(gpa, .{ .anno = parens.anno }),
         },
         .pattern => |pattern| {
-            switch (store.getPattern(pattern)) {
-                .nominal => |nominal| try self.noteLocalTypeContextDecl(nominal.nominal_type_decl, decl, input),
-                else => {},
-            }
+            const data = store.getPattern(pattern);
+            if (data == .nominal) try self.noteLocalTypeContextDecl(data.nominal.nominal_type_decl, decl, input);
             scratch_patterns.clearRetainingCapacity();
             try self.pushCirSubpatterns(scratch_patterns, pattern);
             for (scratch_patterns.items) |subpattern| try work.append(gpa, .{ .pattern = subpattern });
@@ -5413,7 +5409,60 @@ fn walkLocalTypeContextItem(
                         => {},
                     }
                 },
-                else => {},
+                .e_num,
+                .e_frac_f32,
+                .e_frac_f64,
+                .e_dec,
+                .e_dec_small,
+                .e_num_from_numeral,
+                .e_typed_int,
+                .e_typed_frac,
+                .e_typed_num_from_numeral,
+                .e_str_segment,
+                .e_str,
+                .e_bytes_literal,
+                .e_lookup_external,
+                .e_deferred_import_ref,
+                .e_lookup_associated,
+                .e_lookup_associated_resolved,
+                .e_lookup_required,
+                .e_list,
+                .e_empty_list,
+                .e_tuple,
+                .e_match,
+                .e_if,
+                .e_call,
+                .e_record,
+                .e_empty_record,
+                .e_tag,
+                .e_nominal_external,
+                .e_zero_argument_tag,
+                .e_closure,
+                .e_lambda,
+                .e_binop,
+                .e_unary_minus,
+                .e_field_access,
+                .e_method_call,
+                .e_dispatch_call,
+                .e_interpolation,
+                .e_structural_eq,
+                .e_structural_hash,
+                .e_method_eq,
+                .e_tuple_access,
+                .e_runtime_error,
+                .e_crash,
+                .e_dbg,
+                .e_expect_err,
+                .e_expect,
+                .e_ellipsis,
+                .e_anno_only,
+                .e_derived_method,
+                .e_return,
+                .e_break,
+                .e_for,
+                .e_hosted_lambda,
+                .e_run_low_level,
+                => {},
             }
             try self.visitExprChildren(expr, LocalTypeContextPusher{ .gpa = gpa, .work = work });
         },
@@ -5448,10 +5497,8 @@ fn queueLocalTypeContextBinding(
     if (walked_bindings.contains(pattern)) return;
     const statement = (try self.localDeclForPattern(pattern)) orelse return;
     const local = self.cir.store.getStatement(statement).s_decl;
-    switch (self.cir.store.getExpr(local.expr)) {
-        .e_lambda, .e_closure, .e_lookup_local => {},
-        else => return,
-    }
+    const value = self.cir.store.getExpr(local.expr);
+    if (value != .e_lambda and value != .e_closure and value != .e_lookup_local) return;
     try walked_bindings.put(self.gpa, pattern, {});
     if (local.anno) |annotation| try work.append(self.gpa, .{ .annotation = annotation });
     try work.append(self.gpa, .{ .expr = local.expr });
@@ -5585,7 +5632,7 @@ const LocalTypeEscapeJudge = struct {
                     if (nominal.sourceDeclOptional()) |statement| {
                         for (owners, 0..) |entry, entry_index| {
                             if (@backingInt(entry.decl) != statement) continue;
-                            if (std.mem.indexOfScalar(CIR.Pattern.Idx, judge.inside.items, entry.owner) == null) break :search entry_index;
+                            if (std.mem.findScalar(CIR.Pattern.Idx, judge.inside.items, entry.owner) == null) break :search entry_index;
                         }
                     }
                 }
@@ -5626,15 +5673,19 @@ fn withdrawLocalTypeEscapeConsequences(
     const items = self.problems.problems.items;
     var kept: usize = 0;
     for (items) |item| {
-        const cause: ?problem.LocalTypeEscapeCause = switch (item) {
-            .type_mismatch => |mismatch| mismatch.local_type_escape,
-            .static_dispatch => |dispatch| switch (dispatch) {
-                .dispatcher_not_nominal => |failure| failure.local_type_escape,
-                .dispatcher_does_not_impl_method => |failure| failure.local_type_escape,
-                else => null,
-            },
-            else => null,
-        };
+        const cause: ?problem.LocalTypeEscapeCause = if (item == .type_mismatch)
+            item.type_mismatch.local_type_escape
+        else if (item == .static_dispatch) switch (item.static_dispatch) {
+            .dispatcher_not_nominal => |failure| failure.local_type_escape,
+            .dispatcher_does_not_impl_method => |failure| failure.local_type_escape,
+            .type_does_not_support_equality,
+            .type_does_not_support_map,
+            .undetermined_codec_type,
+            .unresolved_dispatcher,
+            .recursive_dispatch,
+            .undetermined_type,
+            => null,
+        } else null;
         const withdrawn = if (cause) |escape| switch (escape) {
             .context_argument => |decl_idx| argument: {
                 const decl = self.types.getNominalDecl(decl_idx);
@@ -5740,26 +5791,29 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
         try work.append(gpa, .{ .expr = self.cir.store.getDef(def_idx).expr });
         while (work.pop()) |item| switch (item) {
             .leave_owner => _ = judge.inside.pop(),
-            .expr => |expr| switch (self.cir.store.getExpr(expr)) {
-                .e_block => |block| {
-                    try work.append(gpa, .{ .expr = block.final_expr });
-                    const statements = self.cir.store.sliceStatements(block.stmts);
-                    var index = statements.len;
-                    while (index > 0) {
-                        index -= 1;
-                        const statement = self.cir.store.getStatement(statements[index]);
-                        if (statement == .s_decl and judge.ownsContext(statement.s_decl.pattern)) {
-                            // The owner's body may hold its own local types.
-                            _ = try judge.rejectIfEscaping(statement.s_decl.pattern);
-                            try work.append(gpa, .leave_owner);
-                            try work.append(gpa, .{ .expr = statement.s_decl.expr });
-                            try work.append(gpa, .{ .enter_owner = statement.s_decl.pattern });
-                        } else {
-                            try self.visitStatementChildren(statements[index], collector);
-                        }
+            .expr => |expr| {
+                const data = self.cir.store.getExpr(expr);
+                if (data != .e_block) {
+                    try self.visitExprChildren(expr, collector);
+                    continue;
+                }
+                const block = data.e_block;
+                try work.append(gpa, .{ .expr = block.final_expr });
+                const statements = self.cir.store.sliceStatements(block.stmts);
+                var index = statements.len;
+                while (index > 0) {
+                    index -= 1;
+                    const statement = self.cir.store.getStatement(statements[index]);
+                    if (statement == .s_decl and judge.ownsContext(statement.s_decl.pattern)) {
+                        // The owner's body may hold its own local types.
+                        _ = try judge.rejectIfEscaping(statement.s_decl.pattern);
+                        try work.append(gpa, .leave_owner);
+                        try work.append(gpa, .{ .expr = statement.s_decl.expr });
+                        try work.append(gpa, .{ .enter_owner = statement.s_decl.pattern });
+                    } else {
+                        try self.visitStatementChildren(statements[index], collector);
                     }
-                },
-                else => try self.visitExprChildren(expr, collector),
+                }
             },
             .enter_owner => |owner| try judge.inside.append(gpa, owner),
         };
