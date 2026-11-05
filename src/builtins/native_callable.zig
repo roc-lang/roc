@@ -241,7 +241,7 @@ const TestCalls = struct {
         const closure = erased.allocate(&stepWide, &drop, 0, ops);
         var next: [wide_words * 8]u8 align(16) = undefined;
         wideArgs(&next, remaining - 1);
-        deferCall(pending, &stepWide, closure, &next, next.len);
+        deferCall(pending, &stepWide, closure, &next, next.len, false);
     }
 
     const wide_words = inline_args_bytes / 8 + 3;
@@ -270,7 +270,7 @@ const TestCalls = struct {
         const closure = erased.allocate(&stepVaried, &drop, 0, ops);
         var next: [varied_max_words * 8]u8 align(16) = undefined;
         const len = variedArgs(&next, remaining - 1);
-        deferCall(pending, &stepVaried, closure, &next, len);
+        deferCall(pending, &stepVaried, closure, &next, len, false);
     }
 
     const varied_max_words = wide_words + 2 * 7;
@@ -307,7 +307,7 @@ const TestCalls = struct {
         var before: [16]u8 = undefined;
         @memcpy(&before, args.?[0..16]);
         const closure = erased.allocate(&forward, &drop, 0, ops);
-        deferCall(pending, &forward, closure, args, 16);
+        deferCall(pending, &forward, closure, args, 16, false);
         if (!std.mem.eql(u8, &before, args.?[0..16])) overwritten.store(true, .monotonic);
     }
 
@@ -320,7 +320,7 @@ const TestCalls = struct {
         const closure = erased.allocate(&step, &drop, 0, ops);
         var chain: [8]u8 = undefined;
         std.mem.writeInt(u64, &chain, 5, .little);
-        deferCall(pending, &step, closure, &chain, chain.len);
+        deferCall(pending, &step, closure, &chain, chain.len, false);
         var chain_result: [8]u8 = undefined;
         drive(pending, &chain_result);
         if (!std.mem.eql(u8, &before, args.?[0..16])) overwritten.store(true, .monotonic);
@@ -331,7 +331,7 @@ const TestCalls = struct {
     fn deferNested(ops: *RocOps, _: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: *?*const anyopaque) callconv(.c) void {
         const pending = callerCell(@ptrCast(out)).?;
         const closure = erased.allocate(&nested, &drop, 0, ops);
-        deferCall(pending, &nested, closure, args, 16);
+        deferCall(pending, &nested, closure, args, 16, false);
     }
 
     /// Like `nested`, with argument blocks too large for the cell: the
@@ -345,7 +345,7 @@ const TestCalls = struct {
         const closure = erased.allocate(&stepWide, &drop, 0, ops);
         var chain: [wide_words * 8]u8 align(16) = undefined;
         wideArgs(&chain, 50);
-        deferCall(pending, &stepWide, closure, &chain, chain.len);
+        deferCall(pending, &stepWide, closure, &chain, chain.len, false);
         var chain_result: [8]u8 = undefined;
         drive(pending, &chain_result);
         if (!std.mem.eql(u8, &before, args.?[0 .. wide_words * 8])) overwritten.store(true, .monotonic);
@@ -356,14 +356,14 @@ const TestCalls = struct {
         const next_closure = erased.allocate(&nestedWide, &drop, 0, ops);
         var next: [wide_words * 8]u8 align(16) = undefined;
         wideArgs(&next, remaining - 1);
-        deferCall(pending, &nestedWide, next_closure, &next, next.len);
+        deferCall(pending, &nestedWide, next_closure, &next, next.len, false);
     }
 
     /// Leaves `nestedWide` pending with its own arguments.
     fn deferNestedWide(ops: *RocOps, _: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: *?*const anyopaque) callconv(.c) void {
         const pending = callerCell(@ptrCast(out)).?;
         const closure = erased.allocate(&nestedWide, &drop, 0, ops);
-        deferCall(pending, &nestedWide, closure, args, wide_words * 8);
+        deferCall(pending, &nestedWide, closure, args, wide_words * 8, false);
     }
 
     /// A host's callable, which writes the ABI's descriptor output.
