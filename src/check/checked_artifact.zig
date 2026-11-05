@@ -19889,6 +19889,17 @@ const EvidencePass = struct {
                 try self.codec_instance_by_template.put(self.types.resolveVar(template).var_, source);
             }
         }
+        // A relation that recurs a derivation resolves to that derivation.
+        for (module_env.generated_codec_recurrences.items.items) |recurrence| {
+            const source: Var = @fromBackingInt(@intCast(recurrence.derivation_source_fn_var));
+            const derivations = self.generated_codec_by_source.get(source) orelse
+                checkedArtifactInvariant("a recurring generated codec relation named no derivation", .{});
+            const entry = try self.generated_codec_by_source.getOrPut(@fromBackingInt(@intCast(recurrence.constraint_fn_var)));
+            if (entry.found_existing) {
+                checkedArtifactInvariant("a recurring generated codec relation had a derivation of its own", .{});
+            }
+            entry.value_ptr.* = derivations;
+        }
         // Records replayed from one source name the same substitution range,
         // whose pairs are indexed once.
         var indexed_ranges = std.AutoHashMap(struct { start: u32, len: u32 }, void).init(self.allocator);

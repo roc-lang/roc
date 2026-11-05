@@ -296,14 +296,12 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
         .encoder => if (runtime_args.len == 2) runtime_args[1] else invariant("a generated encoder's runtime does not take a value and a state"),
     };
     const shape = try convertIn(program, env, derivation.shape_ty);
-    // The codec walks a value whose shape its contract fixes; only the
-    // results (their error rows) vary with the family's variables. Checking
-    // derives a codec only for a shape and an encoding it has resolved (an
-    // unresolved one is a missing-method error), and the state is the
-    // resolved encoding's.
-    const conv = program.converter();
-    if (!try conv.representationClosed(shape) or !try conv.representationClosed(encoding_ty) or !try conv.representationClosed(state_ty)) {
-        invariant("a generated codec's value shape, encoding, or state is open");
+    // The codec walks a value whose shape its contract fixes. The encoding
+    // and the state can hold the family's variables: a format type declared
+    // in a function body lists the variables of the function it depends on
+    // as hidden arguments, which name the instance's types.
+    if (!try program.converter().representationClosed(shape)) {
+        invariant("a generated codec's value shape is open");
     }
 
     const index: u32 = @intCast(state.families.items.len);
@@ -739,12 +737,26 @@ fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Local
     const fam_ = b.program.codec.families.items[family];
     const bound = try b.relateVariables(fam_.constructor_fn, actual, fam_.env.vars.len);
     defer b.allocator.free(bound);
-    const composed = try composeConstructor(b, family, bound);
+    const composition = switch (try b.beginCodecComposition(family, bound, actual)) {
+        .back_edge => |word| return word,
+        .composing => |index| index,
+    };
+    const composed = try composeConstructorIn(b, family, bound, composition);
     return try b.adaptDictionary(composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound), actual);
 }
 
 /// A family's constructor composed with its variables at `bound`.
 fn composeConstructor(b: *Builder, family: u32, bound: []const TypeId) Allocator.Error!LocalId {
+    const constructor_ty = try b.program.substitute(b.allocator, b.program.codec.families.items[family].constructor_fn, bound);
+    const composition = switch (try b.beginCodecComposition(family, bound, constructor_ty)) {
+        .back_edge => invariant("a stored codec constructor is restored while it is being composed"),
+        .composing => |index| index,
+    };
+    return try composeConstructorIn(b, family, bound, composition);
+}
+
+/// Composition `composition` of a family's constructor at `bound`.
+fn composeConstructorIn(b: *Builder, family: u32, bound: []const TypeId, composition: u32) Allocator.Error!LocalId {
     const fam_ = b.program.codec.families.items[family];
     const captures = try b.allocator.alloc(LocalId, fam_.locals.items.len + bound.len);
     defer b.allocator.free(captures);
@@ -762,7 +774,9 @@ fn composeConstructor(b: *Builder, family: u32, bound: []const TypeId) Allocator
         }
     }
     for (bound, captures[fam_.locals.items.len..]) |ty, *desc| desc.* = try b.descOf(ty);
-    return try b.composeDictionary(try constructorWorker(b.program, family), captures);
+    const composed = try b.composeDictionary(try constructorWorker(b.program, family), captures);
+    try b.finishCodecComposition(composition, composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound));
+    return composed;
 }
 
 /// The function values of family `family`'s local procedures at its
@@ -1341,7 +1355,7 @@ const Gen = struct {
         defer self.b.allocator.free(captured);
         const capture_types = try std.mem.concat(self.b.allocator, TypeId, &.{ value_types, &.{ fam_.encoding, fam_.names_ty } });
         defer self.b.allocator.free(capture_types);
-        return self.b.packClosure(worker, captured, capture_types, self.b.var_descs, &.{});
+        return try self.packFamilyClosure(worker, captured, capture_types);
     }
 
     /// Renamed name `index` of the family's names.
@@ -1410,6 +1424,7 @@ const Gen = struct {
     fn beginErased(self: *Gen) Allocator.Error!Erased {
         const b = self.b;
         const worker = b.currentWorker().*;
+        if (!try b.allClosed(worker.capture_types)) return try self.beginDynamicErased(worker);
         // Captured values, then the family's descriptors.
         const capture_layouts = try b.allocator.alloc(layout.Idx, worker.capture_types.len + worker.scheme_vars.len);
         defer b.allocator.free(capture_layouts);
@@ -1429,6 +1444,31 @@ const Gen = struct {
             }
         }
         b.var_descs = try b.program.arena.allocator().dupe(LocalId, start.captures[worker.capture_types.len..]);
+        return try self.finishErasedStart(worker, start);
+    }
+
+    /// An erased worker whose captures include a value of an open type (an
+    /// encoding that holds the family's variables): its capture record is a
+    /// dynamic one, of the family's descriptors, then the captured values.
+    fn beginDynamicErased(self: *Gen, worker: lower.Worker) Allocator.Error!Erased {
+        const b = self.b;
+        b.entry_hole = try b.newHole();
+        const capture_ptr = try b.closedLocal(.opaque_ptr);
+        b.var_descs = try b.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
+        const start: Builder.ErasedStart = .{
+            .entry = b.entry_hole,
+            .body_start = undefined,
+            .capture_ptr = capture_ptr,
+            .captures = try b.dynamicCaptures(worker, capture_ptr),
+            .args = &.{},
+            .record = null,
+            .ret_layout = undefined,
+        };
+        return try self.finishErasedStart(worker, start);
+    }
+
+    fn finishErasedStart(self: *Gen, worker: lower.Worker, start: Builder.ErasedStart) Allocator.Error!Erased {
+        const b = self.b;
         var record: ?LocalId = null;
         if (worker.params.len != 0) record = try b.erasedParamLocal(worker.params);
         const ret_layout = try self.resultLayout(worker.ret);
@@ -1437,6 +1477,13 @@ const Gen = struct {
         const args = try b.allocator.alloc(LocalId, worker.params.len);
         for (args, 0..) |*arg, index| arg.* = try b.erasedParamValue(record.?, worker.params, @intCast(index));
         return .{ .start = start, .record = record, .ret_layout = ret_layout, .body_start = body_start, .args = args, .captures = start.captures[0..worker.capture_types.len] };
+    }
+
+    /// A family callable of `worker` capturing `values` (of `value_types`),
+    /// then the family's descriptors.
+    fn packFamilyClosure(self: *Gen, worker: WorkerId, values: []const LocalId, value_types: []const TypeId) Allocator.Error!LocalId {
+        if (try self.b.allClosed(value_types)) return try self.b.packClosure(worker, values, value_types, self.b.var_descs, &.{});
+        return try self.b.packDynamicClosure(worker, values, value_types, self.b.var_descs, &.{});
     }
 
     fn finishErased(self: *Gen, frame: Erased) Allocator.Error!void {
@@ -1479,7 +1526,7 @@ const Gen = struct {
             slot.* = (try self.callFormat("rename_field", null, &.{ encoding, label })).value;
         }
         const runtime = try runtimeWorker(program_, self.family);
-        const closure = try self.b.packClosure(runtime, captured, program_.worker(runtime).capture_types, self.b.var_descs, &.{});
+        const closure = try self.packFamilyClosure(runtime, captured, program_.worker(runtime).capture_types);
         try self.ret(closure);
         try self.finishErased(frame);
     }

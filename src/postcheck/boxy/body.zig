@@ -348,6 +348,18 @@ const Declaration = struct {
     const Words = struct { descs: []const LocalId, literals: []const LocalId };
 };
 
+/// A generated codec constructor being composed: its family at the types
+/// `bound` of the family's variables.
+pub const CodecComposition = struct { family: u32, bound: []const TypeId };
+
+/// A request, while composition `composition` was in progress, for the
+/// constructor it composes, at the constructor type `actual`.
+pub const CodecBackEdge = struct { composition: u32, actual: TypeId };
+
+/// Capture `index` of the composed dictionary `dict` holds the null word of
+/// the back edge `back_edge`.
+pub const CodecBackEdgePatch = struct { dict: LocalId, index: u32, back_edge: LocalId };
+
 /// The scope a local procedure's function value is built in: the worker
 /// declaring it, the procedure's worker there, and the declaring worker's
 /// scheme types and hidden words as this body holds them.
@@ -517,6 +529,14 @@ pub const Builder = struct {
     open_members: collections.DenseMapUnmanaged(TypeId, OpenMember) = .empty,
     /// The recursion box over each descriptor local that has one.
     recursive_boxes: collections.DenseMapUnmanaged(LocalId, LocalId) = .empty,
+    /// The generated codec constructors being composed, innermost last
+    /// (`codec.composeConstructor`).
+    codec_compositions: std.ArrayList(CodecComposition) = .empty,
+    /// The null word standing for each request of a constructor while it is
+    /// being composed, by local.
+    codec_back_edges: collections.DenseMapUnmanaged(LocalId, CodecBackEdge) = .empty,
+    /// The composed captures holding a back edge's null word.
+    codec_back_edge_patches: std.ArrayList(CodecBackEdgePatch) = .empty,
     opaque_word_desc: ?LocalId = null,
     /// Expressions whose value is built at a row coercion's destination
     /// type rather than their own (design.md "Row Coercion Primitive").
@@ -579,6 +599,9 @@ pub const Builder = struct {
         self.opened_components.deinit(self.allocator);
         self.open_members.deinit(self.allocator);
         self.recursive_boxes.deinit(self.allocator);
+        self.codec_compositions.deinit(self.allocator);
+        self.codec_back_edges.deinit(self.allocator);
+        self.codec_back_edge_patches.deinit(self.allocator);
         self.name_locals.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
         self.join_infos.deinit(self.allocator);
@@ -7241,7 +7264,69 @@ pub const Builder = struct {
             .worker = self.program.worker(entry).proc,
             .captures = try self.store.addLocalSpan(captures),
         } }), .next = undefined } });
+        if (self.codec_back_edges.count() != 0) {
+            for (captures, 0..) |capture, index| {
+                if (!self.codec_back_edges.contains(capture)) continue;
+                try self.codec_back_edge_patches.append(self.allocator, .{ .dict = local, .index = @intCast(index), .back_edge = capture });
+            }
+        }
         return local;
+    }
+
+    /// Begin composing family `family`'s constructor at `bound`. Null when
+    /// that constructor is already being composed: its own local procedures'
+    /// dictionaries reach it again, as a format method whose `where` clause
+    /// requires the codec that calls it does (design.md "Codec Derivation
+    /// Recurrence"). The request then takes a null word, which every
+    /// composition capturing it gets filled with the constructor once it is
+    /// composed (`finishCodecComposition`).
+    pub fn beginCodecComposition(self: *Builder, family: u32, bound: []const TypeId, actual: TypeId) Allocator.Error!union(enum) { composing: u32, back_edge: LocalId } {
+        for (self.codec_compositions.items, 0..) |composition, index| {
+            if (composition.family != family or !std.mem.eql(TypeId, composition.bound, bound)) continue;
+            const word = try self.nullWord();
+            try self.codec_back_edges.put(self.allocator, word, .{ .composition = @intCast(index), .actual = actual });
+            return .{ .back_edge = word };
+        }
+        const index: u32 = @intCast(self.codec_compositions.items.len);
+        try self.codec_compositions.append(self.allocator, .{ .family = family, .bound = bound });
+        return .{ .composing = index };
+    }
+
+    /// Finish composition `index`, whose constructor `composed` has type
+    /// `composed_ty`: fill every capture holding one of its back edges.
+    pub fn finishCodecComposition(self: *Builder, index: u32, composed: LocalId, composed_ty: TypeId) Allocator.Error!void {
+        if (self.codec_compositions.items.len != index + 1) invariant("generated codec constructor compositions did not nest");
+        _ = self.codec_compositions.pop();
+        if (self.codec_back_edges.count() == 0) return;
+        var back_edges = std.ArrayList(struct { word: LocalId, actual: TypeId }).empty;
+        defer back_edges.deinit(self.allocator);
+        var iterator = self.codec_back_edges.iterator();
+        while (iterator.next()) |entry| {
+            if (entry.value_ptr.composition != index) continue;
+            try back_edges.append(self.allocator, .{ .word = entry.key_ptr.*, .actual = entry.value_ptr.actual });
+        }
+        for (back_edges.items) |back_edge| {
+            _ = self.codec_back_edges.remove(back_edge.word);
+            const value = try self.adaptDictionary(composed, composed_ty, back_edge.actual);
+            var patched_any = false;
+            var kept: usize = 0;
+            for (self.codec_back_edge_patches.items) |patch| {
+                if (patch.back_edge != back_edge.word) {
+                    self.codec_back_edge_patches.items[kept] = patch;
+                    kept += 1;
+                    continue;
+                }
+                patched_any = true;
+                const patched = try self.closedLocal(try self.erasedLayout());
+                try self.emitEntry(.{ .dyn = .{ .target = patched, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_patch = .{
+                    .dict = patch.dict,
+                    .index = patch.index,
+                    .value = value,
+                } }), .next = undefined } });
+            }
+            self.codec_back_edge_patches.shrinkRetainingCapacity(kept);
+            if (!patched_any) invariant("a generated codec constructor's back edge was captured by nothing a composition patches");
+        }
     }
 
     /// The dictionary of `entry` as static data, when all of `captures` are

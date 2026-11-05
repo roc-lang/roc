@@ -422,6 +422,30 @@ final_codec_dispatch_constraint_fns: collections.DenseMapUnmanaged(Var, CodecCon
 scheme_deferred_codec_constraint_fns: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// Each private instance's callable and the template relation it validates.
 final_codec_instance_templates: collections.DenseMapUnmanaged(Var, Var) = .empty,
+/// Each private instance's copies of its template's variables, as a range of
+/// `final_codec_instance_copy_pairs`, by the instance's callable.
+final_codec_instance_copies: collections.DenseMapUnmanaged(Var, CodecInstanceCopies) = .empty,
+final_codec_instance_copy_pairs: std.ArrayListUnmanaged(Instantiator.SharedSubtree) = .empty,
+/// The copies a generated codec method target's instantiation reads instead
+/// of copying those variables again (`instantiateGeneratedCodecMethodTarget`).
+codec_instance_copies: []const Instantiator.SharedSubtree = &.{},
+/// Every generated codec derivation validated so far, in order (design.md
+/// "Codec Derivation Recurrence"). A derivation's method instantiations can
+/// require another generated codec; that relation's derivation records the
+/// one whose instantiation required it as its parent, so the chain of
+/// derivations that led to a relation is explicit.
+codec_derivation_frames: std.ArrayListUnmanaged(CodecDerivationFrame) = .empty,
+/// The requirements registered while a derivation ran, in order, each with
+/// that derivation's frame.
+codec_derivation_children: std.ArrayListUnmanaged(CodecDerivationChild) = .empty,
+/// `codec_derivation_children` keyed by the requirement's callable.
+codec_derivation_frame_by_child_fn_var: collections.DenseMapUnmanaged(Var, u32) = .empty,
+/// The frame of the derivation currently validating, whose method
+/// instantiations register their requirements as its children.
+active_codec_derivation_frame: ?u32 = null,
+/// Relations that recur a derivation still in progress, each recorded when
+/// that derivation finishes.
+codec_derivation_recurrences: std.ArrayListUnmanaged(CodecDerivationRecurrence) = .empty,
 checking_final_codec_dispatch_constraints: bool = false,
 /// Boundary validation produces constraints once; the exact calls and live
 /// contract roots freeze only after the module's error rows have settled.
@@ -1724,6 +1748,14 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .final_codec_dispatch_constraint_fns = .keyed,
     .scheme_deferred_codec_constraint_fns = .keyed,
     .final_codec_instance_templates = .keyed,
+    .final_codec_instance_copies = .keyed,
+    .final_codec_instance_copy_pairs = .keyed,
+    .codec_instance_copies = .lexical,
+    .codec_derivation_frames = .keyed,
+    .codec_derivation_children = .keyed,
+    .codec_derivation_frame_by_child_fn_var = .keyed,
+    .active_codec_derivation_frame = .lexical,
+    .codec_derivation_recurrences = .frame_partitioned,
     .checking_final_codec_dispatch_constraints = .lexical,
     .constraining_boundary_codecs = .lexical,
     .settling_codec_method_requirements_depth = .lexical,
@@ -3075,6 +3107,9 @@ fn registerInstantiatedSchemeRequirement(
     if (parent_constraint_fn_var) |parent_fn_var| {
         try self.recordDispatchDerivations(constraint_range, parent_fn_var);
     }
+    if (self.active_codec_derivation_frame) |frame| {
+        try self.recordCodecDerivationChild(requirement.constraint.fn_var, frame);
+    }
     if (instantiation_expr != null) {
         try self.noteHoistDispatchDependency(requirement.receiver_var, requirement.constraint.fn_name, requirement.constraint.fn_var);
     }
@@ -4136,6 +4171,44 @@ const FinalCodecDispatchConstraint = struct {
 };
 
 const CodecConstraintPhase = enum { final, boundary };
+
+/// A range of `Check.final_codec_instance_copy_pairs`.
+const CodecInstanceCopies = struct {
+    start: u32 = 0,
+    len: u32 = 0,
+};
+
+/// One generated codec derivation, with the derivation whose method
+/// instantiation required the relation it satisfies.
+const CodecDerivationFrame = struct {
+    kind: ModuleEnv.GeneratedCodecDerivation.Kind,
+    parent: ?u32,
+    /// The copies of the private instance the derivation validates, or of
+    /// the one its parent validates (`final_codec_instance_copies`).
+    instance_copies: CodecInstanceCopies = .{},
+    /// The relation the derivation satisfies, its source constraint.
+    relation_fn_var: Var,
+    dispatcher_var: Var,
+    runtime_fn_var: Var,
+    encoding_var: Var,
+    state_var: Var,
+    outcome: Outcome = .in_progress,
+
+    const Outcome = enum { in_progress, derived, rejected };
+};
+
+/// A requirement registered while the derivation `frame` ran.
+const CodecDerivationChild = struct {
+    child_fn_var: Var,
+    frame: u32,
+};
+
+/// A relation that asks again for the derivation `frame`, which was still in
+/// progress when the relation was resolved.
+const CodecDerivationRecurrence = struct {
+    frame: u32,
+    constraint: StaticDispatchConstraint,
+};
 
 const BoundaryCodecDerivation = struct {
     kind: ModuleEnv.GeneratedCodecDerivation.Kind,
@@ -11316,6 +11389,9 @@ fn instantiateVarHelpFromScheme(
     for (instantiator.shared_subtrees) |subtree| {
         try instantiator.var_map.put(self.types.resolveVar(subtree.source).var_, subtree.copy);
     }
+    for (self.codec_instance_copies) |copy| {
+        try instantiator.var_map.put(self.types.resolveVar(copy.source).var_, copy.copy);
+    }
 
     // Then, instantiate the variable with the provided context
     const instantiated_var = if (force_type_scheme_root) scheme: {
@@ -11658,6 +11734,11 @@ inline fn registerInstantiatedVar(
             // detection walks exactly this lineage.
             if (ctx.target_fn_var) |parent_fn_var| {
                 try self.recordDispatchDerivations(flex.constraints, parent_fn_var);
+            }
+            if (self.active_codec_derivation_frame) |frame| {
+                for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |c| {
+                    try self.recordCodecDerivationChild(c.fn_var, frame);
+                }
             }
             const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
             if (ctx.registers_use) {
@@ -38324,6 +38405,10 @@ const Probe = struct {
     accepted_nominal_constructor_backings_len: usize,
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
+    codec_derivation_frames_len: usize,
+    generated_codec_recurrences_len: usize,
+    codec_derivation_children_len: usize,
+    codec_derivation_recurrences_len: usize,
     component_derivations_len: usize,
     component_derived_relations_len: usize,
     dispatch_relation_owner_log_len: usize,
@@ -38416,6 +38501,10 @@ const Probe = struct {
         self.check.probe_links.shrinkRetainingCapacity(self.probe_links_len);
         self.check.probe_link_copies.shrinkRetainingCapacity(self.probe_link_copies_len);
         self.check.shrinkDispatchDerivationsTo(self.dispatch_derivations_len);
+        self.check.codec_derivation_frames.shrinkRetainingCapacity(self.codec_derivation_frames_len);
+        self.check.cir.generated_codec_recurrences.items.shrinkRetainingCapacity(self.generated_codec_recurrences_len);
+        self.check.shrinkCodecDerivationChildrenTo(self.codec_derivation_children_len);
+        self.check.codec_derivation_recurrences.shrinkRetainingCapacity(self.codec_derivation_recurrences_len);
         self.check.shrinkComponentDerivationsTo(self.component_derivations_len);
         self.check.shrinkComponentDerivedRelationsTo(self.component_derived_relations_len);
         self.check.shrinkDispatchRelationOwnersTo(self.dispatch_relation_owner_log_len);
@@ -38520,6 +38609,10 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .accepted_nominal_constructor_backings_len = accepted_nominal_constructor_backings_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
+        .codec_derivation_frames_len = self.codec_derivation_frames.items.len,
+        .generated_codec_recurrences_len = self.cir.generated_codec_recurrences.items.items.len,
+        .codec_derivation_children_len = self.codec_derivation_children.items.len,
+        .codec_derivation_recurrences_len = self.codec_derivation_recurrences.items.len,
         .component_derivations_len = component_derivations_len,
         .component_derived_relations_len = component_derived_relations_len,
         .dispatch_relation_owner_log_len = dispatch_relation_owner_log_len,
@@ -49772,6 +49865,19 @@ fn finalCodecRelationInstance(
         try self.fillInRegionsThrough(copied.*);
         self.setRegionAt(copied.*, region);
     }
+    // The instance's own copy of each type variable of the template. A format
+    // method selected for its derivation can name those variables too (a
+    // method of a type declared in the body whose relation this is), and
+    // reads them as this copy (`instantiateGeneratedCodecMethodTarget`).
+    const copies_start: u32 = @intCast(self.final_codec_instance_copy_pairs.items.len);
+    var copy_entries = instantiator.var_map.iterator();
+    while (copy_entries.next()) |entry| {
+        switch (self.types.resolveVar(entry.key_ptr.*).desc.content) {
+            .flex, .rigid => {},
+            .structure, .alias, .field_presence, .err => continue,
+        }
+        try self.final_codec_instance_copy_pairs.append(self.gpa, .{ .source = entry.key_ptr.*, .copy = entry.value_ptr.* });
+    }
     const copied_relation = self.types.resolveVar(copied_root).desc.content.unwrapFunc() orelse
         unreachable; // instantiating the function type relation_root yields a function type
     var relation = pending;
@@ -49782,6 +49888,10 @@ fn finalCodecRelationInstance(
     self.active_scheme_root = self.dispatchRelationOwner(pending.constraint.fn_var);
     try self.recordDispatchRelationOwner(relation.constraint.fn_var);
     try self.final_codec_instance_templates.put(self.gpa, relation.constraint.fn_var, pending.constraint.fn_var);
+    try self.final_codec_instance_copies.put(self.gpa, relation.constraint.fn_var, .{
+        .start = copies_start,
+        .len = @as(u32, @intCast(self.final_codec_instance_copy_pairs.items.len)) - copies_start,
+    });
     return relation;
 }
 
@@ -55618,6 +55728,8 @@ const ImplicitParseRun = struct {
     walk: DerivedCodecWalk,
     owner_region_before: ?Region,
     err_tags_before: std.ArrayListUnmanaged(Ident.Idx) = .empty,
+    /// The relation's derivation frame (`codec_derivation_frames`).
+    codec_frame: u32 = undefined,
 
     fn inputs(run: *ImplicitParseRun, env: *Env) DerivedCodecInputs {
         return .{
@@ -55701,6 +55813,11 @@ fn beginImplicitParse(self: *Self, request: ImplicitParseRequest, env: *Env) All
         .err_tags_before = err_tags_before,
     };
     errdefer self.endImplicitParse(run);
+    if (try self.recurredCodecDerivation(.parser, constraint_fn_var, &.{ dispatcher_var, encoding_var, state_var }, &run.walk)) |frame| {
+        self.endImplicitParse(run);
+        try self.recurCodecDerivation(frame, constraint, runtime_fn_var, env);
+        return null;
+    }
     // A dispatcher that derives its own codec is validated against the shape
     // that codec is generated from, not against the name in front of it, and
     // everything below is inside that shape for the rest of this constraint.
@@ -55709,6 +55826,15 @@ fn beginImplicitParse(self: *Self, request: ImplicitParseRequest, env: *Env) All
     }
     self.active_codec_owner_region = self.codecRelationOwnerRegion(constraint, failure_expr);
     try self.appendTagRowNames(err_var, &run.err_tags_before);
+    run.codec_frame = try self.beginCodecDerivationFrame(.{
+        .kind = .parser,
+        .parent = self.codecDerivationParentOf(constraint_fn_var),
+        .relation_fn_var = constraint_fn_var,
+        .dispatcher_var = dispatcher_var,
+        .runtime_fn_var = runtime_fn_var,
+        .encoding_var = encoding_var,
+        .state_var = state_var,
+    });
     return run;
 }
 
@@ -55740,6 +55866,7 @@ fn finishImplicitParse(self: *Self, run: *ImplicitParseRun, validation: DerivedP
         },
         .unsupported => try self.reportConstraintErrorAt(request.dispatcher_var, request.constraint, .not_nominal, env, request.failure_expr, request.failure_expr),
     }
+    try self.finishCodecDerivationFrame(run.codec_frame, validation == .ok);
 }
 
 /// Give back everything an implicit parser relation's walk held.
@@ -55812,6 +55939,9 @@ fn satisfyImplicitEncoderForConstraint(
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
     var walk = DerivedCodecWalk.init(self.gpa, generated_calls_start);
     defer walk.deinit();
+    if (try self.recurredCodecDerivation(.encoder, constraint_fn_var, &.{ dispatcher_var, encoding_var, state_var }, &walk)) |frame| {
+        return try self.recurCodecDerivation(frame, constraint, shape.runtime_fn, env);
+    }
     // A dispatcher that derives its own codec is validated against the shape
     // that codec is generated from, not against the name in front of it, and
     // everything below is inside that shape for the rest of this constraint.
@@ -55822,7 +55952,22 @@ fn satisfyImplicitEncoderForConstraint(
     var err_tags_before = std.ArrayListUnmanaged(Ident.Idx).empty;
     defer err_tags_before.deinit(self.gpa);
     try self.appendTagRowNames(err_var, &err_tags_before);
-    const validation = try self.validateDerivedEncodeVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk);
+    const frame = try self.beginCodecDerivationFrame(.{
+        .kind = .encoder,
+        .parent = self.codecDerivationParentOf(constraint_fn_var),
+        .relation_fn_var = constraint_fn_var,
+        .dispatcher_var = dispatcher_var,
+        .runtime_fn_var = shape.runtime_fn,
+        .encoding_var = encoding_var,
+        .state_var = state_var,
+    });
+    const frame_before = self.active_codec_derivation_frame;
+    self.active_codec_derivation_frame = frame;
+    const validation = validation: {
+        defer self.active_codec_derivation_frame = frame_before;
+        break :validation try self.validateDerivedEncodeVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk);
+    };
+    try self.finishCodecDerivationFrame(frame, validation == .ok);
     if (validation == .ok) try self.recordCodecRowGrowth(err_var, err_tags_before.items);
     switch (validation) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
@@ -55846,6 +55991,122 @@ fn satisfyImplicitEncoderForConstraint(
             try self.markStaticDispatchRejected(constraint);
         },
         .unsupported => try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, owner_expr),
+    }
+}
+
+/// Note that a requirement registered while the derivation `frame` ran came
+/// from that derivation. A requirement keeps the first derivation it came from.
+fn recordCodecDerivationChild(self: *Self, child_fn_var: Var, frame: u32) Allocator.Error!void {
+    const entry = try self.codec_derivation_frame_by_child_fn_var.getOrPut(self.gpa, child_fn_var);
+    if (entry.found_existing) return;
+    errdefer _ = self.codec_derivation_frame_by_child_fn_var.remove(child_fn_var);
+    entry.value_ptr.* = frame;
+    try self.codec_derivation_children.append(self.gpa, .{ .child_fn_var = child_fn_var, .frame = frame });
+}
+
+/// The derivation whose method instantiation required this relation. A
+/// private instance of a parked relation came from wherever its template did.
+fn codecDerivationParentOf(self: *const Self, constraint_fn_var: Var) ?u32 {
+    if (self.codec_derivation_frame_by_child_fn_var.get(constraint_fn_var)) |frame| return frame;
+    const template = self.final_codec_instance_templates.get(constraint_fn_var) orelse return null;
+    return self.codec_derivation_frame_by_child_fn_var.get(template);
+}
+
+/// The derivation, among the chain of derivations that required this
+/// relation, that the relation asks for again: one of the same kind whose
+/// value shape, format, and state are the relation's (`key_vars`, in that
+/// order). Every derivation's parent was recorded before it, so the chain ends.
+fn recurredCodecDerivation(
+    self: *Self,
+    kind: ModuleEnv.GeneratedCodecDerivation.Kind,
+    constraint_fn_var: Var,
+    key_vars: *const [3]Var,
+    walk: *DerivedCodecWalk,
+) Allocator.Error!?u32 {
+    var ancestor = self.codecDerivationParentOf(constraint_fn_var);
+    while (ancestor) |index| {
+        const frame = self.codec_derivation_frames.items[index];
+        if (frame.kind == kind and
+            try self.derivedCodecVarsEql(key_vars, &.{ frame.dispatcher_var, frame.encoding_var, frame.state_var }, walk))
+        {
+            return index;
+        }
+        std.debug.assert(frame.parent == null or frame.parent.? < index);
+        ancestor = frame.parent;
+    }
+    return null;
+}
+
+fn beginCodecDerivationFrame(self: *Self, frame: CodecDerivationFrame) Allocator.Error!u32 {
+    const index: u32 = @intCast(self.codec_derivation_frames.items.len);
+    var with_copies = frame;
+    with_copies.instance_copies = self.final_codec_instance_copies.get(frame.relation_fn_var) orelse
+        if (frame.parent) |parent| self.codec_derivation_frames.items[parent].instance_copies else .{};
+    try self.codec_derivation_frames.append(self.gpa, with_copies);
+    return index;
+}
+
+/// Settle a derivation's outcome and resolve every relation that recurred it
+/// while it was in progress.
+fn finishCodecDerivationFrame(self: *Self, index: u32, derived: bool) Allocator.Error!void {
+    const frame = &self.codec_derivation_frames.items[index];
+    std.debug.assert(frame.outcome == .in_progress);
+    frame.outcome = if (derived) .derived else .rejected;
+
+    var kept: usize = 0;
+    var cursor: usize = 0;
+    while (cursor < self.codec_derivation_recurrences.items.len) : (cursor += 1) {
+        const recurrence = self.codec_derivation_recurrences.items[cursor];
+        if (recurrence.frame != index) {
+            self.codec_derivation_recurrences.items[kept] = recurrence;
+            kept += 1;
+            continue;
+        }
+        try self.resolveCodecDerivationRecurrence(recurrence);
+    }
+    self.codec_derivation_recurrences.shrinkRetainingCapacity(kept);
+}
+
+/// A relation that asks again for a derivation in its own chain is that
+/// derivation: its generated codec is the one the derivation generates, so
+/// it resolves to that derivation rather than walking the shape again, whose
+/// format methods would require the same relation once more.
+fn recurCodecDerivation(
+    self: *Self,
+    index: u32,
+    constraint: StaticDispatchConstraint,
+    runtime_fn_var: Var,
+    env: *Env,
+) Allocator.Error!void {
+    const frame = self.codec_derivation_frames.items[index];
+    const related = try self.unifyInContext(runtime_fn_var, frame.runtime_fn_var, env, .none);
+    if (!related.isEstablished()) {
+        try self.markStaticDispatchRejected(constraint);
+        return;
+    }
+    const recurrence: CodecDerivationRecurrence = .{ .frame = index, .constraint = constraint };
+    if (frame.outcome == .in_progress) {
+        try self.codec_derivation_recurrences.append(self.gpa, recurrence);
+        return;
+    }
+    try self.resolveCodecDerivationRecurrence(recurrence);
+}
+
+fn resolveCodecDerivationRecurrence(self: *Self, recurrence: CodecDerivationRecurrence) Allocator.Error!void {
+    const frame = self.codec_derivation_frames.items[recurrence.frame];
+    switch (frame.outcome) {
+        .in_progress => unreachable, // a recurrence resolves once its derivation has finished
+        // The derivation's own relation reported why it failed.
+        .rejected => try self.markStaticDispatchRejected(recurrence.constraint),
+        .derived => try self.cir.recordGeneratedCodecRecurrence(recurrence.constraint.fn_var, frame.relation_fn_var),
+    }
+}
+
+fn shrinkCodecDerivationChildrenTo(self: *Self, new_len: usize) void {
+    while (self.codec_derivation_children.items.len > new_len) {
+        const child = self.codec_derivation_children.pop().?;
+        const did_remove = self.codec_derivation_frame_by_child_fn_var.remove(child.child_fn_var);
+        std.debug.assert(did_remove);
     }
 }
 
@@ -56486,10 +56747,19 @@ fn instantiateGeneratedCodecMethodTarget(
             .records_scheme_use = predeclared_scheme == null,
         },
     };
-    const method_var = if (method_lookup.is_this_module)
-        try self.instantiateBindingVar(scheme_var, env, .use_last_var, evidence)
-    else
-        try self.instantiateVar(scheme_var, env, .{ .explicit = region }, evidence);
+    const method_var = if (method_lookup.is_this_module) local: {
+        // Within a private instance's derivation, a variable of the instance's
+        // template that the method's type names (the enclosing function's
+        // variable, for a method of a type declared in its body) is the
+        // instance's copy of it, as everywhere else in that instance.
+        const copies_before = self.codec_instance_copies;
+        defer self.codec_instance_copies = copies_before;
+        if (self.active_codec_derivation_frame) |frame| {
+            const copies = self.codec_derivation_frames.items[frame].instance_copies;
+            self.codec_instance_copies = self.final_codec_instance_copy_pairs.items[copies.start..][0..copies.len];
+        }
+        break :local try self.instantiateBindingVar(scheme_var, env, .use_last_var, evidence);
+    } else try self.instantiateVar(scheme_var, env, .{ .explicit = region }, evidence);
 
     if (predeclared_scheme != null) {
         try self.recordPredeclaredDispatchUse(
@@ -58161,11 +58431,17 @@ fn validateDerivedParseVar(self: *Self, run: *ImplicitParseRun, env: *Env) Alloc
         runs.deinit(self.gpa);
     }
     try frames.append(self.gpa, .{ .task = .{ .var_ = .{ .var_ = run.validation_var, .context = .shape } } });
+    // The method instantiations of each position belong to the derivation
+    // of the run that position is in.
+    const active_frame_before = self.active_codec_derivation_frame;
+    defer self.active_codec_derivation_frame = active_frame_before;
     var input: ?DerivedParseValidation = null;
     while (true) {
         const frame = &frames.items[frames.items.len - 1];
         const run_depth = runs.items.len;
-        const inputs = (if (run_depth == 0) run else runs.items[run_depth - 1]).inputs(env);
+        const current_run = if (run_depth == 0) run else runs.items[run_depth - 1];
+        const inputs = current_run.inputs(env);
+        self.active_codec_derivation_frame = current_run.codec_frame;
         const step: DerivedCodecStep(DerivedParseTask) = switch (frame.task) {
             .implicit => |request| switch (frame.stage) {
                 .start => blk: {

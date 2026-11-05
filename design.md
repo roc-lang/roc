@@ -10918,6 +10918,40 @@ that error, and a parameter or returned record used only through field access
 nested records closing both at a boundary and outside any function, and that a
 shared value binding's record still collects fields from other definitions.
 
+### Codec Derivation Recurrence
+
+A generated codec's derivation instantiates its format's methods, and a
+method's own `where` clause can require a generated codec in turn. When that
+requirement asks for the codec being derived, as a string method whose clause
+requires the encoder of its state does when the state is the record being
+encoded, deriving it again would instantiate the same method and require the
+same codec once more, without end. Checking keeps the chain of derivations
+explicit instead: each derivation records a frame
+(`Check.codec_derivation_frames`) naming the derivation whose method
+instantiation required its relation, read from the requirements registered
+while that derivation ran (`codec_derivation_frame_by_child_fn_var`). A relation
+whose value shape, format, and state equal those of a derivation in its own
+chain (compared as `derivedCodecVarsEql` compares a recursive nominal's
+applications) is that derivation recurring. Its runtime callable is unified
+with the derivation's, so its error row is the derivation's, and it is
+published as a `GeneratedCodecRecurrence` rather than a derivation of its own.
+A recurrence of a derivation still in progress resolves when that derivation
+finishes; one of a rejected derivation is rejected without a report of its own,
+since the derivation's relation reported why. Every frame's parent precedes it,
+so the chain is finite, and the recurrence ends the walk because it
+instantiates nothing. Checked publication indexes a recurring relation at its
+derivation (`EvidencePass.buildIndexes`), so the method's evidence names the
+derivation that calls the method, and Monotype specializes the cycle like any
+recursive call.
+
+Under `.boxy` the cycle is a dictionary that captures itself: the constructor
+captures its format's local procedures, and the method's own scheme
+dictionary is that constructor. A constructor requested again while it is
+being composed (`Builder.beginCodecComposition`) is a back edge: the request
+takes a null word, every composition that captures it is noted, and once the
+constructor is composed each of those captures is filled with it through
+`dict_patch`, adapted to the type the back edge requested.
+
 ### Derived Parser Required-Field Error Composition
 
 Format methods, like custom nominal parsers, retain their own error rows.
@@ -11101,6 +11135,18 @@ it would to a use, and a generalized binding nothing uses (`_ = any_parser`)
 still has evidence at its construction.
 This validates in a private copy and rewrites no solved variable the program can
 reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
+
+The instance's copy of each of the template's variables is that variable
+throughout the instance's derivation (`Check.final_codec_instance_copies`). A
+format method of a type declared in the definition's body can name the
+definition's own variable in its signature (`rename_field : LocalFormat(a),
+Str -> Str`, with `a` the enclosing function's), and instantiating the method
+for the derivation reads that variable as the instance's copy rather than
+copying it again (`instantiateGeneratedCodecMethodTarget`). A second copy would
+carry the variable's `where` requirements as an instantiated relation of its
+own, whose receiver the instance's rigid copy then answers without being the
+variable the definition's clause declares. A derivation a format method's own
+requirement asks for reads the copies of the derivation that required it.
 
 A template relation that also reaches a variable of an enclosing scope
 (`_local = |_| U64.parser_for(Format.Default)(state)` inside a function of
@@ -13656,9 +13702,16 @@ types are one or commit one layout, since a reached row's source tags are a
 subset of its destination's and equal variant counts mean equal tag sets.
 
 A generated codec family (design.md "Dictionaries") seals in the same way.
-A family's value shape, encoding, and state are closed, so its only variables
-are those of its results, and its generated code constructs only the tags its
-contract names: nothing in a family's body can produce a value at a row tail.
+A family's value shape is closed, and its generated code constructs only the
+tags its contract names: nothing in a family's body can produce a value at a
+row tail. Its encoding and state can hold variables of the family: a format
+type declared in a function body lists the enclosing function's variables it
+depends on as hidden arguments (Body-Local Type Context), so a backing that
+stores one (`LocalFormat := [Default, Other(List(a))]`) has the instance's
+representation. Those are ordinary family variables with hidden descriptors;
+an erased family worker whose captures hold such an encoding reads them from a
+dynamic capture record (`beginDynamicErased`), and its callables are packed as
+dynamic closures.
 So a variable of the derivation's constructor type that seals to its row
 default (`variableSealsToRowDefault`) is no variable of the family
 (`contractEnv`), and takes no hidden descriptor. A family's helpers then have
