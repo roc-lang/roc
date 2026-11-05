@@ -197,6 +197,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     for (modules) |mod| {
         const artifact = mod.semantic.checked_artifact orelse continue;
         try artifacts_by_key.put(artifact.key.digest(), artifact);
+        // Glue reads every module's nominal representations.
+        _ = try artifact.typesView().interfaceCapabilities();
     }
 
     var type_table = TypeTable.init(gpa, &artifacts_by_key);
@@ -3221,7 +3223,7 @@ const TypeTable = struct {
                 };
             },
             .local_box_payload_capability => |capability_ref| blk: {
-                const capability = artifact.interface_capabilities.boxPayloadCapability(capability_ref.capability);
+                const capability = artifact.typesView().demandedInterfaceCapabilities().boxPayloadCapability(capability_ref.capability);
                 const declaration = artifact.checked_types.nominalDeclaration(capability.nominal) orelse
                     glueInvariant("boxed payload capability referenced a nominal declaration that is not in the owner artifact", .{});
                 break :blk .{ .artifact = artifact, .declaration = declaration };
@@ -3229,7 +3231,7 @@ const TypeTable = struct {
             .imported_box_payload_capability => |capability_ref| blk: {
                 const owner = self.artifacts_by_key.get(CheckedArtifact.importedBoxPayloadCapabilityModuleId(capability_ref)) orelse
                     glueInvariant("imported boxed payload capability referenced an artifact that glue did not load", .{});
-                const capability = owner.interface_capabilities.boxPayloadCapability(capability_ref.capability);
+                const capability = owner.typesView().demandedInterfaceCapabilities().boxPayloadCapability(capability_ref.capability);
                 const declaration = owner.checked_types.nominalDeclaration(capability.nominal) orelse
                     glueInvariant("imported boxed payload capability referenced a nominal declaration that is not in the owner artifact", .{});
                 break :blk .{ .artifact = owner, .declaration = declaration };
@@ -4444,7 +4446,7 @@ fn collectModuleTypeInfo(
 ) TypeTableError!?CollectedModuleTypeInfo {
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
     errdefer gpa.free(main_type_str);
-    for (artifact.checked_types.nominal_declarations.items) |declaration| {
+    for (artifact.checked_types.nominal_declarations.items()) |declaration| {
         const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(artifact.checked_types.nominalDeclarationName(declaration)));
         if (std.mem.eql(u8, type_name, module_name)) {
             gpa.free(main_type_str);

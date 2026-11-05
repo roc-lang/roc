@@ -1306,6 +1306,7 @@ pub fn run(
 
     var setup_timing_scope = TimingPhaseScope.begin(options.timing, .setup);
     defer setup_timing_scope.end();
+    try Common.demandInterfaceCapabilities(modules);
     var program = Ast.Program.init(allocator);
     errdefer program.deinit();
 
@@ -1486,7 +1487,6 @@ const ModuleViewData = struct {
     hoisted_constants: *const checked.HoistedConstTable,
     const_templates: *const checked.ConstTemplateTable,
     const_store: *const checked.ConstStore,
-    interface_capabilities: *const checked.ModuleInterfaceCapabilities,
     compile_time_root_reads: *const checked.CompileTimeRootReadTable,
     /// This module's dense id among the lowering input's modules, seeded
     /// once with the program's module tables.
@@ -12341,15 +12341,17 @@ const Builder = struct {
                 break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = decl.paddingFieldTypes(sv.types) };
             },
             .local_box_payload_capability => |cap| blk: {
-                const capability = view.interface_capabilities.boxPayloadCapability(cap.capability);
+                const capabilities = view.types.demandedInterfaceCapabilities();
+                const capability = capabilities.boxPayloadCapability(cap.capability);
                 const decl = view.types.nominalDeclaration(capability.nominal) orelse break :blk null;
-                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(view.interface_capabilities) };
+                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(capabilities) };
             },
             .imported_box_payload_capability => |cap| blk: {
                 const sv = self.moduleForId(checked.importedBoxPayloadCapabilityModuleId(cap));
-                const capability = sv.interface_capabilities.boxPayloadCapability(cap.capability);
+                const capabilities = sv.types.demandedInterfaceCapabilities();
+                const capability = capabilities.boxPayloadCapability(cap.capability);
                 const decl = sv.types.nominalDeclaration(capability.nominal) orelse break :blk null;
-                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(sv.interface_capabilities) };
+                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(capabilities) };
             },
             .builtin => |builtin_nominal| blk: {
                 const source_view = self.moduleForId(nominal.owner_module.*);
@@ -69129,7 +69131,6 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .hoisted_constants = view.hoisted_constants,
         .const_templates = view.const_templates,
         .const_store = view.const_store,
-        .interface_capabilities = view.interface_capabilities,
         .compile_time_root_reads = view.compile_time_root_reads,
     };
 }

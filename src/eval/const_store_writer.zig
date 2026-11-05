@@ -1360,7 +1360,6 @@ fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.
         .hosted_procs = .{},
         .platform_required_declarations = .{},
         .platform_required_bindings = .{},
-        .interface_capabilities = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
         .hoisted_constants = .{},

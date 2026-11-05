@@ -80,17 +80,6 @@ pub const SealedNominalRow = struct {
     representation: ?CheckedNominalRepresentationRef = null,
 };
 
-/// The representation interface capability publication gave one source
-/// nominal type: a box payload capability of the module.
-pub const SealedCapabilityRow = struct {
-    var_: u32,
-    representation: CheckedNominalRepresentationRef,
-
-    pub fn lessThan(_: void, left: SealedCapabilityRow, right: SealedCapabilityRow) bool {
-        return left.var_ < right.var_;
-    }
-};
-
 /// Per solver variable: whether publication reached it, and through which
 /// row-tail positions.
 pub const SealedVarFacts = packed struct(u8) {
@@ -107,7 +96,6 @@ pub const SealedTypeView = struct {
     origins: []const SealedOriginRow,
     nominals: []const SealedNominalRow,
     var_facts: []const SealedVarFacts,
-    capabilities: []const SealedCapabilityRow,
 
     fn typeStore(self: SealedTypeView) *const types.Store {
         return &self.env.types;
@@ -154,21 +142,6 @@ pub const SealedTypeView = struct {
         const row = self.originRow(origin);
         if (row.has_owner == 0) invariant("a sealed checked type named a type from a module with no available checked owner", .{});
         return &row.owner;
-    }
-
-    /// The box payload capability representation publication gave the
-    /// nominal type `var_`, if any.
-    fn capabilityOf(self: SealedTypeView, var_: Var) ?CheckedNominalRepresentationRef {
-        const raw: u32 = @backingInt(var_);
-        var low: usize = 0;
-        var high: usize = self.capabilities.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const row = self.capabilities[mid];
-            if (row.var_ == raw) return row.representation;
-            if (row.var_ < raw) low = mid + 1 else high = mid;
-        }
-        return null;
     }
 
     fn facts(self: SealedTypeView, var_: Var) SealedVarFacts {
@@ -258,7 +231,7 @@ pub const SealedTypeView = struct {
                         .source_decl = nominal.statement(),
                         .builtin = row.builtin,
                         .is_opaque = nominal.isOpaque(),
-                        .representation = self.capabilityOf(var_) orelse row.representation orelse
+                        .representation = row.representation orelse
                             invariant("a sealed nominal type names a declaration whose owner publication could not resolve", .{}),
                         .args = type_ids.fromVars(type_store.sliceNominalArgs(nominal)),
                     } };

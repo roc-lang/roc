@@ -1484,7 +1484,7 @@ pub const Program = struct {
         for (self.modules.views.items) |*view| {
             const env = view.view.module_env;
             const ident = env.common.findIdent(qualified) orelse continue;
-            for (view.types().nominal_declarations) |declaration| {
+            for (view.types().nominalDeclarationRows()) |declaration| {
                 if (declaration.source_statement >= env.store.nodes.len()) continue;
                 const node: can.CIR.Node.Idx = @fromBackingInt(@intCast(declaration.source_statement));
                 if (env.store.nodes.get(node).tag != .statement_nominal_decl) continue;
@@ -2406,6 +2406,7 @@ pub fn poolSlice(comptime T: type, pool: []const T, span: anytype) []const T {
 /// Lower the requested roots and everything they reach.
 pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     base.dev_diagnostics.traceBoxyWork("boxy lowering");
+    try Common.demandInterfaceCapabilities(input.modules);
     var result = try LirProgram.Result.init(allocator, input.target_usize);
     const program = allocator.create(Program) catch |err| {
         result.deinit();

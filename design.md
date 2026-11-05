@@ -5145,6 +5145,26 @@ its id alone, because its key names its variables only by position. Whether
 a type reaches an identity variable is found by walking the types it reaches,
 never through its key.
 
+The store grows while other threads read it. Its columns are append-only
+lists that one creator at a time grows while every other thread reads them
+without a lock (`collections.PublishedList`): a reader loads a column's
+published length, then its backing, and growth copies the column into a new
+backing and keeps the old one alive; replaced backings are freed only when
+the store is published, before any other thread reads it, and with the
+module. An item a reader can name never moves or changes. Once other threads can read the
+store, a creation holds the store's creation lock
+(`CheckedTypeStore.beginCreation`, `endCreation`) from its first append until
+every type it made is complete, waits on no slot while holding it, and lets
+an id it created reach another thread only after it ends; creation's
+in-workspace memos are read and written only under that lock. Synthesized
+key slots never move (`collections.StableList`), and the key index answers
+over the roots complete when it is asked, growing as roots are created. A
+cache entry holds exactly the types the store held when the module was
+published (`markPublished`); a type created later is created again by the
+first consumer that needs it after a cache hit. Synthesized ids follow
+creation order, so no consumer orders anything that reaches output by a
+synthesized id.
+
 A synthesized type's key is computed on first demand through its own key
 slot, like a source type's. A synthesized function type records that its key
 composes its children's keys (`CheckedTypeKeyRecipe.synthetic_function`), and
@@ -5282,9 +5302,9 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   (template demand vectors, literal requirements) are claimed for a whole
   strongly connected component of the module's call graph, never per root.
 - Per-module slots: the key index (one over source types, one over
-  synthesized types), interface capabilities, the method registry view,
-  provided exports, the nodes whose dispatch plan cannot run, diagnostic
-  errors, and single-source calls.
+  synthesized types), the method registry view, provided exports, the
+  nodes whose dispatch plan cannot run, diagnostic errors, and
+  single-source calls.
 - Per-module slots of `check.ModuleAnalyses`
   (`src/check/module_analyses.zig`), which every checked module owns:
   the template closures of the module's export rows (`exportClosures`),
@@ -5295,12 +5315,27 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   and the modules lowering its roots reads (`loweringVisibility`: its
   direct imports, its public API dependencies, the owners of its root
   types, the modules its roots, exports and platform requirement
-  bindings reach, and their public API dependencies). A platform/app
-  pairing has analyses of its own; its export closures and public API
-  dependencies are its platform's. A constant's closure follows the
-  template its compile-time root evaluates whether or not evaluation has
-  stored the constant's value, so the result is the same before and after
-  evaluation.
+  bindings reach, and their public API dependencies), and the box payload
+  capabilities of the module's local nominal types
+  (`interfaceCapabilities`: for every local nominal source type checking
+  reached and every local nominal synthesized type the module held when
+  it was published, the instance's capability, its instantiated backing
+  and padding types, which the computation creates, and whether an opaque
+  instance's backing holds no callable). A platform/app pairing has
+  analyses of its own; its export closures, public API dependencies and
+  interface capabilities are its platform's, and a pairing demands its
+  platform's capabilities before it borrows the platform's types. A
+  constant's closure follows the template its compile-time root evaluates
+  whether or not evaluation has stored the constant's value, so the result
+  is the same before and after evaluation.
+
+A nominal type's representation as the store holds it names its
+declaration. A consumer that reads a module's nominal representations
+(Monotype and Boxy lowering of every module they read, glue, compile-time
+root graphs, the publication of every module that imports it, a
+platform/app pairing) demands the module's interface capabilities first;
+from then on every read of one of the module's nominal types carries the
+capability representation it was given (`CheckedTypeStoreView.payload`).
 
 A slot (`collections.OnceSlot`) is a state word with three states: empty,
 claimed and done; a claimed word also records whether a consumer is parked on

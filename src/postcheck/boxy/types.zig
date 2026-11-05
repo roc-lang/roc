@@ -459,7 +459,7 @@ pub const Store = struct {
     pub fn declarationBySourceDecl(self: *Store, view: *const ModuleView, source_decl: u32) Allocator.Error!?checked.CheckedNominalDeclarationId {
         if (!self.decl_sources_indexed.contains(view.index)) {
             try self.decl_sources_indexed.put(self.allocator, view.index, {});
-            for (view.types().nominal_declarations) |declaration| {
+            for (view.types().nominalDeclarationRows()) |declaration| {
                 try self.decl_by_source.put(self.allocator, .{ .module = view.index, .source_decl = declaration.nominal.source_decl }, declaration.id);
             }
         }
@@ -469,7 +469,7 @@ pub const Store = struct {
     pub fn declarationByKey(self: *Store, view: *const ModuleView, key: names.NominalTypeKey) Allocator.Error!?checked.CheckedNominalDeclarationId {
         if (!self.decl_keys_indexed.contains(view.index)) {
             try self.decl_keys_indexed.put(self.allocator, view.index, {});
-            for (view.types().nominal_declarations) |declaration| {
+            for (view.types().nominalDeclarationRows()) |declaration| {
                 try self.decl_by_key.put(self.allocator, .{ .module = view.index, .key = declaration.nominal }, declaration.id);
             }
         }
@@ -1513,14 +1513,14 @@ pub const Converter = struct {
                 break :blk .{ .module = owner.index, .decl = declaration.id };
             },
             .local_box_payload_capability => |cap| blk: {
-                const capability = view.view.interface_capabilities.boxPayloadCapability(cap.capability);
+                const capability = view.view.checked_types.demandedInterfaceCapabilities().boxPayloadCapability(cap.capability);
                 const decl = (try self.store.declarationByKey(view, capability.nominal)) orelse
                     invariant("a box payload capability names a nominal its module does not declare");
                 break :blk .{ .module = view.index, .decl = decl };
             },
             .imported_box_payload_capability => |cap| blk: {
                 const owner = self.modules.byKey(cap.artifact);
-                const capability = owner.view.interface_capabilities.boxPayloadCapability(cap.capability);
+                const capability = owner.view.checked_types.demandedInterfaceCapabilities().boxPayloadCapability(cap.capability);
                 const decl = (try self.store.declarationByKey(owner, capability.nominal)) orelse
                     invariant("a box payload capability names a nominal its module does not declare");
                 break :blk .{ .module = owner.index, .decl = decl };
@@ -1602,7 +1602,7 @@ pub const Converter = struct {
         // the rest of the module's source leaves alone.
         var ordinal: u32 = 0;
         const name = view.types().nominalDeclarationName(declaration);
-        for (view.types().nominal_declarations[0..@backingInt(decl.decl)]) |earlier| {
+        for (view.types().nominalDeclarationRows()[0..@backingInt(decl.decl)]) |earlier| {
             if (view.types().nominalDeclarationName(earlier) == name) ordinal += 1;
         }
         return try self.store.internDeclName(decl, self.modules.linkName(decl.module), ordinal, text);

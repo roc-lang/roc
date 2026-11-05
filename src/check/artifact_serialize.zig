@@ -646,6 +646,8 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
                     try @field(self, field_name).serialize(&@field(store, field_name), gpa, writer);
                 } else if (comptime isArrayListType(@TypeOf(@field(store, field_name)))) {
                     try @field(self, field_name).serialize(@field(store, field_name).items, gpa, writer);
+                } else if (comptime isPublishedListType(@TypeOf(@field(store, field_name)))) {
+                    try @field(self, field_name).serialize(@field(store, field_name).items(), gpa, writer);
                 } else {
                     try @field(self, field_name).serialize(@field(store, field_name), gpa, writer);
                 }
@@ -669,6 +671,8 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
                     @field(self, field_name).deserialize(base_addr);
                 if (comptime isArrayListType(@TypeOf(@field(store, field_name)))) {
                     @field(store, field_name) = arrayListFromSlice(@typeInfo(@TypeOf(value)).pointer.child, value);
+                } else if (comptime isPublishedListType(@TypeOf(@field(store, field_name)))) {
+                    @field(store, field_name) = .borrowing(value);
                 } else {
                     @field(store, field_name) = value;
                 }
@@ -839,6 +843,11 @@ fn initTransient(comptime FT: type, comptime Store: type, comptime name: []const
 /// `arrayListFromSlice` adapting versus being a plain slice.
 fn isArrayListType(comptime T: type) bool {
     return @typeInfo(T) == .@"struct" and @hasField(T, "items") and @hasField(T, "capacity");
+}
+
+/// Whether `T` is a `collections.PublishedList`.
+fn isPublishedListType(comptime T: type) bool {
+    return @typeInfo(T) == .@"struct" and @hasField(T, "published_len");
 }
 
 /// Errors that can occur in serialization round-trip tests.

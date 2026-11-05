@@ -19,6 +19,9 @@ const ModuleResolver = checked_artifact.ModuleResolver;
 const ExportClosures = checked_artifact.ExportClosures;
 const PublicApiDependencies = checked_artifact.PublicApiDependencies;
 const LoweringVisibility = checked_artifact.LoweringVisibility;
+const ModuleInterfaceCapabilities = checked_artifact.ModuleInterfaceCapabilities;
+const CheckedTypeStore = checked_artifact.CheckedTypeStore;
+const canonical = @import("canonical_names.zig");
 
 /// The per-module analyses of one checked module. `allocator` must be safe
 /// to use from every thread that reads the module.
@@ -31,6 +34,7 @@ pub const ModuleAnalyses = struct {
     export_closures: collections.OnceSlot(*ExportClosures, .module_export_closures) = .empty,
     public_api_dependencies: collections.OnceSlot(*PublicApiDependencies, .module_public_api_dependencies) = .empty,
     lowering_visibility: collections.OnceSlot(*LoweringVisibility, .module_lowering_visibility) = .empty,
+    interface_capabilities: collections.OnceSlot(*ModuleInterfaceCapabilities, .module_interface_capabilities) = .empty,
 
     pub fn create(allocator: Allocator, io: std.Io, platform: ?*const CheckedModuleArtifact) Allocator.Error!*ModuleAnalyses {
         const analyses = try allocator.create(ModuleAnalyses);
@@ -48,6 +52,10 @@ pub const ModuleAnalyses = struct {
         if (self.lowering_visibility.peek()) |visibility| {
             visibility.deinit(allocator);
             allocator.destroy(visibility);
+        }
+        if (self.interface_capabilities.peek()) |capabilities| {
+            capabilities.deinit(allocator);
+            allocator.destroy(capabilities);
         }
         allocator.destroy(self);
     }
@@ -68,6 +76,34 @@ pub const ModuleAnalyses = struct {
     pub fn loweringVisibility(self: *ModuleAnalyses, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!*const LoweringVisibility {
         return self.lowering_visibility.getOrCompute(self.io, Allocator.Error, Request{ .analyses = self, .owner = owner, .resolver = resolver }, Request.loweringVisibility);
     }
+
+    /// The box payload capabilities of the local nominal types of `store`,
+    /// the store of this module's types.
+    pub fn interfaceCapabilities(self: *ModuleAnalyses, store: *CheckedTypeStore, current_module: canonical.ModuleIdentityId) Allocator.Error!*const ModuleInterfaceCapabilities {
+        return self.interface_capabilities.getOrCompute(self.io, Allocator.Error, CapabilityRequest{ .analyses = self, .store = store, .current_module = current_module }, CapabilityRequest.compute);
+    }
+
+    /// The interface capabilities when a consumer has demanded them.
+    pub fn peekInterfaceCapabilities(self: *const ModuleAnalyses) ?*const ModuleInterfaceCapabilities {
+        return self.interface_capabilities.peek();
+    }
+
+    const CapabilityRequest = struct {
+        analyses: *ModuleAnalyses,
+        store: *CheckedTypeStore,
+        current_module: canonical.ModuleIdentityId,
+
+        fn compute(request: CapabilityRequest) Allocator.Error!*ModuleInterfaceCapabilities {
+            const analyses = request.analyses;
+            const allocator = analyses.allocator;
+            const capabilities = try allocator.create(ModuleInterfaceCapabilities);
+            errdefer allocator.destroy(capabilities);
+            request.store.beginCreation(analyses.io);
+            defer request.store.endCreation(analyses.io);
+            capabilities.* = try ModuleInterfaceCapabilities.compute(allocator, request.store, request.current_module);
+            return capabilities;
+        }
+    };
 
     fn platformAnalyses(platform: *const CheckedModuleArtifact) *ModuleAnalyses {
         return platform.module_analyses orelse checked_artifact.checkedArtifactInvariant("a pairing's platform has no module analyses", .{});

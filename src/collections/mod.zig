@@ -48,6 +48,8 @@ pub const VersionedHashMap = @import("VersionedMap.zig").VersionedHashMap;
 pub const DenseMapPool = @import("DenseMap.zig").DenseMapPool;
 /// A write-once slot for a fact computed by whichever consumer first needs it.
 pub const OnceSlot = @import("OnceSlot.zig").OnceSlot;
+pub const PublishedList = @import("PublishedList.zig").PublishedList;
+pub const StableList = @import("StableList.zig").StableList;
 pub const ScopedBitSet = @import("ScopedBitSet.zig");
 pub const RekeyingHashMap = @import("RekeyingHashMap.zig").RekeyingHashMap;
 /// Loop-nesting forest of a reducible directed graph.
@@ -118,6 +120,8 @@ test "collections tests" {
     std.testing.refAllDecls(@import("DenseMap.zig"));
     std.testing.refAllDecls(@import("RingQueue.zig"));
     std.testing.refAllDecls(@import("OnceSlot.zig"));
+    std.testing.refAllDecls(@import("PublishedList.zig"));
+    std.testing.refAllDecls(@import("StableList.zig"));
     std.testing.refAllDecls(@import("ChainedBuckets.zig"));
     std.testing.refAllDecls(@import("any_all.zig"));
     std.testing.refAllDecls(@import("VersionedMap.zig"));

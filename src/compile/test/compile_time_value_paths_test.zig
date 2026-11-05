@@ -57,9 +57,12 @@ fn optimizedTarget(inline_mode: lir.CheckedPipeline.InlineMode) lir.CheckedPipel
     return .{ .inline_expects = .omit, .inline_mode = inline_mode, .specialize_arc_modes = true, .prove_uniqueness = true };
 }
 
-/// Both runtime programs of one app.
+/// Both runtime programs of one app. The coordinator and the builtin
+/// modules it reads live on the heap: a coordinator records its own address
+/// on the thread that runs it, so it never moves.
 const Lowered = struct {
-    coord: Coordinator,
+    builtin_modules: *eval.BuiltinModules,
+    coord: *Coordinator,
     continued: lir.CheckedPipeline.LoweredProgram,
     restored: lir.CheckedPipeline.LoweredProgram,
     /// The continued program's materialized static data: the image a build
@@ -71,6 +74,9 @@ const Lowered = struct {
         self.restored.deinit();
         self.continued.deinit();
         self.coord.deinit();
+        std.testing.allocator.destroy(self.coord);
+        self.builtin_modules.deinit();
+        std.testing.allocator.destroy(self.builtin_modules);
     }
 };
 
@@ -92,14 +98,18 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data = source });
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", arena);
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
-    defer builtin_modules.deinit();
-    var coord = try Coordinator.init(
+    const builtin_modules = try gpa.create(eval.BuiltinModules);
+    errdefer gpa.destroy(builtin_modules);
+    builtin_modules.* = try eval.BuiltinModules.init(gpa, std.testing.io);
+    errdefer builtin_modules.deinit();
+    const coord = try gpa.create(Coordinator);
+    errdefer gpa.destroy(coord);
+    coord.* = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(gpa, gpa, io),
@@ -156,7 +166,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedTarget => return error.TestUnexpectedResult,
     };
-    return .{ .coord = coord, .continued = continued, .restored = restored, .image = image };
+    return .{ .builtin_modules = builtin_modules, .coord = coord, .continued = continued, .restored = restored, .image = image };
 }
 
 fn countListSlots(result: *const lir.Program.Result) usize {

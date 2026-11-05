@@ -471,6 +471,7 @@ pub fn rootHoldsFunction(
     while (pending.pop()) |item| {
         const seen_entry = try seen.getOrPut(allocator, .{ .key = item.key, .ty = item.ty });
         if (seen_entry.found_existing) continue;
+        _ = try item.types.interfaceCapabilities();
         switch (item.types.payload(item.ty)) {
             .function => return true,
             .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
@@ -527,8 +528,7 @@ pub fn rootHoldsFunction(
                     .imported_box_payload_capability => |imported| {
                         const declaring = typesOf(modules, imports, imported.artifact) orelse
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
-                        const capabilities = capabilitiesOf(modules, imports, imported.artifact) orelse
-                            base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
+                        const capabilities = try declaring.interfaceCapabilities();
                         const declaration = declaring.nominalDeclaration(capabilities.boxPayloadCapability(imported.capability).nominal) orelse
                             base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
                         try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaration.backing });
@@ -547,16 +547,6 @@ fn typesOf(modules: []const *const checked.CheckedModuleArtifact, imports: []con
     }
     for (imports) |import| {
         if (import.key.digest().eql(key)) return import.checked_types;
-    }
-    return null;
-}
-
-fn capabilitiesOf(modules: []const *const checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?*const checked.ModuleInterfaceCapabilities {
-    for (modules) |module| {
-        if (module.key.digest().eql(key)) return &module.interface_capabilities;
-    }
-    for (imports) |import| {
-        if (import.key.digest().eql(key)) return import.interface_capabilities;
     }
     return null;
 }

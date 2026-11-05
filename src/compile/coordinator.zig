@@ -4694,6 +4694,9 @@ pub const Coordinator = struct {
             return null;
         };
         const platform_keys = platform.checked_types.sealed_keys orelse coordinatorInvariant("a platform was paired before its key slots were attached", .{});
+        // The pairing reads the platform's capabilities and the types they
+        // name, so they exist before the pairing borrows the platform's types.
+        _ = platform.typesView().interfaceCapabilities() catch return null;
         const synthesized_keys = CheckedArtifact.SynthesizedTypeKeys.create(platform_keys.allocator, platform_keys.io, header.synthesizedTypeCount(platform)) catch return null;
         const body_analyses = CheckedArtifact.BodyAnalyses.create(
             platform_keys.allocator,
@@ -4709,6 +4712,7 @@ pub const Coordinator = struct {
             synthesized_keys.destroy();
             return null;
         };
+
         installed = true;
         return header.install(platform, arena, synthesized_keys, body_analyses, module_analyses);
     }
@@ -4987,6 +4991,7 @@ pub const Coordinator = struct {
         artifact_ptr.checked_types.attachSealedTypes(cached_env, sealed_keys, synthesized_keys);
         artifact_ptr.body_analyses = body_analyses;
         artifact_ptr.module_analyses = module_analyses;
+        artifact_ptr.attachCapabilitySource();
         sealed_keys_owned = false;
         synthesized_keys_owned = false;
         body_analyses_owned = false;
@@ -8795,7 +8800,7 @@ fn checkNominalIdentityFixture(
 
     const app = coord.appRootCheckedArtifact();
     var count: usize = 0;
-    for (app.checked_types.nominal_declarations.items) |declaration| {
+    for (app.checked_types.nominal_declarations.items()) |declaration| {
         const name = app.canonical_names.typeNameText(app.checked_types.nominalDeclarationName(declaration));
         if (!std.mem.eql(u8, name, type_name)) continue;
         out[count] = .{
