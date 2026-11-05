@@ -4680,8 +4680,11 @@ annotated members instantiate the pre-declared scheme, preserving sound
 polymorphic recursion for annotated defs, except recursion that grows its
 types forever (Growing Polymorphic Recursion, below). The same rule applies to
 block-local `s_decl` functions: each local function decl is a binding group
-of one with its own rank frame, and annotated (type-var-free) locals
-pre-declare their scheme. An unannotated local's lambda stays in that frame
+of one with its own rank frame, and annotated locals pre-declare their
+scheme. A type variable a local annotation looks up from an enclosing
+annotation belongs to the enclosing definition: the local's scheme shares it
+rather than quantifying it, so only the local's own variables can differ
+between its recursive uses. An unannotated local's lambda stays in that frame
 like a group member's; the frame's boundary unifies the pattern with the
 RHS, re-runs dispatch for receivers that unification pinned (an accumulator
 the recursive call passes as `[]`), and only then generalizes, so
@@ -7961,7 +7964,16 @@ there the next call's dynamic arguments live in the region, which a loop
 iteration would allocate again while they are still read, so the call is
 lowered like a tail call to any other procedure and replaces the frame
 (see "Frame-Replacing Calls"), whose dynamic arguments each backend moves out
-of the dying frame. A proven call to any other procedure has its continuation
+of the dying frame. A `.boxy` self call is also lowered that way when it does
+not pass the procedure's own descriptors, dictionaries, and literal arguments
+along unchanged: a polymorphic recursive call at other types needs the
+descriptors its body composes at entry composed again, which a loop jump never
+does. So is one that does not pass each dynamic parameter along unchanged: a
+dynamic parameter is the address of storage its caller owns, which a loop jump
+cannot rebind, while a frame-replacing call moves its dynamic arguments. A
+`.boxy` self-tail loop begins after the entry chain that composes those
+descriptors (`TailCalls.entry`), so every iteration shares them and each
+dynamic parameter's descriptor is defined before the loop binds it. A proven call to any other procedure has its continuation
 replaced by a `ret` of the call's target, so the tail position is structural:
 the statement after the call returns its result. That is the only form later
 stages read. A pass that moves a body into another procedure keeps the form:
@@ -15672,16 +15684,36 @@ final demand validation or materialization, just as an unfinished placeholder
 must be filled. Unification with a checked variable preserves the checked
 variable's defaulting evidence. A cell that is unresolved or carries representation
 authority is captured as itself: relating it back would not be plain
-unification. An unfinished expansion is joined only by the instantiation it
-expands: each hole slot of the joining request names the class the expanding
-request supplied, or the expansion's own hole cell, as a recursive call inside
-the expansion does. Across mutually recursive expansions a slot may name
-another unfinished expansion's hole cell, which stands for the class that
-expansion's request supplied, and is followed to it. A single-request component takes a parametric
+unification. An unfinished expansion is joined only by a request for the types it
+expands, slot by slot over every hole slot, whether it was captured as a hole
+or as itself. An unfinished expansion's hole cell stands for its request's node
+in that slot, which may itself be another unfinished expansion's cell, so a
+slot is followed through the cells it reaches down the expansion stack. Two
+slots denote the same type when the nodes they reach share a class (a
+recursive call inside the expansion names the expansion's own cell; a call
+that swaps variables names the cells in the other order and joins only the
+expansion whose request was swapped the same way), or when what they finally
+reach are both settled and equal (a concrete argument such as `1.U8` is a
+fresh class at each recursive call). Joining relates the request to the
+expansion's roots, so a slot that denoted a different type would unify two
+types the program keeps apart. A request that joins beyond the expansion's
+own cells unifies the cell with that other node, so the expansion's interface
+is specific to that type and is stored for no other request.
+
+A generalized local function's relations are applied in a child scope frame
+at its use. A use inside that frame is a recursive use, which an annotated
+local may make at another instantiation of its own variables, so it relates
+to a fresh instantiation of the scope's root that shares only the enclosing
+frames' variables. The active frame already applies the scope's relations,
+and what they imply about enclosing variables is the same at every
+instantiation.
+
+A single-request component takes a parametric
 summary from its expansion before relating back to the request, so the summary
 keeps its holes open. Members of a larger component relate back to each other's
 requests before their summaries are taken, so a parametric member stores no
-reusable summary. The pins are the monotype capture test
+reusable summary, and neither does a member whose request holds another
+member's hole cell, which that member's request settles. The pins are the monotype capture test
 "interface constraints capture representation-neutral holes as variables", the
 compile test "interface summaries share one expansion across parametric
 instantiations", and test/echo/parametric_interface_summaries.roc (a template
@@ -17119,7 +17151,12 @@ No refcount plan exists for a value holding a hole. ARC borrows every such
 parameter, because the body never consumes it: the solver starts the position
 borrowed and nothing demands it, and a pinned signature (a code-keyed, root,
 hosted, or erased-callable procedure's, which is the one its types determine)
-borrows the position by its type. Two invariants pin this: requesting a
+borrows the position by its type. A tail loop over a shaped procedure makes
+such a parameter a join parameter that each loop jump rebinds. That join
+parameter carries no ownership unit, and rebinding it demands nothing of its
+value: a value holding a hole comes only from the procedure's parameters, so
+every value the loop rebinds it to is a borrow of a parameter that lives for
+the whole call. Two invariants pin this: requesting a
 refcount operation on such a value fails, and so does a procedure signature
 that owns such a parameter. The interpreter's refcount-effect conformance
 observer names such a value's own allocation, a list or box header, and

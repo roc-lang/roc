@@ -1250,6 +1250,7 @@ const Transform = struct {
     /// Wrap the (rewritten) body in the loop join and re-point the proc at
     /// fresh argument locals; the original args become the join params.
     fn installWrapper(self: *Transform, comptime is_trmc: bool, initial: LocalId) ResourceError!void {
+        if (self.loopEntry() != null) return self.installWrapperAtEntry(is_trmc, initial);
         const old_body = self.store.getProcSpecImmediate(self.proc_id).body.?;
         const origin = trmcOrigin(self.store.stmtOrigin(old_body));
 
@@ -1318,19 +1319,83 @@ const Transform = struct {
     /// argument locals are already the initial loop-carried values, so enter
     /// the join directly and only rewrite recursive sites to rebind params.
     fn installTceLoop(self: *Transform) ResourceError!void {
-        const proc_ptr = self.store.getProcSpecPtr(self.proc_id);
-        const old_body = proc_ptr.body.?;
-        const origin = trmcOrigin(self.store.stmtOrigin(old_body));
-
+        const proc = self.store.getProcSpecImmediate(self.proc_id);
+        const loop_start = self.loopEntry() orelse proc.body.?;
+        const origin = trmcOrigin(self.store.stmtOrigin(loop_start));
         const entry_jump = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } }, origin);
-        const join_stmt = try self.store.addCFStmt(.{ .join = .{
-            .id = self.join_id,
-            .params = proc_ptr.args,
-            .body = old_body,
-            .remainder = entry_jump,
-        } }, origin);
+        try self.installJoin(proc.args, entry_jump, origin);
 
-        proc_ptr.body = join_stmt;
+        const proc_ptr = self.store.getProcSpecPtr(self.proc_id);
+        proc_ptr.frame_locals = try self.rebuildFrameLocals();
+        self.requireStackProbeIfNeeded(proc_ptr);
+    }
+
+    /// The statement the producer begins the loop at when the statements
+    /// before it run once per call (`LIR.TailCalls.entry`).
+    fn loopEntry(self: *const Transform) ?CFStmtId {
+        const sites = self.store.getProcSpecImmediate(self.proc_id).tail_calls orelse return null;
+        return sites.entry;
+    }
+
+    /// Install the loop's join where the loop begins, entered by `remainder`.
+    /// At the body's first statement the join becomes the body; at a later
+    /// entry statement the join takes that statement's place, and a copy of
+    /// the statement begins the join's body, so the statements before it
+    /// run once.
+    fn installJoin(self: *Transform, params: LIR.LocalSpan, remainder: CFStmtId, origin: LIR.StmtOrigin) ResourceError!void {
+        const entry = self.loopEntry() orelse {
+            const old_body = self.store.getProcSpecImmediate(self.proc_id).body.?;
+            const join_stmt = try self.store.addCFStmt(.{ .join = .{
+                .id = self.join_id,
+                .params = params,
+                .body = old_body,
+                .remainder = remainder,
+            } }, origin);
+            self.store.getProcSpecPtr(self.proc_id).body = join_stmt;
+            return;
+        };
+        const first = try self.store.addCFStmt(self.store.getCFStmt(entry), self.store.stmtOrigin(entry));
+        try self.store.replaceCFStmt(entry, .{ .join = .{
+            .id = self.join_id,
+            .params = params,
+            .body = first,
+            .remainder = remainder,
+        } }, origin);
+    }
+
+    /// TRMC's loop when it begins after the entry statements, which read
+    /// the procedure's own parameters: those stay the procedure's
+    /// parameters, and enter the loop as its first values, as in plain TCE.
+    fn installWrapperAtEntry(self: *Transform, comptime is_trmc: bool, initial: LocalId) ResourceError!void {
+        const entry = self.loopEntry().?;
+        const origin = trmcOrigin(self.store.stmtOrigin(entry));
+        var current = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } }, origin);
+        if (is_trmc) {
+            current = try self.store.addCFStmt(.{ .set_local = .{
+                .target = self.head,
+                .value = initial,
+                .mode = .initialize_join_param,
+                .next = current,
+            } }, origin);
+            current = try self.store.addCFStmt(.{ .set_local = .{
+                .target = self.hole,
+                .value = initial,
+                .mode = .initialize_join_param,
+                .next = current,
+            } }, origin);
+            current = try self.store.addLowLevelStmt(initial, .ptr_alloca, &.{}, current, origin);
+        }
+        const param_count = self.old_args.len + if (is_trmc) @as(usize, 2) else 0;
+        const params = try self.gpa.alloc(LocalId, param_count);
+        defer self.gpa.free(params);
+        @memcpy(params[0..self.old_args.len], self.old_args);
+        if (is_trmc) {
+            params[self.old_args.len] = self.hole;
+            params[self.old_args.len + 1] = self.head;
+        }
+        try self.installJoin(try self.store.addLocalSpan(params), current, origin);
+
+        const proc_ptr = self.store.getProcSpecPtr(self.proc_id);
         proc_ptr.frame_locals = try self.rebuildFrameLocals();
         self.requireStackProbeIfNeeded(proc_ptr);
     }

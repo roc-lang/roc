@@ -861,6 +861,7 @@ fn FrozenProcRows(comptime T: type) type {
 const Solver = struct {
     allocator: Allocator,
     store: *const LirStore,
+    layouts: *const layout_mod.Store,
     rc_local: []const bool,
     consume_dead_boxes: bool,
     /// Run the host-visibility analysis. Off, every local is visible.
@@ -960,6 +961,7 @@ pub fn solveWithOptions(
     var solver = Solver{
         .allocator = allocator,
         .store = store,
+        .layouts = layouts,
         .rc_local = rc_local,
         .consume_dead_boxes = consume_dead_boxes,
         .thread_confined_rc = thread_confined_rc,
@@ -1112,11 +1114,17 @@ pub fn solveWithOptions(
             // and a parameter holding a demand hole is borrowed by its type:
             // the body demands nothing of the hole, and no refcount operation
             // exists for a value holding one (design.md "Specialization By
-            // Demand"). The position is not tracked, so no demand flips it.
+            // Demand"). Such a parameter is a borrowed binding like any
+            // borrowed parameter, which nothing demands, so no demand flips
+            // the pinned position.
             const params = store.getLocalSpan(proc.args);
             for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
                 const param = GuardedList.at(params, position);
-                if (layouts.layoutHoldsHole(store.getLocal(param).layout_idx)) sig = sig.withBorrowedParam(position);
+                if (!layouts.layoutHoldsHole(store.getLocal(param).layout_idx)) continue;
+                sig = sig.withBorrowedParam(position);
+                const param_index = domain.indexOf(param) orelse continue;
+                solver.param_position[param_index] = @intCast(position);
+                solver.param_proc[param_index] = @intCast(proc_index);
             }
         }
         solver.sigs[proc_index] = sig;
@@ -2641,6 +2649,7 @@ fn flipParamIfRequired(solver: *Solver, local_index: u32, work: *std.ArrayList(u
     if (sig.paramMode(position) == .owned) return;
     const required = solver.demand[local_index] or solver.defs[local_index] == .multi;
     if (!required) return;
+    if (solver.pinned.isSet(proc_index)) solveInvariant("ARC demanded a parameter its pinned signature borrows");
     sig.borrowed_params &= ~arc_sig.paramBit(position).?;
     try work.append(solver.allocator, proc_index * arc_sig.tracked_param_count + position);
 }
@@ -2849,6 +2858,16 @@ fn liftVisibilitySeed(solver: *Solver, local: LIR.LocalId) SolveError!void {
     if (!solver.thread_confined_rc) return;
     if (solver.domain.indexOf(local) == null) return;
     try solver.visibility_facts.append(solver.allocator, .{ .seed = local });
+}
+
+/// Whether a join parameter carries an ownership unit into its body. One
+/// holding a demand hole carries none (design.md "Specialization By
+/// Demand"): only a tail loop over a demand-shaped procedure binds such a
+/// parameter, which is one of that procedure's own parameters, borrowed by
+/// its type, and every value the loop rebinds it to holds a hole too, so it
+/// is a borrow of one of those parameters, which live for the whole call.
+fn joinParamCarriesUnit(solver: *const Solver, param: LIR.LocalId) bool {
+    return !solver.layouts.layoutHoldsHole(solver.store.getLocal(param).layout_idx);
 }
 
 fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
@@ -3106,6 +3125,10 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             }
         },
         .set_local => |assign| {
+            // A join parameter holding a demand hole carries no ownership
+            // unit (`joinParamCarriesUnit`): initializing it neither defines
+            // a unit nor demands one of its value.
+            if (assign.mode == .initialize_join_param and !joinParamCarriesUnit(solver, assign.target)) return;
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             if (assign.target != assign.value) try solver.binding_facts.append(allocator, .{ .demand = assign.value });
             try liftVisibilityLink(solver, assign.target, assign.value);
@@ -3182,6 +3205,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             const params = store.getLocalSpan(join_stmt.params);
             for (0..GuardedList.borrowLen(params)) |param_index| {
                 const param = GuardedList.at(params, param_index);
+                if (!joinParamCarriesUnit(solver, param)) continue;
                 try solver.binding_facts.append(allocator, .{ .multi = param });
                 if (solver.domain.indexOf(param)) |arc_index| solver.join_param.set(arc_index);
                 try solver.unique_facts.append(allocator, .{ .join_target = param });
