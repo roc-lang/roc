@@ -389,7 +389,7 @@ const PlatformImmortals = struct {
 /// Reclaimable composition scratch. Published descriptors and interned keys
 /// use the program-lifetime allocator separately; these buffers do not escape.
 pub fn scratchAlloc(comptime T: type, count: usize, ops: *RocOps) []T {
-    if (comptime builtins.host_abi.host_role != .platform) {
+    if (comptime builtins.host_abi.host_role != .platform and !experiment.immortal_scratch) {
         if (comptime experiment.profile) {
             experiment.counters.scratch_allocs += 1;
             experiment.counters.scratch_bytes += count * @sizeOf(T);
@@ -406,7 +406,7 @@ pub fn scratchAlloc(comptime T: type, count: usize, ops: *RocOps) []T {
 }
 
 pub fn scratchFree(comptime T: type, items: []T, ops: *RocOps) void {
-    if (comptime builtins.host_abi.host_role != .platform) {
+    if (comptime builtins.host_abi.host_role != .platform and !experiment.immortal_scratch) {
         if (comptime experiment.pool) {
             std.debug.assert(scratch_live != 0);
             scratch_live -= 1;

@@ -1,7 +1,7 @@
 //! Compile-time experiments. No environment setting selects a cache policy.
-pub const Mode = enum { no_sites, no_intern, scratch_pool, no_sites_scratch_pool, profile };
+pub const Mode = enum { no_sites, no_intern, scratch_pool, no_sites_scratch_pool, immortal_scratch, profile };
 pub const mode: Mode = .no_sites;
-pub const sites = mode == .scratch_pool or mode == .profile;
+pub const sites = mode == .scratch_pool or mode == .immortal_scratch or mode == .profile;
 pub const intern = mode != .no_intern;
 pub const pool = mode == .scratch_pool or mode == .no_sites_scratch_pool;
 pub const profile = mode == .profile;
@@ -19,3 +19,4 @@ pub const Counters = struct {
     origin_notes: u64 = 0,
 };
 pub threadlocal var counters: Counters = .{};
+pub const immortal_scratch = mode == .immortal_scratch;
