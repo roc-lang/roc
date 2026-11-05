@@ -13615,6 +13615,16 @@ never recovers a substitution by matching types, never searches a type graph
 for where a descriptor could be read from, and never derives one hidden value
 from another by structural inspection of a representation.
 
+A direct call whose checked template carries `provided_low_level` emits that
+operation at the call's checked instantiation instead of calling its wrapper.
+The producer's explicit operation identity is authoritative: lowering does not
+inspect the wrapper's body or recognize a name. Operand evaluation, parameter
+adaptation and result adaptation keep their ordinary call order. Open list and
+box operations use the same descriptor operands as a `run_low_level` expression;
+closed operations use their committed layouts. Function values and erased calls
+retain the wrapper and its ordinary calling convention. This is direct lowering
+of a declared primitive, not general body inlining or specialization.
+
 #### Type Descriptors
 
 A type descriptor (`TypeDesc`) is an immutable, immortal runtime value that
@@ -13769,8 +13779,12 @@ values through descriptors, never on descriptors.
 #### Dynamic Values In LIR
 
 Template workers receive an additional hidden descriptor argument for each
-unique dynamic composite type in their parameters and result, in signature
-order (parameters, then result). Bare type variables already receive hidden
+unique dynamic composite type in their parameters and result and in those
+types' descriptor components. Roots follow signature order (parameters, then
+result); components follow breadth-first order, deduplicated by checked type.
+The graph is exactly the graph descriptor composition consumes, including
+nominal backings and open row extensions, and a visited set terminates recursive
+types. The lowerer memoizes this immutable requirement list per worker. Bare type variables already receive hidden
 descriptors, and representation-closed types need no additional argument.
 The caller substitutes the checked call edge's type arguments into these
 formal types and prepares the descriptors in its entry chain. The callee
@@ -14234,7 +14248,8 @@ the program and never shared between programs.
 
 Temporary composition keys, field-order buffers, and traversal stacks do not
 escape the composition operation. In-process execution allocates these from
-the reclaiming SMP allocator and frees them when the operation finishes;
+the reclaiming SMP allocator (the wasm allocator in the freestanding compiler)
+and frees them when the operation finishes;
 platform runtimes retain their existing host allocation/free operations.
 Published descriptors and copied interning keys still use program-lifetime
 storage. Repeated cache hits must not retain temporary buffers in that storage.

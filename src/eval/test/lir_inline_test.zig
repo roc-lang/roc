@@ -14287,8 +14287,10 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         const procs = try procsNamed(allocator, result, "pass");
         defer allocator.free(procs);
         try std.testing.expectEqual(@as(usize, 1), procs.len);
-        // The explicit parameter and the row variable's descriptor.
-        try std.testing.expectEqual(@as(usize, 2), result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args).len);
+        // The explicit parameter, the row variable's descriptor, and the
+        // descriptor of `[A, ..r]`, the dynamic composite its parameter and
+        // result share, which its caller prepares.
+        try std.testing.expectEqual(@as(usize, 3), result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args).len);
     }
     {
         const conversions = try procsNamed(allocator, result, "boxy.convert");
