@@ -19615,7 +19615,12 @@ re-testing columns already known. Exhaustiveness is consumed, never re-derived:
 a tag test whose arms cover the occurrence type's committed variant set emits
 its last arm as the switch default (a single-variant union emits no dispatch at
 all); open matches keep the `comptime_exhaustiveness_failed` / `runtime_error`
-terminal.
+terminal. Both lowerers end a failed match or destructure in
+`comptime_exhaustiveness_failed`, naming its checked exhaustiveness site,
+exactly when the site is in a compile-time root's own expression (not in a
+function it calls or defines) and checking left the site a pending diagnostic,
+so the evaluator reports the site's empirical failure whichever strategy
+lowered the root; every other failed test ends in `runtime_error`.
 
 Named record-rest binders are derived values, not durable pattern decisions.
 Monotype pattern lowering removes the rest binder from the record pattern,

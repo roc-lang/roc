@@ -33,6 +33,9 @@ const CheckedPatternId = checked.CheckedPatternId;
 pub const State = struct {
     arena: std.heap.ArenaAllocator,
     emitter: *Compiler.Emitter = undefined,
+    /// The terminal a value no branch matches ends in
+    /// (`Builder.patternFailure`).
+    failure: LIR.CFStmt,
     /// The join the branch bodies jump to with their values; a match in
     /// tail position returns from each branch instead.
     done: LIR.JoinPointId,
@@ -488,7 +491,7 @@ pub const Ctx = struct {
     }
 
     pub fn failTerminal(self: Ctx) Allocator.Error!LIR.CFStmtId {
-        return try self.b.store.addCFStmt(.runtime_error, self.b.origin(.lowering_glue));
+        return try self.b.store.addCFStmt(self.state.failure, self.b.origin(.lowering_glue));
     }
 
     pub fn lirLocalForOcc(self: Ctx, step: match_tree.Step, ty: types.TypeId, parent: ?LIR.LocalId) Allocator.Error!LIR.LocalId {
