@@ -19858,6 +19858,10 @@ rules as concrete products. Generic record projections copy representation
 bytes into independent frame storage; owning a projected value therefore
 never relies on its container's storage remaining alive. This copy does not
 retain payloads. ARC alone emits the retains, takes and residual decrefs.
+Once a product's stored RC units have all moved, its independent frame or
+parameter representation still permits scalar-field reads. A dynamic interior
+view has no such independent lifetime, and reading an RC field still requires
+its stored unit to be live. Certification distinguishes these cases explicitly.
 Runtime-sized list/box interior views continue to borrow their backing
 storage. ARC's temporary projections used only for an immediate residual
 release may also address the field in place. Every dynamic RC statement uses

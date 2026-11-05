@@ -2301,9 +2301,15 @@ const Certifier = struct {
         return value;
     }
 
+    fn isInlineProductRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
+        const value = self.store.getLocal(local);
+        return self.layouts.getLayout(value.layout_idx).tag == .struct_ or
+            (value.product != .none and value.dyn.?.storage != .view);
+    }
+
     fn isInlineAggregateRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
-        const layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
-        return layout.tag == .struct_ or layout.tag == .tag_union or self.store.getLocal(local).product != .none;
+        return self.isInlineProductRepresentation(local) or
+            self.layouts.getLayout(self.store.getLocal(local).layout_idx).tag == .tag_union;
     }
 
     fn isListRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
@@ -6004,7 +6010,7 @@ const Certifier = struct {
         shell: anytype,
     ) CertifyError!void {
         if (!self.isRc(target) and self.isRc(source) and
-            self.layouts.getLayout(self.store.getLocal(source).layout_idx).tag == .struct_)
+            self.isInlineProductRepresentation(source))
         {
             _ = try self.requireAggregateRepresentation(state, source);
             return;
@@ -10690,4 +10696,46 @@ test "certify known variant prunes a join body's infeasible arm" {
 test "certify known variant does not prune an arm a later jump reaches" {
     // Branches arrive last-listed first, so variant 1 reaches the join first.
     try testing.expectError(error.Certification, certifyKnownVariantJoin(&.{ 0, 1 }));
+}
+
+test "certify dynamic product scalar reads preserve representation but not released payloads" {
+    for ([_]LIR.DynStorage{ .param, .view }) |storage| {
+        for ([_]bool{ false, true }) |read_rc| {
+            var f = try CertifyTest.init(testing.allocator);
+            defer f.deinit();
+            const dynamic = try f.layouts.dynamicLayout();
+            const desc = try f.local(.opaque_ptr);
+            const record = try f.store.addLocal(.{
+                .layout_idx = dynamic,
+                .dyn = .{ .desc = desc, .storage = storage },
+                .product = try f.store.addStmtRow(LIR.ProductShape, .{
+                    .layouts = try f.store.addU32Span(&.{ @backingInt(layout_mod.Idx.str), @backingInt(layout_mod.Idx.i64) }),
+                    .slots = try f.store.addU32Span(&.{ 0, 1, 2 }),
+                    .descriptors = try f.store.addLocalSpan(&.{ desc, desc }),
+                }),
+            });
+            const field = try f.local(.str);
+            const result_layout: layout_mod.Idx = if (read_rc) .str else .i64;
+            const result = try f.local(result_layout);
+            const ret = try f.ret(result);
+            const read = try fieldReadStmt(&f, result, record, if (read_rc) 0 else 1, ret);
+            const join_id = f.freshJoinPointId();
+            const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+            const release = try f.decrefStmt(field, .str, jump);
+            const take = try fieldReadStmt(&f, field, record, 0, release);
+            const body = try f.store.addCFStmt(.{ .join = .{
+                .id = join_id,
+                .params = .empty(),
+                .body = read,
+                .remainder = take,
+            } }, .test_fixture);
+            _ = try f.addProc(&.{ desc, record }, body, result_layout);
+            if (storage == .param and !read_rc) {
+                try f.certify();
+            } else {
+                try testing.expectError(error.Certification, f.certify());
+                try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
+            }
+        }
+    }
 }
