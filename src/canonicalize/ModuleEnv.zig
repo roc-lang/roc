@@ -920,8 +920,12 @@ pub const CheckingDependency = struct {
     };
 };
 
-/// One generated-codec dispatch relation that remains part of a binding's
-/// scheme across checked-module boundaries. `scheme_root` preserves alias
+/// One dispatch relation that remains part of a binding's scheme across
+/// checked-module boundaries: a generated-codec relation, which every later
+/// specialization revalidates, or a relation of a function-body binding's
+/// scheme whose callable reaches a variable the scheme quantifies but its type
+/// does not, which evidence reads that variable through (design.md "Scheme
+/// Relations Through Unrooted Variables"). `scheme_root` preserves alias
 /// identity when a cached checked environment is rechecked, and
 /// `constraint_index` names the exact `StaticDispatchConstraint` in this
 /// environment's serialized `TypeStore`; import copying therefore preserves

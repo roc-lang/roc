@@ -4936,6 +4936,39 @@ The accepted and rejected sides are pinned by
 `test/cli/issue_12482_encoder_for_in_nested_function.roc`, and
 `test/cli/lifted_use_leaves_other_uses/`.
 
+### Scheme Relations Through Unrooted Variables
+
+A generalized function-body binding can quantify a variable its type never
+mentions. In
+
+```roc
+f = |r| {
+    h = |_n| {
+        g = |s| r.to_str().concat(s)
+        g(".")
+    }
+    h(1.U8)
+}
+```
+
+`g`'s requirement on the result of `r.to_str()` takes `s`, and `h`'s use of
+`g` copies that requirement with a fresh `s`, the type of `"."`. `r`'s method
+is the enclosing function's, so the relation is an explicit requirement of
+`h`'s scheme, and `h` quantifies the fresh `s`: each use of `h` copies the
+requirement again, relating its own copy of that type to `r`'s method. `h`'s
+type reaches none of it.
+
+When the closing boundary drops `h`'s checker-only scheme, it publishes each
+such requirement, one whose callable reaches a quantified variable the scheme's
+type and the constraints on it do not, on the binding scheme
+(`ModuleEnv.BindingSchemeCodecRequirement`, beside the generated-codec
+relations). The evidence pass walks the published callable, so the variable's
+own requirements, `from_quote` here, become parameters of `h`'s scope, and each
+use's scheme-use substitution supplies them from the caller's copy. A
+requirement whose callable reaches only variables the type reaches is not
+published: evidence already finds them through the type.
+`test/cli/GeneralizedLocalReturnsEvidenceClosure.roc` pins the program above.
+
 ### Value Bindings Generalize By Expression
 
 Adding an annotation may only make a binding's type less flexible, never more.
