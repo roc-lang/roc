@@ -4741,6 +4741,12 @@ const Inserter = struct {
         next: LIR.CFStmtId,
     ) ResourceError!AliasBindTransfer {
         if (target == value) return .{ .retain_target = false, .release_old_target = false };
+        // A join parameter holding a demand hole carries no unit
+        // (`arc_solve.joinParamCarriesUnit`), so rebinding it transfers none.
+        if (self.layouts.layoutHoldsHole(self.store.getLocal(target).layout_idx)) {
+            std.debug.assert(self.isBindingBorrowed(target));
+            return .{ .retain_target = false, .release_old_target = false };
+        }
         const move_value = try self.canMoveAliasBindValue(owned, value, target, next);
         const release_old_target = try self.takeRebindTarget(owned, target);
         if (move_value) _ = try self.takeUnit(owned, value);
