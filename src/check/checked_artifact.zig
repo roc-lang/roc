@@ -29524,7 +29524,9 @@ const PublicApiClosureDependencyCollector = struct {
                 if (entry.found_existing) return;
                 entry.value_ptr.* = {};
 
-                const index: usize = template_ref.template.rowIndex() orelse self.checked_templates.templates.items.len;
+                // A literal root's entry wrapper converts a closed literal of
+                // this module and reads nothing beyond it.
+                const index: usize = template_ref.template.rowIndex() orelse return;
                 if (index >= self.checked_templates.templates.items.len) {
                     checkedArtifactInvariant("public API closure dependency referenced missing local procedure template", .{});
                 }

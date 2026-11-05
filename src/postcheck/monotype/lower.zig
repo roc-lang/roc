@@ -12135,7 +12135,12 @@ const Builder = struct {
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(module_name.len))));
         hasher.update(module_name);
         hasher.update(@tagName(proc_base.kind));
-        if (proc_base.export_name) |name| {
+        if (template.template.rowIndex() == null) {
+            // Every literal root's entry wrapper shares one procedure base;
+            // its template id, its root's identity, names it.
+            hasher.update("literal_root");
+            template.template.digestInto(&hasher);
+        } else if (proc_base.export_name) |name| {
             const text = view.names.exportNameText(name);
             hasher.update("named");
             hasher.update(std.mem.asBytes(&@as(u32, @intCast(text.len))));
