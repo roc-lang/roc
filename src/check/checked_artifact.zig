@@ -19119,6 +19119,8 @@ const NestedProcSiteScan = struct {
     /// The positions of the sites whose bodies the walk is inside, innermost
     /// last.
     open_sites: std.ArrayList(u32) = .empty,
+    /// Every expression the scan has constructed a site at.
+    constructed: collections.DenseMap(CIR.Expr.Idx, void),
 
     fn deinit(self: *NestedProcSiteScan) void {
         self.sites.deinit(self.allocator);
@@ -19127,6 +19129,7 @@ const NestedProcSiteScan = struct {
         self.selections.deinit(self.allocator);
         self.work.deinit(self.allocator);
         self.open_sites.deinit(self.allocator);
+        self.constructed.deinit();
     }
 
     fn scanEntryWrapper(self: *NestedProcSiteScan, root: CompileTimeRoot) Allocator.Error!void {
@@ -19230,6 +19233,13 @@ const NestedProcSiteScan = struct {
         expr_id: CIR.Expr.Idx,
         suppress_current_site: bool,
     ) Allocator.Error!void {
+        const bodies = self.bodies;
+        const data = bodies.exprData(expr_id);
+        // A local procedure a type declaration attaches can also be reached
+        // through the body; its site is the first occurrence the scan reaches.
+        if (!suppress_current_site and (data == .closure or data == .lambda or data == .hosted_lambda)) {
+            if ((try self.constructed.getOrPut(expr_id)).found_existing) return;
+        }
         const previous_scope = self.current_scope;
         self.current_scope = nestedProcLexicalScope(
             previous_scope,
@@ -19237,8 +19247,6 @@ const NestedProcSiteScan = struct {
             self.scope_by_checked_expr,
             self.dispatch_scopes,
         );
-        const bodies = self.bodies;
-        const data = bodies.exprData(expr_id);
         try self.pushWork(.{ .exit_expr = .{ .previous_scope = previous_scope, .open_site_mark = self.open_sites.items.len } });
         const children = self.beginChildren();
         switch (data) {
@@ -19622,6 +19630,7 @@ pub fn computeOwnerNestedProcSites(
         .resolved_value_refs = source.refs,
         .dispatch_scopes = source.templates.dispatch_scopes,
         .scope_by_checked_expr = scope_by_checked_expr,
+        .constructed = collections.DenseMap(CIR.Expr.Idx, void).init(allocator),
     };
     defer scan.deinit();
     switch (owner) {
