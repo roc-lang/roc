@@ -8764,6 +8764,26 @@ pub const Builder = struct {
         try self.push(if (join) |id| .{ .jump = id } else .ret);
     }
 
+    /// What a match reports when no branch matches: in a compile-time
+    /// program, a match of a root's own body, outside every function it
+    /// builds, fails as the empirical failure of its checked exhaustiveness
+    /// site, as the `.lss` evaluator's does (design.md "Compile-Time Failure
+    /// Sites"); elsewhere it is a runtime error.
+    fn comptimeMatchFailure(self: *const Builder, expr_id: CheckedExprId, match: @FieldType(checked.CheckedExprData, "match_")) ?Match.ComptimeFailure {
+        if (!self.program.input.compile_time or self.own_root == null or match.skip_exhaustiveness) return null;
+        const sites = self.view.view.exhaustiveness_sites;
+        const checked_site = switch (match.comptime_site_kind) {
+            .match => sites.lookupByMatchExpr(expr_id),
+            .destructure => blk: {
+                if (match.branches.len != 1) break :blk null;
+                const patterns = match.branches[0].patternsSlice(self.bodies());
+                if (patterns.len != 1) break :blk null;
+                break :blk sites.lookupByDestructurePattern(patterns[0].pattern);
+            },
+        };
+        return .{ .owner = self.program.lowering_module_ids[@backingInt(self.module)], .checked_site = checked_site };
+    }
+
     pub fn matchStart(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const scrutinee = self.popValue();
         const match = self.bodies().expr(expr_id).data.match_;
@@ -8776,6 +8796,7 @@ pub const Builder = struct {
             .tail = tail,
             .merge = null,
             .remainder = undefined,
+            .comptime_failure = self.comptimeMatchFailure(expr_id, match),
         };
         const merge_binders: []const checked.PatternBinderId = if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{};
         if (tail) {

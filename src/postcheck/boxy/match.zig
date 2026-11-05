@@ -30,6 +30,12 @@ const CheckedExprId = checked.CheckedExprId;
 const CheckedPatternId = checked.CheckedPatternId;
 
 /// A match being lowered: its emitter, and what its branch requests need.
+/// The checked site a compile-time match reports when no branch matches.
+pub const ComptimeFailure = struct {
+    owner: LIR.LoweringModuleId,
+    checked_site: ?checked.CheckedExhaustivenessSiteId,
+};
+
 pub const State = struct {
     arena: std.heap.ArenaAllocator,
     emitter: *Compiler.Emitter = undefined,
@@ -42,6 +48,12 @@ pub const State = struct {
     merge: ?body_mod.MergeId,
     /// The hole the decision tree goes into.
     remainder: CFStmtId,
+    /// The checked site a match lowered in a compile-time root's own body
+    /// reports when no branch matches, as the empirical failure of its
+    /// exhaustiveness; null where no branch matching is a plain runtime
+    /// error.
+    comptime_failure: ?ComptimeFailure = null,
+
     /// The type of each occurrence local.
     occ_types: collections.DenseMapUnmanaged(LocalId, TypeId) = .empty,
     /// The local each pattern binder is bound to.
@@ -488,6 +500,10 @@ pub const Ctx = struct {
     }
 
     pub fn failTerminal(self: Ctx) Allocator.Error!LIR.CFStmtId {
+        if (self.state.comptime_failure) |failure| return try self.b.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
+            .owner = failure.owner,
+            .checked_site = failure.checked_site,
+        } }, self.b.origin(.lowering_glue));
         return try self.b.store.addCFStmt(.runtime_error, self.b.origin(.lowering_glue));
     }
 
