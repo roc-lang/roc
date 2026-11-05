@@ -702,7 +702,7 @@ pub const Program = struct {
     pub fn passedDescriptorTypes(self: *Program, allocator: Allocator, id: WorkerId) Allocator.Error![]TypeId {
         var result: std.ArrayList(TypeId) = .empty;
         errdefer result.deinit(allocator);
-        if (comptime @import("boxy_runtime").experiment.mode == .caller) {
+        if (comptime @import("boxy_runtime").experiment.caller_prepares) {
             const target = self.worker(id).*;
             if (target.key == .template) {
                 for (0..target.params.len + 1) |i| {
