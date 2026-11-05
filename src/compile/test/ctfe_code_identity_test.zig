@@ -88,20 +88,26 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
     }
     // Compile-time evaluation runs `square` through `List.map`, `describe`
     // reading the folded `total`, string and dictionary operations, and the
-    // program runs each again at runtime.
+    // program runs each again at runtime. Each value reads `offset_by`, which
+    // holds a function, so the Solved program evaluates them all (design.md
+    // "Compile-Time Evaluation Under `.lss`").
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\square : U64 -> U64
         \\square = |n| n * n
+        \\make_offset : U64 -> (U64 -> U64)
+        \\make_offset = |k| |n| n + k
+        \\offset_by : U64 -> U64
+        \\offset_by = make_offset(0)
         \\total : U64
-        \\total = List.map([1, 2, 3, 4], square).sum()
+        \\total = offset_by(List.map([1, 2, 3, 4], square).sum())
         \\describe : U64 -> Str
         \\describe = |n| if n > total { "big" } else { "small" }
         \\bigger : Str
         \\bigger = describe(40)
         \\names : List(Str)
-        \\names = ["alpha", "beta"].map(|s| Str.concat(s, "!"))
+        \\names = ["alpha", "beta"].map(|s| Str.concat(s, "!")).drop_first(offset_by(0))
         \\lookup : Dict(Str, U64)
         \\lookup = Dict.empty().insert("a", 1).insert("b", total)
         \\measure : U64 -> { large : U128, ratio : F64, text : Str }
@@ -110,7 +116,7 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
         \\    while $i > 0 { $i = $i - 1 }
         \\    { large: n.to_u128() * 18446744073709551617, ratio: n.to_f64() / 2.0, text: "a long string carried by both native procedure consumers" }
         \\}
-        \\measured = measure(3)
+        \\measured = measure(offset_by(3))
         \\main! = |args| {
         \\    lengths = List.map(args, |arg| arg.to_utf8().len())
         \\    increment = args.len().to_u64()
