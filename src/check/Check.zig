@@ -31037,7 +31037,19 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             const decl = &statement.kind.decl;
 
             if (decl_predeclared) {
-                const scheme_var = try self.predeclareAnnotationScheme(decl_stmt.anno.?, env);
+                // The annotation is the local function's own: generated here
+                // first, the type variables it introduces take the depth of
+                // the function's candidate, as they do when the body pass
+                // generates it again (`recordRigidVarCandidateDepth`), and a
+                // lookup of an enclosing function's variable is that
+                // candidate's.
+                if (is_local_procedure_candidate) try self.local_procedure_candidate_stack.append(self.gpa, decl_stmt.pattern);
+                const scheme_var = scheme: {
+                    defer if (is_local_procedure_candidate) {
+                        _ = self.local_procedure_candidate_stack.pop();
+                    };
+                    break :scheme try self.predeclareAnnotationScheme(decl_stmt.anno.?, env);
+                };
                 try self.registerPredeclaredSlots(decl_stmt.anno.?, scheme_var);
                 try self.predeclared_local_annotations.put(self.gpa, decl_stmt.pattern, decl_stmt.anno.?);
             }
