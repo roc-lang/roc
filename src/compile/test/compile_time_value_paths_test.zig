@@ -1,6 +1,6 @@
 //! A compile-time value must reach the runtime program the same way on every
 //! path that produces one: the program a build continues once compile-time
-//! evaluation has completed (specialized again from the stored values) and
+//! evaluation has completed (specialized from the stored values) and
 //! the program lowered from checked modules whose values the constant store
 //! restores. Each test drives the first path through `ProgramSession`, as
 //! `roc build` does, and the second through `lowerCheckedModulesToLir`, so a
@@ -115,11 +115,11 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     try coord.finishCheckedProgram(.executable_artifacts);
     if (coord.hasUserErrors()) return error.TestUnexpectedResult;
     const session = &coord.program_session.?;
-    // The build evaluated the app's compile-time roots, so its runtime
-    // consumer continues the program specialized again from their stored
-    // values.
-    try std.testing.expect(session.completed != null);
-    try std.testing.expect(session.runtime_stages == .respecialized);
+    // The `.boxy` evaluator completed the app's compile-time roots before
+    // the Solved program was specialized, so that program restores their
+    // stored values and is specialized once, and the runtime consumer
+    // continues it (design.md "Compile-Time Evaluation Under `.lss`").
+    try std.testing.expect(session.runtime_stages == .evaluation);
     try std.testing.expect(session.runtime_prepared != null);
     var continued = try session.takeRuntime(gpa, session.runtime_roots, optimizedTarget(inline_mode));
     errdefer continued.deinit();
