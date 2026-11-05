@@ -26,6 +26,13 @@ published: bool = false,
 /// its next call's dynamic arguments live in that region, which a loop
 /// iteration would allocate again while they are still read.
 self_calls: enum { loop, replace_frame } = .loop,
+/// The procedure's trailing parameters that fix its instantiation (a
+/// `.boxy` procedure's descriptors, dictionaries, and literal arguments).
+/// Everything the body composes from them is composed at entry, so a call
+/// to the procedure itself is a loop only when it passes each of them
+/// along unchanged; a call at another instantiation (polymorphic
+/// recursion) replaces the frame like a tail call to any other procedure.
+instance_params: []const LIR.LocalId = &.{},
 
 /// Start recording one exact procedure identity.
 pub fn init(allocator: std.mem.Allocator, proc: LIR.LirProcSpecId) Self {
@@ -62,6 +69,7 @@ pub fn reset(self: *Self, proc: LIR.LirProcSpecId) void {
     self.next_join = 0;
     self.published = false;
     self.self_calls = .loop;
+    self.instance_params = &.{};
 }
 
 /// Called by the statement producer, including when filling a placeholder.
@@ -134,7 +142,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         if (call.tail_call.isSite()) continue;
         const returned = try self.returnedLocal(store, call.next) orelse continue;
         if (returned != call.target) continue;
-        if (call.proc == proc and self.self_calls == .loop) {
+        if (call.proc == proc and self.self_calls == .loop and self.keepsInstance(store, call.args)) {
             store.getCFStmtPtr(id).assign_call.tail_call = .site(head);
             head = id;
         } else if (store.getCFStmtImmediate(call.next).* != .ret and store.getLocal(call.target).layout_idx == ret_layout) {
@@ -144,6 +152,20 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
     }
     self.published = true;
     return if (head) |first| .{ .head = first, .loop = @fromBackingInt(self.next_join) } else null;
+}
+
+/// Whether a call to the procedure itself passes its instance parameters
+/// along unchanged.
+fn keepsInstance(self: *const Self, store: anytype, args: LIR.LocalSpan) bool {
+    if (self.instance_params.len == 0) return true;
+    const passed = store.getLocalSpan(args);
+    const passed_len = collections.GuardedList.borrowLen(passed);
+    std.debug.assert(passed_len >= self.instance_params.len);
+    const first = passed_len - self.instance_params.len;
+    for (self.instance_params, 0..) |param, index| {
+        if (collections.GuardedList.at(passed, first + index) != param) return false;
+    }
+    return true;
 }
 
 fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {

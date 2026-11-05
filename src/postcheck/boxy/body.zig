@@ -1498,6 +1498,8 @@ pub const Builder = struct {
         }
         try self.run();
 
+        self.tail_calls.instance_params = args.items[params.len..];
+        defer self.tail_calls.instance_params = &.{};
         try self.finishProc(entry, body_start, args.items, ret_layout);
     }
 

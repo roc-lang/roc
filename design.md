@@ -7886,7 +7886,11 @@ there the next call's dynamic arguments live in the region, which a loop
 iteration would allocate again while they are still read, so the call is
 lowered like a tail call to any other procedure and replaces the frame
 (see "Frame-Replacing Calls"), whose dynamic arguments each backend moves out
-of the dying frame. A proven call to any other procedure has its continuation
+of the dying frame. A `.boxy` self call is also lowered that way when it does
+not pass the procedure's own descriptors, dictionaries, and literal arguments
+along unchanged: a polymorphic recursive call at other types needs the
+descriptors its body composes at entry composed again, which a loop jump never
+does. A proven call to any other procedure has its continuation
 replaced by a `ret` of the call's target, so the tail position is structural:
 the statement after the call returns its result. That is the only form later
 stages read. A pass that moves a body into another procedure keeps the form:
