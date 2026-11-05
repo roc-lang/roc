@@ -2504,34 +2504,51 @@ pub const Builder = struct {
         try self.finishProc(entry, body_start, params, ret_layout);
     }
 
-    /// A default expression's worker: the expression, in no scope.
+    /// A default expression's worker: the expression, in the scope of its
+    /// own type's variables, whose descriptors are its parameters.
     pub fn lowerDefaultBody(self: *Builder, expr: CheckedExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
-        self.var_descs = &.{};
+        self.var_descs = try self.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
+        for (self.var_descs) |*slot| slot.* = try self.closedLocal(.opaque_ptr);
         self.dict_locals = &.{};
-        const ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        var ret_layout: layout.Idx = undefined;
+        if (try self.closed(worker.ret)) {
+            ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        } else {
+            ret_layout = try self.program.result.layouts.dynamicLayout();
+            self.result_local = try self.localOf(worker.ret, .result);
+        }
         const body_start = try self.newHole();
         self.hole = body_start;
         try self.tasks.append(self.allocator, .ret);
         try self.tasks.append(self.allocator, .{ .expr = expr });
         try self.run();
-        try self.finishProc(entry, body_start, &.{}, ret_layout);
+        try self.finishProc(entry, body_start, self.var_descs, ret_layout);
     }
 
-    /// The value of the `??` default `default`: its declaring module's
-    /// default expression, evaluated now.
-    pub fn defaultValue(self: *Builder, default: checked.CheckedFieldDefault) Allocator.Error!LocalId {
+    /// The value of the `??` default `default` for a field of type
+    /// `field_ty`: its declaring module's default expression, evaluated now
+    /// at the instantiation the field's type gives its variables.
+    pub fn defaultValue(self: *Builder, default: checked.CheckedFieldDefault, field_ty: TypeId) Allocator.Error!LocalId {
         const origin_module = default.origin() orelse invariant("a field default has no declaring module");
         const module_index = self.program.by_identity.get(self.view.nameStore().moduleIdentityBytes(origin_module).*) orelse
             invariant("a field default's declaring module is not in this lowering");
         const expr = self.program.module(module_index).bodies().defaultExpr(default.expr_node) orelse
             invariant("a field default's expression was not archived");
-        const worker = try self.program.defaultWorker(module_index, expr);
-        const target = try self.localOf(self.program.worker(worker).ret, .frame);
-        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(worker).proc, .args = LIR.LocalSpan.empty(), .next = undefined } });
-        return target;
+        const worker_id = try self.program.defaultWorker(module_index, expr);
+        const worker = self.program.worker(worker_id).*;
+        const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = field_ty, .effectful = false } });
+        const bound = try self.boundTypesAt(worker_id, &.{}, fn_ty);
+        defer self.allocator.free(bound);
+        const descs = try self.allocator.alloc(LocalId, bound.len);
+        defer self.allocator.free(descs);
+        for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+        const ret = try self.program.substitute(self.allocator, worker.ret, bound);
+        const target = try self.localOf(ret, .frame);
+        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = worker.proc, .args = try self.store.addLocalSpan(descs), .next = undefined } });
+        return try self.adaptValue(target, ret, field_ty);
     }
 
     pub fn lowerMethodEntry(self: *Builder, target: WorkerId) Allocator.Error!void {
@@ -3402,6 +3419,15 @@ pub const Builder = struct {
                 if (try self.layoutResolvedBranch(match.cond, match.branches)) |value| {
                     try self.destination_types.put(self.allocator, value, try self.exprType(expr_id));
                     return try self.push(.{ .expr = value });
+                }
+                // A scrutinee that diverges leaves every branch unreachable;
+                // checking relates no pattern to it, so it has no decision
+                // tree.
+                if (self.bodies().exprDiverges(match.cond, self.inlineExpectMode())) {
+                    const match_ty = self.bodies().expr(expr_id).ty;
+                    try self.push(.{ .diverged = if (try self.program.converter().hasError(self.module, match_ty)) null else try self.exprType(expr_id) });
+                    try self.push(.discard);
+                    return try self.push(.{ .expr = match.cond });
                 }
                 try self.push(.{ .match_start = expr_id });
                 try self.push(.{ .expr = match.cond });
@@ -8554,7 +8580,7 @@ pub const Builder = struct {
             slot.* = value orelse switch (field.kind) {
                 .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(field.ty), try self.program.store.internName(@import("layouts.zig").missing_label), &.{}),
                 .inline_slot => try self.defaultValue(self.program.omitted_defaults.get(.{ .module = self.module, .expr = expr_id, .name = field.name }) orelse
-                    invariant("a record construction omits a field it has no default for")),
+                    invariant("a record construction omits a field it has no default for"), field.ty),
                 .variable_slot => invariant("a record construction omits a field of undetermined kind"),
             };
         }
