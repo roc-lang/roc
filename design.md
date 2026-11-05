@@ -17565,12 +17565,24 @@ identities are interned in CheckedModule, so the first request creates or loads
 the specialization and every repeated call is an O(1) hit before durable type
 or evidence digests are rebuilt. That identity is complete only for a
 specialization independent of the caller's local context. A caller-owned
-specialization (structural evidence lowered inside a local procedure context,
-or evidence naming a local procedure) also belongs to its lexical owner and
-lexical context, so the O(1) memo never records it; each repeated request takes
-the template lookup, which reuses it only from inside its lexical owner and
-only at an equal lexical context. Graph-participating targets consume their
-producer-authored graph protocol instead of taking this sealed-interface path.
+specialization (structural evidence lowered where a method of a body-declared
+type is visible, including inside a restored function whose retained scope
+can resolve one, or evidence naming a local procedure) also belongs to its
+lexical owner and lexical context, so the O(1) memo never records it; each
+repeated request takes the template lookup, which reuses it only from inside
+its lexical owner and only at an equal lexical context. Only a visible local
+method makes structural evidence caller-owned: structural derivation and
+generated codec contracts select methods by type, and a local procedure that
+is not a method is reachable only through evidence that names it. The lexical
+context a template body inherits is the visible local procedure declaration
+contexts and any restored-function scope, never the caller's value binders: a
+template body names none of them, and each local procedure it reaches installs
+its own declaration context's captured binders. The lexical context identity
+digests exactly that inherited context, so the recursive calls of a
+caller-owned body (whose inherited context equals its caller's) reuse it
+rather than lowering a new body per call site. Graph-participating targets
+consume their producer-authored graph protocol instead of taking this
+sealed-interface path.
 
 Nothing else exists. Absent an explicit checker-authored callable path,
 Monotype lowering never derives a method owner from type content, never
