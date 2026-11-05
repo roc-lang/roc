@@ -3802,21 +3802,26 @@ pub const CheckedTypeStoreView = struct {
     }
 
     /// Whether `root` reaches a flex or rigid variable, found by walking the
-    /// types it reaches; no key is computed.
+    /// types it reaches; no key is computed. The walk records the fact for
+    /// every type whose result it proves, not only for `root`, so asking
+    /// about each level of a deep type in turn walks each level once.
     pub fn rootHasIdentityVariables(self: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!bool {
         if (self.knownIdentity(root)) |known| return known;
         var scan = CheckedTypeViewIdentityScan{ .view = self };
-        const allocator = self.scanAllocator();
-        const result = try checked_traverse.checkedTypeContainsIdentityVariables(
-            CheckedTypeId,
-            CheckedTypeViewIdentityScan,
-            allocator,
-            &scan,
-            root,
-        );
-        if (!scan.saw_pending) self.recordIdentity(root, result);
+        var traversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, CheckedTypeViewIdentityScan).init(self.scanAllocator(), &scan);
+        defer traversal.deinit();
+        const result = try traversal.visit(root);
+        if (!scan.saw_pending) traversal.reportDecided(result, IdentityRecorder{ .view = self });
         return result;
     }
+
+    const IdentityRecorder = struct {
+        view: CheckedTypeStoreView,
+
+        pub fn decided(self: IdentityRecorder, ty: CheckedTypeId, value: bool) void {
+            self.view.recordIdentity(ty, value);
+        }
+    };
 
     /// The identity-variable fact of `root` a previous walk recorded.
     fn knownIdentity(self: CheckedTypeStoreView, root: CheckedTypeId) ?bool {
