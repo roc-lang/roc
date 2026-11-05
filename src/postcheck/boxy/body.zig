@@ -3403,6 +3403,7 @@ pub const Builder = struct {
             },
             .zero_argument_tag => try self.finishTag(expr_id, null),
             .list => |items| {
+                if (try self.packedNumeralList(expr_id, items)) |packed_list| return try self.pushValue(packed_list);
                 try self.push(.{ .finish_list = expr_id });
                 try self.pushExprsReversed(items);
             },
@@ -3645,6 +3646,65 @@ pub const Builder = struct {
                 try self.pushValue(target);
             },
         }
+    }
+
+    /// A list of builtin numerals at a numeric primitive element type, as one
+    /// literal of the elements' packed bytes, exactly as Monotype lowers it
+    /// (`lowerPackedNumeralList`), so the list's code does not grow with its
+    /// length. Null for any other list, which builds its elements one by one.
+    fn packedNumeralList(self: *Builder, expr_id: CheckedExprId, items: []const CheckedExprId) Allocator.Error!?LocalId {
+        if (items.len == 0) return null;
+        const ty = try self.exprType(expr_id);
+        if (!try self.closed(ty)) return null;
+        const elem = switch (self.program.store.get(try self.structuralType(ty))) {
+            .list => |elem| elem,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a list's type is not a List"),
+        };
+        const primitive = switch (self.program.store.get(elem)) {
+            .primitive => |primitive| primitive,
+            .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => return null,
+        };
+        const width: usize = switch (primitive) {
+            .u8, .i8 => 1,
+            .u16, .i16 => 2,
+            .u32, .i32, .f32 => 4,
+            .u64, .i64, .f64 => 8,
+            .u128, .i128, .dec => 16,
+            .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
+        };
+        for (items) |item| switch (self.bodies().expr(item).data) {
+            .numeral => |numeral| if (numeral.plan != null or numeral.conversion_root != null) return null,
+            .pending, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
+        };
+        const exact_numeral = checked.exact_numeral;
+        const bytes = try self.allocator.alloc(u8, items.len * width);
+        defer self.allocator.free(bytes);
+        for (items, 0..) |item, index| {
+            const exact = self.view.view.module_env.exactNumeral(self.bodies().expr(item).data.numeral.literal);
+            var encoded: [16]u8 = undefined;
+            switch (primitive) {
+                inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |integer| {
+                    const bits = exact_numeral.intBits(exact, @field(exact_numeral.Target, @tagName(integer))) orelse return null;
+                    const wide: i128 = switch (bits) {
+                        .i128 => |value| value,
+                        .u128 => |value| @bitCast(value),
+                    };
+                    std.mem.writeInt(i128, &encoded, wide, .little);
+                },
+                .f32 => std.mem.writeInt(u32, encoded[0..4], @bitCast(try exact_numeral.floatBits(f32, self.allocator, exact)), .little),
+                .f64 => std.mem.writeInt(u64, encoded[0..8], @bitCast(try exact_numeral.floatBits(f64, self.allocator, exact)), .little),
+                .dec => std.mem.writeInt(i128, &encoded, (try exact_numeral.decBits(self.allocator, exact)) orelse return null, .little),
+                .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => unreachable, // the width switch admits only scalar numerics
+            }
+            @memcpy(bytes[index * width ..][0..width], encoded[0..width]);
+        }
+        const local = try self.localOf(ty, .frame);
+        const backing = try self.store.insertStringAligned(bytes, @intCast(width));
+        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .bytes_literal = .{
+            .bytes = .{ .backing = backing, .offset = 0, .len = @intCast(bytes.len) },
+            .len = @intCast(items.len),
+        } }, .next = undefined } });
+        return local;
     }
 
     pub fn lowerNumeral(self: *Builder, expr_id: CheckedExprId, numeral: checked.CheckedNumeralData) Allocator.Error!void {
