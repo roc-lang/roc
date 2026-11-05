@@ -176,6 +176,13 @@ pub fn load(gpa: std.mem.Allocator, view: UnitImage.View, resolver: Resolver, di
 
     const executable: std.posix.PROT = .{ .READ = true, .EXEC = true };
     if (std.c.mprotect(@ptrCast(memory.ptr), exec_len, executable) != 0) return error.OutOfMemory;
+    if (comptime @import("boxy_runtime").experiment.profile) {
+        for (view.symbols()) |symbol| {
+            if (symbol.type == @backingInt(UnitImage.SymbolType.func) and symbol.size != 0) {
+                std.debug.print("profile-symbol pid={d} address={x} size={x} name={s}\n", .{ std.os.linux.getpid(), loaded.symbolAddress(symbol), symbol.size, view.name(symbol.name) });
+            }
+        }
+    }
     return loaded;
 }
 

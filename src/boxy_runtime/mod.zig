@@ -9,6 +9,7 @@
 //! without libc and without the rest of the compiler.
 
 pub const desc = @import("desc.zig");
+pub const experiment = @import("experiment.zig");
 pub const compose = @import("compose.zig");
 pub const walk = @import("walk.zig");
 pub const exports = @import("exports.zig");

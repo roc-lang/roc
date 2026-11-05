@@ -863,6 +863,7 @@ pub const InProcessState = struct {
     }
 
     fn note(self: *InProcessState, desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) void {
+        if (comptime @import("experiment.zig").profile) @import("experiment.zig").counters.origin_notes += 1;
         while (!self.lock.tryLock()) std.atomic.spinLoopHint();
         defer self.lock.unlock();
         const entry = self.origins.getOrPut(self.allocator, desc) catch crashOutOfMemory(self);
@@ -883,6 +884,7 @@ pub const InProcessState = struct {
     /// Release everything the program composed. Nothing of the program may
     /// run afterwards.
     pub fn destroy(self: *InProcessState) void {
+        compose.releaseScratchPool();
         const allocator = self.allocator;
         self.origins.deinit(allocator);
         self.arena.deinit();
@@ -902,6 +904,7 @@ pub const InProcessState = struct {
     /// Restore what `enter` displaced.
     pub fn leave(entered: Entered) void {
         comptime assertInProcess("leave");
+        compose.releaseScratchPool();
         current_state = entered.saved;
     }
 
@@ -921,6 +924,10 @@ pub const InProcessState = struct {
     }
 
     fn alloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
+        if (comptime @import("experiment.zig").profile) {
+            @import("experiment.zig").counters.immortal_allocs += 1;
+            @import("experiment.zig").counters.immortal_bytes += length;
+        }
         const self = fromOps(ops);
         while (!self.lock.tryLock()) std.atomic.spinLoopHint();
         defer self.lock.unlock();

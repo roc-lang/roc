@@ -15,6 +15,7 @@
 //! (`compiled.InProcessState`).
 
 const std = @import("std");
+const experiment = @import("experiment.zig");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const raw_pages = @import("raw_pages");
@@ -162,6 +163,7 @@ pub const CompositionSite = extern struct {
     }
 
     pub fn publish(self: *CompositionSite, cache: *Cache, ops: *RocOps, operands: []const usize, result: usize) void {
+        if (comptime experiment.profile and builtins.host_abi.host_role != .platform) experiment.counters.site_publishes += 1;
         var scratch: Scratch(u64, 16) = .{};
         defer scratch.deinit(ops);
         const key = scratch.get(2 + operands.len, ops);
@@ -254,13 +256,23 @@ pub const Cache = struct {
     }
 
     pub fn lookup(self: *Cache, key: []const u64) ?*const TypeDesc {
-        const table = self.table.load(.acquire) orelse return null;
-        return find(table, keyHash(key), key);
+        if (comptime !experiment.intern) return null;
+        if (comptime experiment.profile and builtins.host_abi.host_role != .platform) {
+            experiment.counters.lookups += 1;
+            experiment.counters.key_words += key.len;
+        }
+        const result = if (self.table.load(.acquire)) |table| find(table, keyHash(key), key) else null;
+        if (comptime experiment.profile and builtins.host_abi.host_role != .platform) {
+            if (result == null) experiment.counters.misses += 1;
+        }
+        return result;
     }
 
     /// Intern `value` under `key`, or return the descriptor another thread
     /// interned under it first.
     pub fn intern(self: *Cache, key: []const u64, value: *const TypeDesc, ops: *RocOps) *const TypeDesc {
+        if (comptime !experiment.intern) return value;
+        if (comptime experiment.profile and builtins.host_abi.host_role != .platform) experiment.counters.intern_calls += 1;
         const hash = keyHash(key);
         self.acquire();
         defer self.release();
@@ -378,6 +390,15 @@ const PlatformImmortals = struct {
 /// use the program-lifetime allocator separately; these buffers do not escape.
 pub fn scratchAlloc(comptime T: type, count: usize, ops: *RocOps) []T {
     if (comptime builtins.host_abi.host_role != .platform) {
+        if (comptime experiment.profile) {
+            experiment.counters.scratch_allocs += 1;
+            experiment.counters.scratch_bytes += count * @sizeOf(T);
+        }
+        if (comptime experiment.pool) {
+            if (scratch_arena == null) scratch_arena = .init(std.heap.smp_allocator);
+            scratch_live += 1;
+            return scratch_arena.?.allocator().alloc(T, count) catch ops.crash("out of memory allocating descriptor scratch");
+        }
         return std.heap.smp_allocator.alloc(T, count) catch ops.crash("out of memory allocating descriptor scratch");
     }
     const items: [*]T = @ptrCast(@alignCast(ops.allocRaw(count * @sizeOf(T), @alignOf(T))));
@@ -386,8 +407,26 @@ pub fn scratchAlloc(comptime T: type, count: usize, ops: *RocOps) []T {
 
 pub fn scratchFree(comptime T: type, items: []T, ops: *RocOps) void {
     if (comptime builtins.host_abi.host_role != .platform) {
+        if (comptime experiment.pool) {
+            std.debug.assert(scratch_live != 0);
+            scratch_live -= 1;
+            if (scratch_live == 0) _ = scratch_arena.?.reset(.retain_capacity);
+            return;
+        }
         std.heap.smp_allocator.free(items);
     } else ops.dealloc(@ptrCast(items.ptr), @alignOf(T));
+}
+
+threadlocal var scratch_arena: ?std.heap.ArenaAllocator = null;
+threadlocal var scratch_live: usize = 0;
+
+/// The current thread has completed its in-process composition scope.
+pub fn releaseScratchPool() void {
+    if (comptime experiment.pool and builtins.host_abi.host_role != .platform) {
+        std.debug.assert(scratch_live == 0);
+        if (scratch_arena) |*arena| arena.deinit();
+        scratch_arena = null;
+    }
 }
 
 fn Scratch(comptime T: type, comptime inline_count: usize) type {

@@ -15760,6 +15760,12 @@ fn runUnitImageTestPlan(
                 base.invariant("roc test invariant violated: no loaded test unit exports the wrapper of root {d} of module {s}", .{ root_index, planned.module.semantic.env.qualifiedModuleName() });
             roots[cursor] = .{ .entry = entry };
             cursor += 1;
+            if (comptime eval.Inspected.compositionProfileEnabled) {
+                const env = planned.module.semantic.env;
+                const region = testRootRegion(env, root.source);
+                const line = 1 + std.mem.count(u8, env.common.source[0..region.start.offset], "\n");
+                std.debug.print("root-source index={d} module={s} line={d} address={x}\n", .{ reports.items.len, env.qualifiedModuleName(), line, @intFromPtr(entry) });
+            }
             try reports.append(ctx.gpa, .{ .root = root, .env = planned.module.semantic.env, .region = testRootRegion(planned.module.semantic.env, root.source) });
         }
         try partitions.append(ctx.gpa, .{ .roots = roots });

@@ -14201,6 +14201,19 @@ type, which static data materialization evaluates as it does under `.lss`.
 
 #### Runtime
 
+Research branch: compile-time modes compare omission of per-site shortcuts,
+omission of descriptor/dictionary interning, and per-thread reusable scratch
+arenas. The no-interner mode returns freshly constructed descriptors rather
+than canonical pointers; it omits site slots too. Recursive placeholders
+remain private until closed, and descriptor consumers still compare structure
+when identity differs. The scratch arena resets retaining capacity when its
+last live temporary allocation is released, and is destroyed when the thread
+leaves its in-process execution scope. Platform runtimes keep their original
+scratch allocator. A separate profiling mode records per-root durations,
+allocation/composition counts, source regions, and loaded function addresses;
+these observations are not part of ordinary timing runs. Modes are selected
+in source, not through a release-readable environment variable.
+
 The Boxy runtime is the descriptor machinery and nothing else: descriptor
 composition with the shared layout code and its immortal interning cache,
 descriptor-guided copy, incref, decref, equality, hashing, and inspection, the

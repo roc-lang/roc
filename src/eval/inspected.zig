@@ -19,6 +19,7 @@ const builtin_static = can.BuiltinStatic;
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
+pub const compositionProfileEnabled = @import("boxy_runtime").experiment.profile;
 const RuntimeHostEnv = @import("runtime_host.zig");
 const object_image = @import("object_image.zig");
 const InspectedRun = @import("inspected_run.zig");
@@ -2647,6 +2648,7 @@ fn callBoolRoot(
     };
     errdefer deinitBoolRootEvalOutcome(allocator, outcome);
     const events = try copyRuntimeHostEvents(allocator, &runtime_env);
+    if (comptime compositionProfileEnabled) std.debug.print("root-alloc index={d} calls={d}\n", .{ call_index, runtime_env.allocationCallCount() });
     return .{
         .outcome = outcome,
         .events = events,
@@ -2787,6 +2789,8 @@ fn boolRootWorker(args: *BoolRootWorkerArgs) void {
         const worker_start = args.worker_index * state.worker_expect_stride;
         const expect_start = worker_start + call.expect_site_base;
         const expect_end = expect_start + call.expect_site_count;
+        const profile_start = if (comptime compositionProfileEnabled) StageTimer.readNs() else 0;
+        if (comptime compositionProfileEnabled) @import("boxy_runtime").experiment.counters = .{};
         state.results[index] = callBoolRoot(
             state.allocator,
             call.shape,
@@ -2799,6 +2803,10 @@ fn boolRootWorker(args: *BoolRootWorkerArgs) void {
             state.errors[index] = err;
             return;
         };
+        if (comptime compositionProfileEnabled) {
+            const c = @import("boxy_runtime").experiment.counters;
+            std.debug.print("root-profile index={d} worker={d} start_ns={d} ns={d} lookups={d} misses={d} intern={d} words={d} scratch_allocs={d} scratch_bytes={d} immortal_allocs={d} immortal_bytes={d} publishes={d} notes={d}\n", .{ index, args.worker_index, profile_start, StageTimer.readNs() - profile_start, c.lookups, c.misses, c.intern_calls, c.key_words, c.scratch_allocs, c.scratch_bytes, c.immortal_allocs, c.immortal_bytes, c.site_publishes, c.origin_notes });
+        }
         var observations = std.ArrayList(ExpectObservation).empty;
         defer observations.deinit(state.allocator);
         for (0..call.expect_site_count) |site| {
