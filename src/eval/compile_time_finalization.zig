@@ -7433,13 +7433,35 @@ fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []con
     return Image.build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
 }
 
-fn ctfeSelectionTest(allocator: Allocator) (FinalizeError || backend.dev.UnitImage.BuildError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
-    const leaf = try ctfeSelectionTestImage(allocator, "leaf", "leaf_pointer", null, false);
-    defer allocator.free(leaf);
-    const middle = try ctfeSelectionTestImage(allocator, "middle", "callback", "leaf", false);
-    defer allocator.free(middle);
-    const unused = try ctfeSelectionTestImage(allocator, "unused", "unused_pointer", null, false);
-    defer allocator.free(unused);
+/// The images `ctfeSelectionTest` selects among. They are built before the
+/// test runs so an allocation-failure sweep covers only the selection's own
+/// allocations: building an image allocates through an arena, whose growth
+/// depends on whether the backing allocator extends a block in place.
+const CtfeSelectionImages = struct {
+    leaf: []align(16) u8,
+    middle: []align(16) u8,
+    unused: []align(16) u8,
+
+    fn init(allocator: Allocator) backend.dev.UnitImage.BuildError!CtfeSelectionImages {
+        const leaf = try ctfeSelectionTestImage(allocator, "leaf", "leaf_pointer", null, false);
+        errdefer allocator.free(leaf);
+        const middle = try ctfeSelectionTestImage(allocator, "middle", "callback", "leaf", false);
+        errdefer allocator.free(middle);
+        const unused = try ctfeSelectionTestImage(allocator, "unused", "unused_pointer", null, false);
+        return .{ .leaf = leaf, .middle = middle, .unused = unused };
+    }
+
+    fn deinit(self: CtfeSelectionImages, allocator: Allocator) void {
+        allocator.free(self.leaf);
+        allocator.free(self.middle);
+        allocator.free(self.unused);
+    }
+};
+
+fn ctfeSelectionTest(allocator: Allocator, built: CtfeSelectionImages) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const leaf = built.leaf;
+    const middle = built.middle;
+    const unused = built.unused;
     var images = BoxyLinkedImages{ .allocator = allocator };
     defer images.deinit();
     const objects = [_]BoxyObject{
@@ -7481,12 +7503,16 @@ fn ctfeSelectionTest(allocator: Allocator) (FinalizeError || backend.dev.UnitIma
 
 test "CTFE image demand follows data callbacks and resets only reused reachable images" {
     if (comptime boxy_object_code != .image) return error.SkipZigTest;
-    try ctfeSelectionTest(std.testing.allocator);
+    const built = try CtfeSelectionImages.init(std.testing.allocator);
+    defer built.deinit(std.testing.allocator);
+    try ctfeSelectionTest(std.testing.allocator, built);
 }
 
 test "CTFE image demand releases partial registrations and mappings on allocation failure" {
     if (comptime boxy_object_code != .image) return error.SkipZigTest;
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, ctfeSelectionTest, .{});
+    const built = try CtfeSelectionImages.init(std.testing.allocator);
+    defer built.deinit(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, ctfeSelectionTest, .{built});
 }
 
 test "CTFE image demand keeps registration bindings independent of load order" {
