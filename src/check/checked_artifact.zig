@@ -23317,8 +23317,9 @@ fn buildPlatformAppRelationFromDeclarations(
     };
 }
 
-/// Copy a pairing session's changed columns. Unchanged columns stay in their
-/// immutable module. This allocator must be the session's arena.
+/// Copy an evaluation column into storage `allocator`, an arena, owns: a
+/// paired module's or a reopened module's own evaluation columns. The source
+/// stays with the module it belongs to.
 fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocator.Error!T {
     if (comptime @typeInfo(T) == .pointer) {
         const pointer = @typeInfo(T).pointer;
@@ -30724,8 +30725,8 @@ pub const CheckedModuleArtifact = struct {
     pub fn reopenForEvaluation(self: *CheckedModuleArtifact, allocator: Allocator) Allocator.Error!void {
         if (self.evaluation_state != .finalized) checkedArtifactInvariant("only a finalized artifact can be reopened for evaluation", .{});
         if (self.reopened_arena != null) checkedArtifactInvariant("checked artifact was reopened for evaluation twice", .{});
-        // A relocated cache entry's columns alias its buffer and a pairing
-        // overlay's borrow its platform, so they move into owned storage; an
+        // A relocated cache entry's columns alias its buffer and a paired
+        // module's may alias its platform's, so they move into owned storage; an
         // artifact this process published already owns them.
         if (self.serialized_backing != null or self.pairing_arena != null) {
             const owner = if (self.pairing_arena) |arena| arena.allocator() else blk: {
