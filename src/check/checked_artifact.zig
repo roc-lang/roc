@@ -30617,10 +30617,13 @@ pub const CheckedModuleArtifact = struct {
         if (builtin.mode != .debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
-        std.debug.assert(self.checked_types.roots.items().len == self.checked_types.payloads.items().len);
+        // Another thread may be creating types in the store; the roots its
+        // creation made are complete only once it ends.
+        const complete_roots = self.checked_types.completeRootCount();
+        std.debug.assert(self.checked_types.payloads.items().len >= complete_roots);
         verifyRootRequestSubsets(self.root_requests);
 
-        for (self.checked_types.payloads.items(), 0..) |payload, i| {
+        for (self.checked_types.payloads.items()[0..complete_roots], 0..) |payload, i| {
             switch (payload) {
                 .pending => base.invariant("checked artifact invariant violated: checked type payload {d} was not filled before compile-time lowering", .{i}),
                 .field_kind,
@@ -30879,9 +30882,12 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(proc.module_idx == self.module_identity.module_idx);
         }
 
-        for (self.checked_types.roots.items(), 0..) |root, i| {
+        // Another thread may be creating types in the store; the roots its
+        // creation made are complete only once it ends.
+        const complete_roots = self.checked_types.completeRootCount();
+        std.debug.assert(self.checked_types.payloads.items().len >= complete_roots);
+        for (self.checked_types.roots.items()[0..complete_roots], 0..) |root, i| {
             std.debug.assert(root.id == type_ids.fromSynthesized(i));
-            std.debug.assert(self.checked_types.payloads.items().len == self.checked_types.roots.items().len);
             switch (self.checked_types.payloads.items()[i]) {
                 .pending => base.invariant("checked artifact invariant violated: checked type payload {d} was not filled", .{i}),
                 .field_kind,
