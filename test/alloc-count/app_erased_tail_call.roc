@@ -5,8 +5,10 @@ import pf.Host
 # A call through a boxed function in tail position is left pending for its
 # caller to make. Recording that pending call must not heap-allocate a copy of
 # small argument blocks. A block too large for the pending record is copied to
-# the heap; whether that happens depends on whether the call stays erased, so
-# only its result is checked.
+# the heap, and a chain of such calls reuses its blocks: it holds two however
+# long it runs, the one the running call reads and the one it leaves pending.
+# (The interpreter keeps pending calls in its own reused storage, which the
+# host does not count.)
 apply_one : Box((U64 -> U64)), U64 -> U64
 apply_one = |boxed, x| {
 	f = Box.unbox(boxed)
@@ -26,6 +28,16 @@ apply_wide = |boxed, w| {
 	f = Box.unbox(boxed)
 	f(w)
 }
+
+# Each step leaves the next one pending through a boxed function, so one
+# waiter makes the whole chain of calls.
+count_down_wide : Wide -> U64
+count_down_wide = |w|
+	if w.a == 0 {
+		w.t
+	} else {
+		apply_wide(Box.box(count_down_wide), { ..w, a: w.a - 1, t: w.t + w.b })
+	}
 
 run! : Str => Str
 run! = |input| {
@@ -64,7 +76,11 @@ run! = |input| {
 		$k = $k + 1
 	}
 
+	before_chain = Host.alloc_count!()
+	chain = count_down_wide({ ..record, a: 1000 + n, t: 0 })
+	chain_allocs = Host.alloc_count!() - before_chain
+
 	expect $a == n + 1000
 	expect $b == n + 2000
-	"results: ${($a - n).to_str()} ${($b - n).to_str()} ${$c.to_str()}, allocations: one argument ${one_allocs.to_str()}, string argument ${str_allocs.to_str()}"
+	"results: ${($a - n).to_str()} ${($b - n).to_str()} ${$c.to_str()}, allocations: one argument ${one_allocs.to_str()}, string argument ${str_allocs.to_str()}, wide chain ${(chain - 2 * n).to_str()} with ${chain_allocs.to_str()}"
 }

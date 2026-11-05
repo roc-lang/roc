@@ -14501,7 +14501,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const slot = self.codegen.allocStackSlot(word);
             const reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(reg, 0);
-            try self.emitStore(.w64, frame_ptr, cell, reg);
+            for (0..builtins.native_callable.zeroed_words) |i| {
+                try self.emitStore(.w64, frame_ptr, cell + @as(i32, @intCast(i * word)), reg);
+            }
             try self.emitLeaStack(reg, cell);
             try self.emitStore(.w64, frame_ptr, slot, reg);
             self.codegen.freeGeneral(reg);

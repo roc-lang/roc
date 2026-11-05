@@ -21,13 +21,23 @@ const inline_args_bytes = inline_args_words * @sizeOf(usize);
 const args_alignment = 16;
 
 /// One waiter's pending call, in its frame. Empty when `callable` is null.
+///
+/// Every field is a word, so the cell has the same number of words on every
+/// target. A backend reserving one zeroes its first `zeroed_words` words.
 pub const Pending = extern struct {
     callable: ?erased.CallableFnPtr = null,
+    /// A heap block no call reads, `spare_capacity` bytes long, which the
+    /// next argument block too large for `inline_args` is copied to. A chain
+    /// of such calls reuses the blocks it frees, and `drive` frees this one
+    /// when its chain ends.
+    spare: ?[*]u8 = null,
+    spare_capacity: usize = 0,
     closure: ?[*]u8 = null,
     /// The call's argument bytes: `inline_args` when they fit there, a heap
-    /// block otherwise, null when the call has none.
+    /// block of `args_capacity` bytes otherwise, null when the call has none.
     args: ?[*]u8 = null,
     args_len: usize = 0,
+    args_capacity: usize = 0,
     /// What a callee that writes the erased ABI's descriptor output writes.
     /// The tag on `invocation`'s address moves that word off its alignment,
     /// so it spans two of these.
@@ -37,9 +47,18 @@ pub const Pending = extern struct {
     inline_args: [inline_args_words]usize = undefined,
 };
 
-/// The words of a `Pending`, for backends reserving one in a frame. Only
-/// `callable` needs initializing.
+/// The words of a `Pending`, for backends reserving one in a frame.
 pub const pending_words = @sizeOf(Pending) / @sizeOf(usize);
+
+/// The leading words of a `Pending` a backend zeroes when it reserves one:
+/// `callable` and `spare`. The rest is written before it is read.
+pub const zeroed_words = 2;
+
+comptime {
+    std.debug.assert(@offsetOf(Pending, "callable") == 0);
+    std.debug.assert(@offsetOf(Pending, "spare") == @sizeOf(usize));
+    std.debug.assert(@sizeOf(Pending) % @sizeOf(usize) == 0);
+}
 
 /// The erased ABI's last argument as this runtime passes it: an address in
 /// `cell` with the low bit set, which a host's aligned output pointer never
@@ -69,13 +88,26 @@ pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]
     std.debug.assert(pending.callable == null);
     // A call without arguments carries no argument bytes to copy out.
     var copied: ?[*]u8 = null;
+    var capacity: usize = 0;
     if (args_len != 0) {
         const bytes: [*]u8 = if (args_len <= inline_args_bytes)
             @ptrCast(&pending.inline_args)
-        else
-            @ptrCast(host.ops().allocRaw(args_len, args_alignment));
-        // Nothing is ever called with the cell's own bytes as its arguments
-        // (`drive` copies them out first), so these never overlap.
+        else heap: {
+            if (pending.spare) |spare| {
+                pending.spare = null;
+                if (pending.spare_capacity >= args_len) {
+                    capacity = pending.spare_capacity;
+                    break :heap spare;
+                }
+                host.ops().dealloc(spare, args_alignment);
+            }
+            capacity = args_len;
+            break :heap @ptrCast(host.ops().allocRaw(args_len, args_alignment));
+        };
+        // Nothing is ever called with the cell's own bytes or its spare
+        // block as its arguments (`drive` copies inline bytes out first, and
+        // a heap block becomes spare only once its call returns), so these
+        // never overlap.
         @memcpy(bytes[0..args_len], args.?[0..args_len]);
         copied = bytes;
     }
@@ -83,6 +115,21 @@ pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]
     pending.closure = closure;
     pending.args = copied;
     pending.args_len = args_len;
+    pending.args_capacity = capacity;
+}
+
+/// Keep `block`, which no call reads any more, as `pending`'s spare when it
+/// is the larger, and free the other.
+fn keepSpare(pending: *Pending, block: [*]u8, capacity: usize) void {
+    if (pending.spare) |spare| {
+        if (pending.spare_capacity >= capacity) {
+            host.ops().dealloc(block, args_alignment);
+            return;
+        }
+        host.ops().dealloc(spare, args_alignment);
+    }
+    pending.spare = block;
+    pending.spare_capacity = capacity;
 }
 
 /// Tail-drive's result slot has the same concrete ABI throughout the chain.
@@ -91,13 +138,15 @@ pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]
 /// stays at the address it arrived at. So each call's arguments live outside
 /// the cell until it returns, in this frame or in their heap block, leaving
 /// the cell free for the call it leaves pending, and for any chain driven in
-/// this same cell before it returns.
+/// this same cell before it returns. A heap block becomes the cell's spare
+/// once its call returns, for the next large block in the chain.
 pub fn drive(pending: *Pending, ret: ?[*]u8) void {
     var inline_copy: [inline_args_bytes]u8 align(args_alignment) = undefined;
     while (pending.callable) |callable| {
         pending.callable = null;
         const closure = pending.closure.?;
         const args_len = pending.args_len;
+        const capacity = pending.args_capacity;
         const args: ?[*]u8 = if (args_len == 0)
             null
         else if (args_len <= inline_args_bytes) copy: {
@@ -105,11 +154,14 @@ pub fn drive(pending: *Pending, ret: ?[*]u8) void {
             break :copy &inline_copy;
         } else pending.args;
         invoke(pending, callable, ret, args, erased.capturePtr(closure), null);
-        const ops = host.ops();
         // This is the ownership transfer explicitly requested by ARC's
         // deferred-call statement, not a backend-inferred capture release.
-        erased.decref(closure, ops);
-        if (args_len > inline_args_bytes) ops.dealloc(args.?, args_alignment);
+        erased.decref(closure, host.ops());
+        if (args_len > inline_args_bytes) keepSpare(pending, args.?, capacity);
+    }
+    if (pending.spare) |spare| {
+        pending.spare = null;
+        host.ops().dealloc(spare, args_alignment);
     }
 }
 
@@ -168,6 +220,48 @@ const TestCalls = struct {
 
     const wide_words = inline_args_bytes / 8 + 3;
 
+    /// Like `stepWide`, with an argument block whose length cycles through
+    /// three sizes too large for the cell. Its second word is its length in
+    /// words.
+    fn stepVaried(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: *?*const anyopaque) callconv(.c) void {
+        const pending = callerCell(@ptrCast(out)).?;
+        const remaining = std.mem.readInt(u64, args.?[0..8], .little);
+        const words = std.mem.readInt(u64, args.?[8..16], .little);
+        if (words != variedWords(remaining)) {
+            std.mem.writeInt(u64, ret.?[0..8], 0, .little);
+            return;
+        }
+        for (2..words) |i| {
+            if (std.mem.readInt(u64, args.?[i * 8 ..][0..8], .little) != remaining +% i) {
+                std.mem.writeInt(u64, ret.?[0..8], 0, .little);
+                return;
+            }
+        }
+        if (remaining == 0) {
+            std.mem.writeInt(u64, ret.?[0..8], 42, .little);
+            return;
+        }
+        const closure = erased.allocate(&stepVaried, &drop, 0, ops);
+        var next: [varied_max_words * 8]u8 align(16) = undefined;
+        const len = variedArgs(&next, remaining - 1);
+        deferCall(pending, &stepVaried, closure, &next, len);
+    }
+
+    const varied_max_words = wide_words + 2 * 7;
+
+    fn variedWords(remaining: u64) u64 {
+        return wide_words + (remaining % 3) * 7;
+    }
+
+    /// Fills `bytes` for `stepVaried` and returns how many it used.
+    fn variedArgs(bytes: *[varied_max_words * 8]u8, remaining: u64) usize {
+        const words = variedWords(remaining);
+        std.mem.writeInt(u64, bytes[0..8], remaining, .little);
+        std.mem.writeInt(u64, bytes[8..16], words, .little);
+        for (2..words) |i| std.mem.writeInt(u64, bytes[i * 8 ..][0..8], remaining +% i, .little);
+        return words * 8;
+    }
+
     fn wideArgs(bytes: *[wide_words * 8]u8, remaining: u64) void {
         for (0..wide_words) |i| std.mem.writeInt(u64, bytes[i * 8 ..][0..8], remaining +% i, .little);
     }
@@ -214,6 +308,38 @@ const TestCalls = struct {
         deferCall(pending, &nested, closure, args, 16);
     }
 
+    /// Like `nested`, with argument blocks too large for the cell: the
+    /// chain it drives in its caller's cell takes and returns that cell's
+    /// spare block while this callee still reads its own.
+    fn nestedWide(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: *?*const anyopaque) callconv(.c) void {
+        const pending = callerCell(@ptrCast(out)).?;
+        var before: [wide_words * 8]u8 = undefined;
+        @memcpy(&before, args.?[0 .. wide_words * 8]);
+        const remaining = std.mem.readInt(u64, args.?[0..8], .little);
+        const closure = erased.allocate(&stepWide, &drop, 0, ops);
+        var chain: [wide_words * 8]u8 align(16) = undefined;
+        wideArgs(&chain, 50);
+        deferCall(pending, &stepWide, closure, &chain, chain.len);
+        var chain_result: [8]u8 = undefined;
+        drive(pending, &chain_result);
+        if (!std.mem.eql(u8, &before, args.?[0 .. wide_words * 8])) overwritten.store(true, .monotonic);
+        if (remaining == 0) {
+            @memcpy(ret.?[0..8], &chain_result);
+            return;
+        }
+        const next_closure = erased.allocate(&nestedWide, &drop, 0, ops);
+        var next: [wide_words * 8]u8 align(16) = undefined;
+        wideArgs(&next, remaining - 1);
+        deferCall(pending, &nestedWide, next_closure, &next, next.len);
+    }
+
+    /// Leaves `nestedWide` pending with its own arguments.
+    fn deferNestedWide(ops: *RocOps, _: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: *?*const anyopaque) callconv(.c) void {
+        const pending = callerCell(@ptrCast(out)).?;
+        const closure = erased.allocate(&nestedWide, &drop, 0, ops);
+        deferCall(pending, &nestedWide, closure, args, wide_words * 8);
+    }
+
     /// A host's callable, which writes the ABI's descriptor output.
     fn writesOutput(_: *RocOps, ret: ?[*]u8, _: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: *?*const anyopaque) callconv(.c) void {
         std.mem.writeInt(u64, ret.?[0..8], 7, .little);
@@ -248,6 +374,43 @@ test "native callable trampoline copies an argument block too large for the cell
     call(&TestCalls.stepWide, &result, &args, null, null);
     try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, &result, .little));
     try std.testing.expectEqual(@as(usize, 1000), TestCalls.drops.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+    // One closure per pending call, and two argument blocks for the whole
+    // chain: the one a call is reading and the one it leaves pending.
+    try std.testing.expectEqual(@as(usize, 1000 + 2), env.total_allocations);
+}
+
+test "a chain of argument blocks of varying sizes reuses its heap blocks, growing them only for a larger block" {
+    var env = @import("utils.zig").TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved = host.enter(env.getOps(), null);
+    defer host.leave(saved);
+    TestCalls.drops.store(0, .monotonic);
+    var args: [TestCalls.varied_max_words * 8]u8 align(16) = undefined;
+    _ = TestCalls.variedArgs(&args, 300);
+    var result: [8]u8 = undefined;
+    call(&TestCalls.stepVaried, &result, &args, null, null);
+    try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, &result, .little));
+    try std.testing.expectEqual(@as(usize, 300), TestCalls.drops.load(.monotonic));
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+    // Sizes cycle through three lengths, so after the first cycle the two
+    // blocks the chain holds are both the largest.
+    try std.testing.expect(env.total_allocations <= 300 + 6);
+}
+
+test "a chain of large argument blocks driven in the cell a callee was invoked from leaves the callee's arguments intact" {
+    var env = @import("utils.zig").TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved = host.enter(env.getOps(), null);
+    defer host.leave(saved);
+    TestCalls.drops.store(0, .monotonic);
+    TestCalls.overwritten.store(false, .monotonic);
+    var args: [TestCalls.wide_words * 8]u8 align(16) = undefined;
+    TestCalls.wideArgs(&args, 3);
+    var result: [8]u8 = undefined;
+    call(&TestCalls.deferNestedWide, &result, &args, null, null);
+    try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, &result, .little));
+    try std.testing.expect(!TestCalls.overwritten.load(.monotonic));
     try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
 }
 
@@ -304,6 +467,7 @@ test "a callable writing its descriptor output leaves the cell's pending call al
     try std.testing.expectEqual(@as(?[*]u8, null), cell.closure);
     try std.testing.expectEqual(@as(?[*]u8, null), cell.args);
     try std.testing.expectEqual(@as(usize, 0), cell.args_len);
+    try std.testing.expectEqual(@as(?[*]u8, null), cell.spare);
     try std.testing.expectEqual(@as(?*Pending, &cell), callerCell(@ptrFromInt(invocation(&cell))));
     try std.testing.expectEqual(@as(u64, 7), std.mem.readInt(u64, &result, .little));
 }
