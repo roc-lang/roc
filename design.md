@@ -13741,6 +13741,22 @@ values through descriptors, never on descriptors.
 
 #### Dynamic Values In LIR
 
+Experimental branch: composition shortcuts are selected at compiler build time
+by `boxy_runtime.experiment`, never by an end-user environment variable. Each
+experimental compiler uses an isolated content-addressed cache. The descriptor
+interner remains authoritative in every variant. The alternatives are no site
+shortcut, worker-local one/four-entry shortcuts, and shared one/four-entry
+shortcuts whose entries publish once and are never replaced. Worker-local
+shortcuts check both the exact site and all operand identities, and clear on
+entry/exit of in-process execution so code/data address reuse cannot resurrect
+expired descriptors. Recursive open placeholders cannot enter any shortcut.
+The native dev backend implements these experiments; wasm dev already omits
+site shortcuts. A separate caller experiment passes descriptors of dynamic
+template parameters/results as additional hidden arguments, using the callee's
+declared types substituted through the checked call edge. Those descriptors
+are prepared in the caller's entry chain and consumed directly by the callee.
+It does not pass descriptors recovered by inspecting a runtime value.
+
 A local whose checked type mentions a type variable in scope has the LIR
 layout `dynamic` and names the local holding its descriptor. A dynamic local
 is always manipulated by address. Its storage lives in the procedure's

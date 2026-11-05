@@ -20,6 +20,7 @@ const builtins = @import("builtins");
 const raw_pages = @import("raw_pages");
 const shape = @import("layout_shape");
 const desc_mod = @import("desc.zig");
+const experiment = @import("experiment.zig");
 
 const field_order = shape.field_order;
 const SortKey = shape.SortKey;
@@ -162,6 +163,10 @@ pub const CompositionSite = extern struct {
     }
 
     pub fn publish(self: *CompositionSite, cache: *Cache, ops: *RocOps, operands: []const usize, result: usize) void {
+        @atomicStore(?*const CompositionEntry, &self.entry, snapshot(cache, ops, operands, result), .release);
+    }
+
+    fn snapshot(cache: *Cache, ops: *RocOps, operands: []const usize, result: usize) *const CompositionEntry {
         var scratch: Scratch(u64, 16) = .{};
         defer scratch.deinit(ops);
         const key = scratch.get(2 + operands.len, ops);
@@ -177,9 +182,69 @@ pub const CompositionSite = extern struct {
             @memcpy(@constCast(fresh.operands(operands.len)), operands);
             break :blk @ptrCast(cache.intern(key, @ptrCast(@alignCast(fresh)), ops));
         };
-        @atomicStore(?*const CompositionEntry, &self.entry, entry, .release);
+        return entry;
     }
 };
+
+// The native backend supplies an exact site identity and all operands. A
+// collision only evicts a shortcut; the descriptor interner remains canonical.
+const LocalSite = struct {
+    site: ?*CompositionSite = null,
+    entries: [experiment.ways]?*const CompositionEntry = @splat(null),
+    next: usize = 0,
+};
+threadlocal var local_sites: [1024]LocalSite = @splat(.{});
+
+/// In-process code/data and descriptors expire together. Clear before entering
+/// and after leaving an execution, including nested executions, so a reused
+/// address cannot resurrect an entry from an earlier program.
+pub fn clearLocalSites() void {
+    if (comptime experiment.worker_local) @memset(&local_sites, .{});
+}
+
+fn localSite(site: *CompositionSite) *LocalSite {
+    const bits = @intFromPtr(site) >> 3;
+    const slot = &local_sites[(bits ^ (bits >> 10)) & (local_sites.len - 1)];
+    if (slot.site != site) slot.* = .{ .site = site };
+    return slot;
+}
+
+/// Read-only on a hit. Frozen shared slots are never overwritten.
+pub fn experimentLookup(site: *CompositionSite, operands: []const usize) ?*const CompositionEntry {
+    if (comptime experiment.worker_local) {
+        for (localSite(site).entries) |maybe| {
+            if (maybe) |entry| if (entry.holds(operands)) return entry;
+        }
+    } else {
+        const slots: [*]?*const CompositionEntry = @ptrCast(site);
+        for (0..experiment.ways) |i| {
+            const entry = @atomicLoad(?*const CompositionEntry, &slots[i], .acquire) orelse continue;
+            if (entry.holds(operands)) return entry;
+        }
+    }
+    return null;
+}
+
+pub fn experimentPublish(site: *CompositionSite, cache: *Cache, ops: *RocOps, operands: []const usize, result: usize) void {
+    if (comptime experiment.worker_local) {
+        const slot = localSite(site);
+        slot.entries[slot.next] = CompositionSite.snapshot(cache, ops, operands, result);
+        slot.next = (slot.next + 1) % experiment.ways;
+    } else {
+        const slots: [*]?*const CompositionEntry = @ptrCast(site);
+        var fresh: ?*const CompositionEntry = null;
+        for (0..experiment.ways) |i| {
+            if (@atomicLoad(?*const CompositionEntry, &slots[i], .acquire)) |entry| {
+                if (entry.holds(operands)) return;
+                continue;
+            }
+            if (fresh == null) fresh = CompositionSite.snapshot(cache, ops, operands, result);
+            if (@cmpxchgStrong(?*const CompositionEntry, &slots[i], null, fresh, .release, .acquire)) |raced| {
+                if (raced.?.holds(operands)) return;
+            } else return;
+        }
+    }
+}
 
 /// ABI shared with the generated inline comparisons. The operand count belongs
 /// to the site, whose constructor and non-local inputs never change.

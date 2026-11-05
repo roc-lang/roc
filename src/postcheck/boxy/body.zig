@@ -657,7 +657,7 @@ pub const Builder = struct {
     /// Replace `hole` with `stmt`.
     pub fn fill(self: *Builder, hole: CFStmtId, stmt: LIR.CFStmt, kind: LIR.OriginKind) Allocator.Error!void {
         var emitted = stmt;
-        if (self.program.input.composition_sites and emitted == .dyn and lir_core.DynOps.isComposition(self.store.stmtRow(emitted.dyn.data))) {
+        if (@import("boxy_runtime").experiment.mode != .none and self.program.input.composition_sites and emitted == .dyn and lir_core.DynOps.isComposition(self.store.stmtRow(emitted.dyn.data))) {
             std.debug.assert(emitted.dyn.composition_cache == null);
             const site = self.composition_site_count;
             self.composition_site_count = std.math.add(u32, site, 1) catch return error.OutOfMemory;
@@ -1347,6 +1347,14 @@ pub const Builder = struct {
         const entry = self.entry_hole;
         self.var_descs = try self.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
         for (self.var_descs) |*slot| slot.* = try self.closedLocal(.opaque_ptr);
+        const passed_types = try self.program.passedDescriptorTypes(self.allocator, self.worker_id);
+        defer self.allocator.free(passed_types);
+        const passed_descs = try self.allocator.alloc(LocalId, passed_types.len);
+        defer self.allocator.free(passed_descs);
+        for (passed_types, passed_descs) |ty, *slot| {
+            slot.* = try self.closedLocal(.opaque_ptr);
+            try self.type_descs.put(self.allocator, ty, slot.*);
+        }
         const params = try self.allocator.alloc(LocalId, worker.params.len);
         defer self.allocator.free(params);
         for (params, worker.params) |*param, param_ty| param.* = try self.localOf(param_ty, .param);
@@ -1358,6 +1366,7 @@ pub const Builder = struct {
         self.literal_locals = try self.program.arena.allocator().alloc(LocalId, worker.literal_params);
         for (self.literal_locals) |*slot| slot.* = try self.closedLocal(try self.erasedLayout());
         try args.appendSlice(self.allocator, self.literal_locals);
+        try args.appendSlice(self.allocator, passed_descs);
         var ret_layout: layout.Idx = undefined;
         if (try self.closed(worker.ret)) {
             ret_layout = try self.program.layouts.layoutOf(worker.ret);
@@ -2543,7 +2552,9 @@ pub const Builder = struct {
         for (values, 0..) |*value, index| value.* = try self.erasedParamValue(record.?, params, @intCast(index));
         const result: ?LocalId = switch (body) {
             .call => |call| blk: {
-                const all = try std.mem.concat(self.allocator, LocalId, &.{ values, call.hidden });
+                const passed = try self.callDescriptorArgs(call.target, null);
+                defer self.allocator.free(passed);
+                const all = try std.mem.concat(self.allocator, LocalId, &.{ values, call.hidden, passed });
                 defer self.allocator.free(all);
                 const target = try self.localOf(ret, .frame);
                 try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(call.target).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
@@ -7018,12 +7029,26 @@ pub const Builder = struct {
         const explicit = try self.popValues(@intCast(arg_types.len));
         defer self.allocator.free(explicit);
         try self.argsAtParams(explicit, arg_types, callee, bound);
-        const args = try std.mem.concat(self.allocator, LocalId, &.{ explicit, hidden });
+        const passed = try self.callDescriptorArgs(callee, bound);
+        defer self.allocator.free(passed);
+        const args = try std.mem.concat(self.allocator, LocalId, &.{ explicit, hidden, passed });
         defer self.allocator.free(args);
         const target = try self.localOf(ret, .frame);
         const proc = self.program.worker(callee).proc;
         try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = proc, .args = try self.store.addLocalSpan(args), .next = undefined } });
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
+    }
+
+    fn callDescriptorArgs(self: *Builder, callee: WorkerId, bound: ?[]const TypeId) Allocator.Error![]LocalId {
+        const required = try self.program.passedDescriptorTypes(self.allocator, callee);
+        defer self.allocator.free(required);
+        const result = try self.allocator.alloc(LocalId, required.len);
+        errdefer self.allocator.free(result);
+        for (required, result) |ty, *local| {
+            const instantiated = if (bound) |subst| try self.program.substitute(self.allocator, ty, subst) else ty;
+            local.* = try self.descOf(instantiated);
+        }
+        return result;
     }
 
     /// `args` of types `arg_types`, where one parameter of `callee` under
@@ -9621,7 +9646,9 @@ pub const Builder = struct {
                     .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                 };
                 defer self.allocator.free(instance.hidden);
-                const all = try std.mem.concat(self.allocator, LocalId, &.{ args, instance.hidden });
+                const passed = try self.callDescriptorArgs(callee, instance.bound);
+                defer self.allocator.free(passed);
+                const all = try std.mem.concat(self.allocator, LocalId, &.{ args, instance.hidden, passed });
                 defer self.allocator.free(all);
                 const target = try self.localOf(instance.ret, .frame);
                 try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(callee).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });

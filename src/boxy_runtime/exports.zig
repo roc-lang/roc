@@ -52,6 +52,14 @@ pub fn roc_desc_site_publish(site: *compose.CompositionSite, count: u32, operand
     site.publish(cache(), composeOps(), items(usize, count, operands), result);
 }
 
+pub fn roc_desc_site_experiment_lookup(site: *compose.CompositionSite, count: u32, operands: ?[*]const usize) callconv(.c) ?*const compose.CompositionEntry {
+    return compose.experimentLookup(site, items(usize, count, operands));
+}
+
+pub fn roc_desc_site_experiment_publish(site: *compose.CompositionSite, count: u32, operands: ?[*]const usize, result: usize) callconv(.c) void {
+    compose.experimentPublish(site, cache(), composeOps(), items(usize, count, operands), result);
+}
+
 /// The end of a run of `count` dynamic locals of type `desc` placed after
 /// `offset` bytes of a procedure's frame region: the run starts at `offset`
 /// rounded up to the type's alignment, and each local takes the type's size

@@ -701,6 +701,34 @@ test "boxy composition site retains complete snapshots and reuses alternating in
     try testing.expectEqual(@as(usize, 0), site.load().?.operands(0).len);
 }
 
+test "experimental composition shortcuts retain exact operand result associations" {
+    const experiment = @import("experiment.zig");
+    var env = Env.init();
+    defer env.deinit();
+    var slots: [4]compose.CompositionSite = @splat(.{});
+    const site = &slots[0];
+    compose.clearLocalSites();
+    defer compose.clearLocalSites();
+    const a = [_]usize{ 11, 22 };
+    const b = [_]usize{ 22, 11 };
+    try testing.expectEqual(null, compose.experimentLookup(site, &a));
+    compose.experimentPublish(site, &env.cache, env.ops(), &a, 101);
+    try testing.expectEqual(@as(usize, 101), compose.experimentLookup(site, &a).?.result);
+    try testing.expectEqual(null, compose.experimentLookup(site, &b));
+    compose.experimentPublish(site, &env.cache, env.ops(), &b, 202);
+    if (experiment.worker_local or experiment.ways > 1) {
+        try testing.expectEqual(@as(usize, 202), compose.experimentLookup(site, &b).?.result);
+    } else {
+        try testing.expectEqual(null, compose.experimentLookup(site, &b));
+    }
+    if (!experiment.worker_local or experiment.ways > 1)
+        try testing.expectEqual(@as(usize, 101), compose.experimentLookup(site, &a).?.result);
+    if (experiment.worker_local) {
+        compose.clearLocalSites();
+        try testing.expectEqual(null, compose.experimentLookup(site, &b));
+    }
+}
+
 test "boxy composition site concurrent writers publish whole operand result pairs" {
     if (@import("builtin").single_threaded) return error.SkipZigTest;
     const state = try compiled.InProcessState.create(testing.allocator);

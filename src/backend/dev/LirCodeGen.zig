@@ -17655,6 +17655,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Inline the site's acquire-load and operand comparisons. Only a miss
         /// builds the runtime arguments, probes the interner, and publishes.
         fn generateCachedComposition(self: *Self, dst: LocalId, op: LIR.DynOp, cache: LIR.StaticDataId) Allocator.Error!void {
+            if (comptime boxy_runtime.experiment.worker_local or boxy_runtime.experiment.shared_frozen)
+                return self.generateExperimentalComposition(dst, op, cache);
             try self.spillAllVectorLocals();
             var operands: std.ArrayList(LocalId) = .empty;
             defer operands.deinit(self.allocator);
@@ -17714,6 +17716,68 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, words);
             try builder.addMemArg(frame_ptr, result_slot);
             try self.callBoxyRuntime(&builder, "roc_desc_site_publish");
+            if (open) |jump| try self.codegen.patchJump(jump, self.codegen.currentOffset());
+            try self.codegen.patchJump(hit, self.codegen.currentOffset());
+            try self.bindAssignedLocal(dst, self.stackLocationForLayout(self.localLayout(dst), result_slot));
+        }
+
+        fn generateExperimentalComposition(self: *Self, dst: LocalId, op: LIR.DynOp, cache: LIR.StaticDataId) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            var operands: std.ArrayList(LocalId) = .empty;
+            defer operands.deinit(self.allocator);
+            try lir.DynOps.Operands.of(op).appendAll(self.store, self.allocator, &operands);
+            const words = self.codegen.allocStackSlot(@intCast(@max(operands.items.len, 1) * 8));
+            const site_slot = self.codegen.allocStackSlot(8);
+            const result_slot = self.codegen.allocStackSlot(8);
+            {
+                const reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(reg);
+                switch (self.generation_mode) {
+                    .native_execution => try self.codegen.emitLoadImm(reg, @bitCast(@as(u64, self.nativeStaticDataAddress(cache)))),
+                    .shim_execution, .object_file => try self.emitStaticDataAddress(reg, cache),
+                }
+                try self.emitStore(.w64, frame_ptr, site_slot, reg);
+                for (operands.items, 0..) |operand, i| {
+                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(operand));
+                    try self.emitStore(.w64, frame_ptr, words + @as(i32, @intCast(i * 8)), reg);
+                }
+            }
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                try builder.addMemArg(frame_ptr, site_slot);
+                try builder.addImmArg(@intCast(operands.items.len));
+                try builder.addLeaArg(frame_ptr, words);
+                try self.callBoxyRuntime(&builder, "roc_desc_site_experiment_lookup");
+            }
+            try self.emitCmpImm(ret_reg_0, 0);
+            const miss = try self.codegen.emitCondJump(condCode(.equal));
+            try self.emitLoad(.w64, ret_reg_0, ret_reg_0, @offsetOf(boxy_runtime.compose.CompositionEntry, "result"));
+            try self.emitStore(.w64, frame_ptr, result_slot, ret_reg_0);
+            const hit = try self.codegen.emitJump();
+            try self.codegen.patchJump(miss, self.codegen.currentOffset());
+            try self.generateDyn(dst, op);
+            var open: ?usize = null;
+            {
+                const reg = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(reg);
+                try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(dst));
+                try self.emitStore(.w64, frame_ptr, result_slot, reg);
+                if (op == .desc_recursive_open) {
+                    try self.emitLoad(.w32, reg, reg, @offsetOf(boxy_runtime.TypeDesc, "size"));
+                    try self.emitCmpImm(reg, std.math.maxInt(u32));
+                    open = try self.codegen.emitCondJump(condCode(.equal));
+                }
+            }
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                try builder.addMemArg(frame_ptr, site_slot);
+                try builder.addImmArg(@intCast(operands.items.len));
+                try builder.addLeaArg(frame_ptr, words);
+                try builder.addMemArg(frame_ptr, result_slot);
+                try self.callBoxyRuntime(&builder, "roc_desc_site_experiment_publish");
+            }
             if (open) |jump| try self.codegen.patchJump(jump, self.codegen.currentOffset());
             try self.codegen.patchJump(hit, self.codegen.currentOffset());
             try self.bindAssignedLocal(dst, self.stackLocationForLayout(self.localLayout(dst), result_slot));

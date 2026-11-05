@@ -141,7 +141,7 @@ pub const StaticDescs = struct {
     pub fn compositionSlot(self: *StaticDescs, identity: LIR.ProcIdentity, site: u32) Allocator.Error!LIR.StaticDataId {
         const slot = try self.addSlot();
         const name = try std.fmt.allocPrint(self.allocator, "roc__boxy_site_{s}_{d}", .{ &std.fmt.bytesToHex(identity.bytes, .lower), site });
-        const node = try self.addExport(name, self.ptrSize(), self.ptrSize(), slot);
+        const node = try self.addExport(name, self.ptrSize() * boxy_runtime.experiment.site_words, self.ptrSize(), slot);
         self.exports.items[node].is_mutable = true;
         return slot;
     }
