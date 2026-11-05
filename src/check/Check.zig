@@ -4876,6 +4876,18 @@ fn recordRigidVarIntro(self: *Self, anno_idx: CIR.TypeAnno.Idx) Allocator.Error!
     };
 }
 
+/// The binding whose annotation introduced a rigid variable that a type
+/// declared in a function body names: an enclosing binding, or a method or
+/// local function of the declaration itself.
+fn rigidVarOwner(self: *const Self, rigid: CIR.TypeAnno.Idx) CIR.Pattern.Idx {
+    const intro = self.rigid_var_intros.get(rigid) orelse
+        base.invariant("type checker invariant violated: rigid variable {d} named by a body-local type was never introduced", .{@backingInt(rigid)});
+    const annotation = intro.annotation orelse
+        base.invariant("type checker invariant violated: rigid variable {d} named by a body-local type was introduced outside a binding annotation", .{@backingInt(rigid)});
+    return self.polymorphic_annotation_owners.get(annotation) orelse
+        base.invariant("type checker invariant violated: the annotation introducing rigid variable {d} named by a body-local type is on no binding", .{@backingInt(rigid)});
+}
+
 fn rigidVarCandidateDepth(self: *const Self, rigid: CIR.TypeAnno.Idx) u32 {
     const intro = self.rigid_var_intros.get(rigid) orelse return 0;
     return intro.depth;
@@ -5242,16 +5254,8 @@ fn computeLocalTypeContexts(self: *Self, dispatch_refs: []const LocalProcedureOu
         nominal_decl.context = try self.types.appendVars(vars);
         self.types.setNominalDecl(decl_entry, nominal_decl);
 
-        // A context variable is a rigid variable an enclosing binding's
-        // annotation introduced.
         for (input.context.items) |rigid| {
-            const intro = self.rigid_var_intros.get(rigid) orelse
-                base.invariant("type checker invariant violated: context variable {d} of a body-local type was never introduced", .{@backingInt(rigid)});
-            const annotation = intro.annotation orelse
-                base.invariant("type checker invariant violated: context variable {d} of a body-local type was introduced outside a binding annotation", .{@backingInt(rigid)});
-            const owner = self.polymorphic_annotation_owners.get(annotation) orelse
-                base.invariant("type checker invariant violated: the annotation introducing context variable {d} of a body-local type is on no binding", .{@backingInt(rigid)});
-            try self.local_type_context_owners.append(gpa, .{ .decl = decl, .rigid = rigid, .owner = owner });
+            try self.local_type_context_owners.append(gpa, .{ .decl = decl, .rigid = rigid, .owner = self.rigidVarOwner(rigid) });
         }
     }
 }
@@ -5339,10 +5343,8 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
         } else null;
         const entry = owners[escaping orelse continue];
 
-        const header_idx = switch (self.cir.store.getStatement(entry.decl)) {
-            .s_nominal_decl => |nominal_decl| nominal_decl.header,
-            else => unreachable, // only nominal declarations record context owners
-        };
+        // Only nominal declarations record context owners.
+        const header_idx = self.cir.store.getStatement(entry.decl).s_nominal_decl.header;
         _ = try self.problems.appendProblem(.{ .local_type_escape = .{
             .region = self.cir.store.getPatternRegion(pattern),
             .def_name = self.getPatternIdent(pattern),
@@ -5380,8 +5382,11 @@ fn addLocalTypeContextRigid(self: *Self, decl: CIR.Statement.Idx, input: *LocalT
     for (self.typeDeclHeaderArgs(decl)) |parameter| {
         if (parameter == rigid) return false;
     }
+    // A variable whose binding is declared inside the declaration's block, a
+    // method or a function inside one, is the method's own.
     if (input.method_depth) |method_depth| {
-        if (self.rigidVarCandidateDepth(rigid) > method_depth) return false;
+        const owner = self.rigidVarOwner(rigid);
+        if (!self.patternIsTopLevelDef(owner) and (self.local_pattern_candidate_depths.get(owner) orelse 0) >= method_depth) return false;
     }
     const items = input.context.items;
     var lo: usize = 0;
