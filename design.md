@@ -5837,8 +5837,10 @@ them introduces (its own parameters, its methods' own variables, and those of
 the local functions they reach are introduced by its parts), and each
 variable of the context of a body-local type its parts name that none of
 them introduces, as a least fixpoint, so mutually referring types share their
-variables. A type variable alias whose variable a type-rooted call in its
-parts goes through counts as a lookup of that variable. A dispatch inside a
+variables. A type variable alias in its parts (`Outer : a`, whose
+type-rooted calls go through `a`) counts as a lookup of the variable it
+aliases, which the alias names by that variable's own introducing
+annotation. A dispatch inside a
 method contributes nothing of its own: the value it dispatches on has a type
 whose application lists that type's own context.
 

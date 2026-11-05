@@ -5372,11 +5372,11 @@ fn walkLocalTypeContextItem(
                 .e_lookup_local => |lookup| try self.queueLocalTypeContextBinding(lookup.pattern_idx, work, walked_bindings),
                 .e_nominal => |nominal| try self.noteLocalTypeContextDecl(nominal.nominal_type_decl, decl, input),
                 .e_lookup_associated_local => |lookup| {
-                    try self.noteLocalTypeContextStatement(@fromBackingInt(@intCast(lookup.type_node_idx)), decl, input, work);
+                    try self.noteLocalTypeContextStatement(@fromBackingInt(@intCast(lookup.type_node_idx)), decl, input);
                 },
-                .e_type_method_call => |call| try self.noteLocalTypeContextStatement(call.type_dispatch_stmt, decl, input, work),
+                .e_type_method_call => |call| try self.noteLocalTypeContextStatement(call.type_dispatch_stmt, decl, input),
                 .e_type_dispatch_call => |call| switch (call.owner) {
-                    .statement => |statement| try self.noteLocalTypeContextStatement(statement, decl, input, work),
+                    .statement => |statement| try self.noteLocalTypeContextStatement(statement, decl, input),
                     .dispatcher => {},
                 },
                 .e_block => |block| for (store.sliceStatements(block.stmts)) |statement| {
@@ -5388,7 +5388,7 @@ fn walkLocalTypeContextItem(
                             try work.append(gpa, .{ .anno = type_anno.anno });
                             if (type_anno.where) |where_span| try work.append(gpa, .{ .where = where_span });
                         },
-                        .s_type_var_alias => |alias| try work.append(gpa, .{ .anno = alias.type_var_anno }),
+                        .s_type_var_alias => |alias| try self.noteLocalTypeContextAliasedVar(alias.type_var_anno, input),
                         .s_reassign,
                         .s_crash,
                         .s_dbg,
@@ -5476,6 +5476,22 @@ fn noteLocalTypeContextDecl(
     try input.named.append(self.gpa, named);
 }
 
+/// A type variable alias (`Outer : a`) names the variable of an enclosing
+/// scope it aliases: the rigid variable annotation that introduced it, which
+/// its parts look up rather than introduce.
+fn noteLocalTypeContextAliasedVar(
+    self: *Self,
+    type_var_anno: CIR.TypeAnno.Idx,
+    input: *LocalTypeContextInputs,
+) Allocator.Error!void {
+    switch (self.cir.store.getTypeAnno(type_var_anno)) {
+        .rigid_var => try input.lookups.append(self.gpa, type_var_anno),
+        .rigid_var_lookup => |lookup| try input.lookups.append(self.gpa, lookup.ref),
+        .underscore, .malformed => {},
+        .lookup, .apply, .tag_union, .tag, .tuple, .record, .@"fn", .parens => unreachable, // a type variable alias names a type variable
+    }
+}
+
 /// A statement a type-rooted call or associated lookup in a declaration's
 /// parts goes through: a type declaration it names, or a type variable alias
 /// whose variable it looks up.
@@ -5484,11 +5500,10 @@ fn noteLocalTypeContextStatement(
     statement: CIR.Statement.Idx,
     decl: CIR.Statement.Idx,
     input: *LocalTypeContextInputs,
-    work: *std.ArrayListUnmanaged(LocalTypeContextWalkItem),
 ) Allocator.Error!void {
     switch (self.cir.store.getStatement(statement)) {
         .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => try self.noteLocalTypeContextDecl(statement, decl, input),
-        .s_type_var_alias => |alias| try work.append(self.gpa, .{ .anno = alias.type_var_anno }),
+        .s_type_var_alias => |alias| try self.noteLocalTypeContextAliasedVar(alias.type_var_anno, input),
         .s_decl,
         .s_var,
         .s_var_uninitialized,
