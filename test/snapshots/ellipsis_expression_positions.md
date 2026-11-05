@@ -1134,8 +1134,8 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 658)
-				(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18500") (target-def "18500"))
+			(e-call (constraint-fn-var 685)
+				(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18537") (target-def "18537"))
 				(e-not-implemented))))
 	(d-let
 		(p-assign (ident "question"))
