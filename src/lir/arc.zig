@@ -2496,6 +2496,15 @@ const Inserter = struct {
                     .construct => {
                         const operands = try self.dynOperands(op);
                         next = try self.retainLocalsExceptPositions(operands, step.transfer_positions.of(u32, &self.arc_plans.positions), .{ .stmt = at, .reason = .stored_in_aggregate }, next);
+                        if (op == .closure and op.closure.reuse != null) {
+                            var repack = op;
+                            repack.closure.reuse_unique = step.reuse_unique;
+                            break :blk try self.store.addCFStmt(.{ .dyn = .{
+                                .target = dyn_stmt.target,
+                                .data = try self.store.addStmtRow(LIR.DynOp, repack),
+                                .next = next,
+                            } }, origin);
+                        }
                     },
                 }
                 break :blk try self.addWithNext(stmt, next, origin);
@@ -4968,6 +4977,16 @@ const Inserter = struct {
                 }
             },
             .construct => {
+                if (op == .closure) {
+                    // A repacked allocation is unique when the frame owns its
+                    // unit, it is unique here, nothing reads it afterwards,
+                    // and the capture record is not an alias of it.
+                    if (op.closure.reuse) |reuse| {
+                        if (reuse == target) arcInvariant("ARC closure repack cannot reuse its result binding");
+                        step.reuse_unique = !(try self.groupUsedInPath(next, reuse)) and self.ownsUnit(owned, reuse) and self.isLocalUniqueHere(reuse) and
+                            self.solution.leaderOf(op.closure.capture) != self.solution.leaderOf(reuse);
+                    }
+                }
                 self.transfer_position_scratch.clearRetainingCapacity();
                 try self.localsTransferPositions(operands, next, target, owned, self.transfer_position_scratch);
                 const release_old_target = try self.takeRebindTarget(owned, target);
@@ -4988,21 +5007,32 @@ const Inserter = struct {
                         try self.appendStepRetain(step, .{ .local = args, .reason = .owned_param_demand });
                     }
                 };
+                // An owned call transfers one unit of its closure: the
+                // closure's own when it dies here, else a retained one.
+                var preserve_reuse_source = false;
+                if (call.reuse_closure) {
+                    if (call.closure == target) arcInvariant("owned erased call cannot consume and rebind the same local");
+                    const reuse_source = call.reuse_source orelse arcInvariant("owned erased call lacked its explicit reuse ownership source");
+                    preserve_reuse_source = try self.groupUsedInPath(next, reuse_source);
+                    if (!preserve_reuse_source) _ = try self.takeUnit(owned, reuse_source);
+                }
                 const release_old_target = if (target == call.closure) false else try self.takeRebindTarget(owned, target);
                 try self.placeCallResultUnit(owned, target, .owned);
                 step.pre_release = if (release_old_target) self.releaseDecision(target) else null;
                 self.death_scratch.clearRetainingCapacity();
                 if (self.dynErasedCallIsDeferred(target, next)) {
                     // The call is left pending and made after this frame
-                    // returns. It keeps one reference to its closure, retained
-                    // here; everything else the frame owns ends first.
-                    try self.appendStepRetain(step, .{ .local = call.closure, .reason = .closure_call_capture });
+                    // returns. It keeps one reference to its closure: the
+                    // unit an owned call moved, or one retained here;
+                    // everything else the frame owns ends first.
+                    if (!call.reuse_closure or preserve_reuse_source) try self.appendStepRetain(step, .{ .local = call.closure, .reason = .closure_call_capture });
                     try self.releaseTailCallerFrame(owned, target, self.death_scratch);
                     try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
                     step.pre_release_extra_reason = .tail_call_frame;
                     step.replaces_frame = true;
                     return;
                 }
+                if (preserve_reuse_source) try self.appendStepRetain(step, .{ .local = call.reuse_source.?, .reason = .reuse_source_preserved });
                 try self.noteCallResultDeathIfUnused(owned, target, .owned, next, self.death_scratch);
                 try self.postStmtDeaths(owned, operands, null, next, self.death_scratch);
                 try self.copyDeathScratchToStep(step);

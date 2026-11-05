@@ -483,12 +483,20 @@ const Printer = struct {
                 return;
             },
             .dict_compose => |dict| try writer.print(" p{d}", .{@backingInt(dict.worker)}),
-            .closure => |closure| try writer.print(" p{d}", .{@backingInt(closure.proc)}),
+            .closure => |closure| {
+                try writer.print(" p{d}", .{@backingInt(closure.proc)});
+                if (closure.reuse != null and closure.reuse_unique) try writer.writeAll(" reuse_unique");
+            },
+            .call_erased => |call| {
+                if (call.reuse_closure) try writer.writeAll(" owned");
+                if (call.deferred) try writer.writeAll(" deferred");
+                if (call.drive != .none) try writer.print(" drive={s}", .{@tagName(call.drive)});
+            },
             .dict_method => |method| try writer.print(" #{d}", .{method.index}),
             .field_addr => |field| try writer.print(" #{d}", .{field.field_index}),
             .tag_payload_addr => |payload| try writer.print(" #{d}", .{payload.payload_index}),
             .desc_nominal => |nominal| if (nominal.inspect_opaque) try writer.writeAll(" opaque"),
-            .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_args, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .copy, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .adapt => {},
+            .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_args, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .copy, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .view, .adapt => {},
         }
         const operands = DynOps.Operands.of(op);
         for (operands.singles[0..operands.single_count]) |local| try writer.print(" l{d}", .{@backingInt(local)});

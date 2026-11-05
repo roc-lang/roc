@@ -38,6 +38,11 @@ pub const Pending = extern struct {
     args: ?[*]u8 = null,
     args_len: usize = 0,
     args_capacity: usize = 0,
+    /// Nonzero when the call transfers the reference it owns to `closure`
+    /// through the erased ABI's reuse channel (an owned deferred call), so
+    /// the callee consumes it; zero when the driver releases it after the
+    /// call.
+    transfer: usize = 0,
     /// What a callee that writes the erased ABI's descriptor output writes.
     /// The tag on `invocation`'s address moves that word off its alignment,
     /// so it spans two of these.
@@ -85,8 +90,10 @@ pub fn call(callable: erased.CallableFnPtr, ret: ?[*]u8, args: ?[*]const u8, cap
     if (pending.callable != null) drivePending(&pending, ret);
 }
 
-/// ARC transfers one closure reference and the arguments to this pending call.
-pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize) void {
+/// ARC transfers one closure reference and the arguments to this pending
+/// call; `transfer` says the driven call passes that reference on to the
+/// callee as its reuse input.
+pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize, transfer: bool) void {
     std.debug.assert(pending.callable == null);
     // A call without arguments carries no argument bytes to copy out.
     var copied: ?[*]u8 = null;
@@ -118,6 +125,7 @@ pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]
     pending.args = copied;
     pending.args_len = args_len;
     pending.args_capacity = capacity;
+    pending.transfer = @intFromBool(transfer);
 }
 
 /// Keep `block`, which no call reads any more, as `pending`'s spare when it
@@ -162,16 +170,19 @@ noinline fn drivePending(pending: *Pending, ret: ?[*]u8) void {
         const closure = pending.closure.?;
         const args_len = pending.args_len;
         const capacity = pending.args_capacity;
+        const transfer = pending.transfer != 0;
         const args: ?[*]u8 = if (args_len == 0)
             null
         else if (args_len <= inline_args_bytes) copy: {
             @memcpy(inline_copy[0..args_len], pending.args.?[0..args_len]);
             break :copy &inline_copy;
         } else pending.args;
-        invoke(pending, callable, ret, args, erased.capturePtr(closure), null);
+        invoke(pending, callable, ret, args, erased.capturePtr(closure), if (transfer) closure else null);
         // This is the ownership transfer explicitly requested by ARC's
-        // deferred-call statement, not a backend-inferred capture release.
-        erased.decref(closure, host.ops());
+        // deferred-call statement, not a backend-inferred capture release:
+        // the callee consumed the reference an owned call passed it, and
+        // the driver releases every other.
+        if (!transfer) erased.decref(closure, host.ops());
         if (args_len > inline_args_bytes) keepSpare(pending, args.?, capacity);
     }
     if (pending.spare) |spare| {
@@ -209,7 +220,7 @@ const TestCalls = struct {
         const closure = erased.allocate(&step, &drop, 0, ops);
         var next: [8]u8 = undefined;
         std.mem.writeInt(u64, &next, remaining - 1, .little);
-        deferCall(pending, &step, closure, &next, next.len);
+        deferCall(pending, &step, closure, &next, next.len, false);
     }
 
     /// Like `step`, with an argument block too large for the cell, whose

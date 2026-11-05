@@ -14356,18 +14356,31 @@ thus carries the type knowledge of its creation site, and its worker needs no
 hidden parameters of its own: it reads them from its captures. When any
 capture is of variable type, the capture record is a dynamic record composed
 from the captures' descriptors, its first word is the capture record's
-descriptor, and the callable's `on_drop` is the shared runtime drop that reads
-that word. When every capture is of closed type, the capture record has a
-static layout and `on_drop` is the per-worker helper the backend generates for
-that layout. A callable whose captures are all static (none, or only static
-callables such as dictionaries) is a static, immortal callable: `packClosure`
-reads the program's static dictionary of its worker and captures
-(`StaticDescs.dictionary`), whose node carries the zero (static) refcount, so
-creating, sharing, or dropping it never allocates or frees. A compile-time
-program, which reads its function values' types back from what their
-compositions noted, packs them instead. The
-`out_desc` slot of the erased-callable ABI is always written null: the caller
-knows the result type's descriptor itself.
+descriptor, its second word the capture capacity of the allocation holding it
+(the record's size when the callable is first packed; an allocation repacked
+in place keeps its capacity), and the callable's `on_drop` is the shared
+runtime drop that reads the first word. When every capture is of closed type,
+the capture record has a static layout and `on_drop` is the per-worker helper
+the backend generates for that layout. A callable whose captures are all
+static (none, or only static callables such as dictionaries) is a static,
+immortal callable: `packClosure` reads the program's static dictionary of its
+worker and captures (`StaticDescs.dictionary`), whose node carries the zero
+(static) refcount, so creating, sharing, or dropping it never allocates or
+frees. A compile-time program, which reads its function values' types back
+from what their compositions noted, packs them instead. The `out_desc` slot of
+the erased-callable ABI is always written null: the caller knows the result
+type's descriptor itself.
+
+Every `.boxy` erased worker (a lambda, an adapter, a method entry, a literal
+or root thunk) takes the erased ABI's reuse argument as its last parameter,
+named by `LirProcSpec.erased_reuse_arg`, and consumes it exactly once
+(Destination-Passing Results and Allocation Reuse): the first dynamic
+closure the body packs repacks it when the worker's own closure is dynamic,
+a packing of the worker's own closed capture layout repacks it when that
+closure is closed, and otherwise ARC releases it. A worker's capture record is
+a view whose owner is that argument, so a packing that would repack the
+allocation while a later read of the captures is still to come retains it,
+and the runtime then packs afresh.
 
 An erased call passes its arguments as one record in the uniform ABI. When the
 call's argument types are closed, that record has a static layout; when they
@@ -14471,22 +14484,25 @@ adding it, takes the lock, probes the current table again, and interns on a
 true miss. Only insertion and growth hold the lock. Keys are a few words of
 constructor tags and operand addresses, hashed by mixing each word.
 
-Where the consumer is the interpreter or the native dev backend, each descriptor
-or dictionary composition statement also owns a one-entry site cache in
-zero-initialized writable static data; LLVM and wasm consumers read no sites, so
-their lowering emits no slots and every composition reaches the interner. The
+Where the consumer is the interpreter, the native dev backend, or the LLVM
+backend, each descriptor or dictionary composition statement also owns a
+one-entry site cache in zero-initialized writable static data; the wasm dev
+backend reads no sites, so its lowering emits no slots and every composition
+it runs reaches the interner. The
 lowerer assigns its slot
 and stable worker/site identity; LIR cloning and compaction preserve that
 reference. Mutable slots are never content-deduplicated or pooled between
 program images. Dev run images place them on separate writable pages outside
-the code and read-only data sections and outside the retained static pool.
+the code and read-only data sections and outside the retained static pool. An
+LLVM object names a site by the symbol of the zero-fill definition in the
+program's static data, never by a private constant copy of its initial bytes.
 Saved objects and LirImages carry the initial zero bytes, never runtime pointers.
 Each interpreter owns its own instances of these slots, with
 the lifetime of its composition arena.
 
-The dev backend and interpreter acquire-load a site's pointer to an immutable
+Every consumer with sites acquire-loads a site's pointer to an immutable
 snapshot of the last operand pointers and result. If every operand matches,
-they use that result without entering the runtime or probing the interner. The
+it uses that result without entering the runtime or probing the interner. The
 constructor, worker, arities and other non-local arguments are fixed by the
 site; the local operand sequence is its complete varying key. A miss composes
 normally, then release-stores a complete snapshot pointer. An atomic store
@@ -14494,7 +14510,10 @@ of one pointer means no reader can observe a partially replaced operand/result
 pair, even with several writers. Snapshots are themselves interned by result
 and operand sequence in the program's immortal table, so alternating previously
 seen instantiations does not allocate on each replacement. A replaced snapshot
-stays alive for racing readers until the program is destroyed.
+stays alive for racing readers until the program is destroyed. The native dev
+backend and the LLVM backend emit the load and the operand comparisons inline
+at the site, so a hit costs a few loads and compares, and only a miss enters
+the runtime (`roc_desc_site_publish`).
 
 A snapshot belongs to the program whose immortal table interned it. A cached
 module object is loaded once per compile-time evaluation and shared by every
@@ -18118,6 +18137,56 @@ A `Skip` carries only `rest`: it signals "advanced one position, produced no
 item this step," which is what keeps adapters like `keep_if` non-recursive. A
 plain source `for` loop binds nothing from it and simply continues with `rest`.
 
+`.boxy` lowering emits the same loop from the checked plan. When the plan's
+`next` dispatch resolves to the procedure the checker stamped
+`IteratorProcedureId.next` of the pure `Iter` protocol, whose definition is
+`|iterator| (iterator.step)()`, the loop calls the step thunk itself: it reads
+the step field the owner's `IteratorRepresentationTopology` names from the
+iterator it owns and makes an owned erased call of it (Destination-Passing
+Results and Allocation Reuse). The loop dismantles the dying iterator into
+that call, so the thunk receives its own allocation unique and repacks it
+with the next step's captures; an iterator over a list is then advanced
+without an allocation. The call is made where the loop matches its result, so
+no pending call is left for the loop to drive. Every other `next`, including
+`Stream.next!`, is dispatched to as the plan resolves it.
+
+A `.boxy` loop whose iterable is a chain of stamped producers runs the chain
+structurally, building no step closure at all (`body.zig` `iteratorChain`,
+`forChainStart`). The chain is read from the checker's
+`IteratorProcedureId` stamps alone: the plan's `iter` dispatch stamped
+`list_iter`, `list_iter_rev` or `str_iter_utf8` makes the iterable the
+source, and one stamped `identity` makes the iterable expression the chain,
+each of whose dispatch calls of a value result on the `Iter` protocol whose
+target is stamped `map`, `keep_if`, `drop_if`, `with_index`, `take_first` or
+`drop_first` is an adapter over its receiver, `identity` passes its receiver
+through, and `list_iter`, `list_iter_rev` or `str_iter_utf8` is the source.
+Any other expression is the source as an iterator value, stepped through the
+protocol as above; a chain that is only such a value is the plain loop. No
+producer is recognized by a name or a type shape, and a producer this
+lowering does not run structurally (`custom` and the ranges built on it,
+`single`, `concat`, `append`, `step_by`, `prepended`) ends the chain as a
+value, keeping every behavior of its own step, such as a `Known` count a
+`custom` source exceeds crashing on.
+
+The loop evaluates the chain's operands in chain order before it starts,
+exactly when the producer calls would evaluate them, and carries the chain's
+state in one tuple: a list source's index (a reversed one's remaining
+count), a string source's byte index, an iterator source's value, a
+`with_index` counter, a `take_first` remaining count and a `drop_first`
+pending count; join-parameter scalarization gives each its own local. Each
+iteration is the composition of the producers' steps: every `take_first` at
+its count ends the loop before the source steps, the source yields its item
+(`list_get_unsafe` or `str_get_utf8_byte_unsafe` by index, or the owned
+step call of the iterator value, whose `Skip` continues with its `rest`),
+and the adapters run innermost first: `map` calls its transform, `keep_if`
+and `drop_if` call their predicate and continue the loop with the state the
+inner producers advanced to when they skip, `with_index` pairs the item with
+a counter that advances only when its item is yielded, `take_first` counts
+the item down, and `drop_first` skips while its count is pending. The
+observable behavior, including the order of the user functions' effects and
+of their calls, is the closure protocol's; only the allocation of step
+closures is gone, as it is under `.lss`.
+
 No `for` node exists after Monotype IR.
 
 ## Monotype Lifted IR
@@ -20509,9 +20578,11 @@ its packed arguments, one owned reference to its closure, and the layout and
 result descriptor the statement calls with, and the procedure returns. Its
 target holds no value.
 
-Whoever awaits that procedure's result makes the pending call, releases the
-closure reference afterwards, and repeats while the call it made leaves
-another pending. The erased-call runtime does this after every erased call it
+Whoever awaits that procedure's result makes the pending call and repeats
+while the call it made leaves another pending. The pending record owns one
+reference to the closure: for an owned deferred call (`reuse_closure`), the
+driver passes that reference to the callee as its reuse input, which consumes
+it; for any other, the driver releases it after the call. The erased-call runtime does this after every erased call it
 makes, so an erased-callable procedure it invoked can simply return. Every
 other waiter is stated in LIR by the tail-drive pass (`src/lir/tail_drive.zig`),
 which runs after ARC and stamps a `PendingDrive` on each direct call whose
@@ -22725,7 +22796,28 @@ LIR lowerer records each emitted `assign_ref` target's provenance from it, and
 the resolution in `lir/erased_owner.zig` follows it. A LIR transform that
 rewrites the definitions on such a chain, as join scalarization does when it
 turns field reads into aliases, re-resolves the reuse sources of the procedures
-it changes with that resolution. Boxy lowering emits no owned erased calls.
+it changes with that resolution. Boxy lowering marks an erased call owned
+(`DynOp.call_erased.reuse_closure`, with the closure as its reuse source,
+resolved to the allocation's root after lowering) when the call's result type
+holds exactly one erased-callable slot (`types.Converter.erasedResultSlots`:
+a function type is a slot, a record's or tuple's slots add up, a tag union's
+are its largest variant's, a list of callables holds any number, a box holds
+its payload's, a nominal its backing's, and a type variable holds none). ARC
+moves the closure's unit into the call when the closure dies there and
+retains one for it otherwise; a deferred owned call's pending record carries
+the unit to the driver (Deferred Erased Calls).
+
+A `.boxy` dynamic closure's capture record carries its allocation's capture
+capacity (Function Values), so the same-size class rule above widens for
+those allocations: a `DynOp.closure` with a reuse operand repacks the
+allocation in place when it is unique (at runtime, or `reuse_unique` when ARC
+proved it) and the new record fits the recorded capacity, releasing the old
+capture through the old drop callback first and keeping the capacity; a
+shared or too small allocation is released and the callable is fresh. The
+reuse operand is always an allocation packed by `DynOp.closure`: a worker's
+own, or one such a worker handed on. A closed-capture `.boxy` closure
+repacks through `assign_packed_erased_fn` under the same-layout rule, like
+an `.lss` one.
 
 The erased ABI's capture pointer addresses the interior of the callable passed
 as the reuse ownership input. LLVM must not mark either parameter `noalias`:

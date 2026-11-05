@@ -6989,10 +6989,9 @@ fn emitProcSpecBody(
         );
         break :blk ret_ptr;
     } else if (proc.abi == .erased_record) blk: {
-        // The reuse slot is never read.
-        const ret_ptr, const args_ptr, const capture_ptr, _, const invocation = try self.allocAnonymousLocals(.i32, 5);
+        const ret_ptr, const args_ptr, const capture_ptr, const reuse_ptr, const invocation = try self.allocAnonymousLocals(.i32, 5);
         erased_invocation = invocation;
-        try self.bindErasedRecordParams(proc, ret_ptr, args_ptr, capture_ptr);
+        try self.bindErasedRecordParams(proc, ret_ptr, args_ptr, capture_ptr, reuse_ptr);
         break :blk ret_ptr;
     } else blk: {
         // Bind parameters to locals.
@@ -9162,8 +9161,8 @@ fn generateDynResultReturn(self: *Self, result: ProcLocalId, value: ProcLocalId)
 /// Bind the parameters of a procedure entered through the uniform
 /// erased-callable ABI as a `.boxy` worker receives it
 /// (`ProcAbi.erased_record`): the result pointer, the argument record
-/// pointer, and the capture pointer.
-fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr: u32, capture_ptr: u32) Allocator.Error!void {
+/// pointer, the capture pointer, and the reuse pointer.
+fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr: u32, capture_ptr: u32, reuse_ptr: u32) Allocator.Error!void {
     if (proc.dyn_result) |result| {
         try self.emitLocalGet(ret_ptr);
         try self.emitBindingSet(try self.procLocalBinding(result));
@@ -9176,6 +9175,11 @@ fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr
         const binding = try self.procLocalBinding(param);
         if (param == capture_param) {
             try self.emitLocalGet(capture_ptr);
+            try self.emitBindingSet(binding);
+            continue;
+        }
+        if (proc.erased_reuse_arg != null and param == proc.erased_reuse_arg.?) {
+            try self.emitLocalGet(reuse_ptr);
             try self.emitBindingSet(binding);
             continue;
         }
@@ -9763,10 +9767,14 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
         .closure => |c| {
             try self.emitProcTableIndex(c.proc);
             try self.emitBytesAddress(c.capture);
+            if (c.reuse) |reuse| {
+                try self.emitProcLocal(reuse);
+                try self.emitI32Const(@intFromBool(c.reuse_unique));
+            }
             // No hot-reload header or drop on wasm.
             try self.emitI32Const(0);
             try self.emitI32Const(0);
-            try self.emitBoxyRuntimeCall(.closure);
+            try self.emitBoxyRuntimeCall(if (c.reuse != null) .closure_reuse else .closure);
             try self.bindReturnedScalar(dst, .i32);
         },
         .call_erased => |c| {
@@ -9793,6 +9801,9 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
                     try self.emitNullPtr();
                     try self.emitI32Const(0);
                 }
+                // An owned call's reference is passed on to the callee as
+                // its reuse input when the call is driven.
+                try self.emitI32Const(@intFromBool(c.reuse_closure));
                 try self.emitBuiltinCall(.native_callable_defer);
                 try self.emitDriveInto(c.drive, dynTargetAddressLocal(t));
             } else {
@@ -9803,7 +9814,9 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
                 try self.emitLocalGet(payload);
                 try self.emitI32Const(@intCast(builtins.erased_callable.capture_offset));
                 try self.emitOps(.{Op.i32_add});
-                try self.emitI32Const(0);
+                // An owned call transfers the closure allocation as the
+                // callee's reuse input.
+                if (c.reuse_closure) try self.emitLocalGet(payload) else try self.emitI32Const(0);
                 try self.emitBuiltinCall(.native_callable_call);
             }
             try self.finishTarget(dst, t);
@@ -10135,6 +10148,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
         try self.emitLocalGet(payload_ptr);
         if (args_ptr) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();
         try self.emitI32Const(@intCast(plan.size));
+        try self.emitI32Const(0);
         try self.emitBuiltinCall(.native_callable_defer);
     } else {
         if (ret_offset) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();

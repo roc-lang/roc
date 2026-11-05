@@ -14475,6 +14475,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addMemArg(frame_ptr, closure_ptr_slot);
                 if (arg_refs.len == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, args_slot);
                 try builder.addImmArg(plan.size);
+                try builder.addImmArg(0);
                 try self.callBuiltin(&builder, .native_callable_defer);
             } else {
                 if (ret_size == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, ret_buffer_offset);
@@ -18107,6 +18108,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     try builder.addMemArg(frame_ptr, fn_slot);
                     try self.addBytesArg(&builder, c.capture);
+                    if (c.reuse) |reuse| {
+                        try self.addWordArg(&builder, reuse);
+                        try builder.addImmArg(@intFromBool(c.reuse_unique));
+                    }
                     if (code_ref_slot) |slot| {
                         const drop_slot = self.codegen.allocStackSlot(8);
                         const reg = try self.allocTempGeneral();
@@ -18119,7 +18124,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(0);
                         try builder.addImmArg(0);
                     }
-                    try self.callBoxyRuntime(&builder, "roc_desc_closure");
+                    if (c.reuse != null)
+                        try self.callBoxyRuntime(&builder, "roc_desc_closure_reuse")
+                    else
+                        try self.callBoxyRuntime(&builder, "roc_desc_closure");
                     try self.bindReturnedScalar(dst_local, 8);
                 },
                 .call_erased => |c| {
@@ -18162,6 +18170,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try builder.addImmArg(0);
                             try builder.addImmArg(0);
                         }
+                        // An owned call's reference is passed on to the
+                        // callee as its reuse input when the call is driven.
+                        try builder.addImmArg(@intFromBool(c.reuse_closure));
                         try self.callBuiltin(&builder, .native_callable_defer);
                         try self.emitDriveInto(c.drive, dst);
                         try self.finishCallTarget(dst_local, dst, c.drive);
@@ -18171,7 +18182,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (dst == .zero_sized) try builder.addImmArg(0) else try addTargetArg(&builder, dst);
                         if (c.args) |args| try self.addBytesArg(&builder, args) else try builder.addImmArg(0);
                         try builder.addMemArg(frame_ptr, capture_slot);
-                        try builder.addImmArg(0);
+                        // An owned call transfers the closure allocation as
+                        // the callee's reuse input.
+                        if (c.reuse_closure) try builder.addMemArg(frame_ptr, closure_slot) else try builder.addImmArg(0);
                         try self.callBuiltin(&builder, .native_callable_call);
                         try self.finishTarget(dst_local, dst);
                     }
@@ -18371,14 +18384,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Bind the hidden parameters of a procedure entered through the
         /// uniform erased-callable ABI as a `.boxy` worker receives it
         /// (`ProcAbi.erased_record`): the result pointer, the argument record
-        /// pointer, and the capture pointer. `out_desc` is left untouched.
+        /// pointer, the capture pointer, and the reuse pointer. `out_desc` is
+        /// left untouched.
         fn bindErasedRecordParams(self: *Self, proc: LirProcSpec) Allocator.Error!void {
             const ret_slot = self.codegen.allocStackSlot(8);
             const args_slot = self.codegen.allocStackSlot(8);
             const capture_slot = self.codegen.allocStackSlot(8);
+            const reuse_slot = self.codegen.allocStackSlot(8);
             try self.saveIncomingPointerArg(ret_slot, 1);
             try self.saveIncomingPointerArg(args_slot, 2);
             try self.saveIncomingPointerArg(capture_slot, 3);
+            try self.saveIncomingPointerArg(reuse_slot, 4);
 
             if (proc.dyn_result) |result| {
                 try self.setLocalLocation(localKey(result), self.stackLocationForLayout(self.localLayout(result), ret_slot));
@@ -18401,6 +18417,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(reg);
                     }
                     try self.setLocalLocation(localKey(param), self.stackLocationForLayout(.opaque_ptr, capture_slot));
+                    continue;
+                }
+                if (proc.erased_reuse_arg != null and param == proc.erased_reuse_arg.?) {
+                    try self.setLocalLocation(localKey(param), self.stackLocationForLayout(self.localLayout(param), reuse_slot));
                     continue;
                 }
                 explicit_count += 1;

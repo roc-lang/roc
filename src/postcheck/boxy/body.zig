@@ -564,6 +564,57 @@ pub const Builder = struct {
     tasks: std.ArrayList(Task) = .empty,
     region: base.Region = base.Region.zero(),
     result_local: ?LocalId = null,
+    /// An erased worker's reuse argument: the erased-callable allocation a
+    /// caller transferred to it (design.md "Destination-Passing Results
+    /// and Allocation Reuse"), owned by this body until a packing consumes
+    /// it; `reuse_available` says none has yet.
+    reuse_arg: ?LocalId = null,
+    reuse_available: bool = false,
+    /// What the transferred allocation holds, which is what this worker's
+    /// own function value holds: a dynamic capture record with its
+    /// capacity, which a dynamic packing repacks, or the closed capture
+    /// layout `static`, which a packing of that same layout repacks.
+    reuse_kind: ReuseKind = .none,
+
+    pub const ReuseKind = union(enum) { none, dynamic, static: layout.Idx };
+
+    /// The reuse argument for a packing emitted in the body, consumed:
+    /// later packings start fresh.
+    pub fn takeReuse(self: *Builder, kind: enum { dynamic, static }) ?LocalId {
+        if (!self.reuse_available or self.emitting_entry) return null;
+        switch (self.reuse_kind) {
+            .none => return null,
+            .dynamic => if (kind != .dynamic) return null,
+            .static => if (kind != .static) return null,
+        }
+        self.reuse_available = false;
+        return self.reuse_arg;
+    }
+
+    /// The reuse parameter of an erased worker: the trailing argument the
+    /// uniform erased-callable ABI passes, after the capture pointer.
+    pub fn beginReuseArg(self: *Builder, kind: ReuseKind) Allocator.Error!LocalId {
+        const reuse = try self.closedLocal(try self.erasedLayout());
+        self.reuse_arg = reuse;
+        self.reuse_kind = kind;
+        self.reuse_available = kind != .none;
+        return reuse;
+    }
+
+    /// Finish an erased worker's procedure: its arguments are `args`, then
+    /// the capture pointer and the reuse argument, which the procedure's
+    /// markers name.
+    pub fn finishErasedProc(self: *Builder, entry: CFStmtId, body_start: CFStmtId, args: []const LocalId, ret_layout: layout.Idx, capture_ptr: LocalId) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        const reuse = self.reuse_arg orelse invariant("an erased worker finished without its reuse argument");
+        const all = try std.mem.concat(self.allocator, LocalId, &.{ args, &.{ capture_ptr, reuse } });
+        defer self.allocator.free(all);
+        try self.finishProc(entry, body_start, all, ret_layout);
+        const proc = self.store.getProcSpecPtr(worker.proc);
+        proc.erased_capture_arg = capture_ptr;
+        proc.erased_reuse_arg = reuse;
+        proc.abi = .erased_record;
+    }
 
     pub fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
         const worker = program.worker(id);
@@ -1755,9 +1806,11 @@ pub const Builder = struct {
         const capture_count = worker.capture_types.len + outer_descs + captured_dicts + captured_literals;
         var capture_values: []LocalId = &.{};
         if (!try self.allClosed(worker.capture_types)) {
+            _ = try self.beginReuseArg(.dynamic);
             capture_values = try self.dynamicCaptures(worker, capture_ptr);
         } else if (capture_count != 0) {
             const capture_layout = try self.captureLayout(worker.capture_types, outer_descs, captured_dicts + captured_literals);
+            _ = try self.beginReuseArg(.{ .static = capture_layout });
             // A record of zero-sized captures has no storage to read.
             const record: ?LocalId = if (capture_layout == .zst) null else try self.closedLocal(capture_layout);
             if (record) |loaded| try self.emitEntry(.{ .assign_low_level = .{
@@ -1840,11 +1893,8 @@ pub const Builder = struct {
         try self.tail_exprs.put(self.allocator, lambda.body, {});
         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
         try self.run();
-        try args.append(self.allocator, capture_ptr);
-        try self.finishProc(entry, body_start, args.items, ret_layout);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = capture_ptr;
-        proc.abi = .erased_record;
+        if (self.reuse_arg == null) _ = try self.beginReuseArg(.none);
+        try self.finishErasedProc(entry, body_start, args.items, ret_layout, capture_ptr);
     }
 
     /// An adapter's body (`WorkerKey.adapter`): each argument adapted to the
@@ -1901,11 +1951,8 @@ pub const Builder = struct {
         try self.pushValue(try self.adaptValue(result, signature.ret, worker.ret));
         try self.tasks.append(self.allocator, .ret);
         try self.run();
-        try args.append(self.allocator, capture_ptr);
-        try self.finishProc(entry, body_start, args.items, ret_layout);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = capture_ptr;
-        proc.abi = .erased_record;
+        _ = try self.beginReuseArg(.none);
+        try self.finishErasedProc(entry, body_start, args.items, ret_layout, capture_ptr);
     }
 
     /// Where two types of one value differ: nowhere; only in the tags of
@@ -2247,19 +2294,23 @@ pub const Builder = struct {
             .args = try self.store.addLocalSpan(&.{capture_ptr}),
             .next = undefined,
         } });
+        // The record's bytes are in the allocation the reuse argument
+        // holds, so reads of them count as uses of it: a packing that
+        // reuses the allocation while a read is still to come retains it,
+        // and the runtime then packs afresh.
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = record_desc, .storage = .view } });
-        try self.emitEntry(.{ .dyn = .{ .target = record, .data = try self.store.addStmtRow(LIR.DynOp, .{ .view = .{ .address = capture_ptr } }), .next = undefined } });
+        try self.emitEntry(.{ .dyn = .{ .target = record, .data = try self.store.addStmtRow(LIR.DynOp, .{ .view = .{ .address = capture_ptr, .owner = self.reuse_arg } }), .next = undefined } });
         const values = try self.allocator.alloc(LocalId, worker.capture_types.len + word_count);
         for (0..word_count) |index| {
             const word = try self.closedLocal(if (index < outer_descs) .opaque_ptr else try self.erasedLayout());
-            try self.emitEntry(.{ .dyn = .{ .target = word, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(1 + index) } }), .next = undefined } });
+            try self.emitEntry(.{ .dyn = .{ .target = word, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(capture_record_leading_words + index) } }), .next = undefined } });
             values[worker.capture_types.len + index] = word;
         }
         // The captured values' types mention only the outer scope.
         @memcpy(self.var_descs[0..outer_descs], values[worker.capture_types.len..][0..outer_descs]);
         for (worker.capture_types, 0..) |ty, index| {
             const local = try self.localOf(ty, .view);
-            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(1 + word_count + index) } }), .next = undefined } });
+            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(capture_record_leading_words + word_count + index) } }), .next = undefined } });
             values[index] = local;
         }
         return values;
@@ -2318,6 +2369,7 @@ pub const Builder = struct {
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
         const capture_ptr = try self.closedLocal(.opaque_ptr);
+        _ = try self.beginReuseArg(.none);
         const captures = if (field_layouts.len == 0) try self.allocator.alloc(LocalId, 0) else try self.loadCaptures(capture_ptr, field_layouts);
         return .{
             .entry = entry,
@@ -2562,17 +2614,13 @@ pub const Builder = struct {
     /// A crashing dictionary method: it crashes as the dispatch it stands
     /// for would.
     pub fn lowerCrashDictionary(self: *Builder, kind: lower.CrashDictionary) Allocator.Error!void {
-        const worker = self.currentWorker().*;
         const start = try self.beginErasedWorker(&.{});
         defer self.allocator.free(start.captures);
         self.var_descs = &.{};
         const body_start = try self.newHole();
         self.hole = body_start;
         try self.emitDispatchCrash(kind);
-        try self.finishProc(start.entry, body_start, &.{start.capture_ptr}, .zst);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = start.capture_ptr;
-        proc.abi = .erased_record;
+        try self.finishErasedProc(start.entry, body_start, &.{}, .zst, start.capture_ptr);
     }
 
     /// The crash of a dispatch that cannot run: a rejected one is checked-
@@ -2597,7 +2645,6 @@ pub const Builder = struct {
     };
 
     pub fn runErasedBody(self: *Builder, start: *ErasedStart, params: []const TypeId, ret: TypeId, body: ErasedBody) Allocator.Error!void {
-        const worker = self.currentWorker().*;
         var args: std.ArrayList(LocalId) = .empty;
         defer args.deinit(self.allocator);
         var record: ?LocalId = null;
@@ -2643,11 +2690,7 @@ pub const Builder = struct {
             try self.pushValue(value);
             try self.step(.ret);
         }
-        try args.append(self.allocator, start.capture_ptr);
-        try self.finishProc(start.entry, body_start, args.items, ret_layout);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = start.capture_ptr;
-        proc.abi = .erased_record;
+        try self.finishErasedProc(start.entry, body_start, args.items, ret_layout, start.capture_ptr);
     }
 
     /// The closed layout of a lambda's capture record: the captured values,
@@ -3957,10 +4000,7 @@ pub const Builder = struct {
         if (target.literal_scopes.len == 0) invariant("a literal thunk's target has no scope");
         try self.lowerLiteralChain(target.literal_scopes[0], key.literal_requirement, worker.ret);
         try self.run();
-        try self.finishProc(start.entry, body_start, &.{start.capture_ptr}, ret_layout);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = start.capture_ptr;
-        proc.abi = .erased_record;
+        try self.finishErasedProc(start.entry, body_start, &.{}, ret_layout, start.capture_ptr);
     }
 
     /// The body of a root slot thunk (`WorkerKey.root_slot`): the read of
@@ -3978,10 +4018,7 @@ pub const Builder = struct {
         try self.tasks.append(self.allocator, .ret);
         try self.pendingValueRead(key.module, key.root, worker.ret);
         try self.run();
-        try self.finishProc(start.entry, body_start, &.{start.capture_ptr}, ret_layout);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = start.capture_ptr;
-        proc.abi = .erased_record;
+        try self.finishErasedProc(start.entry, body_start, &.{}, ret_layout, start.capture_ptr);
     }
 
     /// Begin a literal chain: the frames it enters are left once the
@@ -8218,16 +8255,21 @@ pub const Builder = struct {
     }
 
     /// The descriptor of a dynamic capture record (design.md "Function
-    /// Values"): a declared-order record of its own descriptor word, the
-    /// descriptor and dictionary words, then the captured values.
+    /// Values"): a declared-order record of its own descriptor word, its
+    /// allocation's capture capacity word, the descriptor and dictionary
+    /// words, then the captured values.
     pub fn dynamicCaptureDesc(self: *Builder, capture_types: []const TypeId, word_count: usize) Allocator.Error!LocalId {
         const word = try self.opaqueWordDesc();
-        const descs = try self.allocator.alloc(LocalId, 1 + word_count + capture_types.len);
+        const descs = try self.allocator.alloc(LocalId, capture_record_leading_words + word_count + capture_types.len);
         defer self.allocator.free(descs);
-        @memset(descs[0 .. 1 + word_count], word);
-        for (descs[1 + word_count ..], capture_types) |*desc, ty| desc.* = try self.descOf(ty);
+        @memset(descs[0 .. capture_record_leading_words + word_count], word);
+        for (descs[capture_record_leading_words + word_count ..], capture_types) |*desc, ty| desc.* = try self.descOf(ty);
         return self.composedArgsDesc(descs);
     }
+
+    /// The words before a dynamic capture record's descriptor and
+    /// dictionary words: its descriptor and its capture capacity.
+    pub const capture_record_leading_words = 2;
 
     pub fn opaqueWordDesc(self: *Builder) Allocator.Error!LocalId {
         if (self.opaque_word_desc) |local| return local;
@@ -8245,11 +8287,13 @@ pub const Builder = struct {
         if (self.immortal_closures) invariant("a method override captures a value of an open type, which methods never capture");
         const record_desc = try self.dynamicCaptureDesc(capture_types, descs.len + dicts.len);
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = record_desc, .storage = .frame } });
-        const fields = try std.mem.concat(self.allocator, LocalId, &.{ &.{record_desc}, descs, dicts, captured });
+        // The capacity word is the runtime's to write when it packs the
+        // callable; the record carries its descriptor there until then.
+        const fields = try std.mem.concat(self.allocator, LocalId, &.{ &.{ record_desc, record_desc }, descs, dicts, captured });
         defer self.allocator.free(fields);
         try self.emitDyn(record, .{ .record = .{ .desc = record_desc, .fields = try self.store.addLocalSpan(fields) } });
         const target = try self.closedLocal(try self.erasedLayout());
-        try self.emitDyn(target, .{ .closure = .{ .proc = self.program.worker(callee).proc, .capture = record } });
+        try self.emitDyn(target, .{ .closure = .{ .proc = self.program.worker(callee).proc, .capture = record, .reuse = self.takeReuse(.dynamic) } });
         return target;
     }
 
@@ -8285,6 +8329,9 @@ pub const Builder = struct {
                 on_drop = .{ .rc_helper = .{ .op = .host_drop, .layout_idx = record_layout } };
             }
         }
+        // A transferred allocation of this worker's own closed capture
+        // layout is repacked in place when unique.
+        const reuse: ?LocalId = if (capture_layout != null and self.reuse_kind == .static and self.reuse_kind.static == capture_layout.?) self.takeReuse(.static) else null;
         try self.emitLinear(.{ .assign_packed_erased_fn = .{
             .target = target,
             .data = try self.store.addStmtRow(LIR.PackedErasedFnData, .{
@@ -8292,6 +8339,7 @@ pub const Builder = struct {
                 .capture = capture,
                 .capture_layout = capture_layout,
                 .on_drop = on_drop,
+                .reuse = reuse,
             }),
             .next = undefined,
         } });
@@ -8353,7 +8401,12 @@ pub const Builder = struct {
     /// `record` (possibly a single value), for a result of `result_ty`.
     pub fn callErased(self: *Builder, closure: LocalId, record: ?LocalId, result_ty: TypeId) Allocator.Error!LocalId {
         const target = try self.localOf(result_ty, .frame);
-        try self.emitDyn(target, .{ .call_erased = .{ .closure = closure, .args = record } });
+        // A call whose result holds one erased-callable slot transfers the
+        // callable's allocation, which the callee repacks when it packs a
+        // callable that fits it (design.md "Destination-Passing Results
+        // and Allocation Reuse").
+        const owned = try self.program.converter().erasedResultSlots(result_ty) == .single;
+        try self.emitDyn(target, .{ .call_erased = .{ .closure = closure, .args = record, .reuse_closure = owned, .reuse_source = if (owned) closure else null } });
         return target;
     }
 
@@ -9460,8 +9513,438 @@ pub const Builder = struct {
             return;
         }
         try self.push(.{ .unreachable_or_unit = {} });
+        if (try self.iteratorChain(plan_id)) |chain| {
+            try self.forChainStart(pattern, body, plan_id, mutations, chain);
+            return;
+        }
         try self.push(.{ .for_start = .{ .pattern = pattern, .body = body, .plan = plan_id, .mutations = mutations } });
         try self.push(.{ .expr = iterable });
+    }
+
+    /// One producer of a `for` loop's iterable, which the loop runs
+    /// structurally when the checker stamped every producer of the chain
+    /// (design.md "Iterator `for`"): a source yielding each item of a
+    /// list, a string's bytes, or the steps of an iterator value, and the
+    /// adapters over it, innermost first. Operands are checked expressions
+    /// the loop evaluates in chain order before it starts.
+    pub const ChainLayer = union(enum) {
+        list: ChainListSource,
+        list_rev: ChainListSource,
+        str: struct { str: CheckedExprId },
+        /// An iterator value whose steps the loop takes through the `Iter`
+        /// protocol, as a loop over the value alone does.
+        value: struct { iterator: CheckedExprId },
+        map: struct { transform: CheckedExprId, item_ty: TypeId },
+        keep_if: struct { predicate: CheckedExprId },
+        drop_if: struct { predicate: CheckedExprId },
+        /// The stamped `iter_with_index` worker: its counter starts at the
+        /// second operand.
+        with_index: struct { start: CheckedExprId, item_ty: TypeId },
+        take_first: struct { count: CheckedExprId },
+        drop_first: struct { count: CheckedExprId },
+    };
+
+    pub const ChainListSource = struct { list: CheckedExprId, item_ty: TypeId };
+
+    /// The structural chain of a `for` loop's iterable, innermost producer
+    /// first, or null when the loop takes its steps through the `Iter`
+    /// protocol alone: its `iter` dispatch and every producer of the
+    /// iterable expression are read from the checker's
+    /// `IteratorProcedureId` stamps on their resolved targets, never from
+    /// names or type shapes, and a producer without a stamp this lowering
+    /// runs structurally ends the chain as an iterator value.
+    fn iteratorChain(self: *Builder, plan_id: static_dispatch.IteratorForPlanId) Allocator.Error!?[]const ChainLayer {
+        const plan = self.view.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)];
+        const iterator_ty = try self.convert(plan.iterator_ty);
+        // The loop steps the chain's result and every iterator value in it
+        // through the builtin protocol, whose step field the loop calls.
+        if (try self.builtinStepField(plan.next, iterator_ty) == null) return null;
+        var layers: std.ArrayList(ChainLayer) = .empty;
+        defer layers.deinit(self.allocator);
+        const iter_stamp = self.dispatchStamp(plan.iter.resolution);
+        switch (iter_stamp orelse return null) {
+            .list_iter => try layers.append(self.allocator, .{ .list = .{ .list = plan.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
+            .list_iter_rev => try layers.append(self.allocator, .{ .list_rev = .{ .list = plan.iterable, .item_ty = try self.iteratorItemType(iterator_ty) } }),
+            .str_iter_utf8 => try layers.append(self.allocator, .{ .str = .{ .str = plan.iterable } }),
+            .identity => {
+                var current = plan.iterable;
+                walk: while (true) {
+                    const call = try self.chainCall(current) orelse {
+                        try layers.append(self.allocator, .{ .value = .{ .iterator = current } });
+                        break :walk;
+                    };
+                    const item_ty = try self.iteratorItemType(try self.exprType(current));
+                    switch (call.stamp) {
+                        .identity => current = call.operands[0],
+                        .list_iter => {
+                            try layers.append(self.allocator, .{ .list = .{ .list = call.operands[0], .item_ty = item_ty } });
+                            break :walk;
+                        },
+                        .list_iter_rev => {
+                            try layers.append(self.allocator, .{ .list_rev = .{ .list = call.operands[0], .item_ty = item_ty } });
+                            break :walk;
+                        },
+                        .str_iter_utf8 => {
+                            try layers.append(self.allocator, .{ .str = .{ .str = call.operands[0] } });
+                            break :walk;
+                        },
+                        .map => {
+                            try layers.append(self.allocator, .{ .map = .{ .transform = call.operands[1], .item_ty = item_ty } });
+                            current = call.operands[0];
+                        },
+                        .keep_if => {
+                            try layers.append(self.allocator, .{ .keep_if = .{ .predicate = call.operands[1] } });
+                            current = call.operands[0];
+                        },
+                        .drop_if => {
+                            try layers.append(self.allocator, .{ .drop_if = .{ .predicate = call.operands[1] } });
+                            current = call.operands[0];
+                        },
+                        .with_index => {
+                            try layers.append(self.allocator, .{ .with_index = .{ .start = call.operands[1], .item_ty = item_ty } });
+                            current = call.operands[0];
+                        },
+                        .take_first => {
+                            try layers.append(self.allocator, .{ .take_first = .{ .count = call.operands[1] } });
+                            current = call.operands[0];
+                        },
+                        .drop_first => {
+                            try layers.append(self.allocator, .{ .drop_first = .{ .count = call.operands[1] } });
+                            current = call.operands[0];
+                        },
+                        .next, .custom, .single, .concat, .append, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => {
+                            try layers.append(self.allocator, .{ .value = .{ .iterator = current } });
+                            break :walk;
+                        },
+                    }
+                }
+            },
+            .next, .custom, .single, .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => return null,
+        }
+        // A chain of one iterator value and nothing over it is the loop the
+        // protocol lowering already emits.
+        if (layers.items.len == 1 and layers.items[0] == .value) return null;
+        std.mem.reverse(ChainLayer, layers.items);
+        return try self.program.arena.allocator().dupe(ChainLayer, layers.items);
+    }
+
+    /// The `IteratorProcedureId` the checker stamped on the procedure a
+    /// dispatch resolves to, or null when it resolves to anything else.
+    fn dispatchStamp(self: *Builder, resolution: static_dispatch.CheckedCallResolution) ?static_dispatch.IteratorProcedureId {
+        const table = self.view.view.static_dispatch_plans;
+        const node = switch (resolution) {
+            .direct_closed, .direct_parametric => |direct| table.evidenceNode(direct.evidence),
+            .evidence_dependent, .checked_error, .@"unreachable", .structural, .direct_pending => return null,
+        };
+        return switch (node.target.kind) {
+            .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
+            .local_proc, .structural => null,
+        };
+    }
+
+    pub const ChainCall = struct { stamp: static_dispatch.IteratorProcedureId, operands: []const CheckedExprId };
+
+    /// The stamped producer call `expr` is: a dispatch of a value result on
+    /// the pure `Iter` protocol whose target the checker stamped, with its
+    /// checked operand expressions (the receiver first). Null for any other
+    /// expression.
+    fn chainCall(self: *Builder, expr: CheckedExprId) Allocator.Error!?ChainCall {
+        const plan_id = switch (self.bodies().expr(expr).data) {
+            .dispatch_call, .type_dispatch_call => |plan| plan orelse return null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
+        };
+        const call_plan = self.dispatchPlan(plan_id);
+        // A `map` dispatch on a type with a map method carries the map
+        // result mode, which a direct resolution calls as a value does.
+        switch (call_plan.result_mode) {
+            .value, .map => {},
+            .equality, .hash, .parser_for, .encoder_for, .map_effectful => return null,
+        }
+        const stamp = self.dispatchStamp(call_plan.resolution) orelse return null;
+        switch (self.program.store.get(try self.exprType(expr))) {
+            .nominal => |nominal| if ((nominal.builtin orelse return null) != .iter) return null,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return null,
+        }
+        const operands = call_plan.argsSlice(self.view.view.static_dispatch_plans);
+        const exprs = try self.program.arena.allocator().alloc(CheckedExprId, operands.len);
+        for (operands, exprs) |operand, *slot| {
+            slot.* = switch (operand) {
+                .checked_expr => |operand_expr| operand_expr,
+                .generated_interpolation_segments, .generated_numeral, .generated_quote => return null,
+            };
+        }
+        const expected_operands: usize = switch (stamp) {
+            .identity, .list_iter, .list_iter_rev, .str_iter_utf8 => 1,
+            .map, .keep_if, .drop_if, .take_first, .drop_first, .with_index => 2,
+            .next, .custom, .single, .concat, .append, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => return .{ .stamp = stamp, .operands = exprs },
+        };
+        if (exprs.len != expected_operands) invariant("a stamped iterator producer's checked operand count differs from its definition's");
+        return .{ .stamp = stamp, .operands = exprs };
+    }
+
+    /// The item type of the iterator nominal `iterator_ty`: its one
+    /// argument.
+    fn iteratorItemType(self: *Builder, iterator_ty: TypeId) Allocator.Error!TypeId {
+        const args = switch (self.program.store.get(iterator_ty)) {
+            .nominal => |nominal| self.program.store.nominalArgs(nominal),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => invariant("an iterator's type is not the iterator nominal"),
+        };
+        if (args.len != 1) invariant("the iterator nominal has one argument");
+        return args[0];
+    }
+
+    /// A `u64` local holding `value`.
+    fn u64Literal(self: *Builder, value: u64) Allocator.Error!LocalId {
+        const local = try self.closedLocal(.u64);
+        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .i64_literal = .{ .value = @bitCast(value), .layout_idx = .u64 } }, .next = undefined } });
+        return local;
+    }
+
+    /// `lhs op rhs` for `u64` operands.
+    fn u64Op(self: *Builder, op: LIR.LowLevel, lhs: LocalId, rhs: LocalId) Allocator.Error!LocalId {
+        const local = try self.closedLocal(if (op == .num_is_eq) .bool else .u64);
+        try self.emitLowLevel(local, op, &.{ lhs, rhs });
+        return local;
+    }
+
+    /// `for pattern in <chain> { body }` over a structural chain: the loop
+    /// carries the chain's state (a list source's index, a reversed list
+    /// source's remaining count, an iterator source's value, an adapter's
+    /// counter) in one tuple, and each iteration steps the source and runs
+    /// the adapters over its item, innermost first, exactly as each
+    /// producer's step does: a `take_first` at its count is done before the
+    /// source steps, a `keep_if` or `drop_if` or `drop_first` skip
+    /// continues with the state the inner producers advanced to, and a
+    /// `with_index` counter advances only when its item is yielded.
+    fn forChainStart(self: *Builder, pattern: CheckedPatternId, body: CheckedExprId, plan_id: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId, chain: []const ChainLayer) Allocator.Error!void {
+        const table = self.view.view.static_dispatch_plans;
+        const plan = table.iterator_for_plans[@backingInt(plan_id)];
+        const store = &self.program.store;
+        const names = self.view.nameStore();
+
+        // The chain's operands, in chain order.
+        const Evaluated = union(enum) {
+            list: struct { list: LocalId, list_ty: TypeId, item_ty: TypeId, len: LocalId },
+            str: struct { str: LocalId, len: LocalId },
+            value: struct { iterator_ty: TypeId, step_name: types.NameId },
+            map: struct { transform: LocalId, fn_ty: TypeId, item_ty: TypeId },
+            keep_if: struct { predicate: LocalId, fn_ty: TypeId },
+            drop_if: struct { predicate: LocalId, fn_ty: TypeId },
+            with_index: struct { item_ty: TypeId },
+            take_first,
+            drop_first,
+        };
+        const evaluated = try self.allocator.alloc(Evaluated, chain.len);
+        defer self.allocator.free(evaluated);
+        // The loop's state tuple: each layer's carried slot, and its initial
+        // value.
+        var state_types: std.ArrayList(TypeId) = .empty;
+        defer state_types.deinit(self.allocator);
+        var state_init: std.ArrayList(LocalId) = .empty;
+        defer state_init.deinit(self.allocator);
+        const slot_of = try self.allocator.alloc(?usize, chain.len);
+        defer self.allocator.free(slot_of);
+        const u64_ty = try store.primitive(.u64);
+        for (chain, evaluated, slot_of) |layer, *done, *slot| {
+            slot.* = null;
+            switch (layer) {
+                inline .list, .list_rev => |source, tag| {
+                    const list = try self.lowerExprNow(source.list);
+                    const list_ty = try self.exprType(source.list);
+                    const len = try self.closedLocal(.u64);
+                    try self.emitListLowLevel(len, .list_len, &.{list}, source.item_ty, list_ty);
+                    done.* = .{ .list = .{ .list = list, .list_ty = list_ty, .item_ty = source.item_ty, .len = len } };
+                    slot.* = state_types.items.len;
+                    try state_types.append(self.allocator, u64_ty);
+                    try state_init.append(self.allocator, if (tag == .list) try self.u64Literal(0) else len);
+                },
+                .str => |source| {
+                    const str = try self.lowerExprNow(source.str);
+                    const len = try self.closedLocal(.u64);
+                    try self.emitLowLevel(len, .str_count_utf8_bytes, &.{str});
+                    done.* = .{ .str = .{ .str = str, .len = len } };
+                    slot.* = state_types.items.len;
+                    try state_types.append(self.allocator, u64_ty);
+                    try state_init.append(self.allocator, try self.u64Literal(0));
+                },
+                .value => |source| {
+                    const iterator = try self.lowerExprNow(source.iterator);
+                    const iterator_ty = try self.exprType(source.iterator);
+                    const step_name = (try self.builtinStepField(plan.next, iterator_ty)) orelse invariant("a chain's iterator value is not stepped by the builtin protocol");
+                    done.* = .{ .value = .{ .iterator_ty = iterator_ty, .step_name = step_name } };
+                    slot.* = state_types.items.len;
+                    try state_types.append(self.allocator, iterator_ty);
+                    try state_init.append(self.allocator, iterator);
+                },
+                .map => |adapter| {
+                    const transform = try self.lowerExprNow(adapter.transform);
+                    done.* = .{ .map = .{ .transform = transform, .fn_ty = try self.exprType(adapter.transform), .item_ty = adapter.item_ty } };
+                },
+                .keep_if => |adapter| {
+                    const predicate = try self.lowerExprNow(adapter.predicate);
+                    done.* = .{ .keep_if = .{ .predicate = predicate, .fn_ty = try self.exprType(adapter.predicate) } };
+                },
+                .drop_if => |adapter| {
+                    const predicate = try self.lowerExprNow(adapter.predicate);
+                    done.* = .{ .drop_if = .{ .predicate = predicate, .fn_ty = try self.exprType(adapter.predicate) } };
+                },
+                .with_index => |adapter| {
+                    const start = try self.lowerExprNow(adapter.start);
+                    done.* = .{ .with_index = .{ .item_ty = adapter.item_ty } };
+                    slot.* = state_types.items.len;
+                    try state_types.append(self.allocator, u64_ty);
+                    try state_init.append(self.allocator, start);
+                },
+                inline .take_first, .drop_first => |adapter, tag| {
+                    const count = try self.lowerExprNow(adapter.count);
+                    done.* = if (tag == .take_first) .take_first else .drop_first;
+                    slot.* = state_types.items.len;
+                    try state_types.append(self.allocator, u64_ty);
+                    try state_init.append(self.allocator, count);
+                },
+            }
+        }
+        const state_ty = try store.intern(.{ .tuple = state_types.items });
+        const initial = try self.buildStruct(state_ty, state_init.items);
+
+        const binders: []const checked.PatternBinderId = if (mutations) |id| blk: {
+            const range = self.bodies().loopMutations(id).binders;
+            break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
+        } else &.{};
+        const exit_merge = try self.beginMerge(binders, .joined);
+        const head_merge = try self.beginMerge(binders, .joined);
+        const exit = self.freshJoin();
+        const head = self.freshJoin();
+        const state = try self.localOf(state_ty, .frame);
+        const after = try self.declareMergeJoin(exit, null, exit_merge);
+        const head_body = try self.declareMergeJoin(head, state, head_merge);
+        try self.emitJump(head, initial);
+        self.store.shapes.loop = true;
+
+        self.hole = head_body;
+        if (head_merge) |m| try self.enterMerge(m);
+        // The state this iteration advances to, slot by slot.
+        const current = try self.allocator.alloc(LocalId, state_types.items.len);
+        defer self.allocator.free(current);
+        for (current, state_types.items, 0..) |*slot, slot_ty, index| slot.* = try self.readField(state_ty, state, @intCast(index), slot_ty);
+
+        // A `take_first` at its count is done before anything steps.
+        for (chain, slot_of) |layer, slot| {
+            if (layer != .take_first) continue;
+            const remaining = current[slot.?];
+            const is_done = try self.u64Op(.num_is_eq, remaining, try self.u64Literal(0));
+            const holes = try self.emitBoolSwitch(is_done);
+            self.hole = holes.then;
+            try self.emitJump(exit, null);
+            self.hole = holes.otherwise;
+        }
+
+        // The source's item.
+        var item: TypedValue = undefined;
+        switch (evaluated[0]) {
+            .list => |source| {
+                const index = current[slot_of[0].?];
+                const reversed = chain[0] == .list_rev;
+                const is_done = try self.u64Op(.num_is_eq, index, if (reversed) try self.u64Literal(0) else source.len);
+                const holes = try self.emitBoolSwitch(is_done);
+                self.hole = holes.then;
+                try self.emitJump(exit, null);
+                self.hole = holes.otherwise;
+                const one = try self.u64Literal(1);
+                const at = if (reversed) try self.u64Op(.num_int_sub_wrap, index, one) else index;
+                const value = try self.localOf(source.item_ty, .frame);
+                try self.emitListLowLevel(value, .list_get_unsafe, &.{ source.list, at }, source.item_ty, source.list_ty);
+                item = .{ .value = value, .ty = source.item_ty };
+                current[slot_of[0].?] = if (reversed) at else try self.u64Op(.num_int_add_wrap, index, one);
+            },
+            .str => |source| {
+                const index = current[slot_of[0].?];
+                const is_done = try self.u64Op(.num_is_eq, index, source.len);
+                const holes = try self.emitBoolSwitch(is_done);
+                self.hole = holes.then;
+                try self.emitJump(exit, null);
+                self.hole = holes.otherwise;
+                const value = try self.closedLocal(.u8);
+                try self.emitLowLevel(value, .str_get_utf8_byte_unsafe, &.{ source.str, index });
+                item = .{ .value = value, .ty = try store.primitive(.u8) };
+                current[slot_of[0].?] = try self.u64Op(.num_int_add_wrap, index, try self.u64Literal(1));
+            },
+            .value => |source| {
+                const iterator = current[slot_of[0].?];
+                const thunk = try self.recordFieldValue(iterator, source.iterator_ty, source.step_name);
+                const step_ty = switch (store.get(thunk.ty)) {
+                    .function => |function| function.ret,
+                    .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an iterator's step field is not a function"),
+                };
+                const step_value = try self.emitErasedCall(thunk.value, thunk.ty, &.{}, step_ty);
+                const done_name = try store.internName(names.tagLabelText(plan.step_topology.done_tag));
+                const skip_name = try store.internName(names.tagLabelText(plan.step_topology.skip_tag));
+                const one_name = try store.internName(names.tagLabelText(plan.step_topology.one_tag));
+                const item_name = try store.internName(names.recordFieldLabelText(plan.step_topology.item_field));
+                const rest_name = try store.internName(names.recordFieldLabelText(plan.step_topology.rest_field));
+                const not_done_hole = try self.newHole();
+                try self.branchOnTag(step_value, step_ty, done_name, not_done_hole);
+                try self.emitJump(exit, null);
+                self.hole = not_done_hole;
+                const one_hole = try self.newHole();
+                try self.branchOnTag(step_value, step_ty, skip_name, one_hole);
+                {
+                    const payload = try self.tagPayloadValue(step_value, step_ty, skip_name, 0);
+                    const rest = try self.recordFieldValue(payload.value, payload.ty, rest_name);
+                    current[slot_of[0].?] = rest.value;
+                    try self.emitJump(head, try self.buildStruct(state_ty, current));
+                }
+                self.hole = one_hole;
+                const payload = try self.tagPayloadValue(step_value, step_ty, one_name, 0);
+                item = try self.recordFieldValue(payload.value, payload.ty, item_name);
+                current[slot_of[0].?] = (try self.recordFieldValue(payload.value, payload.ty, rest_name)).value;
+            },
+            .map, .keep_if, .drop_if, .with_index, .take_first, .drop_first => invariant("a structural chain does not start with a source"),
+        }
+
+        // The adapters, innermost first.
+        for (evaluated[1..], slot_of[1..]) |layer, slot| {
+            switch (layer) {
+                .map => |adapter| item = .{ .value = try self.emitErasedCall(adapter.transform, adapter.fn_ty, &.{item.value}, adapter.item_ty), .ty = adapter.item_ty },
+                inline .keep_if, .drop_if => |adapter, tag| {
+                    const verdict = try self.emitErasedCall(adapter.predicate, adapter.fn_ty, &.{item.value}, try store.primitive(.bool));
+                    const holes = try self.emitBoolSwitch(verdict);
+                    // A rejected item is skipped: the loop continues with the
+                    // state the inner producers advanced to.
+                    self.hole = if (tag == .keep_if) holes.otherwise else holes.then;
+                    try self.emitJump(head, try self.buildStruct(state_ty, current));
+                    self.hole = if (tag == .keep_if) holes.then else holes.otherwise;
+                },
+                .with_index => |adapter| {
+                    const index = current[slot.?];
+                    item = .{ .value = try self.buildStruct(adapter.item_ty, &.{ index, item.value }), .ty = adapter.item_ty };
+                    current[slot.?] = try self.u64Op(.num_int_add_wrap, index, try self.u64Literal(1));
+                },
+                .take_first => current[slot.?] = try self.u64Op(.num_int_sub_wrap, current[slot.?], try self.u64Literal(1)),
+                .drop_first => {
+                    const pending = current[slot.?];
+                    const yields = try self.u64Op(.num_is_eq, pending, try self.u64Literal(0));
+                    const holes = try self.emitBoolSwitch(yields);
+                    self.hole = holes.otherwise;
+                    current[slot.?] = try self.u64Op(.num_int_sub_wrap, pending, try self.u64Literal(1));
+                    try self.emitJump(head, try self.buildStruct(state_ty, current));
+                    current[slot.?] = pending;
+                    self.hole = holes.then;
+                },
+                .list, .str, .value => invariant("a structural chain has one source, first"),
+            }
+        }
+
+        const next_state = try self.buildStruct(state_ty, current);
+        try self.bindIrrefutable(pattern, item.value, item.ty);
+        try self.loops.append(self.allocator, .{ .join = exit, .reached = true });
+        try self.push(.end_loop);
+        if (exit_merge) |m| try self.push(.{ .enter_merge = m });
+        try self.push(.{ .resume_at = after });
+        try self.push(.{ .jump = head });
+        try self.push(.{ .push_value = next_state });
+        try self.push(.discard);
+        try self.push(.{ .expr = body });
     }
 
     /// `for pattern in iterable { body }`: the iterable's iterator is the
@@ -9491,7 +9974,10 @@ pub const Builder = struct {
 
         self.hole = head_body;
         if (head_merge) |m| try self.enterMerge(m);
-        const step_value = try self.emitDispatch(plan.next.resolution, plan.next.callable_ty, &.{state}, step_ty);
+        const step_value = if (try self.builtinStepField(plan.next, iterator_ty)) |step_name| blk: {
+            const thunk = try self.recordFieldValue(state, iterator_ty, step_name);
+            break :blk try self.emitErasedCall(thunk.value, thunk.ty, &.{}, step_ty);
+        } else try self.emitDispatch(plan.next.resolution, plan.next.callable_ty, &.{state}, step_ty);
         const names = self.view.nameStore();
         const done = try self.program.store.internName(names.tagLabelText(plan.step_topology.done_tag));
         const skip = try self.program.store.internName(names.tagLabelText(plan.step_topology.skip_tag));
@@ -9526,6 +10012,37 @@ pub const Builder = struct {
         try self.push(.{ .push_value = rest.value });
         try self.push(.discard);
         try self.push(.{ .expr = body });
+    }
+
+    /// The step field of a `for` loop's iterator when the loop's `next`
+    /// dispatch resolves to the procedure the checker stamped
+    /// `IteratorProcedureId.next` of the pure `Iter` protocol, which is
+    /// `|iterator| (iterator.step)()`: the loop then calls the step thunk
+    /// itself, owning the iterator it dismantles, so the call transfers the
+    /// thunk's allocation to it (design.md "Iterator `for`"). Null for
+    /// every other `next`, which the loop dispatches to.
+    fn builtinStepField(self: *Builder, next: static_dispatch.IteratorDispatchCall, iterator_ty: TypeId) Allocator.Error!?types.NameId {
+        const table = self.view.view.static_dispatch_plans;
+        const node = switch (next.resolution) {
+            .direct_closed, .direct_parametric => |direct| table.evidenceNode(direct.evidence),
+            .evidence_dependent, .checked_error, .@"unreachable", .structural, .direct_pending => return null,
+        };
+        const stamp = switch (node.target.kind) {
+            .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
+            .local_proc, .structural => return null,
+        };
+        if (stamp != .next) return null;
+        const owner: static_dispatch.IteratorOwner = switch (self.program.store.get(iterator_ty)) {
+            .nominal => |nominal| switch (nominal.builtin orelse return null) {
+                .iter => .iter,
+                .stream, .bool, .try_, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => return null,
+            },
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return null,
+        };
+        const topologies = table.iterator_topologies;
+        if (topologies.len != std.enums.values(static_dispatch.IteratorOwner).len) invariant("a checked module omitted an iterator representation topology");
+        const topology = topologies[@backingInt(owner)];
+        return try self.program.store.internName(self.view.nameStore().recordFieldLabelText(topology.step_field));
     }
 
     /// Continue at the next statement when `value` (of `ty`) holds tag
