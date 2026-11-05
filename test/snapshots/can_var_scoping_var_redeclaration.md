@@ -149,7 +149,7 @@ NO CHANGE
 					(p-var-assign (ident "x_"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 256)
+		(e-call (constraint-fn-var 259)
 			(e-lookup-local
 				(p-assign (ident "redeclareTest")))
 			(e-empty_record))))

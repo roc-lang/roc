@@ -204,8 +204,8 @@ literals [default](#defaulting-to-dec) the same way other number literals do.
 
 A range starts with a step of 1. Calling `range.step_by(new_step)` replaces that
 absolute step; calling it a second time replaces the first step rather than
-multiplying them. `range.size_hint()` returns `Known(count)` when the exact
-count fits in a `U64`, and `Unknown` otherwise.
+multiplying them. `range.len_if_known()` returns `Ok(count)` when the exact
+count fits in a `U64`, and `Err(Unknown)` otherwise.
 
 Call `range.iter()` to obtain a forward iterator. Integer and `Dec` ranges also
 support `range.iter_rev()`, which produces the same lower-anchored members in

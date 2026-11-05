@@ -5313,6 +5313,16 @@ pub const Interpreter = struct {
                 const result = builtins.str.strJoinWithC(self.valueToRocListForLayout(args[0], arg_layout), valueToRocStr(args[1]), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
+            .str_from_parts => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return self.crashError();
+                const parts = try self.allocator.alloc(RocStr, args.len);
+                defer self.allocator.free(parts);
+                for (args, parts) |arg, *part| part.* = valueToRocStr(arg);
+                const result = builtins.str.strFromParts(parts, &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
             .str_with_capacity => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();

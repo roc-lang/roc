@@ -6,7 +6,7 @@ type=file
 # SOURCE
 ~~~roc
 Rendered := [Rendered].{
-    from_interpolation : List(Str) -> Try((List(U64) -> Rendered), [InvalidInterpolation(Str)])
+    from_interpolation : List(Str) -> Try((Iter(U64) -> Rendered), [InvalidInterpolation(Str)])
     from_interpolation = |_| Ok(|_| Rendered.Rendered)
 }
 
@@ -69,7 +69,7 @@ EndOfFile,
 							(ty (name "Try"))
 							(ty-fn
 								(ty-apply
-									(ty (name "List"))
+									(ty (name "Iter"))
 									(ty (name "U64")))
 								(ty (name "Rendered")))
 							(ty-tag-union
@@ -118,7 +118,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 Rendered := [Rendered].{
-	from_interpolation : List(Str) -> Try((List(U64) -> Rendered), [InvalidInterpolation(Str)])
+	from_interpolation : List(Str) -> Try((Iter(U64) -> Rendered), [InvalidInterpolation(Str)])
 	from_interpolation = |_| Ok(|_| Rendered.Rendered)
 }
 
@@ -149,7 +149,7 @@ main = build(1.U64, "not a number")
 				(ty-apply (name "Try") (builtin)
 					(ty-parens
 						(ty-fn (effectful false)
-							(ty-apply (name "List") (builtin)
+							(ty-apply (name "Iter") (builtin)
 								(ty-lookup (name "U64") (builtin)))
 							(ty-lookup (name "Rendered") (local))))
 					(ty-tag-union
@@ -168,7 +168,7 @@ main = build(1.U64, "not a number")
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "good"))))
-						(e-interpolation (constraint-fn-var 329) (dispatcher-var 39)
+						(e-interpolation (constraint-fn-var 339) (dispatcher-var 39)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -180,7 +180,7 @@ main = build(1.U64, "not a number")
 							(p-assign (ident "#interp_1"))
 							(e-lookup-local
 								(p-assign (ident "bad"))))
-						(e-interpolation (constraint-fn-var 343) (dispatcher-var 47)
+						(e-interpolation (constraint-fn-var 377) (dispatcher-var 47)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -189,7 +189,7 @@ main = build(1.U64, "not a number")
 								(e-literal (string "")))))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 364)
+		(e-call (constraint-fn-var 411)
 			(e-lookup-local
 				(p-assign (ident "build")))
 			(e-typed-int (value "1") (type "U64"))
@@ -206,14 +206,14 @@ main = build(1.U64, "not a number")
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(Str) -> Try(List(U64) -> Rendered, [InvalidInterpolation(Str)])"))
-		(patt (type "a, a -> List(b) where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]"))
+		(patt (type "List(Str) -> Try(Iter(U64) -> Rendered, [InvalidInterpolation(Str)])"))
+		(patt (type "item, item -> List(a) where [a.from_interpolation : List(Str) -> Try(Iter(item) -> a, [InvalidInterpolation(Str)])]"))
 		(patt (type "List(Rendered)")))
 	(type_decls
 		(nominal (type "Rendered")
 			(ty-header (name "Rendered"))))
 	(expressions
-		(expr (type "List(Str) -> Try(List(U64) -> Rendered, [InvalidInterpolation(Str)])"))
-		(expr (type "a, a -> List(b) where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]"))
+		(expr (type "List(Str) -> Try(Iter(U64) -> Rendered, [InvalidInterpolation(Str)])"))
+		(expr (type "item, item -> List(a) where [a.from_interpolation : List(Str) -> Try(Iter(item) -> a, [InvalidInterpolation(Str)])]"))
 		(expr (type "List(Rendered)"))))
 ~~~

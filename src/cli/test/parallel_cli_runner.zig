@@ -665,6 +665,7 @@ const CustomCase = enum {
     ctfe_static_cache_runtime,
     ctfe_evaluation_order,
     ctfe_cache_mixing,
+    ctfe_cached_nominal_anchor,
     literal_root_rejected_every_build,
     issue_11673_callable_cache,
     issue_12595_lambda_solved,
@@ -3604,6 +3605,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "interpolated results of generic functions follow each caller's target type (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/GenericInterpolationResult.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "value=1\nWrapped(\"value=\\\"x\\\"\")\nCount(2)\nasbsc\n" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "interpolated results of generic functions follow each caller's target type (specialized, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/GenericInterpolationResult.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "value=1\nWrapped(\"value=\\\"x\\\"\")\nCount(2)\nasbsc\n" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "interpolated results of generic functions follow each caller's target type (specialized, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/GenericInterpolationResult.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "value=1\nWrapped(\"value=\\\"x\\\"\")\nCount(2)\nasbsc\n" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "every shape of an interpolated Str literal matches its concat form (dev, specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/InterpolationParts.roc", .exit = .success, .stdout_exact = "ok one value\nok leading segment\nok trailing segment\nok both segments\nok empty value\nok three empties in a row\nok empty value between values\nok big value\nok big values crossing both ways\nok utf8 segments\nok nested literal\nok number through to_str\nok seventeen values\nok shared heap value used after\nok value still usable after\nok greeting\n13\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "every shape of an interpolated Str literal matches its concat form (dev, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/InterpolationParts.roc", .exit = .success, .stdout_exact = "ok one value\nok leading segment\nok trailing segment\nok both segments\nok empty value\nok three empties in a row\nok empty value between values\nok big value\nok big values crossing both ways\nok utf8 segments\nok nested literal\nok number through to_str\nok seventeen values\nok shared heap value used after\nok value still usable after\nok greeting\n13\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "every shape of an interpolated Str literal matches its concat form (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/InterpolationParts.roc", .exit = .success, .stdout_exact = "ok one value\nok leading segment\nok trailing segment\nok both segments\nok empty value\nok three empties in a row\nok empty value between values\nok big value\nok big values crossing both ways\nok utf8 segments\nok nested literal\nok number through to_str\nok seventeen values\nok shared heap value used after\nok value still usable after\nok greeting\n13\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "every shape of an interpolated Str literal matches its concat form (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/InterpolationParts.roc", .exit = .success, .stdout_exact = "ok one value\nok leading segment\nok trailing segment\nok both segments\nok empty value\nok three empties in a row\nok empty value between values\nok big value\nok big values crossing both ways\nok utf8 segments\nok nested literal\nok number through to_str\nok seventeen values\nok shared heap value used after\nok value still usable after\nok greeting\n13\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "every shape of an interpolated Str literal matches its concat form (speed, specialize=yes)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/InterpolationParts.roc", .exit = .success, .stdout_exact = "ok one value\nok leading segment\nok trailing segment\nok both segments\nok empty value\nok three empties in a row\nok empty value between values\nok big value\nok big values crossing both ways\nok utf8 segments\nok nested literal\nok number through to_str\nok seventeen values\nok shared heap value used after\nok value still usable after\nok greeting\n13\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "every shape of an interpolated Str literal matches its concat form (speed, specialize=no)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/InterpolationParts.roc", .exit = .success, .stdout_exact = "ok one value\nok leading segment\nok trailing segment\nok both segments\nok empty value\nok three empties in a row\nok empty value between values\nok big value\nok big values crossing both ways\nok utf8 segments\nok nested literal\nok number through to_str\nok seventeen values\nok shared heap value used after\nok value still usable after\nok greeting\n13\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "a closure releases an unread argument whose descriptor it rebuilds (boxy, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/UnusedClosureParamDescriptor.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "3\n1\n" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "a closure releases an unread argument whose descriptor it rebuilds (boxy, dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/UnusedClosureParamDescriptor.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "3\n1\n" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "a closure releases an unread argument whose descriptor it rebuilds (specialized, interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/UnusedClosureParamDescriptor.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "3\n1\n" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -3694,6 +3701,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "CTFE static cache: a helper read at compile time and at runtime prints the same result uncached, cold and warm", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_static_cache_runtime } },
     .{ .id = 0, .suite = .subcommands, .name = "compile-time evaluation order keeps values and diagnostics across uncached, seeded, repeated and edited compilations", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_evaluation_order } },
     .{ .id = 0, .suite = .subcommands, .name = "CTFE cache mixing: warm callable tests and compile-time failures after a runtime build match uncached results", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_cache_mixing } },
+    .{ .id = 0, .suite = .subcommands, .name = "Boxy CTFE resolves a cached nominal anchor after editing another test module", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_cached_nominal_anchor } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a specialization's rejected literal on every build, cached or not", .timeout_ms = 600_000, .body = .{ .custom = .literal_root_rejected_every_build } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a rejected literal whose type holds a callable", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/literal_root_rejected/CallableLiteral.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "invalid string" }}, .occurrences = &.{.{ .stream = .stderr, .text = "invalid string", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
@@ -4012,6 +4020,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11220: roc run preserves distinct exports of the same function (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "run", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/issue_11220_required_main_host_entry/app_aliases.roc", .exit = .success, .contains = &.{ .{ .stream = .stderr, .text = "Got the following from the host: string from host" }, .{ .stream = .stderr, .text = "SUCCESS" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "duplicate symbol" }, .{ .stream = .stderr, .text = "LinkFailed" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11220: roc run preserves distinct exports of the same function (speed)", .backend = .speed, .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "run", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/issue_11220_required_main_host_entry/app_aliases.roc", .exit = .success, .contains = &.{ .{ .stream = .stderr, .text = "Got the following from the host: string from host" }, .{ .stream = .stderr, .text = "SUCCESS" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "duplicate symbol" }, .{ .stream = .stderr, .text = "LinkFailed" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "SIMD inspection avoids intermediate allocations (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_simd_inspect.roc", .contains = &.{.{ .stream = .stderr, .text = "SIMD inspection allocations: 1 1 1 1 0 0 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "interpolated literals allocate only their heap result, and a custom assembler's iterator allocates nothing (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_interpolation.roc", .contains = &.{.{ .stream = .stderr, .text = "interpolation allocations: 0 1 0 (16-16-16 516 Count(8))" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "interpolated literals allocate only their heap result, and a custom assembler's iterator allocates nothing (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_interpolation.roc", .contains = &.{.{ .stream = .stderr, .text = "interpolation allocations: 0 1 0 (16-16-16 516 Count(8))" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "SIMD inspection avoids intermediate allocations (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_simd_inspect.roc", .contains = &.{.{ .stream = .stderr, .text = "SIMD inspection allocations: 1 1 1 1 0 0 0 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app_allocates.roc: allocation counter positive control (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_allocates.roc", .contains = &.{.{ .stream = .stderr, .text = "byte count: 16" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app_dict_insert.roc: pre-sized Dict inserts allocate nothing (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_dict_insert.roc", .contains = &.{.{ .stream = .stderr, .text = "entries: 1016, insert allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
@@ -6239,6 +6249,7 @@ fn runCustomCase(
         .ctfe_static_cache_runtime => customCtfeStaticCacheRuntime(io, allocator, &env, &timer, timeout_ms),
         .ctfe_evaluation_order => customCtfeEvaluationOrder(io, allocator, &env, &timer, timeout_ms),
         .ctfe_cache_mixing => customCtfeCacheMixing(io, allocator, &env, &timer, timeout_ms),
+        .ctfe_cached_nominal_anchor => customCtfeCachedNominalAnchor(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
@@ -11952,6 +11963,62 @@ fn customCtfeEvaluationOrder(
                 baseline = run;
             }
         }
+    }
+    return null;
+}
+
+/// A cached ownership anchor still supplies nominal declarations to fresh CTFE.
+fn customCtfeCachedNominalAnchor(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const dir = createWorkSubdir(io, allocator, env, "cached_nominal_anchor") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create the case directory: {}", .{err});
+    const cache = std.fs.path.join(allocator, &.{ dir, "cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    const main_path = std.fs.path.join(allocator, &.{ dir, "Main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the entrypoint: {}", .{err});
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to clone the environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
+        return customInfraFailure(allocator, timer, "failed to isolate the cache: {}", .{err});
+    if (writeCaseFile(io, allocator, timer, dir, "Main.roc", "import Anchor\nimport Consumer\n")) |failure| return failure;
+    if (writeCaseFile(io, allocator, timer, dir, "Anchor.roc",
+        \\Anchor := { value : I64 }.{
+        \\    make : I64 -> Anchor
+        \\    make = |n| { value: n }
+        \\    get : Anchor -> I64
+        \\    get = |r| r.value
+        \\}
+        \\expect Anchor.get(Anchor.make(1)) == 1
+        \\
+    )) |failure| return failure;
+    const consumer =
+        \\Consumer := []
+        \\import Anchor
+        \\value = Anchor.make(42)
+        \\
+    ;
+    // Anchor owns the test program, but after the edit its checked artifact
+    // is cached and it has no pending roots. Consumer's fresh constant still
+    // needs Anchor's nominal backing when selecting its CTFE evaluator.
+    for ([_][]const u8{
+        consumer ++ "expect Anchor.get(value) == 42\n",
+        consumer ++ "expect Anchor.get(value) == 42\n",
+        consumer ++ "expect Anchor.get(value) == 41 + 1\n",
+        consumer ++ "expect Anchor.get(value) == 41 + 1\n",
+    }) |source| {
+        if (writeCaseFile(io, allocator, timer, dir, "Consumer.roc", source)) |failure| return failure;
+        if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = &.{ "test", "--opt=dev", "--specialize=no", "--no-color" },
+            .roc_file = main_path,
+            .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }},
+            .stderr_exact = "",
+        })) |failure| return failure;
     }
     return null;
 }

@@ -111,7 +111,7 @@ foo = {
 				(e-block
 					(s-reassign
 						(p-var-assign (ident "result"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 304)
+						(e-dispatch-call (method "plus") (constraint-fn-var 307)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "result"))))

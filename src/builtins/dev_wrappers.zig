@@ -465,6 +465,12 @@ pub fn roc_builtins_str_join_with(out: *RocStr, list_bytes: ?[*]u8, list_len: us
     out.* = strJoinWithC(l, sep, roc_ops);
 }
 
+/// Wrapper: strFromParts([]const RocStr, *RocOps) -> RocStr: an interpolated
+/// literal's `count` parts at `parts`, written once. Every part is borrowed.
+pub fn roc_builtins_str_from_parts(out: *RocStr, parts: [*]const RocStr, count: usize) callconv(.c) void {
+    out.* = str.strFromParts(parts[0..count], in_process_host.ops());
+}
+
 /// Wrapper: reserveC(RocStr, u64, UpdateMode, *RocOps) -> RocStr. The update
 /// mode is forwarded to the builtin's uniqueness check; `.InPlace` skips it.
 pub fn roc_builtins_str_reserve(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, spare: u64, update_mode: utils.UpdateMode) callconv(.c) void {

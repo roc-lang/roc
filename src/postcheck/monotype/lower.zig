@@ -244,7 +244,8 @@ const CommittedGraphTypes = struct {
         if (committed.iterator_topology) |*topology| {
             topology.len_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.len_field);
             topology.step_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.step_field);
-            topology.known_tag = try relocation.relocateTagLabel(self.source_names, topology.known_tag);
+            topology.ok_tag = try relocation.relocateTagLabel(self.source_names, topology.ok_tag);
+            topology.err_tag = try relocation.relocateTagLabel(self.source_names, topology.err_tag);
             topology.unknown_tag = try relocation.relocateTagLabel(self.source_names, topology.unknown_tag);
             topology.done_tag = try relocation.relocateTagLabel(self.source_names, topology.done_tag);
             topology.one_tag = try relocation.relocateTagLabel(self.source_names, topology.one_tag);
@@ -31006,7 +31007,9 @@ const BodyContext = struct {
             var fn_node = input.?.nodeValue();
             if (self.iteratorProcedureForResolvedTarget(call.direct_target.?)) |procedure| {
                 const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
-                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+                const optional_args = try self.optionalCheckedArgs(call.args);
+                defer self.allocator.free(optional_args);
+                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, optional_args)) |private_fn_node| {
                     try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
                     try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
                     fn_node = private_fn_node;
@@ -31937,11 +31940,40 @@ const BodyContext = struct {
         expr: checked.CheckedExprId,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         value_node: NodeId,
+        stage: enum {
+            start,
+            /// A value lowered; bound to a local.
+            value,
+            /// `iter` on the seed list lowered.
+            seed_iterator,
+            /// `append` of a value lowered.
+            appended,
+            /// The literal conversion lowered; the assembler is called.
+            conversion,
+            /// The literal's type is `Str`: the conversion lowered, its
+            /// segments and values are written once by `str_from_parts` (a
+            /// `StrTask` over them interleaved), and the assembler is not
+            /// called.
+            str_conversion,
+            written_once,
+        } = .start,
+        try_ty: checked.CheckedTypeId = undefined,
         try_node: NodeId = undefined,
         assembler_node: NodeId = undefined,
-        assembler: DraftExprId = undefined,
-        values_ty: Type.TypeId = undefined,
+        item_node: NodeId = undefined,
+        /// `iter` on the empty seed list, then `append` for each value.
+        iterator_plan: static_dispatch.IteratorForPlan = undefined,
+        /// Each lowered value, bound to a local. Owned.
+        values: std.ArrayList(DraftTypedLocal) = .empty,
+        /// The bindings the interpolation's expression nests, in order:
+        /// each value, the seed list, and each iterator. Owned.
+        lets: std.ArrayList(InterpolationLet) = .empty,
+        /// The iterator built so far.
+        iterator: DraftTypedLocal = undefined,
+        index: usize = 0,
     };
+
+    const InterpolationLet = struct { pat: DraftPatId, value: DraftExprId };
 
     /// A call-site intrinsic whose arguments lower as child tasks, in
     /// argument order, before its generated body.
@@ -32008,14 +32040,19 @@ const BodyContext = struct {
         lhs: DraftExprId = undefined,
     };
 
-    /// A string whose segments lower as child tasks, concatenated in order.
+    /// A `Str` literal whose segments and values lower as child tasks and
+    /// are written once, in order, by `str_from_parts`.
     const StrTask = struct {
         segments: []const checked.CheckedExprId,
         /// The cell the string's expression is built at; without one the
         /// task produces the string's expression data.
         cell: ?DraftTypeCell = null,
+        /// `segments` was allocated for this task (an interpolation's
+        /// segments and values interleaved) and is freed with it.
+        owned_segments: bool = false,
         index: usize = 0,
-        out: DraftExprId = undefined,
+        /// The lowered segments and values, the empty segments left out.
+        parts: std.ArrayList(DraftExprId) = .empty,
     };
 
     /// A field access whose receiver lowers as a child task, so nested
@@ -33587,12 +33624,12 @@ const BodyContext = struct {
                         // (`initial_iterator`).
                         if (self.dispatchCrashReason(task.plan.iter.resolution)) |reason| {
                             task.stage = .{ .crashing_iter = reason };
-                            return requestLowerTask(self, .{ .discarded = .{ .expr = task.plan.iterable } });
+                            return requestLowerTask(self, .{ .discarded = .{ .expr = task.plan.forLoopSite().iterable } });
                         }
                         task.stage = .initial_iterator;
                         return self.iteratorDispatchStep(.{
                             .plan = task.plan.iter,
-                            .loop_iterator = null,
+                            .pre_lowered = .{},
                             .expected_ret_ty = null,
                         });
                     },
@@ -33651,13 +33688,13 @@ const BodyContext = struct {
                 task.stage = .step_expr;
                 return self.iteratorDispatchStep(.{
                     .plan = plan.next,
-                    .loop_iterator = task.iterator_param,
+                    .pre_lowered = .{ .loop_iterator = task.iterator_param },
                     .expected_ret_ty = DraftTypeCell.fromGraphNode(task.step.step_node),
                 });
             },
             .step_expr => {
                 task.step_expr = input.?.exprValue();
-                try self.constrainCheckedInterfaceToCell(task.plan.step_ty, self.exprTypeCell(task.step_expr));
+                try self.constrainCheckedInterfaceToCell(task.plan.forLoopSite().step_ty, self.exprTypeCell(task.step_expr));
                 task.done_body = if (task.carries.len == 0)
                     try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = null })
                 else
@@ -33812,11 +33849,34 @@ const BodyContext = struct {
         return statementStep(.{ .stmt = try self.addStmt(stmt), .termination = .none });
     }
 
+    /// The operands of an iterator dispatch that are lowered before the call
+    /// rather than as checked expressions: a loop's iterator state, and an
+    /// interpolation's seed list, the iterator it has built so far, and the
+    /// value it appends next.
+    const PreLoweredIteratorOperands = struct {
+        loop_iterator: ?DraftTypedLocal = null,
+        interpolation_seed: ?DraftTypedLocal = null,
+        interpolation_iterator: ?DraftTypedLocal = null,
+        interpolation_value: ?DraftTypedLocal = null,
+
+        /// The pre-lowered local `operand` names, or null for a checked
+        /// expression.
+        fn typedLocal(self: PreLoweredIteratorOperands, operand: static_dispatch.IteratorDispatchOperand) ?DraftTypedLocal {
+            return switch (operand) {
+                .checked_expr => null,
+                .loop_iterator_state => self.loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local"),
+                .interpolation_seed => self.interpolation_seed orelse Common.invariant("interpolation iter dispatch reached Monotype without its seed list local"),
+                .interpolation_iterator => self.interpolation_iterator orelse Common.invariant("interpolation append dispatch reached Monotype without its iterator local"),
+                .interpolation_value => self.interpolation_value orelse Common.invariant("interpolation append dispatch reached Monotype without its value local"),
+            };
+        }
+    };
+
     /// An iterator method call whose operands lower
     /// as child tasks.
     const IteratorDispatchTask = struct {
         plan: static_dispatch.IteratorDispatchCall,
-        loop_iterator: ?DraftTypedLocal,
+        pre_lowered: PreLoweredIteratorOperands,
         expected_ret_ty: ?DraftTypeCell,
         call_ctx: ?*BodyContext = null,
         /// The generated `Iter.iter`/`Iter.next` path's procedure and
@@ -33861,7 +33921,7 @@ const BodyContext = struct {
         task.call_ctx = try self.createCallContext();
         const call_ctx = task.call_ctx.?;
 
-        var callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, task.loop_iterator, task.expected_ret_ty);
+        var callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, task.pre_lowered, task.expected_ret_ty);
         const initial_plan_fn = try self.graph.functionNodes(callable_node);
         // Instantiating the caller-authored request completes any procedure
         // operands that return iterator evidence. Only then is the producer's
@@ -33871,7 +33931,7 @@ const BodyContext = struct {
             if ((procedure == .identity or procedure == .next) and (try self.isGeneratedIteratorEvidenceNode(dispatcher_node))) {
                 try self.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
                 task.generated = .{ .procedure = procedure, .dispatcher_node = dispatcher_node };
-                switch (try self.iteratorOperandStep(plan_args[plan.dispatcher_arg_index], task.loop_iterator, dispatcher_node)) {
+                switch (try self.iteratorOperandStep(plan_args[plan.dispatcher_arg_index], task.pre_lowered, dispatcher_node)) {
                     .now => |iterator| return self.finishGeneratedIteratorDispatch(task, procedure, dispatcher_node, iterator),
                     .child => |step| return step,
                 }
@@ -33905,7 +33965,7 @@ const BodyContext = struct {
 
         const dispatcher_node = plan_fn.args[plan.dispatcher_arg_index];
         try call_ctx.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
-        const actual_dispatcher_node = try self.iteratorOperandNode(plan_args[plan.dispatcher_arg_index], task.loop_iterator);
+        const actual_dispatcher_node = try self.iteratorOperandNode(plan_args[plan.dispatcher_arg_index], task.pre_lowered);
         try relateRequestComponent(self.graph, dispatcher_node, actual_dispatcher_node);
         // A producer-authored request intentionally remains in a different
         // class from its checked-public operand. The directed relation above
@@ -33946,7 +34006,7 @@ const BodyContext = struct {
         plan_args: []const static_dispatch.IteratorDispatchOperand,
     ) Allocator.Error!LowerStep {
         while (task.index < plan_args.len) {
-            switch (try self.iteratorOperandStep(plan_args[task.index], task.loop_iterator, task.arg_nodes[task.index])) {
+            switch (try self.iteratorOperandStep(plan_args[task.index], task.pre_lowered, task.arg_nodes[task.index])) {
                 .now => |arg| {
                     task.args[task.index] = arg;
                     task.index += 1;
@@ -33998,23 +34058,19 @@ const BodyContext = struct {
     }
 
     /// Lower one iterator dispatch operand at its instantiated argument node:
-    /// the loop's iterator local at once, a checked expression as a child.
+    /// a pre-lowered local at once, a checked expression as a child.
     fn iteratorOperandStep(
         self: *BodyContext,
         operand: static_dispatch.IteratorDispatchOperand,
-        loop_iterator: ?DraftTypedLocal,
+        pre_lowered: PreLoweredIteratorOperands,
         node: NodeId,
     ) Allocator.Error!union(enum) { now: DraftExprId, child: LowerStep } {
-        return switch (operand) {
-            .checked_expr => |expr| .{ .child = requestLowerChild(self, expr, DraftTypeCell.fromGraphNode(node)) },
-            .loop_iterator_state => blk: {
-                const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
-                const iterator_node = try iterator.ty.toGraphNode(self.graph);
-                try self.graph.unify(iterator_node, node);
-                if (!self.graph.sameClass(iterator_node, node)) Common.invariant("iterator .next operand type differed from instantiated callable argument type");
-                break :blk .{ .now = try self.addExprWithTypeCell(iterator.ty, .{ .local = iterator.local }) };
-            },
-        };
+        const local = pre_lowered.typedLocal(operand) orelse
+            return .{ .child = requestLowerChild(self, operand.checked_expr, DraftTypeCell.fromGraphNode(node)) };
+        const local_node = try local.ty.toGraphNode(self.graph);
+        try self.graph.unify(local_node, node);
+        if (!self.graph.sameClass(local_node, node)) Common.invariant("pre-lowered iterator operand type differed from instantiated callable argument type");
+        return .{ .now = try self.addExprWithTypeCell(local.ty, .{ .local = local.local }) };
     }
 
     const WithTypeTask = struct {
@@ -34546,6 +34602,8 @@ const BodyContext = struct {
                 task.prior = &.{};
             },
             .span, .prepared_span, .span_at_types, .list_span => |*task| self.releaseSpanTask(task),
+            .str => |*task| self.releaseStrTask(task),
+            .interpolation => |*task| self.releaseInterpolationTask(task),
             .constructor => |*task| self.releaseConstructorTask(task),
             .block => |task| {
                 self.releaseBlockTask(task);
@@ -34579,7 +34637,7 @@ const BodyContext = struct {
                 self.destroyLowerTaskBox(task);
             },
             .materialize => |*task| self.releaseMaterializeTask(task),
-            .branch_body, .return_value, .inspected, .divergent, .field_access, .str, .direct_structural, .inspect_only => {},
+            .branch_body, .return_value, .inspected, .divergent, .field_access, .direct_structural, .inspect_only => {},
             .scheme_alias => |*task| self.restoreSchemeAliasScope(task),
             .callsite_intrinsic => |*task| {
                 self.allocator.free(task.args);
@@ -34598,7 +34656,6 @@ const BodyContext = struct {
             .operand_at_type,
             .call_expr_at_node,
             .call_expr,
-            .interpolation,
             => {},
         }
     }
@@ -34652,7 +34709,7 @@ const BodyContext = struct {
             .inspect_only => |*task| return self.stepInspectOnly(task, input),
             .scheme_alias => |*task| return self.stepSchemeAlias(task, input),
             .callsite_intrinsic => |*task| return self.stepCallsiteIntrinsic(task, input),
-            .interpolation => |*task| return self.stepInterpolationLower(frame, task, input),
+            .interpolation => |*task| return self.stepInterpolationLower(task, input),
         }
     }
 
@@ -34661,66 +34718,178 @@ const BodyContext = struct {
     /// literal conversion it runs at compile time: its `Ok` payload, the
     /// assembler, is a literal root's value, and its `Err` is the literal's
     /// rejection. The interpolation's value is the assembler called with the
-    /// parts' values.
-    fn stepInterpolationLower(self: *BodyContext, frame: *LowerFrame, task: *InterpolationLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
-        switch (frame.cursor) {
-            0 => {
-                const try_ty = self.literalConversionTryType(task.maybe_plan);
-                task.try_node = try self.instNode(try_ty);
+    /// iterator over its values: `iter` on an empty list, then `append` for
+    /// each value, every step bound to a local so the iterator lives on the
+    /// stack. A `Str` literal writes its parts once instead.
+    fn stepInterpolationLower(self: *BodyContext, task: *InterpolationLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const interpolation = switch (self.view.bodies.expr(task.expr).data) {
+            .interpolation => |value| value,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
+        };
+        switch (task.stage) {
+            .start => {
+                task.try_ty = self.literalConversionTryType(task.maybe_plan);
+                task.try_node = try self.instNode(task.try_ty);
                 task.assembler_node = (try self.graphTryPayloads(task.try_node)).ok;
                 const assembler_fn = try self.graph.functionNodes(task.assembler_node);
-                if (assembler_fn.args.len != 1) Common.invariant("interpolation assembler did not take exactly the values list");
+                if (assembler_fn.args.len != 1) Common.invariant("interpolation assembler did not take exactly the values iterator");
                 try relateRequestComponent(self.graph, assembler_fn.ret, task.value_node);
                 // Every interpolated value is an item of the assembler's
-                // values list, so the item type is the values' type. The
+                // iterator, so the item type is the values' type. The
                 // selected `from_interpolation` determines the item only when
                 // its own signature fixes it.
-                const item_node = switch (try self.graph.content(assembler_fn.args[0])) {
-                    .list => |elem| elem,
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("interpolation assembler did not take a values list"),
-                };
-                const interpolation = switch (self.view.bodies.expr(task.expr).data) {
-                    .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
-                };
+                const iterator_args = (try self.graph.namedNodes(assembler_fn.args[0])).args;
+                if (iterator_args.len != 1) Common.invariant("interpolation assembler's iterator did not have one item type");
+                task.item_node = iterator_args[0];
                 for (interpolation.values) |value| {
-                    try relateRequestComponent(self.graph, item_node, try self.lowerExprTypeNode(value));
+                    try relateRequestComponent(self.graph, task.item_node, try self.lowerExprTypeNode(value));
                 }
-                frame.cursor = 1;
-                // The conversion runs during compile-time evaluation; see
-                // `lowerLiteralConversionDispatch`. Its operands are the
-                // literal segments, so nothing else lowers before cursor 1.
-                self.draft.evaluation_depth += 1;
-                return requestLowerTask(self, .{ .dispatch = .{
-                    .checked_ret_ty = try_ty,
-                    .maybe_plan = task.maybe_plan,
-                    .expected_ret_cell = DraftTypeCell.fromGraphNode(task.try_node),
-                } });
+                const result_is_str = switch (try self.graph.content(task.value_node)) {
+                    .primitive => |primitive| primitive == .str,
+                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
+                };
+                if (result_is_str) {
+                    task.stage = .str_conversion;
+                    return self.interpolationConversionStep(task);
+                }
+                const plan_id = interpolation.iter_plan orelse Common.invariant("checked interpolation reached Monotype without an iterator plan");
+                task.iterator_plan = self.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)];
             },
-            1 => {
+            .value => {
+                const value = input.?.exprValue();
+                const cell = self.exprTypeCell(value);
+                try task.values.append(self.allocator, try self.bindInterpolationLocal(task, value, cell));
+                task.index += 1;
+            },
+            .seed_iterator => {
+                const iterator = input.?.exprValue();
+                task.iterator = try self.bindInterpolationLocal(task, iterator, self.exprTypeCell(iterator));
+                task.index = 0;
+            },
+            .appended => {
+                const iterator = input.?.exprValue();
+                task.iterator = try self.bindInterpolationLocal(task, iterator, self.exprTypeCell(iterator));
+                task.index += 1;
+            },
+            .conversion => {
+                self.draft.evaluation_depth -= 1;
+                const site = self.literalRejectionSite(task.expr);
+                // The assembler is called with the iterator the chain built,
+                // so its request names that iterator's representation, as a
+                // call's argument evidence does (`stepInstantiateCall`).
+                const assembler_fn = try self.graph.functionNodes(task.assembler_node);
+                const iterator_node = try task.iterator.ty.toGraphNode(self.graph);
+                if (try self.graph.containsGeneratedPrivate(iterator_node)) {
+                    const public_node = try self.freshInstNode(self.checkedFunctionType(interpolation.assembler_ty).args[0]);
+                    try self.graph.relateOpaqueInterface(public_node, iterator_node);
+                    try relateRequestComponent(self.graph, assembler_fn.args[0], public_node);
+                } else {
+                    try self.graph.unify(assembler_fn.args[0], iterator_node);
+                }
+                const request_fn = try functionRequestNode(self.graph, task.assembler_node, &.{iterator_node}, assembler_fn.ret);
+                const assembler = try self.unwrapLiteralConversionAtNode(input.?.exprValue(), task.try_node, request_fn, site);
+                const callee = if (self.builder.literal_roots)
+                    try self.literalRootRead(task.expr, site, assembler, request_fn)
+                else
+                    assembler;
+                const value_cell = DraftTypeCell.fromGraphNode(task.value_node);
+                const iterator_expr = try self.addExprWithTypeCell(task.iterator.ty, .{ .local = task.iterator.local });
+                var expr = try self.addExprWithTypeCell(value_cell, .{ .call_value = .{
+                    .callee = callee,
+                    .args = try self.addExprSpan(&.{iterator_expr}),
+                } });
+                var index = task.lets.items.len;
+                while (index > 0) {
+                    index -= 1;
+                    const let_ = task.lets.items[index];
+                    expr = try self.addExprWithTypeCell(value_cell, .{ .let_ = .{
+                        .bind = let_.pat,
+                        .value = let_.value,
+                        .rest = expr,
+                    } });
+                }
+                self.releaseInterpolationTask(task);
+                return loweredExprStep(expr);
+            },
+            .str_conversion => {
                 self.draft.evaluation_depth -= 1;
                 const site = self.literalRejectionSite(task.expr);
                 const assembler = try self.unwrapLiteralConversionAtNode(input.?.exprValue(), task.try_node, task.assembler_node, site);
-                task.assembler = if (self.builder.literal_roots)
-                    try self.literalRootRead(task.expr, site, assembler, task.assembler_node)
-                else
-                    assembler;
-                const interpolation = switch (self.view.bodies.expr(task.expr).data) {
-                    .interpolation => |value| value,
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
-                };
-                task.values_ty = try self.activeTypeFromNode((try self.graph.functionNodes(task.assembler_node)).args[0]);
-                frame.cursor = 2;
-                return requestLowerTask(self, .{ .list_span = .{ .exprs = interpolation.values, .list_ty = task.values_ty } });
+                if (self.builder.literal_roots) _ = try self.literalRootRead(task.expr, site, assembler, task.assembler_node);
+                // The segments and values lower interleaved, in order, each
+                // at `Str`, and are written once.
+                var operands: std.ArrayList(checked.CheckedExprId) = .empty;
+                errdefer operands.deinit(self.allocator);
+                try appendInterpolationOperands(self.allocator, &operands, interpolation);
+                task.stage = .written_once;
+                return requestLowerTask(self, .{ .str = .{
+                    .segments = try operands.toOwnedSlice(self.allocator),
+                    .cell = DraftTypeCell.fromGraphNode(task.value_node),
+                    .owned_segments = true,
+                } });
             },
-            else => {
-                const values = try self.addExpr(.{ .ty = task.values_ty, .data = .{ .list = input.?.spanValue() } });
-                return loweredExprStep(try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(task.value_node), .{ .call_value = .{
-                    .callee = task.assembler,
-                    .args = try self.addExprSpan(&.{values}),
-                } }));
+            .written_once => {
+                self.releaseInterpolationTask(task);
+                return loweredExprStep(input.?.exprValue());
             },
         }
+        // The values, in order, each at the item type.
+        if (task.stage == .start or task.stage == .value) {
+            if (task.index < interpolation.values.len) {
+                task.stage = .value;
+                return requestLowerChild(self, interpolation.values[task.index], DraftTypeCell.fromGraphNode(task.item_node));
+            }
+            // The iterator starts from an empty list of items.
+            const seed_cell = DraftTypeCell.fromGraphNode(try self.graph.newNode(.{ .list = task.item_node }));
+            const seed_expr = try self.addExprWithTypeCell(seed_cell, .{ .list = try self.addExprSpan(&.{}) });
+            const seed = try self.bindInterpolationLocal(task, seed_expr, seed_cell);
+            task.stage = .seed_iterator;
+            return self.iteratorDispatchStep(.{
+                .plan = task.iterator_plan.iter,
+                .pre_lowered = .{ .interpolation_seed = seed },
+                .expected_ret_ty = null,
+            });
+        }
+        if (task.index < task.values.items.len) {
+            task.stage = .appended;
+            return self.iteratorDispatchStep(.{
+                .plan = task.iterator_plan.next,
+                .pre_lowered = .{ .interpolation_iterator = task.iterator, .interpolation_value = task.values.items[task.index] },
+                .expected_ret_ty = null,
+            });
+        }
+        task.stage = .conversion;
+        return self.interpolationConversionStep(task);
+    }
+
+    /// Lower the interpolation's literal conversion. It runs during
+    /// compile-time evaluation; its operands are the literal segments, so
+    /// nothing else lowers until it returns.
+    fn interpolationConversionStep(self: *BodyContext, task: *InterpolationLowerTask) LowerStep {
+        self.draft.evaluation_depth += 1;
+        return requestLowerTask(self, .{ .dispatch = .{
+            .checked_ret_ty = task.try_ty,
+            .maybe_plan = task.maybe_plan,
+            .expected_ret_cell = DraftTypeCell.fromGraphNode(task.try_node),
+        } });
+    }
+
+    /// Bind `value` to a fresh local the interpolation's expression nests a
+    /// `let` for.
+    fn bindInterpolationLocal(self: *BodyContext, task: *InterpolationLowerTask, value: DraftExprId, cell: DraftTypeCell) Allocator.Error!DraftTypedLocal {
+        const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, null);
+        try task.lets.append(self.allocator, .{
+            .pat = try self.addPatWithTypeCell(cell, .{ .bind = local }),
+            .value = value,
+        });
+        return .{ .local = local, .ty = cell };
+    }
+
+    fn releaseInterpolationTask(self: *BodyContext, task: *InterpolationLowerTask) void {
+        task.values.deinit(self.allocator);
+        task.values = .empty;
+        task.lets.deinit(self.allocator);
+        task.lets = .empty;
     }
 
     fn requestLowerChild(ctx: *BodyContext, expr: checked.CheckedExprId, cell: DraftTypeCell) LowerStep {
@@ -37135,24 +37304,38 @@ const BodyContext = struct {
     fn stepStr(self: *BodyContext, task: *StrTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const str_ty = try self.primitiveType(.str);
         if (input) |lowered| {
-            task.out = if (task.index == 0)
-                lowered.exprValue()
-            else
-                try self.concatExpr(task.out, lowered.exprValue(), str_ty);
+            // An empty literal segment writes nothing: it is not a part.
+            if (!self.view.bodies.isEmptyStrSegment(task.segments[task.index])) {
+                try task.parts.append(self.allocator, lowered.exprValue());
+            }
             task.index += 1;
-        } else if (task.segments.len == 0) {
-            return try self.finishStr(task, try self.stringExpr("", str_ty));
         }
         if (task.index < task.segments.len) {
             return requestLowerChild(self, task.segments[task.index], .{ .sealed = str_ty });
         }
-        return try self.finishStr(task, task.out);
+        const parts = task.parts.items;
+        const value = switch (parts.len) {
+            0 => try self.stringExpr("", str_ty),
+            1 => parts[0],
+            else => try self.lowLevelExpr(.str_from_parts, parts, str_ty),
+        };
+        return try self.finishStr(task, value);
     }
 
-    fn finishStr(self: *BodyContext, task: *const StrTask, value: DraftExprId) Allocator.Error!LowerStep {
+    fn finishStr(self: *BodyContext, task: *StrTask, value: DraftExprId) Allocator.Error!LowerStep {
         const data: BodyExprData = .{ .nominal = value };
-        const cell = task.cell orelse return .{ .ret = .{ .data = data } };
-        return loweredExprStep(try self.addExprWithTypeCell(cell, data));
+        const cell = task.cell;
+        self.releaseStrTask(task);
+        if (cell) |ty| return loweredExprStep(try self.addExprWithTypeCell(ty, data));
+        return .{ .ret = .{ .data = data } };
+    }
+
+    fn releaseStrTask(self: *BodyContext, task: *StrTask) void {
+        task.parts.deinit(self.allocator);
+        task.parts = .empty;
+        if (task.owned_segments) self.allocator.free(task.segments);
+        task.owned_segments = false;
+        task.segments = &.{};
     }
 
     fn lowerStringLiteral(self: *BodyContext, id: checked.CheckedStringLiteralId) Allocator.Error!DraftStringLiteralId {
@@ -38846,7 +39029,7 @@ const BodyContext = struct {
         procedure: checked.IteratorProcedureId,
         public_fn_node: NodeId,
         request_fn_node: NodeId,
-        checked_args: []const checked.CheckedExprId,
+        checked_args: []const ?checked.CheckedExprId,
     ) Allocator.Error!?NodeId {
         const public_fn = try self.graph.functionNodes(public_fn_node);
         const request_fn = try self.graph.functionNodes(request_fn_node);
@@ -38893,8 +39076,9 @@ const BodyContext = struct {
                     return try self.graphFunctionNode(&.{ components[0], request_fn.args[1], components[1] }, expected);
                 }
                 const state_is_private = try self.graph.containsGeneratedPrivate(request_fn.args[0]);
+                const advance_arg = checked_args[2] orelse Common.invariant("custom iterator source's advance operand was not a checked expression");
                 const advance_node = if (state_is_private)
-                    try self.iterCustomAdvanceRequestNode(checked_args[2], request_fn.args[0])
+                    try self.iterCustomAdvanceRequestNode(advance_arg, request_fn.args[0])
                 else
                     request_fn.args[2];
                 return try self.graphFunctionNode(
@@ -38903,7 +39087,7 @@ const BodyContext = struct {
                         mintedProducerKind(procedure),
                         public_fn.ret,
                         &.{ request_fn.args[0], advance_node },
-                        try self.callableArgumentEvidenceDigest(checked_args[2]),
+                        try self.callableArgumentEvidenceDigest(advance_arg),
                     ),
                 );
             },
@@ -39053,7 +39237,7 @@ const BodyContext = struct {
         kind: Type.IteratorKind,
         public_ret: NodeId,
         args: []const NodeId,
-        checked_args: []const checked.CheckedExprId,
+        checked_args: []const ?checked.CheckedExprId,
         expected_ret: ?NodeId,
         callable_index: ?usize,
     ) Allocator.Error!?NodeId {
@@ -39065,7 +39249,7 @@ const BodyContext = struct {
         if (try self.generatedIteratorExpectedProducerFunctionNode(kind, args, expected_ret)) |expected_fn| return expected_fn;
         if (!(try self.isGeneratedIteratorEvidenceNode(args[0]))) return null;
         const callable_evidence = if (callable_index) |index|
-            try self.callableArgumentEvidenceDigest(checked_args[index])
+            try self.callableArgumentEvidenceDigest(checked_args[index] orelse Common.invariant("iterator adapter's callable operand was not a checked expression"))
         else
             null;
         return try self.graphFunctionNode(
@@ -39132,7 +39316,8 @@ const BodyContext = struct {
         return .{
             .len_field = try recordFieldName(self.nameStoreMut(), self.view, topology.len_field),
             .step_field = try recordFieldName(self.nameStoreMut(), self.view, topology.step_field),
-            .known_tag = try tagName(self.nameStoreMut(), self.view, topology.known_tag),
+            .ok_tag = try tagName(self.nameStoreMut(), self.view, topology.ok_tag),
+            .err_tag = try tagName(self.nameStoreMut(), self.view, topology.err_tag),
             .unknown_tag = try tagName(self.nameStoreMut(), self.view, topology.unknown_tag),
             .done_tag = try tagName(self.nameStoreMut(), self.view, topology.done_tag),
             .one_tag = try tagName(self.nameStoreMut(), self.view, topology.one_tag),
@@ -39783,17 +39968,31 @@ const BodyContext = struct {
         ty: Type.TypeId,
         mode: FieldNamesIterMode,
     ) Allocator.Error!DraftExprId {
-        const topology = try self.iteratorRepresentationNames(.iter);
         return switch (mode) {
             .all => try self.lowerGeneratedIterLenIfKnown(remaining, ty),
-            .for_size => blk: {
-                const unknown_tag = self.monoTagByName(ty, topology.unknown_tag);
-                break :blk try self.addExpr(.{ .ty = ty, .data = .{ .tag = .{
-                    .name = unknown_tag.name,
-                    .payloads = .empty(),
-                } } });
-            },
+            .for_size => try self.lowerGeneratedIterLenUnknown(ty),
         };
+    }
+
+    /// `Err(Unknown)` at `ty`, the iterator's `len_if_known` type
+    /// `Try(U64, [Unknown])`.
+    fn lowerGeneratedIterLenUnknown(self: *BodyContext, ty: Type.TypeId) Allocator.Error!DraftExprId {
+        const topology = try self.iteratorRepresentationNames(.iter);
+        const backing_ty = namedBackingType(self.typeStore(), ty) orelse Common.invariant("Iter.len_if_known type had no backing");
+        const err_tag = self.monoTagByName(backing_ty, topology.err_tag);
+        const err_payloads = self.typeStore().span(err_tag.payloads);
+        if (err_payloads.len != 1) Common.invariant("Iter.len_if_known Err tag did not have one payload");
+        const unknown_ty = GuardedList.at(err_payloads, 0);
+        const unknown_tag = self.monoTagByName(unknown_ty, topology.unknown_tag);
+        const unknown = try self.addExpr(.{ .ty = unknown_ty, .data = .{ .tag = .{
+            .name = unknown_tag.name,
+            .payloads = .empty(),
+        } } });
+        const err = try self.addExpr(.{ .ty = backing_ty, .data = .{ .tag = .{
+            .name = err_tag.name,
+            .payloads = try self.addExprSpan(&[_]DraftExprId{unknown}),
+        } } });
+        return try self.addExpr(.{ .ty = ty, .data = .{ .nominal = err } });
     }
 
     fn lowerFieldNamesDoneStep(
@@ -39937,14 +40136,16 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const topology = try self.iteratorRepresentationNames(.iter);
-        const known_tag = self.monoTagByName(ty, topology.known_tag);
-        const payloads = self.typeStore().span(known_tag.payloads);
-        if (payloads.len != 1) Common.invariant("Iter.len_if_known Known tag did not have one payload");
+        const backing_ty = namedBackingType(self.typeStore(), ty) orelse Common.invariant("Iter.len_if_known type had no backing");
+        const ok_tag = self.monoTagByName(backing_ty, topology.ok_tag);
+        const payloads = self.typeStore().span(ok_tag.payloads);
+        if (payloads.len != 1) Common.invariant("Iter.len_if_known Ok tag did not have one payload");
         const count = try self.intLiteralExpr(@intCast(remaining), GuardedList.at(payloads, 0));
-        return try self.addExpr(.{ .ty = ty, .data = .{ .tag = .{
-            .name = known_tag.name,
+        const ok = try self.addExpr(.{ .ty = backing_ty, .data = .{ .tag = .{
+            .name = ok_tag.name,
             .payloads = try self.addExprSpan(&[_]DraftExprId{count}),
         } } });
+        return try self.addExpr(.{ .ty = ty, .data = .{ .nominal = ok } });
     }
 
     fn lowerGeneratedIterOnePayload(
@@ -47746,7 +47947,8 @@ const BodyContext = struct {
             .iterator_topology = if (def.iterator_topology) |topology| .{
                 .len_field = try self.constRecordFieldName(store_view, topology.len_field),
                 .step_field = try self.constRecordFieldName(store_view, topology.step_field),
-                .known_tag = try self.constTagName(store_view, topology.known_tag),
+                .ok_tag = try self.constTagName(store_view, topology.ok_tag),
+                .err_tag = try self.constTagName(store_view, topology.err_tag),
                 .unknown_tag = try self.constTagName(store_view, topology.unknown_tag),
                 .done_tag = try self.constTagName(store_view, topology.done_tag),
                 .one_tag = try self.constTagName(store_view, topology.one_tag),
@@ -54312,11 +54514,13 @@ const BodyContext = struct {
         const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
         const checked_args = try self.checkedExprDispatchOperands(operands) orelse return null;
         defer self.allocator.free(checked_args);
+        const optional_args = try self.optionalCheckedArgs(checked_args);
+        defer self.allocator.free(optional_args);
         const private_node = (try self.generatedIteratorFunctionNode(
             procedure,
             public_target_node,
             request_node,
-            checked_args,
+            optional_args,
         )) orelse return null;
         try self.graph.registerRequestSourceInterface(private_node, public_target_node);
         try relateFunctionRequestInterface(self.graph, public_target_node, private_node);
@@ -54331,7 +54535,7 @@ const BodyContext = struct {
         operands: []const static_dispatch.IteratorDispatchOperand,
     ) Allocator.Error!?NodeId {
         const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
-        const checked_args = try self.checkedExprIteratorDispatchOperands(operands) orelse return null;
+        const checked_args = try self.checkedExprIteratorDispatchOperands(operands);
         defer self.allocator.free(checked_args);
         const private_node = (try self.generatedIteratorFunctionNode(
             procedure,
@@ -54365,22 +54569,28 @@ const BodyContext = struct {
         return checked_args;
     }
 
+    /// Each iterator dispatch operand's checked expression; a pre-lowered
+    /// operand has none, and its representation reaches the request through
+    /// its node instead.
     fn checkedExprIteratorDispatchOperands(
         self: *BodyContext,
         operands: []const static_dispatch.IteratorDispatchOperand,
-    ) Allocator.Error!?[]checked.CheckedExprId {
-        const checked_args = try self.allocator.alloc(checked.CheckedExprId, operands.len);
-        errdefer self.allocator.free(checked_args);
+    ) Allocator.Error![]?checked.CheckedExprId {
+        const checked_args = try self.allocator.alloc(?checked.CheckedExprId, operands.len);
         for (operands, checked_args) |operand, *checked_arg| {
             checked_arg.* = switch (operand) {
                 .checked_expr => |expr| expr,
-                .loop_iterator_state => {
-                    self.allocator.free(checked_args);
-                    return null;
-                },
+                .loop_iterator_state, .interpolation_seed, .interpolation_iterator, .interpolation_value => null,
             };
         }
         return checked_args;
+    }
+
+    /// `args` as the optional operands `generatedIteratorFunctionNode` takes.
+    fn optionalCheckedArgs(self: *BodyContext, args: []const checked.CheckedExprId) Allocator.Error![]?checked.CheckedExprId {
+        const out = try self.allocator.alloc(?checked.CheckedExprId, args.len);
+        for (args, out) |arg, *slot| slot.* = arg;
+        return out;
     }
 
     fn methodTargetMonoTypeFromArgs(
@@ -64484,7 +64694,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         caller: *BodyContext,
         operands: []const static_dispatch.IteratorDispatchOperand,
-        loop_iterator: ?DraftTypedLocal,
+        pre_lowered: PreLoweredIteratorOperands,
         expected_ret_ty: ?DraftTypeCell,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
@@ -64516,12 +64726,12 @@ const BodyContext = struct {
                         request_arg.* = formal_node;
                     }
                 },
-                .loop_iterator_state => {
-                    const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
+                .loop_iterator_state, .interpolation_seed, .interpolation_iterator, .interpolation_value => {
+                    const local = pre_lowered.typedLocal(operand).?;
                     request_arg.* = try checkedMonoRequestNode(
                         self.graph,
                         formal_node,
-                        try iterator.ty.toGraphNode(self.graph),
+                        try local.ty.toGraphNode(self.graph),
                         .exact,
                     );
                 },
@@ -64544,15 +64754,10 @@ const BodyContext = struct {
     fn iteratorOperandNode(
         self: *BodyContext,
         operand: static_dispatch.IteratorDispatchOperand,
-        loop_iterator: ?DraftTypedLocal,
+        pre_lowered: PreLoweredIteratorOperands,
     ) Allocator.Error!NodeId {
-        return switch (operand) {
-            .checked_expr => |expr| try self.lowerExprTypeNode(expr),
-            .loop_iterator_state => if (loop_iterator) |iterator|
-                try iterator.ty.toGraphNode(self.graph)
-            else
-                Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local"),
-        };
+        const local = pre_lowered.typedLocal(operand) orelse return try self.lowerExprTypeNode(operand.checked_expr);
+        return try local.ty.toGraphNode(self.graph);
     }
 
     fn iteratorDonePattern(self: *BodyContext, step: IterStepShape) Allocator.Error!DraftPatId {
@@ -64834,12 +65039,13 @@ const BodyContext = struct {
         plan: static_dispatch.IteratorForPlan,
         iterator_cell: DraftTypeCell,
     ) Allocator.Error!IterStepShape {
-        const topology = plan.step_topology;
+        const for_site = plan.forLoopSite();
+        const topology = for_site.step_topology;
         const iterator_node = try iterator_cell.toGraphNode(self.graph);
         const step_node = if ((try self.isGeneratedIteratorEvidenceNode(iterator_node)))
             try self.generatedIteratorStepReturnNode(iterator_node)
         else
-            try self.lowerTypeNode(plan.step_ty);
+            try self.lowerTypeNode(for_site.step_ty);
         const done_tag_name = try tagName(self.nameStoreMut(), self.view, topology.done_tag);
         const one_tag_name = try tagName(self.nameStoreMut(), self.view, topology.one_tag);
         const skip_tag_name = try tagName(self.nameStoreMut(), self.view, topology.skip_tag);
