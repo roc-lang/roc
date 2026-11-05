@@ -16,7 +16,9 @@ pub const available = builtin.link_libc and build_options.dev_diagnostics;
 
 /// One developer-diagnostic environment variable.
 pub const Var = enum {
-    /// Trace Boxy-only work; specialized compilation must produce no events.
+    /// Trace Boxy work: the `.boxy` compile-time evaluator's under either
+    /// strategy, and Boxy lowering's. A specialized compilation whose
+    /// compile-time roots are all complete produces no events.
     trace_boxy_work,
     /// Rebuild every restored Boxy object and compare it with the cached one.
     verify_boxy_object_reuse,

@@ -2010,15 +2010,20 @@ peaks. A completed compile-time program's procedures are likewise released
 once the values they produced have been read: what stays consulted is those
 values, their representation metadata, and the procedures' own identities.
 
-Boxy runtime lowering is a distinct declared specialization strategy. Compile-
-time evaluation remains LSS, so that consumer's runtime roots are excluded from
-the LSS union and lowered by the separate Boxy pipeline after checking completes.
-This split follows the selected strategy, never a failed specialization attempt.
+Boxy runtime lowering is a distinct declared specialization strategy: that
+consumer's runtime roots are excluded from the LSS union and lowered by the
+separate Boxy pipeline after checking completes. Under either strategy the
+`.boxy` evaluator completes every compile-time root that reads no function
+value ("Compile-Time Evaluation Under `.lss`"). This split follows the
+selected strategy, never a failed specialization attempt.
 
 #### Demand-Driven Compile-Time Specialization
 
 Compile-time evaluation runs the compile-time roots, and the literal roots
-that specializations register. Checking already gave every literal whose
+that specializations register. Under `.lss`, the `.boxy` evaluator has
+completed every compile-time root that reads no function value before the
+Solved program is specialized ("Compile-Time Evaluation Under `.lss`").
+Checking already gave every literal whose
 conversion is closed a compile-time root of its own, and every literal whose
 conversion depends on its instance a `literal_argument` root at each closed
 type a checked instantiation fixes it to ("Literal Arguments"), which every
@@ -14137,18 +14142,14 @@ strategy).
   state walk the scheme a root's edge instantiates and treat a template's
   `literal_argument_demand` as reads, so each root completes before any root
   whose evaluation calls through it. A `.lss` compilation hands these roots
-  to the `.boxy` evaluator (`evaluateLiteralArgumentRoots`): those whose
-  evaluation reads no value of another pending root (other than one of
-  these) complete before its Solved program is specialized, and the rest
-  once that program's roots have, each with every pending root whose value
-  it reads that the Solved program did not demand. Such a compilation links
-  no module objects, so a module's compile-time program would lower
-  everything its roots reach; the literal argument roots of every module
-  instead share one program per phase (`BoxyGrouping.one_program`), which
-  lowers the conversions and codecs they reach once. A module's own
-  finalization outside a program session (the baked Builtin's among them)
-  hands each batch's literal argument roots to the `.boxy` evaluator the
-  same way.
+  to the `.boxy` evaluator with every other root whose evaluation reads no
+  function value, in the one program that evaluates them before its Solved
+  program is specialized ("Compile-Time Evaluation Under `.lss`"); one that
+  reads a value of a root holding a function value completes once the
+  Solved program's roots have, with every pending root whose value it reads
+  that the Solved program did not demand. A module's own finalization
+  outside a program session (the baked Builtin's among them) hands each
+  batch's literal argument roots to the `.boxy` evaluator.
 - A specialization converts a literal where its type first becomes
   concrete, which is where some module's literal argument root converts it
   when checking recorded that instantiation, so every root for one literal
@@ -14664,24 +14665,38 @@ with a rebuilt unit's exactly as it compared objects.
 
 ### Compile-Time Evaluation Strategy
 
-`--specialize` selects the compile-time evaluator as well as the runtime
-lowering (`CompileTimeFinalization.Options.strategy`). Under `.lss`,
-compile-time evaluation specializes the pending roots into a Solved program
-and evaluates it in dependency-ordered stages, as Compile-Time Constants
-describes. Under `.boxy`, the `.boxy` compile-time evaluator
-(`finalizeProgramBoxy`) orders the pending roots by the values they read,
+`--specialize` selects the runtime lowering, and which evaluator completes
+the roots holding function values (`CompileTimeFinalization.Options.strategy`).
+In a program's compilation, every other compile-time root is the `.boxy`
+compile-time evaluator's under either strategy, so the compilation lowers and
+compiles each procedure its compile-time roots reach once, and a checked
+module holds the same values whichever strategy completed it ("Compile-Time
+Evaluation Under `.lss`"). A module finalized on its own, outside a program
+session (the baked Builtin's among them), splits each batch of its roots
+between the two evaluators as `lowerEvalAndFinishRoots` describes.
+The `.boxy` compile-time evaluator (`evaluateRootsBoxy`) orders the pending
+roots by the values they read,
 computed from the checked modules alone (`eval/checked_root_graph.zig`: a
 root's wrapper template and every template it reaches through its value
-references, in any module of the program, with every read a dependency), and
-lowers each module's pending roots as one `.boxy` program of compile-time
+references, in any module of the program, with every read a dependency).
+A compilation that links module objects lowers each module's pending roots as one `.boxy` program of compile-time
 roots (`TargetConfig.boxy_compile_time`), module by module in an order that
-puts an import before the modules importing it. A root reads an earlier
-module's values from that module's constant store, exactly as a runtime
-`.boxy` program reads stored values, and reads a root of its own module
+puts an import before the modules importing it, against its imports'
+objects, which compile the imports' code once. A compilation that links no
+module objects (no cache, a Solved compilation, or a host that interprets
+compile-time code) lowers every pending root as one program: a module's own
+program would lower everything its roots reach, so the programs of modules
+reaching the same code would each lower and compile it. A root reads a
+value an earlier program completed from its module's constant store, exactly as a runtime
+`.boxy` program reads stored values, and reads a root of its own program
 through the root's compile-time value slot (`Program.rootValueSlot`): a
 static data slot with a failure record, which every read guards
 (`lir.ComptimeValueGuards`), exactly as a Solved program reads a completed
-value. Before any root runs, the evaluator marks every slot of the program
+value. The slot holds the value at the root's own type
+(`Program.rootValueType`); a read in another module is checked at that
+module's own copy of the type, which can store the value differently (a
+record row lifted into a padded nominal), so it converts the value as a read
+of a stored value does. Before any root runs, the evaluator marks every slot of the program
 failed with the failure a read of a value not yet evaluated reports
 (`markRootSlotsUnfilled`); completing a root writes its value into its slot
 and clears the mark, so a read of a root the program has not completed
@@ -14791,6 +14806,29 @@ programs "Stored Function Values" describes rather than the module's program.
 A literal argument root ("Literal Arguments") is the module's program's
 whatever its value: one whose value holds a function is evaluated for its
 outcome and discarded.
+
+#### Compile-Time Evaluation Under `.lss`
+
+A `.lss` compilation (`finalizeProgram`) hands the `.boxy` evaluator every
+pending root that neither holds a function value nor reads, directly or
+through other roots, the value of a root that does; a literal argument root
+counts as holding none, since the `.boxy` evaluator owns it whatever its
+value ("Literal Arguments"). They complete in one program before the Solved
+program is specialized (`evaluateBoxyRoots`, `.before_solved`), so the
+specialization restores every value it reads exactly as a compilation of
+cached modules does: the Solved program of a cold compilation and of a warm
+one are the same program, and an LSS runtime consumer continues it without
+the program being specialized again. A root holding a function value is the
+Solved program's, since a `.boxy` function value means nothing to Monotype
+("Stored Function Values"), and so is every root reading one; the Solved
+program evaluates them, and the literal roots its specializations register,
+in dependency-ordered stages, as Compile-Time Constants describes. A literal
+argument root reading a value of a root holding a function value completes
+after the Solved program's roots (`.after_solved`). A compilation whose
+roots hold no function value therefore compiles its compile-time code in one
+program, and specializes nothing for compile-time evaluation but the bodies
+that can register a literal root ("Demand-Driven Compile-Time
+Specialization").
 
 #### Stored Function Values
 
