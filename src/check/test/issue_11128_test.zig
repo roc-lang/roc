@@ -24,8 +24,31 @@ fn schemeAllocationFailures(gpa: std.mem.Allocator) (std.mem.Allocator.Error || 
 }
 
 test "issue 11128 scheme growth and allocation failure preserve existing schemes" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, schemeAllocationFailures, .{});
+    // Growth that extends a block in place makes no allocation, and whether
+    // the backing allocator can extend one depends on its state, so the
+    // sweep runs over a backing allocator that never extends: every growth
+    // allocates, the same way on every run.
+    try std.testing.checkAllAllocationFailures(never_extending, schemeAllocationFailures, .{});
 }
+
+/// `std.testing.allocator` with every in-place resize refused.
+const never_extending: std.mem.Allocator = .{
+    .ptr = undefined,
+    .vtable = &.{
+        .alloc = struct {
+            fn alloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+                return std.testing.allocator.rawAlloc(len, alignment, ret_addr);
+            }
+        }.alloc,
+        .resize = std.mem.Allocator.noResize,
+        .remap = std.mem.Allocator.noRemap,
+        .free = struct {
+            fn free(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+                std.testing.allocator.rawFree(memory, alignment, ret_addr);
+            }
+        }.free,
+    },
+};
 
 test "issue 11128 top-level procedure binding appends stay amortized" {
     const binding_count: usize = 4096;
