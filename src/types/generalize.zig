@@ -299,6 +299,13 @@ pub const Generalizer = struct {
                 if (resolved_rank_int < rank_to_generalize_int) {
                     // Escaped var, so move it to the right pool.
                     try var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
+                    // Anonymous structure made in this scope is copied by
+                    // every use even though no variable in it is quantified:
+                    // a use may lift it into a nominal type (design.md
+                    // "Anonymous Structure Is Copied Per Use").
+                    if (resolved.desc.liftsIntoNominal()) {
+                        try self.store.markPerUseStructure(resolved.desc_idx);
+                    }
                 } else {
                     // Safe to generalize
                     try self.store.setDescRank(resolved.desc_idx, Rank.generalized);

@@ -4667,7 +4667,8 @@ the owning relation and its error report.
 The checker records scheme-ness as explicit binding metadata at each
 generalization boundary. After rank adjustment, it walks the binding's type
 interface once and classifies the binding as a scheme exactly when a reachable
-variable was promoted to generalized rank. This producer-side classification
+variable was promoted to generalized rank, or reachable anonymous structure is
+copied per use (Anonymous Structure Is Copied Per Use, below). This producer-side classification
 is necessary because generalization is per variable: a partially generalized
 scheme can have a monomorphic structural root and quantified descendants. Root
 rank is therefore not a valid proxy for whether a binding is a scheme. The walk
@@ -4863,6 +4864,68 @@ recorded at its instantiation.
 A rejected use is a Growing Polymorphic Recursion error at the use, showing
 the type it was used at. The use becomes a runtime error, like any other
 rejected use, which also cuts the cycle for every later stage.
+
+### Anonymous Structure Is Copied Per Use
+
+A use of a binding can lift anonymous structure in the binding's type into a
+nominal type whose backing matches: given `make : U64 -> { count : U64 }` and
+`Counter := { count : U64 }`, the use `lifted : Counter = make(1)` relates
+the call's record to `Counter`, and unification rewrites the record's class
+to `Counter`. That rewrite belongs to the use. If the use shared the record
+with the binding's type, the lift would change `make` itself and every other
+use with it, and `plain = make(2)` would gain `Counter`'s methods. So each
+use owns its own copy of every anonymous record and tag union (empty ones
+included) that the binding's scope made, even when no variable in it is
+quantified, exactly as it owns copies of the quantified variables.
+
+The rule is carried as explicit descriptor data, not by rank: such a class is
+monomorphic, so marking it generalized would make every body-local record of
+the scope look polymorphic to post-check stages. Instead, when a
+generalization boundary leaves a class it made ungeneralized and the class can
+lift (`Descriptor.liftsIntoNominal`: a record, tag union, empty record, or empty
+tag union not written in an opened nominal backing, which never lifts), it
+marks the class `DescriptorFlags.per_use_structure`, and the rank stays what
+rank adjustment computed. A class an enclosing scope made keeps its sharing:
+a weak binding's one type is still shared by every use, and a function
+returning it returns that same class. A merge keeps the mark only when both
+sides had it, so a class that joins an enclosing scope's class is shared like
+that class.
+
+Binding classification treats a marked class like a quantified variable: a
+binding whose type reaches one is a scheme. Scheme instantiation copies each
+marked class and every monomorphic node from which one is reachable, by the
+same reachability walk that reaches quantified variables, and gives the copy
+no mark; the copy is a new class at its use's rank. A scheme with a marked
+class therefore always walks its reachability. Imported checked types are
+generalized templates whose nodes every use copies, so the mark needs no
+cross-module form; an exporting module's own lifts stay out of its exported
+types by the same rule.
+
+A use's copy can then differ from the binding's own structure in more than
+a lift. A closed record relates to a record that lists more fields when every
+extra field is optional and omitted, which widens the closed row, so two uses
+of `make = |value| { a: value }` can relate its result to
+`{ a ?: U8, b ?: U8 }` and to `{ a ?: U8, b ?: Str }`. Monotype specializes
+`make` at each use's type. Boxy lowers one worker for the template, whose
+result record holds no slot for `b`, so it treats two closed records of one
+value with different field counts like records stored in different orders
+(`Builder.storageDifference`) and rebuilds the call's result at the use's
+type by descriptors.
+
+Annotation instances follow the same rule. An annotation's instance of a
+type declaration is shared by later references at the same position only
+when it is ground and free of liftable structure; only such subtrees of a
+non-ground instance are shared with the next instance. Otherwise one
+definition's body, lifting its annotated result into a nominal type, would
+change every other annotation naming the same alias.
+
+The cost is one copy per use of a binding's anonymous records and tag
+unions, with their field and tag runs, and of the nodes above them.
+The accepted and rejected sides are pinned by
+`test/cli/LiftedUseLeavesOtherUses.roc`,
+`test/cli/LiftedUseLeavesOtherUsesRejected.roc`,
+`test/cli/OptionalFieldsPerUse.roc`, and
+`test/cli/lifted_use_leaves_other_uses/`.
 
 ### Value Bindings Generalize By Expression
 
@@ -13170,6 +13233,15 @@ Other solved-graph mutations:
   relation reads them. Unification consults the mark under the declared
   rule in Declared Backing Structure (above); the write itself never changes
   content or links classes.
+- `markPerUseStructure`—policy: Anonymous Structure Is Copied Per Use
+  (above). A generalization boundary marks each liftable class it made and
+  left ungeneralized, after rank adjustment and before anything instantiates
+  the binding. The write never changes content, rank, or links classes; scheme
+  classification and scheme instantiation consult it, so each use copies the
+  class instead of sharing it. The accepted side (every use keeps its own
+  type, and a lifting use still lifts) and the rejected side (a method of the
+  lifted nominal called on another use) are pinned by the tests that section
+  names.
 - `unifyWithFresh` (`dangerousSetVarDesc`)—mechanism: fast path writing
   exactly the descriptor that unifying a root flex placeholder with fresh
   content would produce.

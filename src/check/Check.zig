@@ -10438,10 +10438,31 @@ fn bindBindingSchemeVar(self: *Self, scheme_var: Var, alias_var: Var) Allocator.
 }
 
 /// Whether the post-generalization graph reachable from `root_var` contains a
-/// quantified variable. This exact producer-side walk classifies a rank-1
-/// binding once; use sites consume the recorded classification in O(1).
+/// quantified variable.
 fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
-    if (self.types.resolveVar(root_var).desc.rank == .generalized) return true;
+    return self.typeReaches(root_var, .generalized);
+}
+
+/// What `typeReaches` looks for.
+const TypeReachTarget = enum {
+    /// A quantified variable.
+    generalized,
+    /// A quantified variable or per-use structure
+    /// (`DescriptorFlags.per_use_structure`): anything a scheme
+    /// instantiation must copy.
+    copied_per_use,
+
+    fn found(self: TypeReachTarget, desc: types_mod.Descriptor) bool {
+        return desc.rank == .generalized or (self == .copied_per_use and desc.flags.per_use_structure);
+    }
+};
+
+/// Whether the post-generalization graph reachable from `root_var` contains
+/// a node `target` looks for. This exact producer-side walk classifies a
+/// rank-1 binding once; use sites consume the recorded classification in
+/// O(1).
+fn typeReaches(self: *Self, root_var: Var, target: TypeReachTarget) Allocator.Error!bool {
+    if (target.found(self.types.resolveVar(root_var).desc)) return true;
 
     self.binding_scheme_classification_seen.clearRetainingCapacity();
     self.binding_scheme_classification_stack.clearRetainingCapacity();
@@ -10450,7 +10471,7 @@ fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
     try self.binding_scheme_classification_stack.append(self.gpa, root_var);
     while (self.binding_scheme_classification_stack.pop()) |pending_var| {
         const resolved = self.types.resolveVar(pending_var);
-        if (resolved.desc.rank == .generalized) return true;
+        if (target.found(resolved.desc)) return true;
         const seen = try self.binding_scheme_classification_seen.getOrPut(self.gpa, resolved.var_);
         if (seen.found_existing) continue;
 
@@ -10506,8 +10527,11 @@ fn typeHasGeneralizedVar(self: *Self, root_var: Var) Allocator.Error!bool {
     return false;
 }
 
+/// A binding is a scheme exactly when its uses must copy part of its type:
+/// a quantified variable, or anonymous structure a use may lift into a
+/// nominal type (design.md "Anonymous Structure Is Copied Per Use").
 fn publishBindingScheme(self: *Self, root_var: Var) Allocator.Error!void {
-    if (try self.typeHasGeneralizedVar(root_var)) {
+    if (try self.typeReaches(root_var, .copied_per_use)) {
         try self.markBindingSchemeVar(root_var);
     }
 }
@@ -10694,12 +10718,15 @@ fn instantiateVarPolarized(
     defer trace.end();
 
     // A declaration whose instance at this position resolved to a ground type
-    // is shared by every later reference at the same position. Instantiating
-    // it again would copy the same variable-free structure, and a large record
-    // alias referenced from many annotations is copied once per reference.
-    // A shared instance is unified with every annotation that refers to it,
-    // so a mismatch against one of them can merge it into `.err`; it is then
-    // no longer ground and the next reference instantiates a fresh copy.
+    // with no anonymous record or tag union in it is shared by every later
+    // reference at the same position. Instantiating it again would copy the
+    // same variable-free structure. A shared instance is unified with every
+    // annotation that refers to it, so a mismatch against one of them can
+    // merge it into `.err`; it is then no longer ground and the next
+    // reference instantiates a fresh copy. Anonymous structure is never
+    // shared: one annotation's definition can lift it into a nominal type,
+    // which would change every other annotation sharing it (design.md
+    // "Anonymous Structure Is Copied Per Use").
     const instance_key: PolarizedInstanceKey = .{
         .declaration = var_to_instantiate,
         .polarity_behavior = polarity_behavior,
@@ -10713,8 +10740,9 @@ fn instantiateVarPolarized(
     }
     // An instance that is not ground still has ground subtrees, identical in
     // every instance at this position: the declaration's own ground subtrees,
-    // copied. The latest instance's ground subtrees that are still ground are
-    // read by the next instance instead of being copied again.
+    // copied. The latest instance's ground subtrees free of anonymous
+    // structure that are still ground are read by the next instance instead
+    // of being copied again.
     var shared_subtrees = self.shared_subtrees_scratch;
     self.shared_subtrees_scratch = .empty;
     defer {
@@ -10745,7 +10773,7 @@ fn instantiateVarPolarized(
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
     if (evidence == .none) {
-        if (opened_marker_exts.items.len == 0 and try self.varIsGround(instantiated)) {
+        if (opened_marker_exts.items.len == 0 and try self.varIsGroundAs(instantiated, .refinable)) {
             try self.ground_polarized_instances.put(self.gpa, instance_key, instantiated);
         } else {
             const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, instance_key);
@@ -10842,11 +10870,12 @@ fn computeGroundMarksKnowing(
     roots: []const Var,
     known_ground: ?*const collections.DenseMapUnmanaged(Var, ?Var),
     stop: KnownGroundStop,
+    liftable: LiftableStructure,
 ) Allocator.Error!GroundMarks {
     var marks = self.takeGroundMarks();
     errdefer self.releaseGroundMarks(&marks);
     for (roots) |root| try marks.pending.append(self.gpa, .{ .var_ = root, .parent = null });
-    try self.walkGroundMarks(&marks, known_ground, stop);
+    try self.walkGroundMarks(&marks, known_ground, stop, liftable);
     return marks;
 }
 
@@ -10856,6 +10885,7 @@ fn walkGroundMarks(
     marks: *GroundMarks,
     known_ground: ?*const collections.DenseMapUnmanaged(Var, ?Var),
     stop: KnownGroundStop,
+    liftable: LiftableStructure,
 ) Allocator.Error!void {
     const pending = &marks.pending;
     while (pending.pop()) |item| {
@@ -10873,6 +10903,7 @@ fn walkGroundMarks(
             .any => continue,
             .copied => if (copy != null) continue,
         };
+        if (liftable == .refinable and resolved.desc.liftsIntoNominal()) marks.ground.items[index] = false;
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => marks.ground.items[index] = false,
             .alias => |alias| {
@@ -10939,11 +10970,11 @@ fn walkGroundMarks(
 }
 
 /// The copies `instantiateVarPolarized`'s last instantiation made of the
-/// declaration's subtrees that are ground and maximal: their instance var is
-/// ground and reached from a var that is not. Sharing those roots shares
-/// everything below them.
+/// declaration's subtrees that are ground, free of anonymous structure, and
+/// maximal: their instance var is such and reached from a var that is not.
+/// Sharing those roots shares everything below them.
 fn maximalGroundSubtreeCopies(self: *Self, instance_root: Var, entries: *std.ArrayListUnmanaged(Instantiator.SharedSubtree)) Allocator.Error!void {
-    var marks = try self.computeGroundMarksKnowing(&.{instance_root}, null, .any);
+    var marks = try self.computeGroundMarksKnowing(&.{instance_root}, null, .any, .refinable);
     defer self.releaseGroundMarks(&marks);
     errdefer entries.clearRetainingCapacity();
     var copies = self.var_map.iterator();
@@ -10967,7 +10998,7 @@ fn groundSubtreeEntries(self: *Self, entries: []const Instantiator.SharedSubtree
     defer self.releaseGroundMarks(&marks);
     try marks.pending.ensureUnusedCapacity(self.gpa, entries.len);
     for (entries) |entry| marks.pending.appendAssumeCapacity(.{ .var_ = entry.copy, .parent = null });
-    try self.walkGroundMarks(&marks, null, .any);
+    try self.walkGroundMarks(&marks, null, .any, .refinable);
     for (entries) |entry| {
         if (marks.isGround(self.types.resolveVar(entry.copy).var_)) try kept.append(self.gpa, entry);
     }
@@ -36248,9 +36279,23 @@ fn methodCallArgContext(
 }
 
 /// Whether a type contains no type variables at all: no flex, rigid, or
-/// presence vars, and no error content. Such a type gains nothing from being
-/// shared between a definition and its uses, since no use can refine it.
+/// presence vars, and no error content.
 fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
+    return self.varIsGroundAs(root_var, .ground);
+}
+
+/// How a ground walk treats anonymous structure that a use could lift into a
+/// nominal type (`Descriptor.liftsIntoNominal`).
+const LiftableStructure = enum {
+    /// As ground: the walk asks only whether the type has variables.
+    ground,
+    /// As not ground: the walk asks whether anything relating to the type
+    /// can change it, as a type shared by several relations must not.
+    refinable,
+};
+
+/// `varIsGround`, with `liftable` choosing how liftable structure counts.
+fn varIsGroundAs(self: *Self, root_var: Var, liftable: LiftableStructure) std.mem.Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
     defer self.var_set.clearRetainingCapacity();
     const visited = &self.var_set;
@@ -36264,6 +36309,7 @@ fn varIsGround(self: *Self, root_var: Var) std.mem.Allocator.Error!bool {
         const resolved = self.types.resolveVar(var_);
         if (visited.contains(resolved.var_)) continue;
         try visited.put(resolved.var_, {});
+        if (liftable == .refinable and resolved.desc.liftsIntoNominal()) return false;
 
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
@@ -52413,7 +52459,7 @@ fn syncSnapshotGroundEpoch(self: *Self) void {
 fn rememberGroundTypes(self: *Self, roots: []const Var) Allocator.Error!void {
     if (self.types.savepointActive()) return;
     self.syncSnapshotGroundEpoch();
-    var marks = try self.computeGroundMarksKnowing(roots, &self.snapshot_ground_copies, .any);
+    var marks = try self.computeGroundMarksKnowing(roots, &self.snapshot_ground_copies, .any, .ground);
     defer self.releaseGroundMarks(&marks);
     for (marks.order.items, marks.ground.items) |resolved_var, is_ground| {
         if (!is_ground) continue;
@@ -56335,7 +56381,7 @@ fn recordGeneratedCodecDerivationSnapshot(
     // remembered for later ones. Copies made inside a probe are rolled back
     // with it, so a probe remembers nothing.
     self.syncSnapshotGroundEpoch();
-    var ground_marks = try self.computeGroundMarksKnowing(roots.items, &self.snapshot_ground_copies, .copied);
+    var ground_marks = try self.computeGroundMarksKnowing(roots.items, &self.snapshot_ground_copies, .copied, .ground);
     defer self.releaseGroundMarks(&ground_marks);
     var shared_copies = collections.DenseMapUnmanaged(Var, void).empty;
     defer shared_copies.deinit(self.gpa);
