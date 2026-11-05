@@ -245,13 +245,22 @@ test "checking evaluates a generic function's conversion at its concrete runtime
     var checked = try checkApp(std.testing.allocator, genericLabelApp("good"), &.{helper_module}, null);
     defer checked.deinit();
     try checked.expectErrors(false);
-    // The generic function's literal depends on its instance, so the app's
-    // runtime root is lowered for discovery; the unrelated helper's
-    // specialization is parked and never lowered.
+    // The generic function's literal depends on its instance, and `main!`'s
+    // call fixes that instance to `Word`: checking records the call, so the
+    // conversion is a literal argument root of the app, which evaluation
+    // completes and stores (design.md "Literal Arguments"). No runtime body
+    // can register a literal root, so nothing is specialized for discovery.
+    const root = checked.coord.appRootCheckedArtifact();
+    var stored: usize = 0;
+    for (root.compile_time_roots.roots) |compile_time_root| {
+        if (compile_time_root.kind != .literal_argument) continue;
+        try std.testing.expect(compile_time_root.payload == .const_node);
+        stored += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), stored);
     const demand = checked.demand();
-    try std.testing.expect(demand.discovery_roots != 0);
-    try std.testing.expect(demand.monotype.parked != 0);
-    try std.testing.expectEqual(demand.monotype.parked, demand.monotype.stubs + demand.monotype.unparked);
+    try std.testing.expectEqual(@as(u64, 0), demand.discovery_roots);
+    try std.testing.expectEqual(@as(u64, 0), demand.monotype.discovery_bodies);
 }
 
 test "checking specializes no runtime body that cannot reach its module's dependent conversion" {
