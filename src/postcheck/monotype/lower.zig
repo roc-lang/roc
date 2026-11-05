@@ -68901,6 +68901,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     const outer_ty = try checked_types.reserveSyntheticTypeRoot(gpa);
     const inner_ty = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, outer_ty, .{ .flex = .{} });
@@ -69086,6 +69087,7 @@ test "specialization evidence equality includes exact target instantiation" {
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     checked_types.key_names = &name_store;
     // Ten distinct types: the empty record, then tuples of 1 through 9 of it.
     const unit = try checked_types.appendSyntheticPayloadRoot(gpa, .empty_record);
@@ -72344,6 +72346,7 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     const variable = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, variable, .{ .flex = .{} });
     const function = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{variable}, variable);
@@ -72444,6 +72447,7 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             var checked_types = checked.CheckedTypeStore{};
             defer checked_types.deinit(gpa);
             checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+            checked_types.key_names = &name_store;
             const recursive = try checked_types.reserveSyntheticTypeRoot(gpa);
             try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{recursive}) });
             var program = Ast.Program.init(gpa);
@@ -72595,6 +72599,7 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(std.testing.allocator);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(std.testing.allocator, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     const leaf = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator);
     try checked_types.fillSyntheticTypeRoot(std.testing.allocator, leaf, .empty_record);
     const acyclic = try checked_types.appendSyntheticFunctionRoot(std.testing.allocator, .pure, &.{leaf}, leaf);
@@ -72700,6 +72705,7 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     const leaf = try checked_types.appendSyntheticPayloadRoot(gpa, .empty_record);
     const pair = try checked_types.appendSyntheticPayloadRoot(gpa, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ leaf, leaf }) });
     const alias = try checked_types.appendSyntheticPayloadRoot(gpa, .{ .alias = .{
@@ -72771,9 +72777,12 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
 
 test "issue 11362: allocation failure removes checked instantiation markers" {
     const gpa = std.testing.allocator;
+    var key_names = names.NameStore.init(gpa);
+    defer key_names.deinit();
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &key_names;
     const recursive = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
     const Helper = struct {
@@ -72829,11 +72838,35 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{ checked_types.view(), recursive });
 }
 
+/// `std.testing.allocator` with every in-place resize refused, for
+/// allocation-failure sweeps whose allocation count must not depend on the
+/// backing allocator's state.
+const never_extending_test_allocator: Allocator = .{
+    .ptr = undefined,
+    .vtable = &.{
+        .alloc = struct {
+            fn alloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+                return std.testing.allocator.rawAlloc(len, alignment, ret_addr);
+            }
+        }.alloc,
+        .resize = Allocator.noResize,
+        .remap = Allocator.noRemap,
+        .free = struct {
+            fn free(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+                std.testing.allocator.rawFree(memory, alignment, ret_addr);
+            }
+        }.free,
+    },
+};
+
 fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     const gpa = std.testing.allocator;
+    var key_names = names.NameStore.init(gpa);
+    defer key_names.deinit();
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &key_names;
     const closed = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, closed, .empty_record);
     const leaf = try checked_types.reserveSyntheticTypeRoot(gpa);
@@ -72939,7 +72972,11 @@ test "lazy checked instantiation allocates no acyclic placeholders and preserves
 }
 
 test "lazy checked instantiation shares recursive placeholders and cleans failed construction" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testLazyCheckedInstantiation, .{true});
+    // Growth that extends a block in place makes no allocation, and whether
+    // the backing allocator can extend one depends on its state, so the
+    // sweep runs over a backing allocator that never extends: every growth
+    // allocates, the same way on every run.
+    try std.testing.checkAllAllocationFailures(never_extending_test_allocator, testLazyCheckedInstantiation, .{true});
 }
 
 test "lazy checked instantiation allocates only recursive placeholders and clears failed builds" {
@@ -72956,6 +72993,7 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             var checked_types = checked.CheckedTypeStore{};
             defer checked_types.deinit(std.testing.allocator);
             checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(std.testing.allocator, std.testing.io, 0));
+            checked_types.key_names = &name_store;
             const variable = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator);
             try checked_types.fillSyntheticTypeRoot(std.testing.allocator, variable, .{ .flex = .{} });
             const function = try checked_types.appendSyntheticFunctionRoot(std.testing.allocator, .pure, &.{variable}, variable);
@@ -73048,6 +73086,7 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     const open = try checked_types.reserveSyntheticTypeRoot(gpa);
     const closed = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, open, .{ .flex = .{} });
