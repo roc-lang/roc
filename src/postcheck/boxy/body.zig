@@ -529,7 +529,7 @@ pub const Builder = struct {
     /// test here at a checked exhaustiveness site ends in
     /// `comptime_exhaustiveness_failed`, so compile-time evaluation reports
     /// the site's empirical failure exactly as it does for `.lss` lowering
-    /// (`patternFailure`).
+    /// (`comptimeFailure`).
     comptime_root_body: bool = false,
     /// The recursive components whose members' descriptors this body has
     /// begun composing.
@@ -777,24 +777,24 @@ pub const Builder = struct {
         };
     }
 
-    /// The terminal a failed pattern test ends in, where `site` is the
-    /// checked exhaustiveness site the test belongs to, if it has one. In a
-    /// compile-time root's own expression, a site's failure is the empirical
-    /// failure compile-time evaluation reports by the site, which the
-    /// program records beside the procedure (design.md "Compile-Time
-    /// Constants and Hoisted Roots"); anywhere else, and where checking
-    /// left no pending diagnostic, it is an impossible execution path.
-    pub fn patternFailure(self: *Builder, site: ?checked.CheckedExhaustivenessSiteId) Allocator.Error!LIR.CFStmt {
-        if (!self.comptime_root_body) return .runtime_error;
-        const checked_site = site orelse return .runtime_error;
+    /// What a failed pattern test at checked exhaustiveness site
+    /// `checked_site` reports. In a compile-time root's own body, outside
+    /// every function it builds, it fails as the empirical failure of the
+    /// site, as Monotype's lowering of the body does, and the program records
+    /// the site beside the procedure (design.md "Compile-Time Failure
+    /// Sites"); elsewhere it is a runtime error.
+    pub fn comptimeFailure(self: *Builder, checked_site: ?checked.CheckedExhaustivenessSiteId) Allocator.Error!?Match.ComptimeFailure {
+        if (!self.comptime_root_body) return null;
         const owner = self.program.lowering_module_ids[@backingInt(self.module)];
-        const record = self.view.view.exhaustiveness_sites.get(checked_site);
-        const kind: LIR.ComptimeSiteKind = switch (record.kind) {
-            .match => .match,
-            .destructure => .destructure,
-        };
-        _ = try self.program.result.addComptimeSite(kind, owner, record.region, checked_site, self.currentWorker().proc);
-        return .{ .comptime_exhaustiveness_failed = .{ .owner = owner, .checked_site = checked_site } };
+        if (checked_site) |site| {
+            const record = self.view.view.exhaustiveness_sites.get(site);
+            const kind: LIR.ComptimeSiteKind = switch (record.kind) {
+                .match => .match,
+                .destructure => .destructure,
+            };
+            _ = try self.program.result.addComptimeSite(kind, owner, record.region, site, self.currentWorker().proc);
+        }
+        return .{ .owner = owner, .checked_site = checked_site };
     }
 
     pub fn newHole(self: *Builder) Allocator.Error!CFStmtId {
@@ -1589,11 +1589,11 @@ pub const Builder = struct {
                             try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = self.currentWorker().ret, .root = wrapper.root } })
                         else
                             try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
-                        .fn_value => |fn_id| if (self.program.moduleUnit() != null)
-                            try self.restoreFn(.{ .module = self.module }, fn_id, self.currentWorker().ret)
-                        else
-                            try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
-                        .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
+                        // A function value the `.lss` evaluator stored means
+                        // nothing here ("Stored Function Values"): the
+                        // wrapper computes it, as it does a value no
+                        // evaluation produced.
+                        .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
                     },
                     // A literal argument's body is the conversion its root
                     // names, called on another module's literal.
@@ -2876,7 +2876,10 @@ pub const Builder = struct {
             .stmt => |stmt| if (self.hole != null) try self.stepStmt(stmt),
             .bind => |bind| {
                 const value = self.popValue();
-                const miss = try self.store.addCFStmt(try self.patternFailure(self.view.view.exhaustiveness_sites.lookupByDestructurePattern(bind.pattern)), self.origin(.lowering_glue));
+                // A destructure that can miss has the checked site of the
+                // pending diagnostic checking left it.
+                const failure = if (self.view.view.exhaustiveness_sites.lookupByDestructurePattern(bind.pattern)) |site| try self.comptimeFailure(site) else null;
+                const miss = try self.store.addCFStmt(Match.ComptimeFailure.terminal(failure), self.origin(.lowering_glue));
                 try self.testPattern(bind.pattern, value, bind.ty, miss);
             },
             .discard => _ = self.popValue(),
@@ -3030,15 +3033,15 @@ pub const Builder = struct {
                 const root = owner.view.compile_time_roots.root(template.root);
                 if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
                 switch (root.payload) {
-                    .fn_value => |fn_id| try self.restoreFn(.{ .module = eval.module }, fn_id, eval.ty),
                     // Evaluation stored a value that is not a function: the
                     // crash a rejected binding is.
                     .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = node, .ty = eval.ty } }),
-                    // No compile-time evaluation produced the value (a
-                    // binding of the app a platform's roots name, or one
-                    // whose evaluation failed where it was guarded): its
-                    // entry wrapper computes it.
-                    .pending, .unevaluated, .runtime => {
+                    // No `.boxy` evaluation produced the value (a binding of
+                    // the app a platform's roots name, one whose evaluation
+                    // failed where it was guarded, or one only the `.lss`
+                    // evaluator stored, whose function value means nothing
+                    // here): its entry wrapper computes it.
+                    .fn_value, .pending, .unevaluated, .runtime => {
                         const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
                             invariant("a callable-eval binding's root has no entry wrapper");
                         const callee = try self.program.templateRefWorker(wrapper);
@@ -8844,28 +8847,35 @@ pub const Builder = struct {
         try self.push(if (join) |id| .{ .jump = id } else .ret);
     }
 
+    /// What a match reports when no branch matches (`comptimeFailure`).
+    fn comptimeMatchFailure(self: *Builder, expr_id: CheckedExprId, match: @FieldType(checked.CheckedExprData, "match_")) Allocator.Error!?Match.ComptimeFailure {
+        if (match.skip_exhaustiveness) return null;
+        const sites = self.view.view.exhaustiveness_sites;
+        const checked_site = switch (match.comptime_site_kind) {
+            .match => sites.lookupByMatchExpr(expr_id),
+            .destructure => blk: {
+                if (match.branches.len != 1) break :blk null;
+                const patterns = match.branches[0].patternsSlice(self.bodies());
+                if (patterns.len != 1) break :blk null;
+                break :blk sites.lookupByDestructurePattern(patterns[0].pattern);
+            },
+        };
+        return try self.comptimeFailure(checked_site);
+    }
+
     pub fn matchStart(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const scrutinee = self.popValue();
         const match = self.bodies().expr(expr_id).data.match_;
         const scrutinee_ty = try self.exprType(match.cond);
         const tail = self.tail_exprs.contains(expr_id);
         const state = try self.program.arena.allocator().create(Match.State);
-        const failure_site: ?checked.CheckedExhaustivenessSiteId = if (match.skip_exhaustiveness) null else switch (match.comptime_site_kind) {
-            .match => self.view.view.exhaustiveness_sites.lookupByMatchExpr(expr_id),
-            .destructure => site: {
-                if (match.branches.len != 1) break :site null;
-                const patterns = match.branches[0].patternsSlice(self.bodies());
-                if (patterns.len != 1) break :site null;
-                break :site self.view.view.exhaustiveness_sites.lookupByDestructurePattern(patterns[0].pattern);
-            },
-        };
         state.* = .{
             .arena = std.heap.ArenaAllocator.init(self.allocator),
-            .failure = try self.patternFailure(failure_site),
             .done = self.freshJoin(),
             .tail = tail,
             .merge = null,
             .remainder = undefined,
+            .comptime_failure = try self.comptimeMatchFailure(expr_id, match),
         };
         const merge_binders: []const checked.PatternBinderId = if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{};
         if (tail) {

@@ -1449,6 +1449,12 @@ local_type_contexts_final: bool = false,
 /// variable, owner); the bindings whose types `rejectEscapingLocalTypes`
 /// walks. Empty in a module with no such type.
 local_type_context_owners: std.ArrayListUnmanaged(LocalTypeContextOwner) = .empty,
+/// The bindings whose annotation introduces a type variable whose
+/// definitions are checked, generalization boundary included. Recorded only
+/// in a module with a body-local type whose context is not empty: a relation
+/// against such a type's context variable checked once the binding owning it
+/// is in this set is outside that binding's body (`probeContextVariable`).
+checked_polymorphic_bindings: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
 /// Type declarations being generated, innermost last.
 type_decl_generation_frames: std.ArrayListUnmanaged(TypeDeclGenerationFrame) = .empty,
 /// The declaration statement of each local declaration, by binding pattern.
@@ -2053,6 +2059,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .local_type_contexts = .keyed,
     .local_type_contexts_final = .keyed,
     .local_type_context_owners = .keyed,
+    .checked_polymorphic_bindings = .keyed,
     .type_decl_generation_frames = .frame_stack,
     .local_decl_by_pattern = .keyed,
     .local_decls_indexed = .keyed,
@@ -5668,18 +5675,22 @@ const LocalTypeEscapeJudge = struct {
 /// A relation or requirement that failed only because a body-local type left
 /// the functions its identity depends on (`problem.LocalTypeEscapeCause`:
 /// values of two instantiations met, or a context variable it carried out met
-/// another type or a requirement it does not declare) is withdrawn once the
+/// another type or a requirement it does not declare outside the body of the
+/// binding owning the variable) is withdrawn once the
 /// escape rule reports that type: the escape is the problem, reported at the
 /// binding the type left through, and the failure is its consequence. This
 /// runs once every relation is checked.
 fn withdrawLocalTypeEscapeConsequences(
     self: *Self,
     escaped: *const collections.DenseMapUnmanaged(CIR.Statement.Idx, void),
-) void {
+) Allocator.Error!void {
+    try self.claimRecordedProblems();
     const self_module = self.cir.selfModuleIdentity();
     const items = self.problems.problems.items;
+    const owners = self.problem_owners.items;
+    std.debug.assert(owners.len == items.len);
     var kept: usize = 0;
-    for (items) |item| {
+    for (items, owners) |item, owner| {
         const cause: ?problem.LocalTypeEscapeCause = if (item == .type_mismatch)
             item.type_mismatch.local_type_escape
         else if (item == .static_dispatch) switch (item.static_dispatch) {
@@ -5708,9 +5719,10 @@ fn withdrawLocalTypeEscapeConsequences(
         } else false;
         if (withdrawn) continue;
         items[kept] = item;
+        owners[kept] = owner;
         kept += 1;
     }
-    self.problems.truncate(kept);
+    self.truncateProblems(kept);
 }
 
 /// The context variable of a body-local type (design.md "Body-Local Type
@@ -5722,9 +5734,22 @@ fn probeContextVariable(ctx: *const anyopaque, var_: Var) ?Var {
     if (resolved.desc.content != .rigid) return null;
     for (self.local_type_context_rigids.items) |rigid| {
         const variable = ModuleEnv.varFrom(rigid);
-        if (self.types.resolveVar(variable).var_ == resolved.var_) return variable;
+        if (self.types.resolveVar(variable).var_ != resolved.var_) continue;
+        // Inside the body of the binding that owns it, the variable is that
+        // body's own, and a relation against it is the body's.
+        if (!self.checked_polymorphic_bindings.contains(self.rigidVarOwner(rigid))) return null;
+        return variable;
     }
     return null;
+}
+
+/// Record that a binding's definition is checked, generalization boundary
+/// included (`checked_polymorphic_bindings`).
+fn recordCheckedPolymorphicBinding(self: *Self, annotation: ?CIR.Annotation.Idx, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+    if (self.local_type_context_rigids.items.len == 0) return;
+    const annotation_idx = annotation orelse return;
+    if (!self.cir.store.getAnnotation(annotation_idx).introduces_type_var) return;
+    try self.checked_polymorphic_bindings.put(self.gpa, pattern, {});
 }
 
 /// POLICY: a body-local type stays inside the functions its identity depends
@@ -5827,7 +5852,7 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
     }
     const escaped = &judge.escaped;
     if (escaped.count() == 0) return;
-    self.withdrawLocalTypeEscapeConsequences(escaped);
+    try self.withdrawLocalTypeEscapeConsequences(escaped);
 
     // Values of an escaped type exist outside its context, where its methods
     // have no declaration context to run in, so every method is rejected.
@@ -21970,6 +21995,10 @@ fn finishGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.
     try self.popTryRowFixpoint(state.try_row_fixpoint, env);
     try self.popGroupFrame(state.group_index);
     self.group_states.items[state.group_index] = .checked;
+    for (self.check_order.?.sccs[state.group_index].defs) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        try self.recordCheckedPolymorphicBinding(def.annotation, def.pattern);
+    }
     self.active_scheme_root = state.saved_active_scheme_root;
     return checkActivityDone(.none);
 }
@@ -32055,6 +32084,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 env.var_pool.popRank();
                 self.active_scheme_root = decl.saved_active_scheme_root;
             }
+            try self.recordCheckedPolymorphicBinding(decl_stmt.anno, decl_stmt.pattern);
 
             _ = try self.unify(stmt_var, decl_pattern_var, env);
             try self.bindTypeSchemeVar(decl_expr_var, stmt_var);
@@ -35002,6 +35032,9 @@ const StaticDispatchMethodBinding = struct {
     env: *const ModuleEnv,
     is_this_module: bool,
     binding: ModuleEnv.MethodBinding,
+    /// The declaration statement, in `env`, of the type whose `.{ … }`
+    /// block declares the method.
+    owner_statement: ?u32,
 };
 
 const AssociatedLookupCacheKey = struct {
@@ -35088,6 +35121,7 @@ fn lookupStaticDispatchMethodBinding(
         .env = owner_env,
         .is_this_module = owner_env == self.cir,
         .binding = binding,
+        .owner_statement = owner_source_decl,
     };
 }
 
@@ -46842,13 +46876,67 @@ fn importedMethodScheme(
     method_lookup: StaticDispatchMethodBinding,
 ) Allocator.Error!Var {
     std.debug.assert(!method_lookup.is_this_module);
-    return self.importedSchemeFromSource(method_lookup.env, method_lookup.binding.type_node_idx);
+    return self.importedSchemeFromSourceOwnedBy(method_lookup.env, method_lookup.binding.type_node_idx, method_lookup.owner_statement);
 }
 
 fn importedSchemeFromSource(
     self: *Self,
     source_env: *const ModuleEnv,
     type_node_idx: CIR.Node.Idx,
+) Allocator.Error!Var {
+    return self.importedSchemeFromSourceOwnedBy(source_env, type_node_idx, null);
+}
+
+/// The context variables of a body-local type declared at `owner_statement`
+/// in `source_env` (design.md "Body-Local Type Context"), each paired with
+/// this module's copy of the declaration's formal for it. A copy of one of
+/// the type's methods names those formals for the context variables, so
+/// instantiating the method on an application reads them as its context
+/// arguments (`receiverContext`), as for a method of this module. Empty for
+/// a declaration with no context.
+fn importedOwnerContextSubstitutions(
+    self: *Self,
+    source_env: *const ModuleEnv,
+    owner_statement: u32,
+    substitutions: *collections.DenseMap(Var, Var),
+) Allocator.Error!void {
+    const source_origin = source_env.selfModuleIdentity();
+    const source_decl_idx = source_env.types.lookupNominalDeclByKey(source_origin, owner_statement) orelse return;
+    const source_decl = source_env.types.getNominalDecl(source_decl_idx);
+    if (source_decl.flags.context_len == 0) return;
+
+    self.var_map.clearRetainingCapacity();
+    const first_new_var: usize = @intCast(self.types.len());
+    try copy_import.ensureNominalDeclForStatement(
+        &source_env.types,
+        self.types,
+        owner_statement,
+        &self.var_map,
+        source_env,
+        self.cir,
+        self.gpa,
+    );
+    try self.postProcessCopiedVars(first_new_var, Region.zero());
+
+    const translated_origin = self.cir.lookupModuleIdentity(source_env.moduleIdentityHash(source_origin)) orelse
+        base.invariant("type checker invariant violated: the module declaring an imported method has no identity in the importing module", .{});
+    const dest_decl_idx = self.types.lookupNominalDeclByKey(translated_origin, owner_statement) orelse
+        base.invariant("type checker invariant violated: an imported body-local type's declaration was not copied", .{});
+    const dest_decl = self.types.getNominalDecl(dest_decl_idx);
+    const declared = source_decl.declaredFormalCount();
+    const source_formals = source_env.types.sliceVars(source_decl.formals);
+    const dest_formals = self.types.sliceVars(dest_decl.formals);
+    std.debug.assert(source_formals.len == dest_formals.len);
+    for (source_formals[declared..], dest_formals[declared..]) |source_formal, dest_formal| {
+        try substitutions.put(source_env.types.resolveVar(source_formal).var_, dest_formal);
+    }
+}
+
+fn importedSchemeFromSourceOwnedBy(
+    self: *Self,
+    source_env: *const ModuleEnv,
+    type_node_idx: CIR.Node.Idx,
+    owner_statement: ?u32,
 ) Allocator.Error!Var {
     const key = ImportedSchemeKey{
         .env = source_env,
@@ -46865,7 +46953,10 @@ fn importedSchemeFromSource(
     // source-owned and regionless; each fresh instantiation below receives its
     // own use-site region and can be unified or rejected independently.
     const source_var = ModuleEnv.varFrom(type_node_idx);
-    const scheme_var = try self.copyVar(source_var, source_env, null);
+    var owner_context = collections.DenseMap(Var, Var).init(self.gpa);
+    defer owner_context.deinit();
+    if (owner_statement) |statement| try self.importedOwnerContextSubstitutions(source_env, statement, &owner_context);
+    const scheme_var = try self.copyVarWithSourceSubstitutions(source_var, source_env, null, &owner_context, null);
     errdefer self.discardImportedSchemeMetadata(scheme_var);
     if (source_env.nodeIsBindingScheme(type_node_idx)) {
         try self.markBindingSchemeVar(scheme_var);
@@ -48270,16 +48361,18 @@ fn instantiateDispatchTargetMethodVar(
     const records_before = self.cir.scheme_uses.items.items.len;
     const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
         break :blk expr_var_for_method;
-    } else if (method_lookup.is_this_module) blk: {
-        const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
+    } else blk: {
         var receiver_context = try self.receiverContext(dispatcher_var);
         defer receiver_context.deinit(self.gpa);
         const context_before = self.method_receiver_context;
         defer self.method_receiver_context = context_before;
-        self.method_receiver_context = receiver_context.subs();
-        break :blk try self.instantiateBindingVar(local_method_type_var, env, .use_last_var, evidence);
-    } else blk: {
+        if (method_lookup.is_this_module) {
+            const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
+            self.method_receiver_context = receiver_context.subs();
+            break :blk try self.instantiateBindingVar(local_method_type_var, env, .use_last_var, evidence);
+        }
         const imported_scheme = try self.importedMethodScheme(method_lookup);
+        self.method_receiver_context = receiver_context.subs();
         break :blk try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, evidence);
     };
     if (predeclared_annotation) |annotation_idx| {
@@ -57704,7 +57797,14 @@ fn instantiateGeneratedCodecMethodTarget(
         defer self.method_receiver_context = context_before;
         self.method_receiver_context = receiver_context.subs();
         break :local try self.instantiateBindingVar(scheme_var, env, .use_last_var, evidence);
-    } else try self.instantiateVar(scheme_var, env, .{ .explicit = region }, evidence);
+    } else imported: {
+        var receiver_context = try self.receiverContext(receiver_var);
+        defer receiver_context.deinit(self.gpa);
+        const context_before = self.method_receiver_context;
+        defer self.method_receiver_context = context_before;
+        self.method_receiver_context = receiver_context.subs();
+        break :imported try self.instantiateVar(scheme_var, env, .{ .explicit = region }, evidence);
+    };
 
     if (predeclared_scheme != null) {
         try self.recordPredeclaredDispatchUse(
