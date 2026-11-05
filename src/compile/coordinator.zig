@@ -3759,7 +3759,7 @@ pub const Coordinator = struct {
                 if (artifact.hasUnboundPlatformRequirements()) coordinatorInvariant("platform awaiting its app relation left compile-time roots unevaluated", .{});
                 const state = try UnfinalizedReportDestinations.newState(self);
                 errdefer state.deinit();
-                try artifact.reopenForEvaluation(self.gpa);
+                try artifact.reopenForEvaluation();
                 mod.pending_evaluation = state;
                 mod.reopened_unevaluated = unevaluatedRequestCount(artifact, self.specialization_strategy);
             }

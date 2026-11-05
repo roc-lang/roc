@@ -2235,9 +2235,13 @@ A checked module cache entry records every requested root it did not evaluate
 with the explicit `unevaluated` payload; its constant template keeps its
 `eval_template` state and the constant store holds nothing for it. When a
 compilation loads a finalized checked module with unevaluated requests, it
-reopens that module before evaluation: the evaluation columns move into
-storage the module owns, every unevaluated root returns to `pending`, and the
-module joins finalization with the compilation's other modules. Finalization
+reopens that module before evaluation: the evaluation columns (the
+compile-time roots, the constant templates, the constant store, and the
+canonical name store, since a stored type names its labels and nominal types
+there and a value evaluated here can reach names the module's own source never
+mentions, such as the capture types of an imported closure) move into storage
+the module owns, every unevaluated root returns to `pending`, and the module
+joins finalization with the compilation's other modules. Finalization
 requests only the pending roots of the modules it finalizes, so the reopened
 module's evaluated roots are restored from its store like any other module's,
 and its demanded pending roots evaluate against the same checked module data
@@ -2433,6 +2437,14 @@ values pass their own storage. Views extend their owner's lifetime. Procedure
 arguments, which the prologue writes, and locals in deferred string-match
 captures, which the backend materializes outside the statements that access
 them, keep their activation lifetime.
+
+The always-inline selection of wrappers and leaves is a speed-build policy.
+A size build (`--opt=size`) selects nothing: every function the module
+defines, including the linked builtins and the private runtime, carries
+LLVM's `optsize` and `minsize` and no `inlinehint`, so LLVM's size cost model
+is the one measure of every inlining decision, exactly as it is for a C or
+Zig module built for minimum size. The pinned leaf builtins keep
+`alwaysinline` in every mode.
 
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
@@ -3771,8 +3783,12 @@ consumes these checked modules; it never suspends or reconstructs a checker.
 
 User diagnostics never suppress checked module output or propagate dependency failure. Every invalid source construct is represented at its first owning
 producer boundary by explicit checked data: a checked runtime-error expression,
-a checked-error dispatch plan, a crash constant, or a checked-error platform
-requirement. Importers and every post-check stage consume that data normally.
+a checked-error dispatch plan, a crash constant, a checked-error platform
+requirement, or a checked-error provided export (a `provides` entry whose
+checked type contains an error declares no host ABI, so it publishes no
+runtime root, static data request, or glue signature, and a runtime command
+stops before linking). Importers and every post-check stage consume that data
+normally.
 Independent definitions, imports, compile-time roots, and runtime paths remain
 available; execution crashes only if it reaches a recorded checked error.
 
@@ -20572,6 +20588,23 @@ a worklist keyed by `(proc, demand vector)`:
 4. The variant table is keyed by vector content, so identical demands share
    one variant deterministically, independent of discovery order.
 
+A borrowed position whose owned-only field takes cover every stored unit of
+the parameter on every returning path is owned by the base signature itself,
+decided once dismantle analysis has solved the parameter and before any
+emission. The borrowed base would retain each of those units exactly where
+the owned body takes them, so for a caller that keeps its argument the two
+conventions cost the same retain, in the caller or in the callee, and for a
+caller whose argument dies the owned convention is strictly cheaper; a
+borrowed base variant would therefore save no caller any work and exist only
+to duplicate the body (a closure body appending to its captured list, called
+both from a loop that borrows each closure out of a list and from a site that
+owns one). The parameter's binding stays solved borrowed and the base
+emission overrides it to owned exactly as a demanded variant does; callers
+adapt to the owned position as to any other, retaining an argument they keep
+and moving one that dies. A position that lends a borrowed return, or holds a
+demand hole, keeps its borrowed mode, and a pinned signature is never
+changed.
+
 Variant bodies are cloned with the existing statement-cloning machinery and
 added with `LirStore.addProcSpec`. Root procs are never specialized; their
 vectors are pinned. The variant count is bounded by realized demand vectors,
@@ -20956,7 +20989,12 @@ A borrowed struct read out of a container, or a borrowed pure alias of one,
 is a view of the slots it covers. It holds no unit: its field reads are
 reads of the container's slots offset by the view's first slot, so a
 consumed read through it takes those slots from the container, and its
-other uses observe its whole range. Its definition copies only the
+other uses observe its whole range. A borrowed tag union read out of a
+container is a view of its one slot: nothing reads through it except an
+ownership-complete payload view, which carries the union's whole unit, so
+it is held exactly when that payload reaches a consuming operand (the
+closure read out of a record of closures, whose captures are unwrapped and
+passed to the closure body), and it dismantles no further. Its definition copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
 view's residual shell, numbered in the view's own layout. A view whose shell
@@ -20970,12 +21008,16 @@ result by a take. A residual release reads a struct field whose slots are
 only partly residual as a view marked with its absent slots and releases the
 residual slots through it.
 
-A view whose value reaches a consuming operand (the view itself or a
-borrowed pure same-value alias of it at an owned direct-call position, a
-borrowed position whose owned variant takes a field, or a consumed or
-retained low-level position, with no other mention of the view's borrow
-forest in the same statement) is first solved as a take of its whole range
-at its definition. While it is, it holds those slots: reads
+A view whose value reaches a consuming operand (the view itself, a
+borrowed pure same-value alias of it, or an ownership-complete projection of
+either, through any number of such projections and aliases, at an owned
+direct-call position, a borrowed position whose owned variant takes a field,
+or a consumed or retained low-level position, with no other mention of the
+view's borrow forest in the same statement) is first solved as a take of its
+whole range at its definition. An ownership-complete projection holds every
+refcounted byte its source owns, so consuming it consumes the source's whole
+unit; the certifier claims the source's stored unit through the projection
+exactly as it does for any complete aggregate read. While it is, it holds those slots: reads
 through it, through its aliases, and through views nested in it are reads of
 the view, not of its container, and once the take is committed the view is a
 container in its own right, solved right after the container it was taken
@@ -21155,8 +21197,26 @@ and the take binding's unit stays live through the alias's uses while the
 root's residual shell dies at its own last use. Only the groups an alias leaves
 are re-resolved, so a program whose aliases all stay in their group pays one
 pass over its aliases.
-Dominance is computed from the explicit statement-successor graph with a
-synthetic entry for all procedure roots. Every path from that entry to a
+The solution likewise adopts every binding solved borrowed whose read
+dismantle committed as a take: a held view, a held tag-union field read, or
+a projected container that receives its root's unit. In the emissions its
+take applies to, such a binding holds a unit of its own, so it leads a
+liveness group of its own together with every borrow anchored through it,
+and its container's group dies at the container's own last use: the sibling
+fields of a record are released as soon as the record's last field is taken,
+before the call that consumes that field, rather than after it. In the other
+emissions the binding holds nothing and its container is a borrowed
+parameter, which no release waits for, so one grouping serves every
+emission. The binding keeps its borrow source, which the ownership-place
+query still follows to the nearest binding the current emission makes
+owned. A complete projection of such a binding denotes the unit it holds,
+exactly as a complete projection of an owned binding does.
+Dominance is computed from the control-flow graph with a synthetic entry for
+all procedure roots: a statement's structural successors, except that a
+join's body is entered only through the jumps that name the join, so a read
+in a join's remainder dominates the body when every jump to the join runs
+after it (a record projected before a `match` whose arm jumps to the match's
+join, and projected again after it). Every path from that entry to a
 statement starts at the body of a procedure that reaches the statement and
 stays among statements that procedure reaches, so a statement dominates only
 statements of procedures that transitively share statements with its own.
@@ -21165,6 +21225,12 @@ exactly as the whole store's graph would. Immediate dominators settle in reverse
 postorder, and dominator-tree intervals answer field-read and tag-payload-read
 dominance queries without re-walking procedure bodies. Read comparisons are indexed by their
 explicit ownership root rather than scanning unrelated locals.
+A dominating read is no representative of a later read when a `set_local`
+writing the root lies on some path between them (a path leaving the
+dominating read, through the write, to the later read, that does not pass
+the dominating read again): the later read may observe the written value,
+which the earlier read never held. Both reads then keep their own field
+reads of the root.
 The analysis is a deterministic function of the store, whatever the schedule.
 Reachability and each statement's procedure come from the uniqueness solve's
 per-procedure statement lists, which list each procedure's statements in the
@@ -21299,16 +21365,17 @@ descendants and whole container uses; it never guesses from operation names.
 A read solved borrowed holds no unit, so it never consumes at the read, with
 one exception: a view whose value reaches a consuming operand is taken whole
 at its definition and then holds its slots (see the view rules above). Every
-other borrowed read's binding, and every borrowed pure same-value alias of
-it, carries the field to where the value is consumed: an owned direct-call
-position, a borrowed position whose owned variant takes a field, or a
-consumed or retained low-level position, with no other mention of the
-binding's borrow forest in the same statement. Each such operand is a
-use-point take candidate. A binding borrowed onward from the read through a
-field or payload read, a borrowed low-level result, or a lent call result
-holds a different value than the field (the payload unboxed out of a boxed
-field is not the box), so consuming it only observes the field, exactly like
-any other mention of the forest. It takes the
+other borrowed read's binding, every borrowed pure same-value alias of it,
+and every ownership-complete projection of either carries the field to where
+the value is consumed: an owned direct-call position, a borrowed position
+whose owned variant takes a field, or a consumed or retained low-level
+position, with no other mention of the binding's borrow forest in the same
+statement. Each such operand is a use-point take candidate. A binding
+borrowed onward from the read through a partial field or payload read, a
+borrowed low-level result, or a lent call result holds a different value
+than the field (the payload unboxed out of a boxed field is not the box), so
+consuming it only observes the field, exactly like any other mention of the
+forest. It takes the
 field only where it is the last observation of that field on every path; an
 earlier one pays its ordinary retain at the operand, since the binding is
 read again afterwards. The take belongs at the operand, not at the read. A
@@ -24752,8 +24819,13 @@ image is built; what remains is a patch site: an import of another image or
 of the host, or a reference whose distance depends on where the linker places
 the image's regions. The image is a pure function of the unit (Per-Module
 Output), so two builds of a unit write identical images. The block divides
-into atoms, one per symbol start, each recording what it references; a link
-writes only the atoms the program reaches and leaves the rest as zero holes.
+into atoms, one per function in the text and one per datum in the read-only
+data (a refcounted datum's symbol sits inside its atom, after the header),
+each recording what it references and, for every relative reference the
+image resolved between two of its atoms, where the field is; a link writes
+only the atoms the program reaches, each image's packed together in image
+order, and fixes a resolved reference again only when the atoms it left out
+moved the reference's two ends by different amounts.
 The compiler's builtins and Boxy runtime objects are converted once, in Roc's
 own build graph, into a support image of the same format and embedded. A
 library unit's cache entry files the image's `CodeLocations` beside it, so
@@ -24865,7 +24937,9 @@ directory when the build starts, and a background job hashes the host inputs,
 looks the host up and copies it into the output while the program compiles;
 on a miss the link step prelinks the host. The link then walks atoms from
 the `provides` symbols, places the reached images after the host at
-addresses that are a function of their content digests, resolves imports
+addresses that are a function of their content digests (each run of an
+image's consecutive reached atoms keeps its bytes together and the
+alignment its image offsets had), resolves imports
 (app region first, then host), fills the output through a shared mapping on
 the compilation's worker threads, writes the provide windows, program
 headers, build id (a hash of the host's and the images' content digests),

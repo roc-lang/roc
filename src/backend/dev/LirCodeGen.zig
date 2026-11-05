@@ -23492,6 +23492,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return false;
         }
 
+        /// Offset within a reference's instruction of the 4-byte relative
+        /// displacement field `normalizeExcerptRefSite` clears: what a unit
+        /// image records for a reference it resolves (`UnitImage.CodeEdge`).
+        pub fn codeRefFieldOffset(form: CodeRefForm) usize {
+            switch (isa) {
+                .aarch64 => unreachable, // unit images are built for x86_64 targets only (boxy_unit.producesImage), and only their builder asks
+                .x86_64 => return switch (form) {
+                    .call => 1,
+                    .addr => 3,
+                    .inline_call => unreachable, // only aarch64 direct calls record the inline-call form
+                },
+            }
+        }
+
         /// Remove placement-specific stub displacements using producer records.
         /// Clear the placement-specific displacement of a reference at
         /// `site` in an excerpt's `bytes`, and of the in-body veneer it
