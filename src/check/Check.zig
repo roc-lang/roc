@@ -5333,7 +5333,7 @@ const LocalTypeEscapeJudge = struct {
                     if (nominal.sourceDeclOptional()) |statement| {
                         for (owners, 0..) |entry, entry_index| {
                             if (@backingInt(entry.decl) != statement) continue;
-                            if (std.mem.indexOfScalar(CIR.Pattern.Idx, judge.inside.items, entry.owner) == null) break :search entry_index;
+                            if (std.mem.findScalar(CIR.Pattern.Idx, judge.inside.items, entry.owner) == null) break :search entry_index;
                         }
                     }
                 }
@@ -5449,7 +5449,7 @@ fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
                         }
                     }
                 },
-                else => try self.visitExprChildren(expr, collector),
+                .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => try self.visitExprChildren(expr, collector),
             },
             .enter_owner => |owner| try judge.inside.append(gpa, owner),
         };
