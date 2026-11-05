@@ -366,9 +366,11 @@ pub const Interpreter = struct {
     /// Frame storage: each procedure activation's locals and `ptr_alloca`
     /// cells, released when the activation ends.
     frame_stack: ValueStack,
-    /// Owned copy of the values `pending_erased` reads, which outlive the
-    /// statement and frame that deferred the call.
-    pending_erased_storage: std.ArrayListAlignedUnmanaged(u8, .@"16") = .empty,
+    /// Owned copy of what the pending call (`pending_erased` or
+    /// `pending_dyn`) reads, which outlives the statement and frame that
+    /// deferred the call. Driving the call copies it out first, so the call
+    /// it leaves pending can replace it.
+    pending_storage: std.ArrayListAlignedUnmanaged(u8, .@"16") = .empty,
     /// The arguments of a frame-replacing call, between the frame that makes
     /// it ending and the callee's frame beginning.
     tail_call_storage: std.ArrayListAlignedUnmanaged(u8, .@"16") = .empty,
@@ -406,7 +408,7 @@ pub const Interpreter = struct {
     pending_erased: ?PendingErasedCall = null,
     /// A dynamic erased call a deferred tail call left pending, as the
     /// native runtime records one: its closure, one reference to which it
-    /// owns, and an owned copy of its argument record.
+    /// owns, and a copy of its argument record in `pending_storage`.
     pending_dyn: ?PendingDynCall = null,
     /// Set while an erased call is entering its callee, so that callee can
     /// tell this caller, which makes pending calls, from any other.
@@ -928,10 +930,7 @@ pub const Interpreter = struct {
         if (self.boxy_immortals) |immortals| immortals.destroy(self.allocator);
         self.failed_call_stack.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
-        self.pending_erased_storage.deinit(self.allocator);
-        if (self.pending_dyn) |pending| {
-            if (pending.args) |args| self.allocator.free(args);
-        }
+        self.pending_storage.deinit(self.allocator);
         self.tail_call_storage.deinit(self.allocator);
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
@@ -2991,7 +2990,7 @@ pub const Interpreter = struct {
     /// A dynamic erased call left pending (`pending_dyn`).
     const PendingDynCall = struct {
         closure: [*]u8,
-        args: ?[]align(16) u8,
+        args: ?[]const u8,
     };
 
     /// Whether an erased call is pending.
@@ -3031,8 +3030,14 @@ pub const Interpreter = struct {
             self.scratch.restore(chain_mark);
             if (self.pending_dyn) |pending| {
                 self.pending_dyn = null;
-                defer if (pending.args) |args| self.allocator.free(args);
-                try self.invokeErasedInto(pending.closure, if (ret_size == 0) null else ret, if (pending.args) |args| args.ptr else null);
+                // The call may leave another pending, which replaces the
+                // owned copy, so it reads its arguments from scratch.
+                const args: ?[*]const u8 = if (pending.args) |owned| copy: {
+                    const copy = try self.evalAllocator().alignedAlloc(u8, .@"16", owned.len);
+                    @memcpy(copy, owned);
+                    break :copy copy.ptr;
+                } else null;
+                try self.invokeErasedInto(pending.closure, if (ret_size == 0) null else ret, args);
                 // ARC explicitly transferred this reference to the pending call.
                 builtins.erased_callable.decref(pending.closure, &self.roc_ops);
                 continue;
@@ -3069,12 +3074,12 @@ pub const Interpreter = struct {
     /// Copy the values a deferred erased call reads into storage that
     /// outlives the statement and frame deferring it.
     fn ownPendingErasedCall(self: *LirInterpreter, call: PendingErasedCall) Error!PendingErasedCall {
-        self.pending_erased_storage.clearRetainingCapacity();
+        self.pending_storage.clearRetainingCapacity();
         return try self.copyPendingErasedCall(call, null);
     }
 
     /// Copy a pending erased call's values into `allocator`, or into
-    /// `pending_erased_storage` when `allocator` is null.
+    /// `pending_storage` when `allocator` is null.
     fn copyPendingErasedCall(self: *LirInterpreter, call: PendingErasedCall, allocator: ?Allocator) Error!PendingErasedCall {
         const layouts_offset = call.args.len * @sizeOf(Value);
         const closure_sa = self.helper.sizeAlignOf(call.closure_layout);
@@ -3095,8 +3100,8 @@ pub const Interpreter = struct {
         const bytes: [*]align(16) u8 = if (allocator) |a|
             (try a.alignedAlloc(u8, .@"16", @max(end, 1))).ptr
         else blk: {
-            try self.pending_erased_storage.resize(self.allocator, end);
-            break :blk self.pending_erased_storage.items.ptr;
+            try self.pending_storage.resize(self.allocator, end);
+            break :blk self.pending_storage.items.ptr;
         };
         const args: [*]Value = @ptrCast(bytes);
         const layouts: [*]layout_mod.Idx = @ptrCast(@alignCast(bytes + layouts_offset));
@@ -9036,11 +9041,11 @@ pub const Interpreter = struct {
                     if (self.hasPendingCall()) {
                         return self.invariantFailedError("LIR/interpreter invariant violated: deferred an erased call while another was pending", .{});
                     }
-                    const owned_args: ?[]align(16) u8 = if (c.args) |args_local| owned: {
+                    const owned_args: ?[]const u8 = if (c.args) |args_local| owned: {
                         const size = try self.targetSize(frame, args_local);
-                        const copy = try self.allocator.alignedAlloc(u8, .@"16", @max(size, 1));
-                        @memcpy(copy[0..size], args.?[0..size]);
-                        break :owned copy;
+                        try self.pending_storage.resize(self.allocator, size);
+                        @memcpy(self.pending_storage.items, args.?[0..size]);
+                        break :owned self.pending_storage.items;
                     } else null;
                     self.pending_dyn = .{ .closure = closure, .args = owned_args };
                     // The target holds no value until whoever makes the
