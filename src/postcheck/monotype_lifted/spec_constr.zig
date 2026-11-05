@@ -8128,6 +8128,13 @@ const Cloner = struct {
                 if (try valueIsSubstitutable(self.pass.program, self.pass.allocator, value)) return retValue(value);
                 switch (value) {
                     .expr => |expr| {
+                        // An uninitialized payload evaluates nothing to bind:
+                        // it is a loop initializer whose slot its producer's
+                        // presence condition guards, and direct LIR lowering
+                        // reads that condition only from the initializer
+                        // itself. Bound to a local, the loop would enter with
+                        // a plain read of a slot nothing wrote.
+                        if (self.pass.program.getExpr(expr).data == .uninitialized_payload) return retValue(value);
                         const ty = self.pass.program.getExpr(expr).ty;
                         const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
                         try bindings.appendBinding(self.arena.allocator(), .{
