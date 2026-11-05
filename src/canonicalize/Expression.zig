@@ -443,6 +443,17 @@ pub const Expr = union(enum) {
         constraint_fn_var: ?TypeVar = null,
         assembler_fn_var: ?TypeVar = null,
         dispatcher_var: ?TypeVar = null,
+        /// The type of every interpolated value, the `item` of the
+        /// assembler's `Iter(item)` argument.
+        item_var: ?TypeVar = null,
+        /// The iterator over the interpolated values the assembler receives
+        /// at runtime, built by `iter` on an empty `List(item)` and `append`
+        /// for each value: the iterator's type, the empty list's type, and
+        /// the two synthetic dispatch constraints.
+        iterator_var: ?TypeVar = null,
+        seed_list_var: ?TypeVar = null,
+        iter_fn_var: ?TypeVar = null,
+        append_fn_var: ?TypeVar = null,
     },
     /// Structural equality chosen explicitly by the checker.
     ///

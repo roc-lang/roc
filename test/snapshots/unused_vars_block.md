@@ -167,7 +167,7 @@ main! = |_| {
 					(e-num (value "999")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 269)
+					(e-dispatch-call (method "plus") (constraint-fn-var 272)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "used_var"))))

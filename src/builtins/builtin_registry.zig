@@ -64,6 +64,7 @@ pub const BuiltinFn = enum {
     str_trim_end,
     str_split,
     str_join_with,
+    str_from_parts,
     str_reserve,
     str_release_excess_capacity,
     str_with_capacity,
@@ -379,6 +380,7 @@ pub const BuiltinFn = enum {
 
             .str_from_utf8_result,
             .str_join_with,
+            .str_from_parts,
             .str_release_excess_capacity,
             .str_repeat,
             .str_reserve,
@@ -433,6 +435,7 @@ pub const BuiltinFn = enum {
             .str_trim_end,
             .str_split,
             .str_join_with,
+            .str_from_parts,
             .str_reserve,
             .str_release_excess_capacity,
             .str_with_capacity,

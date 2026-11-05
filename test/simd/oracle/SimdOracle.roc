@@ -658,7 +658,7 @@ SimdOracle := [].{
 			chunk_count = len / 16
 			chunks = Iter.custom(
 				0.U64,
-				Known(chunk_count),
+				Ok(chunk_count),
 				|start|
 					if len - start >= 16 {
 						Ok((ScalarU8x16.from_u128_bits(simd128_from_bytes_at(bytes, start)), start + 16))

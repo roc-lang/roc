@@ -6313,7 +6313,7 @@ Every live literal-origin record leaves checking with one explicit resolution:
 
 An interpolated string literal converts in two stages. Its
 `from_interpolation` constraint is
-`List(Str) -> Try((List(item) -> a), [InvalidInterpolation(Str)])`, where `a`
+`List(Str) -> Try((Iter(item) -> a), [InvalidInterpolation(Str)])`, where `a`
 is the interpolation's own type and `item` is every interpolated value's type.
 The conversion's only operand is the literal's segments, the `n + 1` source
 strings around its `n` interpolations, so it is a literal conversion exactly
@@ -6321,14 +6321,41 @@ like a quote's: it resolves to a compile-time root, or to Boxy's runtime
 literal conversion, whose value is the assembler, and its `Err` arm is a
 literal-rejection crash with an `interpolation` `LiteralRejectionSite`, which
 compile-time evaluation reports as the interpolation's own diagnostic. The
-interpolation's value is the assembler called with the interpolated values as
-one list, which cannot reject. The checked interpolation carries its segments,
-its values, and the assembler's type; in a generalized body the checker relates
-each value's type to `item` at the generalization boundary (see "Builtin Str
-Interpolation Part Compatibility"), so Monotype relates `item` to each value's
-type before lowering the call and Boxy gives `item` the first value's
-type. `Try` declares no
-`from_interpolation`, so an interpolation cannot target a `Try` itself.
+interpolation's value is the assembler called with an iterator over the
+interpolated values, which cannot reject. The checked interpolation carries its
+segments, its values, and the assembler's type; in a generalized body the
+checker relates each value's type to `item` at the generalization boundary (see
+"Builtin Str Interpolation Part Compatibility"), so Monotype relates `item` to
+each value's type before lowering the call and Boxy gives `item` the first
+value's type. `Try` declares no `from_interpolation`, so an interpolation
+cannot target a `Try` itself.
+
+The iterator the assembler receives is built at runtime without allocating:
+the checker mints two synthetic receiver dispatches the interpolation owns,
+exactly as a `for` loop owns its `iter` and `next` (`IteratorForPlan`, with an
+`interpolation` site): `iter` on an empty `List(item)` and `append` on the
+iterator with each value in order, resolved against the builtin `List` and
+`Iter` like any other dispatch. Monotype emits the chain from those plans as
+iterator dispatches over pre-lowered operands (the seed list, the iterator so
+far, and the value), each bound to a local, so every step takes the minted
+bounded representation its producer gives it and the chain is a tower of
+values on the stack. The assembler is then called at a request naming that
+representation, as a call's argument evidence names it, so the assembler's
+body is specialized for the chain. The chain never depends on how many values
+the literal has: a literal with more values is a deeper chain, with no other
+difference. Boxy boxes every closure, so it emits the plan's `iter` dispatch
+over the list of the values instead: one list and a box per step, where a
+chain of `append` dispatches would nest a boxed closure per value per step.
+
+A literal whose type is `Str`, whether the checker proved it (a `str` checked
+expression over its segments and values) or a generalized literal
+instantiated at `Str`, never calls the assembler. Its non-empty segments and
+its values are written once by the `str_from_parts` low-level op: the builtin
+sums the lengths, allocates one small or heap string, and copies each part in,
+borrowing every part. An empty segment writes nothing, so it is not a part
+(`CheckedBodyStoreView.isEmptyStrSegment`); a literal that is one part is
+that part. The op takes any number of parts and every backend marshals them
+through a stack array sized by the call.
 
 Literal-pattern deferred static-dispatch constraint groups are owned by the
 enclosing match, lambda, loop, binding statement, or top-level definition.
@@ -8006,12 +8033,12 @@ types:
 
 ```roc
 Iter(item) :: {
-    len_if_known : [Known(U64), Unknown],
+    len_if_known : Try(U64, [Unknown]),
     step : () -> [One({ item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done],
 }
 
 Stream(item) :: {
-    len_if_known : [Known(U64), Unknown],
+    len_if_known : Try(U64, [Unknown]),
     step! : () => [One({ item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
 }
 
@@ -8021,7 +8048,7 @@ Range(num) :: {
     step : num,
     upper_bound : [Exclusive, Inclusive],
     direction : [To, From],
-    len_if_known : [Known(U64), Unknown],
+    len_if_known : Try(U64, [Unknown]),
 }
 ```
 
@@ -8056,8 +8083,8 @@ Range syntax produces a reusable `Range(num)`, not an `Iter(num)`. The
 exclusive and inclusive operators dispatch to `num.range_exclusive_to` and
 `num.range_inclusive_to`, respectively. `Range.step_by` replaces the stored
 absolute step with another value of `num`; it does not compose or multiply
-steps. `Range.size_hint` returns the stored exact count when that count fits in
-`U64`, otherwise `Unknown`. `Range.iter` delegates to `num.range_iter` and
+steps. `Range.len_if_known` returns the stored exact count when that count fits in
+`U64`, otherwise `Err(Unknown)`. `Range.iter` delegates to `num.range_iter` and
 propagates that hint into the resulting iterator. `Range.iter` and the numeric
 `range_iter` implementations are iterator producers that mint no
 representation of their own: the result is exactly the `Iter.custom` chain the
@@ -11069,7 +11096,7 @@ rolls the whole attempt back and reports the interpolation-part type mismatch.
 
 Builtin quote and interpolation literal constraints are discharged directly by
 `Str`. Discharging an interpolation constraint also makes its item type `Str`,
-because `Str.from_interpolation`'s assembler receives `List(Str)`: a generic
+because `Str.from_interpolation`'s assembler receives `Iter(Str)`: a generic
 body that keeps the dispatch calls that method through dictionary evidence
 whose callable type names the item. A numeral literal constraint is
 rejected because builtin `Str` does not
@@ -11099,7 +11126,7 @@ and generalization read the boundary's variable pool
 through the constraint's signature exactly as it sees the item type, and a
 generalized interpolation's scheme relates its parts to the item type
 (`greet = |name| "hi ${name}"` is
-`a -> b where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]`),
+`a -> b where [b.from_interpolation : List(Str) -> Try(Iter(a) -> b, [InvalidInterpolation(Str)])]`),
 so a body compiled once for every instantiation builds its items from its parts
 without consulting any use.
 

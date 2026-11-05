@@ -43,7 +43,7 @@ TYPE MISMATCH - interpolation_defaulted_numeral_part_type.md:3:14:3:17
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
+			(text "item where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]")
 			(annotation-end)
 			(line-break)
 			(line-break)
