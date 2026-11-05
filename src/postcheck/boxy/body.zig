@@ -1957,9 +1957,11 @@ pub const Builder = struct {
 
     /// Where two types of one value differ: nowhere; only in the tags of
     /// rows, one widening the other along the coercion's reach (design.md
-    /// "Sealed Result Rows"); in the memory order of a record, one being the
+    /// "Sealed Result Rows"); in the memory of a record, one being the
     /// record a padded nominal lifts it into (design.md "Nominal Record Field
-    /// Order"); or inside the function type the value has.
+    /// Order") or a closed record a use widened by optional fields it omits
+    /// (design.md "Anonymous Structure Is Copied Per Use"); or inside the
+    /// function type the value has.
     pub const StorageDifference = enum { none, rows, record_order, function };
 
     /// A function value inside data is outside every row widening's reach
@@ -2016,7 +2018,12 @@ pub const Builder = struct {
             const inner: Place = if (pair.place == .root_function) .signature_data else pair.place;
             switch (from) {
                 .record => |record| {
-                    if (!store.sameRecordOrder(record, to.record)) switch (pair.place) {
+                    // A use can widen a closed record by optional fields it
+                    // omits (design.md "Anonymous Structure Is Copied Per
+                    // Use"), which hold presence slots the narrower record
+                    // has no room for: the value is rebuilt, like a record
+                    // stored in another order.
+                    if (!store.sameRecordOrder(record, to.record) or (record.ext == null and to.record.ext == null and record.fields.len != to.record.fields.len)) switch (pair.place) {
                         .data => result = .record_order,
                         .root_function, .signature_data => return .function,
                         .nested_function => invariant(nested_function_storage),

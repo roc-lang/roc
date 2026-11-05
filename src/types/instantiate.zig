@@ -380,11 +380,13 @@ pub const Instantiator = struct {
 
     /// A rank-1 scheme can contain quantified leaves below monomorphic
     /// structural nodes. While instantiating such a scheme, copy exactly the
-    /// monomorphic nodes from which a generalized variable is reachable (as
-    /// recorded in `Scratch.reach_state`) so the walk reaches every
-    /// generalized descendant. Every other monomorphic node stays shared: it
-    /// is not quantified, so each use must see the same node, including a
-    /// function node's effect kind and effect dependencies.
+    /// monomorphic nodes from which a generalized variable or per-use
+    /// structure (`DescriptorFlags.per_use_structure`) is reachable,
+    /// per-use structure included (as recorded in `Scratch.reach_state`), so
+    /// the walk reaches every node each use must own. Every other monomorphic
+    /// node stays shared: it is not quantified, so each use must see the same
+    /// node, including a function node's effect kind and effect
+    /// dependencies.
     copy_scheme_structure: bool = false,
     /// Set by a caller that knows the next scheme root it instantiates has no
     /// monomorphic structural node from which a generalized variable is
@@ -698,7 +700,8 @@ pub const Instantiator = struct {
     }
 
     /// Fill `Scratch.reach_state` for every node reachable from `root`: true
-    /// when a generalized variable is reachable from that node. The walk
+    /// when a generalized variable, or structure every use copies
+    /// (`schemeCopiesNode`), is reachable from that node. The walk
     /// follows exactly the child edges the copy follows, stops at monomorphic
     /// flex and rigid leaves (shared, so their constraints are shared too),
     /// and records every edge by its child. Reachability then propagates from
@@ -715,7 +718,7 @@ pub const Instantiator = struct {
         reach_state.clearRetainingCapacity();
 
         const root_resolved = self.store.resolveVar(root);
-        try reach_state.put(root_resolved.var_, root_resolved.desc.rank == .generalized);
+        try reach_state.put(root_resolved.var_, schemeCopiesNode(root_resolved.desc));
         try machine.reach_stack.append(self.store.gpa, root_resolved.var_);
 
         while (machine.reach_stack.pop()) |parent| {
@@ -840,8 +843,16 @@ pub const Instantiator = struct {
         head.value_ptr.* = edge_idx;
         const entry = try machine.reach_state.?.getOrPut(resolved.var_);
         if (entry.found_existing) return;
-        entry.value_ptr.* = resolved.desc.rank == .generalized;
+        entry.value_ptr.* = schemeCopiesNode(resolved.desc);
         try machine.reach_stack.append(self.store.gpa, resolved.var_);
+    }
+
+    /// Whether every instantiation of a scheme copies this node itself: a
+    /// generalized variable, or anonymous structure made in the scheme's own
+    /// scope, which a use may lift into a nominal type
+    /// (`DescriptorFlags.per_use_structure`).
+    fn schemeCopiesNode(desc: types_mod.Descriptor) bool {
+        return desc.rank == .generalized or desc.flags.per_use_structure;
     }
 
     /// Resolve shared declaration binders before copying. Every semantic
@@ -1094,10 +1105,11 @@ pub const Instantiator = struct {
         }
 
         // Ordinary instantiation shares every non-generalized var. A binding
-        // explicitly classified as a scheme instead copies the non-generalized
-        // structural nodes from which a generalized leaf is reachable, so
-        // generalized leaves at arbitrary depth remain reachable while every
-        // monomorphic node and leaf keeps its identity. A polarity marker is
+        // explicitly classified as a scheme instead copies its per-use
+        // structure and the non-generalized structural nodes from which a
+        // generalized leaf or per-use structure is reachable, so those stay
+        // reachable at arbitrary depth while every other monomorphic node and
+        // leaf keeps its identity. A polarity marker is
         // never shared: it stands for "decided by this instantiation" whatever
         // its rank (a where-method signature is instantiated per body use
         // before the enclosing scheme generalizes).

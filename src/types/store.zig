@@ -2120,6 +2120,18 @@ pub const Store = struct {
 
     // rank //
 
+    /// Mark a class a generalization boundary found to be anonymous structure
+    /// made in its own scope and left ungeneralized
+    /// (`DescriptorFlags.per_use_structure`). A frozen class never changes,
+    /// so no use can lift it and it stays shared.
+    pub fn markPerUseStructure(self: *Self, desc_idx: DescStore.Idx) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        var desc = self.descs.get(desc_idx);
+        if (desc.flags.frozen or desc.flags.per_use_structure) return;
+        desc.flags.per_use_structure = true;
+        try self.setDesc(desc_idx, desc);
+    }
+
     /// Set the rank for a descriptor
     pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) Allocator.Error!void {
         self.debugAssertUnsealed();
@@ -2352,6 +2364,10 @@ pub const Store = struct {
         // an opened nominal backing component is that component.
         merged_desc.flags.nominal_backing_structure = a_data.desc.flags.nominal_backing_structure or
             b_data.desc.flags.nominal_backing_structure;
+        // Structure copied per use stays so only while it is nothing else: a
+        // class it merged with keeps its own sharing.
+        merged_desc.flags.per_use_structure = a_data.desc.flags.per_use_structure and
+            b_data.desc.flags.per_use_structure;
         // A defaulting decision about one side is a decision about the merged
         // class: the default it committed is the type both sides now share.
         merged_desc.flags.default_decided = a_data.desc.flags.default_decided or
