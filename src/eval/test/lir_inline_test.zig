@@ -1477,9 +1477,9 @@ const IterCollectShape = enum {
 fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool {
     // Fingerprints of the `Iter.collect` -> `List.from_iter` worker over a range
     // (ranges are built on `Iter.custom`, so the worker's iterator argument is a
-    // custom-step record). `from_iter` branches on the iterator's length: a Known
+    // custom-step record). `from_iter` branches on the iterator's length: an Ok
     // length reserves the whole allocation up front and writes each item with the
-    // unchecked append, while an Unknown length grows with the reserving append.
+    // unchecked append, while an Err(Unknown) length grows with the reserving append.
     // That per-element branch (the inner `match length`) accounts for the
     // worker's switch/join/jump counts, which are identical in both builds. The
     // builds differ in call structure: the generic worker leaves the range
@@ -3749,7 +3749,7 @@ test "trmc: result used before the constructor is not transformed" {
 }
 
 test "known-length List.iter collect specializes without unbound locals" {
-    // Regression: collecting a Known-length iterator (List.iter) under
+    // Regression: collecting an Ok-length iterator (List.iter) under
     // optimization specializes a recursive capturing worker (List.iter's `make`
     // step). The specializer must reuse the source capture local ids; otherwise
     // a leftover direct call to the un-specialized worker references an unbound
@@ -5937,7 +5937,7 @@ test "issue 11784 range pipelines consumed by Iter.fold and Iter.sum fuse into c
         },
         .{ .name = "custom source folded by Iter.fold", .source =
         \\main : U64 -> U64
-        \\main = |n| Iter.custom(0, Known(n), |i| if i < n { Ok((i, i + 1)) } else { Err(NoMore) }).map(|x| x * 2).fold(0, |acc, x| acc + x)
+        \\main = |n| Iter.custom(0, Ok(n), |i| if i < n { Ok((i, i + 1)) } else { Err(NoMore) }).map(|x| x * 2).fold(0, |acc, x| acc + x)
         },
         .{ .name = "pipeline passed to a looping consumer", .source =
         \\total : Iter(U64) -> U64
@@ -5971,13 +5971,13 @@ test "issue 11784 iterators returned through destructured parameters keep their 
     const allocator = std.testing.allocator;
     const cases = [_]struct { name: []const u8, source: []const u8 }{
         .{ .name = "record parameter destructure", .source =
-        \\count_up = |{ lo, hi }| Iter.custom(lo, Unknown, |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
+        \\count_up = |{ lo, hi }| Iter.custom(lo, Err(Unknown), |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
         \\
         \\main : U64 -> U64
         \\main = |n| count_up({ lo: 0, hi: n }).map(|x| x * 2).fold(0, |acc, x| acc + x)
         },
         .{ .name = "tuple parameter destructure", .source =
-        \\count_up = |(lo, hi)| Iter.custom(lo, Unknown, |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
+        \\count_up = |(lo, hi)| Iter.custom(lo, Err(Unknown), |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
         \\
         \\main : U64 -> U64
         \\main = |n| count_up((0, n)).map(|x| x * 2).fold(0, |acc, x| acc + x)
@@ -5985,7 +5985,7 @@ test "issue 11784 iterators returned through destructured parameters keep their 
         .{ .name = "nominal method destructuring its receiver", .source =
         \\Span := { lo : U64, hi : U64 }.{
         \\    iter : Span -> Iter(U64)
-        \\    iter = |Span.{ lo, hi }| Iter.custom(lo, Unknown, |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
+        \\    iter = |Span.{ lo, hi }| Iter.custom(lo, Err(Unknown), |i| if i < hi { Ok((i, i + 1)) } else { Err(NoMore) })
         \\}
         \\
         \\main : U64 -> U64
@@ -7973,11 +7973,11 @@ const shared_iterator_operation_cases = [_]SharedIteratorOperationCase{
     },
     .{ .operation = .custom, .owner = .iter, .source =
     \\main : () => List(U64)
-    \\main = || List.from_iter(Iter.custom(0.U64, Known(3), |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
+    \\main = || List.from_iter(Iter.custom(0.U64, Ok(3), |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
     },
     .{ .operation = .custom, .owner = .stream, .source =
     \\main : () => List(U64)
-    \\main = || Stream.collect!(Stream.custom(0.U64, Known(3), |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
+    \\main = || Stream.collect!(Stream.custom(0.U64, Ok(3), |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
     },
     .{ .operation = .map, .owner = .iter, .source =
     \\main : () => List(U64)
@@ -8001,7 +8001,7 @@ const shared_iterator_operation_cases = [_]SharedIteratorOperationCase{
     },
     .{ .operation = .from_step, .owner = .stream, .source =
     \\main : () => List(U64)
-    \\main = || Stream.collect!(Stream.custom(0.U64, Unknown, |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
+    \\main = || Stream.collect!(Stream.custom(0.U64, Err(Unknown), |s| if s < 3 Ok((s, s + 1)) else Err(NoMore)).map(|x| x + 1))
     },
 };
 
@@ -8082,7 +8082,7 @@ test "optimized infinite custom iterator consumes finite prefix" {
         \\    adv : ((U64, U64) -> Try((U64, (U64, U64)), [NoMore]))
         \\    adv = |(a, b)| Try.Ok((a, (b, a + b)))
         \\
-        \\    fib_iter = Iter.custom((0.U64, 1.U64), Unknown, adv)
+        \\    fib_iter = Iter.custom((0.U64, 1.U64), Err(Unknown), adv)
         \\
         \\    var $sum = 0.U64
         \\    for f in fib_iter.take_first(5) {
@@ -8925,7 +8925,7 @@ test "iterdiff: Stream.custom advance effects agree across inline modes" {
         \\main : () => List(I64)
         \\main = || {
         \\    stream =
-        \\        Stream.custom(0.I64, Unknown, up_to_three!)
+        \\        Stream.custom(0.I64, Err(Unknown), up_to_three!)
         \\            .map(|n| {
         \\                dbg n * 2
         \\                n * 2
@@ -8958,7 +8958,7 @@ test "iterdiff: Stream.custom advance effects agree across inline modes" {
 //         \\main = {
 //         \\    adv : ((U64, U64) -> Try((U64, (U64, U64)), [NoMore]))
 //         \\    adv = |(a, b)| Try.Ok((a, (b, a + b)))
-//         \\    fib_iter = Iter.custom((0.U64, 1.U64), Unknown, adv)
+//         \\    fib_iter = Iter.custom((0.U64, 1.U64), Err(Unknown), adv)
 //         \\    var $sum = 0.U64
 //         \\    for f in fib_iter.take_first(8) {
 //         \\        dbg f
@@ -11490,9 +11490,9 @@ test "field takes: a view taken whole keeps a field it is read again for" {
 
 // With the calls in the other order, `view` is taken whole and lent to
 // `lookup_first`, and then `first` is taken out of the view for `consume`.
-// The read of `first` is solved borrowed, so the take belongs to its last
-// consuming operand, the `consume` call, not to the read: the read is no
-// take, and nothing in `main` retains a field read.
+// The read of `first` comes after the view's last whole use, so the read
+// takes the field out of its slot, and nothing in `main` retains a field
+// read.
 test "field takes: a view taken whole gives up a field after its last whole use" {
     const allocator = std.testing.allocator;
     const source = dying_view_record_source ++
@@ -11511,7 +11511,7 @@ test "field takes: a view taken whole gives up a field after its last whole use"
     const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
     try std.testing.expectEqual(@as(usize, 1), counts.struct_takes);
     try std.testing.expectEqual(@as(usize, 1), counts.tag_union_reads);
-    try std.testing.expectEqual(@as(usize, 0), counts.tag_union_takes);
+    try std.testing.expectEqual(@as(usize, 1), counts.tag_union_takes);
     try std.testing.expectEqual(@as(usize, 0), try mainFieldReadRetainCount(allocator, &lowered.lowered));
 }
 

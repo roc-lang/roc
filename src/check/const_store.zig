@@ -102,7 +102,8 @@ pub const Primitive = @import("checked_artifact.zig").CheckedPrimitive;
 pub const IteratorTopology = struct {
     len_field: names.RecordFieldNameId,
     step_field: names.RecordFieldNameId,
-    known_tag: names.TagNameId,
+    ok_tag: names.TagNameId,
+    err_tag: names.TagNameId,
     unknown_tag: names.TagNameId,
     done_tag: names.TagNameId,
     one_tag: names.TagNameId,
@@ -1123,7 +1124,8 @@ pub const ConstTypeStore = struct {
             .iterator_topology = if (def.iterator_topology) |topology| .{
                 .len_field = try translateRecordFieldName(name_translation, topology.len_field),
                 .step_field = try translateRecordFieldName(name_translation, topology.step_field),
-                .known_tag = try translateTagName(name_translation, topology.known_tag),
+                .ok_tag = try translateTagName(name_translation, topology.ok_tag),
+                .err_tag = try translateTagName(name_translation, topology.err_tag),
                 .unknown_tag = try translateTagName(name_translation, topology.unknown_tag),
                 .done_tag = try translateTagName(name_translation, topology.done_tag),
                 .one_tag = try translateTagName(name_translation, topology.one_tag),
@@ -1342,7 +1344,7 @@ pub const ConstTypeStore = struct {
             inline for (.{ "len_field", "step_field", "item_field", "rest_field" }) |field| {
                 if (!base.Ident.textEql(left_names.recordFieldLabelText(@field(topology, field)), right_names.recordFieldLabelText(@field(other, field)))) return false;
             }
-            inline for (.{ "known_tag", "unknown_tag", "done_tag", "one_tag", "skip_tag" }) |field| {
+            inline for (.{ "ok_tag", "err_tag", "unknown_tag", "done_tag", "one_tag", "skip_tag" }) |field| {
                 if (!base.Ident.textEql(left_names.tagLabelText(@field(topology, field)), right_names.tagLabelText(@field(other, field)))) return false;
             }
         }
@@ -1567,12 +1569,16 @@ pub const ConstStore = struct {
                 => false,
             };
         }
+        // Frames `0..=head` are the function's own lexical chain. Any frames
+        // after the head are a second chain, rooted right after it: the
+        // evidence of the template that declares the local procedures of
+        // another template the function reaches.
         const head = fn_value.evidence_frame_head orelse return false;
-        if (head != fn_value.evidence_frames.len - 1) return false;
+        if (head >= fn_value.evidence_frames.len) return false;
 
         var cursor: usize = 0;
         for (fn_value.evidence_frames, 0..) |frame, index| {
-            if (index == 0) {
+            if (index == 0 or index == head + 1) {
                 if (frame.scope() != .root or frame.parent != null) return false;
             } else {
                 switch (frame.scope()) {

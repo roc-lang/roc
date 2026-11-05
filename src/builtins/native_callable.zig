@@ -17,6 +17,11 @@ pub const Pending = extern struct {
     closure: ?[*]u8 = null,
     args: ?[*]align(16) u8 = null,
     args_len: usize = 0,
+    /// Nonzero when the call transfers the reference it owns to `closure`
+    /// through the erased ABI's reuse channel (an owned deferred call), so
+    /// the callee consumes it; zero when the driver releases it after the
+    /// call.
+    transfer: usize = 0,
     /// What a callee that writes the erased ABI's descriptor output writes.
     /// The tag on `invocation`'s address moves that word off its alignment,
     /// so it spans two of these.
@@ -43,15 +48,19 @@ fn invoke(cell: *Pending, callable: erased.CallableFnPtr, ret: ?[*]u8, args: ?[*
     invoked(host.ops(), ret, args, capture, reuse, invocation(cell));
 }
 
-/// Ordinary indirect invocation with the producer's exact packed ABI.
+/// Ordinary indirect invocation with the producer's exact packed ABI. The
+/// invocation is the hot path and stays inline at each call site; a pending
+/// call the callee left behind is the cold path, driven out of line.
 pub fn call(callable: erased.CallableFnPtr, ret: ?[*]u8, args: ?[*]const u8, capture: ?[*]u8, reuse: ?[*]u8) void {
     var pending: Pending = .{};
     invoke(&pending, callable, ret, args, capture, reuse);
-    drive(&pending, ret);
+    if (pending.callable != null) drivePending(&pending, ret);
 }
 
-/// ARC transfers one closure reference and the arguments to this pending call.
-pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize) void {
+/// ARC transfers one closure reference and the arguments to this pending
+/// call; `transfer` says the driven call passes that reference on to the
+/// callee as its reuse input.
+pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize, transfer: bool) void {
     std.debug.assert(pending.callable == null);
     // A call without arguments carries no argument bytes to copy out.
     var copied: ?[*]align(16) u8 = null;
@@ -64,19 +73,36 @@ pub fn deferCall(pending: *Pending, callable: erased.CallableFnPtr, closure: [*]
     pending.closure = closure;
     pending.args = copied;
     pending.args_len = args_len;
+    pending.transfer = @intFromBool(transfer);
 }
 
 /// Tail-drive's result slot has the same concrete ABI throughout the chain.
 pub fn drive(pending: *Pending, ret: ?[*]u8) void {
+    drivePending(pending, ret);
+}
+
+/// Run the chain of pending calls. A program makes one erased call per
+/// literal argument and per call of a stored function, so a generic body
+/// can hold thousands of call sites; the loop stays out of line so no site
+/// carries a copy of it, and each site ends with the branch over it, which
+/// keeps the body in blocks of one site each. LLVM's WebAssembly register
+/// stackifier does work proportional to a block's length for each of a
+/// register's uses in that block, and every stack-slot access in a function
+/// uses its frame register, so a body kept in one block costs the square of
+/// its size there.
+noinline fn drivePending(pending: *Pending, ret: ?[*]u8) void {
     while (pending.callable) |callable| {
         pending.callable = null;
         const closure = pending.closure.?;
         const args = pending.args;
-        invoke(pending, callable, ret, args, erased.capturePtr(closure), null);
+        const transfer = pending.transfer != 0;
+        invoke(pending, callable, ret, args, erased.capturePtr(closure), if (transfer) closure else null);
         const ops = host.ops();
         // This is the ownership transfer explicitly requested by ARC's
-        // deferred-call statement, not a backend-inferred capture release.
-        erased.decref(closure, ops);
+        // deferred-call statement, not a backend-inferred capture release:
+        // the callee consumed the reference an owned call passed it, and
+        // the driver releases every other.
+        if (!transfer) erased.decref(closure, ops);
         if (args) |bytes| ops.dealloc(bytes, 16);
     }
 }
@@ -110,7 +136,7 @@ const TestCalls = struct {
         const closure = erased.allocate(&step, &drop, 0, ops);
         var next: [8]u8 = undefined;
         std.mem.writeInt(u64, &next, remaining - 1, .little);
-        deferCall(pending, &step, closure, &next, next.len);
+        deferCall(pending, &step, closure, &next, next.len, false);
     }
 
     /// A host's callable, which writes the ABI's descriptor output.

@@ -10,7 +10,7 @@ next_index = |state| {
 }
 
 inner : Str -> Iter(U64)
-inner = |source| Iter.custom({ bytes: source.to_utf8(), offset: 0 }, Unknown, next_index)
+inner = |source| Iter.custom({ bytes: source.to_utf8(), offset: 0 }, Err(Unknown), next_index)
 
 outer : Str -> Iter(U64)
 outer = |source| inner(source)

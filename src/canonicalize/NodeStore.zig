@@ -919,6 +919,11 @@ pub const InterpolationData = extern struct {
     constraint_fn_var_plus_one: u32,
     assembler_fn_var_plus_one: u32,
     dispatcher_var_plus_one: u32,
+    item_var_plus_one: u32,
+    iterator_var_plus_one: u32,
+    seed_list_var_plus_one: u32,
+    iter_fn_var_plus_one: u32,
+    append_fn_var_plus_one: u32,
 };
 
 /// Method-call side data.
@@ -2088,6 +2093,11 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
                     null
                 else
                     @fromBackingInt(@intCast(data.dispatcher_var_plus_one - 1)),
+                .item_var = if (data.item_var_plus_one == 0) null else @fromBackingInt(data.item_var_plus_one - 1),
+                .iterator_var = if (data.iterator_var_plus_one == 0) null else @fromBackingInt(data.iterator_var_plus_one - 1),
+                .seed_list_var = if (data.seed_list_var_plus_one == 0) null else @fromBackingInt(data.seed_list_var_plus_one - 1),
+                .iter_fn_var = if (data.iter_fn_var_plus_one == 0) null else @fromBackingInt(data.iter_fn_var_plus_one - 1),
+                .append_fn_var = if (data.append_fn_var_plus_one == 0) null else @fromBackingInt(data.append_fn_var_plus_one - 1),
             } };
         },
         .expr_type_method_call => {
@@ -2533,6 +2543,16 @@ pub fn replaceExprWithDispatchCall(
     store.nodes.set(node_idx, node);
 }
 
+/// The checker's types for the iterator an interpolation's assembler receives
+/// at runtime (`CIR.Expr.e_interpolation`).
+pub const InterpolationIteratorVars = struct {
+    item_var: types.Var,
+    iterator_var: types.Var,
+    seed_list_var: types.Var,
+    iter_fn_var: types.Var,
+    append_fn_var: types.Var,
+};
+
 /// Replaces an existing expression with checked interpolation dispatch metadata.
 pub fn replaceExprWithInterpolationConstraint(
     store: *NodeStore,
@@ -2543,6 +2563,7 @@ pub fn replaceExprWithInterpolationConstraint(
     constraint_fn_var: types.Var,
     assembler_fn_var: types.Var,
     dispatcher_var: types.Var,
+    iterator: InterpolationIteratorVars,
 ) Allocator.Error!void {
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
     const interpolation_data_idx: u32 = @intCast(store.interpolation_data.len());
@@ -2554,6 +2575,11 @@ pub fn replaceExprWithInterpolationConstraint(
         .constraint_fn_var_plus_one = @backingInt(constraint_fn_var) + 1,
         .assembler_fn_var_plus_one = @backingInt(assembler_fn_var) + 1,
         .dispatcher_var_plus_one = @backingInt(dispatcher_var) + 1,
+        .item_var_plus_one = @backingInt(iterator.item_var) + 1,
+        .iterator_var_plus_one = @backingInt(iterator.iterator_var) + 1,
+        .seed_list_var_plus_one = @backingInt(iterator.seed_list_var) + 1,
+        .iter_fn_var_plus_one = @backingInt(iterator.iter_fn_var) + 1,
+        .append_fn_var_plus_one = @backingInt(iterator.append_fn_var) + 1,
     });
     var node = Node.init(.expr_interpolation);
     node.setPayload(.{ .expr_interpolation = .{
@@ -3478,6 +3504,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .constraint_fn_var_plus_one = if (e.constraint_fn_var) |var_| @backingInt(var_) + 1 else 0,
                 .assembler_fn_var_plus_one = if (e.assembler_fn_var) |var_| @backingInt(var_) + 1 else 0,
                 .dispatcher_var_plus_one = if (e.dispatcher_var) |var_| @backingInt(var_) + 1 else 0,
+                .item_var_plus_one = if (e.item_var) |var_| @backingInt(var_) + 1 else 0,
+                .iterator_var_plus_one = if (e.iterator_var) |var_| @backingInt(var_) + 1 else 0,
+                .seed_list_var_plus_one = if (e.seed_list_var) |var_| @backingInt(var_) + 1 else 0,
+                .iter_fn_var_plus_one = if (e.iter_fn_var) |var_| @backingInt(var_) + 1 else 0,
+                .append_fn_var_plus_one = if (e.append_fn_var) |var_| @backingInt(var_) + 1 else 0,
             });
             node.setPayload(.{ .expr_interpolation = .{
                 .first = @backingInt(e.first),

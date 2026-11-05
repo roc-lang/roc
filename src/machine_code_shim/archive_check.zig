@@ -86,6 +86,10 @@ const windows_imports = c_imports ++ .{
     // The Windows CRT initializes the module's native TLS index.
              "_tls_index",
     "_fltused",
+} ++ .{
+    // A composed run image's function table is registered with the process.
+    "RtlAddFunctionTable",
+    "RtlDeleteFunctionTable",
 };
 const Check = struct {
     os: Os,

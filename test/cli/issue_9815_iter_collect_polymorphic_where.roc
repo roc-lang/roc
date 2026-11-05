@@ -4,7 +4,7 @@
 main! = |_| {
 	f = |_| Try.Err(NoMore)
 
-	_ = Iter.collect(Iter.custom(0.U64, Unknown, f))
+	_ = Iter.collect(Iter.custom(0.U64, Err(Unknown), f))
 
 	Ok({})
 }

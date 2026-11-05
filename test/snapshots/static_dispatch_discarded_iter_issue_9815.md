@@ -7,19 +7,19 @@ type=file
 ~~~roc
 run = || {
     f = |_| Try.Err(NoMore)
-    _ = Iter.collect(Iter.custom(0.U64, Unknown, f))
+    _ = Iter.collect(Iter.custom(0.U64, Err(Unknown), f))
     Ok({})
 }
 ~~~
 # EXPECTED
-MISSING METHOD - static_dispatch_discarded_iter_issue_9815.md:3:9:3:53
+MISSING METHOD - static_dispatch_discarded_iter_issue_9815.md:3:9:3:58
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Missing Method")
-		(region (start 3 9) (end 3 53))
+		(region (start 3 9) (end 3 58))
 		(headline
 			(reflow "This")
 			(reflow " ")
@@ -40,7 +40,7 @@ MISSING METHOD - static_dispatch_discarded_iter_issue_9815.md:3:9:3:53
 			(reflow " ")
 			(reflow "method."))
 		(document
-			(source-region (file "static_dispatch_discarded_iter_issue_9815.md") (start 3 9) (end 3 53) (annotation error) (line-text "    _ = Iter.collect(Iter.custom(0.U64, Unknown, f))"))
+			(source-region (file "static_dispatch_discarded_iter_issue_9815.md") (start 3 9) (end 3 58) (annotation error) (line-text "    _ = Iter.collect(Iter.custom(0.U64, Err(Unknown), f))"))
 			(line-break)
 			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
@@ -48,7 +48,7 @@ MISSING METHOD - static_dispatch_discarded_iter_issue_9815.md:3:9:3:53
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,
-Underscore,OpAssign,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,Int,NoSpaceDotUpperIdent,Comma,UpperIdent,Comma,LowerIdent,CloseRound,CloseRound,
+Underscore,OpAssign,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,Int,NoSpaceDotUpperIdent,Comma,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,Comma,LowerIdent,CloseRound,CloseRound,
 UpperIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,CloseRound,
 CloseCurly,
 EndOfFile,
@@ -79,7 +79,9 @@ EndOfFile,
 								(e-apply
 									(e-ident (raw "Iter.custom"))
 									(e-typed-int (raw "0") (type "U64"))
-									(e-tag (raw "Unknown"))
+									(e-apply
+										(e-tag (raw "Err"))
+										(e-tag (raw "Unknown")))
 									(e-ident (raw "f")))))
 						(e-apply
 							(e-tag (raw "Ok"))
@@ -89,7 +91,7 @@ EndOfFile,
 ~~~roc
 run = || {
 	f = |_| Try.Err(NoMore)
-	_ = Iter.collect(Iter.custom(0.U64, Unknown, f))
+	_ = Iter.collect(Iter.custom(0.U64, Err(Unknown), f))
 	Ok({})
 }
 ~~~

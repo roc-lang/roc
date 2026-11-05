@@ -2729,7 +2729,7 @@ const core_tests = [_]TestCase{
         \\Url := [Url(Str)].{
         \\    from_quote : Str -> Try(Url, [BadQuotedBytes(Str)])
         \\    from_quote = |str| Ok(Url(str))
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\    inner : Url -> Str
         \\    inner = |Url.Url(str)| str
@@ -2749,8 +2749,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Shape := [Shape(U64, List(Str))].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Shape), [InvalidInterpolation(Str)])
-        \\    from_interpolation = |segments| Ok(|values| Shape.Shape(List.len(segments), values))
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Shape), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Ok(|values| Shape.Shape(List.len(segments), List.from_iter(values)))
         \\}
         \\
         \\main = {
@@ -2768,7 +2768,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Wrapped := [Wrapped(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Wrapped), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Wrapped), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Wrapped.Wrapped(assemble(values)))
         \\}
         \\
@@ -2792,8 +2792,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Count := [Count(U64)].{
-        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
-        \\    from_interpolation = |_segments| Ok(|values| Count.Count(List.len(values)))
+        \\    from_interpolation : List(Str) -> Try((Iter(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(values.fold(0, |count, _| count + 1)))
         \\}
         \\
         \\around = |f, x| f("a${x}b${x}c")
@@ -2810,7 +2810,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Count := [Count(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(item) -> Count), [InvalidInterpolation(Str)])
         \\    from_interpolation = |_segments| Ok(|_| Count.Count("none"))
         \\}
         \\
@@ -2828,8 +2828,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Count := [Count(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
-        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(values)))
+        \\    from_interpolation : List(Str) -> Try((Iter(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(List.from_iter(values))))
         \\}
         \\
         \\main = {
@@ -2846,7 +2846,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Count := [Count(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(item) -> Count), [InvalidInterpolation(Str)])
         \\    from_interpolation = |_segments| Ok(|_| Count.Count("none"))
         \\}
         \\
@@ -2866,8 +2866,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Count := [Count(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(item) -> Count), [InvalidInterpolation(Str)])
-        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(values)))
+        \\    from_interpolation : List(Str) -> Try((Iter(item) -> Count), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |_segments| Ok(|values| Count.Count(Str.inspect(List.from_iter(values))))
         \\}
         \\
         \\main = {
@@ -2886,7 +2886,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
@@ -2922,7 +2922,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidUrl])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidUrl])
         \\    from_interpolation = |_segments| Ok(|values| Url.Url(Str.join_with(values, "")))
         \\}
         \\
@@ -2940,7 +2940,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
@@ -2984,7 +2984,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Strict := [Strict].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Strict), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Strict), [InvalidInterpolation(Str)])
         \\    from_interpolation = |_segments| Err(InvalidInterpolation("Strict rejects every interpolation"))
         \\}
         \\
@@ -3002,7 +3002,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Html := [Html(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Html), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Html), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments|
         \\        if segments.any(|segment| segment.contains("<script")) {
         \\            Err(InvalidInterpolation("Html literals can't contain script tags"))
@@ -5817,8 +5817,8 @@ const core_tests = [_]TestCase{
     },
     .{
         .name = "inspect: Iter.single reports known length one",
-        .source = "Iter.size_hint(Iter.single(42.I64))",
-        .expected = .{ .inspect_str = "Known(1)" },
+        .source = "Iter.len_if_known(Iter.single(42.I64))",
+        .expected = .{ .inspect_str = "Ok(1)" },
     },
     .{
         .name = "inspect: Iter.concat yields first then second",
@@ -5853,13 +5853,13 @@ const core_tests = [_]TestCase{
     },
     .{
         .name = "inspect: Iter.concat reports summed known length",
-        .source = "Iter.size_hint([1.I64, 2].iter().concat([3, 4, 5].iter()))",
-        .expected = .{ .inspect_str = "Known(5)" },
+        .source = "Iter.len_if_known([1.I64, 2].iter().concat([3, 4, 5].iter()))",
+        .expected = .{ .inspect_str = "Ok(5)" },
     },
     .{
         .name = "inspect: Iter.concat reports unknown length when either side is unknown",
-        .source = "Iter.size_hint([1.I64, 2, 3].iter().keep_if(|item| item > 1).concat([4].iter()))",
-        .expected = .{ .inspect_str = "Unknown" },
+        .source = "Iter.len_if_known([1.I64, 2, 3].iter().keep_if(|item| item > 1).concat([4].iter()))",
+        .expected = .{ .inspect_str = "Err(Unknown)" },
     },
     .{
         .name = "inspect: Iter.append yields item after iterator",
@@ -5873,8 +5873,8 @@ const core_tests = [_]TestCase{
     },
     .{
         .name = "inspect: Iter.append reports incremented known length",
-        .source = "Iter.size_hint([1.I64, 2, 3].iter().append(4))",
-        .expected = .{ .inspect_str = "Known(4)" },
+        .source = "Iter.len_if_known([1.I64, 2, 3].iter().append(4))",
+        .expected = .{ .inspect_str = "Ok(4)" },
     },
     .{
         .name = "inspect: Iter.with_index pairs items with their position",
@@ -5900,13 +5900,13 @@ const core_tests = [_]TestCase{
     },
     .{
         .name = "inspect: Iter.with_index forwards the source's known length",
-        .source = "Iter.size_hint([1.I64, 2, 3].iter().with_index())",
-        .expected = .{ .inspect_str = "Known(3)" },
+        .source = "Iter.len_if_known([1.I64, 2, 3].iter().with_index())",
+        .expected = .{ .inspect_str = "Ok(3)" },
     },
     .{
         .name = "inspect: Iter.with_index reports unknown length over a skipping source",
-        .source = "Iter.size_hint([1.I64, 2, 3].iter().keep_if(|n| n > 1).with_index())",
-        .expected = .{ .inspect_str = "Unknown" },
+        .source = "Iter.len_if_known([1.I64, 2, 3].iter().keep_if(|n| n > 1).with_index())",
+        .expected = .{ .inspect_str = "Err(Unknown)" },
     },
     .{
         .name = "inspect: Iter.next steps appended iterator in order",
@@ -6082,7 +6082,7 @@ const core_tests = [_]TestCase{
         .source =
         \\gen_range : num, num -> Iter(num)
         \\    where [num.is_lt : num, num -> Bool, num.succ : num -> num]
-        \\gen_range = |lo, hi| Iter.custom(lo, Unknown, |c| if c < hi Ok((c, c.succ())) else Err(NoMore))
+        \\gen_range = |lo, hi| Iter.custom(lo, Err(Unknown), |c| if c < hi Ok((c, c.succ())) else Err(NoMore))
         \\
         \\Step :: { v : U64 }.{
         \\    is_lt : Step, Step -> Bool
@@ -6184,8 +6184,8 @@ const core_tests = [_]TestCase{
         .source =
         \\Span(num) :: { lower : num, upper : num, step : num }.{
         \\    make : Span(num) -> Iter(num)
-        \\        where [num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)]
-        \\    make = |span| span.lower.range_iter(span.upper, span.step, Exclusive, To, Unknown)
+        \\        where [num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(num)]
+        \\    make = |span| span.lower.range_iter(span.upper, span.step, Exclusive, To, Err(Unknown))
         \\}
         \\
         \\pick : List(U64), U64, Bool -> Iter(U64)
@@ -6663,7 +6663,7 @@ const core_tests = [_]TestCase{
         \\
         \\    Iter.custom(
         \\        (0.U64, 1.U64),
-        \\        Unknown,
+        \\        Err(Unknown),
         \\        adv,
         \\    )
         \\}
@@ -6679,23 +6679,23 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[0, 1, 1, 2, 3]" },
     },
     .{
-        .name = "inspect: Iter.custom overcounted Known hint collects every item",
+        .name = "inspect: Iter.custom overcounted Ok hint collects every item",
         .source =
         \\{
         \\    adv : U64 -> Try((U64, U64), [NoMore])
         \\    adv = |n| if n < 4 Try.Ok((n, n + 1)) else Try.Err(NoMore)
-        \\    List.from_iter(Iter.custom(0, Known(10), adv))
+        \\    List.from_iter(Iter.custom(0, Ok(10), adv))
         \\}
         ,
         .expected = .{ .inspect_str = "[0, 1, 2, 3]" },
     },
     .{
-        .name = "Iter.custom crashes when the source outlives its Known size hint",
+        .name = "Iter.custom crashes when the source outlives its Ok len_if_known",
         .source =
         \\{
         \\    adv : U64 -> Try((U64, U64), [NoMore])
         \\    adv = |n| if n < 4 Try.Ok((n, n + 1)) else Try.Err(NoMore)
-        \\    List.from_iter(Iter.custom(0, Known(2), adv))
+        \\    List.from_iter(Iter.custom(0, Ok(2), adv))
         \\}
         ,
         .expected = .{ .crash = {} },
@@ -6782,23 +6782,23 @@ const core_tests = [_]TestCase{
     },
     .{
         .name = "inspect: Iter.step_by preserves known length as ceil",
-        .source = "Iter.size_hint([1.I64, 2, 3, 4, 5].iter().step_by(2))",
-        .expected = .{ .inspect_str = "Known(3)" },
+        .source = "Iter.len_if_known([1.I64, 2, 3, 4, 5].iter().step_by(2))",
+        .expected = .{ .inspect_str = "Ok(3)" },
     },
     .{
-        .name = "inspect: Range.step_by recomputes its exact size hint",
-        .source = "Range.size_hint((1.U64..=10).step_by(3))",
-        .expected = .{ .inspect_str = "Known(4)" },
+        .name = "inspect: Range.step_by recomputes its exact len_if_known",
+        .source = "Range.len_if_known((1.U64..=10).step_by(3))",
+        .expected = .{ .inspect_str = "Ok(4)" },
     },
     .{
         .name = "inspect: Iter.step_by of 0 has known length zero",
-        .source = "Iter.size_hint([1.I64, 2, 3].iter().step_by(0))",
-        .expected = .{ .inspect_str = "Known(0)" },
+        .source = "Iter.len_if_known([1.I64, 2, 3].iter().step_by(0))",
+        .expected = .{ .inspect_str = "Ok(0)" },
     },
     .{
         .name = "inspect: Iter.step_by reports unknown length for unknown source",
-        .source = "Iter.size_hint([1.I64, 2, 3, 4].iter().keep_if(|x| x > 1).step_by(2))",
-        .expected = .{ .inspect_str = "Unknown" },
+        .source = "Iter.len_if_known([1.I64, 2, 3, 4].iter().keep_if(|x| x > 1).step_by(2))",
+        .expected = .{ .inspect_str = "Err(Unknown)" },
     },
     .{
         .name = "inspect: List.iter_rev yields items back to front",
@@ -6862,13 +6862,13 @@ const core_tests = [_]TestCase{
     },
     .{
         .name = "inspect: List.iter_rev reports known length",
-        .source = "Iter.size_hint([1.I64, 2, 3].iter_rev())",
-        .expected = .{ .inspect_str = "Known(3)" },
+        .source = "Iter.len_if_known([1.I64, 2, 3].iter_rev())",
+        .expected = .{ .inspect_str = "Ok(3)" },
     },
     .{
         .name = "inspect: List.iter_rev on empty list reports zero length",
-        .source = "Iter.size_hint([].iter_rev())",
-        .expected = .{ .inspect_str = "Known(0)" },
+        .source = "Iter.len_if_known([].iter_rev())",
+        .expected = .{ .inspect_str = "Ok(0)" },
     },
     .{
         .name = "inspect: non-list iterator can be collected before reversing",
@@ -7077,7 +7077,7 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Distance := [Meters(U64)].{
-        \\    range_iter : Distance, Distance, Distance, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(Distance)
+        \\    range_iter : Distance, Distance, Distance, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(Distance)
         \\    range_iter = |Meters(lower), Meters(upper), Meters(step), upper_bound, direction, len_if_known| {
         \\        initial = match direction {
         \\            To => At(lower)
@@ -7109,7 +7109,7 @@ const core_tests = [_]TestCase{
         \\        step: Meters(3),
         \\        upper_bound: Exclusive,
         \\        direction: To,
-        \\        len_if_known: Known(3),
+        \\        len_if_known: Ok(3),
         \\    })
         \\    Iter.fold(range.iter(), [], |items, Meters(value)| items.append(value))
         \\}
@@ -7726,27 +7726,27 @@ const core_tests = [_]TestCase{
     },
     .{
         // Directly exercises the stored range length computation: ascending ->
-        // Known(count); descending and empty -> Known(0); inclusive singleton
-        // -> Known(1); and counts wider than U64 -> Unknown.
-        .name = "inspect: range size_hint reports Known counts, Known(0) descending, Unknown on overflow",
+        // Ok(count); descending and empty -> Ok(0); inclusive singleton
+        // -> Ok(1); and counts wider than U64 -> Err(Unknown).
+        .name = "inspect: range len_if_known reports Ok counts, Ok(0) descending, Err(Unknown) on overflow",
         .source =
         \\{
         \\    (
-        \\        Range.size_hint(U8.range_exclusive_to(5, 10)),
-        \\        Range.size_hint(U8.range_exclusive_to(10, 5)),
-        \\        Range.size_hint(U8.range_exclusive_to(5, 5)),
-        \\        Range.size_hint(U8.range_inclusive_to(5, 5)),
-        \\        Range.size_hint(I8.range_exclusive_to(-3, 2)),
-        \\        Range.size_hint(I8.range_exclusive_to(2, -3)),
-        \\        Range.size_hint(U128.range_exclusive_to(0, 100)),
-        \\        Range.size_hint(U128.range_exclusive_to(0, U128.highest)),
-        \\        Range.size_hint(I128.range_exclusive_to(0, I128.highest)),
-        \\        Range.size_hint(U64.range_inclusive_to(0, U64.highest)),
-        \\        Range.size_hint(Dec.range_exclusive_to(1.0, 5.0)),
+        \\        Range.len_if_known(U8.range_exclusive_to(5, 10)),
+        \\        Range.len_if_known(U8.range_exclusive_to(10, 5)),
+        \\        Range.len_if_known(U8.range_exclusive_to(5, 5)),
+        \\        Range.len_if_known(U8.range_inclusive_to(5, 5)),
+        \\        Range.len_if_known(I8.range_exclusive_to(-3, 2)),
+        \\        Range.len_if_known(I8.range_exclusive_to(2, -3)),
+        \\        Range.len_if_known(U128.range_exclusive_to(0, 100)),
+        \\        Range.len_if_known(U128.range_exclusive_to(0, U128.highest)),
+        \\        Range.len_if_known(I128.range_exclusive_to(0, I128.highest)),
+        \\        Range.len_if_known(U64.range_inclusive_to(0, U64.highest)),
+        \\        Range.len_if_known(Dec.range_exclusive_to(1.0, 5.0)),
         \\    )
         \\}
         ,
-        .expected = .{ .inspect_str = "(Known(5), Known(0), Known(0), Known(1), Known(5), Known(0), Known(100), Unknown, Unknown, Unknown, Known(4))" },
+        .expected = .{ .inspect_str = "(Ok(5), Ok(0), Ok(0), Ok(1), Ok(5), Ok(0), Ok(100), Err(Unknown), Err(Unknown), Err(Unknown), Ok(4))" },
     },
     .{
         .name = "inspect: collect over a Dec range uses its exact hint",

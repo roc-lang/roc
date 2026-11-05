@@ -1113,3 +1113,22 @@ test "record construction and updates preserve boxed fields and initialize all p
     walk.decref(desc, replaced.ptr(), ops);
     try testing.expectEqual(allocations, env.allocations());
 }
+
+test "frame runs place each local at its alignment and report the run end" {
+    const u8_desc = compose.scalarDesc(.u8);
+    const u64_desc = compose.scalarDesc(.u64);
+    try testing.expectEqual(@as(usize, 3), exports.roc_desc_frame_run_size(u8_desc, 3, 0));
+    // A u64 run after three bytes starts at the next multiple of eight.
+    try testing.expectEqual(@as(usize, 24), exports.roc_desc_frame_run_size(u64_desc, 2, 3));
+    var region: [32]u8 align(16) = undefined;
+    var slots: [3][*]u8 = undefined;
+    const bytes_end = exports.roc_desc_frame_place_run(u8_desc, 3, &region, 0, &slots);
+    try testing.expectEqual(@as(usize, 3), bytes_end);
+    try testing.expectEqual(@as([*]u8, &region), slots[0]);
+    try testing.expectEqual(@as([*]u8, region[2..]), slots[2]);
+    var words: [2][*]u8 = undefined;
+    const words_end = exports.roc_desc_frame_place_run(u64_desc, 2, &region, bytes_end, &words);
+    try testing.expectEqual(@as(usize, 24), words_end);
+    try testing.expectEqual(@as([*]u8, region[8..]), words[0]);
+    try testing.expectEqual(@as([*]u8, region[16..]), words[1]);
+}

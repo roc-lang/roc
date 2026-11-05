@@ -108,7 +108,7 @@ main_for_host = |result|
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call (constraint-fn-var 293)
+								(e-call (constraint-fn-var 296)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local
@@ -118,7 +118,7 @@ main_for_host = |result|
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-call (constraint-fn-var 299)
+								(e-call (constraint-fn-var 302)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local

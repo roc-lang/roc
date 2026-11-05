@@ -8795,7 +8795,7 @@ fn nextTagRowPart(self: *Self, cursor: *Var) ?types_mod.Tag.SafeMultiList.Range 
 /// reaches (a lambda passed to a call, say), and is reported at the published
 /// root whose walk found it; one of its types becomes `.err`, after every
 /// report has its snapshot, so no checked type holds the cycle.
-fn rejectSettledInfiniteTypes(self: *Self, cycles: []const SettledCycle, repl_root: ?CIR.Expr.Idx) std.mem.Allocator.Error!void {
+fn rejectSettledInfiniteTypes(self: *Self, cycles: []const SettledCycle, repl_root: ?CIR.Expr.Idx, env: *Env) std.mem.Allocator.Error!void {
     if (cycles.len == 0) return;
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -8803,7 +8803,10 @@ fn rejectSettledInfiniteTypes(self: *Self, cycles: []const SettledCycle, repl_ro
     var reported = collections.DenseMap(Var, void).init(self.gpa);
     defer reported.deinit();
     if (repl_root) |expr_idx| _ = try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx, &reported);
-    try self.checkBindingRootsForInfiniteTypes(&reported);
+    var rejected_defs = collections.DenseMap(CIR.Def.Idx, void).init(self.gpa);
+    defer rejected_defs.deinit();
+    try self.checkBindingRootsForInfiniteTypes(&reported, &rejected_defs);
+    try self.retireDispatchesOfRejectedDefs(&rejected_defs, env);
 
     var rejected: std.ArrayListUnmanaged(Var) = .empty;
     defer rejected.deinit(self.gpa);
@@ -8849,7 +8852,11 @@ fn infiniteTypeSourceVar(self: *Self, cycle: SettledCycle, err_var: Var) Var {
 /// Check every binding root—top-level defs and recorded local bindings—for
 /// infinite/anonymous-recursive types, adding every variable a rejected
 /// root's type reaches to `reported`.
-fn checkBindingRootsForInfiniteTypes(self: *Self, reported: *collections.DenseMap(Var, void)) std.mem.Allocator.Error!void {
+fn checkBindingRootsForInfiniteTypes(
+    self: *Self,
+    reported: *collections.DenseMap(Var, void),
+    rejected_defs: *collections.DenseMap(CIR.Def.Idx, void),
+) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -8870,8 +8877,43 @@ fn checkBindingRootsForInfiniteTypes(self: *Self, reported: *collections.DenseMa
     }
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
-        _ = try self.checkForInfiniteType(CIR.Def.Idx, def_idx, reported);
+        if (try self.checkForInfiniteType(CIR.Def.Idx, def_idx, reported)) {
+            try rejected_defs.put(def_idx, {});
+        }
     }
+}
+
+/// Retire every static dispatch this module resolved to a definition the
+/// settled infinite-type check rejected. Such a dispatch was selected while
+/// the definition still had its inferred type, so it succeeded; the
+/// definition's type is now an error, and a dispatch that selects a
+/// definition whose type is an error is rejected at the expression that owns
+/// it, exactly as when the error was known at selection (an imported
+/// definition's error type fails the selection's relation). The definition
+/// owns the report, so the retired dispatch adds none.
+fn retireDispatchesOfRejectedDefs(
+    self: *Self,
+    rejected_defs: *const collections.DenseMap(CIR.Def.Idx, void),
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    if (rejected_defs.count() == 0) return;
+    for (self.dispatch_target_instantiations.items) |edge| {
+        if (edge.target_env != self.cir) continue;
+        if (!rejected_defs.contains(edge.target_binding.def_idx)) continue;
+        if (self.types.varStaticDispatchRejected(edge.constraint_fn_var)) continue;
+        const constraint = self.dispatchConstraintOfFn(edge.constraint_fn_var);
+        try self.poisonConstraintFailure(edge.receiver_var, constraint, env, null);
+        try self.markStaticDispatchRejected(constraint);
+    }
+}
+
+/// The dispatch constraint whose callable is exactly `fn_var`. Only failure
+/// paths ask, so the scan costs nothing when dispatch succeeds.
+fn dispatchConstraintOfFn(self: *const Self, fn_var: Var) StaticDispatchConstraint {
+    for (self.types.static_dispatch_constraints.items.items) |constraint| {
+        if (constraint.fn_var == fn_var) return constraint;
+    }
+    base.invariant("type checker invariant violated: a selected dispatch edge has no dispatch constraint", .{});
 }
 
 /// The settled-state re-decision of every accepted explicit nominal constructor
@@ -13122,7 +13164,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         var settled_walk = try SettledWalk.init(self.gpa, self.types);
         defer settled_walk.deinit(self.gpa);
         try self.validateSettledValueRows(&env, &settled_walk);
-        try self.rejectSettledInfiniteTypes(settled_walk.cycles.items, null);
+        try self.rejectSettledInfiniteTypes(settled_walk.cycles.items, null, &env);
     }
     try self.recheckNominalConstructorBackings(&env);
 
@@ -15130,8 +15172,11 @@ fn recordOwnDispatch(self: *Self, constraint: StaticDispatchConstraint) Allocato
     try self.own_dispatch_exprs.putNoClobber(constraint.fn_var, intro);
 }
 
-/// Record that `fn_var` is the callable of a `for` loop's own `iter` or `next`
-/// dispatch over `iterable` (`loop_dispatch_iterables`).
+/// Record that `fn_var` is the callable of a synthetic iterator dispatch the
+/// expression `iterable` owns (`loop_dispatch_iterables`): a `for` loop's
+/// `iter` or `next` over its iterable, or an interpolation's `iter` or
+/// `append` building the iterator its assembler receives, over the
+/// interpolation itself.
 fn recordLoopDispatch(self: *Self, fn_var: Var, iterable: CIR.Expr.Idx) Allocator.Error!void {
     // Keyed by raw var, as `own_dispatch_exprs` is.
     std.debug.assert(!self.types.savepointActive());
@@ -18645,7 +18690,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
         var settled_walk = try SettledWalk.init(self.gpa, self.types);
         defer settled_walk.deinit(self.gpa);
         try self.validateSettledValueRows(&env, &settled_walk);
-        try self.rejectSettledInfiniteTypes(settled_walk.cycles.items, expr_idx);
+        try self.rejectSettledInfiniteTypes(settled_walk.cycles.items, expr_idx, &env);
     }
     try self.recheckNominalConstructorBackings(&env);
 
@@ -31781,11 +31826,11 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
 
     // The conversion receives the literal segments at compile time and returns
     // the assembler the interpolation calls with its values at runtime:
-    // `List(Str) -> Try((List(item) -> a), [InvalidInterpolation(Str)])`.
+    // `List(Str) -> Try((Iter(item) -> a), [InvalidInterpolation(Str)])`.
     const segments_var = try self.freshFromContent(try self.mkListContent(try self.freshStr(env, expr_region)), env, expr_region);
-    const values_var = try self.freshFromContent(try self.mkListContent(item_var), env, expr_region);
+    const iterator_var = try self.mkForLoopSequenceVar(.iter, item_var, env, expr_region);
     const assembler_var = try self.freshFromContent(.{ .structure = .{ .fn_pure = Func{
-        .args = try self.types.appendVars(&.{values_var}),
+        .args = try self.types.appendVars(&.{iterator_var}),
         .ret = expr_var,
     } } }, env, expr_region);
 
@@ -31801,6 +31846,17 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
             interpolation.method_name_region,
             expr_idx,
         );
+        // The iterator the assembler receives is built at runtime from the
+        // values on the stack: `iter` on an empty `List(item)`, then `append`
+        // for each value in order. Both are ordinary builtin dispatches
+        // the interpolation owns, like a `for` loop's `iter` and `next`.
+        const seed_list_var = try self.freshFromContent(try self.mkListContent(item_var), env, expr_region);
+        const iter_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("iter"));
+        const append_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("append"));
+        const iter_fn_var = try self.mkSyntheticReceiverDispatchConstraint(seed_list_var, &.{}, iterator_var, iter_method, env, expr_region);
+        const append_fn_var = try self.mkSyntheticReceiverDispatchConstraint(iterator_var, &.{item_var}, iterator_var, append_method, env, expr_region);
+        try self.recordLoopDispatch(iter_fn_var, expr_idx);
+        try self.recordLoopDispatch(append_fn_var, expr_idx);
         try self.cir.store.replaceExprWithInterpolationConstraint(
             expr_idx,
             interpolation.first,
@@ -31809,6 +31865,13 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
             constraint_fn_var,
             assembler_var,
             dispatcher_var,
+            .{
+                .item_var = item_var,
+                .iterator_var = iterator_var,
+                .seed_list_var = seed_list_var,
+                .iter_fn_var = iter_fn_var,
+                .append_fn_var = append_fn_var,
+            },
         );
     }
     return .done;
@@ -50272,7 +50335,7 @@ fn satisfyBuiltinStrInterpolation(
         try self.poisonConstraintFailureSource(dispatcher_var, constraint, failure_expr orelse self.instantiatedInterpolationOwner(constraint));
         return true;
     }
-    // `Str.from_interpolation` receives `Iter((Str, Str))`, so the
+    // `Str.from_interpolation`'s assembler receives `Iter(Str)`, so the
     // constraint's generated item type is Str. A generic body that keeps the
     // dispatch calls that method with an iterator of this item type.
     _ = try self.unify(metadata.item_var, expected_str_var, env);

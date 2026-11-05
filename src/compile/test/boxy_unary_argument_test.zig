@@ -98,7 +98,9 @@ fn inspectEntries(store: *const lir.LirStore, _: *const layout.Store) harness.Lo
         try pending.append(std.testing.allocator, proc.body.?);
         var arg_descs: usize = 0;
         const params = store.getLocalSpan(proc.args);
-        const param: ?lir.LIR.LocalId = if (params.len == 2) collections.GuardedList.at(params, 0) else null;
+        // An erased worker's last parameter is the erased ABI's reuse input.
+        const reuse_params: usize = @intFromBool(proc.erased_reuse_arg != null);
+        const param: ?lir.LIR.LocalId = if (params.len == 2 + reuse_params) collections.GuardedList.at(params, 0) else null;
         var forwards_param = false;
         var extracts_param = false;
         var retains_param = false;
