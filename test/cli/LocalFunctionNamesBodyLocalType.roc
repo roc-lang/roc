@@ -17,15 +17,15 @@ count = |x, n| {
 
 # A local function that returns the type, matched in the enclosing body.
 first_or : a, a -> a
-first_or = |x, fallback| {
+first_or = |x, otherwise| {
 	Local := [Default, Other(List(a))]
 	wrap : List(a) -> Local
 	wrap = |items| if List.is_empty(items) { Local.Default } else { Local.Other(items) }
 	match wrap([x]) {
-		Default => fallback
+		Default => otherwise
 		Other(items) => match List.first(items) {
 			Ok(item) => item
-			Err(_) => fallback
+			Err(_) => otherwise
 		}
 	}
 }
