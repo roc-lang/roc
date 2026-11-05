@@ -296,6 +296,27 @@ fn redirectDarwinContextToEscape(context: ?*anyopaque, recovery: *const StackOve
     }
 }
 
+/// The id of the thread writing a crash report, or 0 while no thread is.
+var crash_reporter: std.atomic.Value(u64) = .init(0);
+
+/// Claim the crash report for the calling thread, which then writes the
+/// report and ends the process. Returns only to the claiming thread. A fault
+/// in the report itself ends the process at once with `exit_code`, the code
+/// the report would have exited with. A thread that faults while another
+/// thread is reporting (every worker of a parallel link hits the same bad
+/// mapping at once) sleeps until that thread ends the process, so the report
+/// is neither interleaved nor cut short, and no thread runs the reporting
+/// code on top of another's run of it.
+fn claimCrashReport(exit_code: u8) void {
+    const me: u64 = std.Thread.getCurrentId();
+    const reporter = crash_reporter.cmpxchgStrong(0, me, .acq_rel, .acquire) orelse return;
+    if (reporter == me) std.process.exit(exit_code);
+    while (true) {
+        const forever: std.c.timespec = .{ .sec = std.math.maxInt(i32), .nsec = 0 };
+        _ = std.c.nanosleep(&forever, null);
+    }
+}
+
 fn unblockFaultSignals() void {
     if (comptime !supports_posix_signals) return;
     var set = posix.sigemptyset();
@@ -619,10 +640,12 @@ fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyop
                 unblockFaultSignals();
                 recovery.escape(recovery.context);
             }
+            claimCrashReport(134);
             if (stack_overflow_callback) |callback| callback();
             std.process.exit(134);
         },
         .access_violation => {
+            claimCrashReport(139);
             if (access_violation_callback) |callback| {
                 if (comptime AccessViolationContext == void) {
                     callback(fault_addr, {});
@@ -637,6 +660,7 @@ fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyop
 }
 
 fn handleFpeSignal(_: posix.SIG, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+    claimCrashReport(136);
     if (arithmetic_error_callback) |callback| callback();
     std.process.exit(136);
 }

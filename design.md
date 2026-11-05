@@ -2235,9 +2235,13 @@ A checked module cache entry records every requested root it did not evaluate
 with the explicit `unevaluated` payload; its constant template keeps its
 `eval_template` state and the constant store holds nothing for it. When a
 compilation loads a finalized checked module with unevaluated requests, it
-reopens that module before evaluation: the evaluation columns move into
-storage the module owns, every unevaluated root returns to `pending`, and the
-module joins finalization with the compilation's other modules. Finalization
+reopens that module before evaluation: the evaluation columns (the
+compile-time roots, the constant templates, the constant store, and the
+canonical name store, since a stored type names its labels and nominal types
+there and a value evaluated here can reach names the module's own source never
+mentions, such as the capture types of an imported closure) move into storage
+the module owns, every unevaluated root returns to `pending`, and the module
+joins finalization with the compilation's other modules. Finalization
 requests only the pending roots of the modules it finalizes, so the reopened
 module's evaluated roots are restored from its store like any other module's,
 and its demanded pending roots evaluate against the same checked module data
@@ -2433,6 +2437,14 @@ values pass their own storage. Views extend their owner's lifetime. Procedure
 arguments, which the prologue writes, and locals in deferred string-match
 captures, which the backend materializes outside the statements that access
 them, keep their activation lifetime.
+
+The always-inline selection of wrappers and leaves is a speed-build policy.
+A size build (`--opt=size`) selects nothing: every function the module
+defines, including the linked builtins and the private runtime, carries
+LLVM's `optsize` and `minsize` and no `inlinehint`, so LLVM's size cost model
+is the one measure of every inlining decision, exactly as it is for a C or
+Zig module built for minimum size. The pinned leaf builtins keep
+`alwaysinline` in every mode.
 
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
@@ -3771,8 +3783,12 @@ consumes these checked modules; it never suspends or reconstructs a checker.
 
 User diagnostics never suppress checked module output or propagate dependency failure. Every invalid source construct is represented at its first owning
 producer boundary by explicit checked data: a checked runtime-error expression,
-a checked-error dispatch plan, a crash constant, or a checked-error platform
-requirement. Importers and every post-check stage consume that data normally.
+a checked-error dispatch plan, a crash constant, a checked-error platform
+requirement, or a checked-error provided export (a `provides` entry whose
+checked type contains an error declares no host ABI, so it publishes no
+runtime root, static data request, or glue signature, and a runtime command
+stops before linking). Importers and every post-check stage consume that data
+normally.
 Independent definitions, imports, compile-time roots, and runtime paths remain
 available; execution crashes only if it reaches a recorded checked error.
 
@@ -6297,7 +6313,7 @@ Every live literal-origin record leaves checking with one explicit resolution:
 
 An interpolated string literal converts in two stages. Its
 `from_interpolation` constraint is
-`List(Str) -> Try((List(item) -> a), [InvalidInterpolation(Str)])`, where `a`
+`List(Str) -> Try((Iter(item) -> a), [InvalidInterpolation(Str)])`, where `a`
 is the interpolation's own type and `item` is every interpolated value's type.
 The conversion's only operand is the literal's segments, the `n + 1` source
 strings around its `n` interpolations, so it is a literal conversion exactly
@@ -6305,14 +6321,41 @@ like a quote's: it resolves to a compile-time root, or to Boxy's runtime
 literal conversion, whose value is the assembler, and its `Err` arm is a
 literal-rejection crash with an `interpolation` `LiteralRejectionSite`, which
 compile-time evaluation reports as the interpolation's own diagnostic. The
-interpolation's value is the assembler called with the interpolated values as
-one list, which cannot reject. The checked interpolation carries its segments,
-its values, and the assembler's type; in a generalized body the checker relates
-each value's type to `item` at the generalization boundary (see "Builtin Str
-Interpolation Part Compatibility"), so Monotype relates `item` to each value's
-type before lowering the call and Boxy gives `item` the first value's
-type. `Try` declares no
-`from_interpolation`, so an interpolation cannot target a `Try` itself.
+interpolation's value is the assembler called with an iterator over the
+interpolated values, which cannot reject. The checked interpolation carries its
+segments, its values, and the assembler's type; in a generalized body the
+checker relates each value's type to `item` at the generalization boundary (see
+"Builtin Str Interpolation Part Compatibility"), so Monotype relates `item` to
+each value's type before lowering the call and Boxy gives `item` the first
+value's type. `Try` declares no `from_interpolation`, so an interpolation
+cannot target a `Try` itself.
+
+The iterator the assembler receives is built at runtime without allocating:
+the checker mints two synthetic receiver dispatches the interpolation owns,
+exactly as a `for` loop owns its `iter` and `next` (`IteratorForPlan`, with an
+`interpolation` site): `iter` on an empty `List(item)` and `append` on the
+iterator with each value in order, resolved against the builtin `List` and
+`Iter` like any other dispatch. Monotype emits the chain from those plans as
+iterator dispatches over pre-lowered operands (the seed list, the iterator so
+far, and the value), each bound to a local, so every step takes the minted
+bounded representation its producer gives it and the chain is a tower of
+values on the stack. The assembler is then called at a request naming that
+representation, as a call's argument evidence names it, so the assembler's
+body is specialized for the chain. The chain never depends on how many values
+the literal has: a literal with more values is a deeper chain, with no other
+difference. Boxy boxes every closure, so it emits the plan's `iter` dispatch
+over the list of the values instead: one list and a box per step, where a
+chain of `append` dispatches would nest a boxed closure per value per step.
+
+A literal whose type is `Str`, whether the checker proved it (a `str` checked
+expression over its segments and values) or a generalized literal
+instantiated at `Str`, never calls the assembler. Its non-empty segments and
+its values are written once by the `str_from_parts` low-level op: the builtin
+sums the lengths, allocates one small or heap string, and copies each part in,
+borrowing every part. An empty segment writes nothing, so it is not a part
+(`CheckedBodyStoreView.isEmptyStrSegment`); a literal that is one part is
+that part. The op takes any number of parts and every backend marshals them
+through a stack array sized by the call.
 
 Literal-pattern deferred static-dispatch constraint groups are owned by the
 enclosing match, lambda, loop, binding statement, or top-level definition.
@@ -7990,12 +8033,12 @@ types:
 
 ```roc
 Iter(item) :: {
-    len_if_known : [Known(U64), Unknown],
+    len_if_known : Try(U64, [Unknown]),
     step : () -> [One({ item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done],
 }
 
 Stream(item) :: {
-    len_if_known : [Known(U64), Unknown],
+    len_if_known : Try(U64, [Unknown]),
     step! : () => [One({ item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
 }
 
@@ -8005,7 +8048,7 @@ Range(num) :: {
     step : num,
     upper_bound : [Exclusive, Inclusive],
     direction : [To, From],
-    len_if_known : [Known(U64), Unknown],
+    len_if_known : Try(U64, [Unknown]),
 }
 ```
 
@@ -8040,8 +8083,8 @@ Range syntax produces a reusable `Range(num)`, not an `Iter(num)`. The
 exclusive and inclusive operators dispatch to `num.range_exclusive_to` and
 `num.range_inclusive_to`, respectively. `Range.step_by` replaces the stored
 absolute step with another value of `num`; it does not compose or multiply
-steps. `Range.size_hint` returns the stored exact count when that count fits in
-`U64`, otherwise `Unknown`. `Range.iter` delegates to `num.range_iter` and
+steps. `Range.len_if_known` returns the stored exact count when that count fits in
+`U64`, otherwise `Err(Unknown)`. `Range.iter` delegates to `num.range_iter` and
 propagates that hint into the resulting iterator. `Range.iter` and the numeric
 `range_iter` implementations are iterator producers that mint no
 representation of their own: the result is exactly the `Iter.custom` chain the
@@ -11053,7 +11096,7 @@ rolls the whole attempt back and reports the interpolation-part type mismatch.
 
 Builtin quote and interpolation literal constraints are discharged directly by
 `Str`. Discharging an interpolation constraint also makes its item type `Str`,
-because `Str.from_interpolation`'s assembler receives `List(Str)`: a generic
+because `Str.from_interpolation`'s assembler receives `Iter(Str)`: a generic
 body that keeps the dispatch calls that method through dictionary evidence
 whose callable type names the item. A numeral literal constraint is
 rejected because builtin `Str` does not
@@ -11083,7 +11126,7 @@ and generalization read the boundary's variable pool
 through the constraint's signature exactly as it sees the item type, and a
 generalized interpolation's scheme relates its parts to the item type
 (`greet = |name| "hi ${name}"` is
-`a -> b where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]`),
+`a -> b where [b.from_interpolation : List(Str) -> Try(Iter(a) -> b, [InvalidInterpolation(Str)])]`),
 so a body compiled once for every instantiation builds its items from its parts
 without consulting any use.
 
@@ -14055,12 +14098,25 @@ thus carries the type knowledge of its creation site, and its worker needs no
 hidden parameters of its own: it reads them from its captures. When any
 capture is of variable type, the capture record is a dynamic record composed
 from the captures' descriptors, its first word is the capture record's
-descriptor, and the callable's `on_drop` is the shared runtime drop that reads
-that word. When every capture is of closed type, the capture record has a
-static layout and `on_drop` is the per-worker helper the backend generates for
-that layout. Zero-capture functions are static, immortal callables. The
-`out_desc` slot of the erased-callable ABI is always written null: the caller
-knows the result type's descriptor itself.
+descriptor, its second word the capture capacity of the allocation holding it
+(the record's size when the callable is first packed; an allocation repacked
+in place keeps its capacity), and the callable's `on_drop` is the shared
+runtime drop that reads the first word. When every capture is of closed type,
+the capture record has a static layout and `on_drop` is the per-worker helper
+the backend generates for that layout. Zero-capture functions are static,
+immortal callables. The `out_desc` slot of the erased-callable ABI is always
+written null: the caller knows the result type's descriptor itself.
+
+Every `.boxy` erased worker (a lambda, an adapter, a method entry, a literal
+or root thunk) takes the erased ABI's reuse argument as its last parameter,
+named by `LirProcSpec.erased_reuse_arg`, and consumes it exactly once
+(Destination-Passing Results and Allocation Reuse): the first dynamic
+closure the body packs repacks it when the worker's own closure is dynamic,
+a packing of the worker's own closed capture layout repacks it when that
+closure is closed, and otherwise ARC releases it. A worker's capture record is
+a view whose owner is that argument, so a packing that would repack the
+allocation while a later read of the captures is still to come retains it,
+and the runtime then packs afresh.
 
 An erased call passes its arguments as one record in the uniform ABI. When the
 call's argument types are closed, that record has a static layout; when they
@@ -14164,22 +14220,25 @@ adding it, takes the lock, probes the current table again, and interns on a
 true miss. Only insertion and growth hold the lock. Keys are a few words of
 constructor tags and operand addresses, hashed by mixing each word.
 
-Where the consumer is the interpreter or the native dev backend, each descriptor
-or dictionary composition statement also owns a one-entry site cache in
-zero-initialized writable static data; LLVM and wasm consumers read no sites, so
-their lowering emits no slots and every composition reaches the interner. The
+Where the consumer is the interpreter, the native dev backend, or the LLVM
+backend, each descriptor or dictionary composition statement also owns a
+one-entry site cache in zero-initialized writable static data; the wasm dev
+backend reads no sites, so its lowering emits no slots and every composition
+it runs reaches the interner. The
 lowerer assigns its slot
 and stable worker/site identity; LIR cloning and compaction preserve that
 reference. Mutable slots are never content-deduplicated or pooled between
 program images. Dev run images place them on separate writable pages outside
-the code and read-only data sections and outside the retained static pool.
+the code and read-only data sections and outside the retained static pool. An
+LLVM object names a site by the symbol of the zero-fill definition in the
+program's static data, never by a private constant copy of its initial bytes.
 Saved objects and LirImages carry the initial zero bytes, never runtime pointers.
 Each interpreter owns its own instances of these slots, with
 the lifetime of its composition arena.
 
-The dev backend and interpreter acquire-load a site's pointer to an immutable
+Every consumer with sites acquire-loads a site's pointer to an immutable
 snapshot of the last operand pointers and result. If every operand matches,
-they use that result without entering the runtime or probing the interner. The
+it uses that result without entering the runtime or probing the interner. The
 constructor, worker, arities and other non-local arguments are fixed by the
 site; the local operand sequence is its complete varying key. A miss composes
 normally, then release-stores a complete snapshot pointer. An atomic store
@@ -14187,7 +14246,10 @@ of one pointer means no reader can observe a partially replaced operand/result
 pair, even with several writers. Snapshots are themselves interned by result
 and operand sequence in the program's immortal table, so alternating previously
 seen instantiations does not allocate on each replacement. A replaced snapshot
-stays alive for racing readers until the program is destroyed.
+stays alive for racing readers until the program is destroyed. The native dev
+backend and the LLVM backend emit the load and the operand comparisons inline
+at the site, so a hit costs a few loads and compares, and only a miss enters
+the runtime (`roc_desc_site_publish`).
 
 A snapshot belongs to the program whose immortal table interned it. A cached
 module object is loaded once per compile-time evaluation and shared by every
@@ -14505,6 +14567,16 @@ it (`postcheck/boxy/const_schema.zig`). Both evaluators run the same LIR
 interpreter or native dev evaluator and store the same checked values, so a
 `.boxy` runtime program restores constants the same way under either, and
 reports the same diagnostics.
+
+Selecting a root's compile-time evaluator by whether its value contains a
+function resolves nominal backings against the **complete checked program**:
+the lowering root, its platform relation modules, and its imports. The pending
+evaluation module list is not a type lookup universe. In particular, a cached
+module with no pending roots can still declare a nominal used by a fresh root
+in another module; `roc test` can also use that cached module as its program's
+ownership anchor, which is deliberately absent from the ordinary import list.
+Cache hits change which roots need evaluation, not which type declarations
+are visible when classifying their values.
 
 Where a cache exists and the compiler runs native code, a module's roots first
 run in a program linked against its imports' cached objects: a module unit
@@ -17749,6 +17821,56 @@ A `Skip` carries only `rest`: it signals "advanced one position, produced no
 item this step," which is what keeps adapters like `keep_if` non-recursive. A
 plain source `for` loop binds nothing from it and simply continues with `rest`.
 
+`.boxy` lowering emits the same loop from the checked plan. When the plan's
+`next` dispatch resolves to the procedure the checker stamped
+`IteratorProcedureId.next` of the pure `Iter` protocol, whose definition is
+`|iterator| (iterator.step)()`, the loop calls the step thunk itself: it reads
+the step field the owner's `IteratorRepresentationTopology` names from the
+iterator it owns and makes an owned erased call of it (Destination-Passing
+Results and Allocation Reuse). The loop dismantles the dying iterator into
+that call, so the thunk receives its own allocation unique and repacks it
+with the next step's captures; an iterator over a list is then advanced
+without an allocation. The call is made where the loop matches its result, so
+no pending call is left for the loop to drive. Every other `next`, including
+`Stream.next!`, is dispatched to as the plan resolves it.
+
+A `.boxy` loop whose iterable is a chain of stamped producers runs the chain
+structurally, building no step closure at all (`body.zig` `iteratorChain`,
+`forChainStart`). The chain is read from the checker's
+`IteratorProcedureId` stamps alone: the plan's `iter` dispatch stamped
+`list_iter`, `list_iter_rev` or `str_iter_utf8` makes the iterable the
+source, and one stamped `identity` makes the iterable expression the chain,
+each of whose dispatch calls of a value result on the `Iter` protocol whose
+target is stamped `map`, `keep_if`, `drop_if`, `with_index`, `take_first` or
+`drop_first` is an adapter over its receiver, `identity` passes its receiver
+through, and `list_iter`, `list_iter_rev` or `str_iter_utf8` is the source.
+Any other expression is the source as an iterator value, stepped through the
+protocol as above; a chain that is only such a value is the plain loop. No
+producer is recognized by a name or a type shape, and a producer this
+lowering does not run structurally (`custom` and the ranges built on it,
+`single`, `concat`, `append`, `step_by`, `prepended`) ends the chain as a
+value, keeping every behavior of its own step, such as a `Known` count a
+`custom` source exceeds crashing on.
+
+The loop evaluates the chain's operands in chain order before it starts,
+exactly when the producer calls would evaluate them, and carries the chain's
+state in one tuple: a list source's index (a reversed one's remaining
+count), a string source's byte index, an iterator source's value, a
+`with_index` counter, a `take_first` remaining count and a `drop_first`
+pending count; join-parameter scalarization gives each its own local. Each
+iteration is the composition of the producers' steps: every `take_first` at
+its count ends the loop before the source steps, the source yields its item
+(`list_get_unsafe` or `str_get_utf8_byte_unsafe` by index, or the owned
+step call of the iterator value, whose `Skip` continues with its `rest`),
+and the adapters run innermost first: `map` calls its transform, `keep_if`
+and `drop_if` call their predicate and continue the loop with the state the
+inner producers advanced to when they skip, `with_index` pairs the item with
+a counter that advances only when its item is yielded, `take_first` counts
+the item down, and `drop_first` skips while its count is pending. The
+observable behavior, including the order of the user functions' effects and
+of their calls, is the closure protocol's; only the allocation of step
+closures is gone, as it is under `.lss`.
+
 No `for` node exists after Monotype IR.
 
 ## Monotype Lifted IR
@@ -20125,9 +20247,11 @@ its packed arguments, one owned reference to its closure, and the layout and
 result descriptor the statement calls with, and the procedure returns. Its
 target holds no value.
 
-Whoever awaits that procedure's result makes the pending call, releases the
-closure reference afterwards, and repeats while the call it made leaves
-another pending. The erased-call runtime does this after every erased call it
+Whoever awaits that procedure's result makes the pending call and repeats
+while the call it made leaves another pending. The pending record owns one
+reference to the closure: for an owned deferred call (`reuse_closure`), the
+driver passes that reference to the callee as its reuse input, which consumes
+it; for any other, the driver releases it after the call. The erased-call runtime does this after every erased call it
 makes, so an erased-callable procedure it invoked can simply return. Every
 other waiter is stated in LIR by the tail-drive pass (`src/lir/tail_drive.zig`),
 which runs after ARC and stamps a `PendingDrive` on each direct call whose
@@ -20545,6 +20669,23 @@ a worklist keyed by `(proc, demand vector)`:
 4. The variant table is keyed by vector content, so identical demands share
    one variant deterministically, independent of discovery order.
 
+A borrowed position whose owned-only field takes cover every stored unit of
+the parameter on every returning path is owned by the base signature itself,
+decided once dismantle analysis has solved the parameter and before any
+emission. The borrowed base would retain each of those units exactly where
+the owned body takes them, so for a caller that keeps its argument the two
+conventions cost the same retain, in the caller or in the callee, and for a
+caller whose argument dies the owned convention is strictly cheaper; a
+borrowed base variant would therefore save no caller any work and exist only
+to duplicate the body (a closure body appending to its captured list, called
+both from a loop that borrows each closure out of a list and from a site that
+owns one). The parameter's binding stays solved borrowed and the base
+emission overrides it to owned exactly as a demanded variant does; callers
+adapt to the owned position as to any other, retaining an argument they keep
+and moving one that dies. A position that lends a borrowed return, or holds a
+demand hole, keeps its borrowed mode, and a pinned signature is never
+changed.
+
 Variant bodies are cloned with the existing statement-cloning machinery and
 added with `LirStore.addProcSpec`. Root procs are never specialized; their
 vectors are pinned. The variant count is bounded by realized demand vectors,
@@ -20929,7 +21070,12 @@ A borrowed struct read out of a container, or a borrowed pure alias of one,
 is a view of the slots it covers. It holds no unit: its field reads are
 reads of the container's slots offset by the view's first slot, so a
 consumed read through it takes those slots from the container, and its
-other uses observe its whole range. Its definition copies only the
+other uses observe its whole range. A borrowed tag union read out of a
+container is a view of its one slot: nothing reads through it except an
+ownership-complete payload view, which carries the union's whole unit, so
+it is held exactly when that payload reaches a consuming operand (the
+closure read out of a record of closures, whose captures are unwrapped and
+passed to the closure body), and it dismantles no further. Its definition copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
 view's residual shell, numbered in the view's own layout. A view whose shell
@@ -20943,12 +21089,16 @@ result by a take. A residual release reads a struct field whose slots are
 only partly residual as a view marked with its absent slots and releases the
 residual slots through it.
 
-A view whose value reaches a consuming operand (the view itself or a
-borrowed pure same-value alias of it at an owned direct-call position, a
-borrowed position whose owned variant takes a field, or a consumed or
-retained low-level position, with no other mention of the view's borrow
-forest in the same statement) is first solved as a take of its whole range
-at its definition. While it is, it holds those slots: reads
+A view whose value reaches a consuming operand (the view itself, a
+borrowed pure same-value alias of it, or an ownership-complete projection of
+either, through any number of such projections and aliases, at an owned
+direct-call position, a borrowed position whose owned variant takes a field,
+or a consumed or retained low-level position, with no other mention of the
+view's borrow forest in the same statement) is first solved as a take of its
+whole range at its definition. An ownership-complete projection holds every
+refcounted byte its source owns, so consuming it consumes the source's whole
+unit; the certifier claims the source's stored unit through the projection
+exactly as it does for any complete aggregate read. While it is, it holds those slots: reads
 through it, through its aliases, and through views nested in it are reads of
 the view, not of its container, and once the take is committed the view is a
 container in its own right, solved right after the container it was taken
@@ -21128,8 +21278,26 @@ and the take binding's unit stays live through the alias's uses while the
 root's residual shell dies at its own last use. Only the groups an alias leaves
 are re-resolved, so a program whose aliases all stay in their group pays one
 pass over its aliases.
-Dominance is computed from the explicit statement-successor graph with a
-synthetic entry for all procedure roots. Every path from that entry to a
+The solution likewise adopts every binding solved borrowed whose read
+dismantle committed as a take: a held view, a held tag-union field read, or
+a projected container that receives its root's unit. In the emissions its
+take applies to, such a binding holds a unit of its own, so it leads a
+liveness group of its own together with every borrow anchored through it,
+and its container's group dies at the container's own last use: the sibling
+fields of a record are released as soon as the record's last field is taken,
+before the call that consumes that field, rather than after it. In the other
+emissions the binding holds nothing and its container is a borrowed
+parameter, which no release waits for, so one grouping serves every
+emission. The binding keeps its borrow source, which the ownership-place
+query still follows to the nearest binding the current emission makes
+owned. A complete projection of such a binding denotes the unit it holds,
+exactly as a complete projection of an owned binding does.
+Dominance is computed from the control-flow graph with a synthetic entry for
+all procedure roots: a statement's structural successors, except that a
+join's body is entered only through the jumps that name the join, so a read
+in a join's remainder dominates the body when every jump to the join runs
+after it (a record projected before a `match` whose arm jumps to the match's
+join, and projected again after it). Every path from that entry to a
 statement starts at the body of a procedure that reaches the statement and
 stays among statements that procedure reaches, so a statement dominates only
 statements of procedures that transitively share statements with its own.
@@ -21138,6 +21306,12 @@ exactly as the whole store's graph would. Immediate dominators settle in reverse
 postorder, and dominator-tree intervals answer field-read and tag-payload-read
 dominance queries without re-walking procedure bodies. Read comparisons are indexed by their
 explicit ownership root rather than scanning unrelated locals.
+A dominating read is no representative of a later read when a `set_local`
+writing the root lies on some path between them (a path leaving the
+dominating read, through the write, to the later read, that does not pass
+the dominating read again): the later read may observe the written value,
+which the earlier read never held. Both reads then keep their own field
+reads of the root.
 The analysis is a deterministic function of the store, whatever the schedule.
 Reachability and each statement's procedure come from the uniqueness solve's
 per-procedure statement lists, which list each procedure's statements in the
@@ -21272,16 +21446,17 @@ descendants and whole container uses; it never guesses from operation names.
 A read solved borrowed holds no unit, so it never consumes at the read, with
 one exception: a view whose value reaches a consuming operand is taken whole
 at its definition and then holds its slots (see the view rules above). Every
-other borrowed read's binding, and every borrowed pure same-value alias of
-it, carries the field to where the value is consumed: an owned direct-call
-position, a borrowed position whose owned variant takes a field, or a
-consumed or retained low-level position, with no other mention of the
-binding's borrow forest in the same statement. Each such operand is a
-use-point take candidate. A binding borrowed onward from the read through a
-field or payload read, a borrowed low-level result, or a lent call result
-holds a different value than the field (the payload unboxed out of a boxed
-field is not the box), so consuming it only observes the field, exactly like
-any other mention of the forest. It takes the
+other borrowed read's binding, every borrowed pure same-value alias of it,
+and every ownership-complete projection of either carries the field to where
+the value is consumed: an owned direct-call position, a borrowed position
+whose owned variant takes a field, or a consumed or retained low-level
+position, with no other mention of the binding's borrow forest in the same
+statement. Each such operand is a use-point take candidate. A binding
+borrowed onward from the read through a partial field or payload read, a
+borrowed low-level result, or a lent call result holds a different value
+than the field (the payload unboxed out of a boxed field is not the box), so
+consuming it only observes the field, exactly like any other mention of the
+forest. It takes the
 field only where it is the last observation of that field on every path; an
 earlier one pays its ordinary retain at the operand, since the binding is
 read again afterwards. The take belongs at the operand, not at the read. A
@@ -22245,7 +22420,28 @@ LIR lowerer records each emitted `assign_ref` target's provenance from it, and
 the resolution in `lir/erased_owner.zig` follows it. A LIR transform that
 rewrites the definitions on such a chain, as join scalarization does when it
 turns field reads into aliases, re-resolves the reuse sources of the procedures
-it changes with that resolution. Boxy lowering emits no owned erased calls.
+it changes with that resolution. Boxy lowering marks an erased call owned
+(`DynOp.call_erased.reuse_closure`, with the closure as its reuse source,
+resolved to the allocation's root after lowering) when the call's result type
+holds exactly one erased-callable slot (`types.Converter.erasedResultSlots`:
+a function type is a slot, a record's or tuple's slots add up, a tag union's
+are its largest variant's, a list of callables holds any number, a box holds
+its payload's, a nominal its backing's, and a type variable holds none). ARC
+moves the closure's unit into the call when the closure dies there and
+retains one for it otherwise; a deferred owned call's pending record carries
+the unit to the driver (Deferred Erased Calls).
+
+A `.boxy` dynamic closure's capture record carries its allocation's capture
+capacity (Function Values), so the same-size class rule above widens for
+those allocations: a `DynOp.closure` with a reuse operand repacks the
+allocation in place when it is unique (at runtime, or `reuse_unique` when ARC
+proved it) and the new record fits the recorded capacity, releasing the old
+capture through the old drop callback first and keeping the capacity; a
+shared or too small allocation is released and the callable is fresh. The
+reuse operand is always an allocation packed by `DynOp.closure`: a worker's
+own, or one such a worker handed on. A closed-capture `.boxy` closure
+repacks through `assign_packed_erased_fn` under the same-layout rule, like
+an `.lss` one.
 
 The erased ABI's capture pointer addresses the interior of the callable passed
 as the reuse ownership input. LLVM must not mark either parameter `noalias`:
@@ -24725,8 +24921,13 @@ image is built; what remains is a patch site: an import of another image or
 of the host, or a reference whose distance depends on where the linker places
 the image's regions. The image is a pure function of the unit (Per-Module
 Output), so two builds of a unit write identical images. The block divides
-into atoms, one per symbol start, each recording what it references; a link
-writes only the atoms the program reaches and leaves the rest as zero holes.
+into atoms, one per function in the text and one per datum in the read-only
+data (a refcounted datum's symbol sits inside its atom, after the header),
+each recording what it references and, for every relative reference the
+image resolved between two of its atoms, where the field is; a link writes
+only the atoms the program reaches, each image's packed together in image
+order, and fixes a resolved reference again only when the atoms it left out
+moved the reference's two ends by different amounts.
 The compiler's builtins and Boxy runtime objects are converted once, in Roc's
 own build graph, into a support image of the same format and embedded. A
 library unit's cache entry files the image's `CodeLocations` beside it, so
@@ -24838,7 +25039,9 @@ directory when the build starts, and a background job hashes the host inputs,
 looks the host up and copies it into the output while the program compiles;
 on a miss the link step prelinks the host. The link then walks atoms from
 the `provides` symbols, places the reached images after the host at
-addresses that are a function of their content digests, resolves imports
+addresses that are a function of their content digests (each run of an
+image's consecutive reached atoms keeps its bytes together and the
+alignment its image offsets had), resolves imports
 (app region first, then host), fills the output through a shared mapping on
 the compilation's worker threads, writes the provide windows, program
 headers, build id (a hash of the host's and the images' content digests),

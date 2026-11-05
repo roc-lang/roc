@@ -2,8 +2,8 @@
 # `from_interpolation` accepts its parts. Its `Str` instantiation rejects the
 # `U8` part at that use alone, so the `Bytes` use still runs.
 Bytes := [Bytes(List(U8))].{
-	from_interpolation : List(Str) -> Try((List(U8) -> Bytes), [InvalidInterpolation(Str)])
-	from_interpolation = |_segments| Ok(|values| Bytes.Bytes(values))
+	from_interpolation : List(Str) -> Try((Iter(U8) -> Bytes), [InvalidInterpolation(Str)])
+	from_interpolation = |_segments| Ok(|values| Bytes.Bytes(List.from_iter(values)))
 	count : Bytes -> U64
 	count = |Bytes.Bytes(list)| list.len()
 }

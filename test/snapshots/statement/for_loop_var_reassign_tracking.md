@@ -168,7 +168,7 @@ NO CHANGE
 				(e-block
 					(s-reassign
 						(p-var-assign (ident "sum_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 349)
+						(e-dispatch-call (method "plus") (constraint-fn-var 352)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "sum_"))))
@@ -179,7 +179,7 @@ NO CHANGE
 						(e-if
 							(if-branches
 								(if-branch
-									(e-dispatch-call (method "is_gt") (constraint-fn-var 352)
+									(e-dispatch-call (method "is_gt") (constraint-fn-var 355)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "n"))))
@@ -196,7 +196,7 @@ NO CHANGE
 								(e-block
 									(e-empty_record)))))
 					(e-empty_record)))
-			(e-dispatch-call (method "plus") (constraint-fn-var 358)
+			(e-dispatch-call (method "plus") (constraint-fn-var 361)
 				(receiver
 					(e-lookup-local
 						(p-var-assign (ident "sum_"))))

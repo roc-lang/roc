@@ -6,7 +6,7 @@ type=file
 # SOURCE
 ~~~roc
 Html := [Text(Str)].{
-	from_interpolation : List(Str) -> Try((List(Html) -> Html), [InvalidInterpolation(Str)])
+	from_interpolation : List(Str) -> Try((Iter(Html) -> Html), [InvalidInterpolation(Str)])
 	from_interpolation = |_segments| Ok(|_items| Html.Text(""))
 }
 
@@ -91,7 +91,7 @@ EndOfFile,
 							(ty (name "Try"))
 							(ty-fn
 								(ty-apply
-									(ty (name "List"))
+									(ty (name "Iter"))
 									(ty (name "Html")))
 								(ty (name "Html")))
 							(ty-tag-union
@@ -187,7 +187,7 @@ NO CHANGE
 				(ty-apply (name "Try") (builtin)
 					(ty-parens
 						(ty-fn (effectful false)
-							(ty-apply (name "List") (builtin)
+							(ty-apply (name "Iter") (builtin)
 								(ty-lookup (name "Html") (local)))
 							(ty-lookup (name "Html") (local))))
 					(ty-tag-union
@@ -241,13 +241,13 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "List(Str) -> Try(List(Error) -> Html, [InvalidInterpolation(Str)])"))
+		(patt (type "List(Str) -> Try(Iter(Error) -> Html, [InvalidInterpolation(Str)])"))
 		(patt (type "_arg -> [Ok({})]")))
 	(type_decls
 		(nominal (type "Html")
 			(ty-header (name "Html"))))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "List(Str) -> Try(List(Error) -> Html, [InvalidInterpolation(Str)])"))
+		(expr (type "List(Str) -> Try(Iter(Error) -> Html, [InvalidInterpolation(Str)])"))
 		(expr (type "_arg -> [Ok({})]"))))
 ~~~

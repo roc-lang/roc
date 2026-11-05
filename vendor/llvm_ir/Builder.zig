@@ -7820,7 +7820,7 @@ pub const WipFunction = struct {
         };
     }
 
-    fn extraData(self: *const WipFunction, comptime T: type, index: Instruction.ExtraIndex) T {
+    pub fn extraData(self: *const WipFunction, comptime T: type, index: Instruction.ExtraIndex) T {
         return self.extraDataTrail(T, index).data;
     }
 };

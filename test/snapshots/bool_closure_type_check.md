@@ -33,7 +33,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 224)
+(e-call (constraint-fn-var 227)
 	(e-lambda
 		(args
 			(p-assign (ident "x")))
