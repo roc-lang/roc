@@ -564,11 +564,16 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     // would retain each unit where the variant takes it, so borrowing saves
     // no caller any work and would only emit a second body. A position that
     // lends the return, or holds a demand hole, keeps its borrowed mode.
+    // Exported workers additionally own positions with a field-take benefit:
+    // their importers cannot demand an owned variant. The producer commits
+    // this convention independently of callers, which retain kept arguments.
     for (0..store.procSpecCount()) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         if (solution.isPinnedProc(proc)) continue;
         const sig = solution.sigOf(proc);
-        var mask = dismantles.ownedOnlyParamTotals(proc) & sig.borrowed_params;
+        var mask = dismantles.ownedOnlyParamTotals(proc);
+        if (store.getProcSpecImmediate(proc).exported) mask |= dismantles.ownedOnlyParamBenefits(proc);
+        mask &= sig.borrowed_params;
         if (sig.ret_mode == .borrowed) mask &= ~sig.ret_lenders;
         if (mask == 0) continue;
         const params = store.getLocalSpan(store.getProcSpecImmediate(proc).args);
@@ -7633,6 +7638,61 @@ fn arcInvariant(comptime message: []const u8) noreturn {
 
 test "arc insertion boundary exists" {
     std.testing.refAllDecls(@This());
+}
+
+test "RC exported field-take convention owns conditional partial consumers" {
+    for ([_]bool{ false, true }) |exported| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const pair_layout = try f.layouts.putStructFields(&.{
+            .{ .index = 0, .layout = f.list_i64 },
+            .{ .index = 1, .layout = f.list_i64 },
+        });
+        const pair = try f.local(pair_layout);
+        const condition = try f.local(.i64);
+        const field = try f.local(f.list_i64);
+        const changed = try f.local(f.list_i64);
+        const empty = try f.local(f.list_i64);
+        const consuming = try f.assignRefField(field, pair, 0, try f.assignLowLevel(
+            changed,
+            &.{field},
+            LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+            try f.ret(changed),
+        ));
+        const untouched = try f.assignList(empty, &.{}, try f.ret(empty));
+        const proc = try f.addProc(&.{ pair, condition }, try f.switchStmt(condition, consuming, untouched, null), f.list_i64);
+        f.store.getProcSpecPtr(proc).exported = exported;
+        try insert(&f.store, &f.layouts, .{ .specialize = false });
+
+        const borrowed: u64 = if (exported) 0 else 1;
+        try testing.expectEqual(borrowed, f.store.getProcSpecImmediate(proc).rc_borrowed_params);
+        try testing.expectEqual(@as(usize, if (exported) 0 else 1), f.countRc(field, .incref));
+        try testing.expectEqual(@as(usize, 1), f.store.procSpecCount());
+        // Certification is explicit so the ReleaseFast unit test checks both
+        // paths, including the untouched residual field and early return.
+        var diag: arc_certify.Diagnostic = .{};
+        const sigs = [_]arc_sig.RcSig{.{ .borrowed_params = @intCast(borrowed) }};
+        try arc_certify.certifyStore(testing.allocator, &f.store, &f.layouts, .{ .sigs = &sigs }, &.{}, &diag);
+    }
+}
+
+test "RC exported field-take convention preserves a borrowed result lender" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const pair_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = f.list_i64 },
+        .{ .index = 1, .layout = f.list_i64 },
+    });
+    const pair = try f.local(pair_layout);
+    const field = try f.local(f.list_i64);
+    const proc = try f.addProc(&.{pair}, try f.assignRefField(field, pair, 0, try f.ret(field)), f.list_i64);
+    f.store.getProcSpecPtr(proc).exported = true;
+    try insert(&f.store, &f.layouts, .{ .specialize = false });
+    const emitted = f.store.getProcSpecImmediate(proc);
+    try testing.expectEqual(@as(u64, 1), emitted.rc_borrowed_params);
+    try testing.expect(emitted.rc_ret_borrowed);
+    try testing.expectEqual(@as(u64, 1), emitted.rc_ret_lenders);
+    try f.expectRc(field, 0, 0, 0);
 }
 
 test "RC list metadata through aliases does not preserve a consumed buffer" {

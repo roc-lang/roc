@@ -20728,6 +20728,20 @@ and moving one that dies. A position that lends a borrowed return, or holds a
 demand hole, keeps its borrowed mode, and a pinned signature is never
 changed.
 
+An exported worker additionally commits owned parameter positions for which
+dismantle analysis proved an owned-only field-take benefit, including benefits
+forwarded through its callees. This is a producer-selected boundary convention:
+the module emits it whether or not any importer exists, and publishes that
+exact signature with its object. An importing caller moves a dying argument
+and retains an argument it still needs. A borrowed return's lenders, demand
+holes, and pinned ABI positions retain their existing contracts. The emitted
+body applies the same ownership override as an ordinary owned variant, never
+an ABI bit change applied after emitting a borrowed body. On a read-only or
+early-error path the owning convention can add a retain/drop pair for a caller
+that keeps its argument; on a consuming path it permits the field transfer
+that a fixed borrowed import convention would prevent. No importer requests
+another body, and no extra vector combinations are enumerated for export.
+
 Variant bodies are cloned with the existing statement-cloning machinery and
 added with `LirStore.addProcSpec`. Root procs are never specialized; their
 vectors are pinned. The variant count is bounded by realized demand vectors,
