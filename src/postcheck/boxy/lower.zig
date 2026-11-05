@@ -735,7 +735,7 @@ pub const Program = struct {
     /// `root`: a row of its template table, or, for a literal root, the
     /// template its identity names.
     pub fn rootWrapper(self: *const Program, index: ModuleIndex, root: checked.ComptimeRootKey) checked_names.ProcedureTemplateRef {
-        if (root.rowIndex() == null) {
+        if (root.isLiteral()) {
             const view = self.module(index);
             return .{
                 .artifact = view.view.key.digest(),
@@ -785,7 +785,7 @@ pub const Program = struct {
     /// The names `source`'s stored types intern.
     pub fn constNames(self: *const Program, source: ConstSource) *const checked_names.CanonicalNameStore {
         return switch (source) {
-            .module => |index| self.module(index).nameStore(),
+            .module => |index| &self.module(index).view.const_store.type_names,
         };
     }
 

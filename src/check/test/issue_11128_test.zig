@@ -1,6 +1,7 @@
 //! Deterministic allocation-work guard for checked procedure publication.
 const std = @import("std");
 const CheckedArtifact = @import("../checked_artifact.zig");
+const type_ids = @import("../checked_type_ids.zig");
 const TopLevelProcedureBinding = CheckedArtifact.TopLevelProcedureBinding;
 const TopLevelProcedureBindingTable = CheckedArtifact.TopLevelProcedureBindingTable;
 
@@ -9,16 +10,16 @@ fn schemeAllocationFailures(gpa: std.mem.Allocator) (std.mem.Allocator.Error || 
     defer store.deinit(gpa);
     var inserted: usize = 0;
     defer for (0..inserted) |i| {
-        const scheme = store.scheme(@fromBackingInt(@intCast(i)));
-        std.debug.assert(@backingInt(scheme.id) == i);
+        const scheme = store.scheme(@fromBackingInt(@backingInt(type_ids.fromSynthesized(i))));
+        std.debug.assert(@backingInt(scheme.id) == @backingInt(type_ids.fromSynthesized(i)));
         std.debug.assert(@backingInt(scheme.root) == i);
     };
     while (inserted < 128) : (inserted += 1) {
         const root: CheckedArtifact.CheckedTypeId = @fromBackingInt(@intCast(inserted));
-        const id = try store.internScheme(gpa, .source, root);
-        try std.testing.expectEqual(inserted, @backingInt(id));
+        const id = try store.internScheme(gpa, .synthetic, root);
+        try std.testing.expectEqual(@backingInt(type_ids.fromSynthesized(inserted)), @backingInt(id));
         // Asking for a root's scheme again names the scheme it already has.
-        try std.testing.expectEqual(id, try store.internScheme(gpa, .source, root));
+        try std.testing.expectEqual(id, try store.internScheme(gpa, .synthetic, root));
     }
     try std.testing.expectEqual(inserted, store.schemes.items().len);
 }

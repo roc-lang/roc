@@ -3003,7 +3003,9 @@ pub const Coordinator = struct {
         errdefer if (state_owned) self.gpa.destroy(state);
         var problems = try pairingProblemStore(self.gpa, platform);
         errdefer if (state_owned) problems.deinit();
-        var display_names = try platform.inference.importMapping(self.gpa);
+        // The deferred checks' reports carry the display text checking
+        // rendered, so they name no import.
+        var display_names = @import("types").import_mapping.ImportMapping.init(self.gpa);
         errdefer if (state_owned) display_names.deinit();
         state.* = .{
             .allocator = self.gpa,
@@ -9483,7 +9485,7 @@ fn hashPatternExtractionRegionsForView(
 
         const store = &view.module_env.store;
         hasher.update(&view.key.bytes);
-        hashU32IntoSha256(hasher, root.id.index());
+        root.id.digestInto(hasher);
         hashU32IntoSha256(hasher, @backingInt(root.rootExpr()));
         hashU32IntoSha256(hasher, @backingInt(extraction.base_expr));
         hashU32IntoSha256(hasher, @backingInt(extraction.scrutinee_pattern));

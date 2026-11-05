@@ -1496,7 +1496,7 @@ const ModuleViewData = struct {
 
     /// Compile-time root `id`: a row of the root table, or a literal root.
     fn compileTimeRoot(self: *const ModuleViewData, id: checked.ComptimeRootKey) Allocator.Error!checked.CompileTimeRoot {
-        if (id.rowIndex() != null) return self.compile_time_roots.root(id);
+        if (!id.isLiteral()) return self.compile_time_roots.root(id);
         return (try self.dispatch.literalRoot(id)).root;
     }
 
@@ -1565,11 +1565,11 @@ const ExprSite = enum(u32) {
     }
 
     fn hoistedRoot(root_id: checked.ComptimeRootKey) ExprSite {
-        return make(.hoisted_root, root_id.index());
+        return make(.hoisted_root, root_id.source());
     }
 
     fn hoistedResult(root_id: checked.ComptimeRootKey) ExprSite {
-        return make(.hoisted_result, root_id.index());
+        return make(.hoisted_result, root_id.source());
     }
 
     fn literalGuard(pattern: CIR.Pattern.Idx) ExprSite {
@@ -1630,7 +1630,7 @@ const ExprSite = enum(u32) {
     /// belongs to.
     fn root(self: ExprSite) checked.ComptimeRootKey {
         return switch (self.kind()) {
-            .hoisted_root, .hoisted_result => @fromBackingInt(self.payload()),
+            .hoisted_root, .hoisted_result => checked.ComptimeRootKey.ofSource(.hoisted, self.payload()),
             .read, .coerced_value, .literal_guard, .literal_value, .literal_conversion => Common.invariant("a reference that belongs to no hoisted root was read as one"),
         };
     }
@@ -47947,7 +47947,7 @@ const BodyContext = struct {
         store_view: ModuleView,
         name: names.RecordFieldNameId,
     ) Allocator.Error!names.RecordFieldNameId {
-        return try self.nameStoreMut().internRecordFieldLabel(store_view.names.recordFieldLabelText(name));
+        return try self.nameStoreMut().internRecordFieldLabel(store_view.const_store.type_names.recordFieldLabelText(name));
     }
 
     /// Re-intern a field default's declaring-module identity from the const
@@ -47960,7 +47960,7 @@ const BodyContext = struct {
     ) Allocator.Error!?Type.FieldDefault {
         const field_default = default orelse return null;
         return .{
-            .module = try self.nameStoreMut().internModuleIdentity(store_view.names.moduleIdentityBytes(field_default.module)),
+            .module = try self.nameStoreMut().internModuleIdentity(store_view.const_store.type_names.moduleIdentityBytes(field_default.module)),
             .expr_node = field_default.expr_node,
         };
     }
@@ -47970,7 +47970,7 @@ const BodyContext = struct {
         store_view: ModuleView,
         name: names.TagNameId,
     ) Allocator.Error!names.TagNameId {
-        return try self.nameStoreMut().internTagLabel(store_view.names.tagLabelText(name));
+        return try self.nameStoreMut().internTagLabel(store_view.const_store.type_names.tagLabelText(name));
     }
 
     fn constTypeDef(
@@ -47979,11 +47979,11 @@ const BodyContext = struct {
         def: check.ConstStore.TypeDef,
     ) Allocator.Error!Type.TypeDef {
         return .{
-            .module = try self.nameStoreMut().internModuleIdentity(store_view.names.moduleIdentityBytes(def.module)),
-            .type_name = try self.nameStoreMut().internTypeName(store_view.names.typeNameText(def.type_name)),
+            .module = try self.nameStoreMut().internModuleIdentity(store_view.const_store.type_names.moduleIdentityBytes(def.module)),
+            .type_name = try self.nameStoreMut().internTypeName(store_view.const_store.type_names.typeNameText(def.type_name)),
             .source_decl = def.source_decl,
             .generated = def.generated,
-            .site = self.builder.isAppModuleIdentity(store_view.names.moduleIdentityBytes(def.module)),
+            .site = self.builder.isAppModuleIdentity(store_view.const_store.type_names.moduleIdentityBytes(def.module)),
             .iterator_representation = def.iterator_representation,
             .iterator_kind = def.iterator_kind,
             .iterator_depth = def.iterator_depth,
@@ -72629,10 +72629,11 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     const gpa = std.testing.allocator;
     var source_names = names.NameStore.init(gpa);
     defer source_names.deinit();
-    const origin = try source_names.internModuleIdentity(&(@as([32]u8, @splat(9))));
-    const type_name = try source_names.internTypeName("Wrapper");
     var constants = check.ConstStore.ConstStore.init(gpa);
     defer constants.deinit();
+    // A stored type's names live in its constant store's own table.
+    const origin = try constants.type_names.internModuleIdentity(&(@as([32]u8, @splat(9))));
+    const type_name = try constants.type_names.internTypeName("Wrapper");
     const stored_types = &constants.type_store;
     // A stored opaque nominal declared by the storing module, and the alias
     // chain that wraps it.

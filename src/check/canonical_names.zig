@@ -536,6 +536,8 @@ pub const CanonicalNameStore = struct {
             store.published = store.epochBoundary();
             return store;
         }
+
+        pub const deserializeWithAllocator = deserialize;
     };
 
     /// Intern `text` into `interner`. Once the store is published, other

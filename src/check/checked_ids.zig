@@ -17,64 +17,83 @@ pub const CheckedTypeId = enum(u32) {
         return std.math.rotl(u32, @backingInt(self), 1);
     }
 };
-/// Public `CheckedTypeSchemeId` declaration.
+/// A scheme of one checked module: a source scheme is named by its root's id,
+/// a source variable, so it is a function of the module's sealed data; a
+/// synthetic scheme by its row of the module's synthetic schemes, in the
+/// synthesized id space (`CheckedTypeStore.internScheme`).
 pub const CheckedTypeSchemeId = enum(u32) { _ };
 
 /// Identity of one compile-time root within its checked module, a function
-/// of the module's checked data alone: a row of the module's compile-time
-/// root table (a definition's, an expect's, a selected hoisted root's or a
-/// REPL expression's), a literal conversion root named by its literal, or a
-/// literal argument root named by the edge that fixes its type and the
-/// callee requirement it converts. The top two bits say which; the encodings
-/// live with the literal identities (`checked_artifact.literalConversionRootId`,
-/// `checked_artifact.literalArgumentRootId`).
+/// of the module's checked data alone: a REPL expression's root named by its
+/// expression, a definition's by its definition, a selected hoisted root by
+/// its index in the module's selected hoisted roots, an expect's by its
+/// statement, a literal conversion root by its literal, or a literal argument
+/// root by the edge that fixes its type and the callee requirement it
+/// converts. The top three bits say which; the literal encodings live with
+/// the literal identities (`checked_artifact.literalConversionRootId`,
+/// `checked_artifact.literalArgumentRootId`). No kind encodes as zero, so a
+/// root's identity is never a template table row
+/// (`CheckedProcedureTemplateId`).
 pub const ComptimeRootKey = enum(u128) {
     _,
 
-    pub const Kind = enum(u2) { row = 0, literal_conversion = 1, literal_argument = 2 };
+    pub const Kind = enum(u3) {
+        repl_expr = 1,
+        def = 2,
+        hoisted = 3,
+        expect = 4,
+        literal_conversion = 5,
+        literal_argument = 6,
+    };
 
-    pub const kind_shift = 126;
+    pub const kind_shift = 125;
 
-    /// The root at `index` of the module's compile-time root table.
-    pub fn row(row_index: u32) ComptimeRootKey {
-        return @fromBackingInt(row_index);
+    /// The root of a source kind (`repl_expr`, `def`, `hoisted`, `expect`)
+    /// named by `source`.
+    pub fn ofSource(source_kind: Kind, source_index: u32) ComptimeRootKey {
+        std.debug.assert(!kindIsLiteral(source_kind));
+        return @fromBackingInt((@as(u128, @backingInt(source_kind)) << kind_shift) | source_index);
     }
 
     pub fn kind(self: ComptimeRootKey) Kind {
-        return switch (@as(u2, @truncate(@backingInt(self) >> kind_shift))) {
-            0 => .row,
-            1 => .literal_conversion,
-            2 => .literal_argument,
-            3 => unreachable, // no encoding sets both kind bits
+        return switch (@as(u3, @truncate(@backingInt(self) >> kind_shift))) {
+            1 => .repl_expr,
+            2 => .def,
+            3 => .hoisted,
+            4 => .expect,
+            5 => .literal_conversion,
+            6 => .literal_argument,
+            0, 7 => unreachable, // no root identity encodes these kinds
         };
     }
 
-    /// The root's table row, or null for a literal root.
-    pub fn rowIndex(self: ComptimeRootKey) ?u32 {
-        return switch (self.kind()) {
-            .row => @truncate(@backingInt(self)),
-            .literal_conversion, .literal_argument => null,
+    fn kindIsLiteral(root_kind: Kind) bool {
+        return switch (root_kind) {
+            .repl_expr, .def, .hoisted, .expect => false,
+            .literal_conversion, .literal_argument => true,
         };
     }
 
-    /// The root's table row; the root must be one.
-    pub fn index(self: ComptimeRootKey) u32 {
-        std.debug.assert(self.kind() == .row);
+    /// Whether the root is a literal root rather than a row of the module's
+    /// root table.
+    pub fn isLiteral(self: ComptimeRootKey) bool {
+        return kindIsLiteral(self.kind());
+    }
+
+    /// The source a row root's identity names: its REPL expression,
+    /// definition, selected hoisted root index or expect statement.
+    pub fn source(self: ComptimeRootKey) u32 {
+        std.debug.assert(!self.isLiteral());
         return @truncate(@backingInt(self));
     }
 
-    /// Feed the id to a digest: a row as its 32-bit index, a literal root as
-    /// 32 set bits and then its 128-bit identity, each little-endian.
+    /// Feed the id to a digest: 32 set bits and then its 128-bit identity,
+    /// little-endian, as `canonical_names.digestId` feeds every identity
+    /// that is not a template table row.
     pub fn digestInto(self: ComptimeRootKey, hasher: anytype) void {
-        const raw = @backingInt(self);
-        if (raw >> 32 == 0) {
-            const little = std.mem.nativeToLittle(u32, @truncate(raw));
-            hasher.update(std.mem.asBytes(&little));
-            return;
-        }
         const marker = std.mem.nativeToLittle(u32, std.math.maxInt(u32));
         hasher.update(std.mem.asBytes(&marker));
-        const little = std.mem.nativeToLittle(u128, raw);
+        const little = std.mem.nativeToLittle(u128, @backingInt(self));
         hasher.update(std.mem.asBytes(&little));
     }
 };

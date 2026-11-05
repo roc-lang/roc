@@ -1171,6 +1171,10 @@ pub const ConstStore = struct {
     tag_name_pool: std.ArrayList(u8),
     /// Monomorphic type evidence for roots and function captures.
     type_store: ConstTypeStore,
+    /// The names `type_store`'s types use: labels, type names and module
+    /// identities, interned into this store's own table so a stored type
+    /// names nothing outside the store.
+    type_names: names.NameStore,
     /// Flat pool of function captures.
     capture_pool: std.ArrayList(ConstCapture),
     /// Flat evidence vectors referenced by stored functions.
@@ -1233,6 +1237,7 @@ pub const ConstStore = struct {
             .node_pool = .empty,
             .tag_name_pool = .empty,
             .type_store = ConstTypeStore.init(allocator),
+            .type_names = names.NameStore.init(allocator),
             .capture_pool = .empty,
             .evidence_pool = .empty,
             .evidence_target_pool = .empty,
@@ -1560,6 +1565,7 @@ pub const ConstStore = struct {
         node_pool: artifact_serialize.SerializedSlice(ConstNodeId) = .{},
         tag_name_pool: artifact_serialize.SerializedSlice(u8) = .{},
         type_store: ConstTypeStore.Serialized = .{},
+        type_names: names.NameStore.Serialized,
         capture_pool: artifact_serialize.SerializedSlice(ConstCapture) = .{},
         evidence_pool: artifact_serialize.SerializedSlice(ConstFnEvidence) = .{},
         evidence_target_pool: artifact_serialize.SerializedSlice(ConstFnTargetEvidence) = .{},
@@ -1569,8 +1575,9 @@ pub const ConstStore = struct {
         blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
 
         comptime {
-            // 11 value/function side lists + 7 nested type-store lists.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 18);
+            // 11 value/function side lists, 7 nested type-store lists and the
+            // type names' 25.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 43);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
@@ -1720,6 +1727,7 @@ pub const ConstStore = struct {
 
     pub fn deinit(self: *ConstStore) void {
         self.type_store.deinit();
+        self.type_names.deinit();
         self.blob_index.deinit(self.allocator);
         if (!self.serialized) {
             self.values.deinit(self.allocator);

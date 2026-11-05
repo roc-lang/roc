@@ -4252,7 +4252,7 @@ fn checkedProducerReportedFailure(
     for (owners.modules) |owner| {
         if (!artifactMatches(module, owner.module.key)) continue;
         // Only a selected hoisted root of the root table is guarded.
-        if (root_id.rowIndex() == null) return true;
+        if (root_id.isLiteral()) return true;
         return !owner.module.compile_time_roots.root(root_id).guarded;
     }
     finalizationInvariant("value guard producer belonged to a module this finalization does not complete");
@@ -6847,7 +6847,7 @@ fn regionsEqual(a: base.Region, b: base.Region) bool {
 /// The definition a root of the module's root table evaluates, or null for
 /// any other root.
 fn rootDef(module: *const checked.CheckedModuleArtifact, root_id: checked.ComptimeRootKey) ?@FieldType(checked.RootSource, "def") {
-    if (root_id.rowIndex() == null) return null;
+    if (root_id.isLiteral()) return null;
     return switch (module.compile_time_roots.root(root_id).source) {
         .def => |def| def,
         .expr, .statement, .required_binding, .hoisted, .literal => null,
@@ -7276,7 +7276,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8) (FinalizeError || Interpret
     const module_id = result.loweringModuleId(module_key).?;
     var checked_roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer checked_roots.deinit(allocator);
-    const root_id: checked.ComptimeRootKey = @fromBackingInt(@intCast(checked_roots.items.len));
+    const root_id = checked.ComptimeRootKey.ofSource(.def, @intCast(checked_roots.items.len));
     // This execution fixture consumes only root identity, never checked syntax.
     try checked_roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible });
     const failure_layout = try result.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });

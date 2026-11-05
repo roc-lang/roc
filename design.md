@@ -1641,7 +1641,7 @@ replay order are explicit coordinator responsibilities. Successful compile-time
 message bytes. Cache hits replay that output for the roots the compilation
 demands alongside newly evaluated roots, sorted by module and root id; they do
 not rerun cached expressions. Cache
-validation checks the recorded root ids and message ranges before replay.
+validation checks the recorded message ranges before replay.
 
 Checking must evaluate every checked top-level expression and every selected
 compile-time root that can be evaluated without effectful calls or runtime
@@ -5215,7 +5215,10 @@ composes its children's keys (`CheckedTypeKeyRecipe.synthetic_function`), and
 a projected type keeps the recipe of the type it projects.
 
 A scheme belongs to one root type of its module and is identified within the
-module by its id; references to a scheme hold that id. Its canonical key is
+module by its id; references to a scheme hold that id. A source scheme's id is
+its root's, a solver variable, so it is a function of the module's sealed
+data and occupies no entry of the synthesized-type store; only a synthetic
+scheme (over a synthesized root) is an entry there. Its canonical key is
 its root's key in the scheme namespace, computed only for a consumer that
 needs a key (`CheckedTypeStoreView.schemeKey`).
 
@@ -5230,8 +5233,8 @@ the platform's deferred checks in its inference output whose sites need the
 pairing, less those whose empirical failure the platform's own evaluation
 reported (its evaluation output records those sites); the inference output
 holds their checked display text, missing patterns, source regions and
-checked site IDs, and the import mapping their reports display names
-through. Nothing copies them into another table.
+checked site IDs, so their reports name nothing else. Nothing copies them
+into another table.
 
 A parametric platform outputs every root selected by the producer, including
 roots that require app bindings, and the complete same-module evaluation order.
@@ -5258,8 +5261,11 @@ intrinsic wrapper's, a compile-time root's or a resolved reference's type
 through the pairing; root requests and provided exports carry their images.
 The paired checked module holds no type store or name store of its own: its
 types and names are its platform's (`typeStore`, `nameStore`), and every name
-the pairing interns (an app type's names, an evaluated constant's names) is
-interned into the platform's name store as a shared writer. The data that
+the pairing interns for its types (an app type's names) is interned into the
+platform's name store as a shared writer. The names an evaluated constant's
+stored types use live in the constant store's own name table
+(`ConstStore.type_names`), so the evaluation output names nothing in any
+module's name store. The data that
 depends on the substituted types (direct targets, required-reference classification,
 requirement relations, required bindings, provided exports, exhaustiveness
 policy) is computed by per-pairing on-demand analyses; the pairing's root
@@ -5612,10 +5618,13 @@ hoisted pattern root names its hoisted body; no root names a node that does
 not exist in CIR.
 
 A compile-time root's identity (`ComptimeRootKey`) is a function of the
-module's checked data alone. A root of the module's root table (a
-definition's, an expect's, a selected hoisted root's, a REPL expression's)
-is named by its row, which checking's recorded outputs fix. A literal root
-is no row: a literal conversion root is named by its literal
+module's checked data alone, never of the order anything was built or
+demanded in. A root of the module's root table is named by its source: a
+definition's by the definition, an expect's by its statement, a selected
+hoisted root's by its position in the module's selected hoisted roots
+(`ModuleEnv.selected_hoisted_roots`), a REPL expression's by the
+expression; the table holds its rows in ascending identity order and finds
+a row by its identity. A literal root is no row: a literal conversion root is named by its literal
 (`literalConversionRootId`), and a literal argument root by the edge that
 fixes its type and the callee requirement it converts
 (`literalArgumentRootId`). A literal root's entry wrapper is no row of the

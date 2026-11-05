@@ -794,23 +794,25 @@ pub const HoistedRootSelection = enum {
     none,
 };
 
-/// The checker-selected compile-time roots `selection` keeps, in selection
-/// order. The caller owns the returned slice.
-fn selectHoistedRoots(
+/// The positions in `ModuleEnv.selected_hoisted_roots` of the
+/// checker-selected compile-time roots `selection` keeps, ascending. A kept
+/// root's position is its identity (`ComptimeRootKey`). The caller owns the
+/// returned slice.
+fn selectHoistedRootIndices(
     allocator: Allocator,
     module_env: *const ModuleEnv,
     selection: HoistedRootSelection,
-) Allocator.Error![]hoist_roots.SelectedHoistedRoot {
+) Allocator.Error![]u32 {
     const selected = module_env.selected_hoisted_roots.items.items;
-    var kept = try std.ArrayList(hoist_roots.SelectedHoistedRoot).initCapacity(allocator, selected.len);
+    var kept = try std.ArrayList(u32).initCapacity(allocator, selected.len);
     errdefer kept.deinit(allocator);
-    for (selected) |root| {
+    for (selected, 0..) |root, index| {
         const keep = switch (selection) {
             .selected => true,
             .top_level => root.top_level,
             .none => false,
         };
-        if (keep) kept.appendAssumeCapacity(root);
+        if (keep) kept.appendAssumeCapacity(@intCast(index));
     }
     return try kept.toOwnedSlice(allocator);
 }
@@ -1359,7 +1361,7 @@ fn pairingRootRequests(allocator: Allocator, owner: ImportedModuleView, platform
         // the same forwarding rule as a module with resolved imports.
         // Runtime demand consumes its checked lookup; no evaluator is needed.
         if (request.requires_pairing and request.compile_time_root != null) {
-            if (request.compile_time_root.?.rowIndex() != null and
+            if (!request.compile_time_root.?.isLiteral() and
                 compileTimeCallableRootIsProcedureReference(bodies, owner.resolved_value_refs, owner.compile_time_roots.root(request.compile_time_root.?))) continue;
         }
         var selected = request;
@@ -4165,11 +4167,15 @@ pub const CheckedTypeStoreView = struct {
         return type_ids.fromVar(sealed.representative(var_));
     }
 
-    /// The scheme `id` names.
+    /// The scheme `id` names: a source scheme is named by its root, a
+    /// source variable, and a synthetic scheme by its row of the store's
+    /// synthetic schemes, in the synthesized id space.
     pub fn scheme(self: CheckedTypeStoreView, id: CheckedTypeSchemeId) CheckedTypeScheme {
-        const raw = @backingInt(id);
-        if (raw >= self.schemeRows().len) checkedArtifactInvariant("checked type scheme id is out of range", .{});
-        return self.schemeRows()[raw];
+        const as_type: CheckedTypeId = @fromBackingInt(@backingInt(id));
+        if (!type_ids.isSynthesized(as_type)) return .{ .id = id, .domain = .source, .root = as_type };
+        const index = type_ids.synthesizedIndex(as_type);
+        if (index >= self.schemeRows().len) checkedArtifactInvariant("checked type scheme id is out of range", .{});
+        return self.schemeRows()[index];
     }
 
     /// The canonical key of the scheme `id` names, computed from its root's
@@ -5473,19 +5479,28 @@ pub const CheckedTypeStore = struct {
         return self.view().scheme(id);
     }
 
-    /// The scheme of `domain` over `root`, added the first time it is asked
-    /// for. Row allocation preserves existing rows on failure.
+    /// The scheme of `domain` over `root`. A source scheme is its root, a
+    /// source variable, and has no row; a synthetic scheme's row is added
+    /// the first time it is asked for. Row allocation preserves existing rows
+    /// on failure.
     pub fn internScheme(
         self: *CheckedTypeStore,
         allocator: Allocator,
         domain: CheckedTypeSchemeDomain,
         root: CheckedTypeId,
     ) Allocator.Error!CheckedTypeSchemeId {
+        switch (domain) {
+            .source => {
+                if (type_ids.isSynthesized(root)) checkedArtifactInvariant("a source scheme was given a synthesized root", .{});
+                return @fromBackingInt(@backingInt(root));
+            },
+            .synthetic => {},
+        }
         const entry = try self.scheme_by_root.getOrPut(allocator, .{ .root = root, .domain = domain });
         if (entry.found_existing) return entry.value_ptr.*;
         errdefer _ = self.scheme_by_root.remove(.{ .root = root, .domain = domain });
         try self.ownColumn(allocator, .schemes);
-        const id: CheckedTypeSchemeId = @fromBackingInt(@intCast(self.schemes.items().len));
+        const id: CheckedTypeSchemeId = @fromBackingInt(@backingInt(type_ids.fromSynthesized(self.schemes.items().len)));
         try self.schemes.append(allocator, .{ .id = id, .domain = domain, .root = root });
         entry.value_ptr.* = id;
         return id;
@@ -14038,7 +14053,7 @@ pub const CheckedDispatch = struct {
     /// A literal root's payload is the evaluation output's
     /// (`CheckedModuleArtifact.compileTimeRoot`).
     pub fn compileTimeRoot(self: CheckedDispatch, id: ComptimeRootKey) Error!CompileTimeRoot {
-        if (id.rowIndex() != null) return self.source.compile_time_roots.root(id);
+        if (!id.isLiteral()) return self.source.compile_time_roots.root(id);
         return (try self.literalRoot(id)).root;
     }
 
@@ -18970,7 +18985,7 @@ pub const CheckedProcedureTemplateTable = struct {
 
         const module_name = try names.internModuleName(module.moduleEnvConst().module_name);
 
-        for (roots) |root| {
+        for (roots, 0..) |root, position| {
             const checked_fn_root = try checked_types.appendSyntheticFunctionRoot(
                 allocator,
                 .pure,
@@ -18982,7 +18997,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .module_name = module_name,
                 .export_name = null,
                 .kind = .entry_wrapper,
-                .ordinal = root.id.index(),
+                .ordinal = @intCast(position),
                 .source_def_idx = null,
             });
             const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
@@ -21692,7 +21707,7 @@ pub const LiteralRootName = union(enum) {
 pub fn literalRootName(id: ComptimeRootKey) ?LiteralRootName {
     const raw = @backingInt(id);
     switch (id.kind()) {
-        .row => return null,
+        .repl_expr, .def, .hoisted, .expect => return null,
         .literal_conversion => {
             const node: u32 = @truncate(raw);
             return .{ .conversion = if ((raw >> 32) & 1 == 0) .{ .expr = @fromBackingInt(node) } else .{ .pattern = @fromBackingInt(node) } };
@@ -21711,7 +21726,7 @@ pub fn literalRootName(id: ComptimeRootKey) ?LiteralRootName {
 /// The entry wrapper of literal root `root`: a template named by the root's
 /// identity, which no row of the template table holds.
 pub fn literalRootWrapperTemplate(root: ComptimeRootKey) canonical.CheckedProcedureTemplateId {
-    std.debug.assert(root.kind() != .row);
+    std.debug.assert(root.isLiteral());
     return @fromBackingInt(@backingInt(root));
 }
 
@@ -24147,6 +24162,8 @@ fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocat
         const result = try allocator.alignedAlloc(pointer.child, .fromByteUnits(pointer.attrs.@"align" orelse @alignOf(pointer.child)), source.len);
         @memcpy(result, source);
         return result;
+    } else if (comptime T == canonical.CanonicalNameStore) {
+        return source.clone(allocator);
     } else if (comptime @typeInfo(T) == .@"struct") {
         if (comptime @hasField(T, "items") and @hasField(T, "capacity")) {
             var result = source;
@@ -25574,6 +25591,7 @@ pub const CompileTimeRootTable = struct {
         module: TypedCIR.Module,
         value_binding_defs: []const CIR.Def.Idx,
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
+        selected_hoisted_indices: []const u32,
         explicit_roots: []const ExplicitRootRequestInput,
         checked_types: *CheckedTypePublication,
         module_index: *const ModuleIndex,
@@ -25646,7 +25664,7 @@ pub const CompileTimeRootTable = struct {
             }
         }
 
-        for (selected_hoisted_roots, 0..) |selected, selected_index| {
+        for (selected_hoisted_roots, selected_hoisted_indices) |selected, selected_index| {
             const source_ty = if (selected.pattern) |pattern|
                 ModuleEnv.varFrom(pattern)
             else
@@ -25669,7 +25687,7 @@ pub const CompileTimeRootTable = struct {
                 .module_idx = module.moduleIndex(),
                 .kind = kind,
                 .source = .{ .hoisted = .{
-                    .index = @intCast(selected_index),
+                    .index = selected_index,
                     .expr = selected.expr,
                 } },
                 .source_pattern = selected.pattern,
@@ -25697,6 +25715,11 @@ pub const CompileTimeRootTable = struct {
 
         try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items);
 
+        std.mem.sort(CompileTimeRoot, roots.items, {}, struct {
+            fn lessThan(_: void, a: CompileTimeRoot, b: CompileTimeRoot) bool {
+                return @backingInt(a.id) < @backingInt(b.id);
+            }
+        }.lessThan);
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
 
@@ -25732,7 +25755,18 @@ pub const CompileTimeRootTable = struct {
     /// Row `id` of the table. A literal root is no row
     /// (`CheckedModuleArtifact.compileTimeRoot`).
     pub fn root(self: *const CompileTimeRootTable, id: ComptimeRootKey) CompileTimeRoot {
-        return self.roots[id.index()];
+        const index = self.position(id) orelse checkedArtifactInvariant("a compile-time root was read that its module's root table does not hold", .{});
+        return self.roots[index];
+    }
+
+    /// The position of row `id` in the table, ascending by root identity.
+    pub fn position(self: *const CompileTimeRootTable, id: ComptimeRootKey) ?u32 {
+        const index = std.sort.binarySearch(CompileTimeRoot, self.roots, id, struct {
+            fn order(key: ComptimeRootKey, item: CompileTimeRoot) std.math.Order {
+                return std.math.order(@backingInt(key), @backingInt(item.id));
+            }
+        }.order) orelse return null;
+        return @intCast(index);
     }
 
     pub fn deinit(self: *CompileTimeRootTable, allocator: Allocator) void {
@@ -25776,9 +25810,15 @@ pub const CompileTimeRootTable = struct {
         });
     }
 
-    /// The id `appendCompileTimeRoot` assigns to the next appended root.
-    fn nextCompileTimeRootId(roots: []const CompileTimeRoot) ComptimeRootKey {
-        return @fromBackingInt(@intCast(@as(u32, @intCast(roots.len))));
+    /// The identity of the row root `source` names.
+    fn rootIdForSource(source: RootSource) ComptimeRootKey {
+        return switch (source) {
+            .expr => |expr| ComptimeRootKey.ofSource(.repl_expr, @backingInt(expr)),
+            .def => |def| ComptimeRootKey.ofSource(.def, @backingInt(def)),
+            .hoisted => |hoisted| ComptimeRootKey.ofSource(.hoisted, hoisted.index),
+            .statement => |statement| ComptimeRootKey.ofSource(.expect, @backingInt(statement)),
+            .required_binding, .literal => checkedArtifactInvariant("a root table row was named by a source no row root has", .{}),
+        };
     }
 
     fn appendCompileTimeRoot(
@@ -25786,7 +25826,7 @@ pub const CompileTimeRootTable = struct {
         allocator: Allocator,
         entry: RootWithoutId,
     ) Allocator.Error!void {
-        const id = nextCompileTimeRootId(roots.items);
+        const id = rootIdForSource(entry.source);
         roots.append(allocator, .{
             .id = id,
             .module_idx = entry.module_idx,
@@ -28275,13 +28315,11 @@ pub const HoistedConstTable = struct {
     entries: []HoistedConstEntry = &.{},
     by_expr: []HoistedConstByExprEntry = &.{},
     by_pattern: []HoistedConstByPatternEntry = &.{},
-    by_root: []?HoistedConstId = &.{},
 
     pub const Serialized = extern struct {
         entries: SerializedSlice(HoistedConstEntry) = .{},
         by_expr: SerializedSlice(HoistedConstByExprEntry) = .{},
         by_pattern: SerializedSlice(HoistedConstByPatternEntry) = .{},
-        by_root: SerializedSlice(?HoistedConstId) = .{},
 
         const Serde = artifact_serialize.SliceStoreSerde(HoistedConstTable, @This());
         pub const serialize = Serde.serialize;
@@ -28306,9 +28344,6 @@ pub const HoistedConstTable = struct {
         var by_pattern = std.ArrayList(HoistedConstByPatternEntry).empty;
         errdefer by_pattern.deinit(allocator);
 
-        const by_root = try allocator.alloc(?HoistedConstId, roots.roots.len);
-        errdefer allocator.free(by_root);
-        @memset(by_root, null);
 
         for (roots.roots) |root| {
             if (root.kind != .hoisted_constant) continue;
@@ -28360,7 +28395,6 @@ pub const HoistedConstTable = struct {
                     .entry = id,
                 });
             }
-            by_root[root.id.index()] = id;
         }
 
         std.mem.sort(HoistedConstByExprEntry, by_expr.items, {}, HoistedConstByExprEntry.lessThan);
@@ -28376,7 +28410,6 @@ pub const HoistedConstTable = struct {
             .entries = entry_slice,
             .by_expr = by_expr_slice,
             .by_pattern = by_pattern_slice,
-            .by_root = by_root,
         };
     }
 
@@ -28414,11 +28447,15 @@ pub const HoistedConstTable = struct {
         return self.entries[@backingInt(self.by_pattern[lo].entry)];
     }
 
+    /// The entry of hoisted root `root`. Entries follow their roots'
+    /// ascending identities.
     pub fn lookupByRoot(self: *const HoistedConstTable, root: ComptimeRootKey) ?HoistedConstEntry {
-        const idx = root.rowIndex() orelse return null;
-        if (idx >= self.by_root.len) return null;
-        const entry_id = self.by_root[idx] orelse return null;
-        return self.entries[@backingInt(entry_id)];
+        const index = std.sort.binarySearch(HoistedConstEntry, self.entries, root, struct {
+            fn order(key: ComptimeRootKey, item: HoistedConstEntry) std.math.Order {
+                return std.math.order(@backingInt(key), @backingInt(item.root));
+            }
+        }.order) orelse return null;
+        return self.entries[index];
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
@@ -28442,11 +28479,9 @@ pub const CheckedConstBody = struct {
 /// Public `CheckedConstBodyTable` declaration.
 pub const CheckedConstBodyTable = struct {
     bodies: []CheckedConstBody = &.{},
-    by_root: []?CheckedConstBodyRef = &.{},
 
     pub const Serialized = extern struct {
         bodies: SerializedSlice(CheckedConstBody) = .{},
-        by_root: SerializedSlice(?CheckedConstBodyRef) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedConstBodyTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -28459,9 +28494,6 @@ pub const CheckedConstBodyTable = struct {
         var bodies = std.ArrayList(CheckedConstBody).empty;
         errdefer bodies.deinit(allocator);
 
-        const by_root = try allocator.alloc(?CheckedConstBodyRef, roots.roots.len);
-        errdefer allocator.free(by_root);
-        @memset(by_root, null);
 
         for (roots.roots) |root| {
             if (!compileTimeRootHasConstBody(root.kind)) continue;
@@ -28472,19 +28504,22 @@ pub const CheckedConstBodyTable = struct {
                 .body_expr = root.rootExpr(),
                 .checked_type = root.checked_type,
             });
-            by_root[root.id.index()] = id;
         }
 
         return .{
             .bodies = try bodies.toOwnedSlice(allocator),
-            .by_root = by_root,
         };
     }
 
+    /// The checked const body of root `root`. Bodies follow their roots'
+    /// ascending identities.
     pub fn bodyForRoot(self: *const CheckedConstBodyTable, root: ComptimeRootKey) ?CheckedConstBodyRef {
-        const idx = root.rowIndex() orelse return null;
-        if (idx >= self.by_root.len) return null;
-        return self.by_root[idx];
+        const index = std.sort.binarySearch(CheckedConstBody, self.bodies, root, struct {
+            fn order(key: ComptimeRootKey, item: CheckedConstBody) std.math.Order {
+                return std.math.order(@backingInt(key), @backingInt(item.root));
+            }
+        }.order) orelse return null;
+        return self.bodies[index].id;
     }
 
     pub fn get(self: *const CheckedConstBodyTable, id: CheckedConstBodyRef) CheckedConstBody {
@@ -30131,7 +30166,7 @@ const ImportedTemplateClosureBuilder = struct {
         self: *ImportedTemplateClosureBuilder,
         scheme: CheckedTypeSchemeId,
     ) Allocator.Error!void {
-        std.debug.assert(@backingInt(scheme) < self.context.checked_types.schemeRows().len);
+        std.debug.assert(self.context.checked_types.scheme(scheme).id == scheme);
         const ref = ArtifactCheckedTypeSchemeRef{ .artifact = self.context.artifact_key.digest(), .scheme = scheme };
         _ = try self.checked_type_schemes.append(self.context.allocator, ref);
     }
@@ -31343,8 +31378,8 @@ pub const CheckedModuleArtifact = struct {
     /// The module's types. Empty in a paired artifact, which reads its
     /// platform's (`typeStore`).
     checked_types: CheckedTypeStore = .{},
-    /// What inference output beside the solved source: the checking outcome
-    /// and the import mapping.
+    /// What inference output beside the solved source, its checking outcome
+    /// included.
     inference: InferenceOutput = .{},
     checked_const_bodies: CheckedConstBodyTable = .{},
     exported_procedure_templates: ExportedProcedureTemplateTable = .{},
@@ -31435,14 +31470,6 @@ pub const CheckedModuleArtifact = struct {
     /// paired artifact's platform's.
     pub fn nameStore(self: *const CheckedModuleArtifact) *const canonical.CanonicalNameStore {
         if (self.pairing) |pairing| return &pairing.platform.canonical_names;
-        return &self.canonical_names;
-    }
-
-    /// The name store names are interned into for the artifact's checked
-    /// data: a paired artifact's platform's, which then interns as a shared
-    /// writer (`CanonicalNameStore.insertName`).
-    pub fn internedNameStore(self: *CheckedModuleArtifact) *canonical.CanonicalNameStore {
-        if (self.pairing) |pairing| return @constCast(&pairing.platform.canonical_names);
         return &self.canonical_names;
     }
 
@@ -31670,7 +31697,7 @@ pub const CheckedModuleArtifact = struct {
         defer entries.deinit(allocator);
         for ((try self.rootRequests()).requests) |request| {
             const root = request.compile_time_root orelse continue;
-            if (root.rowIndex() != null) continue;
+            if (!root.isLiteral()) continue;
             try entries.append(allocator, .{ .id = root });
         }
         try self.evaluation.addRoots(allocator, self.freesReplacedEvaluationColumns(), entries.items);
@@ -31839,7 +31866,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 157);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 179);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -31961,7 +31988,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 120;
+    const serialized_layout_version: u32 = 121;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -32144,7 +32171,7 @@ pub const CheckedModuleArtifact = struct {
 
         for (self.checked_const_bodies.bodies, 0..) |body, i| {
             std.debug.assert(@backingInt(body.id) == i);
-            std.debug.assert(@backingInt(body.root) < self.compile_time_roots.roots.len);
+            std.debug.assert(self.compile_time_roots.position(body.root) != null);
             const root = self.compile_time_roots.root(body.root);
             std.debug.assert(compileTimeRootHasConstBody(root.kind));
             std.debug.assert(root.expr == body.body_expr);
@@ -32184,7 +32211,8 @@ pub const CheckedModuleArtifact = struct {
         }
 
         for (self.compile_time_roots.roots, 0..) |root, i| {
-            std.debug.assert(@backingInt(root.id) == i);
+            std.debug.assert(root.id == CompileTimeRootTable.rootIdForSource(root.source));
+            if (i != 0) std.debug.assert(@backingInt(self.compile_time_roots.roots[i - 1].id) < @backingInt(root.id));
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
             if (root.expr) |expr| std.debug.assert(@backingInt(expr) < self.moduleEnvConst().store.nodes.len());
             if (root.literalNode()) |literal| std.debug.assert(literal.node() < self.moduleEnvConst().store.nodes.len());
@@ -32338,7 +32366,8 @@ pub const CheckedModuleArtifact = struct {
         }
 
         for (self.compile_time_roots.roots, 0..) |root, i| {
-            std.debug.assert(@backingInt(root.id) == i);
+            std.debug.assert(root.id == CompileTimeRootTable.rootIdForSource(root.source));
+            if (i != 0) std.debug.assert(@backingInt(self.compile_time_roots.roots[i - 1].id) < @backingInt(root.id));
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
             if (root.expr) |expr| std.debug.assert(@backingInt(expr) < self.moduleEnvConst().store.nodes.len());
             if (root.literalNode()) |literal| std.debug.assert(literal.node() < self.moduleEnvConst().store.nodes.len());
@@ -32422,7 +32451,7 @@ pub const CheckedModuleArtifact = struct {
 
         for (self.checked_const_bodies.bodies, 0..) |body, i| {
             std.debug.assert(@backingInt(body.id) == i);
-            std.debug.assert(@backingInt(body.root) < self.compile_time_roots.roots.len);
+            std.debug.assert(self.compile_time_roots.position(body.root) != null);
             const root = self.compile_time_roots.root(body.root);
             std.debug.assert(compileTimeRootHasConstBody(root.kind));
             std.debug.assert(root.expr == body.body_expr);
@@ -32555,7 +32584,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@backingInt(template.id) == i);
             std.debug.assert(template.module_idx == self.module_identity.module_idx);
             std.debug.assert(@backingInt(template.pattern) < self.moduleEnvConst().store.nodes.len());
-            std.debug.assert(@backingInt(template.root) < self.compile_time_roots.roots.len);
+            std.debug.assert(self.compile_time_roots.position(template.root) != null);
             const root = self.compile_time_roots.root(template.root);
             std.debug.assert(root.kind == .callable_binding);
             std.debug.assert(root.pattern != null and root.pattern.? == template.pattern);
@@ -32819,7 +32848,7 @@ pub const ImportedModuleView = struct {
     /// Compile-time root `id` of the module: a row of the root table, or a
     /// literal root.
     pub fn compileTimeRoot(self: ImportedModuleView, id: ComptimeRootKey) Allocator.Error!CompileTimeRoot {
-        if (id.rowIndex() != null) return self.compile_time_roots.root(id);
+        if (!id.isLiteral()) return self.compile_time_roots.root(id);
         return (try self.dispatch().literalRoot(id)).root;
     }
 
@@ -34163,8 +34192,11 @@ pub fn publishFromTypedModule(
 
     const promoted_local_procedures = module_env.promoted_local_procedures.items.items;
     const requirement_solutions = module_env.platform_requirement_solutions.items.items;
-    const selected_hoisted_roots = try selectHoistedRoots(allocator, module_env, inputs.hoisted_roots);
+    const selected_hoisted_indices = try selectHoistedRootIndices(allocator, module_env, inputs.hoisted_roots);
+    defer allocator.free(selected_hoisted_indices);
+    const selected_hoisted_roots = try allocator.alloc(hoist_roots.SelectedHoistedRoot, selected_hoisted_indices.len);
     defer allocator.free(selected_hoisted_roots);
+    for (selected_hoisted_roots, selected_hoisted_indices) |*root, index| root.* = module_env.selected_hoisted_roots.items.items[index];
     const analyses = try BodyAnalyses.create(allocator, inputs.io, module_env, promoted_local_procedures);
     var analyses_owned = true;
     errdefer if (analyses_owned) analyses.destroy();
@@ -34271,6 +34303,7 @@ pub fn publishFromTypedModule(
         module,
         value_binding_defs,
         selected_hoisted_roots,
+        selected_hoisted_indices,
         inputs.explicit_roots,
         &checked_type_publication,
         module_index,
@@ -35910,14 +35943,18 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
 
     // A scheme with generalized vars [a, b].
     const gv = try store.appendPool(gpa, CheckedTypeId, &.{ a, b });
-    const scheme_id = try store.internScheme(gpa, .source, a);
-    store.schemes.items()[@backingInt(scheme_id)].gv_start = gv.start;
-    store.schemes.items()[@backingInt(scheme_id)].gv_len = gv.len;
-    // A synthetic scheme over the same root is a distinct scheme; asking
-    // again names the same one.
-    const synthetic_scheme = try store.internScheme(gpa, .synthetic, a);
-    try std.testing.expect(synthetic_scheme != scheme_id);
-    try std.testing.expectEqual(synthetic_scheme, try store.internScheme(gpa, .synthetic, a));
+    const scheme_id = try store.internScheme(gpa, .synthetic, a);
+    store.schemes.items()[0].gv_start = gv.start;
+    store.schemes.items()[0].gv_len = gv.len;
+    // A source scheme is named by its root, a source variable, and holds no
+    // row; asking again names the same one.
+    const source_root: CheckedTypeId = @fromBackingInt(3);
+    const source_scheme = try store.internScheme(gpa, .source, source_root);
+    try std.testing.expect(source_scheme != scheme_id);
+    try std.testing.expectEqual(@backingInt(source_root), @backingInt(source_scheme));
+    try std.testing.expectEqual(source_scheme, try store.internScheme(gpa, .source, source_root));
+    try std.testing.expectEqual(scheme_id, try store.internScheme(gpa, .synthetic, a));
+    try std.testing.expectEqual(@as(usize, 1), store.schemes.items().len);
 
     // A nominal declaration with formal args [c], backing c, padding fields [a], and a
     // declared record sequence [{field}, {_ : a}].
@@ -36190,8 +36227,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x06, 0x94, 0x00, 0xB5, 0x41, 0xB5, 0xC8, 0x05, 0xAA, 0xDE, 0xE4, 0x05, 0x32, 0x5F, 0xBF, 0x48,
-        0x9B, 0x23, 0x82, 0xC5, 0x54, 0x53, 0x2E, 0x59, 0xC6, 0x34, 0xD8, 0x8A, 0x6B, 0x45, 0xA4, 0x2D,
+        0x8A, 0xEB, 0x04, 0xFD, 0x46, 0xBD, 0x7B, 0x09, 0x87, 0x5F, 0x53, 0xE7, 0xDB, 0x9A, 0x48, 0x7F,
+        0x98, 0x8B, 0xF9, 0x50, 0x1E, 0xE2, 0x67, 0xC8, 0x36, 0xB1, 0x07, 0xFA, 0xF0, 0xDE, 0x94, 0x9C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
