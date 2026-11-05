@@ -5936,7 +5936,11 @@ instantiating a method of the declaration for a dispatch on an application,
 a source dispatch or a generated codec's call of a format method alike
 (`receiverContext`): the method's scheme names the context variables as the
 enclosing functions' own, and its instance reads them as the receiver's
-context arguments. A method whose signature does not name its type (a
+context arguments. A method of a type an imported module declares in a
+function body is copied with the importing module's copy of the
+declaration's context formals in place of the context variables
+(`importedOwnerContextSubstitutions`), so its instance reads them as the
+receiver's context arguments the same way. A method whose signature does not name its type (a
 format's `encode_str : Str, s -> Try(s, e)`) is otherwise related to the
 receiver by nothing, so a fresh copy would make each derivation that
 instantiates it ask for a format no derivation in its chain matches. Instantiation
