@@ -4628,13 +4628,16 @@ fn checkedTypePairEqlStep(
         .tuple => |left_items| return try appendCheckedTypePairs(allocator, pending, left_items, right_payload.tuple),
         .nominal => |left_nominal| {
             const right_nominal = right_payload.nominal;
+            // A nominal type is its declaration at its arguments; the
+            // representation a read carries (its declaration, or the box
+            // payload capability its module's interface capabilities gave
+            // it) is a view of that one type.
             return left_nominal.name == right_nominal.name and
                 left_nominal.origin_module == right_nominal.origin_module and
                 std.meta.eql(left_nominal.owner_module.*, right_nominal.owner_module.*) and
                 left_nominal.source_decl == right_nominal.source_decl and
                 left_nominal.builtin == right_nominal.builtin and
                 left_nominal.is_opaque == right_nominal.is_opaque and
-                std.meta.eql(left_nominal.representation, right_nominal.representation) and
                 checkedDeclaredFieldsExactEql(left_nominal.declared_fields, right_nominal.declared_fields) and
                 try appendCheckedTypePairs(allocator, pending, left_nominal.args, right_nominal.args) and
                 try appendCheckedTypePairs(allocator, pending, left_nominal.padding_field_types, right_nominal.padding_field_types);
