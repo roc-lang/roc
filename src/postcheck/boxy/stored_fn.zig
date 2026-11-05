@@ -359,15 +359,16 @@ const Rebuild = enum(u8) {
 
 /// Where each capture of a worker of `shape` is in its capture record at
 /// `capture`: a closed record's order is values, then words; a dynamic
-/// record's is its own descriptor, words, then values.
+/// record's is its own descriptor and capacity, words, then values.
 fn captureOffsets(program: *Program, allocator: Allocator, shape: CaptureShape, capture: [*]u8) Allocator.Error![]u32 {
     const word_count = shape.descs + shape.dicts;
     const offsets = try allocator.alloc(u32, shape.values.len + word_count);
     errdefer allocator.free(offsets);
     if (!try allClosed(program, shape.values)) {
+        const leading = body.Builder.capture_record_leading_words;
         const record_desc: *const TypeDesc = @ptrCast(@alignCast(readWord(capture)));
-        for (0..word_count) |index| offsets[shape.values.len + index] = record_desc.fieldOffset(@intCast(1 + index));
-        for (0..shape.values.len) |index| offsets[index] = record_desc.fieldOffset(@intCast(1 + word_count + index));
+        for (0..word_count) |index| offsets[shape.values.len + index] = record_desc.fieldOffset(@intCast(leading + index));
+        for (0..shape.values.len) |index| offsets[index] = record_desc.fieldOffset(@intCast(leading + word_count + index));
     } else if (offsets.len != 0) {
         const record = try closedRecordLayout(program, shape);
         if (record != .zst) {

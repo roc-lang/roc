@@ -16,6 +16,7 @@ const ImmortalLocals = @import("immortal_locals.zig");
 const TailDrive = @import("tail_drive.zig");
 const ProcPasses = @import("proc_passes.zig");
 const ReturnSlot = @import("return_slot.zig");
+const ErasedOwner = @import("erased_owner.zig");
 const StrAppend = @import("str_append.zig");
 const SingleUseInline = @import("single_use_inline.zig");
 
@@ -1822,6 +1823,17 @@ fn finishLoweredOutput(
         if (pass_target.lir_pass_parallel_metrics_out) |metrics| timing.addLirPassParallel(metrics.*);
     };
 
+    // A `.boxy` body's owned erased calls name their closure as their
+    // ownership source; the allocation's root is reached through the
+    // representation-transparent aliases lowering emitted (design.md
+    // "Destination-Passing Results and Allocation Reuse").
+    if (target.specialization_strategy != .lss) {
+        const store = &lowered.lir_result.store;
+        for (0..store.procSpecCount()) |index| {
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+            try ErasedOwner.resolveProcReuseSources(allocator, store, &lowered.lir_result.layouts, proc_id);
+        }
+    }
     // Branch expectations are read off the lowered switches before any
     // rewrite reshapes them.
     try runProcedurePass(allocator, &lowered.lir_result, pass_target, .branch_expectation);
@@ -2207,7 +2219,7 @@ fn collectStaticDataRequests(
                     .checked_type = data.checked_type,
                 });
             },
-            .procedure => {},
+            .procedure, .checked_error => {},
         }
     }
 
