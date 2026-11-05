@@ -17421,7 +17421,7 @@ fn runGlueRuntimeCase(
         };
     }
 
-    // Zig 0.17.0 mislowers a natural C ABI aggregate signature exercised by
+    // Zig 0.17 mislowers a natural C ABI aggregate signature exercised by
     // layout-probe on arm64musl: after five integer arguments occupy x0-x4,
     // Zig passes the 16-byte-aligned Dec aggregate in x5/x6 instead of
     // rounding up to the even pair x6/x7 as AAPCS64 requires. CGlue and

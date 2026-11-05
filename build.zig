@@ -5318,13 +5318,10 @@ fn addAflFuzzExe(
         run_afl_cc.step.dependOn(&install_tools.step);
     }
 
-    // Keep the object output requested so Zig materializes the LLVM bitcode output.
-    _ = fuzz_obj.getEmittedBin();
-
     run_afl_cc.addArg("-o");
     const fuzz_exe = run_afl_cc.addOutputFileArg(fuzz_obj.name);
     run_afl_cc.addFileArg(afl_kit.path("afl.c"));
-    run_afl_cc.addFileArg(fuzz_obj.getEmittedLlvmBc());
+    run_afl_cc.addFileArg(bitcodeWithoutObject(fuzz_obj));
     // ELF linkers resolve libraries left-to-right, so math libraries must follow the bitcode.
     run_afl_cc.addArg("-lm");
     run_afl_cc.addArg("-lquadmath");
@@ -5571,6 +5568,15 @@ const MainExeResult = struct {
     machine_code_shim_archive_test: ?*Step.Compile,
     archive_member_names_test: ?*Step.Compile,
 };
+
+/// LLVM bitcode of `obj` for a later LLVM pipeline to optimize. Never also request
+/// `obj`'s object file: Zig would then write this bitcode after code generation,
+/// whose stack coloring merges allocas in the IR but leaves their lifetime markers,
+/// and optimizing that again miscompiles it.
+fn bitcodeWithoutObject(obj: *Step.Compile) std.Build.LazyPath {
+    return obj.getEmittedLlvmBc();
+}
+
 /// LLVM bitcode for `src/builtins/sha256_rounds_lib.zig` compiled for `query`,
 /// whose CPU features select the SHA-256 rounds the payload defines.
 fn addSha256RoundsBitcode(b: *std.Build, comptime rounds_name: []const u8, query: std.Target.Query) std.Build.LazyPath {
@@ -5589,8 +5595,7 @@ fn addSha256RoundsBitcode(b: *std.Build, comptime rounds_name: []const u8, query
     obj.root_module.stack_check = false;
     obj.use_llvm = true;
     obj.bundle_compiler_rt = false;
-    _ = obj.getEmittedBin();
-    return obj.getEmittedLlvmBc();
+    return bitcodeWithoutObject(obj);
 }
 
 /// LLVM bitcode for src/builtins/llvm_private_runtime.zig compiled for
@@ -5623,8 +5628,7 @@ fn addLlvmPrivateRuntimeBitcode(b: *std.Build, runtime_target: roc_target.RocTar
     obj.root_module.link_libc = false;
     obj.use_llvm = true;
     obj.bundle_compiler_rt = false;
-    _ = obj.getEmittedBin();
-    return obj.getEmittedLlvmBc();
+    return bitcodeWithoutObject(obj);
 }
 
 /// Run the wasm static-lib test runner on one built app as part of `step`.
@@ -5769,8 +5773,7 @@ fn addBuiltinsBitcode(
     if (link_libc) |link| obj.root_module.link_libc = link;
     obj.use_llvm = true;
     obj.bundle_compiler_rt = false;
-    _ = obj.getEmittedBin();
-    return obj.getEmittedLlvmBc();
+    return bitcodeWithoutObject(obj);
 }
 
 fn addMainExe(
