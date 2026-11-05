@@ -24449,7 +24449,7 @@ pub const PlatformPairing = struct {
             if (self.has_dependent_evaluation) result.exported_const_templates = self.exported_const_templates.deserialize(address);
             result.compile_time_debug = self.compile_time_debug.deserialize(address);
             if (self.has_dependent_evaluation) result.compile_time_root_reads = self.compile_time_root_reads.deserialize(address);
-            result.finishPublication();
+            result.openToAnalyses();
             return result;
         }
     };
@@ -24637,7 +24637,7 @@ pub fn pairCheckedPlatform(
     result.checked_types.markPublished();
     result.checked_types.releaseSuperseded(allocator);
     result.canonical_names.markPublished();
-    result.finishPublication();
+    result.openToAnalyses();
     return result;
 }
 
@@ -31380,7 +31380,7 @@ pub const CheckedModuleArtifact = struct {
         self.module_analyses = try ModuleAnalyses.create(gpa, io, null);
         self.checked_types.attachSealedTypes(env, keys, synthesized);
         self.attachCapabilitySource();
-        self.finishPublication();
+        self.openToAnalyses();
     }
 
     /// Point the artifact's types at its module analyses, which compute
@@ -31396,7 +31396,7 @@ pub const CheckedModuleArtifact = struct {
     /// published and its interface capabilities have their source, so no
     /// slot can see the module before every type and name its cache entry
     /// holds exists. A pairing's capabilities are its platform's.
-    pub fn finishPublication(self: *CheckedModuleArtifact) void {
+    pub fn openToAnalyses(self: *CheckedModuleArtifact) void {
         if (std.debug.runtime_safety) {
             if (self.checked_types.published_counts == null) checkedArtifactInvariant("a module's analyses were let run before its type store was published", .{});
             if (self.canonical_names.published == null) checkedArtifactInvariant("a module's analyses were let run before its name store was published", .{});
@@ -34536,7 +34536,7 @@ pub fn publishFromTypedModule(
         artifact.checked_types.deinit(allocator);
         artifact.canonical_names.deinit();
     }
-    artifact.finishPublication();
+    artifact.openToAnalyses();
     checked_const_store = ConstStore.init(allocator);
     errdefer artifact.const_store.deinit();
     errdefer artifact.literal_root_payloads.deinit(allocator);

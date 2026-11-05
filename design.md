@@ -5484,19 +5484,19 @@ ordered after its importers, nothing waits for demand to flow top-down, and
 the read path takes no lock.
 
 No slot's result depends on whether, when or on which thread another slot
-was computed. Checking a module and recording its checked data creates every
-type and interns every name its cache entry holds, and only then is the
-module published: its type store and name store are marked published
-(`markPublished`), its interface capabilities get their source
-(`attachCapabilitySource`), and its analyses are told
-(`CheckedModuleArtifact.finishPublication`). No slot of a module runs before
-that point, publication's own steps included; each slot claim of a
-module's analyses (`ModuleAnalyses`, `BodyAnalyses`) asserts it in debug
-builds. A slot that reads a module's nominal types demands the module's
-interface capabilities first, so every slot reads every nominal type at the
-representation its capabilities give it; a read of a nominal type of a
-module whose capabilities no consumer has demanded is a compiler bug,
-asserted in debug builds.
+was computed. Recording a checked module creates every type and interns
+every name its cache entry holds before any slot of the module can run: the
+type store and name store are then sealed for shared reading, the interface capabilities get their source
+(`attachCapabilitySource`), and only then are the module's analyses opened
+(`CheckedModule.openToAnalyses`). Each slot claim of a module's analyses
+(`ModuleAnalyses`, `BodyAnalyses`) asserts in debug builds that they are
+open. Every dispatch slot (schemas, resolutions, indexes, the demand graph)
+and every literal slot demands the module's interface capabilities before it
+claims, and a creation demands those of every module whose types it copies,
+so every slot reads each nominal type at the representation its
+capabilities give it. A platform/app pairing reads the types its platform
+held when the platform's analyses were opened, whatever the platform's
+slots created since.
 
 An analysis that reads modules other than its own finds them through the
 `ModuleResolver` its consumer passes: publication's imports, a build's
@@ -5579,7 +5579,8 @@ fixes its type and the callee requirement it converts
 template table either: its template id is its root's identity
 (`literalRootWrapperTemplate`), its procedure base is the one every literal
 root's wrapper of the module shares (`literal_root_proc_base`, interned with
-the module's other procedure bases before its names are published), and
+the module's other procedure bases while its names are still private to its
+check), and
 `CheckedDispatch.procedureTemplate` describes it from the slot that holds
 the root. Its function type and scheme are created by that slot. What
 compile-time evaluation stores for a literal root is evaluation output keyed

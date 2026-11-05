@@ -195,7 +195,7 @@ pub const ModuleAnalyses = struct {
     literal_graph: collections.OnceSlot(*LiteralGraph, .module_literal_graph) = .empty,
     unit_conversion_slots: collections.OnceSlot(*UnitConversionSlots, .module_unit_conversion_slots) = .empty,
     root_requests: collections.OnceSlot(*RootRequestTable, .module_root_requests) = .empty,
-    /// Set once the module is published (`CheckedModuleArtifact.finishPublication`):
+    /// Set once the module is published (`CheckedModuleArtifact.openToAnalyses`):
     /// no slot of the module runs before it.
     published: std.atomic.Value(bool) = .init(false),
 

@@ -4996,7 +4996,7 @@ pub const Coordinator = struct {
         artifact_ptr.body_analyses = body_analyses;
         artifact_ptr.module_analyses = module_analyses;
         artifact_ptr.attachCapabilitySource();
-        artifact_ptr.finishPublication();
+        artifact_ptr.openToAnalyses();
         sealed_keys_owned = false;
         synthesized_keys_owned = false;
         body_analyses_owned = false;

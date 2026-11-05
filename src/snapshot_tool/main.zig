@@ -3719,7 +3719,7 @@ fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
 fn snapshotRootRequestByOrder(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     order: u32,
-) check.CheckedArtifact.RootRequest {
+) std.mem.Allocator.Error!check.CheckedArtifact.RootRequest {
     for ((try root_artifact.rootRequests()).requests) |request| {
         if (request.order == order) return request;
     }
@@ -3777,7 +3777,7 @@ fn snapshotNativeEntrypoints(
 
     for (root_procs, root_metadata) |root_proc, metadata| {
         if (metadata.abi != .platform or metadata.exposure != .exported) continue;
-        const root = snapshotRootRequestByOrder(root_artifact, metadata.order);
+        const root = try snapshotRootRequestByOrder(root_artifact, metadata.order);
         if (root.kind != .provided_export) continue;
 
         const proc_spec = lowered.lir_result.store.getProcSpec(root_proc);

@@ -856,7 +856,7 @@ pub const BodyAnalyses = struct {
     diagnostic_errors: collections.OnceSlot(*NodeBits, .body_diagnostic_errors) = .empty,
     single_source: collections.OnceSlot(*SingleSourceFacts, .body_single_source_calls) = .empty,
     exhaustiveness_index: collections.OnceSlot(*ExhaustivenessIndex, .body_exhaustiveness_index) = .empty,
-    /// Set once the module is published (`CheckedModuleArtifact.finishPublication`):
+    /// Set once the module is published (`CheckedModuleArtifact.openToAnalyses`):
     /// no slot of the module runs before it.
     published: std.atomic.Value(bool) = .init(false),
 
