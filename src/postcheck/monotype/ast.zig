@@ -406,12 +406,12 @@ pub const CallableIdentity = union(enum(u8)) {
     proc_template: struct {
         module: names.CheckedModuleDigest,
         proc_base: u32,
-        template: u32,
+        template: u128,
     },
     nested_site: struct {
         module: names.CheckedModuleDigest,
         owner_proc_base: u32,
-        owner_template: u32,
+        owner_template: u128,
         owner_fn_digest: names.TypeDigest,
         site: u32,
         /// Set iff `site` is a default-root site: the declaring module's
@@ -472,13 +472,13 @@ pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
             hasher.update("proc_template");
             hasher.update(&template.module.bytes);
             writeU32(&hasher, template.proc_base);
-            writeU32(&hasher, template.template);
+            names.digestId(template.template, &hasher);
         },
         .nested_site => |site| {
             hasher.update("nested_site");
             hasher.update(&site.module.bytes);
             writeU32(&hasher, site.owner_proc_base);
-            writeU32(&hasher, site.owner_template);
+            names.digestId(site.owner_template, &hasher);
             hasher.update(&site.owner_fn_digest.bytes);
             writeU32(&hasher, site.site);
             if (site.default_root_module) |module| {
@@ -906,7 +906,7 @@ fn writeMethodTarget(
             const template_module = names.procTemplateModuleDigest(procedure.template);
             writeBytes(hasher, &template_module.bytes);
             writeU32(hasher, @backingInt(procedure.template.proc_base));
-            writeU32(hasher, @backingInt(procedure.template.template));
+            procedure.template.template.digestInto(hasher);
         },
         .local_proc => |local| {
             writeU32(hasher, @backingInt(local.binder));
@@ -1074,7 +1074,7 @@ fn writeProcTemplate(hasher: *TypeDigestHasher, template: names.ProcTemplate) vo
     const module_digest = names.procTemplateModuleDigest(template);
     hasher.update(&module_digest.bytes);
     writeU32(hasher, @backingInt(template.proc_base));
-    writeU32(hasher, @backingInt(template.template));
+    template.template.digestInto(hasher);
 }
 
 fn writeBytes(hasher: anytype, bytes: []const u8) void {

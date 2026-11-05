@@ -45,8 +45,53 @@ pub const ExternalSymbolNameId = enum(u32) { _ };
 
 /// Public `ProcBaseKeyRef` declaration.
 pub const ProcBaseKeyRef = enum(u32) { _ };
-/// Public `CheckedProcedureTemplateId` declaration.
-pub const CheckedProcedureTemplateId = enum(u32) { _ };
+/// A procedure template of one checked module: a row of the module's
+/// template table, or the entry wrapper of a literal root, whose id carries
+/// its root's identity (`ComptimeRootId`) and names no row.
+pub const CheckedProcedureTemplateId = enum(u128) {
+    _,
+
+    /// The template at `index` of the module's template table.
+    pub fn row(row_index: u32) CheckedProcedureTemplateId {
+        return @fromBackingInt(row_index);
+    }
+
+    /// The template's table row, or null for a literal root's entry wrapper.
+    pub fn rowIndex(self: CheckedProcedureTemplateId) ?u32 {
+        const raw = @backingInt(self);
+        if (raw >> 32 != 0) return null;
+        return @intCast(raw);
+    }
+
+    /// The template's table row; the template must be one.
+    pub fn index(self: CheckedProcedureTemplateId) u32 {
+        const raw = @backingInt(self);
+        std.debug.assert(raw >> 32 == 0);
+        return @truncate(raw);
+    }
+
+    /// Feed the id to a digest: a row as its 32-bit index, a literal root's
+    /// entry wrapper as 32 set bits and then its 128-bit identity, each
+    /// little-endian.
+    pub fn digestInto(self: CheckedProcedureTemplateId, hasher: anytype) void {
+        digestId(@backingInt(self), hasher);
+    }
+};
+
+/// Feed a template or compile-time root identity to a digest: a row's 32-bit
+/// index, or 32 set bits and the 128-bit identity of a literal root, each
+/// little-endian.
+pub fn digestId(raw: u128, hasher: anytype) void {
+    if (raw >> 32 == 0) {
+        const little = std.mem.nativeToLittle(u32, @truncate(raw));
+        hasher.update(std.mem.asBytes(&little));
+        return;
+    }
+    const marker = std.mem.nativeToLittle(u32, std.math.maxInt(u32));
+    hasher.update(std.mem.asBytes(&marker));
+    const little = std.mem.nativeToLittle(u128, raw);
+    hasher.update(std.mem.asBytes(&little));
+}
 /// Public `NestedProcSiteId` declaration.
 pub const NestedProcSiteId = enum(u32) { _ };
 /// Public `IntrinsicWrapperId` declaration.
@@ -171,6 +216,9 @@ pub const ProcBaseKind = enum {
     /// A local function binding promoted to a procedure of its own; the
     /// ordinal is its lambda's source expression.
     promoted_local,
+    /// The one base every literal root's entry wrapper in a module shares;
+    /// the wrapper's template id, its root's identity, tells them apart.
+    literal_root_wrapper,
 };
 
 /// Public `NestedProcSiteKey` declaration.

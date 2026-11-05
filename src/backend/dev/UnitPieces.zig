@@ -425,7 +425,11 @@ fn writeFailureMeaning(writer: *Writer, meaning: lir.LIR.FailureMeaning) Allocat
             switch (value.producer) {
                 .checked => |root| {
                     try writer.byte(0);
-                    try writer.word(@backingInt(root));
+                    var remaining: u128 = @backingInt(root);
+                    for (0..4) |_| {
+                        try writer.word(@truncate(remaining));
+                        remaining >>= 32;
+                    }
                 },
                 .literal => |root| {
                     try writer.byte(1);
@@ -455,7 +459,11 @@ fn readFailureMeaning(reader: *Reader) ReadError!lir.LIR.FailureMeaning {
         3 => .{ .failed_value = .{
             .module = (try reader.raw(32))[0..32].*,
             .producer = switch (try reader.byte()) {
-                0 => .{ .checked = @fromBackingInt(try reader.word()) },
+                0 => blk: {
+                    var value: u128 = 0;
+                    for (0..4) |index| value |= @as(u128, try reader.word()) << @intCast(32 * index);
+                    break :blk .{ .checked = @fromBackingInt(value) };
+                },
                 1 => .{ .literal = @fromBackingInt(try reader.word()) },
                 else => return error.MalformedPieces,
             },

@@ -387,7 +387,7 @@ const ComptimeDemandState = struct {
     /// `literal` is set when the body reads a literal root's value, which
     /// its reads do not name since the root's body is the reading body's code.
     const Summary = struct { refs: Range, reads: Range, local: bool, literal: bool };
-    const RootBytes = struct { module: [32]u8, root: u32 };
+    const RootBytes = struct { module: [32]u8, root: u128 };
     const Visit = union(enum) { expr: Ast.ExprId, stmt: Ast.StmtId };
     /// Items number definitions first and nested definitions after them, in
     /// two disjoint ranges of one id space.
@@ -1488,9 +1488,28 @@ const ModuleViewData = struct {
     const_templates: *const checked.ConstTemplateTable,
     const_store: *const checked.ConstStore,
     compile_time_root_reads: *const checked.CompileTimeRootReadTable,
+    literal_root_payloads: *const checked.LiteralRootPayloadTable,
     /// This module's dense id among the lowering input's modules, seeded
     /// once with the program's module tables.
     lowering_module: ?Common.LoweringModuleId = null,
+
+    /// Compile-time root `id`, with the payload evaluation gave it: a row of
+    /// the root table, or a literal root.
+    fn compileTimeRoot(self: *const ModuleViewData, id: checked.ComptimeRootId) Allocator.Error!checked.CompileTimeRoot {
+        if (id.rowIndex() != null) return self.compile_time_roots.root(id);
+        var root = (try self.dispatch.literalRoot(id)).root;
+        if (self.literal_root_payloads.get(id)) |output| {
+            root.payload = output.payload;
+            root.boxy_value = output.boxy_value;
+        }
+        return root;
+    }
+
+    /// Procedure template `id`: a row of the template table, or a literal
+    /// root's entry wrapper.
+    fn template(self: *const ModuleViewData, id: names.CheckedProcedureTemplateId) Allocator.Error!checked.CheckedProcedureTemplate {
+        return self.dispatch.procedureTemplate(id);
+    }
 };
 
 /// The reader over a checked module's bodies (`check.CheckedBodies`).
@@ -1545,11 +1564,11 @@ const ExprSite = enum(u32) {
     }
 
     fn hoistedRoot(root_id: checked.ComptimeRootId) ExprSite {
-        return make(.hoisted_root, @backingInt(root_id));
+        return make(.hoisted_root, root_id.index());
     }
 
     fn hoistedResult(root_id: checked.ComptimeRootId) ExprSite {
-        return make(.hoisted_result, @backingInt(root_id));
+        return make(.hoisted_result, root_id.index());
     }
 
     fn literalGuard(pattern: CIR.Pattern.Idx) ExprSite {
@@ -2127,9 +2146,9 @@ fn patternIntroducesBinder(view: ModuleView, pattern: CIR.Pattern.Idx) bool {
 
 /// The compile-time root that evaluates a literal's conversion, when its
 /// conversion is independent of specialization.
-fn literalConversionRootOf(view: ModuleView, data: ExprData) ?checked.ComptimeRootId {
+fn literalConversionRootOf(view: ModuleView, data: ExprData) Allocator.Error!?checked.ComptimeRootId {
     return switch (data) {
-        .numeral, .str_from_quote => |node| view.bodies.literalConversionRoot(node),
+        .numeral, .str_from_quote => |node| try view.bodies.literalConversionRoot(node),
         .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => null,
     };
 }
@@ -2472,7 +2491,7 @@ const SealedSubstitution = []const SealedSubstSlot;
 /// Whether a template's body relates anything to its interface beyond its
 /// checked root: a dispatch relation or a checked specialization relation.
 fn templateHasInterfaceRelations(view: ModuleView, template: *const checked.CheckedProcedureTemplate) Allocator.Error!bool {
-    return (try view.dispatch.templateRelations(template.template_id)).relations.len != 0 or view.templates.specializationRelations(template).len != 0;
+    return (try view.dispatch.templateRelations(template.template_id)).relations.len != 0 or (try view.dispatch.specializationRelations(template)).len != 0;
 }
 
 /// Whether a procedure template's checked function type is its complete
@@ -7375,7 +7394,7 @@ const Builder = struct {
                     .request = request,
                     .source_module = source_module,
                     .validation = self.validate_every_comptime_root or
-                        source_view.compile_time_roots.root(root_id).kind == .hoisted_validation,
+                        (try source_view.compileTimeRoot(root_id)).kind == .hoisted_validation,
                 });
                 if (!self.demand_driven_comptime_roots) _ = try self.prepareDeclaredRoot(ordinal, &fn_tys[i]);
             }
@@ -8251,7 +8270,7 @@ const Builder = struct {
             },
             .hoisted_root => |owner| {
                 hasher.update("hoisted-root");
-                hashU32(&hasher, @backingInt(owner.root));
+                owner.root.digestInto(&hasher);
             },
         }
         hashU32(&hasher, @backingInt(request.const_locator.template));
@@ -8318,7 +8337,7 @@ const Builder = struct {
             Common.invariant("callable eval binding referenced a missing checked template");
         }
         const template = view.callable_eval_templates.templates[raw];
-        const root = view.compile_time_roots.root(template.root);
+        const root = (try view.compileTimeRoot(template.root));
         const restored = switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try runConstRestore(self, view, view, node, mono_fn_ty, null),
@@ -8782,7 +8801,7 @@ const Builder = struct {
         if (request_accounting == .count) self.count("template_requests");
         const lower_fn_ty = fn_ty;
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-        const template = view.templates.get(template_ref.template);
+        const template = (try view.template(template_ref.template));
         // The template's own type, whichever module requests it first: a
         // request names the type through its own module's checked types.
         const source_fn_ty = template.checked_fn_root;
@@ -9209,7 +9228,7 @@ const Builder = struct {
         codec_contract: ?SealedCodecContractContext,
     ) Allocator.Error!void {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-        const template = view.templates.get(template_ref.template);
+        const template = (try view.template(template_ref.template));
 
         switch (template.target) {
             .hosted => {
@@ -9796,7 +9815,7 @@ const Builder = struct {
                     Common.compilerBug("Monotype streaming dispatch was not contiguous");
                 }
                 const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
-                const template = view.templates.get(job.template_ref.template);
+                const template = (try view.template(job.template_ref.template));
                 if (self.spec_store.recordStatus(job.spec) == .ready or specJobCompletesOnCoordinator(template)) {
                     // Coordinator-only entries still wait their exact acceptance
                     // turn, but need not wait for any later worker task.
@@ -10093,7 +10112,7 @@ const Builder = struct {
         self.countCoordinatorBodyDiagnostic("spec_jobs_executed");
         self.spec_store.markLowering(job.spec);
         const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
-        const template = view.templates.get(job.template_ref.template);
+        const template = (try view.template(job.template_ref.template));
         // Hosted completion has no Roc graph/draft pair to transfer, and
         // neither does an object-cache completion. Both keep coordinator
         // ownership while ordinary bodies establish the shard handoff.
@@ -10600,7 +10619,7 @@ const Builder = struct {
             .anchored => |anchor| source_ctx.activeCodecContractContextForAnchor(anchor),
         };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-        const template = view.templates.get(template_ref.template);
+        const template = (try view.template(template_ref.template));
         // The template's own type, whichever module requests it first: a
         // request names the type through its own module's checked types.
         const source_fn_ty = template.checked_fn_root;
@@ -11252,7 +11271,9 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         mono_fn_ty: Type.TypeId,
     ) Ast.FnTemplate {
-        const fn_def: Ast.FnDef = switch (view.templates.get(template.template).target) {
+        // A literal root's entry wrapper runs only at compile time.
+        const target: checked.ProcTarget = if (template.template.rowIndex() == null) .comptime_only else view.templates.get(template.template).target;
+        const fn_def: Ast.FnDef = switch (target) {
             .hosted => self.fnDefForHostedTemplate(template, moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template).bytes)),
             .roc,
             .intrinsic,
@@ -13153,7 +13174,7 @@ const Builder = struct {
         var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &draft);
         defer ctx.deinit();
         ctx.evidence = rootEvidence(template_ref, &.{});
-        const template = view.templates.get(template_ref.template);
+        const template = (try view.template(template_ref.template));
         const subst = try ctx.substitutionFromCheckedTypes(view, (try view.dispatch.templateSchemeVars(template.template_id)));
         return .{
             .subst = subst,
@@ -13726,7 +13747,7 @@ const Builder = struct {
             // dispatch relations flow through its collected default-root
             // evidence spans.
             if (nested.default_root == null) try nested_ctx.instantiateTemplateDispatchRelations(
-                nested_ctx.view.templates.get(nested_ctx.owner_template.template),
+                (try nested_ctx.view.template(nested_ctx.owner_template.template)),
                 scope,
             );
         }
@@ -14871,7 +14892,7 @@ const Builder = struct {
         var resolution_profile = ResolutionProfile.Scope.begin(&self.resolution_profile, .demand_shape);
         defer resolution_profile.end();
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-        const template = view.templates.get(template_ref.template);
+        const template = (try view.template(template_ref.template));
         const demands = try view.dispatch.templateDemands(template_ref.template);
         if (demands.len != subst.len) Common.invariant("specialization substitution length differed from its template's demand vector");
         const types_ = &self.program.types;
@@ -17529,7 +17550,7 @@ const DraftOpenCandidateSelection = struct {
 const DraftTemplateFamilyAddress = struct {
     module: [32]u8,
     proc_base: u32,
-    template: u32,
+    template: u128,
     source_fn_key: [32]u8,
 
     fn init(template_ref: names.ProcTemplate, source_fn_key: names.TypeDigest) DraftTemplateFamilyAddress {
@@ -17581,7 +17602,7 @@ const ActiveTemplateRoot = struct {
 const DraftNestedFamilyAddress = struct {
     module: [32]u8,
     owner_proc_base: u32,
-    owner_template: u32,
+    owner_template: u128,
     owner_fn_key: [32]u8,
     site: u32,
     /// Explicitly tagged default-root qualifier: the site id is relative to
@@ -18597,7 +18618,7 @@ const RuntimeDemandGuardFrameAddress = struct {
     module: [32]u8,
     owner_module: [32]u8,
     owner_proc_base: u32,
-    owner_template: u32,
+    owner_template: u128,
     pattern: u32,
     kind: RuntimeDemandGuardFrameKind,
 };
@@ -21776,7 +21797,7 @@ const InterfaceReplayAddress = struct {
 const InterfaceReplayAddressContext = struct {
     pub fn hash(_: InterfaceReplayAddressContext, address: InterfaceReplayAddress) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        const scalars = [_]u32{ @backingInt(address.kind), address.family.proc_base, address.family.template };
+        const scalars = [_]u128{ @backingInt(address.kind), address.family.proc_base, address.family.template };
         hasher.update(std.mem.asBytes(&scalars));
         hasher.update(address.family.module[0..8]);
         hasher.update(address.family.source_fn_key[0..8]);
@@ -25523,7 +25544,7 @@ const BodyContext = struct {
             } else hasher.update(&.{0});
             hasher.update(&names.procTemplateModuleDigest(context.owner_template).bytes);
             hashU32(&hasher, @backingInt(context.owner_template.proc_base));
-            hashU32(&hasher, @backingInt(context.owner_template.template));
+            context.owner_template.template.digestInto(&hasher);
             hasher.update(&context.base_key.bytes);
             if (context.restored_specialization_key) |key| {
                 hasher.update(&.{1});
@@ -27606,7 +27627,8 @@ const BodyContext = struct {
                 };
             },
             .unimplemented => |declaration| return try self.lowerUnimplementedTemplateAtNode(declaration, fn_nodes, ret_cell),
-            .entry_wrapper => |wrapper_id| return try self.lowerEntryWrapperAtCell(wrapper_id, ret_cell),
+            .entry_wrapper => |wrapper_id| return try self.lowerRootEntryAtCell(self.view.entry_wrappers.get(wrapper_id).root, ret_cell),
+            .literal_root => |root_id| return try self.lowerRootEntryAtCell(root_id, ret_cell),
             .intrinsic_wrapper => |wrapper_id| {
                 const wrapper = self.view.intrinsic_wrappers.get(wrapper_id);
                 return switch (wrapper.intrinsic) {
@@ -27747,7 +27769,7 @@ const BodyContext = struct {
         const self = frame.ctx;
         const scope_id = frame.scope_id;
         const scope_root_node = frame.scope_root_node;
-        const relations = self.view.templates.specializationRelations(&frame.template);
+        const relations = try self.view.dispatch.specializationRelations(&frame.template);
         while (frame.next_relation < relations.len) {
             const relation = relations[frame.next_relation];
             frame.next_relation += 1;
@@ -28128,7 +28150,7 @@ const BodyContext = struct {
         if (self.builder.forwardingCallableEvalForProcedureUse(procedure) != null) return null;
         const template_ref = self.builder.templateRefForProcedureUse(procedure);
         const callee_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-        const template = callee_view.templates.get(template_ref.template);
+        const template = (try callee_view.template(template_ref.template));
         const partial_edge = try self.evidenceForProcedureUseAtNode(procedure, record.expr, root_evidence, request_fn_node, .interface_summary_input);
         var edge = if (partial_edge.vector.len == (try callee_view.dispatch.evidenceParams(template.template_id)).len)
             partial_edge
@@ -28459,16 +28481,15 @@ const BodyContext = struct {
         }
     };
 
-    fn lowerEntryWrapperAtCell(
+    fn lowerRootEntryAtCell(
         self: *BodyContext,
-        wrapper_id: anytype,
+        root_id: checked.ComptimeRootId,
         ret_cell: DraftTypeCell,
     ) Allocator.Error!LoweredTemplateBody {
-        const wrapper = self.view.entry_wrappers.get(wrapper_id);
-        const root = self.view.compile_time_roots.root(wrapper.root);
+        const root = try self.view.compileTimeRoot(root_id);
         const saved_entry_root = self.current_entry_root;
         defer self.current_entry_root = saved_entry_root;
-        self.current_entry_root = .{ .module = self.view.key, .root = wrapper.root };
+        self.current_entry_root = .{ .module = self.view.key, .root = root_id };
         const saved_source_region_override = self.source_region_override;
         defer self.source_region_override = saved_source_region_override;
         self.source_region_override = switch (root.kind) {
@@ -28500,9 +28521,9 @@ const BodyContext = struct {
                 // The canonical evaluator owns its recursive closure binding.
                 // Reads inside its construction must refer to this binding,
                 // before the completed value can be published to a root slot.
-                const local = try self.reserveCallableEvalBinding(self.view, wrapper.root, try ret_cell.toGraphNode(self.graph));
+                const local = try self.reserveCallableEvalBinding(self.view, root_id, try ret_cell.toGraphNode(self.graph));
                 const lowered = try self.lowerComptimeRootExprAtCell(rootBodyExpr(self.view, root), ret_cell);
-                break :blk try self.finishCallableEvalBinding(self.view, wrapper.root, ret_cell, local, lowered);
+                break :blk try self.finishCallableEvalBinding(self.view, root_id, ret_cell, local, lowered);
             },
             .numeral_conversion,
             .quote_conversion,
@@ -28695,7 +28716,7 @@ const BodyContext = struct {
             try scopes.append(self.allocator, frame.scope);
             frame = (frame.parent orelse break).*;
         }
-        const template = self.view.templates.get(self.owner_template.template);
+        const template = (try self.view.template(self.owner_template.template));
         var index = scopes.items.len;
         while (index > 0) {
             index -= 1;
@@ -33162,7 +33183,7 @@ const BodyContext = struct {
                     task.stage = .expr_value;
                     task.saved_in_place = self.in_place_statement_expr;
                     if (self.view.hoisted_constants.lookupByExpr(child)) |entry| {
-                        if (self.view.compile_time_roots.root(entry.root).guarded) self.in_place_statement_expr = ExprSite.read(child);
+                        if ((try self.view.compileTimeRoot(entry.root)).guarded) self.in_place_statement_expr = ExprSite.read(child);
                     }
                     return requestLowerTask(self, .{ .expr = .{ .expr = ExprSite.read(child) } });
                 }
@@ -35130,7 +35151,7 @@ const BodyContext = struct {
             }, expected_node),
             .record => |record| return recordConstructorStep(self, checked_expr, record, expected_node),
             .call => return requestLowerTask(self, .{ .call_expr_at_node = .{ .expr = checked_expr, .expected_node = expected_node } }),
-            .numeral, .str_from_quote => |node| if (self.view.bodies.literalConversionRoot(node)) |root_id| {
+            .numeral, .str_from_quote => |node| if (try self.view.bodies.literalConversionRoot(node)) |root_id| {
                 return loweredExprStep(try self.lowerLiteralConversionAtNode(checked_expr, root_id, expected_node));
             },
             .dispatch_call => |plan_node| {
@@ -35393,7 +35414,7 @@ const BodyContext = struct {
             // requesting an active view of their still-unresolved payload.
             .numeral, .str_from_quote => {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
-                if (literalConversionRootOf(self.view, expr.data)) |root_id| {
+                if (try literalConversionRootOf(self.view, expr.data)) |root_id| {
                     return self.exprInnerDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, expr_node));
                 }
                 // Only an unpinned target variable takes the checked literal
@@ -35611,11 +35632,11 @@ const BodyContext = struct {
                 return self.withTypeDone(task, try self.addExpr(.{ .ty = ty, .data = .{ .checked_error = try self.addStringLiteral("runtime error") } }));
             },
             .numeral => |node| {
-                if (self.view.bodies.literalConversionRoot(node)) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
+                if (try self.view.bodies.literalConversionRoot(node)) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
                 return self.withTypeDone(task, try self.lowerNumeralExpr(expr_id, node, ty));
             },
             .str_from_quote => |node| {
-                if (self.view.bodies.literalConversionRoot(node)) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
+                if (try self.view.bodies.literalConversionRoot(node)) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
                 return self.withTypeDone(task, try self.lowerQuoteExpr(expr_id, node, ty));
             },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
@@ -36299,7 +36320,7 @@ const BodyContext = struct {
             }
             break :blk existing.slot;
         } else blk: {
-            const template = lookup.view.templates.get(procedure.template.template);
+            const template = (try lookup.view.template(procedure.template.template));
             const edge: EdgeEvidence = if (try self.directAliasTargetEdge(plan, lookup)) |alias_edge| alias_edge else edge: {
                 const subst = (try self.directDispatchTargetSubstitution(plan, lookup, callable_node)) orelse
                     Common.invariant("closed direct procedure call had no checked substitution");
@@ -37784,7 +37805,7 @@ const BodyContext = struct {
 
         var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
         defer body_ctx.deinit();
-        const entry_template = view.templates.get(wrapper.template.template);
+        const entry_template = (try view.template(wrapper.template.template));
         const schema = (try templateSchemaIn(view, &entry_template));
         const subst = try body_ctx.substitutionFromCheckedTypes(view, schema.scheme_vars);
         body_ctx.evidence = rootEvidenceWithSubstitution(wrapper.template, schema, .{
@@ -37827,7 +37848,7 @@ const BodyContext = struct {
             Common.invariant("callable eval binding referenced a missing checked template");
         }
         const template = view.callable_eval_templates.templates[raw];
-        const root = view.compile_time_roots.root(template.root);
+        const root = (try view.compileTimeRoot(template.root));
         const restored = switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnAt(view, fn_id, .{ .node = request_fn_node }, null),
             .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
@@ -37852,7 +37873,7 @@ const BodyContext = struct {
 
         var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
         defer body_ctx.deinit();
-        const entry_template = view.templates.get(wrapper.template.template);
+        const entry_template = (try view.template(wrapper.template.template));
         const schema = (try templateSchemaIn(view, &entry_template));
         const subst = try body_ctx.substitutionFromCheckedTypes(view, schema.scheme_vars);
         body_ctx.evidence = rootEvidenceWithSubstitution(wrapper.template, schema, .{
@@ -37954,7 +37975,7 @@ const BodyContext = struct {
         root_id: checked.ComptimeRootId,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftLocalId {
-        const root = view.compile_time_roots.root(root_id);
+        const root = (try view.compileTimeRoot(root_id));
         const pattern = root.pattern orelse Common.invariant("callable eval binding omitted its checked pattern");
         const binder = switch (view.bodies.pattern(pattern).data) {
             .assign => pattern,
@@ -45287,14 +45308,14 @@ const BodyContext = struct {
         const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
         const lookup = template.forwarded_lookup orelse
             Common.invariant("forwarded callable-eval alias had no checked lookup");
-        const root = view.compile_time_roots.root(template.root);
+        const root = (try view.compileTimeRoot(template.root));
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
             Common.invariant("callable eval template root had no checked entry wrapper");
         const edge = try self.evidenceForUseSiteAtNode(use_expr, request_fn_node);
 
         var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
         defer body_ctx.deinit();
-        const entry_template = view.templates.get(wrapper.template.template);
+        const entry_template = (try view.template(wrapper.template.template));
         const schema = (try templateSchemaIn(view, &entry_template));
         // The alias's scope runs under the substitution checking applied at
         // this use, so its lookup's own recorded substitution composes with
@@ -46641,7 +46662,7 @@ const BodyContext = struct {
 
         const request_fn_ty = try self.activeTypeFromNode(spec.request_fn_node);
         const view = self.builder.moduleForDigest(names.procTemplateModuleDigest(spec.template_ref));
-        const template = view.templates.get(spec.template_ref.template);
+        const template = (try view.template(spec.template_ref.template));
         // A hosted declaration has no Roc body that can author a private
         // iterator representation. Its public request remains the exact ABI.
         if (template.target == .hosted) return current_node;
@@ -46953,7 +46974,7 @@ const BodyContext = struct {
         if (self.builder.comptimeValueReadDeclared(store_view, body.root)) {
             return self.declaredComptimeValueRead(store_view, body.root, DraftTypeCell.fromGraphNode(request_node), const_use);
         }
-        const entry_template = store_view.templates.get(eval.entry_template.template);
+        const entry_template = (try store_view.template(eval.entry_template.template));
 
         var body_ctx = try BodyContext.init(
             self.allocator,
@@ -47006,7 +47027,7 @@ const BodyContext = struct {
         try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
 
         const evaluated = try body_ctx.lowerComptimeRootExprAtCell(
-            rootBodyExpr(store_view, store_view.compile_time_roots.root(body.root)),
+            rootBodyExpr(store_view, (try store_view.compileTimeRoot(body.root))),
             DraftTypeCell.fromGraphNode(request_node),
         );
         try self.draft.recordEvaluatedRootRead(evaluated, store_view.key, body.root);
@@ -48092,7 +48113,7 @@ const BodyContext = struct {
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => blk: {
                 const template_ref = templateForConstFnDef(fn_value.fn_def);
                 const template_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-                const template = template_view.templates.get(template_ref.template);
+                const template = (try template_view.template(template_ref.template));
                 // The stored value retains its dispatch selections; only the
                 // substitution is read back from the restoring request.
                 const subst = try self.substitutionAtRequest((try templateSchemaIn(template_view, &template)), request_fn_node);
@@ -51072,7 +51093,7 @@ const BodyContext = struct {
         root_id: checked.ComptimeRootId,
         request_node: NodeId,
     ) Allocator.Error!DraftExprId {
-        const root = self.view.compile_time_roots.root(root_id);
+        const root = (try self.view.compileTimeRoot(root_id));
         const kind = root.literalConversionKind() orelse
             Common.invariant("literal conversion root link named a non-conversion root");
         switch (root.payload) {
@@ -51289,7 +51310,7 @@ const BodyContext = struct {
         for (items) |item| {
             const expr = checkedExpr(self.view, ExprSite.read(item));
             if (expr.data != .numeral) return null;
-            if (self.view.bodies.numeralPlan(expr.data.numeral) != null or self.view.bodies.literalConversionRoot(expr.data.numeral) != null) return null;
+            if (self.view.bodies.numeralPlan(expr.data.numeral) != null or try self.view.bodies.literalConversionRoot(expr.data.numeral) != null) return null;
         }
 
         const width = scalar.byteWidth();
@@ -52499,7 +52520,7 @@ const BodyContext = struct {
 
     fn templateSchema(self: *BodyContext, template_ref: names.ProcTemplate) Allocator.Error!SchemeRequirements {
         const view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-        const template = view.templates.get(template_ref.template);
+        const template = (try view.template(template_ref.template));
         return (try templateSchemaIn(view, &template));
     }
 
@@ -52676,7 +52697,7 @@ const BodyContext = struct {
             Common.invariant("root procedure evidence and procedure template belonged to different checked modules");
         }
         const root_entries = try view.dispatch.evidenceEntries(evidence_span.span);
-        const template = view.templates.get(template_ref.template);
+        const template = (try view.template(template_ref.template));
         const schema = (try templateSchemaIn(view, &template));
         const subst = try self.substitutionAtRequest(schema, request_node);
         return .{
@@ -53050,7 +53071,7 @@ const BodyContext = struct {
         const lookup = try self.methodLookupForEvidencePurpose(base_lookup, purpose);
         const schema: SchemeRequirements = switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
-                const template = lookup.view.templates.get(procedure.template.template);
+                const template = (try lookup.view.template(procedure.template.template));
                 break :blk (try templateSchemaIn(lookup.view, &template));
             },
             .local_proc => |local| try self.scopeSchema(lookup.view, local.dispatch_scope),
@@ -53748,7 +53769,7 @@ const BodyContext = struct {
     ) Allocator.Error!static_dispatch.ProcedureEvidenceSchema {
         return switch (target.target.kind) {
             .procedure => |procedure| blk: {
-                const template = target.view.templates.get(procedure.template.template);
+                const template = (try target.view.template(procedure.template.template));
                 const schema = static_dispatch.procedureEvidenceSchema((try target.view.dispatch.evidenceParams(template.template_id)));
                 // A signature that leaves a scheme variable to the target's
                 // nested evidence cannot supply an independent callable's
@@ -53930,7 +53951,7 @@ const BodyContext = struct {
             .procedure => |procedure| procedure,
             .local_proc, .structural => Common.invariant("a callable-derived substitution reached a non-procedure method target"),
         };
-        const template = lookup.view.templates.get(procedure.template.template);
+        const template = (try lookup.view.template(procedure.template.template));
         var target_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
@@ -54060,7 +54081,7 @@ const BodyContext = struct {
                         template.forwarded_lookup orelse
                             Common.invariant("method target alias binding was not an exact procedure alias"),
                         wrapper.template,
-                        try templateSchemaIn(use.view, &use.view.templates.get(wrapper.template.template)),
+                        try templateSchemaIn(use.view, &(try use.view.template(wrapper.template.template))),
                     };
                 },
                 .local => |local| .{
@@ -54127,7 +54148,7 @@ const BodyContext = struct {
                 const template = use.view.callable_eval_templates.templates[@backingInt(use.template)];
                 const wrapper = use.view.entry_wrappers.lookupByRoot(template.root) orelse
                     Common.invariant("callable eval template root had no checked entry wrapper");
-                break :blk templateSchemaIn(use.view, &use.view.templates.get(wrapper.template.template));
+                break :blk templateSchemaIn(use.view, &(try use.view.template(wrapper.template.template)));
             },
             .local => |local| try self.scopeSchema(target_alias.view, local.dispatch_scope),
         };
@@ -54135,7 +54156,7 @@ const BodyContext = struct {
 
     fn methodTargetSchema(self: *BodyContext, lookup: MethodLookup) Allocator.Error!SchemeRequirements {
         return switch (lookup.target.kind) {
-            .procedure => |procedure| templateSchemaIn(lookup.view, &lookup.view.templates.get(procedure.template.template)),
+            .procedure => |procedure| templateSchemaIn(lookup.view, &(try lookup.view.template(procedure.template.template))),
             .local_proc => |local| try self.scopeSchema(lookup.view, local.dispatch_scope),
             .structural => Common.invariant("structural method registry result has no quantified scheme"),
         };
@@ -54424,7 +54445,7 @@ const BodyContext = struct {
         const template = try lookup.view.bodies.localProcedureTemplate(local.expr);
         return .{
             .artifact = moduleDigestFromId(lookup.view.key),
-            .proc_base = lookup.view.templates.get(template).proc_base,
+            .proc_base = (try lookup.view.template(template)).proc_base,
             .template = template,
         };
     }
@@ -54955,7 +54976,7 @@ const BodyContext = struct {
         };
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
-                const template = lookup.view.templates.get(procedure.template.template);
+                const template = (try lookup.view.template(procedure.template.template));
                 const schema = (try templateSchemaIn(lookup.view, &template));
                 var target_ctx = if (alias_edge) |edge| ctx: {
                     var ctx = try self.methodTargetContext(lookup);
@@ -55128,7 +55149,7 @@ const BodyContext = struct {
         const contract: ?[]const static_dispatch.CheckedEvidence = if (try self.dispatchTargetContract(plan)) |c| c.entries else null;
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
-                const template = lookup.view.templates.get(procedure.template.template);
+                const template = (try lookup.view.template(procedure.template.template));
                 if (subst.len != (try lookup.view.dispatch.templateSchemeVars(template.template_id)).len) {
                     Common.invariant("direct dispatch target substitution length differed from its scheme");
                 }
@@ -64599,7 +64620,7 @@ const BodyContext = struct {
         const expr_id = switch (expr_ref.kind()) {
             .read, .coerced_value => expr_ref.node(),
             .hoisted_root => blk: {
-                const root = self.view.compile_time_roots.root(expr_ref.root());
+                const root = (try self.view.compileTimeRoot(expr_ref.root()));
                 const body = root.hoisted_body orelse Common.invariant("hoisted root construct had no hoisted root body");
                 break :blk switch (body) {
                     .pattern_error => return true,
@@ -68993,6 +69014,7 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .const_templates = view.const_templates,
         .const_store = view.const_store,
         .compile_time_root_reads = view.compile_time_root_reads,
+        .literal_root_payloads = view.literal_root_payloads,
     };
 }
 
@@ -69581,7 +69603,7 @@ fn procedureUseRootIdentity(request: checked.RootRequest, source_fn_key: names.T
     }
     if (request.compile_time_root) |root| {
         hasher.update("compile-time-root");
-        hashU32(&hasher, @backingInt(root));
+        root.digestInto(&hasher);
     }
     hasher.update(&source_fn_key.bytes);
     return hasher.finalResult();

@@ -88,7 +88,7 @@ const Pass = struct {
     /// program with completed values evaluates itself; built on first use.
     own_values: ?std.AutoHashMapUnmanaged(OwnValue, void) = null,
 
-    const OwnValue = struct { module: [32]u8, tag: u8, index: u32 };
+    const OwnValue = struct { module: [32]u8, tag: u8, index: u128 };
 
     fn ownValue(module: @import("check").CheckedModule.ModuleId, producer: LIR.ComptimeProducer) OwnValue {
         return switch (producer) {

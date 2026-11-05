@@ -997,12 +997,7 @@ pub const ProvidedExportTable = struct {
             const def_idx = published.def;
             const top_level = top_level_values.lookupByDef(def_idx) orelse
                 checkedArtifactInvariant("provided entry has no top-level value", .{});
-            const checked_type = try checkedTypeIdForRootSource(
-                allocator,
-                module,
-                checked_types,
-                .{ .def = def_idx },
-            );
+            const checked_type = try checkedTypeIdForVar(allocator, module, checked_types, module.defType(def_idx));
             switch (top_level.value) {
                 .procedure_binding => |binding| try exports.append(allocator, .{ .procedure = .{
                     .source_name = published.source_name,
@@ -1139,177 +1134,291 @@ pub const RootRequestTable = struct {
         pub const deserialize = Serde.deserialize;
     };
 
-    pub fn fromModule(
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        artifact_key: CheckedModuleArtifactKey,
-        checked_types: *CheckedTypePublication,
-        compile_time_roots: *const CompileTimeRootTable,
-        procedure_templates: *const CheckedProcedureTemplateTable,
-        entry_wrappers: *const EntryWrapperTable,
-        platform_app_relation: ?PlatformAppRelationKey,
-        platform_required_declarations: *const PlatformRequiredDeclarationTable,
-        platform_required_bindings: *const PlatformRequiredBindingTable,
-        provided_exports: *const ProvidedExportTable,
-        bodies: CheckedBodies,
-        resolved_value_refs: *const ResolvedValueRefTable,
-        top_level_values: *const TopLevelValueTable,
-        top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
-        callable_eval_templates: *const CallableEvalTemplateTable,
-        hoisted_constants: *const HoistedConstTable,
-        const_templates: *const ConstTemplateTable,
-        dispatch: CheckedDispatch,
-        explicit_roots: []const ExplicitRootRequestInput,
-        validation: can.Can.Validation,
-    ) Allocator.Error!RootRequestTable {
-        var requests = std.ArrayList(RootRequest).empty;
-        errdefer requests.deinit(allocator);
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+};
 
-        for (explicit_roots) |root| {
-            if (!explicitRootMatchesCheckedRootKind(procedure_templates, compile_time_roots, root)) continue;
-            if (!explicitCompileTimeRootRequestIsEligible(compile_time_roots, root)) continue;
-            const source_checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, root.source);
-            const backing = explicitRootBackingProcedure(
-                procedure_templates,
-                compile_time_roots,
-                entry_wrappers,
-                root.source,
-                root.kind,
-                source_checked_type,
-            );
-            try appendRoot(&requests, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = root.kind,
-                .source = root.source,
-                .compile_time_root = backing.compile_time_root,
-                .checked_type = backing.checked_type,
-                .abi = root.abi,
-                .exposure = root.exposure,
-                .procedure_template = backing.template,
-            });
-        }
+/// The root requests of `owner` (`ModuleAnalyses.rootRequests`): its explicit
+/// roots, its provided and exposed entrypoints, its platform-required
+/// bindings, and its eligible compile-time roots (the root table's rows, then
+/// each unit's literal conversion roots, then each literal component's
+/// argument roots), with the compile-time requests in evaluation order. A
+/// platform/app pairing's are its platform's (`platform_requests`), read at
+/// the pairing's types, with the pairing's bindings added.
+pub fn computeRootRequests(allocator: Allocator, owner: ImportedModuleView, platform_requests: ?*const RootRequestTable) Allocator.Error!*RootRequestTable {
+    const result = try allocator.create(RootRequestTable);
+    errdefer allocator.destroy(result);
+    result.* = if (platform_requests) |platform|
+        try pairingRootRequests(allocator, owner, platform)
+    else
+        try moduleRootRequests(allocator, owner);
+    return result;
+}
 
-        try appendPublishedEntrypointRoots(
-            &requests,
-            allocator,
-            module,
-            checked_types,
-            provided_exports,
-            top_level_values,
-            top_level_procedure_bindings,
-            platform_app_relation,
-            platform_required_declarations,
-            validation,
-        );
+fn moduleRootRequests(allocator: Allocator, owner: ImportedModuleView) Allocator.Error!RootRequestTable {
+    const env = owner.module_env;
+    const module_idx = owner.module_identity.module_idx;
+    const dispatch = owner.dispatch();
+    const bodies = owner.checked_bodies;
+    const context = owner.checking_context_identity;
+    const compile_time_roots = owner.compile_time_roots;
+    const procedure_templates = owner.checked_procedure_templates;
+    const entry_wrappers = owner.entry_wrappers;
+    var requests = std.ArrayList(RootRequest).empty;
+    errdefer requests.deinit(allocator);
 
-        for (platform_required_bindings.bindings, 0..) |binding, i| {
-            switch (binding.value_use) {
-                .procedure_value => |procedure_use| try appendRoot(&requests, allocator, .{
-                    .module_idx = module.moduleIndex(),
-                    .kind = .platform_required_binding,
-                    .source = .{ .required_binding = @intCast(i) },
-                    .checked_type = platformRequiredBindingCheckedType(binding),
-                    .abi = .platform,
-                    .exposure = .platform_required,
-                    .procedure_use = procedure_use.procedure,
-                    .root_evidence = procedure_use.root_evidence,
-                }),
-                .const_value => {},
-            }
-        }
-
-        for (compile_time_roots.roots) |root| {
-            if (!compileTimeRootRequestIsEligible(root)) continue;
-            if (compileTimeCallableRootIsProcedureReference(bodies, resolved_value_refs, root)) {
-                continue;
-            }
-            if (compileTimeRootHasRootRequest(requests.items, root)) {
-                continue;
-            }
-            try appendRoot(&requests, allocator, .{
-                .module_idx = root.module_idx,
-                .kind = switch (root.kind) {
-                    .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => .compile_time_constant,
-                    .callable_binding => .compile_time_callable,
-                    .expect => .test_expect,
-                    .repl_expr => .repl_expr,
-                },
-                .source = root.source,
-                .compile_time_root = root.id,
-                .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
-                .abi = switch (root.kind) {
-                    .expect => .test_expect,
-                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => .compile_time,
-                },
-                .exposure = .private,
-                .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
-            });
-        }
-
-        for (requests.items) |*request| {
-            if (request.root_evidence != null) continue;
-            const template_ref = request.procedure_template orelse
-                aliasRootWrapperTemplate(request.*, top_level_procedure_bindings, callable_eval_templates, entry_wrappers) orelse
-                continue;
-            if (!template_ref.artifact.eql(artifact_key.digest())) {
-                checkedArtifactInvariant("root procedure template belonged to a different checked artifact", .{});
-            }
-            request.root_evidence = .{
-                .checked_module = artifact_key.digest(),
-                .span = (try dispatch.templateRootEvidenceSpan(template_ref.template)) orelse
-                    checkedArtifactInvariant("uninstantiated generic codec procedure was selected as a root", .{}),
-            };
-        }
-
-        const all_requests = try requests.toOwnedSlice(allocator);
-        errdefer allocator.free(all_requests);
-
-        if (!module.moduleEnvConst().topLevelDemandDependenciesReady()) {
-            checkedArtifactInvariant("checked module had no top-level demand dependencies", .{});
-        }
-        const full_schedule = try collectCompileTimeRootRequests(
-            allocator,
-            all_requests,
-            platform_required_declarations.declarations.len != 0,
-            module.moduleIndex(),
-            artifact_key,
-            module.moduleEnvConst().topLevelDemandDependencies(),
-            compile_time_roots,
+    for (context.explicit_roots) |root| {
+        if (!explicitRootMatchesCheckedRootKind(procedure_templates, compile_time_roots, root)) continue;
+        if (!explicitCompileTimeRootRequestIsEligible(compile_time_roots, root)) continue;
+        const source_checked_type = checkedTypeIdForRootSource(env, bodies, root.source);
+        const backing = explicitRootBackingProcedure(
             procedure_templates,
-            dispatch,
-            resolved_value_refs,
-            top_level_procedure_bindings,
-            platform_required_bindings,
-            callable_eval_templates,
-            hoisted_constants,
-            const_templates,
+            compile_time_roots,
+            entry_wrappers,
+            root.source,
+            root.kind,
+            source_checked_type,
         );
-        defer allocator.free(full_schedule);
-        verifyCompileTimeRequestsScheduled(full_schedule, compile_time_roots);
-        var active_schedule = std.ArrayList(RootRequest).empty;
-        errdefer active_schedule.deinit(allocator);
-        var evaluation_order: u32 = 0;
-        for (full_schedule) |request| {
-            all_requests[request.order].requires_pairing = request.requires_pairing;
-            if (request.abi != .compile_time) continue;
-            all_requests[request.order].evaluation_order = evaluation_order;
-            evaluation_order += 1;
-            if (!request.requires_pairing) try active_schedule.append(allocator, all_requests[request.order]);
+        try appendRoot(&requests, allocator, .{
+            .module_idx = module_idx,
+            .kind = root.kind,
+            .source = root.source,
+            .compile_time_root = backing.compile_time_root,
+            .checked_type = backing.checked_type,
+            .abi = root.abi,
+            .exposure = root.exposure,
+            .procedure_template = backing.template,
+        });
+    }
+
+    try appendPublishedEntrypointRoots(
+        &requests,
+        allocator,
+        module_idx,
+        env,
+        bodies,
+        owner.provided_exports,
+        owner.top_level_values,
+        owner.top_level_procedure_bindings,
+        context.platform_app_relation,
+        owner.platform_required_declarations,
+        context.validation,
+    );
+
+    for (owner.platform_required_bindings.bindings, 0..) |binding, i| {
+        switch (binding.value_use) {
+            .procedure_value => |procedure_use| try appendRoot(&requests, allocator, .{
+                .module_idx = module_idx,
+                .kind = .platform_required_binding,
+                .source = .{ .required_binding = @intCast(i) },
+                .checked_type = platformRequiredBindingCheckedType(binding),
+                .abi = .platform,
+                .exposure = .platform_required,
+                .procedure_use = procedure_use.procedure,
+                .root_evidence = procedure_use.root_evidence,
+            }),
+            .const_value => {},
         }
-        const compile_time_requests = try active_schedule.toOwnedSlice(allocator);
-        errdefer allocator.free(compile_time_requests);
+    }
 
-        const runtime_requests = try collectRuntimeRootRequests(allocator, all_requests);
+    for (compile_time_roots.roots) |root| {
+        if (!compileTimeRootRequestIsEligible(root)) continue;
+        if (compileTimeCallableRootIsProcedureReference(bodies, owner.resolved_value_refs, root)) continue;
+        if (compileTimeRootHasRootRequest(requests.items, root)) continue;
+        try appendRoot(&requests, allocator, .{
+            .module_idx = root.module_idx,
+            .kind = switch (root.kind) {
+                .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => .compile_time_constant,
+                .callable_binding => .compile_time_callable,
+                .expect => .test_expect,
+                .repl_expr => .repl_expr,
+            },
+            .source = root.source,
+            .compile_time_root = root.id,
+            .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
+            .abi = switch (root.kind) {
+                .expect => .test_expect,
+                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => .compile_time,
+            },
+            .exposure = .private,
+            .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
+        });
+    }
 
-        return .{
-            .requests = all_requests,
-            .runtime_requests = runtime_requests,
-            .compile_time_requests = compile_time_requests,
+    // The literal roots: each unit's conversion roots, then each literal
+    // component's argument roots.
+    const literal_proc_base = procedure_templates.literal_root_proc_base;
+    for (0..dispatch.source.module_index.units.len) |unit| {
+        const conversions = try dispatch.source.analyses.unitLiteralConversions(dispatch, @fromBackingInt(@intCast(unit)));
+        for (conversions.records) |*record| try appendLiteralRootRequest(&requests, allocator, owner.key.digest(), literal_proc_base, record);
+    }
+    {
+        const graph = try dispatch.literalGraph();
+        for (0..graph.components.count()) |component| {
+            const done = try dispatch.source.analyses.literalComponent(dispatch, graph, @intCast(component));
+            for (done.roots) |*record| try appendLiteralRootRequest(&requests, allocator, owner.key.digest(), literal_proc_base, record);
+        }
+    }
+
+    for (requests.items) |*request| {
+        if (request.root_evidence != null) continue;
+        const template_ref = request.procedure_template orelse
+            aliasRootWrapperTemplate(request.*, owner.top_level_procedure_bindings, owner.callable_eval_templates, entry_wrappers) orelse
+            continue;
+        if (!template_ref.artifact.eql(owner.key.digest())) {
+            checkedArtifactInvariant("root procedure template belonged to a different checked artifact", .{});
+        }
+        request.root_evidence = .{
+            .checked_module = owner.key.digest(),
+            .span = (try dispatch.templateRootEvidenceSpan(template_ref.template)) orelse
+                checkedArtifactInvariant("uninstantiated generic codec procedure was selected as a root", .{}),
         };
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-};
+    const all_requests = try requests.toOwnedSlice(allocator);
+    errdefer allocator.free(all_requests);
+
+    if (!env.topLevelDemandDependenciesReady()) {
+        checkedArtifactInvariant("checked module had no top-level demand dependencies", .{});
+    }
+    const full_schedule = try collectCompileTimeRootRequests(
+        allocator,
+        all_requests,
+        owner.platform_required_declarations.declarations.len != 0,
+        module_idx,
+        owner.key,
+        env.topLevelDemandDependencies(),
+        compile_time_roots,
+        procedure_templates,
+        dispatch,
+        owner.resolved_value_refs,
+        owner.top_level_procedure_bindings,
+        owner.platform_required_bindings,
+        owner.callable_eval_templates,
+        owner.hoisted_constants,
+        owner.const_templates,
+    );
+    defer allocator.free(full_schedule);
+    try verifyCompileTimeRequestsScheduled(full_schedule, dispatch);
+    var active_schedule = std.ArrayList(RootRequest).empty;
+    errdefer active_schedule.deinit(allocator);
+    var evaluation_order: u32 = 0;
+    for (full_schedule) |request| {
+        all_requests[request.order].requires_pairing = request.requires_pairing;
+        if (request.abi != .compile_time) continue;
+        all_requests[request.order].evaluation_order = evaluation_order;
+        evaluation_order += 1;
+        if (!request.requires_pairing) try active_schedule.append(allocator, all_requests[request.order]);
+    }
+    const compile_time_requests = try active_schedule.toOwnedSlice(allocator);
+    errdefer allocator.free(compile_time_requests);
+
+    const runtime_requests = try collectRuntimeRootRequests(allocator, all_requests);
+
+    return .{
+        .requests = all_requests,
+        .runtime_requests = runtime_requests,
+        .compile_time_requests = compile_time_requests,
+    };
+}
+
+/// A literal root's request, when it may be one.
+fn appendLiteralRootRequest(
+    requests: *std.ArrayList(RootRequest),
+    allocator: Allocator,
+    owner: canonical.ArtifactRef,
+    proc_base: canonical.ProcBaseKeyRef,
+    record: *const LiteralRootRecord,
+) Allocator.Error!void {
+    if (!compileTimeRootRequestIsEligible(record.root)) return;
+    try appendRoot(requests, allocator, .{
+        .module_idx = record.root.module_idx,
+        .kind = .compile_time_constant,
+        .source = record.root.source,
+        .compile_time_root = record.root.id,
+        .checked_type = record.checked_fn_root,
+        .abi = .compile_time,
+        .exposure = .private,
+        .procedure_template = .{
+            .artifact = owner,
+            .proc_base = proc_base,
+            .template = literalRootWrapperTemplate(record.root.id),
+        },
+    });
+}
+
+/// A platform/app pairing's root requests: its platform's, at the
+/// pairing's types, without the callable roots its bindings make exact
+/// procedure references, and with its platform-required bindings' roots. A
+/// request the platform evaluated without the app is complete.
+fn pairingRootRequests(allocator: Allocator, owner: ImportedModuleView, platform: *const RootRequestTable) Allocator.Error!RootRequestTable {
+    const bodies = owner.checked_bodies;
+    var roots = std.ArrayList(RootRequest).empty;
+    errdefer roots.deinit(allocator);
+    for (platform.requests) |request| {
+        // Once a required procedure is bound, an exact callable alias uses
+        // the same forwarding rule as a module with resolved imports.
+        // Runtime demand consumes its checked lookup; no evaluator is needed.
+        if (request.requires_pairing and request.compile_time_root != null) {
+            if (request.compile_time_root.?.rowIndex() != null and
+                compileTimeCallableRootIsProcedureReference(bodies, owner.resolved_value_refs, owner.compile_time_roots.root(request.compile_time_root.?))) continue;
+        }
+        var selected = request;
+        selected.order = @intCast(roots.items.len);
+        selected.evaluation_complete = request.abi == .compile_time and !request.requires_pairing;
+        selected.requires_pairing = false;
+        selected.checked_type = pairingRootRequestType(owner, request);
+        try roots.append(allocator, selected);
+    }
+    for (owner.platform_required_bindings.bindings, 0..) |binding, i| switch (binding.value_use) {
+        .procedure_value => |procedure| try appendRoot(&roots, allocator, .{
+            .module_idx = owner.module_identity.module_idx,
+            .kind = .platform_required_binding,
+            .source = .{ .required_binding = @intCast(i) },
+            .checked_type = platformRequiredBindingCheckedType(binding),
+            .abi = .platform,
+            .exposure = .platform_required,
+            .procedure_use = procedure.procedure,
+            .root_evidence = procedure.root_evidence,
+        }),
+        .const_value => {},
+    };
+    const requests = try roots.toOwnedSlice(allocator);
+    errdefer allocator.free(requests);
+    const runtime_requests = try collectRuntimeRootRequests(allocator, requests);
+    errdefer allocator.free(runtime_requests);
+    var schedule = std.ArrayList(RootRequest).empty;
+    errdefer schedule.deinit(allocator);
+    for (requests) |request| {
+        if (request.evaluation_order != null and !request.evaluation_complete) try schedule.append(allocator, request);
+    }
+    std.mem.sort(RootRequest, schedule.items, {}, struct {
+        fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {
+            return a.evaluation_order.? < b.evaluation_order.?;
+        }
+    }.lessThan);
+    return .{
+        .requests = requests,
+        .runtime_requests = runtime_requests,
+        .compile_time_requests = try schedule.toOwnedSlice(allocator),
+    };
+}
+
+/// A platform root request's type under a pairing: the pairing's entry
+/// wrapper or provided export type, or the pairing's image of its source's
+/// type. A literal root is closed and keeps its wrapper's type.
+fn pairingRootRequestType(owner: ImportedModuleView, request: RootRequest) CheckedTypeId {
+    if (request.compile_time_root) |root| {
+        if (root.rowIndex() == null) return request.checked_type;
+        return entryWrapperForRoot(owner.entry_wrappers, root).checked_fn_root;
+    }
+    if (request.provided_export.get()) |provided| return switch (owner.provided_exports.exports[@backingInt(provided)]) {
+        inline .procedure, .data => |value| value.checked_type,
+    };
+    return switch (request.source) {
+        .def, .expr, .statement => checkedTypeIdForRootSource(owner.module_env, owner.checked_bodies, request.source),
+        .required_binding, .hoisted, .literal => request.checked_type,
+    };
+}
 
 fn explicitRootMatchesCheckedRootKind(
     procedure_templates: *const CheckedProcedureTemplateTable,
@@ -1384,7 +1493,7 @@ fn collectCompileTimeRootRequests(
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
-    callable_eval_templates: *const CallableEvalTemplateTable,
+    callable_eval_templates: CallableEvalTemplateTableView,
     hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
 ) Allocator.Error![]RootRequest {
@@ -1393,7 +1502,7 @@ fn collectCompileTimeRootRequests(
 
     for (requests) |request| {
         if (request.abi != .compile_time and !(include_expects and request.abi == .test_expect)) continue;
-        const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
+        const root_id = try compileTimeRootIdForRequest(dispatch, request);
         try entries.append(allocator, .{
             .request = request,
             .root_id = root_id,
@@ -1433,16 +1542,19 @@ const CompileTimeRequestScheduler = struct {
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
-    callable_eval_templates: *const CallableEvalTemplateTable,
+    callable_eval_templates: CallableEvalTemplateTableView,
     hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
     entries: []CompileTimeRequestScheduleEntry,
-    root_to_request_index: []?usize,
+    root_to_request_index: std.AutoHashMapUnmanaged(ComptimeRootId, usize) = .empty,
     dependents: []std.ArrayList(usize),
     pairing_dependents: []std.ArrayList(usize),
     indegrees: []u32,
     emitted: []bool,
     visited_templates: []u32,
+    /// The visit stamp of each literal root's entry wrapper the walk entered.
+    visited_literal_wrappers: std.AutoHashMapUnmanaged(ComptimeRootId, u32) = .empty,
+    literal_demand: std.ArrayList(ComptimeRootId) = .empty,
     seen_edges: std.AutoHashMap(u64, void),
     visit: u32 = 0,
     current_request_index: usize = 0,
@@ -1459,14 +1571,13 @@ const CompileTimeRequestScheduler = struct {
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
-        callable_eval_templates: *const CallableEvalTemplateTable,
+        callable_eval_templates: CallableEvalTemplateTableView,
         hoisted_constants: *const HoistedConstTable,
         const_templates: *const ConstTemplateTable,
         entries: []CompileTimeRequestScheduleEntry,
     ) Allocator.Error!CompileTimeRequestScheduler {
-        const root_to_request_index = try allocator.alloc(?usize, compile_time_roots.roots.len);
-        errdefer allocator.free(root_to_request_index);
-        @memset(root_to_request_index, null);
+        var root_to_request_index: std.AutoHashMapUnmanaged(ComptimeRootId, usize) = .empty;
+        errdefer root_to_request_index.deinit(allocator);
 
         const dependents = try allocator.alloc(std.ArrayList(usize), entries.len);
         errdefer allocator.free(dependents);
@@ -1489,14 +1600,9 @@ const CompileTimeRequestScheduler = struct {
         @memset(visited_templates, 0);
 
         for (entries, 0..) |entry, i| {
-            const root_index = @backingInt(entry.root_id);
-            if (root_index >= root_to_request_index.len) {
-                checkedArtifactInvariant("compile-time request root id was outside the root table", .{});
-            }
-            if (root_to_request_index[root_index] != null) {
-                checkedArtifactInvariant("compile-time root was requested more than once", .{});
-            }
-            root_to_request_index[root_index] = i;
+            const slot = try root_to_request_index.getOrPut(allocator, entry.root_id);
+            if (slot.found_existing) checkedArtifactInvariant("compile-time root was requested more than once", .{});
+            slot.value_ptr.* = i;
         }
 
         return .{
@@ -1526,6 +1632,8 @@ const CompileTimeRequestScheduler = struct {
 
     fn deinit(self: *CompileTimeRequestScheduler) void {
         self.seen_edges.deinit();
+        self.visited_literal_wrappers.deinit(self.allocator);
+        self.literal_demand.deinit(self.allocator);
         self.allocator.free(self.visited_templates);
         self.allocator.free(self.emitted);
         self.allocator.free(self.indegrees);
@@ -1533,7 +1641,7 @@ const CompileTimeRequestScheduler = struct {
         self.allocator.free(self.pairing_dependents);
         for (self.dependents) |*list| list.deinit(self.allocator);
         self.allocator.free(self.dependents);
-        self.allocator.free(self.root_to_request_index);
+        self.root_to_request_index.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -1639,7 +1747,7 @@ const CompileTimeRequestScheduler = struct {
             try self.collectTemplateDependencies(template_ref);
             // A literal argument root converts in the scheme its edge
             // instantiates (design.md "Literal Arguments").
-            if (self.compile_time_roots.root(entry.root_id).literal_argument) |argument| try self.collectLiteralEdgeDependencies(argument.edge);
+            if ((try self.dispatch.compileTimeRoot(entry.root_id)).literal_argument) |argument| try self.collectLiteralEdgeDependencies(argument.edge);
         }
     }
 
@@ -1706,7 +1814,14 @@ const CompileTimeRequestScheduler = struct {
         template_ref: canonical.ProcedureTemplateRef,
     ) Allocator.Error!?[]const ResolvedValueRefId {
         if (!template_ref.artifact.eql(self.artifact_key.digest())) return null;
-        const index = @backingInt(template_ref.template);
+        if (templateLiteralRoot(template_ref.template)) |root| {
+            const stamp = try self.visited_literal_wrappers.getOrPut(self.allocator, root);
+            if (stamp.found_existing and stamp.value_ptr.* == self.visit) return null;
+            stamp.value_ptr.* = self.visit;
+            try self.addLiteralArgumentDemand(template_ref.template);
+            return &.{};
+        }
+        const index = template_ref.template.index();
         if (index >= self.visited_templates.len) {
             checkedArtifactInvariant("compile-time request dependency referenced an unknown local procedure template", .{});
         }
@@ -1714,7 +1829,7 @@ const CompileTimeRequestScheduler = struct {
         self.visited_templates[index] = self.visit;
 
         const template = self.procedure_templates.get(template_ref.template);
-        for (self.procedure_templates.templateLiteralArgumentDemand(&template)) |root| try self.addRootDependency(root);
+        try self.addLiteralArgumentDemand(template_ref.template);
         const refs = template.resolved_value_refs;
         const end = refs.start + refs.len;
         if (end > self.resolved_value_refs.template_refs.len) {
@@ -1887,15 +2002,22 @@ const CompileTimeRequestScheduler = struct {
         };
     }
 
+    /// Depend on the literal argument roots template `template`'s edges read.
+    fn addLiteralArgumentDemand(self: *CompileTimeRequestScheduler, template: canonical.CheckedProcedureTemplateId) Allocator.Error!void {
+        self.literal_demand.clearRetainingCapacity();
+        try self.dispatch.appendLiteralArgumentDemand(self.allocator, template, &self.literal_demand);
+        for (self.literal_demand.items) |root| try self.addRootDependency(root);
+    }
+
     fn addRootDependency(
         self: *CompileTimeRequestScheduler,
         dependency_root: ComptimeRootId,
     ) Allocator.Error!void {
         if (dependency_root == self.current_root_id) return;
-        if (self.root_to_request_index[@backingInt(dependency_root)]) |dependency_index| {
+        if (self.root_to_request_index.get(dependency_root)) |dependency_index| {
             try self.pairing_dependents[dependency_index].append(self.allocator, self.current_request_index);
         }
-        if (!self.rootDependencyIsStrict(dependency_root)) return;
+        if (!try self.rootDependencyIsStrict(dependency_root)) return;
         try self.addUnconditionalRootDependency(dependency_root);
     }
 
@@ -1904,11 +2026,7 @@ const CompileTimeRequestScheduler = struct {
         dependency_root: ComptimeRootId,
     ) Allocator.Error!void {
         if (dependency_root == self.current_root_id) return;
-        const raw = @backingInt(dependency_root);
-        if (raw >= self.root_to_request_index.len) {
-            checkedArtifactInvariant("compile-time root dependency was outside the root table", .{});
-        }
-        const dependency_index = self.root_to_request_index[raw] orelse return;
+        const dependency_index = self.root_to_request_index.get(dependency_root) orelse return;
         const edge_key = dependencyEdgeKey(dependency_index, self.current_request_index);
         const edge = try self.seen_edges.getOrPut(edge_key);
         if (edge.found_existing) return;
@@ -1920,9 +2038,9 @@ const CompileTimeRequestScheduler = struct {
     fn rootDependencyIsStrict(
         self: *const CompileTimeRequestScheduler,
         dependency_root: ComptimeRootId,
-    ) bool {
-        const dependent = self.compile_time_roots.root(self.current_root_id);
-        const dependency = self.compile_time_roots.root(dependency_root);
+    ) Allocator.Error!bool {
+        const dependent = try self.dispatch.compileTimeRoot(self.current_root_id);
+        const dependency = try self.dispatch.compileTimeRoot(dependency_root);
         return switch (dependent.source) {
             .def => |dependent_def| switch (dependency.source) {
                 .def => |dependency_def| can.DependencyGraph.hasDependency(
@@ -1948,17 +2066,13 @@ const CompileTimeRequestScheduler = struct {
 };
 
 fn compileTimeRootIdForRequest(
-    compile_time_roots: *const CompileTimeRootTable,
+    dispatch: CheckedDispatch,
     request: RootRequest,
-) ComptimeRootId {
+) Allocator.Error!ComptimeRootId {
     const root_id = request.compile_time_root orelse {
         checkedArtifactInvariant("compile-time request had no exact compile-time root identity", .{});
     };
-    const raw = @backingInt(root_id);
-    if (raw >= compile_time_roots.roots.len) {
-        checkedArtifactInvariant("compile-time request root identity was outside the checked root table", .{});
-    }
-    const root = compile_time_roots.roots[raw];
+    const root = try dispatch.compileTimeRoot(root_id);
     if (root.id != root_id or
         !compileTimeRootKindMatchesRequest(root.kind, request.kind) or
         !rootSourceMatches(root.source, request.source))
@@ -1970,16 +2084,16 @@ fn compileTimeRootIdForRequest(
 
 fn verifyCompileTimeRequestsScheduled(
     requests: []const RootRequest,
-    compile_time_roots: *const CompileTimeRootTable,
-) void {
+    dispatch: CheckedDispatch,
+) Allocator.Error!void {
     if (builtin.mode != .debug) return;
     for (requests, 0..) |request, i| {
         if (request.abi != .compile_time and request.abi != .test_expect) {
             base.invariant("checked artifact invariant violated: scheduled compile-time requests contained a request that is neither compile-time nor an expect", .{});
         }
-        const root_id = compileTimeRootIdForRequest(compile_time_roots, request);
+        const root_id = try compileTimeRootIdForRequest(dispatch, request);
         for (requests[0..i]) |previous| {
-            const previous_id = compileTimeRootIdForRequest(compile_time_roots, previous);
+            const previous_id = try compileTimeRootIdForRequest(dispatch, previous);
             if (previous_id == root_id) {
                 base.invariant("checked artifact invariant violated: compile-time root was scheduled more than once", .{});
             }
@@ -2304,8 +2418,9 @@ fn rootSourceMatches(a: RootSource, b: RootSource) bool {
 fn appendPublishedEntrypointRoots(
     requests: *std.ArrayList(RootRequest),
     allocator: Allocator,
-    module: TypedCIR.Module,
-    checked_types: *CheckedTypePublication,
+    module_idx: u32,
+    module_env: *const ModuleEnv,
+    bodies: CheckedBodies,
     provided_exports: *const ProvidedExportTable,
     top_level_values: *const TopLevelValueTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
@@ -2313,8 +2428,6 @@ fn appendPublishedEntrypointRoots(
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     validation: can.Can.Validation,
 ) Allocator.Error!void {
-    const module_env = module.moduleEnvConst();
-
     const provided_runtime_roots_ready = module_env.module_kind != .platform or
         platform_required_declarations.declarations.len == 0 or
         platform_app_relation != null;
@@ -2323,7 +2436,7 @@ fn appendPublishedEntrypointRoots(
             switch (provided) {
                 .procedure => |procedure| {
                     try appendRoot(requests, allocator, .{
-                        .module_idx = module.moduleIndex(),
+                        .module_idx = module_idx,
                         .kind = .provided_export,
                         .requires_pairing = !provided_runtime_roots_ready,
                         .provided_export = @fromBackingInt(@intCast(export_index)),
@@ -2345,8 +2458,9 @@ fn appendPublishedEntrypointRoots(
             try appendExposedAppProcedureRoots(
                 requests,
                 allocator,
-                module,
-                checked_types,
+                module_idx,
+                module_env,
+                bodies,
                 top_level_values,
                 top_level_procedure_bindings,
             );
@@ -2364,12 +2478,12 @@ fn appendPublishedEntrypointRoots(
 fn appendExposedAppProcedureRoots(
     requests: *std.ArrayList(RootRequest),
     allocator: Allocator,
-    module: TypedCIR.Module,
-    checked_types: *const CheckedTypePublication,
+    module_idx: u32,
+    module_env: *const ModuleEnv,
+    bodies: CheckedBodies,
     top_level_values: *const TopLevelValueTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
 ) Allocator.Error!void {
-    const module_env = module.moduleEnvConst();
     // `exports` is canonicalization's exact app-header `provides` inventory.
     // `common.exposed_items` is broader: it also publishes associated methods
     // for module imports, including compiler-owned generated-method markers.
@@ -2386,10 +2500,10 @@ fn appendExposedAppProcedureRoots(
             .const_ref => continue,
         };
         try appendRoot(requests, allocator, .{
-            .module_idx = module.moduleIndex(),
+            .module_idx = module_idx,
             .kind = .runtime_entrypoint,
             .source = .{ .def = def_idx },
-            .checked_type = try checkedTypeIdForRootSource(allocator, module, checked_types, .{ .def = def_idx }),
+            .checked_type = checkedTypeIdForRootSource(module_env, bodies, .{ .def = def_idx }),
             .abi = .roc,
             .exposure = .exported,
             .procedure_template = procedureTemplateForTopLevelBinding(top_level_procedure_bindings, procedure_binding),
@@ -2480,13 +2594,13 @@ fn procedureTemplateForTopLevelBinding(
 fn aliasRootWrapperTemplate(
     request: RootRequest,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
-    callable_eval_templates: *const CallableEvalTemplateTable,
+    callable_eval_templates: CallableEvalTemplateTableView,
     entry_wrappers: *const EntryWrapperTable,
 ) ?canonical.ProcedureTemplateRef {
     const binding_ref = request.procedure_binding orelse return null;
     return switch (top_level_procedure_bindings.get(binding_ref).body) {
         .callable_eval_template => |template_id| blk: {
-            const template = callable_eval_templates.templates.items[@backingInt(template_id)];
+            const template = callable_eval_templates.templates[@backingInt(template_id)];
             if (template.forwarded_lookup == null) break :blk null;
             break :blk templateForEntryWrapperRoot(entry_wrappers, template.root);
         },
@@ -2520,29 +2634,27 @@ fn explicitRootBackingProcedure(
 }
 
 fn checkedTypeIdForRootSource(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    checked_types: *const CheckedTypePublication,
+    env: *const ModuleEnv,
+    bodies: CheckedBodies,
     source: RootSource,
-) Allocator.Error!CheckedTypeId {
+) CheckedTypeId {
     const var_ = switch (source) {
-        .def => |def_idx| module.defType(def_idx),
-        .expr => |expr_idx| module.exprType(expr_idx),
+        .def => |def_idx| ModuleEnv.varFrom(def_idx),
+        .expr => |expr_idx| ModuleEnv.varFrom(expr_idx),
         .statement => |statement_idx| ModuleEnv.varFrom(statement_idx),
         .hoisted => checkedArtifactInvariant("internal hoisted root source reached external root source type lookup", .{}),
         .literal => checkedArtifactInvariant("internal literal conversion root source reached external root source type lookup", .{}),
         .required_binding => |binding_idx| blk: {
-            const module_env = module.moduleEnvConst();
-            if (binding_idx >= module_env.requires_types.items.items.len) {
+            if (binding_idx >= env.requires_types.items.items.len) {
                 base.invariant(
                     "checked artifact invariant violated: explicit required-binding root {d} is out of range",
                     .{binding_idx},
                 );
             }
-            break :blk ModuleEnv.varFrom(module_env.requires_types.items.items[binding_idx].type_anno);
+            break :blk ModuleEnv.varFrom(env.requires_types.items.items[binding_idx].type_anno);
         },
     };
-    return checkedTypeIdForVar(allocator, module, checked_types, var_);
+    return bodies.typeOf(var_);
 }
 
 fn platformRequiredBindingCheckedType(binding: PlatformRequiredBinding) CheckedTypeId {
@@ -11164,6 +11276,9 @@ pub const CheckedProcedureBody = union(enum) {
     checked_body: CIR.Expr.Idx,
     intrinsic_wrapper: canonical.IntrinsicWrapperId,
     entry_wrapper: canonical.EntryWrapperId,
+    /// The entry wrapper of a literal root, which no table row holds: its
+    /// body converts the root's literal (`CheckedDispatch.procedureTemplate`).
+    literal_root: ComptimeRootId,
     /// This procedure was declared with a type annotation and never given an
     /// implementation. It lowers to a crash body carrying the declared arity,
     /// so every call site still links and arguments still evaluate.
@@ -12853,8 +12968,6 @@ pub const DispatchRefScope = struct {
     scheme_root: CheckedTypeId,
     /// Checked local-function expression that owns this scope.
     checked_expr: CIR.Expr.Idx,
-    /// The scope scheme's literal requirements, as a template's.
-    literal_requirements: artifact_serialize.Span = .{},
 };
 
 /// Stable identity of a generalized-local dispatch scope within a checked
@@ -13144,9 +13257,8 @@ fn sealCheckedProcedureTemplateRefs(
                 const wrapper = entry_wrappers.get(wrapper_id);
                 const root = compile_time_roots.root(wrapper.root);
                 const parts = root.bodyParts();
-                // Literal conversion roots are published after sealing, with
-                // their one conversion reference (`publishLiteralConversionRoots`).
-                if (parts.literal != null) checkedArtifactInvariant("a literal conversion root's wrapper was sealed with the source templates", .{});
+                // A literal root's entry wrapper is no row of the table.
+                if (parts.literal != null) checkedArtifactInvariant("a literal conversion root's wrapper is a row of the template table", .{});
                 if (parts.expr) |expr| try collector.collectExpr(expr);
                 if (parts.pattern) |pattern| try collector.collectPattern(pattern);
                 if (!rootBodyContainsDiagnosticError(diagnostics, root)) try collector.specialization_relations.append(allocator, .{
@@ -13158,6 +13270,7 @@ fn sealCheckedProcedureTemplateRefs(
                     } },
                 });
             },
+            .literal_root => checkedArtifactInvariant("a literal root's entry wrapper is a row of the template table", .{}),
             // Neither an intrinsic wrapper nor an unimplemented declaration
             // has a checked body to collect plans from.
             .intrinsic_wrapper, .unimplemented => {},
@@ -13786,6 +13899,7 @@ pub const DispatchSource = struct {
     plans: *const static_dispatch.StaticDispatchPlanTable,
     refs: *const ResolvedValueRefTable,
     entry_wrappers: *const EntryWrapperTable,
+    callable_eval_templates: CallableEvalTemplateTableView,
     compile_time_roots: *const CompileTimeRootTable,
     analyses: *ModuleAnalyses,
 };
@@ -13946,6 +14060,144 @@ pub const CheckedDispatch = struct {
     pub fn importedView(self: CheckedDispatch, key: ModuleId) ?ImportedModuleView {
         const imports = CheckedImportViews{ .current_owner = self.source.key.digest(), .direct = &.{}, .available = self.source.analyses.dispatch_imports };
         return imports.viewForKey(key);
+    }
+
+    /// The module's literal call graph.
+    pub fn literalGraph(self: CheckedDispatch) Error!*LiteralGraph {
+        return self.analyses().literalGraph(self);
+    }
+
+    /// The literal requirements of procedure template `template`'s scheme. A
+    /// literal root's entry wrapper converts closed literals only and has
+    /// none.
+    pub fn templateLiteralRequirements(self: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Error![]const LiteralRequirement {
+        const row = template.rowIndex() orelse return &.{};
+        const graph = try self.literalGraph();
+        const component = try self.analyses().literalComponent(self, graph, graph.components.component_of[row]);
+        return component.requirementsOf(.{ .template = row, .scope = null });
+    }
+
+    /// The literal requirements of generalized local scope `scope`'s scheme.
+    pub fn scopeLiteralRequirements(self: CheckedDispatch, scope: DispatchScopeId) Error![]const LiteralRequirement {
+        const graph = try self.literalGraph();
+        const key: LiteralScopeKey = .{ .template = graph.scope_owners[@backingInt(scope)], .scope = @backingInt(scope) };
+        const component = try self.analyses().literalComponent(self, graph, graph.components.component_of[graph.nodeOfScope(key)]);
+        return component.requirementsOf(key);
+    }
+
+    /// The literal arguments of `edge`, one per literal requirement of the
+    /// scheme it instantiates, in requirement order; empty when the scheme
+    /// has none.
+    pub fn literalEdgeArgs(self: CheckedDispatch, edge: LiteralEdge) Error![]const LiteralArgSource {
+        const graph = try self.literalGraph();
+        const index = graph.edgeIndex(edge) orelse return &.{};
+        const component = try self.analyses().literalComponent(self, graph, graph.components.component_of[graph.edges[index].holder]);
+        return component.edgeArgs(index);
+    }
+
+    /// Append the literal argument roots template `template`'s edges read to
+    /// `out`, ascending: a row's, or a literal conversion root's entry
+    /// wrapper's, whose edges are its conversion's.
+    pub fn appendLiteralArgumentDemand(self: CheckedDispatch, allocator: Allocator, template: canonical.CheckedProcedureTemplateId, out: *std.ArrayList(ComptimeRootId)) Error!void {
+        if (template.rowIndex()) |row| {
+            try out.appendSlice(allocator, try self.analyses().templateLiteralArgumentDemand(self, row));
+            return;
+        }
+        const record = try self.literalRoot(templateLiteralRoot(template).?);
+        const plan_id = record.plan orelse return;
+        var walker: LiteralEdgeWalker = .{ .allocator = allocator, .dispatch = self };
+        defer walker.deinit();
+        var found: std.ArrayListUnmanaged(LiteralEdgeWalker.Found) = .empty;
+        defer found.deinit(allocator);
+        try walker.plan(try self.plan(plan_id), &found);
+        const first = out.items.len;
+        for (found.items) |item| {
+            for (try self.literalEdgeArgs(.{ .node = item.id })) |arg| switch (arg) {
+                .root => |id| try out.append(allocator, id),
+                .forwarded, .unbound => {},
+            };
+        }
+        const added = out.items[first..];
+        std.mem.sort(ComptimeRootId, added, {}, comptimeRootIdLessThan);
+        var kept: usize = 0;
+        for (added, 0..) |id, index| {
+            if (index != 0 and added[index - 1] == id) continue;
+            added[kept] = id;
+            kept += 1;
+        }
+        out.shrinkRetainingCapacity(first + kept);
+    }
+
+    /// Append every literal root of the module to `out`: each top-level
+    /// unit's literal conversion roots in unit order, then each literal
+    /// component's argument roots in component order.
+    pub fn appendLiteralRoots(self: CheckedDispatch, allocator: Allocator, out: *std.ArrayList(ComptimeRootId)) Error!void {
+        for (0..self.source.module_index.units.len) |unit| {
+            const conversions = try self.analyses().unitLiteralConversions(self, @fromBackingInt(@intCast(unit)));
+            for (conversions.records) |record| try out.append(allocator, record.root.id);
+        }
+        const graph = try self.literalGraph();
+        for (0..graph.components.count()) |component| {
+            const done = try self.analyses().literalComponent(self, graph, @intCast(component));
+            for (done.roots) |record| try out.append(allocator, record.root.id);
+        }
+    }
+
+    /// The conversion root of the literal at `raw_node`, or null.
+    pub fn literalConversionRoot(self: CheckedDispatch, raw_node: u32) Error!?ComptimeRootId {
+        const candidate = (try literalConversionCandidate(dispatchSourceBodies(self.source), self, raw_node)) orelse return null;
+        return literalConversionRootId(candidate.literal);
+    }
+
+    /// Literal root `id` with its entry wrapper.
+    pub fn literalRoot(self: CheckedDispatch, id: ComptimeRootId) Error!*const LiteralRootRecord {
+        const name = literalRootName(id) orelse checkedArtifactInvariant("a root of the root table was read as a literal root", .{});
+        switch (name) {
+            .conversion => |literal| {
+                const unit = self.source.module_index.unitOf(literal.node());
+                const conversions = try self.analyses().unitLiteralConversions(self, unit);
+                return conversions.record(literal.node()) orelse checkedArtifactInvariant("a literal conversion root names a literal without one", .{});
+            },
+            .argument => |argument| {
+                const graph = try self.literalGraph();
+                const index = graph.edgeIndex(argument.edge) orelse checkedArtifactInvariant("a literal argument root names an edge no body holds", .{});
+                const component = try self.analyses().literalComponent(self, graph, graph.components.component_of[graph.edges[index].holder]);
+                return component.root(id) orelse checkedArtifactInvariant("a literal argument root names an argument its edge does not root", .{});
+            },
+        }
+    }
+
+    /// Procedure template `template`: a row of the template table, or a
+    /// literal root's entry wrapper, whose body converts its root's literal.
+    pub fn procedureTemplate(self: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Error!CheckedProcedureTemplate {
+        const root = templateLiteralRoot(template) orelse return self.source.templates.get(template);
+        const record = try self.literalRoot(root);
+        return .{
+            .proc_base = self.source.templates.literal_root_proc_base,
+            .template_id = template,
+            .body = .{ .literal_root = root },
+            .checked_fn_scheme = record.checked_fn_scheme,
+            .checked_fn_root = record.checked_fn_root,
+            .static_dispatch_plans = .{},
+            .resolved_value_refs = .{},
+            .top_level_value_uses = .{},
+            .target = .comptime_only,
+        };
+    }
+
+    /// The relations of template `template`'s interface to its
+    /// specialization.
+    pub fn specializationRelations(self: CheckedDispatch, template: *const CheckedProcedureTemplate) Error![]const SpecializationInterfaceRelation {
+        if (templateLiteralRoot(template.template_id)) |root| return &(try self.literalRoot(root)).relation;
+        return self.source.templates.specializationRelations(template);
+    }
+
+    /// Compile-time root `id`: a row of the root table, or a literal root.
+    /// A literal root's payload is the evaluation output's
+    /// (`CheckedModuleArtifact.compileTimeRoot`).
+    pub fn compileTimeRoot(self: CheckedDispatch, id: ComptimeRootId) Error!CompileTimeRoot {
+        if (id.rowIndex() != null) return self.source.compile_time_roots.root(id);
+        return (try self.literalRoot(id)).root;
     }
 
     /// How much of each of template `template`'s quantified variables
@@ -14289,7 +14541,7 @@ const EvidencePass = struct {
     /// scheme-use sites and scope construction sites against its scheme
     /// chain, then its chain-free root evidence.
     fn resolveTemplate(self: *EvidencePass, template_id: canonical.CheckedProcedureTemplateId) Allocator.Error!?static_dispatch.EvidenceSpan {
-        const template_index: usize = @backingInt(template_id);
+        const template_index: usize = template_id.index();
         const template = self.templates.templates.items[template_index];
         const template_level = ChainLevel.fromScheme((try self.dispatch.analyses().templateSchema(self.dispatch, template_id)).chain);
 
@@ -14549,10 +14801,10 @@ const EvidencePass = struct {
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
     ) ?Var {
-        if (self.index.template_scheme_vars.get(@backingInt(template.template_id))) |scheme_var| return scheme_var;
+        if (self.index.template_scheme_vars.get(template.template_id.index())) |scheme_var| return scheme_var;
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| rootSchemeVar(self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root)),
-            .checked_body, .intrinsic_wrapper, .unimplemented => null,
+            .checked_body, .intrinsic_wrapper, .literal_root, .unimplemented => null,
         };
     }
 
@@ -14717,7 +14969,7 @@ const EvidencePass = struct {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
                 break :blk root.kind == .callable_binding and root.source_pattern == null;
             },
-            .checked_body, .intrinsic_wrapper, .unimplemented => false,
+            .checked_body, .intrinsic_wrapper, .literal_root, .unimplemented => false,
         };
     }
 
@@ -14767,14 +15019,14 @@ const EvidencePass = struct {
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
     ) ?Var {
-        if (self.index.template_scheme_vars.get(@backingInt(template.template_id))) |scheme_var| return scheme_var;
+        if (self.index.template_scheme_vars.get(template.template_id.index())) |scheme_var| return scheme_var;
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| blk: {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
                 if (root.source_pattern) |pattern| break :blk ModuleEnv.varFrom(pattern);
                 break :blk if (root.kind == .callable_binding) rootSchemeVar(root) else null;
             },
-            .checked_body, .intrinsic_wrapper, .unimplemented => null,
+            .checked_body, .intrinsic_wrapper, .literal_root, .unimplemented => null,
         };
     }
 
@@ -14797,10 +15049,10 @@ const EvidencePass = struct {
         // binding's scheme: a top-level def's, or a promoted local function
         // binding pattern's.
         for (self.templates.by_def) |entry| {
-            try out.template_scheme_vars.put(@backingInt(entry.template.template), ModuleEnv.varFrom(entry.def));
+            try out.template_scheme_vars.put(entry.template.template.index(), ModuleEnv.varFrom(entry.def));
         }
         for (self.templates.promoted) |entry| {
-            try out.template_scheme_vars.put(@backingInt(entry.template.template), ModuleEnv.varFrom(entry.pattern));
+            try out.template_scheme_vars.put(entry.template.template.index(), ModuleEnv.varFrom(entry.pattern));
         }
         for (module_env.generated_codec_derivations.items.items, 0..) |derivation, index| {
             const kind: static_dispatch.GeneratedCodecDerivationKind = switch (@as(ModuleEnv.GeneratedCodecDerivation.Kind, @fromBackingInt(@intCast(derivation.kind)))) {
@@ -17280,7 +17532,7 @@ pub fn computeTemplateSchema(allocator: Allocator, dispatch: CheckedDispatch, te
     var module_data = TypedCIR.ModuleData.readOnly(source.env);
     var pass = try EvidencePass.init(allocator, dispatch, &module_data, .module, index);
     defer pass.deinit();
-    const published = try pass.publishTemplateSchema(source.templates.templates.items[@backingInt(template_id)]);
+    const published = try pass.publishTemplateSchema(source.templates.templates.items[template_id.index()]);
     return try schemeAnalysisFromPass(allocator, &pass, published.vars, published.params, published.callable_determines_scheme, published.chain_root);
 }
 
@@ -17467,7 +17719,7 @@ pub fn computePlatformRequirementRootEvidence(allocator: Allocator, dispatch: Ch
 /// its scope and relation kind; every other plan is a direct call.
 pub fn computeTemplateDispatchRelations(allocator: Allocator, dispatch: CheckedDispatch, template_id: canonical.CheckedProcedureTemplateId) Allocator.Error!*TemplateDispatchRelations {
     const templates = dispatch.source.templates;
-    const span = dispatchPlanSpan(templates, @backingInt(template_id));
+    const span = dispatchPlanSpan(templates, template_id.index());
     var direct = std.ArrayList(static_dispatch.StaticDispatchPlanId).empty;
     defer direct.deinit(allocator);
     var relations = std.ArrayList(static_dispatch.StaticDispatchPlanId).empty;
@@ -18549,13 +18801,6 @@ pub const CheckedProcedureTemplate = struct {
     /// Post-check stages read the operation from here; they never recognize a
     /// low-level wrapper from its body.
     provided_low_level: ?base.LowLevel = null,
-    /// The literals the scheme's literal requirements stand for (a range
-    /// into `CheckedProcedureTemplateTable.literal_requirements_pool`),
-    /// grouped by evidence parameter in parameter order.
-    literal_requirements: artifact_serialize.Span = .{},
-    /// The `literal_argument` roots the template's body demands (a range
-    /// into `CheckedProcedureTemplateTable.literal_argument_demand_pool`).
-    literal_argument_demand: artifact_serialize.Span = .{},
 };
 
 fn checkedTypeIsClosedTagRow(
@@ -18658,22 +18903,9 @@ pub const CheckedProcedureTemplateTable = struct {
     dispatch_ref_scopes: []DispatchScope = &.{},
     /// The other sites each template's body reaches.
     dispatch_sites: TemplateDispatchSites = .{},
-    /// Every scheme's literal requirements (design.md "Literal Arguments"):
-    /// a range per template (`CheckedProcedureTemplate.literal_requirements`)
-    /// and per generalized local scope (`DispatchRefScope.literal_requirements`).
-    literal_requirements_pool: []LiteralRequirement = &.{},
-    /// The `literal_argument` roots each template's edges read
-    /// (`CheckedProcedureTemplate.literal_argument_demand`): every
-    /// evaluation of the template reads their values.
-    literal_argument_demand_pool: []ComptimeRootId = &.{},
-    /// Every edge's literal arguments (`literalEdgeArgs`), pooled.
-    literal_edge_args_pool: []LiteralArgSource = &.{},
-    /// The literal arguments of each dispatch edge, by evidence node,
-    /// ascending.
-    literal_node_edges: []LiteralEdgeEntry = &.{},
-    /// The literal arguments of each procedure or local-function use, by
-    /// use expression, ascending.
-    literal_use_edges: []LiteralEdgeEntry = &.{},
+    /// The procedure base every literal root's entry wrapper shares; a
+    /// wrapper's template id, its root's identity, tells them apart.
+    literal_root_proc_base: canonical.ProcBaseKeyRef = @fromBackingInt(0),
     /// Relation semantics of each `dispatch_plan_refs` entry.
     dispatch_relation_kinds: []DispatchRelationKind = &.{},
     /// Generalized-local scopes referenced by `dispatch_ref_scopes`.
@@ -18691,11 +18923,7 @@ pub const CheckedProcedureTemplateTable = struct {
         dispatch_plan_refs: SerializedSlice(static_dispatch.StaticDispatchPlanId) = .{},
         dispatch_ref_scopes: SerializedSlice(DispatchScope) = .{},
         dispatch_sites: TemplateDispatchSites.Serialized = .{},
-        literal_requirements_pool: SerializedSlice(LiteralRequirement) = .{},
-        literal_argument_demand_pool: SerializedSlice(ComptimeRootId) = .{},
-        literal_edge_args_pool: SerializedSlice(LiteralArgSource) = .{},
-        literal_node_edges: SerializedSlice(LiteralEdgeEntry) = .{},
-        literal_use_edges: SerializedSlice(LiteralEdgeEntry) = .{},
+        literal_root_proc_base: artifact_serialize.SerializedScalar(canonical.ProcBaseKeyRef, @fromBackingInt(0)) = .{},
         dispatch_relation_kinds: SerializedSlice(DispatchRelationKind) = .{},
         dispatch_scopes: SerializedSlice(DispatchRefScope) = .{},
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
@@ -18800,9 +19028,16 @@ pub const CheckedProcedureTemplateTable = struct {
 
         std.mem.sort(static_dispatch.ProcedureTemplateLookupEntry, by_def.items, {}, static_dispatch.ProcedureTemplateLookupEntry.lessThan);
         const by_def_slice = try by_def.toOwnedSlice(allocator);
+        errdefer allocator.free(by_def_slice);
         return .{
             .templates = templates,
             .by_def = by_def_slice,
+            .literal_root_proc_base = try names.internProcBase(.{
+                .module_name = module_name,
+                .export_name = null,
+                .kind = .literal_root_wrapper,
+                .ordinal = 0,
+            }),
         };
     }
 
@@ -18912,7 +19147,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .module_name = module_name,
                 .export_name = null,
                 .kind = .entry_wrapper,
-                .ordinal = @backingInt(root.id),
+                .ordinal = root.id.index(),
                 .source_def_idx = null,
             });
             const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
@@ -18947,8 +19182,10 @@ pub const CheckedProcedureTemplateTable = struct {
         try self.templates.append(allocator, template);
     }
 
+    /// Template `id` of the table. A literal root's entry wrapper is no row
+    /// (`CheckedDispatch.procedureTemplate`).
     pub fn get(self: *const CheckedProcedureTemplateTable, id: canonical.CheckedProcedureTemplateId) CheckedProcedureTemplate {
-        return self.templates.items[@backingInt(id)];
+        return self.templates.items[id.index()];
     }
 
     pub fn view(self: *const CheckedProcedureTemplateTable) CheckedProcedureTemplateTableView {
@@ -18964,33 +19201,6 @@ pub const CheckedProcedureTemplateTable = struct {
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-
-    /// The template's literal requirements (design.md "Literal Arguments").
-    pub fn templateLiteralRequirements(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const LiteralRequirement {
-        return self.literal_requirements_pool[template.literal_requirements.start .. template.literal_requirements.start + template.literal_requirements.len];
-    }
-
-    /// A generalized-local scope's literal requirements.
-    pub fn scopeLiteralRequirements(self: *const CheckedProcedureTemplateTable, scope: *const DispatchRefScope) []const LiteralRequirement {
-        return self.literal_requirements_pool[scope.literal_requirements.start .. scope.literal_requirements.start + scope.literal_requirements.len];
-    }
-
-    /// The `literal_argument` roots the template's edges read.
-    pub fn templateLiteralArgumentDemand(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const ComptimeRootId {
-        return self.literal_argument_demand_pool[template.literal_argument_demand.start .. template.literal_argument_demand.start + template.literal_argument_demand.len];
-    }
-
-    /// The literal arguments of `edge`, one per literal requirement of the scheme it
-    /// instantiates, in literal requirement order; empty when the scheme has none.
-    pub fn literalEdgeArgs(self: *const CheckedProcedureTemplateTable, edge: LiteralEdge) []const LiteralArgSource {
-        const entries: []const LiteralEdgeEntry, const key: u64 = switch (edge) {
-            .node => |id| .{ self.literal_node_edges, @bitCast(id) },
-            .use => |expr| .{ self.literal_use_edges, @backingInt(expr) },
-            .literal => return &.{},
-        };
-        const found = artifact_serialize.binarySearchByKey(LiteralEdgeEntry, u64, entries, key, literalEdgeEntryOrder) orelse return &.{};
-        return self.literal_edge_args_pool[found.args.start .. found.args.start + found.args.len];
-    }
 
     pub fn specializationRelations(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const SpecializationInterfaceRelation {
         const span = template.specialization_interface_relations;
@@ -19620,6 +19830,7 @@ pub fn computeOwnerNestedProcSites(
                 const wrapper = source.entry_wrappers.get(wrapper_id);
                 try scan.scanEntryWrapper(source.compile_time_roots.root(wrapper.root));
             },
+            .literal_root => checkedArtifactInvariant("a literal root's entry wrapper is a row of the template table", .{}),
             .intrinsic_wrapper, .unimplemented => {},
         },
         // Unlike a template body, whose root lambda is the procedure
@@ -21512,110 +21723,1003 @@ fn directEvidenceEnter(
     }
 }
 
-/// Literal roots have no lexical evidence parameters. Publish them only after
-/// the ordinary dispatch pass has proved the complete conversion closed. A
+/// The identity of the conversion root of `literal`: the literal itself.
+pub fn literalConversionRootId(literal: LiteralNode) ComptimeRootId {
+    const kind: u128 = @backingInt(ComptimeRootId.Kind.literal_conversion);
+    const pattern: u128 = switch (literal) {
+        .expr => 0,
+        .pattern => 1,
+    };
+    return @fromBackingInt((kind << ComptimeRootId.kind_shift) | (pattern << 32) | literal.node());
+}
+
+/// The identity of the literal argument root converting literal requirement
+/// `requirement` of the scheme `edge` instantiates at the type the edge
+/// fixes.
+pub fn literalArgumentRootId(edge: LiteralEdge, requirement: u32) ComptimeRootId {
+    const kind: u128 = @backingInt(ComptimeRootId.Kind.literal_argument);
+    const edge_bits: u128 = switch (edge) {
+        .node => |id| @as(u64, @bitCast(id)),
+        .use => |expr| (@as(u128, 1) << 64) | @backingInt(expr),
+        .literal => checkedArtifactInvariant("a literal argument root was named by a literal requirement's own literal", .{}),
+    };
+    return @fromBackingInt((kind << ComptimeRootId.kind_shift) | (edge_bits << 32) | requirement);
+}
+
+/// What a literal root's identity names (`literalConversionRootId`,
+/// `literalArgumentRootId`).
+pub const LiteralRootName = union(enum) {
+    conversion: LiteralNode,
+    argument: struct { edge: LiteralEdge, requirement: u32 },
+};
+
+/// What literal root `id` names, or null for a root of the module's root
+/// table.
+pub fn literalRootName(id: ComptimeRootId) ?LiteralRootName {
+    const raw = @backingInt(id);
+    switch (id.kind()) {
+        .row => return null,
+        .literal_conversion => {
+            const node: u32 = @truncate(raw);
+            return .{ .conversion = if ((raw >> 32) & 1 == 0) .{ .expr = @fromBackingInt(node) } else .{ .pattern = @fromBackingInt(node) } };
+        },
+        .literal_argument => {
+            const edge_bits = raw >> 32;
+            const edge: LiteralEdge = if ((edge_bits >> 64) & 1 == 0)
+                .{ .node = @bitCast(@as(u64, @truncate(edge_bits))) }
+            else
+                .{ .use = @fromBackingInt(@as(u32, @truncate(edge_bits))) };
+            return .{ .argument = .{ .edge = edge, .requirement = @truncate(raw) } };
+        },
+    }
+}
+
+/// The entry wrapper of literal root `root`: a template named by the root's
+/// identity, which no row of the template table holds.
+pub fn literalRootWrapperTemplate(root: ComptimeRootId) canonical.CheckedProcedureTemplateId {
+    std.debug.assert(root.kind() != .row);
+    return @fromBackingInt(@backingInt(root));
+}
+
+/// The literal root whose entry wrapper `template` is, or null for a template
+/// of the template table.
+pub fn templateLiteralRoot(template: canonical.CheckedProcedureTemplateId) ?ComptimeRootId {
+    if (template.rowIndex() != null) return null;
+    return @fromBackingInt(@backingInt(template));
+}
+
+/// A literal whose conversion is a literal conversion root: its custom
+/// conversion's dispatch resolution is closed.
+pub const LiteralConversionCandidate = struct {
+    literal: LiteralNode,
+    kind: CompileTimeLiteralConversionKind,
+    plan: static_dispatch.StaticDispatchPlanId,
+    ty: CheckedTypeId,
+    evidence: static_dispatch.EvidenceNodeId,
+};
+
+/// The conversion root the literal at `raw_node` has, or null. Literal roots
+/// have no lexical evidence parameters, so a literal has one only where its
+/// module's dispatch resolution proved the complete conversion closed. A
 /// concrete receiver alone does not prove this: nested codec requirements can
 /// still belong to the enclosing scheme. Those literals stay in that scheme
 /// and are hoisted by its specialization.
-fn publishLiteralConversionRoots(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    owner_artifact: canonical.ArtifactRef,
-    checked_types: *CheckedTypePublication,
-    bodies: CheckedBodies,
-    dispatch: CheckedDispatch,
-    plans: *const static_dispatch.StaticDispatchPlanTable,
-    roots: *CompileTimeRootTable,
-    wrappers: *EntryWrapperTable,
-    templates: *CheckedProcedureTemplateTable,
-) Allocator.Error!void {
-    const first_root = roots.roots.len;
-    var root_list = std.ArrayList(CompileTimeRoot).empty;
-    defer root_list.deinit(allocator);
-    var conversions = std.ArrayList(LiteralConversionRoot).empty;
-    defer conversions.deinit(allocator);
+pub fn literalConversionCandidate(bodies: CheckedBodies, dispatch: CheckedDispatch, raw_node: u32) Allocator.Error!?LiteralConversionCandidate {
+    const literal = bodies.env.store.literalDispatchPlanForNode(@fromBackingInt(raw_node)) orelse return null;
+    switch (literal.dispatchResolution()) {
+        .builtin_direct, .specialization_dispatch, .checked_error => return null,
+        .custom_dispatch => {},
+        .unresolved => checkedArtifactInvariant("an unresolved literal reached literal root selection", .{}),
+    }
+    const literal_node: LiteralNode = switch (bodies.index().nodeKind(raw_node)) {
+        .expr => switch (bodies.exprData(@fromBackingInt(raw_node))) {
+            .numeral => .{ .expr = @fromBackingInt(raw_node) },
+            .str => if (bodies.quoteIsCustom(raw_node)) .{ .expr = @fromBackingInt(raw_node) } else return null,
+            // Diagnostic recovery retired the conversion.
+            .runtime_error => return null,
+            .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
+        },
+        .pattern => if (bodies.literalPatternGuard(@fromBackingInt(raw_node)) == null) return null else .{ .pattern = @fromBackingInt(raw_node) },
+        .statement, .unreached => return null,
+    };
+    const conversion = bodies.literalConversion(raw_node);
+    const plan_id = conversion.plan orelse checkedArtifactInvariant("a custom literal had no conversion plan", .{});
+    const plan = try dispatch.plan(plan_id);
+    const evidence = switch (plan.resolution) {
+        .direct_closed => |direct| direct.evidence,
+        .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => return null,
+        .direct_pending, .structural => checkedArtifactInvariant("a literal conversion had no finalized callable dispatch", .{}),
+    };
+    return .{
+        .literal = literal_node,
+        .kind = if (literal.dispatchKind() == .numeral) .numeral else .quote,
+        .plan = plan_id,
+        .ty = conversion.ty,
+        .evidence = evidence,
+    };
+}
 
-    for (module.moduleEnvConst().store.literalDispatchPlans()) |literal| {
-        switch (literal.dispatchResolution()) {
-            .builtin_direct, .specialization_dispatch, .checked_error => continue,
-            .custom_dispatch => {},
-            .unresolved => checkedArtifactInvariant("unresolved literal reached root publication", .{}),
+/// A literal root of a module with its entry wrapper: the wrapper's function
+/// type and scheme, created by the slot that holds the root, and the relation
+/// of the wrapper's body to its specialization.
+pub const LiteralRootRecord = struct {
+    root: CompileTimeRoot,
+    checked_fn_root: CheckedTypeId,
+    checked_fn_scheme: CheckedTypeSchemeId,
+    /// The conversion plan a literal conversion root's wrapper runs; null for
+    /// a literal argument root.
+    plan: ?static_dispatch.StaticDispatchPlanId,
+    relation: [1]SpecializationInterfaceRelation,
+};
+
+/// The literal conversion roots of one top-level unit's literals, by node
+/// (`ModuleAnalyses.unitLiteralConversions`).
+pub const UnitLiteralConversions = struct {
+    nodes: []const u32,
+    records: []const LiteralRootRecord,
+
+    pub fn record(self: *const UnitLiteralConversions, raw_node: u32) ?*const LiteralRootRecord {
+        const index = std.sort.binarySearch(u32, self.nodes, raw_node, struct {
+            fn order(key: u32, item: u32) std.math.Order {
+                return std.math.order(key, item);
+            }
+        }.order) orelse return null;
+        return &self.records[index];
+    }
+
+    pub fn destroy(self: *UnitLiteralConversions, allocator: Allocator) void {
+        allocator.free(self.nodes);
+        allocator.free(self.records);
+        allocator.destroy(self);
+    }
+};
+
+/// The import views a module's dispatch resolution reads.
+fn dispatchImportViews(dispatch: CheckedDispatch) CheckedImportViews {
+    return .{ .current_owner = dispatch.source.key.digest(), .direct = &.{}, .available = dispatch.source.analyses.dispatch_imports };
+}
+
+/// Demand, holding no claim, the interface capabilities of the module `dispatch`
+/// reads and of `modules`, whose types a creation in the module's store reads.
+fn demandLiteralCapabilities(dispatch: CheckedDispatch, modules: []const ModuleId) Allocator.Error!void {
+    const import_views = dispatchImportViews(dispatch);
+    const store = dispatch.source.types.store;
+    if (store.capability_source != null) _ = try store.view().interfaceCapabilities(import_views.resolver());
+    for (modules) |module| {
+        if (module.eql(dispatch.source.key.digest())) continue;
+        const view = import_views.viewForKey(module) orelse checkedArtifactInvariant("a literal analysis read a module its dispatch resolution does not read", .{});
+        _ = try view.checked_types.interfaceCapabilities(import_views.resolver());
+    }
+}
+
+/// The relation of a literal root's entry wrapper to its specialization: the
+/// wrapper's body delivers the root's type.
+fn literalRootWrapperRelation(checked_fn_root: CheckedTypeId, root_ty: CheckedTypeId) [1]SpecializationInterfaceRelation {
+    return .{.{
+        .scope = .root,
+        .data = .{ .procedure = .{
+            .fn_ty = checked_fn_root,
+            .body_ret_ty = root_ty,
+            .owns_scope = true,
+        } },
+    }};
+}
+
+/// The literal conversion roots of unit `unit`'s literals: each root, its
+/// request eligibility, and its entry wrapper's function type and scheme,
+/// created here under the store's creation lock after every slot it reads.
+pub fn computeUnitLiteralConversions(allocator: Allocator, dispatch: CheckedDispatch, unit: body_analyses.UnitId) Allocator.Error!*UnitLiteralConversions {
+    const source = dispatch.source;
+    const bodies = dispatchSourceBodies(source);
+    var candidates: std.ArrayList(LiteralConversionCandidate) = .empty;
+    defer candidates.deinit(allocator);
+    for (bodies.index().unitNodeSlice(unit)) |raw_node| {
+        if (try literalConversionCandidate(bodies, dispatch, raw_node)) |candidate| try candidates.append(allocator, candidate);
+    }
+    std.mem.sort(LiteralConversionCandidate, candidates.items, {}, struct {
+        fn lessThan(_: void, a: LiteralConversionCandidate, b: LiteralConversionCandidate) bool {
+            return a.literal.node() < b.literal.node();
         }
-        const node = literal.node_idx;
-        const literal_node: LiteralNode = switch (bodies.index().nodeKind(node)) {
-            .expr => switch (bodies.exprData(@fromBackingInt(@intCast(node)))) {
-                .numeral => .{ .expr = @fromBackingInt(@intCast(node)) },
-                .str => if (bodies.quoteIsCustom(node)) .{ .expr = @fromBackingInt(@intCast(node)) } else continue,
-                // Diagnostic recovery retired the conversion.
-                .runtime_error => continue,
-                .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => continue,
+    }.lessThan);
+    const nodes = try allocator.alloc(u32, candidates.items.len);
+    errdefer allocator.free(nodes);
+    const records = try allocator.alloc(LiteralRootRecord, candidates.items.len);
+    errdefer allocator.free(records);
+    const import_views = dispatchImportViews(dispatch);
+    const store = source.types.store;
+    try demandLiteralCapabilities(dispatch, &.{});
+    for (candidates.items, nodes, records) |candidate, *node, *record| {
+        node.* = candidate.literal.node();
+        const eligible = try checkedTypeIsContextFreeCompileTimeRoot(allocator, source.key.digest(), store.view(), import_views.resolver(), false, candidate.ty);
+        record.* = .{
+            .root = .{
+                .id = literalConversionRootId(candidate.literal),
+                .module_idx = source.module_idx,
+                .kind = switch (candidate.kind) {
+                    .numeral => .numeral_conversion,
+                    .quote => .quote_conversion,
+                },
+                .source = .{ .literal = candidate.literal },
+                .pattern = null,
+                .expr = null,
+                .checked_type = candidate.ty,
+                .request_eligibility = if (eligible) .eligible else .ineligible,
+                .payload = .pending,
             },
-            .pattern => if (bodies.literalPatternGuard(@fromBackingInt(@intCast(node))) == null) continue else .{ .pattern = @fromBackingInt(@intCast(node)) },
-            .statement, .unreached => continue,
+            .checked_fn_root = undefined, // Created below, under the creation lock.
+            .checked_fn_scheme = undefined, // Created below, under the creation lock.
+            .plan = candidate.plan,
+            .relation = undefined, // Set below from the created function type.
         };
-        const conversion = bodies.literalConversion(node);
-        const plan_id = conversion.plan orelse checkedArtifactInvariant("a custom literal had no conversion plan", .{});
-        const plan = try dispatch.plan(plan_id);
-        switch (plan.resolution) {
-            .direct_closed => {},
-            .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => continue,
-            .direct_pending, .structural => checkedArtifactInvariant("literal conversion had no finalized callable dispatch", .{}),
+    }
+    store.beginCreation(source.analyses.io);
+    for (records) |*record| {
+        record.checked_fn_root = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{}, record.root.checked_type);
+        record.checked_fn_scheme = try store.ensureSchemeForRoot(allocator, record.checked_fn_root);
+    }
+    store.endCreation(source.analyses.io);
+    for (records) |*record| record.relation = literalRootWrapperRelation(record.checked_fn_root, record.root.checked_type);
+    const result = try allocator.create(UnitLiteralConversions);
+    result.* = .{ .nodes = nodes, .records = records };
+    return result;
+}
+
+/// A scheme of a module: a template's own (`scope == null`) or a generalized
+/// local scope's. A scope inside a defaulted field expression has no
+/// template.
+pub const LiteralScopeKey = struct { template: ?u32, scope: ?u32 };
+
+fn literalScopeKeyOf(template: ?u32, scope: DispatchScope) LiteralScopeKey {
+    return switch (scope) {
+        .root => .{ .template = template, .scope = null },
+        .generalized => |id| .{ .template = template, .scope = @backingInt(id) },
+    };
+}
+
+/// The scheme an edge instantiates: a procedure template's, or a generalized
+/// local function's.
+pub const LiteralCallee = union(enum) {
+    template: canonical.ProcedureTemplateRef,
+    scope: DispatchScopeId,
+};
+
+/// Where an edge's substitution comes from.
+pub const LiteralEdgeSubst = union(enum) {
+    /// A dispatch edge's own instantiation of its target's scheme.
+    evidence: static_dispatch.EvidenceSpan,
+    /// A use's instantiation of the scheme it reads.
+    site: CIR.Expr.Idx,
+    /// A dispatch edge to a method bound to an exact procedure alias: the
+    /// instantiation of the alias's scheme, composed through the alias
+    /// chain's forwarded lookups.
+    alias_chain: static_dispatch.EvidenceNodeId,
+};
+
+/// One instantiation edge of the module's bodies (`LiteralGraph`).
+pub const LiteralGraphEdge = struct {
+    key: LiteralEdge,
+    /// The graph node whose body holds the edge first, in node order, which
+    /// computes the edge's literal arguments.
+    holder: u32,
+    callee: LiteralCallee,
+    /// The scope the edge is in; null inside a defaulted field expression.
+    scope: ?LiteralScopeKey,
+    owner_expr: CIR.Expr.Idx,
+    subst: LiteralEdgeSubst,
+};
+
+/// A literal of a scheme's own body whose conversion plan is open: a literal
+/// requirement of the innermost scheme around it.
+pub const LiteralOwnSite = struct {
+    scope: LiteralScopeKey,
+    site: LiteralSite,
+    ty: CheckedTypeId,
+};
+
+/// An edge of a module's literal graph, by its key.
+pub const LiteralEdgeIndex = struct {
+    key: u64,
+    edge: u32,
+
+    fn lessThan(_: void, a: LiteralEdgeIndex, b: LiteralEdgeIndex) bool {
+        return a.key < b.key;
+    }
+
+    fn order(key: u64, item: LiteralEdgeIndex) std.math.Order {
+        return std.math.order(key, item.key);
+    }
+};
+
+/// The strongly connected components of a call graph over dense nodes,
+/// numbered as they complete (callees first).
+pub const CallGraphComponents = struct {
+    component_of: []const u32,
+    member_index: []const u32,
+    /// Component `c`'s nodes, ascending: `members[member_starts[c]..member_starts[c + 1]]`.
+    member_starts: []const u32,
+    members: []const u32,
+    /// Component `c`'s callee components other than itself, each once.
+    callee_starts: []const u32,
+    callees: []const u32,
+
+    pub fn count(self: *const CallGraphComponents) usize {
+        return self.member_starts.len - 1;
+    }
+
+    pub fn componentMembers(self: *const CallGraphComponents, component: u32) []const u32 {
+        return self.members[self.member_starts[component]..self.member_starts[component + 1]];
+    }
+
+    pub fn componentCallees(self: *const CallGraphComponents, component: u32) []const u32 {
+        return self.callees[self.callee_starts[component]..self.callee_starts[component + 1]];
+    }
+
+    pub fn deinit(self: *CallGraphComponents, allocator: Allocator) void {
+        allocator.free(self.component_of);
+        allocator.free(self.member_index);
+        allocator.free(self.member_starts);
+        allocator.free(self.members);
+        allocator.free(self.callee_starts);
+        allocator.free(self.callees);
+    }
+};
+
+/// The strongly connected components of the graph whose node `n`'s callees
+/// are `successors[successor_starts[n]..successor_starts[n + 1]]` (Tarjan's
+/// algorithm, iteratively), numbered as they complete, so every component's
+/// callee components precede it.
+pub fn callGraphComponents(allocator: Allocator, successor_starts: []const u32, successors: []const u32) Allocator.Error!CallGraphComponents {
+    const count = successor_starts.len - 1;
+    const unvisited = std.math.maxInt(u32);
+    const order = try allocator.alloc(u32, count);
+    defer allocator.free(order);
+    @memset(order, unvisited);
+    const low = try allocator.alloc(u32, count);
+    defer allocator.free(low);
+    var on_stack = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
+    defer on_stack.deinit(allocator);
+    var stack: std.ArrayList(u32) = .empty;
+    defer stack.deinit(allocator);
+    const Frame = struct { node: u32, next: u32 };
+    var frames: std.ArrayList(Frame) = .empty;
+    defer frames.deinit(allocator);
+
+    const component_of = try allocator.alloc(u32, count);
+    errdefer allocator.free(component_of);
+    var members: std.ArrayList(u32) = .empty;
+    defer members.deinit(allocator);
+    var member_starts: std.ArrayList(u32) = .empty;
+    defer member_starts.deinit(allocator);
+    try member_starts.append(allocator, 0);
+    var next_order: u32 = 0;
+
+    for (0..count) |start| {
+        if (order[start] != unvisited) continue;
+        order[start] = next_order;
+        low[start] = next_order;
+        next_order += 1;
+        try stack.append(allocator, @intCast(start));
+        on_stack.set(start);
+        try frames.append(allocator, .{ .node = @intCast(start), .next = successor_starts[start] });
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            const node = frame.node;
+            if (frame.next < successor_starts[node + 1]) {
+                const callee = successors[frame.next];
+                frame.next += 1;
+                if (order[callee] == unvisited) {
+                    order[callee] = next_order;
+                    low[callee] = next_order;
+                    next_order += 1;
+                    try stack.append(allocator, callee);
+                    on_stack.set(callee);
+                    try frames.append(allocator, .{ .node = callee, .next = successor_starts[callee] });
+                } else if (on_stack.isSet(callee)) {
+                    low[node] = @min(low[node], order[callee]);
+                }
+                continue;
+            }
+            _ = frames.pop();
+            if (frames.items.len != 0) {
+                const parent = frames.items[frames.items.len - 1].node;
+                low[parent] = @min(low[parent], low[node]);
+            }
+            if (low[node] != order[node]) continue;
+            const component: u32 = @intCast(member_starts.items.len - 1);
+            const first = members.items.len;
+            while (stack.pop()) |member| {
+                on_stack.unset(member);
+                component_of[member] = component;
+                try members.append(allocator, member);
+                if (member == node) break;
+            }
+            std.mem.sort(u32, members.items[first..], {}, std.sort.asc(u32));
+            try member_starts.append(allocator, @intCast(members.items.len));
         }
-        if (roots.literalConversionRootForNode(node) != null) checkedArtifactInvariant("literal received a second conversion root", .{});
-        const root_id: ComptimeRootId = @fromBackingInt(@intCast(@as(u32, @intCast(first_root + root_list.items.len))));
-        try conversions.append(allocator, .{ .node = node, .root = root_id });
-        try CompileTimeRootTable.appendCompileTimeRoot(&root_list, allocator, .{
-            .module_idx = module.moduleIndex(),
-            .kind = if (literal.dispatchKind() == .numeral) .numeral_conversion else .quote_conversion,
-            .source = .{ .literal = literal_node },
-            .pattern = null,
-            .expr = null,
-            .checked_type = conversion.ty,
-            .payload = .pending,
-        });
     }
-    try roots.addLiteralConversions(allocator, conversions.items);
-    if (root_list.items.len == 0) return;
-    roots.roots = try allocator.realloc(roots.roots, first_root + root_list.items.len);
-    const added = roots.roots[first_root..];
-    @memcpy(added, root_list.items);
-    for (added, first_root..) |*root, index| root.id = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-    try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, added);
 
-    const first_template = templates.templates.items.len;
-    try templates.appendEntryWrappersForRoots(allocator, module, names, owner_artifact, &checked_types.store, wrappers, added);
+    const component_count = member_starts.items.len - 1;
+    const member_index = try allocator.alloc(u32, count);
+    errdefer allocator.free(member_index);
+    for (0..component_count) |component| {
+        for (members.items[member_starts.items[component]..member_starts.items[component + 1]], 0..) |member, index| member_index[member] = @intCast(index);
+    }
+    var callees: std.ArrayList(u32) = .empty;
+    defer callees.deinit(allocator);
+    var callee_starts: std.ArrayList(u32) = .empty;
+    defer callee_starts.deinit(allocator);
+    try callee_starts.append(allocator, 0);
+    for (0..component_count) |component| {
+        const first = callees.items.len;
+        for (members.items[member_starts.items[component]..member_starts.items[component + 1]]) |member| {
+            for (successors[successor_starts[member]..successor_starts[member + 1]]) |callee| {
+                if (component_of[callee] != component) try callees.append(allocator, component_of[callee]);
+            }
+        }
+        const added = callees.items[first..];
+        std.mem.sort(u32, added, {}, std.sort.asc(u32));
+        var kept: usize = 0;
+        for (added, 0..) |callee, index| {
+            if (index != 0 and added[index - 1] == callee) continue;
+            added[kept] = callee;
+            kept += 1;
+        }
+        callees.shrinkRetainingCapacity(first + kept);
+        try callee_starts.append(allocator, @intCast(callees.items.len));
+    }
 
-    // These generated bodies contain exactly one already-resolved conversion,
-    // whose operand is literal data. Append its explicit references directly;
-    // no source-body traversal or second evidence-resolution pass is needed.
-    const first_ref = templates.dispatch_plan_refs.len;
-    templates.dispatch_plan_refs = try allocator.realloc(templates.dispatch_plan_refs, first_ref + added.len);
-    templates.dispatch_ref_scopes = try allocator.realloc(templates.dispatch_ref_scopes, first_ref + added.len);
-    templates.dispatch_relation_kinds = try allocator.realloc(templates.dispatch_relation_kinds, first_ref + added.len);
-    const first_relation = templates.specialization_interface_relations.len;
-    templates.specialization_interface_relations = try allocator.realloc(templates.specialization_interface_relations, first_relation + added.len);
-    for (added, templates.templates.items[first_template..], 0..) |root, *template, i| {
-        const node = (root.literalNode() orelse checkedArtifactInvariant("a literal conversion root had no literal", .{})).node();
-        const plan_id = switch (root.literalConversionKind().?) {
-            .numeral => plans.numeralPlanForNode(node),
-            .quote => plans.quotePlanForNode(node),
-        } orelse checkedArtifactInvariant("a literal conversion root had no conversion plan", .{});
-        const ref_index = first_ref + i;
-        templates.dispatch_plan_refs[ref_index] = plan_id;
-        templates.dispatch_ref_scopes[ref_index] = .root;
-        templates.dispatch_relation_kinds[ref_index] = .conversion;
-        template.static_dispatch_plans = .{ .start = @intCast(ref_index), .len = 1 };
-        templates.specialization_interface_relations[first_relation + i] = .{
-            .scope = .root,
-            .data = .{ .procedure = .{
-                .fn_ty = template.checked_fn_root,
-                .body_ret_ty = root.checked_type,
-                .owns_scope = true,
-            } },
+    const owned_members = try members.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_members);
+    const owned_member_starts = try member_starts.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_member_starts);
+    const owned_callees = try callees.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_callees);
+    return .{
+        .component_of = component_of,
+        .member_index = member_index,
+        .member_starts = owned_member_starts,
+        .members = owned_members,
+        .callee_starts = try callee_starts.toOwnedSlice(allocator),
+        .callees = owned_callees,
+    };
+}
+
+/// The slot holding one literal component's results.
+pub const LiteralComponentSlot = collections.OnceSlot(*LiteralComponent, .module_literal_component);
+/// The slot holding the literal argument roots one template's edges read.
+pub const LiteralDemandSlot = collections.OnceSlot(*LiteralArgumentDemand, .module_literal_demand);
+
+/// A module's literal call graph (`ModuleAnalyses.literalGraph`): every
+/// instantiation edge its bodies hold, each scheme's own open literals, and
+/// the strongly connected components the edges between the templates whose
+/// bodies hold them form, numbered callees first. Nodes are the module's
+/// templates in template order, then the defaulted-field expressions as one
+/// node. Each component's literal requirements, edge arguments and literal
+/// argument roots are a slot of their own (`LiteralComponent`).
+pub const LiteralGraph = struct {
+    template_count: u32,
+    /// The template whose body owns each generalized local scope.
+    scope_owners: []const ?u32,
+    /// Every edge, in the order the nodes' bodies first hold them, so node
+    /// `n`'s edges are `edges[edge_starts[n]..edge_starts[n + 1]]`.
+    edges: []const LiteralGraphEdge,
+    edge_starts: []const u32,
+    node_edges: []const LiteralEdgeIndex,
+    use_edges: []const LiteralEdgeIndex,
+    /// The edges template `t`'s body holds, its own first:
+    /// `held[held_starts[t]..held_starts[t + 1]]`.
+    held_starts: []const u32,
+    held: []const u32,
+    /// Node `n`'s own open literals: `own_sites[own_starts[n]..own_starts[n + 1]]`.
+    own_starts: []const u32,
+    own_sites: []const LiteralOwnSite,
+    components: CallGraphComponents,
+    component_slots: []LiteralComponentSlot,
+    demand_slots: []LiteralDemandSlot,
+
+    pub fn defaultsNode(self: *const LiteralGraph) u32 {
+        return self.template_count;
+    }
+
+    /// The graph node a scope key's scheme belongs to.
+    pub fn nodeOfScope(self: *const LiteralGraph, key: LiteralScopeKey) u32 {
+        return key.template orelse self.defaultsNode();
+    }
+
+    /// The graph node an edge's callee scheme belongs to, or null for a
+    /// scheme of another module.
+    pub fn calleeNode(self: *const LiteralGraph, owner: canonical.ArtifactRef, callee: LiteralCallee) ?u32 {
+        return switch (callee) {
+            .template => |template| if (template.artifact.eql(owner)) template.template.index() else null,
+            .scope => |scope| self.scope_owners[@backingInt(scope)] orelse self.defaultsNode(),
         };
-        template.specialization_interface_relations = .{ .start = @intCast(first_relation + i), .len = 1 };
     }
+
+    pub fn nodeEdges(self: *const LiteralGraph, node: u32) []const LiteralGraphEdge {
+        return self.edges[self.edge_starts[node]..self.edge_starts[node + 1]];
+    }
+
+    /// The index of edge `edge`, or null when no body holds it.
+    pub fn edgeIndex(self: *const LiteralGraph, edge: LiteralEdge) ?u32 {
+        const entries: []const LiteralEdgeIndex, const key: u64 = switch (edge) {
+            .node => |id| .{ self.node_edges, @bitCast(id) },
+            .use => |expr| .{ self.use_edges, @backingInt(expr) },
+            .literal => return null,
+        };
+        const found = std.sort.binarySearch(LiteralEdgeIndex, entries, key, LiteralEdgeIndex.order) orelse return null;
+        return entries[found].edge;
+    }
+
+    pub fn destroy(self: *LiteralGraph, allocator: Allocator) void {
+        for (self.component_slots) |*slot| if (slot.peek()) |result| result.destroy(allocator);
+        for (self.demand_slots) |*slot| if (slot.peek()) |result| result.destroy(allocator);
+        allocator.free(self.component_slots);
+        allocator.free(self.demand_slots);
+        allocator.free(self.scope_owners);
+        allocator.free(self.edges);
+        allocator.free(self.edge_starts);
+        allocator.free(self.node_edges);
+        allocator.free(self.use_edges);
+        allocator.free(self.held_starts);
+        allocator.free(self.held);
+        allocator.free(self.own_starts);
+        allocator.free(self.own_sites);
+        self.components.deinit(allocator);
+        allocator.destroy(self);
+    }
+};
+
+/// The literal kind of a plan with a generated literal operand.
+fn literalKindOfPlan(table: *const static_dispatch.StaticDispatchPlanTable, plan: static_dispatch.StaticDispatchCallPlan) ?LiteralArgumentKind {
+    for (plan.argsSlice(table)) |operand| switch (operand) {
+        .generated_numeral => return .numeral,
+        .generated_quote => return .quote,
+        .generated_interpolation_segments => return .interpolation,
+        .checked_expr, .literal_pattern_value, .literal_pattern_conversion => {},
+    };
+    return null;
+}
+
+/// Walks the evidence a body's dispatch reaches and reports every edge it
+/// holds: each procedure target the evidence names, through nested
+/// evidence, alias scopes and generated codecs.
+const LiteralEdgeWalker = struct {
+    allocator: Allocator,
+    dispatch: CheckedDispatch,
+    stack: std.ArrayListUnmanaged(static_dispatch.EvidenceNodeId) = .empty,
+    visited_derivations: collections.DenseMapUnmanaged(static_dispatch.GeneratedCodecDerivationId, void) = .empty,
+
+    const Found = struct {
+        id: static_dispatch.EvidenceNodeId,
+        template: canonical.ProcedureTemplateRef,
+        alias: bool,
+    };
+
+    fn deinit(self: *LiteralEdgeWalker) void {
+        self.stack.deinit(self.allocator);
+        self.visited_derivations.deinit(self.allocator);
+    }
+
+    /// Every edge of `node_id` and of the nodes its evidence reaches, and of
+    /// the nodes already queued.
+    fn nodes(self: *LiteralEdgeWalker, node_id: static_dispatch.EvidenceNodeId, out: *std.ArrayListUnmanaged(Found)) Allocator.Error!void {
+        try self.stack.append(self.allocator, node_id);
+        try self.drain(out);
+    }
+
+    fn drain(self: *LiteralEdgeWalker, out: *std.ArrayListUnmanaged(Found)) Allocator.Error!void {
+        while (self.stack.pop()) |id| {
+            const node = try self.dispatch.evidenceNode(id);
+            switch (node.target.kind) {
+                .procedure => |procedure| try out.append(self.allocator, .{ .id = id, .template = procedure.template, .alias = node.instantiation == .alias }),
+                // A method declared in a function body is called through
+                // its function value, whose scheme its construction or use
+                // instantiates.
+                .local_proc, .structural => {},
+            }
+            switch (node.nested) {
+                .resolved => try self.entries(try self.dispatch.nestedEvidence(node)),
+                .through_alias => try self.entries(try self.dispatch.aliasScopeEvidence(node)),
+                .from_callable => {},
+            }
+        }
+    }
+
+    fn entries(self: *LiteralEdgeWalker, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error!void {
+        for (evidence) |entry| {
+            switch (entry.resolution) {
+                .direct => |nested| try self.stack.append(self.allocator, nested),
+                .structural => |structural| if (structural.generated_codec_derivation) |id| try self.derivationNodes(id),
+                .constraint, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+            }
+            for (try self.dispatch.evidenceEntries(entry.callable_contracts)) |contract| switch (contract.resolution) {
+                .direct => |nested| try self.stack.append(self.allocator, nested),
+                .structural => |structural| if (structural.generated_codec_derivation) |id| try self.derivationNodes(id),
+                .constraint, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+            };
+        }
+    }
+
+    /// Queue the method calls a generated codec's body makes, through the
+    /// codecs it nests.
+    fn derivationNodes(self: *LiteralEdgeWalker, first: static_dispatch.GeneratedCodecDerivationId) Allocator.Error!void {
+        var pending: std.ArrayListUnmanaged(static_dispatch.GeneratedCodecDerivationId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, first);
+        while (pending.pop()) |id| {
+            if ((try self.visited_derivations.getOrPut(self.allocator, id)).found_existing) continue;
+            const codecs = try self.dispatch.generatedCodecs();
+            const derivation = codecs.generated_codec_derivations[@backingInt(id)];
+            for (derivation.callsSlice(&codecs)) |call| switch (call.resolution) {
+                .callable => |node| try self.stack.append(self.allocator, node),
+                .structural => |nested| try pending.append(self.allocator, nested),
+                .pending, .checked_error => {},
+            };
+        }
+    }
+
+    /// Every edge the evidence recorded at use site `expr` reaches.
+    fn site(self: *LiteralEdgeWalker, expr: CIR.Expr.Idx, out: *std.ArrayListUnmanaged(Found)) Allocator.Error!void {
+        const evidence = (try self.dispatch.siteEvidence(expr)) orelse return;
+        try self.entries(evidence);
+        try self.drain(out);
+    }
+
+    /// Every edge a plan's resolution reaches.
+    fn plan(self: *LiteralEdgeWalker, plan_value: static_dispatch.StaticDispatchCallPlan, out: *std.ArrayListUnmanaged(Found)) Allocator.Error!void {
+        switch (plan_value.resolution) {
+            .direct_closed, .direct_parametric => |direct| try self.nodes(direct.evidence, out),
+            // A generated codec's calls are edges of the scope that reaches
+            // the codec.
+            .structural => if (plan_value.generated_codec_derivation) |id| {
+                try self.derivationNodes(id);
+                try self.drain(out);
+            },
+            .evidence_dependent, .checked_error, .@"unreachable", .direct_pending => {},
+        }
+    }
+};
+
+/// The template a procedure value reference instantiates the scheme of: the
+/// procedure's, or an exact procedure alias's entry wrapper, whose scheme is
+/// the alias's. A use of a computed callable instantiates nothing.
+fn literalTemplateOfValueRef(dispatch: CheckedDispatch, ref: ResolvedValueRef) ?canonical.ProcedureTemplateRef {
+    const source = dispatch.source;
+    const owner = source.key.digest();
+    const import_views = dispatchImportViews(dispatch);
+    const use: ProcedureUseTemplate = switch (ref) {
+        .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| use,
+        .platform_required_proc => |required| required.procedure,
+        .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .platform_required_declaration, .platform_required_checked_error => return null,
+    };
+    var alias_view: ?ImportedModuleView = null;
+    const body: ProcedureBindingBody = switch (use.binding) {
+        .top_level => |top_level| blk: {
+            if (!top_level.artifact.eql(owner)) return null;
+            break :blk source.top_level_procedure_bindings.get(top_level.binding).body;
+        },
+        .imported => |imported| blk: {
+            const view = import_views.viewForKey(imported.artifact) orelse return null;
+            alias_view = view;
+            const binding = importedProcedureBindingForDef(view, imported.def) orelse return null;
+            break :blk binding.body;
+        },
+        .hosted, .platform_required => return null,
+    };
+    return switch (body) {
+        .direct_template => |direct| switch (direct.template) {
+            .checked => |template| template,
+            .lifted, .synthetic => null,
+        },
+        .callable_eval_template => |template_id| blk: {
+            const eval_templates: CallableEvalTemplateTableView = if (alias_view) |view| view.callable_eval_templates else source.callable_eval_templates;
+            const template = eval_templates.templates[@backingInt(template_id)];
+            if (template.forwarded_lookup == null) break :blk null;
+            const wrapper_table: *const EntryWrapperTable = if (alias_view) |view| view.entry_wrappers else source.entry_wrappers;
+            const wrapper = wrapper_table.lookupByRoot(template.root) orelse
+                checkedArtifactInvariant("a callable-eval template's root has no entry wrapper", .{});
+            break :blk wrapper.template;
+        },
+        .checked_error => null,
+    };
+}
+
+/// The module's literal call graph: every template's and the defaulted
+/// fields' edges and own open literals, and the components of the edges
+/// between templates.
+pub fn computeLiteralGraph(allocator: Allocator, dispatch: CheckedDispatch) Allocator.Error!*LiteralGraph {
+    const source = dispatch.source;
+    const owner = source.key.digest();
+    const templates = source.templates;
+    const plans = source.plans;
+    const refs = source.refs;
+    const sites = &templates.dispatch_sites;
+    const scopes = templates.dispatch_scopes;
+    const template_count: u32 = @intCast(templates.templates.items.len);
+    const node_count = template_count + 1;
+    const bodies = dispatchSourceBodies(source);
+
+    const scope_owners = try allocator.alloc(?u32, scopes.len);
+    errdefer allocator.free(scope_owners);
+    @memset(scope_owners, null);
+    for (sites.scope_site_spans[0..sites.walkedTemplateCount()], 0..) |span, template_index| {
+        for (sites.scope_sites[span.start..][0..span.len]) |scope_site| {
+            var current: ?DispatchScopeId = scope_site.scope;
+            while (current) |id| {
+                scope_owners[@backingInt(id)] = @intCast(template_index);
+                current = scopes[@backingInt(id)].parent;
+            }
+        }
+    }
+
+    // Own sites: each open literal conversion plan is a literal requirement
+    // of the innermost scheme around it.
+    var own_sites: std.ArrayList(LiteralOwnSite) = .empty;
+    defer own_sites.deinit(allocator);
+    const own_starts = try allocator.alloc(u32, node_count + 1);
+    errdefer allocator.free(own_starts);
+    for (templates.templates.items, 0..) |template, template_index| {
+        own_starts[template_index] = @intCast(own_sites.items.len);
+        const start = template.static_dispatch_plans.start;
+        for (templates.dispatch_plan_refs[start..][0..template.static_dispatch_plans.len], 0..) |plan_id, i| {
+            const plan = try dispatch.plan(plan_id);
+            const kind = literalKindOfPlan(plans, plan) orelse continue;
+            switch (plan.resolution) {
+                .evidence_dependent, .direct_parametric => {},
+                .direct_closed, .checked_error, .@"unreachable", .structural => continue,
+                .direct_pending => checkedArtifactInvariant("a literal conversion plan was left pending at literal argument analysis", .{}),
+            }
+            // The literal requirement's type is the converted value's: the
+            // literal's own for a numeral or a quote, the assembler's for an
+            // interpolation.
+            const ty = switch (kind) {
+                .interpolation => blk: {
+                    const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(plan.node));
+                    if (bodies.exprData(expr) != .interpolation) checkedArtifactInvariant("a literal conversion plan's expression is not a literal", .{});
+                    break :blk bodies.interpolationAssemblerType(expr);
+                },
+                .numeral, .quote => bodies.literalConversion(plan.node).ty,
+            };
+            try own_sites.append(allocator, .{
+                .scope = literalScopeKeyOf(@intCast(template_index), templates.dispatch_ref_scopes[start + i]),
+                .site = .{ .module = owner, .node = plan.node, .kind = kind },
+                .ty = ty,
+            });
+        }
+    }
+    own_starts[template_count] = @intCast(own_sites.items.len);
+    {
+        const span = sites.defaultRefs(TemplateDispatchSites.default_plan_refs);
+        for (templates.dispatch_plan_refs[span.start..][0..span.len]) |plan_id| {
+            const plan = try dispatch.plan(plan_id);
+            if (literalKindOfPlan(plans, plan) == null) continue;
+            switch (plan.resolution) {
+                .evidence_dependent, .direct_parametric => checkedArtifactInvariant("a defaulted field expression's literal has no scheme to carry its obligation", .{}),
+                .direct_closed, .checked_error, .@"unreachable", .structural => {},
+                .direct_pending => checkedArtifactInvariant("a literal conversion plan was left pending at literal argument analysis", .{}),
+            }
+        }
+    }
+    own_starts[node_count] = @intCast(own_sites.items.len);
+
+    // The edges: every instantiation of a scheme inside this module, held
+    // first by the node whose body reaches it first.
+    var edges: std.ArrayList(LiteralGraphEdge) = .empty;
+    defer edges.deinit(allocator);
+    var edge_keys = std.AutoHashMapUnmanaged(LiteralEdge, u32).empty;
+    defer edge_keys.deinit(allocator);
+    const edge_starts = try allocator.alloc(u32, node_count + 1);
+    errdefer allocator.free(edge_starts);
+    const held_starts = try allocator.alloc(u32, template_count + 1);
+    errdefer allocator.free(held_starts);
+    var held: std.ArrayList(u32) = .empty;
+    defer held.deinit(allocator);
+    var walker: LiteralEdgeWalker = .{ .allocator = allocator, .dispatch = dispatch };
+    defer walker.deinit();
+    var found: std.ArrayListUnmanaged(LiteralEdgeWalker.Found) = .empty;
+    defer found.deinit(allocator);
+
+    const Builder = struct {
+        allocator: Allocator,
+        dispatch: CheckedDispatch,
+        owner: canonical.ArtifactRef,
+        edges: *std.ArrayList(LiteralGraphEdge),
+        keys: *std.AutoHashMapUnmanaged(LiteralEdge, u32),
+        held: *std.ArrayList(u32),
+        held_start: usize = 0,
+        node: u32 = 0,
+        holds: bool = false,
+
+        fn add(self: *@This(), edge: LiteralGraphEdge) Allocator.Error!void {
+            const seen = try self.keys.getOrPut(self.allocator, edge.key);
+            if (!seen.found_existing) {
+                seen.value_ptr.* = @intCast(self.edges.items.len);
+                var placed = edge;
+                placed.holder = self.node;
+                try self.edges.append(self.allocator, placed);
+            }
+            if (!self.holds) return;
+            for (self.held.items[self.held_start..]) |existing| if (existing == seen.value_ptr.*) return;
+            try self.held.append(self.allocator, seen.value_ptr.*);
+        }
+
+        fn evidence(self: *@This(), items: []const LiteralEdgeWalker.Found, scope: ?LiteralScopeKey, owner_expr: CIR.Expr.Idx) Allocator.Error!void {
+            for (items) |item| {
+                // An alias chain that leaves this module is instantiated
+                // where the chain's procedure lives.
+                if (item.alias and !item.template.artifact.eql(self.owner)) continue;
+                try self.add(.{
+                    .key = .{ .node = item.id },
+                    .holder = undefined, // Set by `add` to the node holding the edge first.
+                    .callee = .{ .template = item.template },
+                    .scope = scope,
+                    .owner_expr = owner_expr,
+                    .subst = if (item.alias) .{ .alias_chain = item.id } else .{ .evidence = (try self.dispatchNode(item.id)).subst },
+                });
+            }
+        }
+
+        fn dispatchNode(self: *@This(), id: static_dispatch.EvidenceNodeId) Allocator.Error!static_dispatch.EvidenceNode {
+            return self.dispatch.evidenceNode(id);
+        }
+
+        fn valueRef(self: *@This(), walker_: *LiteralEdgeWalker, found_: *std.ArrayListUnmanaged(LiteralEdgeWalker.Found), record: ResolvedValueRefRecord, scope: ?LiteralScopeKey) Allocator.Error!void {
+            found_.clearRetainingCapacity();
+            try walker_.site(record.expr, found_);
+            try self.evidence(found_.items, scope, record.expr);
+            const callee: LiteralCallee = switch (record.ref) {
+                .local_proc => |local| .{ .scope = local.dispatch_scope orelse return },
+                .top_level_proc, .imported_proc, .promoted_top_level_proc, .platform_required_proc, .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_declaration, .platform_required_checked_error => .{ .template = literalTemplateOfValueRef(self.dispatch, record.ref) orelse return },
+            };
+            try self.add(.{
+                .key = .{ .use = record.expr },
+                .holder = undefined, // Set by `add` to the node holding the edge first.
+                .callee = callee,
+                .scope = scope,
+                .owner_expr = record.expr,
+                .subst = .{ .site = record.expr },
+            });
+        }
+
+        fn scopeSite(self: *@This(), walker_: *LiteralEdgeWalker, found_: *std.ArrayListUnmanaged(LiteralEdgeWalker.Found), scope_site: CollectedScopeConstructionSite, scope: ?LiteralScopeKey) Allocator.Error!void {
+            found_.clearRetainingCapacity();
+            try walker_.site(scope_site.checked_expr, found_);
+            try self.evidence(found_.items, scope, scope_site.checked_expr);
+            try self.add(.{
+                .key = .{ .use = scope_site.checked_expr },
+                .holder = undefined, // Set by `add` to the node holding the edge first.
+                .callee = .{ .scope = scope_site.scope },
+                .scope = scope,
+                .owner_expr = scope_site.checked_expr,
+                .subst = .{ .site = scope_site.checked_expr },
+            });
+        }
+    };
+    var builder: Builder = .{ .allocator = allocator, .owner = owner, .edges = &edges, .keys = &edge_keys, .held = &held, .dispatch = dispatch };
+
+    for (templates.templates.items, 0..) |template, template_index| {
+        const t: u32 = @intCast(template_index);
+        edge_starts[template_index] = @intCast(edges.items.len);
+        held_starts[template_index] = @intCast(held.items.len);
+        builder.node = t;
+        builder.holds = true;
+        builder.held_start = held.items.len;
+        const plan_start = template.static_dispatch_plans.start;
+        for (templates.dispatch_plan_refs[plan_start..][0..template.static_dispatch_plans.len], 0..) |plan_id, i| {
+            const plan = try dispatch.plan(plan_id);
+            found.clearRetainingCapacity();
+            try walker.plan(plan, &found);
+            try builder.evidence(found.items, literalScopeKeyOf(t, templates.dispatch_ref_scopes[plan_start + i]), @fromBackingInt(@intCast(plan.node)));
+        }
+        const ref_start = template.resolved_value_refs.start;
+        for (refs.template_refs[ref_start..][0..template.resolved_value_refs.len], 0..) |ref_id, i| {
+            try builder.valueRef(&walker, &found, refs.records[@backingInt(ref_id)], literalScopeKeyOf(t, sites.value_ref_scopes[ref_start + i]));
+        }
+        const site_span = sites.scopeSiteSpan(template_index);
+        for (sites.scope_sites[site_span.start..][0..site_span.len]) |scope_site| {
+            const parent = scopes[@backingInt(scope_site.scope)].parent;
+            try builder.scopeSite(&walker, &found, scope_site, .{ .template = t, .scope = if (parent) |p| @backingInt(p) else null });
+        }
+    }
+    edge_starts[template_count] = @intCast(edges.items.len);
+    held_starts[template_count] = @intCast(held.items.len);
+    {
+        builder.node = template_count;
+        builder.holds = false;
+        const span = sites.defaultRefs(TemplateDispatchSites.default_plan_refs);
+        for (templates.dispatch_plan_refs[span.start..][0..span.len]) |plan_id| {
+            const plan = try dispatch.plan(plan_id);
+            switch (plan.resolution) {
+                .direct_closed, .direct_parametric => {
+                    found.clearRetainingCapacity();
+                    try walker.plan(plan, &found);
+                    try builder.evidence(found.items, null, @fromBackingInt(@intCast(plan.node)));
+                },
+                .evidence_dependent, .checked_error, .@"unreachable", .structural, .direct_pending => {},
+            }
+        }
+        const value_refs = sites.defaultRefs(TemplateDispatchSites.default_value_refs);
+        for (refs.template_refs[value_refs.start..][0..value_refs.len]) |ref_id| {
+            try builder.valueRef(&walker, &found, refs.records[@backingInt(ref_id)], null);
+        }
+        const default_sites = sites.scopeSiteSpan(sites.defaultsIndex());
+        for (sites.scope_sites[default_sites.start..][0..default_sites.len]) |scope_site| {
+            const parent = scopes[@backingInt(scope_site.scope)].parent;
+            try builder.scopeSite(&walker, &found, scope_site, if (parent) |p| .{ .template = null, .scope = @backingInt(p) } else null);
+        }
+    }
+    edge_starts[node_count] = @intCast(edges.items.len);
+
+    // The call graph: each node to the nodes of the local schemes its
+    // edges instantiate.
+    const successor_starts = try allocator.alloc(u32, node_count + 1);
+    defer allocator.free(successor_starts);
+    var successors: std.ArrayList(u32) = .empty;
+    defer successors.deinit(allocator);
+    var graph: LiteralGraph = .{
+        .template_count = template_count,
+        .scope_owners = scope_owners,
+        .edges = edges.items,
+        .edge_starts = edge_starts,
+        .node_edges = &.{},
+        .use_edges = &.{},
+        .held_starts = held_starts,
+        .held = held.items,
+        .own_starts = own_starts,
+        .own_sites = own_sites.items,
+        .components = undefined, // Computed below from the edges.
+        .component_slots = &.{},
+        .demand_slots = &.{},
+    };
+    for (0..node_count) |node| {
+        successor_starts[node] = @intCast(successors.items.len);
+        for (graph.nodeEdges(@intCast(node))) |edge| {
+            if (graph.calleeNode(owner, edge.callee)) |callee| try successors.append(allocator, callee);
+        }
+    }
+    successor_starts[node_count] = @intCast(successors.items.len);
+    var components = try callGraphComponents(allocator, successor_starts, successors.items);
+    errdefer components.deinit(allocator);
+
+    var node_edges: std.ArrayList(LiteralEdgeIndex) = .empty;
+    defer node_edges.deinit(allocator);
+    var use_edges: std.ArrayList(LiteralEdgeIndex) = .empty;
+    defer use_edges.deinit(allocator);
+    for (edges.items, 0..) |edge, index| switch (edge.key) {
+        .node => |id| try node_edges.append(allocator, .{ .key = @bitCast(id), .edge = @intCast(index) }),
+        .use => |expr| try use_edges.append(allocator, .{ .key = @backingInt(expr), .edge = @intCast(index) }),
+        .literal => checkedArtifactInvariant("a literal requirement's own literal was collected as an edge", .{}),
+    };
+    std.mem.sort(LiteralEdgeIndex, node_edges.items, {}, LiteralEdgeIndex.lessThan);
+    std.mem.sort(LiteralEdgeIndex, use_edges.items, {}, LiteralEdgeIndex.lessThan);
+
+    const component_slots = try allocator.alloc(LiteralComponentSlot, components.count());
+    errdefer allocator.free(component_slots);
+    @memset(component_slots, .empty);
+    const demand_slots = try allocator.alloc(LiteralDemandSlot, template_count);
+    errdefer allocator.free(demand_slots);
+    @memset(demand_slots, .empty);
+    const owned_edges = try edges.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_edges);
+    const owned_held = try held.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_held);
+    const owned_own_sites = try own_sites.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_own_sites);
+    const owned_node_edges = try node_edges.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_node_edges);
+    const owned_use_edges = try use_edges.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_use_edges);
+    graph.edges = owned_edges;
+    graph.held = owned_held;
+    graph.own_sites = owned_own_sites;
+    graph.node_edges = owned_node_edges;
+    graph.use_edges = owned_use_edges;
+    graph.components = components;
+    graph.component_slots = component_slots;
+    graph.demand_slots = demand_slots;
+    const result = try allocator.create(LiteralGraph);
+    result.* = graph;
+    return result;
 }
 
 /// What makes two literal requirements of one literal the same: the type's
@@ -21638,14 +22742,14 @@ fn literalRequirementTypeIdentity(
     return hasher.finalResult();
 }
 
-/// Whether every variable of `ty` is quantified by the scheme `scope` names
+/// Whether every variable of `ty` is quantified by the scheme `key` names
 /// (a template's own, or a generalized local scope's) or by one enclosing it.
 fn literalRequirementTypeIsBound(
     store: *const CheckedTypeStore,
     orderer: *CheckedIdentityOrderer,
     templates: *const CheckedProcedureTemplateTable,
     dispatch: CheckedDispatch,
-    key: anytype,
+    key: LiteralScopeKey,
     ty: CheckedTypeId,
 ) Allocator.Error!bool {
     variables: for (try orderer.identityRoots(ty)) |variable| {
@@ -21659,7 +22763,7 @@ fn literalRequirementTypeIsBound(
             current = if (dispatch_scope.parent) |parent| @backingInt(parent) else null;
         }
         if (key.template) |template_index| {
-            for (try dispatch.templateSchemeVars(@fromBackingInt(template_index))) |bound| {
+            for (try dispatch.templateSchemeVars(.row(template_index))) |bound| {
                 if (store.identityOrigin(bound) == origin) continue :variables;
             }
         }
@@ -21668,709 +22772,421 @@ fn literalRequirementTypeIsBound(
     return true;
 }
 
-/// Publish each scheme's literal requirements, the literal arguments of every
-/// edge, and the `literal_argument` roots this module's instantiations fix
-/// (design.md "Literal Arguments").
-///
-/// A literal whose conversion plan is open (its type mentions the scheme's
-/// variables) is an literal requirement of the innermost scheme around it. An edge
-/// that instantiates a scheme (a dispatch edge, a procedure use, a
-/// generalized local function's use or construction) instantiates each of
-/// the callee's literal requirements at the edge's substitution: a closed type gets
-/// a root of this module converting the literal at that type, an open one
-/// becomes an literal requirement of the scope the edge is in, forwarded in turn.
-/// Literal requirements are computed to a fixpoint over this module's schemes;
-/// imported schemes' literal requirements come published with their artifacts.
-fn publishLiteralArgumentRoots(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    owner_artifact: canonical.ArtifactRef,
-    checked_types: *CheckedTypePublication,
-    bodies: CheckedBodies,
-    plans: *const static_dispatch.StaticDispatchPlanTable,
-    roots: *CompileTimeRootTable,
-    wrappers: *EntryWrapperTable,
-    templates: *CheckedProcedureTemplateTable,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    dispatch: CheckedDispatch,
-    import_views: CheckedImportViews,
-    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
-    callable_eval_templates: *const CallableEvalTemplateTable,
-) Allocator.Error!void {
-    const store = &checked_types.store;
-    const template_count = templates.templates.items.len;
-    const scopes = templates.dispatch_scopes;
+fn literalScopeKeyLessThan(_: void, a: LiteralScopeKey, b: LiteralScopeKey) bool {
+    const a_template = a.template orelse std.math.maxInt(u32);
+    const b_template = b.template orelse std.math.maxInt(u32);
+    if (a_template != b_template) return a_template < b_template;
+    const a_scope = a.scope orelse std.math.maxInt(u32);
+    const b_scope = b.scope orelse std.math.maxInt(u32);
+    return a_scope < b_scope;
+}
 
-    // A scheme of this module: a template's own (`scope == null`) or a
-    // generalized local scope's. A scope inside a defaulted field
-    // expression has no template.
-    const ScopeKey = struct { template: ?u32, scope: ?u32 };
-    const ObligationKey = struct { site: LiteralSite, ty: [32]u8 };
-    const ScopeState = struct {
-        list: std.ArrayListUnmanaged(LiteralRequirement) = .empty,
-        index: std.AutoHashMapUnmanaged(ObligationKey, u32) = .empty,
+fn comptimeRootIdLessThan(_: void, a: ComptimeRootId, b: ComptimeRootId) bool {
+    return @backingInt(a) < @backingInt(b);
+}
+
+/// The literal requirements, edge arguments and literal argument roots of
+/// one component of a module's literal graph (`ModuleAnalyses.literalComponent`).
+pub const LiteralComponent = struct {
+    /// The schemes of the component's nodes with literal requirements,
+    /// sorted; scheme `i`'s are `requirements[scope_spans[i]]`.
+    scope_keys: []const LiteralScopeKey,
+    scope_spans: []const artifact_serialize.Span,
+    requirements: []const LiteralRequirement,
+    /// The edges the component's nodes hold first, ascending, with their
+    /// literal arguments: edge `arg_edges[i]`'s are `args[arg_spans[i]]`.
+    arg_edges: []const u32,
+    arg_spans: []const artifact_serialize.Span,
+    args: []const LiteralArgSource,
+    /// The component's literal argument roots, by id.
+    roots: []const LiteralRootRecord,
+
+    pub fn requirementsOf(self: *const LiteralComponent, key: LiteralScopeKey) []const LiteralRequirement {
+        for (self.scope_keys, self.scope_spans) |candidate, span| {
+            if (std.meta.eql(candidate, key)) return self.requirements[span.start..][0..span.len];
+        }
+        return &.{};
+    }
+
+    pub fn edgeArgs(self: *const LiteralComponent, edge: u32) []const LiteralArgSource {
+        const index = std.sort.binarySearch(u32, self.arg_edges, edge, struct {
+            fn order(key: u32, item: u32) std.math.Order {
+                return std.math.order(key, item);
+            }
+        }.order) orelse return &.{};
+        const span = self.arg_spans[index];
+        return self.args[span.start..][0..span.len];
+    }
+
+    pub fn root(self: *const LiteralComponent, id: ComptimeRootId) ?*const LiteralRootRecord {
+        const index = std.sort.binarySearch(LiteralRootRecord, self.roots, id, struct {
+            fn order(key: ComptimeRootId, item: LiteralRootRecord) std.math.Order {
+                return std.math.order(@backingInt(key), @backingInt(item.root.id));
+            }
+        }.order) orelse return null;
+        return &self.roots[index];
+    }
+
+    pub fn destroy(self: *LiteralComponent, allocator: Allocator) void {
+        allocator.free(self.scope_keys);
+        allocator.free(self.scope_spans);
+        allocator.free(self.requirements);
+        allocator.free(self.arg_edges);
+        allocator.free(self.arg_spans);
+        allocator.free(self.args);
+        allocator.free(self.roots);
+        allocator.destroy(self);
+    }
+};
+
+/// The literal argument roots one template's edges read
+/// (`ModuleAnalyses.templateLiteralArgumentDemand`), ascending.
+pub const LiteralArgumentDemand = struct {
+    roots: []const ComptimeRootId,
+
+    pub fn destroy(self: *LiteralArgumentDemand, allocator: Allocator) void {
+        allocator.free(self.roots);
+        allocator.destroy(self);
+    }
+};
+
+/// One step of an exact procedure alias chain: the module its lookup is in
+/// (null for this module), the lookup's site substitution, and the
+/// quantified variables of the scheme the lookup instantiates, which the
+/// substitution is over.
+const LiteralAliasStep = struct {
+    module: ?ImportedModuleView,
+    lookup_subst: []const CheckedTypeId,
+    vars: []const CheckedTypeId,
+};
+
+/// The scheme of a top-level alias: its callable-eval template's root
+/// wrapper template, whose body is the alias's forwarded lookup.
+fn literalCallableEvalAliasStep(dispatch: CheckedDispatch, alias_view: ?ImportedModuleView, pattern: CIR.Pattern.Idx) Allocator.Error!struct { lookup: CIR.Expr.Idx, vars: []const CheckedTypeId } {
+    const source = dispatch.source;
+    const eval_templates: CallableEvalTemplateTableView = if (alias_view) |view| view.callable_eval_templates else source.callable_eval_templates;
+    const template = for (eval_templates.templates) |candidate| {
+        if (candidate.pattern == pattern) break candidate;
+    } else checkedArtifactInvariant("a method's alias binding has no callable-eval template", .{});
+    const wrapper_table: *const EntryWrapperTable = if (alias_view) |view| view.entry_wrappers else source.entry_wrappers;
+    const wrapper = wrapper_table.lookupByRoot(template.root) orelse checkedArtifactInvariant("a callable-eval template's root has no entry wrapper", .{});
+    const procedure_templates: *const CheckedProcedureTemplateTable = if (alias_view) |view| view.checked_procedure_templates else source.templates;
+    const wrapper_template = procedure_templates.get(wrapper.template.template);
+    return .{
+        .lookup = template.forwarded_lookup orelse checkedArtifactInvariant("a method's alias binding is not an exact procedure alias", .{}),
+        .vars = try (if (alias_view) |view| view.dispatch() else dispatch).templateSchemeVars(wrapper_template.template_id),
     };
-    var scope_states = std.AutoHashMapUnmanaged(ScopeKey, ScopeState).empty;
-    var identity_orderer = CheckedIdentityOrderer.init(allocator, names, store);
-    defer identity_orderer.deinit();
+}
+
+/// The steps of the alias chain a dispatch edge to a method bound to an
+/// exact procedure alias passes through, each step's lookup instantiating
+/// the next scheme; null where the chain leaves this module, whose
+/// instantiation the owning module computes. Reads only finished slots and
+/// tables; the composition (`composeLiteralAliasChain`) creates the types.
+fn literalAliasChainSteps(
+    allocator: Allocator,
+    dispatch: CheckedDispatch,
+    node: static_dispatch.EvidenceNode,
+    steps: *std.ArrayListUnmanaged(LiteralAliasStep),
+) Allocator.Error!bool {
+    const source = dispatch.source;
+    const owner = source.key.digest();
+    const import_views = dispatchImportViews(dispatch);
+    const alias = node.target.alias orelse checkedArtifactInvariant("an alias-instantiated target has no alias binding", .{});
+    // The alias binding is in the target's module, which this module is only
+    // where the target's template is its own: a module index tells modules
+    // of one compilation apart, not a module from the Builtin compiled
+    // beside it.
+    switch (node.target.kind) {
+        .procedure => |procedure| if (!procedure.template.artifact.eql(owner)) return false,
+        .local_proc, .structural => checkedArtifactInvariant("an alias-instantiated target is not a procedure", .{}),
+    }
+    var module: ?ImportedModuleView = null;
+    var lookup: CIR.Expr.Idx, var vars: []const CheckedTypeId = switch (alias) {
+        .top_level => |pattern| blk: {
+            const step = try literalCallableEvalAliasStep(dispatch, null, pattern);
+            break :blk .{ step.lookup, step.vars };
+        },
+        .local => |local| .{ local.lookup, if (local.dispatch_scope) |scope_id| (try dispatch.scopeSchema(scope_id)).vars else &.{} },
+    };
+    var actual_count = (try dispatch.substitution(node.subst)).len;
+    while (true) {
+        if (actual_count != vars.len) checkedArtifactInvariant("an alias edge's substitution differs from its alias's scheme", .{});
+        const step_dispatch: CheckedDispatch = if (module) |view| view.dispatch() else dispatch;
+        const refs: *const ResolvedValueRefTable = if (module) |view| view.resolved_value_refs else source.refs;
+        const lookup_subst = (try step_dispatch.siteSubstitution(lookup)) orelse &.{};
+        try steps.append(allocator, .{ .module = module, .lookup_subst = lookup_subst, .vars = vars });
+        actual_count = lookup_subst.len;
+        const ref_id = refs.lookupIdByExpr(lookup) orelse checkedArtifactInvariant("an alias's forwarded lookup has no resolved reference", .{});
+        switch (refs.records[@backingInt(ref_id)].ref) {
+            .local_proc => |local| {
+                if (!local.is_alias) return true;
+                lookup = local.expr;
+                vars = if (local.dispatch_scope) |scope_id| (try step_dispatch.scopeSchema(scope_id)).vars else &.{};
+            },
+            inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc, .platform_required_proc => |ref, tag| {
+                const use = if (tag == .platform_required_proc) ref.procedure else ref;
+                switch (use.binding) {
+                    .top_level => |top_level| {
+                        const owner_key = top_level.artifact;
+                        const local_owner = owner_key.eql(owner);
+                        const bindings: *const TopLevelProcedureBindingTable = if (local_owner) source.top_level_procedure_bindings else (import_views.viewForKey(owner_key) orelse return false).top_level_procedure_bindings;
+                        switch (bindings.get(top_level.binding).body) {
+                            .callable_eval_template => |template_id| {
+                                const view = if (local_owner) null else import_views.viewForKey(owner_key);
+                                const eval_templates: CallableEvalTemplateTableView = if (view) |v| v.callable_eval_templates else source.callable_eval_templates;
+                                if (eval_templates.templates[@backingInt(template_id)].forwarded_lookup == null) return true;
+                                const step = try literalCallableEvalAliasStep(dispatch, view, eval_templates.templates[@backingInt(template_id)].pattern);
+                                module = view;
+                                lookup = step.lookup;
+                                vars = step.vars;
+                            },
+                            .direct_template, .checked_error => return true,
+                        }
+                    },
+                    .imported, .hosted, .platform_required => return true,
+                }
+            },
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => checkedArtifactInvariant("a forwarded procedure alias lookup names no procedure", .{}),
+        }
+    }
+}
+
+/// The substitution of the procedure template an alias chain ends at, in
+/// this module's store: the edge's instantiation of the first alias's scheme,
+/// carried through each step's forwarded lookup. Runs under the store's
+/// creation lock.
+fn composeLiteralAliasChain(
+    allocator: Allocator,
+    store: *CheckedTypeStore,
+    names: *canonical.CanonicalNameStore,
+    first_actuals: []const CheckedTypeId,
+    steps: []const LiteralAliasStep,
+) Allocator.Error![]CheckedTypeId {
+    var actuals = try allocator.dupe(CheckedTypeId, first_actuals);
+    errdefer allocator.free(actuals);
+    for (steps) |step| {
+        var projector: ?CheckedTypeStoreImportProjector = if (step.module) |view| CheckedTypeStoreImportProjector.init(allocator, store, names, view) else null;
+        defer if (projector) |*p| p.deinit();
+        const formals = try allocator.alloc(CheckedTypeId, step.vars.len);
+        defer allocator.free(formals);
+        for (step.vars, formals) |variable, *out| out.* = if (projector) |*p| try p.project(variable) else variable;
+        // The next scheme's variables, as the lookup instantiates them over
+        // this scheme's variables, at this edge's types.
+        const composed = try allocator.alloc(CheckedTypeId, step.lookup_subst.len);
+        errdefer allocator.free(composed);
+        for (step.lookup_subst, composed) |checked_ty, *out| {
+            const projected = if (projector) |*p| try p.project(checked_ty) else checked_ty;
+            var substitution = CheckedTypeSubstitution.init(allocator, formals, actuals);
+            defer substitution.deinit();
+            out.* = try store.cloneCheckedTypeRootSubstituting(allocator, projected, &substitution);
+        }
+        allocator.free(actuals);
+        actuals = composed;
+    }
+    return actuals;
+}
+
+/// The literal requirements, edge arguments and literal argument roots of
+/// component `component` of `graph` (design.md "Literal Arguments"). An
+/// edge that instantiates a scheme instantiates each of the callee's
+/// literal requirements at the edge's substitution: a closed type gets a
+/// literal argument root of this module converting the literal at that
+/// type, named by the edge and the requirement; an open one becomes a
+/// literal requirement of the scope the edge is in, forwarded in turn.
+/// Requirements are computed to a fixpoint over the component's edges.
+/// Every callee component and every imported callee's requirements are done
+/// before the component is claimed (`ModuleAnalyses.literalComponent`).
+/// Types are created under the store's creation lock, which is held around
+/// each creation only, after every slot the creation reads.
+pub fn computeLiteralComponent(
+    allocator: Allocator,
+    dispatch: CheckedDispatch,
+    graph: *const LiteralGraph,
+    component: u32,
+) Allocator.Error!*LiteralComponent {
+    const source = dispatch.source;
+    const owner = source.key.digest();
+    const store = source.types.store;
+    const names = source.names;
+    const io = source.analyses.io;
+    const templates = source.templates;
+    const import_views = dispatchImportViews(dispatch);
+    const members = graph.components.componentMembers(component);
+
+    var orderer = CheckedIdentityOrderer.init(allocator, names, store);
+    defer orderer.deinit();
+
+    const ObligationKey = LiteralObligationKey;
+    var states: LiteralScopeStates = .empty;
     defer {
-        var it = scope_states.valueIterator();
+        var it = states.valueIterator();
         while (it.next()) |state| {
             state.list.deinit(allocator);
             state.index.deinit(allocator);
         }
-        scope_states.deinit(allocator);
+        states.deinit(allocator);
     }
 
-    // The template whose body owns each generalized local scope.
-    const scope_owners = try allocator.alloc(?u32, scopes.len);
-    defer allocator.free(scope_owners);
-    @memset(scope_owners, null);
-    for (templates.dispatch_sites.scope_site_spans[0..templates.dispatch_sites.walkedTemplateCount()], 0..) |span, template_index| {
-        for (templates.dispatch_sites.scope_sites[span.start..][0..span.len]) |site| {
-            var current: ?DispatchScopeId = site.scope;
-            while (current) |id| {
-                scope_owners[@backingInt(id)] = @intCast(template_index);
-                current = scopes[@backingInt(id)].parent;
-            }
-        }
-    }
-    const scopeKeyOf = struct {
-        fn get(template: ?u32, scope: DispatchScope) ScopeKey {
-            return switch (scope) {
-                .root => .{ .template = template, .scope = null },
-                .generalized => |id| .{ .template = template, .scope = @backingInt(id) },
-            };
-        }
-    }.get;
-
-    // The literal kind of a plan with a generated literal operand.
-    const literalKindOfPlan = struct {
-        fn get(table: *const static_dispatch.StaticDispatchPlanTable, plan: static_dispatch.StaticDispatchCallPlan) ?LiteralArgumentKind {
-            for (plan.argsSlice(table)) |operand| switch (operand) {
-                .generated_numeral => return .numeral,
-                .generated_quote => return .quote,
-                .generated_interpolation_segments => return .interpolation,
-                .checked_expr, .literal_pattern_value, .literal_pattern_conversion => {},
-            };
-            return null;
-        }
-    }.get;
-
-    // Own sites: each open literal conversion plan is an literal requirement of the
-    // innermost scheme around it.
-    for (templates.templates.items, 0..) |template, template_index| {
-        const start = template.static_dispatch_plans.start;
-        for (templates.dispatch_plan_refs[start..][0..template.static_dispatch_plans.len], 0..) |plan_id, i| {
-            const plan = try dispatch.plan(plan_id);
-            const kind = literalKindOfPlan(plans, plan) orelse continue;
-            switch (plan.resolution) {
-                .evidence_dependent, .direct_parametric => {},
-                .direct_closed, .checked_error, .@"unreachable", .structural => continue,
-                .direct_pending => checkedArtifactInvariant("a literal conversion plan was left pending at literal argument publication", .{}),
-            }
-            const key = scopeKeyOf(@intCast(template_index), templates.dispatch_ref_scopes[start + i]);
-            const entry = try scope_states.getOrPut(allocator, key);
+    // The component's own open literals.
+    for (members) |node| {
+        for (graph.own_sites[graph.own_starts[node]..graph.own_starts[node + 1]]) |own| {
+            const entry = try states.getOrPut(allocator, own.scope);
             if (!entry.found_existing) entry.value_ptr.* = .{};
-            const site: LiteralSite = .{ .module = owner_artifact, .node = plan.node, .kind = kind };
-            // The literal requirement's type is the converted value's: the literal's
-            // own for a numeral or a quote, the assembler's for an
-            // interpolation.
-            const ty = switch (kind) {
-                .interpolation => blk: {
-                    const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(plan.node));
-                    if (bodies.exprData(expr) != .interpolation) checkedArtifactInvariant("a literal conversion plan's expression is not a literal", .{});
-                    break :blk bodies.interpolationAssemblerType(expr);
-                },
-                .numeral, .quote => bodies.literalConversion(plan.node).ty,
-            };
-            const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) });
+            const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = own.site, .ty = try literalRequirementTypeIdentity(store, &orderer, own.ty) });
             if (slot.found_existing) continue;
             slot.value_ptr.* = @intCast(entry.value_ptr.list.items.len);
-            try entry.value_ptr.list.append(allocator, .{ .site = site, .ty = ty, .edge = .literal, .callee_requirement = 0 });
-        }
-    }
-    {
-        const span = templates.dispatch_sites.defaultRefs(TemplateDispatchSites.default_plan_refs);
-        for (templates.dispatch_plan_refs[span.start..][0..span.len]) |plan_id| {
-            const plan = try dispatch.plan(plan_id);
-            if (literalKindOfPlan(plans, plan) == null) continue;
-            switch (plan.resolution) {
-                .evidence_dependent, .direct_parametric => checkedArtifactInvariant("a defaulted field expression's literal has no scheme to carry its obligation", .{}),
-                .direct_closed, .checked_error, .@"unreachable", .structural => {},
-                .direct_pending => checkedArtifactInvariant("a literal conversion plan was left pending at literal argument publication", .{}),
-            }
+            try entry.value_ptr.list.append(allocator, .{ .site = own.site, .ty = own.ty, .edge = .literal, .callee_requirement = 0 });
         }
     }
 
-    // The edges: every instantiation of a scheme inside this module.
-    const CalleeRef = union(enum) { template: canonical.ProcedureTemplateRef, scope: DispatchScopeId };
-    const EdgeRec = struct {
-        key: LiteralEdge,
-        callee: CalleeRef,
-        subst: []const CheckedTypeId,
-        /// The scope the edge is in; null inside a defaulted field expression.
-        scope: ?ScopeKey,
-        owner_expr: CIR.Expr.Idx,
+    const ArgBuild = union(enum) { root: ComptimeRootId, forwarded: u32, unbound };
+    const EdgeState = struct {
+        index: u32,
+        edge: LiteralGraphEdge,
+        callee: LiteralCalleeScheme,
+        alias_steps: std.ArrayListUnmanaged(LiteralAliasStep) = .empty,
+        /// The edge's substitution; owned when an alias chain composed it.
+        subst: []const CheckedTypeId = &.{},
+        owned_subst: ?[]CheckedTypeId = null,
+        formals: []CheckedTypeId = &.{},
+        projector: ?*CheckedTypeStoreImportProjector = null,
+        substitution: ?CheckedTypeSubstitution = null,
+        args: std.ArrayListUnmanaged(ArgBuild) = .empty,
     };
-    var edges = std.ArrayListUnmanaged(EdgeRec).empty;
-    defer edges.deinit(allocator);
-    var edge_keys = std.AutoHashMapUnmanaged(LiteralEdge, u32).empty;
-    defer edge_keys.deinit(allocator);
-    var edge_templates = std.ArrayListUnmanaged(std.ArrayListUnmanaged(u32)).empty;
+    var edge_states: std.ArrayListUnmanaged(EdgeState) = .empty;
     defer {
-        for (edge_templates.items) |*list| list.deinit(allocator);
-        edge_templates.deinit(allocator);
+        for (edge_states.items) |*state| {
+            state.alias_steps.deinit(allocator);
+            if (state.owned_subst) |slice| allocator.free(slice);
+            allocator.free(state.formals);
+            if (state.projector) |projector| {
+                projector.deinit();
+                allocator.destroy(projector);
+            }
+            if (state.substitution) |*substitution| substitution.deinit();
+            state.args.deinit(allocator);
+        }
+        edge_states.deinit(allocator);
     }
-    const Collector = struct {
-        allocator: Allocator,
-        plans: *const static_dispatch.StaticDispatchPlanTable,
-        dispatch: CheckedDispatch,
-        resolved_value_refs: *const ResolvedValueRefTable,
-        top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
-        import_views: CheckedImportViews,
-        owner: canonical.ArtifactRef,
-        edges: *std.ArrayListUnmanaged(EdgeRec),
-        keys: *std.AutoHashMapUnmanaged(LiteralEdge, u32),
-        /// The templates whose bodies hold each edge: a hoisted root's
-        /// wrapper shares its edges with the template it was hoisted from.
-        edge_templates: *std.ArrayListUnmanaged(std.ArrayListUnmanaged(u32)),
-        stack: std.ArrayListUnmanaged(static_dispatch.EvidenceNodeId) = .empty,
-        visited_derivations: collections.DenseMapUnmanaged(static_dispatch.GeneratedCodecDerivationId, void) = .empty,
-        /// The substitutions composed through alias chains, which the edges
-        /// hold and the collection owns.
-        composed_substs: std.ArrayListUnmanaged([]const CheckedTypeId) = .empty,
-        callable_eval_templates: *const CallableEvalTemplateTable,
-        entry_wrappers: *const EntryWrapperTable,
-        templates: *const CheckedProcedureTemplateTable,
-        store: *CheckedTypeStore,
-        names: *canonical.CanonicalNameStore,
-
-        fn add(self: *@This(), edge: EdgeRec) Allocator.Error!void {
-            const seen = try self.keys.getOrPut(self.allocator, edge.key);
-            if (!seen.found_existing) {
-                seen.value_ptr.* = @intCast(self.edges.items.len);
-                try self.edges.append(self.allocator, edge);
-                try self.edge_templates.append(self.allocator, .empty);
-            }
-            const template = (edge.scope orelse return).template orelse return;
-            const list = &self.edge_templates.items[seen.value_ptr.*];
-            if (!sliceContains(u32, list.items, template)) try list.append(self.allocator, template);
-        }
-
-        /// The dispatch edges of `node_id` and of every node its evidence
-        /// reaches.
-        fn nodes(self: *@This(), node_id: static_dispatch.EvidenceNodeId, scope: ?ScopeKey, owner_expr: CIR.Expr.Idx) Allocator.Error!void {
-            try self.stack.append(self.allocator, node_id);
-            while (self.stack.pop()) |id| {
-                const node = (try self.dispatch.evidenceNode(id));
-                switch (node.target.kind) {
-                    .procedure => |procedure| if (node.instantiation == .alias) {
-                        // The method is bound to an exact procedure alias:
-                        // the edge instantiates the alias's scheme, and the
-                        // target's instantiation composes through the
-                        // alias chain's forwarded lookups.
-                        if (try self.aliasChainSubstitution(node)) |subst| try self.add(.{
-                            .key = .{ .node = id },
-                            .callee = .{ .template = procedure.template },
-                            .subst = subst,
-                            .scope = scope,
-                            .owner_expr = owner_expr,
-                        });
-                    } else try self.add(.{
-                        .key = .{ .node = id },
-                        .callee = .{ .template = procedure.template },
-                        .subst = (try self.dispatch.substitution(node.subst)),
-                        .scope = scope,
-                        .owner_expr = owner_expr,
-                    }),
-                    // A method declared in a function body is called through
-                    // its function value, whose scheme its construction or
-                    // use instantiates.
-                    .local_proc, .structural => {},
-                }
-                switch (node.nested) {
-                    .resolved => try self.entries((try self.dispatch.nestedEvidence(node))),
-                    .through_alias => try self.entries((try self.dispatch.aliasScopeEvidence(node))),
-                    .from_callable => {},
-                }
-            }
-        }
-
-        fn entries(self: *@This(), evidence: []const static_dispatch.CheckedEvidence) Allocator.Error!void {
-            for (evidence) |entry| {
-                switch (entry.resolution) {
-                    .direct => |nested| try self.stack.append(self.allocator, nested),
-                    .structural => |structural| if (structural.generated_codec_derivation) |id| try self.derivationNodes(id),
-                    .constraint, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
-                }
-                const contracts = entry.callable_contracts;
-                for ((try self.dispatch.evidenceEntries(contracts))) |contract| switch (contract.resolution) {
-                    .direct => |nested| try self.stack.append(self.allocator, nested),
-                    .structural => |structural| if (structural.generated_codec_derivation) |id| try self.derivationNodes(id),
-                    .constraint, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
-                };
-            }
-        }
-
-        /// One scheme an alias chain passes through: the module its lookup is
-        /// in, the lookup, and the scheme's quantified variables, which the
-        /// lookup's site substitution is over.
-        const AliasStep = struct {
-            module: ?ImportedModuleView,
-            lookup: CIR.Expr.Idx,
-            vars: []const CheckedTypeId,
-        };
-
-        /// The substitution of the procedure template an alias chain ends at,
-        /// in this module's store: the node's instantiation of the first
-        /// alias's scheme, carried through each alias's forwarded lookup.
-        /// Null where the chain leaves this module, whose instantiation
-        /// the owning module publishes.
-        fn aliasChainSubstitution(self: *@This(), node: static_dispatch.EvidenceNode) Allocator.Error!?[]const CheckedTypeId {
-            const alias = node.target.alias orelse checkedArtifactInvariant("an alias-instantiated target has no alias binding", .{});
-            // The alias binding is in the target's module, which this
-            // module is only where the target's template is its own: a
-            // module index tells modules of one compilation apart, not a
-            // module from the Builtin compiled beside it.
-            const procedure = switch (node.target.kind) {
-                .procedure => |procedure| procedure,
-                .local_proc, .structural => checkedArtifactInvariant("an alias-instantiated target is not a procedure", .{}),
-            };
-            if (!procedure.template.artifact.eql(self.owner)) return null;
-            var step: AliasStep = switch (alias) {
-                .top_level => |pattern| try self.callableEvalAliasStep(null, pattern),
-                .local => |local| blk: {
-                    const scope_id = local.dispatch_scope orelse break :blk AliasStep{ .module = null, .lookup = local.lookup, .vars = &.{} };
-                    break :blk .{ .module = null, .lookup = local.lookup, .vars = try self.localScopeVars(null, scope_id) };
-                },
-            };
-            var actuals: []const CheckedTypeId = (try self.dispatch.substitution(node.subst));
-            if (actuals.len != step.vars.len) checkedArtifactInvariant("an alias edge's substitution differs from its alias's scheme", .{});
-            // The substitution composed so far, owned here until the
-            // collection takes the one the chain ends at.
-            var owned: ?[]CheckedTypeId = null;
-            defer if (owned) |slice| self.allocator.free(slice);
-            while (true) {
-                const step_dispatch: CheckedDispatch = if (step.module) |view| view.dispatch() else self.dispatch;
-                const refs: *const ResolvedValueRefTable = if (step.module) |view| view.resolved_value_refs else self.resolved_value_refs;
-                const lookup_subst = (try step_dispatch.siteSubstitution(step.lookup)) orelse &.{};
-                // The next scheme's variables, as the lookup instantiates
-                // them over this scheme's variables, at this edge's types.
-                const composed = try self.allocator.alloc(CheckedTypeId, lookup_subst.len);
-                errdefer self.allocator.free(composed);
-                for (lookup_subst, composed) |checked_ty, *out| {
-                    const projected = if (step.module) |view| blk: {
-                        var projector = CheckedTypeStoreImportProjector.init(self.allocator, self.store, self.names, view);
-                        defer projector.deinit();
-                        break :blk try projector.project(checked_ty);
-                    } else checked_ty;
-                    const formals = if (step.module) |view| try self.projectedVars(view, step.vars) else step.vars;
-                    var substitution = CheckedTypeSubstitution.init(self.allocator, formals, actuals);
-                    defer substitution.deinit();
-                    out.* = try self.store.cloneCheckedTypeRootSubstituting(self.allocator, projected, &substitution);
-                }
-                if (owned) |previous| self.allocator.free(previous);
-                owned = composed;
-                actuals = composed;
-                const ref_id = refs.lookupIdByExpr(step.lookup) orelse checkedArtifactInvariant("an alias's forwarded lookup has no resolved reference", .{});
-                switch (refs.records[@backingInt(ref_id)].ref) {
-                    .local_proc => |local| {
-                        if (!local.is_alias) return try self.takeComposed(&owned, actuals);
-                        const scope_id = local.dispatch_scope orelse {
-                            step = .{ .module = step.module, .lookup = local.expr, .vars = &.{} };
-                            continue;
-                        };
-                        step = .{ .module = step.module, .lookup = local.expr, .vars = try self.localScopeVars(step.module, scope_id) };
-                    },
-                    inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc, .platform_required_proc => |ref, tag| {
-                        const use = if (tag == .platform_required_proc) ref.procedure else ref;
-                        switch (use.binding) {
-                            .top_level => |top_level| {
-                                const owner_key = top_level.artifact;
-                                const local_owner = owner_key.eql(self.owner);
-                                const bindings: *const TopLevelProcedureBindingTable = if (local_owner) self.top_level_procedure_bindings else (self.import_views.viewForKey(owner_key) orelse return null).top_level_procedure_bindings;
-                                switch (bindings.get(top_level.binding).body) {
-                                    .callable_eval_template => |template_id| {
-                                        const view = if (local_owner) null else self.import_views.viewForKey(owner_key);
-                                        const eval_templates: CallableEvalTemplateTableView = if (view) |v| v.callable_eval_templates else self.callable_eval_templates.view();
-                                        if (eval_templates.templates[@backingInt(template_id)].forwarded_lookup == null) return try self.takeComposed(&owned, actuals);
-                                        step = try self.callableEvalAliasStep(view, eval_templates.templates[@backingInt(template_id)].pattern);
-                                    },
-                                    .direct_template, .checked_error => return try self.takeComposed(&owned, actuals),
-                                }
-                            },
-                            .imported, .hosted, .platform_required => return try self.takeComposed(&owned, actuals),
-                        }
-                    },
-                    .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => checkedArtifactInvariant("a forwarded procedure alias lookup names no procedure", .{}),
-                }
-                if (actuals.len != step.vars.len) checkedArtifactInvariant("an alias's forwarded lookup's substitution differs from the next alias's scheme", .{});
-            }
-        }
-
-        /// `actuals`, which the collection owns from now on where the chain
-        /// composed it.
-        fn takeComposed(self: *@This(), owned: *?[]CheckedTypeId, actuals: []const CheckedTypeId) Allocator.Error![]const CheckedTypeId {
-            if (owned.*) |slice| {
-                try self.composed_substs.append(self.allocator, slice);
-                owned.* = null;
-            }
-            return actuals;
-        }
-
-        /// The scheme of a top-level alias: its callable-eval template's root
-        /// wrapper template, whose body is the alias's forwarded lookup.
-        fn callableEvalAliasStep(self: *@This(), alias_view: ?ImportedModuleView, pattern: CIR.Pattern.Idx) Allocator.Error!AliasStep {
-            const eval_templates: CallableEvalTemplateTableView = if (alias_view) |view| view.callable_eval_templates else self.callable_eval_templates.view();
-            const template = for (eval_templates.templates) |candidate| {
-                if (candidate.pattern == pattern) break candidate;
-            } else checkedArtifactInvariant("a method's alias binding has no callable-eval template", .{});
-            const wrapper_table: *const EntryWrapperTable = if (alias_view) |view| view.entry_wrappers else self.entry_wrappers;
-            const wrapper = wrapper_table.lookupByRoot(template.root) orelse checkedArtifactInvariant("a callable-eval template's root has no entry wrapper", .{});
-            const procedure_templates: *const CheckedProcedureTemplateTable = if (alias_view) |view| view.checked_procedure_templates else self.templates;
-            const wrapper_template = procedure_templates.get(wrapper.template.template);
-            return .{
-                .module = alias_view,
-                .lookup = template.forwarded_lookup orelse checkedArtifactInvariant("a method's alias binding is not an exact procedure alias", .{}),
-                .vars = try (if (alias_view) |view| view.dispatch() else self.dispatch).templateSchemeVars(wrapper_template.template_id),
-            };
-        }
-
-        /// A generalized-local scope's quantified variables.
-        fn localScopeVars(self: *@This(), alias_view: ?ImportedModuleView, scope_id: DispatchScopeId) Allocator.Error![]const CheckedTypeId {
-            return (try (if (alias_view) |view| view.dispatch() else self.dispatch).scopeSchema(scope_id)).vars;
-        }
-
-        /// Another module's scheme variables as roots of this store.
-        fn projectedVars(self: *@This(), view: ImportedModuleView, vars: []const CheckedTypeId) Allocator.Error![]const CheckedTypeId {
-            const projected = try self.allocator.alloc(CheckedTypeId, vars.len);
-            var projector = CheckedTypeStoreImportProjector.init(self.allocator, self.store, self.names, view);
-            defer projector.deinit();
-            for (vars, projected) |variable, *out| out.* = try projector.project(variable);
-            return projected;
-        }
-
-        /// The dispatch edges inside a generated codec: the method calls
-        /// its body makes, through the codecs it nests.
-        fn derivationNodes(self: *@This(), first: static_dispatch.GeneratedCodecDerivationId) Allocator.Error!void {
-            var pending: std.ArrayListUnmanaged(static_dispatch.GeneratedCodecDerivationId) = .empty;
-            defer pending.deinit(self.allocator);
-            try pending.append(self.allocator, first);
-            while (pending.pop()) |id| {
-                if ((try self.visited_derivations.getOrPut(self.allocator, id)).found_existing) continue;
-                const codecs = try self.dispatch.generatedCodecs();
-                const derivation = codecs.generated_codec_derivations[@backingInt(id)];
-                for (derivation.callsSlice(&codecs)) |call| switch (call.resolution) {
-                    .callable => |node| try self.stack.append(self.allocator, node),
-                    .structural => |nested| try pending.append(self.allocator, nested),
-                    .pending, .checked_error => {},
-                };
-            }
-        }
-
-        /// The dispatch edges inside the evidence recorded at `expr`.
-        fn siteNodes(self: *@This(), expr: CIR.Expr.Idx, scope: ?ScopeKey) Allocator.Error!void {
-            const evidence = (try self.dispatch.siteEvidence(expr)) orelse return;
-            try self.entries(evidence);
-            while (self.stack.pop()) |id| try self.nodes(id, scope, expr);
-        }
-
-        /// The template a procedure value reference instantiates.
-        /// The template whose scheme a value reference instantiates: the
-        /// procedure's, or an exact procedure alias's entry wrapper, whose
-        /// scheme is the alias's. A use of a computed callable instantiates
-        /// nothing.
-        fn templateOfValueRef(self: *@This(), ref: ResolvedValueRef) ?canonical.ProcedureTemplateRef {
-            const use: ProcedureUseTemplate = switch (ref) {
-                .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| use,
-                .platform_required_proc => |required| required.procedure,
-                .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .platform_required_declaration, .platform_required_checked_error => return null,
-            };
-            var alias_view: ?ImportedModuleView = null;
-            const body: ProcedureBindingBody = switch (use.binding) {
-                .top_level => |top_level| blk: {
-                    if (!top_level.artifact.eql(self.owner)) return null;
-                    break :blk self.top_level_procedure_bindings.get(top_level.binding).body;
-                },
-                .imported => |imported| blk: {
-                    const view = self.import_views.viewForKey(imported.artifact) orelse return null;
-                    alias_view = view;
-                    const binding = importedProcedureBindingForDef(view, imported.def) orelse return null;
-                    break :blk binding.body;
-                },
-                .hosted, .platform_required => return null,
-            };
-            return switch (body) {
-                .direct_template => |direct| switch (direct.template) {
-                    .checked => |template| template,
-                    .lifted, .synthetic => null,
-                },
-                .callable_eval_template => |template_id| blk: {
-                    const eval_templates: CallableEvalTemplateTableView = if (alias_view) |view| view.callable_eval_templates else self.callable_eval_templates.view();
-                    const template = eval_templates.templates[@backingInt(template_id)];
-                    if (template.forwarded_lookup == null) break :blk null;
-                    const wrapper_table: *const EntryWrapperTable = if (alias_view) |view| view.entry_wrappers else self.entry_wrappers;
-                    const wrapper = wrapper_table.lookupByRoot(template.root) orelse
-                        checkedArtifactInvariant("a callable-eval template's root has no entry wrapper", .{});
-                    break :blk wrapper.template;
-                },
-                .checked_error => null,
-            };
-        }
-
-        fn valueRef(self: *@This(), record: ResolvedValueRefRecord, scope: ?ScopeKey) Allocator.Error!void {
-            try self.siteNodes(record.expr, scope);
-            const callee: CalleeRef = switch (record.ref) {
-                .local_proc => |local| .{ .scope = local.dispatch_scope orelse return },
-                .top_level_proc, .imported_proc, .promoted_top_level_proc, .platform_required_proc, .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_declaration, .platform_required_checked_error => .{ .template = self.templateOfValueRef(record.ref) orelse return },
-            };
-            try self.add(.{
-                .key = .{ .use = record.expr },
-                .callee = callee,
-                .subst = (try self.dispatch.siteSubstitution(record.expr)) orelse &.{},
-                .scope = scope,
-                .owner_expr = record.expr,
-            });
-        }
-
-        fn scopeSite(self: *@This(), site: CollectedScopeConstructionSite, scope: ?ScopeKey) Allocator.Error!void {
-            try self.siteNodes(site.checked_expr, scope);
-            try self.add(.{
-                .key = .{ .use = site.checked_expr },
-                .callee = .{ .scope = site.scope },
-                .subst = (try self.dispatch.siteSubstitution(site.checked_expr)) orelse &.{},
-                .scope = scope,
-                .owner_expr = site.checked_expr,
-            });
-        }
-    };
-    var collector: Collector = .{
-        .allocator = allocator,
-        .plans = plans,
-        .dispatch = dispatch,
-        .resolved_value_refs = resolved_value_refs,
-        .top_level_procedure_bindings = top_level_procedure_bindings,
-        .import_views = import_views,
-        .owner = owner_artifact,
-        .edges = &edges,
-        .keys = &edge_keys,
-        .edge_templates = &edge_templates,
-        .callable_eval_templates = callable_eval_templates,
-        .entry_wrappers = wrappers,
-        .templates = templates,
-        .store = store,
-        .names = names,
-    };
-    defer collector.stack.deinit(allocator);
-    defer collector.visited_derivations.deinit(allocator);
-    defer {
-        for (collector.composed_substs.items) |slice| allocator.free(slice);
-        collector.composed_substs.deinit(allocator);
-    }
-    // The dispatch scopes were sealed over the templates published before
-    // literal conversion roots got their entry wrappers
-    // (`publishLiteralConversionRoots`). Such a wrapper's body is one closed
-    // literal at the root scope: its conversion plan is an edge of the
-    // wrapper (the callee's literal requirements are its literal arguments), and it
-    // has no generalized-local scope.
-    const sealed_template_count = templates.dispatch_sites.walkedTemplateCount();
-    for (templates.templates.items, 0..) |template, template_index| {
-        const t: u32 = @intCast(template_index);
-        const sealed = template_index < sealed_template_count;
-        if (!sealed and template.body != .entry_wrapper) {
-            checkedArtifactInvariant("template {d} of {d} ({s}) was published after the dispatch scopes were sealed over {d} templates and is not a literal conversion root's entry wrapper", .{ template_index, templates.templates.items.len, @tagName(template.body), sealed_template_count });
-        }
-        const plan_start = template.static_dispatch_plans.start;
-        for (templates.dispatch_plan_refs[plan_start..][0..template.static_dispatch_plans.len], 0..) |plan_id, i| {
-            const plan = try dispatch.plan(plan_id);
-            const scope = scopeKeyOf(t, if (sealed) templates.dispatch_ref_scopes[plan_start + i] else .root);
-            switch (plan.resolution) {
-                .direct_closed, .direct_parametric => |direct| try collector.nodes(direct.evidence, scope, @fromBackingInt(@intCast(plan.node))),
-                // A generated codec's calls are edges of the scope that
-                // reaches the codec.
-                .structural => if (plan.generated_codec_derivation) |id| {
-                    try collector.derivationNodes(id);
-                    while (collector.stack.pop()) |node_id| try collector.nodes(node_id, scope, @fromBackingInt(@intCast(plan.node)));
-                },
-                .evidence_dependent, .checked_error, .@"unreachable", .direct_pending => {},
-            }
-        }
-        const ref_start = template.resolved_value_refs.start;
-        for (resolved_value_refs.template_refs[ref_start..][0..template.resolved_value_refs.len], 0..) |ref_id, i| {
-            const scope = scopeKeyOf(t, if (sealed) templates.dispatch_sites.value_ref_scopes[ref_start + i] else .root);
-            try collector.valueRef(resolved_value_refs.records[@backingInt(ref_id)], scope);
-        }
-        if (!sealed) continue;
-        const site_span = templates.dispatch_sites.scopeSiteSpan(template_index);
-        for (templates.dispatch_sites.scope_sites[site_span.start..][0..site_span.len]) |site| {
-            const parent = scopes[@backingInt(site.scope)].parent;
-            try collector.scopeSite(site, .{ .template = t, .scope = if (parent) |p| @backingInt(p) else null });
-        }
-    }
-    {
-        const span = templates.dispatch_sites.defaultRefs(TemplateDispatchSites.default_plan_refs);
-        for (templates.dispatch_plan_refs[span.start..][0..span.len]) |plan_id| {
-            const plan = try dispatch.plan(plan_id);
-            switch (plan.resolution) {
-                .direct_closed, .direct_parametric => |direct| try collector.nodes(direct.evidence, null, @fromBackingInt(@intCast(plan.node))),
-                .evidence_dependent, .checked_error, .@"unreachable", .structural, .direct_pending => {},
-            }
-        }
-        const refs = templates.dispatch_sites.defaultRefs(TemplateDispatchSites.default_value_refs);
-        for (resolved_value_refs.template_refs[refs.start..][0..refs.len]) |ref_id| {
-            try collector.valueRef(resolved_value_refs.records[@backingInt(ref_id)], null);
-        }
-        const sites = templates.dispatch_sites.scopeSiteSpan(templates.dispatch_sites.defaultsIndex());
-        for (templates.dispatch_sites.scope_sites[sites.start..][0..sites.len]) |site| {
-            const parent = scopes[@backingInt(site.scope)].parent;
-            try collector.scopeSite(site, if (parent) |p| .{ .template = null, .scope = @backingInt(p) } else null);
-        }
-    }
-
-    // Instantiation of each edge's callee literal requirements, to a fixpoint.
-    const ArgBuild = union(enum) { root: u32, forwarded: u32, unbound };
-    var edge_args = std.ArrayListUnmanaged(std.ArrayListUnmanaged(ArgBuild)).empty;
-    defer {
-        for (edge_args.items) |*list| list.deinit(allocator);
-        edge_args.deinit(allocator);
-    }
-    try edge_args.resize(allocator, edges.items.len);
-    for (edge_args.items) |*list| list.* = .empty;
-    const NewRoot = struct { site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, validate_only: bool, owner_expr: CIR.Expr.Idx };
-    var new_roots = std.ArrayListUnmanaged(NewRoot).empty;
-    defer new_roots.deinit(allocator);
-    var root_index = std.AutoHashMapUnmanaged(ObligationKey, u32).empty;
-    defer root_index.deinit(allocator);
-    var projectors = std.AutoHashMapUnmanaged([32]u8, *CheckedTypeStoreImportProjector).empty;
-    defer {
-        var it = projectors.valueIterator();
-        while (it.next()) |projector| {
-            projector.*.deinit();
-            allocator.destroy(projector.*);
-        }
-        projectors.deinit(allocator);
-    }
-    // The callee scheme of an edge: its literal requirements (a live list for this
-    // module's schemes) and its quantified variables, in the scheme's
-    // module.
-    const Callee = struct {
-        key: ?ScopeKey,
-        obligations: []const LiteralRequirement,
-        vars: []const CheckedTypeId,
-        artifact: ?CheckedModuleDigest,
-    };
-    const resolveCallee = struct {
-        fn get(ref: CalleeRef, owner: canonical.ArtifactRef, dispatch_: CheckedDispatch, owners: []const ?u32, states: *std.AutoHashMapUnmanaged(ScopeKey, ScopeState), views: CheckedImportViews) Allocator.Error!?Callee {
-            switch (ref) {
-                .template => |tref| {
-                    if (tref.artifact.eql(owner)) {
-                        const key: ScopeKey = .{ .template = @backingInt(tref.template), .scope = null };
-                        return .{
-                            .key = key,
-                            .obligations = if (states.getPtr(key)) |state| state.list.items else &.{},
-                            .vars = try dispatch_.templateSchemeVars(tref.template),
-                            .artifact = null,
-                        };
+    var modules: std.ArrayListUnmanaged(ModuleId) = .empty;
+    defer modules.deinit(allocator);
+    for (members) |node| {
+        for (graph.nodeEdges(node), graph.edge_starts[node]..) |edge, edge_index| {
+            const callee: LiteralCalleeScheme = switch (edge.callee) {
+                .template => |template| blk: {
+                    if (template.artifact.eql(owner)) {
+                        const key: LiteralScopeKey = .{ .template = template.template.index(), .scope = null };
+                        break :blk literalLocalCallee(graph, component, key, try dispatch.templateSchemeVars(template.template));
                     }
-                    const view = views.viewForKey(tref.artifact) orelse return null;
-                    const table = view.checked_procedure_templates;
-                    const template = table.get(tref.template);
-                    return .{
-                        .key = null,
-                        .obligations = table.literal_requirements_pool[template.literal_requirements.start..][0..template.literal_requirements.len],
-                        .vars = try view.dispatch().templateSchemeVars(tref.template),
-                        .artifact = tref.artifact,
+                    const view = import_views.viewForKey(template.artifact) orelse continue;
+                    try modules.append(allocator, template.artifact);
+                    break :blk .{
+                        .live = null,
+                        .finished = try view.dispatch().templateLiteralRequirements(template.template),
+                        .vars = try view.dispatch().templateSchemeVars(template.template),
+                        .module = view,
                     };
                 },
-                .scope => |id| {
-                    const key: ScopeKey = .{ .template = owners[@backingInt(id)], .scope = @backingInt(id) };
-                    return .{
-                        .key = key,
-                        .obligations = if (states.getPtr(key)) |state| state.list.items else &.{},
-                        .vars = (try dispatch_.scopeSchema(id)).vars,
-                        .artifact = null,
-                    };
+                .scope => |scope_id| literalLocalCallee(
+                    graph,
+                    component,
+                    .{ .template = graph.scope_owners[@backingInt(scope_id)], .scope = @backingInt(scope_id) },
+                    (try dispatch.scopeSchema(scope_id)).vars,
+                ),
+            };
+            var state: EdgeState = .{ .index = @intCast(edge_index), .edge = edge, .callee = callee };
+            switch (edge.subst) {
+                .evidence => |span| state.subst = try dispatch.substitution(span),
+                .site => |expr| state.subst = (try dispatch.siteSubstitution(expr)) orelse &.{},
+                .alias_chain => |id| {
+                    const evidence_node = try dispatch.evidenceNode(id);
+                    if (!try literalAliasChainSteps(allocator, dispatch, evidence_node, &state.alias_steps)) {
+                        state.alias_steps.deinit(allocator);
+                        continue;
+                    }
+                    state.subst = try dispatch.substitution(evidence_node.subst);
+                    for (state.alias_steps.items) |step| if (step.module) |view| try modules.append(allocator, view.key.digest());
                 },
             }
+            try edge_states.append(allocator, state);
         }
-    }.get;
-    const liveObligations = struct {
-        fn get(callee: Callee, states: *std.AutoHashMapUnmanaged(ScopeKey, ScopeState)) []const LiteralRequirement {
-            const key = callee.key orelse return callee.obligations;
-            return if (states.getPtr(key)) |state| state.list.items else &.{};
+    }
+
+    // Read the nominal representations of every module whose types the
+    // creations below copy before taking the creation lock.
+    try demandLiteralCapabilities(dispatch, modules.items);
+    store.beginCreation(io);
+    for (edge_states.items) |*state| {
+        if (state.alias_steps.items.len != 0) {
+            const composed = try composeLiteralAliasChain(allocator, store, names, state.subst, state.alias_steps.items);
+            state.owned_subst = composed;
+            state.subst = composed;
         }
-    }.get;
-    var formals = std.ArrayListUnmanaged(CheckedTypeId).empty;
-    defer formals.deinit(allocator);
+        state.formals = try allocator.alloc(CheckedTypeId, state.callee.vars.len);
+        if (state.callee.module) |view| {
+            const projector = try allocator.create(CheckedTypeStoreImportProjector);
+            projector.* = CheckedTypeStoreImportProjector.init(allocator, store, names, view);
+            state.projector = projector;
+            for (state.callee.vars, state.formals) |variable, *out| out.* = try projector.project(variable);
+        } else @memcpy(state.formals, state.callee.vars);
+        if (state.subst.len != 0) {
+            if (state.subst.len != state.formals.len) checkedArtifactInvariant("an edge's substitution differs from its callee's scheme", .{});
+            state.substitution = CheckedTypeSubstitution.init(allocator, state.formals, state.subst);
+        }
+    }
+    store.endCreation(io);
+
+    const NewRoot = struct { id: ComptimeRootId, site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, owner_expr: CIR.Expr.Idx };
+    var new_roots: std.ArrayListUnmanaged(NewRoot) = .empty;
+    defer new_roots.deinit(allocator);
+    var root_index = std.AutoHashMapUnmanaged(ObligationKey, ComptimeRootId).empty;
+    defer root_index.deinit(allocator);
     while (true) {
         var changed = false;
-        for (edges.items, edge_args.items) |edge, *args| {
-            const callee = (try resolveCallee(edge.callee, owner_artifact, dispatch, scope_owners, &scope_states, import_views)) orelse continue;
-            if (args.items.len >= callee.obligations.len) continue;
-            if (edge.subst.len != 0 and edge.subst.len != callee.vars.len) checkedArtifactInvariant("an edge's substitution differs from its callee's scheme", .{});
+        for (edge_states.items) |*state| {
+            const callee = state.callee;
             // A use with no recorded instantiation of a scheme with
             // variables instantiates nothing.
-            if (callee.vars.len != 0 and edge.subst.len == 0) continue;
-            var projector: ?*CheckedTypeStoreImportProjector = null;
-            if (callee.artifact) |artifact| {
-                const slot = try projectors.getOrPut(allocator, artifact.bytes);
-                if (!slot.found_existing) {
-                    const imported = import_views.viewForKey(artifact) orelse checkedArtifactInvariant("a literal obligation's artifact is not available", .{});
-                    const created = try allocator.create(CheckedTypeStoreImportProjector);
-                    created.* = CheckedTypeStoreImportProjector.init(allocator, store, names, imported);
-                    slot.value_ptr.* = created;
-                }
-                projector = slot.value_ptr.*;
-            }
-            formals.clearRetainingCapacity();
-            for (callee.vars) |variable| try formals.append(allocator, if (projector) |p| try p.project(variable) else variable);
-            var substitution: ?CheckedTypeSubstitution = if (edge.subst.len != 0) CheckedTypeSubstitution.init(allocator, formals.items, edge.subst) else null;
-            defer if (substitution) |*s| s.deinit();
-            var j: u32 = @intCast(args.items.len);
+            if (callee.vars.len != 0 and state.subst.len == 0) continue;
+            var j: u32 = @intCast(state.args.items.len);
             // A self-recursive edge appends to the list it instantiates.
-            while (j < liveObligations(callee, &scope_states).len) : (j += 1) {
-                const obligation = liveObligations(callee, &scope_states)[j];
-                const projected = if (projector) |p| try p.project(obligation.ty) else obligation.ty;
-                const ty = if (substitution) |*s| try store.cloneCheckedTypeRootSubstituting(allocator, projected, s) else projected;
-                const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, &identity_orderer, ty) };
+            while (j < literalCalleeRequirements(callee, &states).len) : (j += 1) {
+                const obligation = literalCalleeRequirements(callee, &states)[j];
+                store.beginCreation(io);
+                const projected = if (state.projector) |projector| try projector.project(obligation.ty) else obligation.ty;
+                const ty = if (state.substitution) |*substitution| try store.cloneCheckedTypeRootSubstituting(allocator, projected, substitution) else projected;
+                store.endCreation(io);
+                const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, &orderer, ty) };
                 if (!try store.rootContainsIdentityVariables(ty)) {
                     const slot = try root_index.getOrPut(allocator, key);
                     if (!slot.found_existing) {
-                        slot.value_ptr.* = @intCast(new_roots.items.len);
+                        const id = literalArgumentRootId(state.edge.key, j);
+                        slot.value_ptr.* = id;
                         try new_roots.append(allocator, .{
+                            .id = id,
                             .site = obligation.site,
                             .ty = ty,
-                            .edge = edge.key,
+                            .edge = state.edge.key,
                             .callee_requirement = j,
-                            .validate_only = !obligation.site.carriesValue() or try checkedTypeHoldsFunction(allocator, store.view(), owner_artifact, import_views, ty),
-                            .owner_expr = edge.owner_expr,
+                            .owner_expr = state.edge.owner_expr,
                         });
-                        if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
-                            const edge_id: u32 = switch (edge.key) {
-                                .literal => 0,
-                                .node => |id| id.index,
-                                .use => |use_expr| @backingInt(use_expr),
-                            };
-                            std.debug.print("literal-args: root {d}: literal expr {d} ({s}) at type root {d}, edge {s} {d} (owner expr {d}), callee obligation {d}\n", .{ new_roots.items.len - 1, obligation.site.node, @tagName(obligation.site.kind), @backingInt(ty), @tagName(edge.key), edge_id, @backingInt(edge.owner_expr), j });
-                        }
                     }
-                    try args.append(allocator, .{ .root = slot.value_ptr.* });
-                } else if (edge.scope != null and !try literalRequirementTypeIsBound(store, &identity_orderer, templates, dispatch, edge.scope.?, ty)) {
+                    try state.args.append(allocator, .{ .root = slot.value_ptr.* });
+                } else if (state.edge.scope != null and !try literalRequirementTypeIsBound(store, &orderer, templates, dispatch, state.edge.scope.?, ty)) {
                     // No use fixes a variable no scheme around the edge
                     // quantifies, so nothing converts this literal.
-                    try args.append(allocator, .unbound);
+                    try state.args.append(allocator, .unbound);
                 } else {
-                    const scope_key = edge.scope orelse checkedArtifactInvariant("a defaulted field expression instantiates a literal obligation at an open type", .{});
-                    const state = try scope_states.getOrPut(allocator, scope_key);
-                    if (!state.found_existing) state.value_ptr.* = .{};
-                    const slot = try state.value_ptr.index.getOrPut(allocator, key);
+                    const scope_key = state.edge.scope orelse checkedArtifactInvariant("a defaulted field expression instantiates a literal obligation at an open type", .{});
+                    const entry = try states.getOrPut(allocator, scope_key);
+                    if (!entry.found_existing) entry.value_ptr.* = .{};
+                    const slot = try entry.value_ptr.index.getOrPut(allocator, key);
                     if (!slot.found_existing) {
-                        slot.value_ptr.* = @intCast(state.value_ptr.list.items.len);
-                        try state.value_ptr.list.append(allocator, .{ .site = obligation.site, .ty = ty, .edge = edge.key, .callee_requirement = j });
+                        slot.value_ptr.* = @intCast(entry.value_ptr.list.items.len);
+                        try entry.value_ptr.list.append(allocator, .{ .site = obligation.site, .ty = ty, .edge = state.edge.key, .callee_requirement = j });
                     }
-                    try args.append(allocator, .{ .forwarded = slot.value_ptr.* });
+                    try state.args.append(allocator, .{ .forwarded = slot.value_ptr.* });
                 }
                 changed = true;
             }
@@ -22378,175 +23194,173 @@ fn publishLiteralArgumentRoots(
         if (!changed) break;
     }
 
-    // The literal requirement pools.
+    // The requirement lists.
+    var scope_keys: std.ArrayListUnmanaged(LiteralScopeKey) = .empty;
+    defer scope_keys.deinit(allocator);
     {
-        var pool = std.ArrayListUnmanaged(LiteralRequirement).empty;
-        errdefer pool.deinit(allocator);
-        for (templates.templates.items, 0..) |*template, template_index| {
-            const start: u32 = @intCast(pool.items.len);
-            if (scope_states.getPtr(.{ .template = @intCast(template_index), .scope = null })) |state| try pool.appendSlice(allocator, state.list.items);
-            template.literal_requirements = .{ .start = start, .len = @intCast(pool.items.len - start) };
-        }
-        for (templates.dispatch_scopes, 0..) |*scope, scope_index| {
-            const start: u32 = @intCast(pool.items.len);
-            if (scope_states.getPtr(.{ .template = scope_owners[scope_index], .scope = @intCast(scope_index) })) |state| try pool.appendSlice(allocator, state.list.items);
-            scope.literal_requirements = .{ .start = start, .len = @intCast(pool.items.len - start) };
-        }
-        allocator.free(templates.literal_requirements_pool);
-        templates.literal_requirements_pool = try pool.toOwnedSlice(allocator);
-        if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
-            for (templates.templates.items, 0..) |template, template_index| {
-                for (templates.templateLiteralRequirements(&template), 0..) |obligation, index| {
-                    const edge_id: u32 = switch (obligation.edge) {
-                        .literal => 0,
-                        .node => |id| id.index,
-                        .use => |use_expr| @backingInt(use_expr),
-                    };
-                    std.debug.print("literal-args: template {d} obligation {d}: literal expr {d} ({s}) at type root {d}, edge {s} {d}, callee obligation {d}\n", .{ template_index, index, obligation.site.node, @tagName(obligation.site.kind), @backingInt(obligation.ty), @tagName(obligation.edge), edge_id, obligation.callee_requirement });
-                }
-            }
-            for (templates.dispatch_scopes, 0..) |*scope, scope_index| {
-                for (templates.scopeLiteralRequirements(scope), 0..) |obligation, index| {
-                    std.debug.print("literal-args: scope {d} (template {?d}) obligation {d}: literal expr {d} ({s}) edge {s}, callee obligation {d}\n", .{ scope_index, scope_owners[scope_index], index, obligation.site.node, @tagName(obligation.site.kind), @tagName(obligation.edge), obligation.callee_requirement });
-                }
-            }
-        }
+        var it = states.keyIterator();
+        while (it.next()) |key| try scope_keys.append(allocator, key.*);
+    }
+    std.mem.sort(LiteralScopeKey, scope_keys.items, {}, literalScopeKeyLessThan);
+    const scope_spans = try allocator.alloc(artifact_serialize.Span, scope_keys.items.len);
+    errdefer allocator.free(scope_spans);
+    var requirements: std.ArrayListUnmanaged(LiteralRequirement) = .empty;
+    defer requirements.deinit(allocator);
+    for (scope_keys.items, scope_spans) |key, *span| {
+        const list = states.getPtr(key).?.list.items;
+        span.* = .{ .start = @intCast(requirements.items.len), .len = @intCast(list.len) };
+        try requirements.appendSlice(allocator, list);
     }
 
-    // The roots.
-    const first_root = roots.roots.len;
-    if (new_roots.items.len != 0) {
-        var root_list = std.ArrayList(CompileTimeRoot).empty;
-        defer root_list.deinit(allocator);
-        for (new_roots.items) |new_root| {
-            try CompileTimeRootTable.appendCompileTimeRoot(&root_list, allocator, .{
-                .module_idx = module.moduleIndex(),
+    // The edges' literal arguments.
+    var arg_edges: std.ArrayListUnmanaged(u32) = .empty;
+    defer arg_edges.deinit(allocator);
+    var arg_spans: std.ArrayListUnmanaged(artifact_serialize.Span) = .empty;
+    defer arg_spans.deinit(allocator);
+    var args: std.ArrayListUnmanaged(LiteralArgSource) = .empty;
+    defer args.deinit(allocator);
+    for (edge_states.items) |state| {
+        if (state.args.items.len == 0) continue;
+        try arg_edges.append(allocator, state.index);
+        try arg_spans.append(allocator, .{ .start = @intCast(args.items.len), .len = @intCast(state.args.items.len) });
+        for (state.args.items) |arg| try args.append(allocator, switch (arg) {
+            .root => |id| .{ .root = id },
+            .forwarded => |index| .{ .forwarded = index },
+            .unbound => .unbound,
+        });
+    }
+
+    // The roots, each with its entry wrapper.
+    std.mem.sort(NewRoot, new_roots.items, {}, struct {
+        fn lessThan(_: void, a: NewRoot, b: NewRoot) bool {
+            return @backingInt(a.id) < @backingInt(b.id);
+        }
+    }.lessThan);
+    const roots = try allocator.alloc(LiteralRootRecord, new_roots.items.len);
+    errdefer allocator.free(roots);
+    for (new_roots.items, roots) |new_root, *record| {
+        const validate_only = !new_root.site.carriesValue() or try checkedTypeHoldsFunction(allocator, store.view(), owner, import_views, new_root.ty);
+        const eligible = try checkedTypeIsContextFreeCompileTimeRoot(allocator, owner, store.view(), import_views.resolver(), false, new_root.ty);
+        record.* = .{
+            .root = .{
+                .id = new_root.id,
+                .module_idx = source.module_idx,
                 .kind = .literal_argument,
                 .source = .{ .expr = new_root.owner_expr },
                 .pattern = null,
                 .expr = new_root.owner_expr,
                 .checked_type = new_root.ty,
+                .request_eligibility = if (eligible) .eligible else .ineligible,
                 .payload = .pending,
                 .literal_argument = .{
                     .site = new_root.site,
                     .ty = new_root.ty,
                     .edge = new_root.edge,
                     .callee_requirement = new_root.callee_requirement,
-                    .validate_only = new_root.validate_only,
+                    .validate_only = validate_only,
                 },
-            });
-        }
-        roots.roots = try allocator.realloc(roots.roots, first_root + root_list.items.len);
-        const added = roots.roots[first_root..];
-        @memcpy(added, root_list.items);
-        for (added, first_root..) |*root, index| root.id = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, added);
-
-        // The roots' entry wrappers, each a template of its own with no
-        // plan: its body is the conversion its root names.
-        const first_template = templates.templates.items.len;
-        try templates.appendEntryWrappersForRoots(allocator, module, names, owner_artifact, store, wrappers, added);
-        const first_relation = templates.specialization_interface_relations.len;
-        templates.specialization_interface_relations = try allocator.realloc(templates.specialization_interface_relations, first_relation + added.len);
-        for (added, templates.templates.items[first_template..], 0..) |root, *template, i| {
-            template.static_dispatch_plans = .{ .start = @intCast(templates.dispatch_plan_refs.len), .len = 0 };
-            templates.specialization_interface_relations[first_relation + i] = .{
-                .scope = .root,
-                .data = .{ .procedure = .{
-                    .fn_ty = template.checked_fn_root,
-                    .body_ret_ty = root.checked_type,
-                    .owns_scope = true,
-                } },
-            };
-            template.specialization_interface_relations = .{ .start = @intCast(first_relation + i), .len = 1 };
-        }
+            },
+            .checked_fn_root = undefined, // Created below, under the creation lock.
+            .checked_fn_scheme = undefined, // Created below, under the creation lock.
+            .plan = null,
+            .relation = undefined, // Set below from the created function type.
+        };
     }
-
-    // The edges' literal arguments and each template's root demand.
-    {
-        var pool = std.ArrayListUnmanaged(LiteralArgSource).empty;
-        errdefer pool.deinit(allocator);
-        var node_edges = std.ArrayListUnmanaged(LiteralEdgeEntry).empty;
-        errdefer node_edges.deinit(allocator);
-        var use_edges = std.ArrayListUnmanaged(LiteralEdgeEntry).empty;
-        errdefer use_edges.deinit(allocator);
-        var demand = try allocator.alloc(std.ArrayListUnmanaged(ComptimeRootId), template_count);
-        defer {
-            for (demand) |*list| list.deinit(allocator);
-            allocator.free(demand);
-        }
-        @memset(demand, .empty);
-        for (edges.items, edge_args.items, edge_templates.items) |edge, args, holders| {
-            if (args.items.len == 0) continue;
-            const start: u32 = @intCast(pool.items.len);
-            for (args.items) |arg| {
-                try pool.append(allocator, switch (arg) {
-                    .root => |ordinal| .{ .root = @fromBackingInt(@intCast(@as(u32, @intCast(first_root + ordinal)))) },
-                    .forwarded => |index| .{ .forwarded = index },
-                    .unbound => .unbound,
-                });
-                if (arg == .root) {
-                    const id: ComptimeRootId = @fromBackingInt(@intCast(@as(u32, @intCast(first_root + arg.root))));
-                    for (holders.items) |template_index| {
-                        const list = &demand[template_index];
-                        if (!sliceContains(ComptimeRootId, list.items, id)) try list.append(allocator, id);
-                    }
-                }
-            }
-            const entry: LiteralEdgeEntry = .{
-                .key = switch (edge.key) {
-                    .node => |id| @bitCast(id),
-                    .use => |expr| @backingInt(expr),
-                    .literal => checkedArtifactInvariant("a literal obligation's own literal is no edge", .{}),
-                },
-                .args = .{ .start = start, .len = @intCast(pool.items.len - start) },
-            };
-            switch (edge.key) {
-                .node => try node_edges.append(allocator, entry),
-                .use => try use_edges.append(allocator, entry),
-                .literal => unreachable, // the entry's key switch above rejects literal keys
-            }
-        }
-        std.sort.pdq(LiteralEdgeEntry, node_edges.items, {}, literalEdgeEntryLessThan);
-        std.sort.pdq(LiteralEdgeEntry, use_edges.items, {}, literalEdgeEntryLessThan);
-        allocator.free(templates.literal_edge_args_pool);
-        templates.literal_edge_args_pool = try pool.toOwnedSlice(allocator);
-        allocator.free(templates.literal_node_edges);
-        templates.literal_node_edges = try node_edges.toOwnedSlice(allocator);
-        allocator.free(templates.literal_use_edges);
-        templates.literal_use_edges = try use_edges.toOwnedSlice(allocator);
-
-        var argument_demand_pool = std.ArrayListUnmanaged(ComptimeRootId).empty;
-        errdefer argument_demand_pool.deinit(allocator);
-        for (templates.templates.items[0..template_count], demand) |*template, list| {
-            const start: u32 = @intCast(argument_demand_pool.items.len);
-            std.sort.pdq(ComptimeRootId, list.items, {}, comptimeRootIdLessThan);
-            try argument_demand_pool.appendSlice(allocator, list.items);
-            template.literal_argument_demand = .{ .start = start, .len = @intCast(argument_demand_pool.items.len - start) };
-        }
-        allocator.free(templates.literal_argument_demand_pool);
-        templates.literal_argument_demand_pool = try argument_demand_pool.toOwnedSlice(allocator);
+    store.beginCreation(io);
+    for (roots) |*record| {
+        record.checked_fn_root = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{}, record.root.checked_type);
+        record.checked_fn_scheme = try store.ensureSchemeForRoot(allocator, record.checked_fn_root);
     }
+    store.endCreation(io);
+    for (roots) |*record| record.relation = literalRootWrapperRelation(record.checked_fn_root, record.root.checked_type);
+
+    const owned_scope_keys = try scope_keys.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_scope_keys);
+    const owned_requirements = try requirements.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_requirements);
+    const owned_arg_edges = try arg_edges.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_arg_edges);
+    const owned_arg_spans = try arg_spans.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_arg_spans);
+    const owned_args = try args.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_args);
+    const result = try allocator.create(LiteralComponent);
+    result.* = .{
+        .scope_keys = owned_scope_keys,
+        .scope_spans = scope_spans,
+        .requirements = owned_requirements,
+        .arg_edges = owned_arg_edges,
+        .arg_spans = owned_arg_spans,
+        .args = owned_args,
+        .roots = roots,
+    };
+    return result;
 }
 
-/// Whether `items` holds `value`.
-fn sliceContains(comptime T: type, items: []const T, value: T) bool {
-    for (items) |item| {
-        if (item == value) return true;
+/// The literal argument roots template `template`'s edges read: every
+/// evaluation of the template reads their values. Every component holding
+/// one of the template's edges is done before the template's slot is
+/// claimed (`ModuleAnalyses.templateLiteralArgumentDemand`).
+pub fn computeLiteralArgumentDemand(allocator: Allocator, graph: *const LiteralGraph, template: u32) Allocator.Error!*LiteralArgumentDemand {
+    var roots: std.ArrayList(ComptimeRootId) = .empty;
+    defer roots.deinit(allocator);
+    for (graph.held[graph.held_starts[template]..graph.held_starts[template + 1]]) |edge| {
+        const component = graph.component_slots[graph.components.component_of[graph.edges[edge].holder]].peek() orelse
+            checkedArtifactInvariant("a template's literal demand was computed before the component of an edge it holds", .{});
+        for (component.edgeArgs(edge)) |arg| switch (arg) {
+            .root => |id| try roots.append(allocator, id),
+            .forwarded, .unbound => {},
+        };
     }
-    return false;
+    std.mem.sort(ComptimeRootId, roots.items, {}, comptimeRootIdLessThan);
+    var kept: usize = 0;
+    for (roots.items, 0..) |id, index| {
+        if (index != 0 and roots.items[index - 1] == id) continue;
+        roots.items[kept] = id;
+        kept += 1;
+    }
+    roots.shrinkRetainingCapacity(kept);
+    const result = try allocator.create(LiteralArgumentDemand);
+    errdefer allocator.destroy(result);
+    result.* = .{ .roots = try roots.toOwnedSlice(allocator) };
+    return result;
 }
 
-fn literalEdgeEntryLessThan(_: void, a: LiteralEdgeEntry, b: LiteralEdgeEntry) bool {
-    return a.key < b.key;
+const LiteralObligationKey = struct { site: LiteralSite, ty: [32]u8 };
+
+/// One scheme's literal requirements while its component is computed, with
+/// the index that keeps each requirement once.
+const LiteralScopeState = struct {
+    list: std.ArrayListUnmanaged(LiteralRequirement) = .empty,
+    index: std.AutoHashMapUnmanaged(LiteralObligationKey, u32) = .empty,
+};
+
+const LiteralScopeStates = std.AutoHashMapUnmanaged(LiteralScopeKey, LiteralScopeState);
+
+/// An edge's callee scheme: its literal requirements (a live list for a
+/// scheme of the component being computed) and its quantified variables, in
+/// the scheme's module.
+const LiteralCalleeScheme = struct {
+    live: ?LiteralScopeKey,
+    finished: []const LiteralRequirement,
+    vars: []const CheckedTypeId,
+    module: ?ImportedModuleView,
+};
+
+fn literalCalleeRequirements(callee: LiteralCalleeScheme, states: *const LiteralScopeStates) []const LiteralRequirement {
+    const key = callee.live orelse return callee.finished;
+    return if (states.getPtr(key)) |state| state.list.items else &.{};
 }
 
-fn comptimeRootIdLessThan(_: void, a: ComptimeRootId, b: ComptimeRootId) bool {
-    return @backingInt(a) < @backingInt(b);
-}
-
-fn literalEdgeEntryOrder(entry: LiteralEdgeEntry, key: u64) std.math.Order {
-    return std.math.order(entry.key, key);
+/// A callee scheme of this module: live while its component is the one being
+/// computed, otherwise the finished requirements of its component.
+fn literalLocalCallee(graph: *const LiteralGraph, component: u32, key: LiteralScopeKey, vars: []const CheckedTypeId) LiteralCalleeScheme {
+    const node = graph.nodeOfScope(key);
+    const callee_component = graph.components.component_of[node];
+    if (callee_component == component) return .{ .live = key, .finished = &.{}, .vars = vars, .module = null };
+    const done = graph.component_slots[callee_component].peek() orelse
+        checkedArtifactInvariant("a literal component was computed before its callee component", .{});
+    return .{ .live = null, .finished = done.requirementsOf(key), .vars = vars, .module = null };
 }
 
 /// Whether a value of the closed type `ty` holds a function: a function
@@ -23440,7 +24254,7 @@ pub const PlatformPairing = struct {
     /// versioning folds it into the platform-pairing cache entry's admission hash.
     // Bump the version for changes to the borrowed-column mask interpretation as
     // well as other semantics not visible in the serialized layout fingerprint.
-    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 5);
+    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 6);
 
     pub const Serialized = extern struct {
         relation: [32]u8,
@@ -23454,10 +24268,10 @@ pub const PlatformPairing = struct {
         platform_required_bindings: PlatformRequiredBindingTable.Serialized,
         resolved_value_refs: ResolvedValueRefTable.Serialized,
         provided_exports: ProvidedExportTable.Serialized,
-        root_requests: RootRequestTable.Serialized,
         entry_wrappers: EntryWrapperTable.Serialized,
         intrinsic_wrappers: IntrinsicWrapperTable.Serialized,
         compile_time_roots: CompileTimeRootTable.Serialized,
+        literal_root_payloads: LiteralRootPayloadTable.Serialized,
         const_templates: ConstTemplateTable.Serialized,
         const_store: ConstStore.Serialized,
         exported_const_templates: ExportedConstTemplateTable.Serialized,
@@ -23522,7 +24336,7 @@ pub const PlatformPairing = struct {
             std.debug.assert(artifact.pairing_arena != null and artifact.evaluation_state == .finalized);
             self.relation = artifact.checking_context_identity.platform_app_relation.?.bytes;
             self.borrowed_types = artifact.checked_types.borrowed_columns.bits.mask;
-            self.has_dependent_evaluation = artifact.root_requests.compile_time_requests.len != 0;
+            self.has_dependent_evaluation = (try artifact.rootRequests()).compile_time_requests.len != 0;
             var delta = artifact.checked_types;
             const empty_types = CheckedTypeStore{};
             inline for (@typeInfo(CheckedTypeStore.BorrowedColumn).@"enum".field_names) |field_name| {
@@ -23540,11 +24354,12 @@ pub const PlatformPairing = struct {
             try self.platform_required_bindings.serialize(&artifact.platform_required_bindings, gpa, writer);
             try self.resolved_value_refs.serialize(&artifact.resolved_value_refs, gpa, writer);
             try self.provided_exports.serialize(&artifact.provided_exports, gpa, writer);
-            try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
             try self.entry_wrappers.serialize(&artifact.entry_wrappers, gpa, writer);
             try self.intrinsic_wrappers.serialize(&artifact.intrinsic_wrappers, gpa, writer);
             const compile_time_roots_empty: CompileTimeRootTable = .{};
             try self.compile_time_roots.serialize(if (self.has_dependent_evaluation) &artifact.compile_time_roots else &compile_time_roots_empty, gpa, writer);
+            const literal_root_payloads_empty: LiteralRootPayloadTable = .{};
+            try self.literal_root_payloads.serialize(if (self.has_dependent_evaluation) &artifact.literal_root_payloads else &literal_root_payloads_empty, gpa, writer);
             const const_templates_empty: ConstTemplateTable = .{};
             try self.const_templates.serialize(if (self.has_dependent_evaluation) &artifact.const_templates else &const_templates_empty, gpa, writer);
             const const_store_empty = ConstStore.init(gpa);
@@ -23603,15 +24418,16 @@ pub const PlatformPairing = struct {
             result.platform_required_bindings = self.platform_required_bindings.deserialize(address);
             result.resolved_value_refs = self.resolved_value_refs.deserialize(address);
             result.provided_exports = self.provided_exports.deserialize(address);
-            result.root_requests = self.root_requests.deserialize(address);
             result.entry_wrappers = self.entry_wrappers.deserialize(address);
             result.intrinsic_wrappers = self.intrinsic_wrappers.deserialize(address);
             if (self.has_dependent_evaluation) result.compile_time_roots = self.compile_time_roots.deserialize(address);
+            if (self.has_dependent_evaluation) result.literal_root_payloads = self.literal_root_payloads.deserialize(address);
             if (self.has_dependent_evaluation) result.const_templates = self.const_templates.deserialize(address);
             if (self.has_dependent_evaluation) result.const_store = self.const_store.deserialize(address, allocator);
             if (self.has_dependent_evaluation) result.exported_const_templates = self.exported_const_templates.deserialize(address);
             result.compile_time_debug = self.compile_time_debug.deserialize(address);
             if (self.has_dependent_evaluation) result.compile_time_root_reads = self.compile_time_root_reads.deserialize(address);
+            result.finishPublication();
             return result;
         }
     };
@@ -23773,6 +24589,7 @@ pub fn pairCheckedPlatform(
                     }
                     result.intrinsic_wrappers.wrappers.items[@backingInt(id)].checked_fn_root = template.checked_fn_root;
                 },
+                .literal_root => checkedArtifactInvariant("a literal root's entry wrapper is a row of the template table", .{}),
                 .checked_body, .unimplemented => {},
             }
         }
@@ -23781,49 +24598,15 @@ pub fn pairCheckedPlatform(
     for (result.provided_exports.exports) |*provided| switch (provided.*) {
         inline .procedure, .data => |*value| value.checked_type = try substitutions.specializeRootWithMemo(allocator, &result.checked_types, value.checked_type, &type_memo),
     };
-    var roots = std.ArrayList(RootRequest).empty;
-    for (platform.root_requests.requests) |request| {
-        // Once a required procedure is bound, an exact callable alias uses the
-        // same forwarding rule as publication with already-resolved imports.
-        // Runtime demand consumes its checked lookup; no evaluator is needed.
-        if (request.requires_pairing and request.compile_time_root != null and
-            compileTimeCallableRootIsProcedureReference(result.bodies(), &result.resolved_value_refs, result.compile_time_roots.root(request.compile_time_root.?))) continue;
-        var selected = request;
-        selected.order = @intCast(roots.items.len);
-        try roots.append(session, selected);
-    }
-    for (roots.items) |*request| {
-        request.evaluation_complete = request.abi == .compile_time and !request.requires_pairing;
-        request.requires_pairing = false;
-        request.checked_type = try substitutions.specializeRootWithMemo(allocator, &result.checked_types, request.checked_type, &type_memo);
-    }
-    for (result.platform_required_bindings.bindings, 0..) |binding, i| switch (binding.value_use) {
-        .procedure_value => |procedure| try appendRoot(&roots, session, .{
-            .module_idx = result.module_identity.module_idx,
-            .kind = .platform_required_binding,
-            .source = .{ .required_binding = @intCast(i) },
-            .checked_type = platformRequiredBindingCheckedType(binding),
-            .abi = .platform,
-            .exposure = .platform_required,
-            .procedure_use = procedure.procedure,
-            .root_evidence = procedure.root_evidence,
-        }),
-        .const_value => {},
-    };
-    result.root_requests.requests = try roots.toOwnedSlice(session);
-    result.root_requests.runtime_requests = try collectRuntimeRootRequests(session, result.root_requests.requests);
-    var schedule = std.ArrayList(RootRequest).empty;
-    for (result.root_requests.requests) |request| {
-        if (request.evaluation_order != null and !request.evaluation_complete) try schedule.append(session, request);
-    }
-    std.mem.sort(RootRequest, schedule.items, {}, struct {
-        fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {
-            return a.evaluation_order.? < b.evaluation_order.?;
-        }
-    }.lessThan);
-    result.root_requests.compile_time_requests = try schedule.toOwnedSlice(session);
-    if (result.root_requests.compile_time_requests.len != 0) {
+    // The pairing evaluates the compile-time roots its platform withheld
+    // until the app binds its requirements, into evaluation columns of its
+    // own.
+    const pairing_evaluates = for ((try platform.rootRequests()).requests) |request| {
+        if (request.abi == .compile_time and request.requires_pairing) break true;
+    } else false;
+    if (pairing_evaluates) {
         result.compile_time_roots = try copyPairingColumns(CompileTimeRootTable, platform.compile_time_roots, session);
+        result.literal_root_payloads = try copyPairingColumns(LiteralRootPayloadTable, platform.literal_root_payloads, session);
         result.const_templates = try copyPairingColumns(ConstTemplateTable, platform.const_templates, session);
         result.exported_const_templates = try copyPairingColumns(ExportedConstTemplateTable, platform.exported_const_templates, session);
         result.const_store = try copyPairingColumns(ConstStore, platform.const_store, session);
@@ -23832,6 +24615,7 @@ pub fn pairCheckedPlatform(
     result.checked_types.markPublished();
     result.checked_types.releaseSuperseded(allocator);
     result.canonical_names.markPublished();
+    result.finishPublication();
     return result;
 }
 
@@ -24680,15 +25464,6 @@ pub const LiteralArgSource = union(enum(u8)) {
     unbound,
 };
 
-/// The literal arguments of one edge, in the instantiated scheme's
-/// literal requirement order: a range into
-/// `CheckedProcedureTemplateTable.literal_edge_args_pool`.
-pub const LiteralEdgeEntry = struct {
-    /// The edge's evidence node (its bits) or use expression.
-    key: u64,
-    args: artifact_serialize.Span,
-};
-
 /// What a `literal_argument` root converts: the literal requirement
 /// `callee_requirement` of the scheme this module's `edge` instantiates, at
 /// the closed type `ty`. A validate-only root (its value is an interpolation
@@ -24820,20 +25595,6 @@ pub const CompileTimeRoot = struct {
     }
 };
 
-/// One literal's conversion root (`CompileTimeRootTable.literal_conversions`).
-pub const LiteralConversionRoot = extern struct {
-    node: u32,
-    root: ComptimeRootId,
-
-    fn order(entry: LiteralConversionRoot, key: u32) std.math.Order {
-        return std.math.order(entry.node, key);
-    }
-
-    fn lessThan(_: void, a: LiteralConversionRoot, b: LiteralConversionRoot) bool {
-        return a.node < b.node;
-    }
-};
-
 /// The body nodes a compile-time root evaluates (`CompileTimeRoot.bodyParts`).
 pub const RootBodyParts = struct {
     expr: ?CIR.Expr.Idx = null,
@@ -24853,6 +25614,49 @@ fn rootBodyContainsDiagnosticError(diagnostics: *const body_analyses.NodeBits, r
     return false;
 }
 
+/// One literal root's evaluation output.
+pub const LiteralRootPayload = struct {
+    id: ComptimeRootId,
+    payload: CompileTimeRootPayload = .pending,
+    /// The value a `.boxy` evaluation stored for the root
+    /// (`CompileTimeRoot.boxy_value`).
+    boxy_value: ?StoredConstTemplate = null,
+};
+
+/// The evaluation output of a module's literal roots, by root id: an entry
+/// for every literal root the module's root requests evaluate, made before
+/// evaluation fills them (`CheckedModuleArtifact.prepareLiteralRootPayloads`).
+pub const LiteralRootPayloadTable = struct {
+    entries: []LiteralRootPayload = &.{},
+
+    pub const Serialized = extern struct {
+        entries: SerializedSlice(LiteralRootPayload) = .{},
+        const Serde = artifact_serialize.SliceStoreSerde(LiteralRootPayloadTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
+    };
+
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+
+    fn find(self: *const LiteralRootPayloadTable, id: ComptimeRootId) ?usize {
+        return std.sort.binarySearch(LiteralRootPayload, self.entries, id, struct {
+            fn order(key: ComptimeRootId, item: LiteralRootPayload) std.math.Order {
+                return std.math.order(@backingInt(key), @backingInt(item.id));
+            }
+        }.order);
+    }
+
+    pub fn get(self: *const LiteralRootPayloadTable, id: ComptimeRootId) ?LiteralRootPayload {
+        const index = self.find(id) orelse return null;
+        return self.entries[index];
+    }
+
+    fn entry(self: *LiteralRootPayloadTable, id: ComptimeRootId) *LiteralRootPayload {
+        const index = self.find(id) orelse checkedArtifactInvariant("a literal root no root request evaluates received a payload", .{});
+        return &self.entries[index];
+    }
+};
+
 /// Public `CompileTimeRootTable` declaration.
 ///
 /// This is the durable compile-time root schedule and payload table. It stores
@@ -24864,13 +25668,9 @@ fn rootBodyContainsDiagnosticError(diagnostics: *const body_analyses.NodeBits, r
 /// the sorted request stream and validates this order with temporary scratch.
 pub const CompileTimeRootTable = struct {
     roots: []CompileTimeRoot = &.{},
-    /// The conversion root of each literal whose conversion is independent of
-    /// specialization, by the literal's CIR node, ascending.
-    literal_conversions: []LiteralConversionRoot = &.{},
 
     pub const Serialized = extern struct {
         roots: SerializedSlice(CompileTimeRoot) = .{},
-        literal_conversions: SerializedSlice(LiteralConversionRoot) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -25011,23 +25811,6 @@ pub const CompileTimeRootTable = struct {
         return .{ .roots = try roots.toOwnedSlice(allocator) };
     }
 
-    /// The conversion root of the literal at a CIR node (an expression, or a
-    /// custom literal pattern).
-    pub fn literalConversionRootForNode(self: *const CompileTimeRootTable, node: u32) ?ComptimeRootId {
-        const found = artifact_serialize.binarySearchByKey(LiteralConversionRoot, u32, self.literal_conversions, node, LiteralConversionRoot.order) orelse return null;
-        return found.root;
-    }
-
-    fn addLiteralConversions(self: *CompileTimeRootTable, allocator: Allocator, added: []const LiteralConversionRoot) Allocator.Error!void {
-        if (added.len == 0) return;
-        const combined = try allocator.alloc(LiteralConversionRoot, self.literal_conversions.len + added.len);
-        @memcpy(combined[0..self.literal_conversions.len], self.literal_conversions);
-        @memcpy(combined[self.literal_conversions.len..], added);
-        std.mem.sort(LiteralConversionRoot, combined, {}, LiteralConversionRoot.lessThan);
-        allocator.free(self.literal_conversions);
-        self.literal_conversions = combined;
-    }
-
     pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) ?ComptimeRootId {
         for (self.roots) |entry| {
             if (entry.kind == .hoisted_validation) continue;
@@ -25055,13 +25838,15 @@ pub const CompileTimeRootTable = struct {
         return null;
     }
 
+    /// Row `id` of the table. A literal root is no row
+    /// (`CheckedModuleArtifact.compileTimeRoot`).
     pub fn root(self: *const CompileTimeRootTable, id: ComptimeRootId) CompileTimeRoot {
-        return self.roots[@backingInt(id)];
+        return self.roots[id.index()];
     }
 
     /// Record the value a `.boxy` evaluation stored for root `id`.
     pub fn fillBoxyValue(self: *CompileTimeRootTable, id: ComptimeRootId, value: StoredConstTemplate) void {
-        const index = @backingInt(id);
+        const index = id.index();
         if (index >= self.roots.len) {
             checkedArtifactInvariant("compile-time root id is out of range", .{});
         }
@@ -25073,7 +25858,7 @@ pub const CompileTimeRootTable = struct {
         id: ComptimeRootId,
         payload: CompileTimeRootPayload,
     ) void {
-        const index = @backingInt(id);
+        const index = id.index();
         if (index >= self.roots.len) {
             checkedArtifactInvariant("compile-time root id is out of range", .{});
         }
@@ -25084,7 +25869,6 @@ pub const CompileTimeRootTable = struct {
     pub fn deinit(self: *CompileTimeRootTable, allocator: Allocator) void {
         deinitCompileTimeRootSlice(allocator, self.roots);
         allocator.free(self.roots);
-        allocator.free(self.literal_conversions);
         self.* = .{};
     }
 
@@ -25865,7 +26649,7 @@ const TemplateDemandWalk = struct {
             // An intrinsic inspects its operands, an entry wrapper marshals
             // them to the host, and an unimplemented declaration's crash
             // body still returns at its declared type.
-            .intrinsic_wrapper, .entry_wrapper, .unimplemented => return self.raiseEverything(),
+            .intrinsic_wrapper, .entry_wrapper, .literal_root, .unimplemented => return self.raiseEverything(),
         };
         if (template.target != .roc) return self.raiseEverything();
 
@@ -26419,7 +27203,7 @@ const TemplateDemandWalk = struct {
                 }
                 try self.edges.append(self.allocator, .{
                     .caller_slot = @intCast(caller_slot),
-                    .callee = if (local) .{ .local = @backingInt(callee.template) } else .{ .imported = callee },
+                    .callee = if (local) .{ .local = callee.template.index() } else .{ .imported = callee },
                     .callee_slot = @intCast(callee_slot),
                 });
             }
@@ -26815,7 +27599,9 @@ const ExhaustivenessTemplateReachability = struct {
         template_ref: canonical.ProcedureTemplateRef,
     ) ?usize {
         if (!template_ref.artifact.eql(self.artifact_key.digest())) return null;
-        const idx = @backingInt(template_ref.template);
+        // A literal root's entry wrapper converts a literal and reaches no
+        // exhaustiveness check.
+        const idx = template_ref.template.rowIndex() orelse return null;
         if (idx >= self.procedure_templates.templates.items.len) {
             checkedArtifactInvariant("reachable procedure template ref was outside table", .{});
         }
@@ -26825,6 +27611,14 @@ const ExhaustivenessTemplateReachability = struct {
 
 /// The exhaustiveness checks a procedure template's body reaches
 /// (`ModuleAnalyses.templateExhaustivenessSites`).
+/// The nested procedure sites of a literal root's entry wrapper, whose body
+/// constructs no procedure.
+pub const empty_owner_nested_proc_sites: OwnerNestedProcSites = .{};
+
+/// The exhaustiveness sites of a literal root's entry wrapper, whose body
+/// reaches none.
+pub const empty_template_exhaustiveness_sites: TemplateExhaustivenessSites = .{};
+
 pub const TemplateExhaustivenessSites = struct {
     /// Ascending.
     sites: []const CheckedExhaustivenessSiteId = &.{},
@@ -26847,7 +27641,7 @@ pub fn computeTemplateExhaustivenessSites(
     defer found.deinit(allocator);
     switch (templates.get(template).body) {
         .checked_body => |root| try collectExhaustivenessSites(allocator, bodies, root, &found),
-        .intrinsic_wrapper, .entry_wrapper, .unimplemented => {},
+        .intrinsic_wrapper, .entry_wrapper, .literal_root, .unimplemented => {},
     }
     const sites = try sortedUniqueSites(allocator, found.items);
     errdefer allocator.free(sites);
@@ -26891,7 +27685,7 @@ pub fn computeExhaustivenessSites(
     owner: ImportedModuleView,
     platform_sites: ?*const CheckedExhaustivenessSiteTable,
 ) Allocator.Error!*CheckedExhaustivenessSiteTable {
-    const root_requests = owner.root_requests;
+    const root_requests = try owner.rootRequests();
     var reachability = try ExhaustivenessTemplateReachability.build(
         allocator,
         owner.key,
@@ -27031,7 +27825,7 @@ fn moduleExhaustivenessSites(
 
         const owner_template: ?canonical.ProcedureTemplateRef = if (owner_template_id) |template_id| .{
             .artifact = owner_artifact,
-            .proc_base = templates[@backingInt(template_id)].proc_base,
+            .proc_base = templates[template_id.index()].proc_base,
             .template = template_id,
         } else null;
         const policy: ExhaustivenessResolutionPolicy = if (replacing_root) |root|
@@ -27701,7 +28495,7 @@ pub const HoistedConstTable = struct {
                     .entry = id,
                 });
             }
-            by_root[@backingInt(root.id)] = id;
+            by_root[root.id.index()] = id;
         }
 
         std.mem.sort(HoistedConstByExprEntry, by_expr.items, {}, HoistedConstByExprEntry.lessThan);
@@ -27756,7 +28550,7 @@ pub const HoistedConstTable = struct {
     }
 
     pub fn lookupByRoot(self: *const HoistedConstTable, root: ComptimeRootId) ?HoistedConstEntry {
-        const idx = @backingInt(root);
+        const idx = root.rowIndex() orelse return null;
         if (idx >= self.by_root.len) return null;
         const entry_id = self.by_root[idx] orelse return null;
         return self.entries[@backingInt(entry_id)];
@@ -27813,7 +28607,7 @@ pub const CheckedConstBodyTable = struct {
                 .body_expr = root.rootExpr(),
                 .checked_type = root.checked_type,
             });
-            by_root[@backingInt(root.id)] = id;
+            by_root[root.id.index()] = id;
         }
 
         return .{
@@ -27823,7 +28617,7 @@ pub const CheckedConstBodyTable = struct {
     }
 
     pub fn bodyForRoot(self: *const CheckedConstBodyTable, root: ComptimeRootId) ?CheckedConstBodyRef {
-        const idx = @backingInt(root);
+        const idx = root.rowIndex() orelse return null;
         if (idx >= self.by_root.len) return null;
         return self.by_root[idx];
     }
@@ -28708,7 +29502,7 @@ const PublicApiClosureDependencyCollector = struct {
                 if (entry.found_existing) return;
                 entry.value_ptr.* = {};
 
-                const index: usize = @backingInt(template_ref.template);
+                const index: usize = template_ref.template.rowIndex() orelse self.checked_templates.templates.items.len;
                 if (index >= self.checked_templates.templates.items.len) {
                     checkedArtifactInvariant("public API closure dependency referenced missing local procedure template", .{});
                 }
@@ -29034,7 +29828,7 @@ pub fn computeLoweringVisibility(allocator: Allocator, owner: ImportedModuleView
     for (owner.direct_import_module_keys) |key| try builder.appendKey(key.digest());
     for (public_api_dependencies.artifacts) |key| try builder.appendKey(key);
     for (public_api_dependencies.type_owner_artifacts) |key| try builder.appendKey(key);
-    for (owner.root_requests.requests) |request| try builder.appendRootRequest(request);
+    for ((try owner.rootRequests()).requests) |request| try builder.appendRootRequest(request);
 
     var closure_dependencies = PublicApiClosureDependencyCollector.init(
         allocator,
@@ -29053,7 +29847,7 @@ pub fn computeLoweringVisibility(allocator: Allocator, owner: ImportedModuleView
     );
     defer closure_dependencies.deinit();
 
-    for (owner.root_requests.requests) |request| {
+    for ((try owner.rootRequests()).requests) |request| {
         if (request.procedure_template) |template| try closure_dependencies.appendProcedureTemplateRef(template);
         if (request.procedure_binding) |binding| try closure_dependencies.appendTopLevelProcedureBinding(.{
             .artifact = artifact_key,
@@ -29431,6 +30225,7 @@ const ImportedTemplateClosureBuilder = struct {
                     .checked_body => |body| try self.appendCheckedBody(body),
                     .intrinsic_wrapper,
                     .entry_wrapper,
+                    .literal_root,
                     .unimplemented,
                     => {},
                 }
@@ -30318,7 +31113,7 @@ fn constRefTopLevelOwner(ref: ConstRef) ?ConstTopLevelOwner {
 /// Ordered compile-time debug observations owned by checked publication and
 /// replayed from cache without executing their roots again.
 pub const CompileTimeDebugStore = struct {
-    pub const Entry = extern struct { root: ComptimeRootId, message_start: u32, message_len: u32 };
+    pub const Entry = extern struct { root: ComptimeRootId, message_start: u32, message_len: u32, _reserved: u64 = 0 };
     pub const Input = struct { root: ComptimeRootId, message: []const u8 };
     entries: []const Entry = &.{},
     bytes: []const u8 = &.{},
@@ -30348,7 +31143,8 @@ pub const CompileTimeDebugStore = struct {
 
     pub fn validate(self: CompileTimeDebugStore, root_count: usize) error{CorruptArtifact}!void {
         for (self.entries) |entry| {
-            if (@backingInt(entry.root) >= root_count or entry.message_start > self.bytes.len or
+            if (entry.root.rowIndex()) |row| if (row >= root_count) return error.CorruptArtifact;
+            if (entry.message_start > self.bytes.len or
                 entry.message_len > self.bytes.len - entry.message_start) return error.CorruptArtifact;
         }
     }
@@ -30371,8 +31167,10 @@ pub const CompileTimeDebugStore = struct {
 pub const CompileTimeRootReadTable = struct {
     /// A read root, named by its module's identity bytes.
     pub const Ref = extern struct { module: [32]u8, root: ComptimeRootId };
-    pub const Row = extern struct { start: u32 = 0, len: u32 = 0 };
+    /// The reads of one evaluated root, by root id.
+    pub const Row = extern struct { root: ComptimeRootId, start: u32 = 0, len: u32 = 0, _reserved: u64 = 0 };
     pub const Input = struct { root: ComptimeRootId, reads: []const Ref };
+    /// Ascending by root.
     rows: []const Row = &.{},
     refs: []const Ref = &.{},
 
@@ -30389,31 +31187,29 @@ pub const CompileTimeRootReadTable = struct {
     pub fn merge(
         allocator: Allocator,
         previous: CompileTimeRootReadTable,
-        root_count: usize,
         inputs: []const Input,
     ) Allocator.Error!CompileTimeRootReadTable {
-        if (previous.rows.len != 0 and previous.rows.len != root_count) {
-            checkedArtifactInvariant("compile-time root read table does not cover its module's roots", .{});
-        }
-        const replaced = try allocator.alloc(?[]const Ref, root_count);
-        defer allocator.free(replaced);
-        @memset(replaced, null);
+        var replaced = std.AutoHashMapUnmanaged(ComptimeRootId, []const Ref).empty;
+        defer replaced.deinit(allocator);
         for (inputs) |input| {
-            const slot = &replaced[@backingInt(input.root)];
-            if (slot.* != null) checkedArtifactInvariant("compile-time root reads were recorded twice for one root", .{});
-            slot.* = input.reads;
+            const slot = try replaced.getOrPut(allocator, input.root);
+            if (slot.found_existing) checkedArtifactInvariant("compile-time root reads were recorded twice for one root", .{});
+            slot.value_ptr.* = input.reads;
         }
+        var roots: std.ArrayList(ComptimeRootId) = .empty;
+        defer roots.deinit(allocator);
+        for (previous.rows) |row| if (!replaced.contains(row.root)) try roots.append(allocator, row.root);
+        for (inputs) |input| try roots.append(allocator, input.root);
+        std.mem.sort(ComptimeRootId, roots.items, {}, comptimeRootIdLessThan);
         var ref_count: usize = 0;
-        for (replaced, 0..) |maybe_reads, index| {
-            ref_count += if (maybe_reads) |reads| reads.len else if (previous.rows.len != 0) previous.rows[index].len else 0;
-        }
-        const rows = try allocator.alloc(Row, root_count);
+        for (roots.items) |root| ref_count += (replaced.get(root) orelse previous.readsOf(root)).len;
+        const rows = try allocator.alloc(Row, roots.items.len);
         errdefer allocator.free(rows);
         const refs = try allocator.alloc(Ref, ref_count);
         var offset: usize = 0;
-        for (replaced, rows, 0..) |maybe_reads, *row, index| {
-            const reads = maybe_reads orelse if (previous.rows.len != 0) previous.readsOf(@fromBackingInt(@intCast(index))) else &.{};
-            row.* = .{ .start = @intCast(offset), .len = @intCast(reads.len) };
+        for (roots.items, rows) |root, *row| {
+            const reads = replaced.get(root) orelse previous.readsOf(root);
+            row.* = .{ .root = root, .start = @intCast(offset), .len = @intCast(reads.len) };
             @memcpy(refs[offset..][0..reads.len], reads);
             offset += reads.len;
         }
@@ -30421,14 +31217,18 @@ pub const CompileTimeRootReadTable = struct {
     }
 
     pub fn readsOf(self: CompileTimeRootReadTable, root: ComptimeRootId) []const Ref {
-        if (self.rows.len == 0) return &.{};
-        const row = self.rows[@backingInt(root)];
+        const index = std.sort.binarySearch(Row, self.rows, root, struct {
+            fn order(key: ComptimeRootId, item: Row) std.math.Order {
+                return std.math.order(@backingInt(key), @backingInt(item.root));
+            }
+        }.order) orelse return &.{};
+        const row = self.rows[index];
         return self.refs[row.start..][0..row.len];
     }
 
-    pub fn validate(self: CompileTimeRootReadTable, root_count: usize) error{CorruptArtifact}!void {
-        if (self.rows.len != 0 and self.rows.len != root_count) return error.CorruptArtifact;
-        for (self.rows) |row| {
+    pub fn validate(self: CompileTimeRootReadTable) error{CorruptArtifact}!void {
+        for (self.rows, 0..) |row, index| {
+            if (index != 0 and @backingInt(self.rows[index - 1].root) >= @backingInt(row.root)) return error.CorruptArtifact;
             if (row.start > self.refs.len or row.len > self.refs.len - row.start) return error.CorruptArtifact;
         }
     }
@@ -30477,7 +31277,8 @@ pub const CheckedModuleArtifact = struct {
     intrinsic_wrappers: IntrinsicWrapperTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
-    root_requests: RootRequestTable,
+    /// The evaluation output of the module's literal roots.
+    literal_root_payloads: LiteralRootPayloadTable = .{},
     hosted_procs: HostedProcTable,
     hosted_bindings: HostedBindingTable = .{},
     platform_required_declarations: PlatformRequiredDeclarationTable,
@@ -30555,6 +31356,7 @@ pub const CheckedModuleArtifact = struct {
         self.module_analyses = try ModuleAnalyses.create(gpa, io, null);
         self.checked_types.attachSealedTypes(env, keys, synthesized);
         self.attachCapabilitySource();
+        self.finishPublication();
     }
 
     /// Point the artifact's types at its module analyses, which compute
@@ -30564,6 +31366,20 @@ pub const CheckedModuleArtifact = struct {
         const hash = self.moduleEnvConst().contentIdentityHash() orelse checkedArtifactInvariant("a checked module has no content identity", .{});
         const current_module = self.canonical_names.lookupModuleIdentity(hash) orelse checkedArtifactInvariant("a checked module's own identity was never interned", .{});
         self.checked_types.capability_source = .{ .analyses = analyses, .current_module = current_module, .module = self.key.digest() };
+    }
+
+    /// Let the module's slots run: its type store and name store are
+    /// published and its interface capabilities have their source, so no
+    /// slot can see the module before every type and name its cache entry
+    /// holds exists. A pairing's capabilities are its platform's.
+    pub fn finishPublication(self: *CheckedModuleArtifact) void {
+        if (std.debug.runtime_safety) {
+            if (self.checked_types.published_counts == null) checkedArtifactInvariant("a module's analyses were let run before its type store was published", .{});
+            if (self.canonical_names.published == null) checkedArtifactInvariant("a module's analyses were let run before its name store was published", .{});
+            if (self.checked_types.capability_source == null) checkedArtifactInvariant("a module's analyses were let run before its interface capabilities had their source", .{});
+        }
+        if (self.module_analyses) |analyses| analyses.markPublished();
+        if (self.body_analyses) |analyses| analyses.markPublished();
     }
 
     /// The capability source of a platform/app pairing over this platform:
@@ -30636,6 +31452,7 @@ pub const CheckedModuleArtifact = struct {
             .plans = &self.static_dispatch_plans,
             .refs = &self.resolved_value_refs,
             .entry_wrappers = &self.entry_wrappers,
+            .callable_eval_templates = self.callable_eval_templates.view(),
             .compile_time_roots = &self.compile_time_roots,
             .analyses = analyses,
         };
@@ -30696,16 +31513,64 @@ pub const CheckedModuleArtifact = struct {
     /// Whether a compilation under `strategy` has roots to evaluate here:
     /// a `.lss` compilation never evaluates a literal argument root
     /// (design.md "Literal Arguments").
-    pub fn hasUnevaluatedRequests(self: *const CheckedModuleArtifact, strategy: base.SpecializationStrategy) bool {
-        for (self.root_requests.compile_time_requests) |request| {
-            const root = request.compile_time_root orelse continue;
-            const payload = self.compile_time_roots.root(root).payload;
-            if (payload != .unevaluated and payload != .pending) continue;
-            if (strategy == .lss and self.compile_time_roots.root(root).kind == .literal_argument) continue;
-            if (strategy == .boxy and self.compile_time_roots.root(root).boxy_value != null) continue;
+    pub fn hasUnevaluatedRequests(self: *const CheckedModuleArtifact, strategy: base.SpecializationStrategy) Allocator.Error!bool {
+        for ((try self.rootRequests()).compile_time_requests) |request| {
+            const root = try self.compileTimeRoot(request.compile_time_root orelse continue);
+            if (root.payload != .unevaluated and root.payload != .pending) continue;
+            if (strategy == .lss and root.kind == .literal_argument) continue;
+            if (strategy == .boxy and root.boxy_value != null) continue;
             return true;
         }
         return false;
+    }
+
+    /// The module's root requests.
+    pub fn rootRequests(self: *const CheckedModuleArtifact) Allocator.Error!*const RootRequestTable {
+        return importedView(self).rootRequests();
+    }
+
+    /// The module's root requests when a consumer has demanded them.
+    pub fn peekRootRequests(self: *const CheckedModuleArtifact) ?*const RootRequestTable {
+        const analyses = self.module_analyses orelse return null;
+        return analyses.root_requests.peek();
+    }
+
+    /// Compile-time root `id` of this module, with the payload evaluation
+    /// gave it: a row of the root table, or a literal root.
+    pub fn compileTimeRoot(self: *const CheckedModuleArtifact, id: ComptimeRootId) Allocator.Error!CompileTimeRoot {
+        return importedView(self).compileTimeRoot(id);
+    }
+
+    /// Record root `id`'s payload.
+    pub fn fillRootPayload(self: *CheckedModuleArtifact, id: ComptimeRootId, payload: CompileTimeRootPayload) Allocator.Error!void {
+        if (id.rowIndex() != null) return self.compile_time_roots.fillPayload(id, payload);
+        verifyCompileTimeRootPayloadMatchesKind((try self.dispatch().literalRoot(id)).root, payload);
+        self.literal_root_payloads.entry(id).payload = payload;
+    }
+
+    /// Record the value a `.boxy` evaluation stored for root `id`.
+    pub fn fillRootBoxyValue(self: *CheckedModuleArtifact, id: ComptimeRootId, value: StoredConstTemplate) void {
+        if (id.rowIndex() != null) return self.compile_time_roots.fillBoxyValue(id, value);
+        self.literal_root_payloads.entry(id).boxy_value = value;
+    }
+
+    /// Give every literal root the module's root requests evaluate its
+    /// evaluation output entry, before evaluation fills any.
+    pub fn prepareLiteralRootPayloads(self: *CheckedModuleArtifact, allocator: Allocator) Allocator.Error!void {
+        if (self.literal_root_payloads.entries.len != 0) return;
+        var entries: std.ArrayList(LiteralRootPayload) = .empty;
+        errdefer entries.deinit(allocator);
+        for ((try self.rootRequests()).requests) |request| {
+            const root = request.compile_time_root orelse continue;
+            if (root.rowIndex() != null) continue;
+            try entries.append(allocator, .{ .id = root });
+        }
+        std.mem.sort(LiteralRootPayload, entries.items, {}, struct {
+            fn lessThan(_: void, a: LiteralRootPayload, b: LiteralRootPayload) bool {
+                return @backingInt(a.id) < @backingInt(b.id);
+            }
+        }.lessThan);
+        self.literal_root_payloads = .{ .entries = try entries.toOwnedSlice(allocator) };
     }
 
     /// Reopen a finalized artifact so this compilation can evaluate the roots
@@ -30728,12 +31593,16 @@ pub const CheckedModuleArtifact = struct {
                 break :blk arena.allocator();
             };
             self.compile_time_roots = try copyPairingColumns(CompileTimeRootTable, self.compile_time_roots, owner);
+            self.literal_root_payloads = try copyPairingColumns(LiteralRootPayloadTable, self.literal_root_payloads, owner);
             self.const_templates = try copyPairingColumns(ConstTemplateTable, self.const_templates, owner);
             self.exported_const_templates = try copyPairingColumns(ExportedConstTemplateTable, self.exported_const_templates, owner);
             self.const_store = try copyPairingColumns(ConstStore, self.const_store, owner);
         }
         for (self.compile_time_roots.roots) |*root| {
             if (root.payload == .unevaluated) root.payload = .pending;
+        }
+        for (self.literal_root_payloads.entries) |*entry| {
+            if (entry.payload == .unevaluated) entry.payload = .pending;
         }
         self.evaluation_state = .prepared;
     }
@@ -30753,9 +31622,10 @@ pub const CheckedModuleArtifact = struct {
     }
 
     /// Root orders are dense indices in the complete checked request table.
-    pub fn lookupRootRequestByOrder(self: *const CheckedModuleArtifact, order: u32) ?RootRequest {
-        if (order >= self.root_requests.requests.len) return null;
-        const root = self.root_requests.requests[order];
+    pub fn lookupRootRequestByOrder(self: *const CheckedModuleArtifact, order: u32) Allocator.Error!?RootRequest {
+        const requests = (try self.rootRequests()).requests;
+        if (order >= requests.len) return null;
+        const root = requests[order];
         std.debug.assert(root.order == order);
         return root;
     }
@@ -30842,7 +31712,7 @@ pub const CheckedModuleArtifact = struct {
         intrinsic_wrappers: IntrinsicWrapperTable.Serialized,
         top_level_procedure_bindings: TopLevelProcedureBindingTable.Serialized,
         callable_eval_templates: CallableEvalTemplateTable.Serialized,
-        root_requests: RootRequestTable.Serialized,
+        literal_root_payloads: LiteralRootPayloadTable.Serialized,
         hosted_procs: HostedProcTable.Serialized,
         hosted_bindings: HostedBindingTable.Serialized,
         platform_required_declarations: PlatformRequiredDeclarationTable.Serialized,
@@ -30880,7 +31750,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 168);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 160);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -30940,7 +31810,7 @@ pub const CheckedModuleArtifact = struct {
             const observations = self.compile_time_debug.deserialize(base_addr);
             const roots = self.compile_time_roots.deserialize(base_addr);
             try observations.validate(roots.roots.len);
-            try self.compile_time_root_reads.deserialize(base_addr).validate(roots.roots.len);
+            try self.compile_time_root_reads.deserialize(base_addr).validate();
         }
 
         /// A deserialized artifact reads its source types once
@@ -31157,7 +32027,8 @@ pub const CheckedModuleArtifact = struct {
         // creation made are complete only once it ends.
         const complete_roots = self.checked_types.completeRootCount();
         std.debug.assert(self.checked_types.payloads.items().len >= complete_roots);
-        verifyRootRequestSubsets(self.root_requests);
+        const root_requests = self.peekRootRequests() orelse &empty_root_requests;
+        verifyRootRequestSubsets(root_requests.*);
 
         for (self.checked_types.payloads.items()[0..complete_roots], 0..) |payload, i| {
             switch (payload) {
@@ -31189,7 +32060,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(self.typesView().containsId(body.checked_type));
         }
 
-        for (self.root_requests.requests, 0..) |request, i| {
+        for (root_requests.requests, 0..) |request, i| {
             std.debug.assert(request.order == i);
             if (request.kind == .provided_export) {
                 const export_id = request.provided_export.get() orelse
@@ -31208,7 +32079,9 @@ pub const CheckedModuleArtifact = struct {
                 const template_ref = request.procedure_template orelse {
                     base.invariant("checked artifact invariant violated: compile-time root has no private wrapper template", .{});
                 };
-                std.debug.assert(@backingInt(template_ref.template) < self.checked_procedure_templates.templates.items.len);
+                // A literal root's entry wrapper runs only at compile time.
+                const row = template_ref.template.rowIndex() orelse continue;
+                std.debug.assert(row < self.checked_procedure_templates.templates.items.len);
                 const template = self.checked_procedure_templates.get(template_ref.template);
                 switch (template.target) {
                     .comptime_only => {},
@@ -31266,7 +32139,7 @@ pub const CheckedModuleArtifact = struct {
                     .{entry_index},
                 );
             }
-            const template_index = @backingInt(procedure.template.template);
+            const template_index = procedure.template.template.rowIndex() orelse self.checked_procedure_templates.templates.items.len;
             if (template_index >= self.checked_procedure_templates.templates.items.len) {
                 base.invariant(
                     "checked artifact invariant violated: method registry procedure {d} referenced a missing checked template",
@@ -31292,7 +32165,7 @@ pub const CheckedModuleArtifact = struct {
                     }
                     break :blk wrapper.intrinsic;
                 },
-                .checked_body, .entry_wrapper, .unimplemented => null,
+                .checked_body, .entry_wrapper, .literal_root, .unimplemented => null,
             };
 
             switch (procedure.runtime_target) {
@@ -31327,11 +32200,12 @@ pub const CheckedModuleArtifact = struct {
         if (builtin.mode != .debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
-        verifyRootRequestSubsets(self.root_requests);
+        const root_requests = try self.rootRequests();
+        verifyRootRequestSubsets(root_requests.*);
         self.verifyMethodIntrinsicRuntimeTargets();
 
         if (self.hasUnboundPlatformRequirements()) {
-            for (self.root_requests.runtime_requests) |request| {
+            for (root_requests.runtime_requests) |request| {
                 if (request.kind == .provided_export) {
                     base.invariant(
                         "checked artifact invariant violated: relationless required platform published a provided runtime root",
@@ -31341,13 +32215,13 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        for (self.root_requests.requests, 0..) |request, i| {
+        for (root_requests.requests, 0..) |request, i| {
             std.debug.assert(request.order == i);
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
             std.debug.assert(self.typesView().containsId(request.checked_type));
             if (request.procedure_template) |template_ref| {
                 std.debug.assert(template_ref.artifact.eql(self.key.digest()));
-                std.debug.assert(@backingInt(template_ref.template) < self.checked_procedure_templates.templates.items.len);
+                if (template_ref.template.rowIndex()) |row| std.debug.assert(row < self.checked_procedure_templates.templates.items.len);
                 const evidence = request.root_evidence orelse {
                     base.invariant("checked artifact invariant violated: procedure template root has no checked evidence vector", .{});
                 };
@@ -31360,7 +32234,7 @@ pub const CheckedModuleArtifact = struct {
                 const template_ref = request.procedure_template orelse {
                     base.invariant("checked artifact invariant violated: compile-time/test root has no entry wrapper template", .{});
                 };
-                std.debug.assert(@backingInt(template_ref.template) < self.checked_procedure_templates.templates.items.len);
+                if (template_ref.template.rowIndex()) |row| std.debug.assert(row < self.checked_procedure_templates.templates.items.len);
             }
             if (request.kind == .platform_required_binding and request.procedure_use != null) {
                 _ = request.root_evidence orelse {
@@ -31384,7 +32258,7 @@ pub const CheckedModuleArtifact = struct {
                 continue;
             }
             const has_request = blk: {
-                for (self.root_requests.requests) |request| {
+                for (root_requests.requests) |request| {
                     if (!request.requires_pairing and compileTimeRootHasRootRequest(&.{request}, root)) break :blk true;
                 }
                 break :blk false;
@@ -31463,7 +32337,7 @@ pub const CheckedModuleArtifact = struct {
         }
 
         for (self.checked_procedure_templates.templates.items, 0..) |template, i| {
-            std.debug.assert(@backingInt(template.template_id) == i);
+            std.debug.assert(template.template_id.index() == i);
             std.debug.assert(self.typesView().containsId(template.checked_fn_root));
             _ = self.checked_types.scheme(template.checked_fn_scheme);
             switch (template.body) {
@@ -31483,6 +32357,7 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(wrapper.template.proc_base == template.proc_base);
                     std.debug.assert(std.meta.eql(wrapper.template.artifact.bytes, self.key.bytes));
                 },
+                .literal_root => checkedArtifactInvariant("a literal root's entry wrapper is a row of the template table", .{}),
                 // An unimplemented declaration publishes no body to verify.
                 .unimplemented => {},
             }
@@ -31795,7 +32670,9 @@ pub const ImportedModuleView = struct {
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
-    root_requests: *const RootRequestTable = &empty_root_requests,
+    checking_context_identity: *const CheckingContextIdentity = &empty_checking_context_identity,
+    top_level_values: *const TopLevelValueTable = &empty_top_level_values,
+    literal_root_payloads: *const LiteralRootPayloadTable = &empty_literal_root_payloads,
     /// A platform's requirement identity variables (empty for any other
     /// module).
     platform_type_inputs: *const PlatformTypeInputs = &empty_platform_type_inputs,
@@ -31845,9 +32722,29 @@ pub const ImportedModuleView = struct {
     pub fn exhaustivenessSites(self: ImportedModuleView) Allocator.Error!*const CheckedExhaustivenessSiteTable {
         return self.analyses().exhaustivenessSites(self);
     }
+
+    /// The module's root requests.
+    pub fn rootRequests(self: ImportedModuleView) Allocator.Error!*const RootRequestTable {
+        return self.analyses().rootRequests(self);
+    }
+
+    /// Compile-time root `id` of the module, with the payload evaluation gave
+    /// it: a row of the root table, or a literal root.
+    pub fn compileTimeRoot(self: ImportedModuleView, id: ComptimeRootId) Allocator.Error!CompileTimeRoot {
+        if (id.rowIndex() != null) return self.compile_time_roots.root(id);
+        var root = (try self.dispatch().literalRoot(id)).root;
+        if (self.literal_root_payloads.get(id)) |output| {
+            root.payload = output.payload;
+            root.boxy_value = output.boxy_value;
+        }
+        return root;
+    }
 };
 
 const empty_root_requests: RootRequestTable = .{};
+const empty_checking_context_identity: CheckingContextIdentity = .{};
+const empty_top_level_values: TopLevelValueTable = .{};
+const empty_literal_root_payloads: LiteralRootPayloadTable = .{};
 
 const no_compile_time_root_reads: CompileTimeRootReadTable = .{};
 
@@ -31890,7 +32787,9 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .platform_required_declarations = &artifact.platform_required_declarations,
         .platform_required_bindings = &artifact.platform_required_bindings,
-        .root_requests = &artifact.root_requests,
+        .checking_context_identity = &artifact.checking_context_identity,
+        .top_level_values = &artifact.top_level_values,
+        .literal_root_payloads = &artifact.literal_root_payloads,
         .platform_type_inputs = &artifact.platform_type_inputs,
         .platform_requirement_solutions = &artifact.platform_requirement_solutions,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
@@ -32943,10 +33842,10 @@ test "mixed field-access segment labels are lowering-visible" {
 }
 
 /// Public `loweringView` function.
-pub fn loweringView(artifact: *const CheckedModuleArtifact) LoweringModuleView {
+pub fn loweringView(artifact: *const CheckedModuleArtifact) Allocator.Error!LoweringModuleView {
     return .{
         .module = artifact,
-        .roots = &artifact.root_requests,
+        .roots = try artifact.rootRequests(),
         .relation_modules = &.{},
     };
 }
@@ -32955,10 +33854,10 @@ pub fn loweringView(artifact: *const CheckedModuleArtifact) LoweringModuleView {
 pub fn loweringViewWithRelations(
     artifact: *const CheckedModuleArtifact,
     relation_artifacts: []const ImportedModuleView,
-) LoweringModuleView {
+) Allocator.Error!LoweringModuleView {
     return .{
         .module = artifact,
-        .roots = &artifact.root_requests,
+        .roots = try artifact.rootRequests(),
         .relation_modules = relation_artifacts,
     };
 }
@@ -33472,56 +34371,6 @@ pub fn publishFromTypedModule(
         &resolved_value_refs,
     );
 
-    resolved_tables.roots = &compile_time_roots;
-    const dispatch = CheckedDispatch{ .source = .{
-        .env = module_env,
-        .module_idx = module_idx,
-        .key = artifact_key,
-        .names = &canonical_names,
-        .types = .{ .store = checked_types, .pairing = body_tables.pairing_types },
-        .module_index = module_index,
-        .body_analyses = analyses,
-        .method_registry = &method_registry,
-        .templates = &checked_procedure_templates,
-        .top_level_procedure_bindings = &top_level_procedure_bindings,
-        .plans = &static_dispatch_plans,
-        .refs = &resolved_value_refs,
-        .entry_wrappers = &entry_wrappers,
-        .compile_time_roots = &compile_time_roots,
-        .analyses = module_analyses,
-    } };
-    resolved_tables.dispatch = dispatch;
-    try publishLiteralConversionRoots(
-        allocator,
-        module,
-        &canonical_names,
-        owner_artifact,
-        &checked_type_publication,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
-        dispatch,
-        &static_dispatch_plans,
-        &compile_time_roots,
-        &entry_wrappers,
-        &checked_procedure_templates,
-    );
-    try publishLiteralArgumentRoots(
-        allocator,
-        module,
-        &canonical_names,
-        owner_artifact,
-        &checked_type_publication,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
-        &static_dispatch_plans,
-        &compile_time_roots,
-        &entry_wrappers,
-        &checked_procedure_templates,
-        &resolved_value_refs,
-        dispatch,
-        import_views,
-        &top_level_procedure_bindings,
-        &callable_eval_templates,
-    );
-
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,
         module,
@@ -33530,31 +34379,6 @@ pub fn publishFromTypedModule(
         provides,
     );
     errdefer provided_exports.deinit(allocator);
-
-    var root_requests = try RootRequestTable.fromModule(
-        allocator,
-        module,
-        artifact_key,
-        &checked_type_publication,
-        &compile_time_roots,
-        &checked_procedure_templates,
-        &entry_wrappers,
-        checking_context_identity.platform_app_relation,
-        &platform_required_declarations,
-        &platform_required_bindings,
-        &provided_exports,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
-        &resolved_value_refs,
-        &top_level_values,
-        &top_level_procedure_bindings,
-        &callable_eval_templates,
-        &hoisted_constants,
-        &const_templates,
-        dispatch,
-        inputs.explicit_roots,
-        inputs.validation,
-    );
-    errdefer root_requests.deinit(allocator);
 
     sealConstEvalTemplatesForRoots(
         &const_templates,
@@ -33654,7 +34478,6 @@ pub fn publishFromTypedModule(
         .intrinsic_wrappers = intrinsic_wrappers,
         .top_level_procedure_bindings = top_level_procedure_bindings,
         .callable_eval_templates = callable_eval_templates,
-        .root_requests = root_requests,
         .hosted_procs = hosted_procs,
         .hosted_bindings = hosted_bindings,
         .platform_required_declarations = platform_required_declarations,
@@ -33680,6 +34503,7 @@ pub fn publishFromTypedModule(
     // analyses intern into them, exactly as they read its types.
     artifact.canonical_names.markPublished();
     artifact.attachCapabilitySource();
+    artifact.finishPublication();
     checked_const_store = ConstStore.init(allocator);
     errdefer artifact.const_store.deinit();
 
@@ -34598,9 +35422,9 @@ test "artifact views are read-only projections" {
     }
 
     const imported = importedView(&artifact);
-    const lowering = loweringView(&artifact);
+    const lowering = try loweringView(&artifact);
     try std.testing.expect(imported.exports.defs.ptr == artifact.exports.defs.ptr);
-    try std.testing.expect(lowering.roots == &artifact.root_requests);
+    try std.testing.expect(lowering.roots == try artifact.rootRequests());
 }
 
 // Round-trip tests for transform-A sub-stores (POD-element slices). Each store
@@ -35257,7 +36081,7 @@ test "compile-time root read table keeps earlier rows beside newly evaluated roo
     const allocator = std.testing.allocator;
     const Ref = CompileTimeRootReadTable.Ref;
     const first_reads = [_]Ref{.{ .module = @as([32]u8, @splat(1)), .root = @fromBackingInt(4) }};
-    var first = try CompileTimeRootReadTable.merge(allocator, .{}, 3, &.{
+    var first = try CompileTimeRootReadTable.merge(allocator, .{}, &.{
         .{ .root = @fromBackingInt(1), .reads = &first_reads },
     });
     defer first.deinit(allocator);
@@ -35268,15 +36092,14 @@ test "compile-time root read table keeps earlier rows beside newly evaluated roo
         .{ .module = @as([32]u8, @splat(2)), .root = testIndexId(ComptimeRootId, 0) },
         .{ .module = @as([32]u8, @splat(1)), .root = @fromBackingInt(4) },
     };
-    var later = try CompileTimeRootReadTable.merge(allocator, first, 3, &.{
+    var later = try CompileTimeRootReadTable.merge(allocator, first, &.{
         .{ .root = @fromBackingInt(2), .reads = &later_reads },
     });
     defer later.deinit(allocator);
     try std.testing.expectEqualSlices(Ref, &first_reads, later.readsOf(@fromBackingInt(1)));
     try std.testing.expectEqualSlices(Ref, &later_reads, later.readsOf(@fromBackingInt(2)));
     try std.testing.expectEqual(@as(usize, 0), later.readsOf(testIndexId(ComptimeRootId, 0)).len);
-    try later.validate(3);
-    try std.testing.expectError(error.CorruptArtifact, later.validate(4));
+    try later.validate();
 }
 
 test "SERIALIZED_VERSION_HASH golden value" {

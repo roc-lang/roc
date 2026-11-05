@@ -20,7 +20,7 @@ const Self = @This();
 const header_size = 4 * @sizeOf(u32);
 const region_size = 2 * @sizeOf(u32);
 const line_size = 6 * @sizeOf(u32);
-const site_size = 2 * @sizeOf(u32) + 32 + 2 * @sizeOf(u32);
+const site_size = 2 * @sizeOf(u32) + 32 + 2 * @sizeOf(u32) + 3 * @sizeOf(u32);
 const file_size = 32 + 4 * @sizeOf(u32);
 
 /// One encoded table, whose bytes `validate` accepted.
@@ -79,7 +79,8 @@ pub fn encode(allocator: Allocator, input: Input) Allocator.Error![]u8 {
         try word(&bytes, allocator, line.region.end.offset);
     }
     for (input.sites) |site| {
-        const row: struct { tag: u32, module: [32]u8, first: u32, second: u32 } = switch (site.meaning) {
+        // `high` holds bits 32 and up of a checked root producer's id.
+        const row: struct { tag: u32, module: [32]u8, first: u32, second: u32, high: [3]u32 = @splat(0) } = switch (site.meaning) {
             .checked_error => .{ .tag = 0, .module = @splat(0), .first = 0, .second = 0 },
             .literal_rejection => |literal| .{ .tag = 1, .module = literal.module, .first = literal.node, .second = @backingInt(literal.kind) },
             .exhaustiveness => |exhaustiveness| .{
@@ -89,7 +90,7 @@ pub fn encode(allocator: Allocator, input: Input) Allocator.Error![]u8 {
                 .second = if (exhaustiveness.checked_site) |checked_site| @backingInt(checked_site) else 0,
             },
             .failed_value => |value| switch (value.producer) {
-                .checked => |root| .{ .tag = 3, .module = value.module, .first = 0, .second = @backingInt(root) },
+                .checked => |root| .{ .tag = 3, .module = value.module, .first = 0, .second = @truncate(@backingInt(root)), .high = .{ @truncate(@backingInt(root) >> 32), @truncate(@backingInt(root) >> 64), @truncate(@backingInt(root) >> 96) } },
                 .literal => |root| .{ .tag = 3, .module = value.module, .first = 1, .second = @backingInt(root) },
             },
         };
@@ -98,6 +99,7 @@ pub fn encode(allocator: Allocator, input: Input) Allocator.Error![]u8 {
         try bytes.appendSlice(allocator, &row.module);
         try word(&bytes, allocator, row.first);
         try word(&bytes, allocator, row.second);
+        for (row.high) |high| try word(&bytes, allocator, high);
     }
     var name_offset: u32 = 0;
     for (input.files) |file| {
@@ -192,9 +194,18 @@ pub fn failureMeaningAt(self: Self, return_offset: u32) ?FailureMeaning {
         } },
         else => .{ .failed_value = .{
             .module = module,
-            .producer = if (first == 0) .{ .checked = @fromBackingInt(second) } else .{ .literal = @fromBackingInt(second) },
+            .producer = if (first == 0) .{ .checked = @fromBackingInt(checkedProducerId(self.bytes, row, second)) } else .{ .literal = @fromBackingInt(second) },
         } },
     };
+}
+
+/// A checked root producer's id: its low word `low` and the three words that
+/// follow it in its site row.
+fn checkedProducerId(bytes: []const u8, row: usize, low: u32) u128 {
+    const high = row + 2 * @sizeOf(u32) + 32 + 2 * @sizeOf(u32);
+    var value: u128 = low;
+    for (0..3) |index| value |= @as(u128, wordAt(bytes, high + index * @sizeOf(u32))) << @intCast(32 * (index + 1));
+    return value;
 }
 
 /// One source file the table's line rows name.

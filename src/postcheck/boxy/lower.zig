@@ -380,7 +380,7 @@ pub fn templateWorkerIdentity(link_name: [32]u8, template: checked_names.Checked
     hasher.update("roc.boxy.worker.v1");
     hasher.update("template");
     hasher.update(&link_name);
-    hasher.update(std.mem.asBytes(&@as(u32, @backingInt(template))));
+    template.digestInto(&hasher);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -731,6 +731,22 @@ pub const Program = struct {
         return self.modules.get(index);
     }
 
+    /// The entry wrapper template of module `index`'s compile-time root
+    /// `root`: a row of its template table, or, for a literal root, the
+    /// template its identity names.
+    pub fn rootWrapper(self: *const Program, index: ModuleIndex, root: checked.ComptimeRootId) checked_names.ProcedureTemplateRef {
+        if (root.rowIndex() == null) {
+            const view = self.module(index);
+            return .{
+                .artifact = view.view.key.digest(),
+                .proc_base = view.view.checked_procedure_templates.literal_root_proc_base,
+                .template = checked.literalRootWrapperTemplate(root),
+            };
+        }
+        return self.wrapper_by_root.get(.{ .module = index, .root = root }) orelse
+            invariant("a compile-time root has no entry wrapper");
+    }
+
     /// Free everything but the program's `result`, which lowering hands on.
     pub fn release(self: *Program) void {
         self.static_descs.deinit();
@@ -822,7 +838,7 @@ pub const Program = struct {
         const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
-        const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
+        const template = (try view.view.dispatch().procedureTemplate(template_id));
         const checked_scheme_vars = try view.view.dispatch().templateSchemeVars(template_id);
         // A sealed variable (design.md "Sealed Result Rows") is no hidden
         // parameter: it seals to the empty row wherever the body mentions it,
@@ -845,7 +861,7 @@ pub const Program = struct {
             try scheme_vars.append(self.arena.allocator(), variable);
             try checked_slots.append(self.arena.allocator(), @intCast(slot));
         }
-        const literal_requirements = view.view.checked_procedure_templates.templateLiteralRequirements(&template);
+        const literal_requirements = try view.view.dispatch().templateLiteralRequirements(template_id);
         var dictionary_params: std.ArrayList(u32) = .empty;
         for (evidence_params, 0..) |param, index| {
             const sealed_dispatcher = if (param.slot) |slot| std.mem.findScalar(u32, sealed_slots.items, slot) != null else false;
@@ -2326,7 +2342,7 @@ pub const Program = struct {
     pub fn readsRootSlot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootId) Allocator.Error!bool {
         if (!self.evaluatesRoot(module_index, root)) return false;
         const view = self.module(module_index);
-        return !try types.Converter.rootHasIdentityVariables(view, view.view.compile_time_roots.root(root).checked_type);
+        return !try types.Converter.rootHasIdentityVariables(view, (try view.view.compileTimeRoot(root)).checked_type);
     }
 
     /// The static data slot holding the value of compile-time root `root` of
@@ -2532,7 +2548,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             // validated and discarded: nothing stores its value (design.md
             // "Literal Arguments").
             const validate_only = if (request.compile_time_root) |root_id| blk: {
-                const root = program.module(source_module).view.compile_time_roots.root(root_id);
+                const root = try program.module(source_module).view.compileTimeRoot(root_id);
                 break :blk if (root.literal_argument) |argument| argument.validate_only else false;
             } else false;
             const stored_ty = if (validate_only) try program.store.emptyRecord() else ret;
@@ -2601,7 +2617,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 },
                 .template => |key| blk: {
                     const view = program.module(key.module);
-                    const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+                    if (key.template.rowIndex() == null) break :blk "boxy.literal_root";
+                    const template = view.view.checked_procedure_templates.get(key.template);
                     const names = view.nameStore();
                     const export_name = names.procBase(template.proc_base).export_name orelse break :blk "boxy.template";
                     break :blk names.exportNameText(export_name);
@@ -2633,7 +2650,17 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
             if (!unitEmitsTemplate(view, template)) continue;
             if (try templateRejected(program, view, template)) continue;
-            const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
+            const worker = try program.templateWorker(view.index, .row(@intCast(index)));
+            _ = try program.methodEntryWorker(worker);
+        }
+        // Each literal root's entry wrapper, which no table row holds.
+        var literal_roots: std.ArrayList(checked.ComptimeRootId) = .empty;
+        defer literal_roots.deinit(program.allocator);
+        try view.view.dispatch().appendLiteralRoots(program.allocator, &literal_roots);
+        for (literal_roots.items) |root| {
+            const template_id = checked.literalRootWrapperTemplate(root);
+            if (try templateRejected(program, view, try view.view.dispatch().procedureTemplate(template_id))) continue;
+            const worker = try program.templateWorker(view.index, template_id);
             _ = try program.methodEntryWorker(worker);
         }
         for (view.view.method_registry.entries) |entry| {
@@ -2672,6 +2699,7 @@ fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedPro
             .expect, .repl_expr => false,
             .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
         },
+        .literal_root => true,
     };
 }
 

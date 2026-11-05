@@ -1303,7 +1303,7 @@ pub const LoweredProgram = struct {
         for (root_metadata, names) |metadata, *name| {
             std.debug.assert(metadata.kind == .provided_export);
             std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
-            const root = root_module.lookupRootRequestByOrder(metadata.order) orelse
+            const root = (try root_module.lookupRootRequestByOrder(metadata.order)) orelse
                 checkedPipelineInvariant("platform entrypoint root metadata has no checked root request");
             const symbol = root_module.providedEntrypointName(root) orelse
                 checkedPipelineInvariant("platform entrypoint root metadata has no checked export declaration");
@@ -2741,7 +2741,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             var callable_kind_is_template = false;
             var module_key: ?[32]u8 = null;
             var proc_base: u32 = 0;
-            var sub: u32 = 0;
+            var sub: u128 = 0;
             switch (spec.identity.callable) {
                 .proc_template => |template| {
                     callable_kind = "template";
@@ -2769,7 +2769,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     module_name = info.name;
                     callable_name = defName(info, proc_base);
                     if (callable_kind_is_template and sub < info.templates.templates.items.len) {
-                        const source_fn_ty = info.templates.templates.items[sub].checked_fn_root;
+                        const source_fn_ty = info.templates.templates.items[@intCast(sub)].checked_fn_root;
                         if (info.types.containsId(source_fn_ty)) {
                             poly = if (try checkedTypeHasVariable(allocator, info.types, source_fn_ty)) 1 else 0;
                         }

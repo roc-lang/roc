@@ -2707,7 +2707,7 @@ fn writeTemplateDigest(hasher: *TypeDigestHasher, template: names.ProcTemplate, 
 fn writeProcTemplateDigest(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
     hasher.update(&template.artifact.bytes);
     writeIdentityU32(hasher, @backingInt(template.proc_base));
-    writeIdentityU32(hasher, @backingInt(template.template));
+    template.template.digestInto(hasher);
 }
 
 fn writeIdentityBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {

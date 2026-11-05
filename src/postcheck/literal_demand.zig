@@ -111,7 +111,7 @@ const NominalKey = struct {
 
 const TemplateKey = struct {
     module: [32]u8,
-    template: u32,
+    template: u128,
 };
 
 const TypeKey = struct {
@@ -315,8 +315,17 @@ const Builder = struct {
         const key: TemplateKey = .{ .module = template.artifact.bytes, .template = @backingInt(template.template) };
         if (self.demand.templates.get(key)) |node| return node;
         const node = try self.addNode(.{});
-        self.markUnbounded(node, "template outside the lowering");
         try self.demand.templates.put(self.allocator, key, node);
+        // A literal root's entry wrapper runs its literal's conversion plan,
+        // if it is a conversion root, and nothing else.
+        if (checked.templateLiteralRoot(template.template)) |root| {
+            if (self.views.get(template.artifact.bytes)) |view| {
+                const dispatch = view.dispatch();
+                if ((try dispatch.literalRoot(root)).plan) |plan_id| try self.addPlan(node, view, dispatch, plan_id);
+                return node;
+            }
+        }
+        self.markUnbounded(node, "template outside the lowering");
         return node;
     }
 
@@ -485,18 +494,7 @@ const Builder = struct {
 
         const dispatch = view.dispatch();
         for (view.checked_procedure_templates.dispatch_plan_refs[template.static_dispatch_plans.start..][0..template.static_dispatch_plans.len]) |plan_id| {
-            const plan = try dispatch.plan(plan_id);
-            try self.addTypeEdge(node, view, plan.callable_ty);
-            try self.addTypeEdge(node, view, plan.dispatcher_ty);
-            self.markOwn(node, self.literalFlags(view, plan_id, plan));
-            switch (plan.resolution) {
-                .direct_closed, .direct_parametric => |direct| try self.addEvidenceNode(node, dispatch, direct.evidence),
-                .direct_pending => |evidence| try self.addEvidenceNode(node, dispatch, evidence),
-                // The target comes from the specialization's evidence or is
-                // derived from the types, which the instance's and this
-                // body's type edges reach.
-                .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
-            }
+            try self.addPlan(node, view, dispatch, plan_id);
         }
     }
 
@@ -535,8 +533,25 @@ const Builder = struct {
         }
     }
 
+    /// A plan's types, its own literal contribution and the templates its
+    /// resolution reaches.
+    fn addPlan(self: *Builder, node: NodeId, view: checked.ImportedModuleView, dispatch: checked.CheckedDispatch, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+        const plan = try dispatch.plan(plan_id);
+        try self.addTypeEdge(node, view, plan.callable_ty);
+        try self.addTypeEdge(node, view, plan.dispatcher_ty);
+        self.markOwn(node, try self.literalFlags(view, plan_id, plan));
+        switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| try self.addEvidenceNode(node, dispatch, direct.evidence),
+            .direct_pending => |evidence| try self.addEvidenceNode(node, dispatch, evidence),
+            // The target comes from the specialization's evidence or is
+            // derived from the types, which the instance's and this body's
+            // type edges reach.
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+        }
+    }
+
     /// A plan's own contribution when it is a literal conversion.
-    fn literalFlags(self: *Builder, view: checked.ImportedModuleView, plan_id: static_dispatch.StaticDispatchPlanId, plan: static_dispatch.StaticDispatchCallPlan) Flags {
+    fn literalFlags(self: *Builder, view: checked.ImportedModuleView, plan_id: static_dispatch.StaticDispatchPlanId, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!Flags {
         if (plan.resolution == .checked_error) return .{};
         const bodies = view.checked_bodies;
         const region = view.module_env.store.getNodeRegion(@fromBackingInt(plan.node));
@@ -547,13 +562,13 @@ const Builder = struct {
                 const conversion = bodies.literalConversion(plan.node);
                 if (conversion.plan != plan_id) return .{};
                 break :blk switch (conversion.literal) {
-                    .numeral => .{ conversion.conversion_root, .{ .dependent_numeral = true } },
-                    .quote => .{ conversion.conversion_root, .{ .dependent_quote = true } },
+                    .numeral => .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },
+                    .quote => .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_quote = true } },
                 };
             },
             .expr => switch (bodies.exprData(@fromBackingInt(plan.node))) {
-                .numeral => .{ bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },
-                .str => if (bodies.quoteIsCustom(plan.node)) .{ bodies.literalConversionRoot(plan.node), .{ .dependent_quote = true } } else return .{},
+                .numeral => .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },
+                .str => if (bodies.quoteIsCustom(plan.node)) .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_quote = true } } else return .{},
                 .interpolation => {
                     if (traceEnabled()) std.debug.print("ctfe-demand unbounded interpolation {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), region.start.offset });
                     return .{ .strict = true };
@@ -604,7 +619,7 @@ const Builder = struct {
         };
         // A conversion with no root of its own depends on its instance.
         const root_id = conversion_root orelse return dependent;
-        return switch (view.compile_time_roots.root(root_id).payload) {
+        return switch ((try view.compileTimeRoot(root_id)).payload) {
             .pending => if (self.declared.contains(.{ .module = view.key.digest(), .root = root_id })) .{} else unrequested: {
                 if (traceEnabled()) std.debug.print("ctfe-demand unbounded unrequested-root {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), region.start.offset });
                 break :unrequested .{ .strict = true };
@@ -621,7 +636,7 @@ const Builder = struct {
         const names = view.canonical_names;
         const dispatch = view.dispatch();
         for (0..view.checked_procedure_templates.templates.items.len) |raw| {
-            for (try dispatch.evidenceParams(@fromBackingInt(@intCast(raw)))) |param| try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});
+            for (try dispatch.evidenceParams(.row(@intCast(raw)))) |param| try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});
         }
         for (0..view.checked_procedure_templates.dispatch_scopes.len) |raw| {
             for ((try dispatch.scopeSchema(@fromBackingInt(@intCast(raw)))).params) |param| try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});

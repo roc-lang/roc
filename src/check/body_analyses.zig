@@ -856,6 +856,9 @@ pub const BodyAnalyses = struct {
     diagnostic_errors: collections.OnceSlot(*NodeBits, .body_diagnostic_errors) = .empty,
     single_source: collections.OnceSlot(*SingleSourceFacts, .body_single_source_calls) = .empty,
     exhaustiveness_index: collections.OnceSlot(*ExhaustivenessIndex, .body_exhaustiveness_index) = .empty,
+    /// Set once the module is published (`CheckedModuleArtifact.finishPublication`):
+    /// no slot of the module runs before it.
+    published: std.atomic.Value(bool) = .init(false),
 
     /// The analyses of `env`'s bodies. `promoted` lists the module's
     /// promoted local procedures, each with its binding `pattern`.
@@ -879,6 +882,15 @@ pub const BodyAnalyses = struct {
             .unit_slots = unit_slots,
         };
         return analyses;
+    }
+
+    /// Record that the module is published.
+    pub fn markPublished(self: *BodyAnalyses) void {
+        self.published.store(true, .release);
+    }
+
+    fn assertPublished(self: *const BodyAnalyses) void {
+        if (std.debug.runtime_safety and !self.published.load(.acquire)) invariant("a body analysis of a module was claimed before the module was published");
     }
 
     pub fn destroy(self: *BodyAnalyses) void {
@@ -922,6 +934,7 @@ pub const BodyAnalyses = struct {
     /// `from_numeral` or `from_quote` plan keyed by the node resolves to a
     /// checked error or unreachable.
     pub fn dispatchCrashes(self: *BodyAnalyses, bodies: CheckedBodies) Allocator.Error!*const NodeBits {
+        self.assertPublished();
         return self.dispatch_crashes.getOrCompute(self.io, Allocator.Error, DispatchCrashRequest{ .analyses = self, .bodies = bodies }, DispatchCrashRequest.compute);
     }
 
@@ -939,38 +952,45 @@ pub const BodyAnalyses = struct {
     };
 
     pub fn exprDiverges(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId, mode: InlineExpectMode) Allocator.Error!bool {
+        self.assertPublished();
         const facts, const position = try self.unitFacts(bodies, @backingInt(expr));
         return facts.flags[position] & divergenceFlag(mode) != 0;
     }
 
     pub fn statementDiverges(self: *BodyAnalyses, bodies: CheckedBodies, statement: StatementId, mode: InlineExpectMode) Allocator.Error!bool {
+        self.assertPublished();
         const facts, const position = try self.unitFacts(bodies, @backingInt(statement));
         return facts.flags[position] & divergenceFlag(mode) != 0;
     }
 
     pub fn exprEvaluationMayBeElidedForInspect(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId) Allocator.Error!bool {
+        self.assertPublished();
         const facts, const position = try self.unitFacts(bodies, @backingInt(expr));
         return facts.flags[position] & UnitFacts.inspect_elidable != 0;
     }
 
     pub fn stateMergeBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
+        self.assertPublished();
         const facts, const position = try self.unitFacts(bodies, raw_node);
         const span = facts.state_merges[position] orelse invariant("a state merge was requested for a node that owns none");
         return facts.binders[span.start..][0..span.len];
     }
 
     pub fn loopMutationBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
+        self.assertPublished();
         const facts, const position = try self.unitFacts(bodies, raw_node);
         const span = facts.loop_mutations[position] orelse invariant("loop mutations were requested for a node that is not a loop");
         return facts.binders[span.start..][0..span.len];
     }
 
     pub fn exprContainsDiagnosticError(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId) Allocator.Error!bool {
+        self.assertPublished();
         const bits = try self.diagnostic_errors.getOrCompute(self.io, Allocator.Error, DiagnosticRequest{ .analyses = self, .bodies = bodies }, DiagnosticRequest.compute);
         return bits.isSet(@backingInt(expr));
     }
 
     pub fn patternContainsDiagnosticError(self: *BodyAnalyses, bodies: CheckedBodies, pattern: PatternId) Allocator.Error!bool {
+        self.assertPublished();
         const bits = try self.diagnostic_errors.getOrCompute(self.io, Allocator.Error, DiagnosticRequest{ .analyses = self, .bodies = bodies }, DiagnosticRequest.compute);
         return bits.isSet(@backingInt(pattern));
     }
@@ -989,6 +1009,7 @@ pub const BodyAnalyses = struct {
     };
 
     pub fn templateHasSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!bool {
+        self.assertPublished();
         const facts = try self.singleSourceFacts(bodies);
         return std.sort.binarySearch(canonical.CheckedProcedureTemplateId, facts.templates, template, struct {
             fn order(key: canonical.CheckedProcedureTemplateId, item: canonical.CheckedProcedureTemplateId) std.math.Order {
@@ -998,6 +1019,7 @@ pub const BodyAnalyses = struct {
     }
 
     pub fn nestedProcSiteIsSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, site: canonical.NestedProcSiteId) Allocator.Error!bool {
+        self.assertPublished();
         const facts = try self.singleSourceFacts(bodies);
         return std.sort.binarySearch(u32, facts.sites, @backingInt(site), orderU32) != null;
     }
@@ -2545,11 +2567,11 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     for (env.method_defs.entries.items) |entry| try public_defs.put(entry.value.def_idx, {});
     for (templates.by_def) |entry| {
         const id = local.template(entry.template) orelse continue;
-        if (!public_defs.contains(entry.def)) eligible[@backingInt(id)] = true;
+        if (!public_defs.contains(entry.def)) eligible[id.index()] = true;
     }
     for (templates.promoted) |entry| {
         const id = local.template(entry.template) orelse continue;
-        eligible[@backingInt(id)] = true;
+        eligible[id.index()] = true;
     }
     for (templates.templates.items, eligible) |template, *is_eligible| {
         if (template.target != .roc or template.body != .checked_body) is_eligible.* = false;
@@ -2570,7 +2592,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
                 },
                 .local_proc, .structural => null,
             };
-            if (target) |id| eligible[@backingInt(id)] = false;
+            if (target) |id| eligible[id.index()] = false;
         }
     }
 
@@ -2609,8 +2631,8 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
             },
             .callable_eval_template, .checked_error => null,
         } orelse continue;
-        references[@backingInt(id)] += 1;
-        if (callees.isSet(@backingInt(record.expr))) calls[@backingInt(id)] += 1;
+        references[id.index()] += 1;
+        if (callees.isSet(@backingInt(record.expr))) calls[id.index()] += 1;
     }
 
     var published = std.ArrayList(canonical.CheckedProcedureTemplateId).empty;

@@ -4989,7 +4989,7 @@ fn checkedArtifactForBuild(
     // An app root that never finished checking has no program; its
     // diagnostics have already been rendered.
     if (!build_env.executable_artifacts_finalized) return error.TypeCheckingFailed;
-    const artifact = build_env.executableRootCheckedArtifact();
+    const artifact = (try build_env.executableRootCheckedArtifact());
     if (artifact.hasUnboundPlatformRequirements()) {
         return ctx.fail(.{ .platform_requires_app = .{ .platform_path = source_path } });
     }
@@ -6121,7 +6121,7 @@ fn lowerDiscoveredLir(
     }
     if (reporter) |r| try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), r, build_env.getTimingInfo());
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
+    const root_artifact = (try build_env.executableRootCheckedArtifact());
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
@@ -6154,7 +6154,7 @@ fn lowerDiscoveredLir(
 
     const internal_static_data: ?[]backend.StaticDataExport = try compile.static_data_exports.buildStaticData(
         ctx.gpa,
-        .{ .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
+        .{ .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
         &lowered,
         switch (artifact) {
             .lir_image => roc_target.RocTarget.detectNative(),
@@ -7458,7 +7458,7 @@ fn nativeBuildEntrypoints(
     for (root_procs, root_metadata, entrypoints) |root_proc, metadata, *entrypoint| {
         std.debug.assert(metadata.kind == .provided_export);
         std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
-        const root = root_artifact.lookupRootRequestByOrder(metadata.order) orelse {
+        const root = (try root_artifact.lookupRootRequestByOrder(metadata.order)) orelse {
             base.invariant("native build invariant violated: missing root request order {d}", .{metadata.order});
         };
         std.debug.assert(root.kind == .provided_export);
@@ -9843,7 +9843,7 @@ fn buildCommandStaticData(
     const static_data_exports = try compile.static_data_exports.buildStaticData(
         ctx.gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
         },
         lowered,
@@ -10569,7 +10569,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     defer ctx.gpa.free(platform_entrypoints);
     const image_static_data = try compile.static_data_exports.buildStaticData(
         ctx.gpa,
-        .{ .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
+        .{ .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
         &lowered,
         target,
         .{},
@@ -10963,7 +10963,7 @@ fn collectTestRootRequests(
     var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     errdefer roots.deinit(allocator);
 
-    for (artifact.root_requests.requests) |root| {
+    for ((try artifact.rootRequests()).requests) |root| {
         if (root.kind != .test_expect or root.requires_pairing) continue;
         try roots.append(allocator, root);
     }
@@ -11013,14 +11013,14 @@ fn buildCliTestPlan(
             if (std.debug.runtime_safety) std.debug.assert(try artifact.bodies().exprContainsDiagnosticError(root.rootExpr()));
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
-                .order = @backingInt(root.id),
+                .order = root.id.index(),
                 .region = testRootRegion(module.semantic.env, root.source),
                 .failure_detail = null,
             });
         }
         // `roc test` pairs no platform with an app, so an expect that reads a
         // value the platform `requires` has nothing to read and cannot run.
-        for (artifact.root_requests.requests) |root| {
+        for ((try artifact.rootRequests()).requests) |root| {
             if (root.kind != .test_expect or !root.requires_pairing) continue;
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
@@ -11641,8 +11641,8 @@ fn lowerCheckedSourceToLir(
     boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
-        .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
-        .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
+        .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root_artifact.rootRequests()).runtime_requests),
+        .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root_artifact.rootRequests()).runtime_requests),
         .test_plan => |plan| plan.requests,
     };
     defer switch (roots) {
@@ -11668,7 +11668,7 @@ fn lowerCheckedSourceToLir(
     return lir.CheckedPipeline.lowerCheckedModulesToLir(
         lir_allocator,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
         },
         requests,

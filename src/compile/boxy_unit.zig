@@ -249,7 +249,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         if (!present) try views.append(gpa, platform_view);
     }
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = check.CheckedArtifact.loweringViewWithRelations(unit.artifact, &.{}),
+        .root = try check.CheckedArtifact.loweringViewWithRelations(unit.artifact, &.{}),
         .imports = views.items,
     };
     var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{}, unit.config);

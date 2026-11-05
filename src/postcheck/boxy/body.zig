@@ -1364,7 +1364,7 @@ pub const Builder = struct {
     pub fn lowerBody(self: *Builder) Allocator.Error!void {
         const worker = self.currentWorker().*;
         const template = switch (worker.key) {
-            .template => |key| self.view.view.checked_procedure_templates.templates.items[@backingInt(key.template)],
+            .template => |key| (try self.view.view.dispatch().procedureTemplate(key.template)),
             .lambda => |key| return try self.lowerLambdaBody(key.expr),
             .adapter => |key| return try self.lowerAdapterBody(key.from),
             .method_entry => |target| return try self.lowerMethodEntry(target),
@@ -1457,43 +1457,46 @@ pub const Builder = struct {
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message } } });
             },
             .intrinsic_wrapper => |wrapper| try Codec.lowerIntrinsic(self, self.view.view.intrinsic_wrappers.get(wrapper).intrinsic, params),
-            .entry_wrapper => |wrapper_id| {
-                const wrapper = self.view.view.entry_wrappers.get(wrapper_id);
-                const root = self.view.view.compile_time_roots.root(wrapper.root);
-                // A conversion root's body is its literal, whose own
-                // conversion runs here (`restoreConversionRoot`); a
-                // validation root's body is the destructure it validates,
-                // whose unit result the evaluator discards.
-                if (params.len != 0) invariant("an entry wrapper has parameters");
-                self.own_root = wrapper.root;
-                try self.tasks.append(self.allocator, .ret);
-                if (root.boxy_value) |stored| {
-                    try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
-                } else switch (root.kind) {
-                    .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .hoisted_validation => switch (root.payload) {
-                        // In a module's object, an evaluated root's wrapper
-                        // produces the stored value: the object defines it
-                        // for the other objects of a link that read the
-                        // root. A program runs a root it is asked to run.
-                        .const_node => |node| if (self.program.moduleUnit() != null)
-                            try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = self.currentWorker().ret, .root = wrapper.root } })
-                        else
-                            try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
-                        .fn_value => |fn_id| if (self.program.moduleUnit() != null)
-                            try self.restoreFn(.{ .module = self.module }, fn_id, self.currentWorker().ret)
-                        else
-                            try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
-                        .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
-                    },
-                    // A literal argument's body is the conversion its root
-                    // names, called on another module's literal.
-                    .literal_argument => try self.lowerLiteralArgumentRoot(wrapper.root, root.literal_argument orelse invariant("a literal argument root names no literal")),
-                }
-            },
+            .entry_wrapper => |wrapper_id| try self.lowerRootEntry(self.view.view.entry_wrappers.get(wrapper_id).root, params),
+            .literal_root => |root_id| try self.lowerRootEntry(root_id, params),
         }
         try self.run();
 
         try self.finishProc(entry, body_start, args.items, ret_layout);
+    }
+
+    /// The body of compile-time root `root_id`'s entry wrapper.
+    fn lowerRootEntry(self: *Builder, root_id: checked.ComptimeRootId, params: []const LocalId) Allocator.Error!void {
+        const root = try self.view.view.compileTimeRoot(root_id);
+        // A conversion root's body is its literal, whose own
+        // conversion runs here (`restoreConversionRoot`); a
+        // validation root's body is the destructure it validates,
+        // whose unit result the evaluator discards.
+        if (params.len != 0) invariant("an entry wrapper has parameters");
+        self.own_root = root_id;
+        try self.tasks.append(self.allocator, .ret);
+        if (root.boxy_value) |stored| {
+            try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
+        } else switch (root.kind) {
+            .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .hoisted_validation => switch (root.payload) {
+                // In a module's object, an evaluated root's wrapper
+                // produces the stored value: the object defines it
+                // for the other objects of a link that read the
+                // root. A program runs a root it is asked to run.
+                .const_node => |node| if (self.program.moduleUnit() != null)
+                    try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = self.currentWorker().ret, .root = root_id } })
+                else
+                    try self.tasks.append(self.allocator, .{ .root_body = root_id }),
+                .fn_value => |fn_id| if (self.program.moduleUnit() != null)
+                    try self.restoreFn(.{ .module = self.module }, fn_id, self.currentWorker().ret)
+                else
+                    try self.tasks.append(self.allocator, .{ .root_body = root_id }),
+                .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .root_body = root_id }),
+            },
+            // A literal argument's body is the conversion its root
+            // names, called on another module's literal.
+            .literal_argument => try self.lowerLiteralArgumentRoot(root_id, root.literal_argument orelse invariant("a literal argument root names no literal")),
+        }
     }
 
     /// The body of a generic hosted worker: a direct call of the extern at
@@ -2313,7 +2316,7 @@ pub const Builder = struct {
         self.hole = body_start;
         const owner = self.program.moduleByKey(checked.constModuleId(request.const_locator));
         try self.tasks.append(self.allocator, .ret);
-        const boxy_value = if (rootOfConstRef(owner, request.const_locator)) |root_id| owner.view.compile_time_roots.root(root_id).boxy_value else null;
+        const boxy_value = if (rootOfConstRef(owner, request.const_locator)) |root_id| (try owner.view.compileTimeRoot(root_id)).boxy_value else null;
         if (boxy_value) |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = stored.node, .ty = worker.ret } }) else switch (owner.view.const_templates.get(request.const_locator).state) {
             .stored_const => |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = request.node orelse stored.node, .ty = worker.ret } }),
             .unimplemented => |unimplemented| {
@@ -2764,9 +2767,10 @@ pub const Builder = struct {
                 try self.push(.{ .restore_region = self.region });
                 self.region = self.nodeRegion(@backingInt(pattern));
                 const conversion = self.bodies().literalConversion(@backingInt(pattern));
+                const conversion_root = try self.bodies().literalConversionRoot(@backingInt(pattern));
                 switch (conversion.literal) {
-                    .numeral => |literal| try self.lowerNumeral(.{ .pattern = pattern }, literal, conversion.plan, conversion.conversion_root),
-                    .quote => |text| try self.lowerQuote(.{ .pattern = pattern }, text, conversion.plan, conversion.conversion_root),
+                    .numeral => |literal| try self.lowerNumeral(.{ .pattern = pattern }, literal, conversion.plan, conversion_root),
+                    .quote => |text| try self.lowerQuote(.{ .pattern = pattern }, text, conversion.plan, conversion_root),
                 }
             },
             .stmt => |stmt| if (self.hole != null) try self.stepStmt(stmt),
@@ -2885,7 +2889,7 @@ pub const Builder = struct {
             .restore_callable_eval => |eval| {
                 const owner = self.program.module(eval.module);
                 const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
-                const root = owner.view.compile_time_roots.root(template.root);
+                const root = (try owner.view.compileTimeRoot(template.root));
                 if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
                 switch (root.payload) {
                     .fn_value => |fn_id| try self.restoreFn(.{ .module = eval.module }, fn_id, eval.ty),
@@ -2897,8 +2901,7 @@ pub const Builder = struct {
                     // whose evaluation failed where it was guarded): its
                     // entry wrapper computes it.
                     .pending, .unevaluated, .runtime => {
-                        const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
-                            invariant("a callable-eval binding's root has no entry wrapper");
+                        const wrapper = self.program.rootWrapper(eval.module, template.root);
                         const callee = try self.program.templateRefWorker(wrapper);
                         const callee_worker = self.program.worker(callee).*;
                         if (callee_worker.params.len != 0 or callee_worker.dictionary_params.len != 0) invariant("a callable-eval entry wrapper takes arguments");
@@ -3067,7 +3070,7 @@ pub const Builder = struct {
     fn storedHoisted(self: *Builder, expr_id: ExprId) Allocator.Error!?HoistedRead {
         const entry = self.view.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.own_root) |own| if (own == entry.root) return null;
-        const root = self.view.view.compile_time_roots.root(entry.root);
+        const root = (try self.view.view.compileTimeRoot(entry.root));
         if (root.boxy_value) |stored| return .{ .stored = stored };
         if (root.payload == .runtime) return null;
         if (entry.pattern != null and root.guarded) return null;
@@ -3177,10 +3180,10 @@ pub const Builder = struct {
         };
         const raw = @backingInt(expr_id);
         switch (expr.data) {
-            .numeral => try self.lowerNumeral(.{ .expr = expr_id }, self.bodies().numeralLiteral(raw), self.bodies().numeralPlan(raw), self.bodies().literalConversionRoot(raw)),
+            .numeral => try self.lowerNumeral(.{ .expr = expr_id }, self.bodies().numeralLiteral(raw), self.bodies().numeralPlan(raw), try self.bodies().literalConversionRoot(raw)),
             .str_segment => |literal| try self.pushValue(try self.strLiteral(self.bodies().text(literal))),
             .str => |segments| if (self.bodies().quoteIsCustom(raw))
-                try self.lowerQuote(.{ .expr = expr_id }, .{ .quote = segments }, self.bodies().quotePlan(raw), self.bodies().literalConversionRoot(raw))
+                try self.lowerQuote(.{ .expr = expr_id }, .{ .quote = segments }, self.bodies().quotePlan(raw), try self.bodies().literalConversionRoot(raw))
             else
                 try self.lowerStrParts(.{ .rest = segments }),
             .lookup_local => |pattern| try self.lowerLookupLocal(expr_id, pattern, self.bodies().resolvedRef(expr_id)),
@@ -3787,7 +3790,7 @@ pub const Builder = struct {
     /// scheme, from the checked edge arguments (`literalEdgeArgs`).
     pub fn fillLiteralArgs(self: *Builder, callee: ?WorkerId, edge: checked.LiteralEdge, out: []LocalId) Allocator.Error!void {
         if (out.len == 0) return;
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
+        const args = try self.view.view.dispatch().literalEdgeArgs(edge);
         if (args.len != out.len) invariantFmt("an edge's {d} literal arguments do not cover its callee's {d} literal requirements (caller {s}, callee {s}{s})", .{
             args.len,
             out.len,
@@ -3803,7 +3806,8 @@ pub const Builder = struct {
         return switch (self.program.worker(id).key) {
             .template => |key| blk: {
                 const view = self.program.module(key.module);
-                const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+                if (key.template.rowIndex() == null) break :blk "a literal root";
+                const template = view.view.checked_procedure_templates.get(key.template);
                 const export_name = view.nameStore().procBase(template.proc_base).export_name orelse break :blk "a template";
                 break :blk view.nameStore().exportNameText(export_name);
             },
@@ -3839,7 +3843,7 @@ pub const Builder = struct {
 
     /// `rootThunk`'s callable, composed here.
     fn composeRootThunk(self: *Builder, root: checked.ComptimeRootId) Allocator.Error!LocalId {
-        const compile_time_root = self.view.view.compile_time_roots.root(root);
+        const compile_time_root = (try self.view.view.compileTimeRoot(root));
         const argument = compile_time_root.literal_argument orelse invariant("a literal argument root records no literal argument");
         // In the compile-time program evaluating the root, a reader reads
         // its value from its slot once it completes; its wrapper converts
@@ -3849,8 +3853,7 @@ pub const Builder = struct {
         const entry = if (slot_read)
             try self.program.rootSlotThunkWorker(self.module, root, try self.convert(argument.ty))
         else blk: {
-            const wrapper = self.program.wrapper_by_root.get(.{ .module = self.module, .root = root }) orelse
-                invariant("a literal argument root has no entry wrapper");
+            const wrapper = self.program.rootWrapper(self.module, root);
             break :blk try self.program.methodEntryWorker(try self.program.templateRefWorker(wrapper));
         };
         return try self.composeDictionary(entry, &.{});
@@ -3918,7 +3921,7 @@ pub const Builder = struct {
     /// matches its base expression against its pattern, crashing where the
     /// pattern does not match (`rootPatternMatch`).
     fn lowerRootBody(self: *Builder, root_id: checked.ComptimeRootId) Allocator.Error!void {
-        const root = self.view.view.compile_time_roots.root(root_id);
+        const root = (try self.view.view.compileTimeRoot(root_id));
         if (root.literalNode()) |literal| return switch (literal) {
             .expr => |expr| try self.push(.{ .own_expr = expr }),
             .pattern => |pattern| try self.push(.{ .literal_pattern_conversion = pattern }),
@@ -3951,7 +3954,7 @@ pub const Builder = struct {
     /// result binder's, and a validation root's is `{}`; where it does not,
     /// the root crashes.
     fn rootPatternMatch(self: *Builder, root_id: checked.ComptimeRootId) Allocator.Error!void {
-        const root = self.view.view.compile_time_roots.root(root_id);
+        const root = (try self.view.view.compileTimeRoot(root_id));
         const body = root.hoisted_body orelse invariant("a hoisted pattern root has no hoisted body");
         const scrutinee_pattern, const base_expr, const result_pattern: ?PatternId = switch (body) {
             .pattern_extraction => |extraction| .{ extraction.scrutinee_pattern, extraction.base_expr, extraction.result_pattern },
@@ -3979,7 +3982,7 @@ pub const Builder = struct {
     /// at the root's edge.
     pub fn lowerLiteralArgumentRoot(self: *Builder, root_id: checked.ComptimeRootId, argument: checked.LiteralArgumentRoot) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        switch (self.view.view.compile_time_roots.root(root_id).payload) {
+        switch ((try self.view.view.compileTimeRoot(root_id)).payload) {
             .const_node => |node| return try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = worker.ret, .root = root_id } }),
             .pending, .unevaluated, .discarded => {},
             inline .fn_value, .expect, .runtime => |_, tag| invariantFmt("a literal argument root holding {s} reached lowering", .{@tagName(tag)}),
@@ -4195,7 +4198,7 @@ pub const Builder = struct {
         if (literals.len != target.literal_params) invariant("a call instance's literal arguments differ from its target's literal_requirements");
         const literal_requirements: []const checked.LiteralRequirement = if (target.literal_scopes.len == 0) &.{} else target.literal_scopes[0];
         const deferred: ?DeferredLiterals = if (deferred_edge) |edge| blk: {
-            const args = self.view.view.checked_procedure_templates.literalEdgeArgs(edge);
+            const args = try self.view.view.dispatch().literalEdgeArgs(edge);
             if (args.len != literals.len) invariant("an edge's literal arguments do not cover its callee's literal requirements");
             break :blk .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
         } else null;
@@ -4223,7 +4226,7 @@ pub const Builder = struct {
         const evidence = (try self.view.view.dispatch().siteEvidence(site)) orelse &.{};
         const env: types.Env = .{ .module = alias_step.module, .vars = alias_step.vars, .bound = bound };
         const deferred_dicts = try self.deferredDictionaries(evidence, .{ .module = alias_step.module, .params = alias_step.params, .env = env }, alias_step.params.len);
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = site });
+        const args = try self.view.view.dispatch().literalEdgeArgs(.{ .use = site });
         if (args.len != alias_step.literal_requirements.len) invariant("an alias's use has no literal arguments for its literal_requirements");
         const deferred: DeferredLiterals = .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
         self.module = alias_step.module;
@@ -4257,7 +4260,7 @@ pub const Builder = struct {
         const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
         const evidence = (try self.view.view.dispatch().siteEvidence(site)) orelse &.{};
         const deferred_dicts = try self.deferredDictionaries(evidence, context, scheme.dictionaries.len);
-        const args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = site });
+        const args = try self.view.view.dispatch().literalEdgeArgs(.{ .use = site });
         if (args.len != scheme.literal_requirements.len) invariant("a local scope's site has no literal arguments for its literal_requirements");
         const deferred: DeferredLiterals = .{ .edge = .{ .args = args, .module = self.module, .view = self.view, .env = self.env } };
         self.env = context.env;
@@ -4294,7 +4297,7 @@ pub const Builder = struct {
     }
 
     pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, at: LiteralAt, kind: LIR.LiteralRejectionKind, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
-        switch (self.view.view.compile_time_roots.root(root_id).payload) {
+        switch ((try self.view.view.compileTimeRoot(root_id)).payload) {
             .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.literalType(at), .root = root_id } }),
             // The literal converts where it is reached: as the root's own
             // evaluation, or at a site no evaluation converts (a literal in
@@ -4518,7 +4521,7 @@ pub const Builder = struct {
             dict.* = try self.paramDictionary(evidence, param_index, context);
         }
         const literals = try self.program.arena.allocator().alloc(LocalId, scheme.literal_requirements.len);
-        const literal_args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = expr_id });
+        const literal_args = try self.view.view.dispatch().literalEdgeArgs(.{ .use = expr_id });
         if (literal_args.len != literals.len) invariant("an alias use has no literal arguments for its scheme's literal_requirements");
         for (literal_args, literals) |source, *word| word.* = try self.literalArg(source);
         try self.alias_scopes.append(self.allocator, .{ .params = scheme.dictionaries, .dicts = dicts, .literals = literals, .literal_requirements = scheme.literal_requirements, .saved_env = self.env });
@@ -4890,7 +4893,7 @@ pub const Builder = struct {
             .scheme_vars = scope_schema.vars,
             .dictionaries = dictionaries.items,
             .params = evidence_params,
-            .literal_requirements = templates.scopeLiteralRequirements(&scope),
+            .literal_requirements = try view.view.dispatch().scopeLiteralRequirements(scope_id),
             .per_call = self.program.local_procs.contains(.{ .module = view.index, .expr = scope.checked_expr }),
         };
     }
@@ -5056,7 +5059,7 @@ pub const Builder = struct {
     pub fn restoreConstUse(self: *Builder, expr_id: ExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
         const owner = self.program.moduleByKey(use.const_ref.artifact);
         const template = owner.view.const_templates.get(use.const_ref);
-        if (rootOfConstRef(owner, use.const_ref)) |root_id| if (owner.view.compile_time_roots.root(root_id).boxy_value) |stored| {
+        if (rootOfConstRef(owner, use.const_ref)) |root_id| if ((try owner.view.compileTimeRoot(root_id)).boxy_value) |stored| {
             return try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, root_id);
         };
         switch (template.state) {
@@ -6725,14 +6728,12 @@ pub const Builder = struct {
     /// scheme has one.
     fn localAliasStep(self: *Builder, module: ModuleIndex, lookup: ExprId, dispatch_scope: ?checked.DispatchScopeId) Allocator.Error!AliasStep {
         const scope_id = dispatch_scope orelse return .{ .module = module, .lookup = lookup, .vars = &.{}, .params = &.{} };
-        const templates = self.program.module(module).view.checked_procedure_templates;
-        const scope = templates.dispatch_scopes[@backingInt(scope_id)];
         return .{
             .module = module,
             .lookup = lookup,
             .vars = (try self.program.module(module).view.dispatch().scopeSchema(scope_id)).vars,
             .params = (try self.program.module(module).view.dispatch().scopeSchema(scope_id)).params,
-            .literal_requirements = templates.scopeLiteralRequirements(&scope),
+            .literal_requirements = try self.program.module(module).view.dispatch().scopeLiteralRequirements(scope_id),
         };
     }
 
@@ -6742,17 +6743,14 @@ pub const Builder = struct {
     fn callableEvalAliasStep(self: *Builder, module_index: ModuleIndex, template_id: checked.CallableEvalTemplateId) Allocator.Error!AliasStep {
         const view = self.program.module(module_index);
         const template = view.view.callable_eval_templates.templates[@backingInt(template_id)];
-        const wrapper = self.program.wrapper_by_root.get(.{ .module = module_index, .root = template.root }) orelse
-            invariant("a callable-eval template's root has no entry wrapper");
+        const wrapper = self.program.rootWrapper(module_index, template.root);
         const owner = self.program.moduleByKey(.{ .bytes = wrapper.artifact.bytes });
-        const templates = owner.view.checked_procedure_templates;
-        const wrapper_template = templates.templates.items[@backingInt(wrapper.template)];
         return .{
             .module = module_index,
             .lookup = template.forwarded_lookup orelse invariant("a method's alias binding is not an exact procedure alias"),
             .vars = try owner.view.dispatch().templateSchemeVars(wrapper.template),
             .params = try owner.view.dispatch().evidenceParams(wrapper.template),
-            .literal_requirements = templates.templateLiteralRequirements(&wrapper_template),
+            .literal_requirements = try owner.view.dispatch().templateLiteralRequirements(wrapper.template),
             .fn_ty = template.checked_fn_root,
         };
     }
@@ -7670,7 +7668,7 @@ pub const Builder = struct {
             .callable_eval_template, .checked_error => return null,
         };
         const owner = self.program.moduleByKey(.{ .bytes = template_ref.artifact.bytes });
-        const op = (owner.view.checked_procedure_templates.templates.items[@backingInt(template_ref.template)].provided_low_level orelse return null).layoutResolved() orelse return null;
+        const op = ((try owner.view.dispatch().procedureTemplate(template_ref.template)).provided_low_level orelse return null).layoutResolved() orelse return null;
         for (call.args) |arg| switch (self.bodies().exprData(arg)) {
             .lookup_local => {},
             .numeral, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
@@ -7838,7 +7836,7 @@ pub const Builder = struct {
             // instantiation has no edge: no use instantiated the lambda, so
             // nothing calls it, and like a `from_scheme` dictionary each
             // argument is a crash nothing reads.
-            const literal_args = self.view.view.checked_procedure_templates.literalEdgeArgs(.{ .use = expr_id });
+            const literal_args = try self.view.view.dispatch().literalEdgeArgs(.{ .use = expr_id });
             if (literal_args.len == scheme.literal_requirements.len) {
                 for (literal_args) |source| try own_dicts.append(self.allocator, try self.literalArg(source));
             } else {

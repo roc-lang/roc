@@ -4922,8 +4922,9 @@ sealed. It consists of exactly these parts:
   from the module, after a cache hit as well. An exhaustiveness check's
   index in its list is its checked site id.
 - The evaluation output: the constant store (`ConstStore`), compile-time root
-  payloads and compile-time root reads. Compile-time evaluation writes it and
-  nothing else does.
+  payloads (the root table's rows', and the literal roots' by identity) and
+  compile-time root reads. Compile-time evaluation writes it and nothing
+  else does.
 
 **Sealing.** Checking canonicalizes the solver store in place as its last
 write before sealing it (`types.Store.canonicalizeAndSeal`). Every slot comes
@@ -5342,16 +5343,40 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   strongly connected component of the module's call graph, never per root.
   The graph and its components are a per-module slot (for demand vectors,
   `templateDemandGraph`: every template's base vector and edges, read from
-  its body, its schema and its plans' dispatch resolution). A consumer
-  demands, holding no claim, every component a component reaches and every
-  imported callee's result before it claims the component, so a
-  component's computation reads only finished results and never waits on a
-  slot of its own kind, in its own module or another.
+  its body, its schema and its plans' dispatch resolution; for literal
+  requirements, `literalGraph`: every edge the module's bodies hold, with
+  the node that holds it first, which computes its arguments, and each
+  scheme's own open literals). A consumer demands, holding no claim, every
+  component a component reaches and every imported callee's result before
+  it claims the component, so a component's computation reads only
+  finished results and never waits on a slot of its own kind, in its own
+  module or another. A literal component (`literalComponent`) holds its
+  schemes' literal requirements, the literal arguments of the edges its
+  templates hold first and its literal argument roots, each with its entry
+  wrapper's function type and scheme, which the component creates; it
+  creates each type under the store's creation lock, held around that
+  creation only, after every slot the creation reads (the schemas and
+  substitutions it instantiates, the requirements of imported callees, the
+  interface capabilities of every module whose types it copies). The
+  literal argument roots a template's edges read are a per-template slot
+  over finished components (`templateLiteralArgumentDemand`).
+- Per-unit slots: the literal conversion roots of a top-level unit's
+  literals (`ModuleAnalyses.unitLiteralConversions`): each literal whose
+  custom conversion dispatch resolution proved closed, its request
+  eligibility, and its entry wrapper's function type and scheme, created
+  under the creation lock after the slots the decision reads.
 - Per-module slots: the key index (one over source types, one over
   synthesized types), the method registry view, provided exports, the
   nodes whose dispatch plan cannot run, diagnostic errors, single-source
-  calls, and the exhaustiveness check checking left at each match
-  expression and destructuring pattern, by node.
+  calls, the exhaustiveness check checking left at each match
+  expression and destructuring pattern, by node, and the module's root
+  requests (`ModuleAnalyses.rootRequests`: its explicit roots and checking
+  mode, which its checking context records, its provided and exposed
+  entrypoints, its platform-required bindings, and its eligible
+  compile-time roots: the root table's rows, then every unit's literal
+  conversion roots, then every literal component's argument roots, with
+  the compile-time requests in evaluation order). A platform/app pairing's
+  root requests are its own slot over its platform's.
 - Per-module slots of `check.ModuleAnalyses`
   (`src/check/module_analyses.zig`), which every checked module owns:
   the template closures of the module's export rows (`exportClosures`),
@@ -5458,6 +5483,21 @@ There is no scheduling edge between modules. A module's analyses are never
 ordered after its importers, nothing waits for demand to flow top-down, and
 the read path takes no lock.
 
+No slot's result depends on whether, when or on which thread another slot
+was computed. Checking a module and recording its checked data creates every
+type and interns every name its cache entry holds, and only then is the
+module published: its type store and name store are marked published
+(`markPublished`), its interface capabilities get their source
+(`attachCapabilitySource`), and its analyses are told
+(`CheckedModuleArtifact.finishPublication`). No slot of a module runs before
+that point, publication's own steps included; each slot claim of a
+module's analyses (`ModuleAnalyses`, `BodyAnalyses`) asserts it in debug
+builds. A slot that reads a module's nominal types demands the module's
+interface capabilities first, so every slot reads every nominal type at the
+representation its capabilities give it; a read of a nominal type of a
+module whose capabilities no consumer has demanded is a compiler bug,
+asserted in debug builds.
+
 An analysis that reads modules other than its own finds them through the
 `ModuleResolver` its consumer passes: publication's imports, a build's
 coordinator, or a list of available modules. Every resolver resolves every
@@ -5491,7 +5531,8 @@ of a node's shape costs what reading the node costs:
   `numeralPlan`, `quotePlan`, `iteratorForPlan`, from
   `StaticDispatchPlanTable` keyed by node), resolved value references
   (`resolvedRef`), calls' direct targets (`callDirectTarget`), literal
-  conversion roots (`literalConversionRoot`, from `CompileTimeRootTable`),
+  conversion roots (`literalConversionRoot`, decided from the literal's
+  conversion plan's dispatch resolution),
   a call's function constraint type and an interpolation's assembler type
   (`callFnType`, `interpolationAssemblerType`), tag, field and symbol
   label ids (`tagLabel`, `recordFieldLabel`, `externalSymbolName`), a
@@ -5526,6 +5567,24 @@ A literal conversion compile-time root names its literal explicitly
 (`CompileTimeRoot.literal`, an expression or a custom literal pattern), and a
 hoisted pattern root names its hoisted body; no root names a node that does
 not exist in CIR.
+
+A compile-time root's identity (`ComptimeRootId`) is a function of the
+module's checked data alone. A root of the module's root table (a
+definition's, an expect's, a selected hoisted root's, a REPL expression's)
+is named by its row, which checking's recorded outputs fix. A literal root
+is no row: a literal conversion root is named by its literal
+(`literalConversionRootId`), and a literal argument root by the edge that
+fixes its type and the callee requirement it converts
+(`literalArgumentRootId`). A literal root's entry wrapper is no row of the
+template table either: its template id is its root's identity
+(`literalRootWrapperTemplate`), its procedure base is the one every literal
+root's wrapper of the module shares (`literal_root_proc_base`, interned with
+the module's other procedure bases before its names are published), and
+`CheckedDispatch.procedureTemplate` describes it from the slot that holds
+the root. Its function type and scheme are created by that slot. What
+compile-time evaluation stores for a literal root is evaluation output keyed
+by the root's identity (`LiteralRootPayloadTable`), serialized with the
+module in identity order.
 
 Constructs lowering needs that the IR does not contain are built by each
 lowering in its worker's workspace and never added to the checked module:
@@ -14253,13 +14312,18 @@ converted value as a hidden argument: a *literal argument*. No type is
 special-cased: a literal at a builtin number type takes the same path as one
 at a user type, through the builtin type's own `from_numeral`.
 
-The checker records the data in every checked module, whatever strategy
-the compilation runs under: the data describes the program, and a checked
-module serves both strategies' programs (its cache identity names no
-strategy).
+The data is derived from every checked module on demand, whatever strategy
+the compilation runs under: it describes the program, and a checked module
+serves both strategies' programs (its cache identity names no strategy).
+The module's literal call graph (`ModuleAnalyses.literalGraph`) holds every
+edge its bodies hold, each scheme's own open literals, and the strongly
+connected components of the edges between templates, numbered callees
+first; each component's requirements, edge arguments and argument roots are
+one slot (`ModuleAnalyses.literalComponent`, "On-Demand Analyses And
+Write-Once Slots").
 
-- A scheme's *literal requirements* (`CheckedProcedureTemplate.literal_requirements`,
-  and the dispatch scope's `literal_requirements`): one per literal of its own body
+- A scheme's *literal requirements* (`CheckedDispatch.templateLiteralRequirements`,
+  `CheckedDispatch.scopeLiteralRequirements`): one per literal of its own body
   whose conversion plan is open (`.evidence_dependent` or
   `.direct_parametric`), recording the literal (`LiteralSite`: module,
   expression, kind) and its type over the scheme's variables; and one per
@@ -14267,22 +14331,24 @@ strategy).
   *edge*: a dispatch edge's evidence node, a procedure use, a generalized
   local function's use or construction), recording the type after the edge's
   substitution, the edge, and the callee's literal requirement index. Literal requirements are
-  computed to a fixpoint over the module's schemes and deduplicated by
+  computed to a fixpoint over the component's schemes and deduplicated by
   literal, type key, and the type's variables, so a recursive call at the same
   types adds nothing, however many roots its instantiations produce.
-- Each edge's *literal arguments* (`literalEdgeArgs`): for every literal requirement
+- Each edge's *literal arguments* (`CheckedDispatch.literalEdgeArgs`): for every literal requirement
   of the instantiated scheme, where the body gets the value from. An
   instantiation at a closed type is a `literal_argument` compile-time root
-  of this module (`.root`), one per literal and closed type, whose wrapper
-  body is the conversion at that edge. An instantiation at an open type is
+  of this module (`.root`), named by the edge and the callee's requirement
+  index (`literalArgumentRootId`) and shared by the later edges of its
+  component that instantiate the same literal at the same closed type,
+  whose wrapper body is the conversion at that edge. An instantiation at an open type is
   forwarded: the value is one of the enclosing scheme's own literal
   arguments (`.forwarded`). An instantiation at a type mentioning a variable
   that no scheme around the edge quantifies (a use's copy that nothing relates
   to the program, as in `_ = local` for a generalized local function nothing
   calls) is fixed by no use, so nothing reads its value (`.unbound`). A
-  template's `literal_argument_demand` lists the
-  roots its edges read, so compile-time evaluation orders them before any
-  evaluation of the template.
+  template's literal argument demand (`CheckedDispatch.appendLiteralArgumentDemand`)
+  lists the roots its edges read, so compile-time evaluation orders them
+  before any evaluation of the template.
 - A use of an exact procedure alias is an edge to the alias's entry wrapper,
   whose literal requirements are those its forwarded lookup, itself an edge,
   gives it. Boxy passes each alias's arguments down the chain as it does
@@ -14302,7 +14368,7 @@ strategy).
   evaluates it like any pending root of its modules, in dependency order:
   the request scheduler (`CompileTimeRequestScheduler`) and the finalizer's
   completion state walk the scheme a root's edge instantiates and treat a
-  template's `literal_argument_demand` as reads, so each root completes
+  template's literal argument demand as reads, so each root completes
   before any root whose evaluation calls through it. A `.lss` compilation
   converts each literal in the specialization that fixes its type and never
   reads these roots, so it leaves them `unevaluated`, exactly as it leaves a

@@ -421,7 +421,7 @@ fn compileGlueSpec(
         return error.CompilationFailed;
     }
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
+    const root_artifact = (try build_env.executableRootCheckedArtifact());
     const imported_artifacts = build_env.collectImportedArtifactViews(gpa, root_artifact) catch {
         return error.OutOfMemory;
     };
@@ -431,7 +431,7 @@ fn compileGlueSpec(
     };
     errdefer gpa.free(relation_artifacts);
 
-    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests) catch {
+    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root_artifact.rootRequests()).runtime_requests) catch {
         return error.OutOfMemory;
     };
     errdefer gpa.free(lir_roots);
@@ -443,7 +443,7 @@ fn compileGlueSpec(
     var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
-            .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .root = try CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
             .imports = imported_artifacts,
         },
         .{ .requests = lir_roots },
@@ -457,7 +457,7 @@ fn compileGlueSpec(
     };
     errdefer lowered.deinit();
 
-    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse
+    const glue_proc = (try selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue)) orelse
         glueInvariant("glue spec produced no published make_glue platform root", .{});
 
     const arg_layouts = argLayoutsForProc(gpa, &lowered.lir_result.store, glue_proc) catch {
@@ -995,11 +995,11 @@ fn selectGlueSpecRootProc(
     root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     expected_ffi_symbol: []const u8,
-) ?lir.LirProcSpecId {
+) std.mem.Allocator.Error!?lir.LirProcSpecId {
     for (lowered.lir_result.root_procs.items, lowered.lir_result.root_metadata.items) |root_proc, metadata| {
         std.debug.assert(metadata.kind == .provided_export);
         std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
-        const root = root_artifact.lookupRootRequestByOrder(metadata.order) orelse
+        const root = (try root_artifact.lookupRootRequestByOrder(metadata.order)) orelse
             glueInvariant("missing root request order {d}", .{metadata.order});
         const ffi_symbol = root_artifact.providedEntrypointName(root) orelse
             glueInvariant("provided export root has no published FFI symbol", .{});
@@ -2408,7 +2408,7 @@ const TypeTable = struct {
         var abi_layouts = try lir.CheckedPipeline.resolveCheckedAbiLayouts(
             self.gpa,
             .{
-                .root = CheckedArtifact.loweringViewWithRelations(artifact, relation_artifacts),
+                .root = try CheckedArtifact.loweringViewWithRelations(artifact, relation_artifacts),
                 .imports = imported_artifacts,
             },
             requests.items,

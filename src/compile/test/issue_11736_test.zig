@@ -173,7 +173,7 @@ fn expectBlockRequirement(value: []const u8, expected_mismatches: usize, compile
         // Reaching the rejected requirement reports nothing beyond the
         // checker's own diagnostic, so every pairing is cacheable.
         try std.testing.expectEqual(@as(u32, if (iteration == 0) 1 else 0), coord.platform_pairing_count);
-        const platform = coord.executableRootCheckedArtifact();
+        const platform = (try coord.executableRootCheckedArtifact());
         const bodies = platform.bodies();
         for (platform.resolved_value_refs.records) |ref| {
             if (ref.ref != .platform_required_checked_error) continue;

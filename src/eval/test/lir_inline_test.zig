@@ -185,7 +185,7 @@ fn lowerModuleWithOptions(
     }
 
     const main_def = resources.can.explicitRootDefByName("main") orelse return error.MissingRootProcedure;
-    const main_request = for (resources.checked_artifact.root_requests.requests) |request| {
+    const main_request = for ((try resources.checked_artifact.rootRequests()).requests) |request| {
         switch (request.source) {
             .def => |def| if (def == main_def) break request,
             .expr, .statement, .required_binding, .hoisted, .literal => {},
@@ -196,7 +196,7 @@ fn lowerModuleWithOptions(
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
         .{ .requests = &published_roots },
@@ -272,9 +272,9 @@ fn lowerMonotypeModuleWithOptions(
     var selected_test_roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     defer selected_test_roots.deinit(allocator);
     const root_requests = switch (options.root_selection) {
-        .all => resources.checked_artifact.root_requests.requests,
+        .all => (try resources.checked_artifact.rootRequests()).requests,
         .test_expects => blk: {
-            for (resources.checked_artifact.root_requests.requests) |request| {
+            for ((try resources.checked_artifact.rootRequests()).requests) |request| {
                 if (request.kind == .test_expect) try selected_test_roots.append(allocator, request);
             }
             break :blk selected_test_roots.items;
@@ -284,7 +284,7 @@ fn lowerMonotypeModuleWithOptions(
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
         .{
@@ -330,10 +330,10 @@ fn monotypeCountersForModuleWithImports(
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = (try resources.checked_artifact.rootRequests()).requests },
         .{ .specialization_counters = &counters },
     );
     defer mono.deinit();
@@ -1055,10 +1055,10 @@ fn liftModuleAfterSpecConstr(
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = (try resources.checked_artifact.rootRequests()).requests },
         .{},
     );
     var mono_owned = true;
@@ -1264,10 +1264,10 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = (try resources.checked_artifact.rootRequests()).requests },
         .{ .proc_debug_names = true },
     );
     var mono_owned = true;
@@ -2394,7 +2394,7 @@ test "adjacent expect roots remain isolated and ordered" {
     try std.testing.expect(roots[0].def != roots[1].def);
 
     var root_index: usize = 0;
-    for (lowered.resources.checked_artifact.root_requests.requests) |request| {
+    for ((try lowered.resources.checked_artifact.rootRequests()).requests) |request| {
         if (request.kind != .test_expect) continue;
         try std.testing.expectEqual(request.order, roots[root_index].request.order);
         root_index += 1;
@@ -3287,10 +3287,10 @@ test "differently ordered source record rows produce normalized monotype rows" {
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = (try resources.checked_artifact.rootRequests()).requests },
         .{},
     );
     defer mono.deinit();
@@ -9472,8 +9472,8 @@ test "custom literal field default gets an ordinary conversion root" {
     var quote_roots: usize = 0;
     const bodies = resources.checked_artifact.bodies();
     for (bodies.defaultExprs()) |default_expr| {
-        const conversion = resources.checked_artifact.compile_time_roots.root(bodies.literalConversion(default_expr).conversion_root orelse
-            return error.TestUnexpectedResult);
+        const conversion = (try resources.checked_artifact.compileTimeRoot(bodies.literalConversion(default_expr).conversion_root orelse
+            return error.TestUnexpectedResult));
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
             .quote_conversion => quote_roots += 1,

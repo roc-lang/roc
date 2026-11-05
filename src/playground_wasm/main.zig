@@ -1769,7 +1769,7 @@ fn collectPlaygroundTestRootRequests(
     var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     errdefer roots.deinit(alloc);
 
-    for (artifact.root_requests.requests) |root| {
+    for ((try artifact.rootRequests()).requests) |root| {
         if (root.kind != .test_expect) continue;
         try roots.append(alloc, root);
     }
@@ -1828,7 +1828,7 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
         .{ .requests = test_roots },

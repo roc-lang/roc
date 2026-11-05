@@ -3720,7 +3720,7 @@ fn snapshotRootRequestByOrder(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     order: u32,
 ) check.CheckedArtifact.RootRequest {
-    for (root_artifact.root_requests.requests) |request| {
+    for ((try root_artifact.rootRequests()).requests) |request| {
         if (request.order == order) return request;
     }
     base.invariant("snapshot invariant violated: missing root request order {d}", .{order});
@@ -3879,7 +3879,7 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
+    const root_artifact = (try build_env.executableRootCheckedArtifact());
     const imported_artifacts = try build_env.collectImportedArtifactViews(allocator, root_artifact);
     defer allocator.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(allocator, root_artifact);
@@ -3911,13 +3911,13 @@ fn processDevObjectSnapshot(
             }
 
             const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-            const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, root_artifact.root_requests.runtime_requests);
+            const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, (try root_artifact.rootRequests()).runtime_requests);
             defer allocator.free(build_roots);
 
             var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
                 allocator,
                 .{
-                    .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+                    .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
                     .imports = imported_artifacts,
                 },
                 .{
@@ -3942,7 +3942,7 @@ fn processDevObjectSnapshot(
             const static_data_exports = compile.static_data_exports.buildStaticData(
                 allocator,
                 .{
-                    .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+                    .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
                     .imports = imported_artifacts,
                 },
                 &lowered,

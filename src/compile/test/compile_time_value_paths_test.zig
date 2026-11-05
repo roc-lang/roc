@@ -134,15 +134,15 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     var continued = try session.takeRuntime(gpa, session.runtime_roots, optimizedTarget(inline_mode));
     errdefer continued.deinit();
 
-    const root = coord.executableRootCheckedArtifact();
+    const root = (try coord.executableRootCheckedArtifact());
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root.rootRequests()).runtime_requests);
     defer gpa.free(lir_roots);
     var restored = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         .{
@@ -156,7 +156,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     const image = static_data_exports.buildStaticData(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         &continued,

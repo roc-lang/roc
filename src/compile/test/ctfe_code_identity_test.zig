@@ -182,12 +182,12 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, coord.runtime_lowering.?.target);
     defer runtime.deinit();
     // The build links the runtime program's materialized static data.
-    const root = coord.executableRootCheckedArtifact();
+    const root = (try coord.executableRootCheckedArtifact());
     const imports = try coord.collectImportedArtifactViews(arena.allocator(), root);
     const relations = try coord.collectRelationArtifactViews(arena.allocator(), root);
     const image = try static_data_exports.buildStaticData(
         allocator,
-        .{ .root = check.CheckedArtifact.loweringViewWithRelations(root, relations), .imports = imports },
+        .{ .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations), .imports = imports },
         &runtime,
         roc_target.RocTarget.detectNative(),
         .{ .include_provided_exports = true },

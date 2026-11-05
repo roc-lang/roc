@@ -83,7 +83,7 @@ test "issue 12434: lowering visibility lists each visible artifact once" {
         try std.testing.expectEqual(@as(usize, 0), module_reports.reports.len);
     }
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
+    const root_artifact = (try build_env.executableRootCheckedArtifact());
     const module_ids = (try root_artifact.loweringVisibility(build_env.moduleResolver())).module_ids;
     for (module_ids, 0..) |key, i| {
         for (module_ids[i + 1 ..]) |other| {

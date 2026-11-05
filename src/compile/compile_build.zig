@@ -3371,11 +3371,11 @@ pub const BuildEnv = struct {
         return root.semanticData();
     }
 
-    pub fn getExecutableRootSemanticData(self: *BuildEnv) ?SemanticModuleData {
+    pub fn getExecutableRootSemanticData(self: *BuildEnv) std.mem.Allocator.Error!?SemanticModuleData {
         if (self.getPlatformSemanticData()) |platform| {
             if (platform.checked_artifact) |artifact| {
                 if (artifact.checking_context_identity.platform_app_relation != null or
-                    artifact.root_requests.requests.len > 0 or
+                    (try artifact.rootRequests()).requests.len > 0 or
                     artifact.provided_exports.exports.len > 0)
                 {
                     return platform;
@@ -3385,8 +3385,8 @@ pub const BuildEnv = struct {
         return self.getAppSemanticData();
     }
 
-    pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
-        const semantic = self.getExecutableRootSemanticData() orelse
+    pub fn executableRootCheckedArtifact(self: *BuildEnv) std.mem.Allocator.Error!*const check.CheckedArtifact.CheckedModuleArtifact {
+        const semantic = (try self.getExecutableRootSemanticData()) orelse
             base.invariant("build env invariant violated: executable root semantic data is missing", .{});
         return semantic.checked_artifact orelse
             base.invariant("build env invariant violated: executable root has no checked artifact", .{});

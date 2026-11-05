@@ -20,8 +20,64 @@ pub const CheckedTypeId = enum(u32) {
 /// Public `CheckedTypeSchemeId` declaration.
 pub const CheckedTypeSchemeId = enum(u32) { _ };
 
-/// Identity of one compile-time root within its checked module.
-pub const ComptimeRootId = enum(u32) { _ };
+/// Identity of one compile-time root within its checked module, a function
+/// of the module's checked data alone: a row of the module's compile-time
+/// root table (a definition's, an expect's, a selected hoisted root's or a
+/// REPL expression's), a literal conversion root named by its literal, or a
+/// literal argument root named by the edge that fixes its type and the
+/// callee requirement it converts. The top two bits say which; the encodings
+/// live with the literal identities (`checked_artifact.literalConversionRootId`,
+/// `checked_artifact.literalArgumentRootId`).
+pub const ComptimeRootId = enum(u128) {
+    _,
+
+    pub const Kind = enum(u2) { row = 0, literal_conversion = 1, literal_argument = 2 };
+
+    pub const kind_shift = 126;
+
+    /// The root at `index` of the module's compile-time root table.
+    pub fn row(row_index: u32) ComptimeRootId {
+        return @fromBackingInt(row_index);
+    }
+
+    pub fn kind(self: ComptimeRootId) Kind {
+        return switch (@as(u2, @truncate(@backingInt(self) >> kind_shift))) {
+            0 => .row,
+            1 => .literal_conversion,
+            2 => .literal_argument,
+            3 => unreachable, // no encoding sets both kind bits
+        };
+    }
+
+    /// The root's table row, or null for a literal root.
+    pub fn rowIndex(self: ComptimeRootId) ?u32 {
+        return switch (self.kind()) {
+            .row => @truncate(@backingInt(self)),
+            .literal_conversion, .literal_argument => null,
+        };
+    }
+
+    /// The root's table row; the root must be one.
+    pub fn index(self: ComptimeRootId) u32 {
+        std.debug.assert(self.kind() == .row);
+        return @truncate(@backingInt(self));
+    }
+
+    /// Feed the id to a digest: a row as its 32-bit index, a literal root as
+    /// 32 set bits and then its 128-bit identity, each little-endian.
+    pub fn digestInto(self: ComptimeRootId, hasher: anytype) void {
+        const raw = @backingInt(self);
+        if (raw >> 32 == 0) {
+            const little = std.mem.nativeToLittle(u32, @truncate(raw));
+            hasher.update(std.mem.asBytes(&little));
+            return;
+        }
+        const marker = std.mem.nativeToLittle(u32, std.math.maxInt(u32));
+        hasher.update(std.mem.asBytes(&marker));
+        const little = std.mem.nativeToLittle(u128, raw);
+        hasher.update(std.mem.asBytes(&little));
+    }
+};
 /// Stable identity of a generalized-local dispatch scope within a checked
 /// module artifact.
 pub const DispatchScopeId = enum(u32) { _ };

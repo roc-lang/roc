@@ -444,7 +444,6 @@ pub const LiteralConversion = struct {
     },
     /// The `from_numeral` or `from_quote` plan, absent before plans exist.
     plan: ?StaticDispatchPlanId,
-    conversion_root: ?ComptimeRootId,
     /// The type the literal converts to.
     ty: CheckedTypeId,
 };
@@ -663,9 +662,9 @@ pub const CheckedBodies = struct {
 
     /// The compile-time root that evaluates a literal's conversion, when that
     /// conversion is independent of specialization.
-    pub fn literalConversionRoot(self: CheckedBodies, raw_node: u32) ?ComptimeRootId {
-        const roots = self.tables.roots orelse return null;
-        return roots.literalConversionRootForNode(raw_node);
+    pub fn literalConversionRoot(self: CheckedBodies, raw_node: u32) Allocator.Error!?ComptimeRootId {
+        const dispatch = self.tables.dispatch orelse return null;
+        return dispatch.literalConversionRoot(raw_node);
     }
 
     /// A numeric literal expression's or pattern's exact digits.
@@ -906,13 +905,11 @@ pub const CheckedBodies = struct {
             .numeral => .{
                 .literal = .{ .numeral = self.numeralLiteral(raw_node) },
                 .plan = self.numeralPlan(raw_node),
-                .conversion_root = self.literalConversionRoot(raw_node),
                 .ty = self.typeOf(ModuleEnv.varFrom(node)),
             },
             .quote => .{
                 .literal = .{ .quote = self.quoteText(raw_node) },
                 .plan = self.quotePlan(raw_node),
-                .conversion_root = self.literalConversionRoot(raw_node),
                 .ty = self.typeOf(ModuleEnv.varFrom(node)),
             },
         };

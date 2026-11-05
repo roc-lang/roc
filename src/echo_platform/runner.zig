@@ -204,7 +204,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
     // Defense in depth: even with no blocking reports, the artifact may be
     // missing in some unexpected state. Bail cleanly instead of trapping in
     // the asserting variant (compile_build.zig:executableRootCheckedArtifact).
-    const root_semantic = build_env.getExecutableRootSemanticData() orelse {
+    const root_semantic = (try build_env.getExecutableRootSemanticData()) orelse {
         diag.step("executableRootCheckedArtifact", error.CompilationFailed);
         return error.CompilationFailed;
     };
@@ -224,7 +224,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
     };
     defer allocator.free(relation_views);
 
-    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(allocator, root_artifact.root_requests.runtime_requests) catch |err| {
+    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(allocator, (try root_artifact.rootRequests()).runtime_requests) catch |err| {
         diag.step("selectPlatformEntrypointRoots", err);
         return err;
     };
@@ -233,7 +233,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
     var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
             .imports = import_views,
         },
         .{ .requests = lir_roots },
@@ -258,7 +258,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         return err;
     };
     const image_data = try eval.buildStaticDataForWidth(allocator, .{
-        .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
+        .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
         .imports = import_views,
     }, &lowered, lowered.target_usize, .{});
     defer eval.deinitStaticData(allocator, image_data);

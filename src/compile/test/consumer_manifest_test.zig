@@ -246,7 +246,7 @@ test "a build evaluates every compile-time value and materializes the ones its p
 
     const host = &session.completed.?;
     const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
-    const helper_roots = helper.root_requests.compile_time_requests;
+    const helper_roots = (try helper.rootRequests()).compile_time_requests;
     try std.testing.expectEqual(@as(usize, 2), helper_roots.len);
     // The value the program reads is materialized and frozen; the other root
     // is complete but stays in its module's store. Transcoding rejects a read
@@ -254,7 +254,7 @@ test "a build evaluates every compile-time value and materializes the ones its p
     // below also fails if the wrong root were the materialized one.
     try std.testing.expectEqual(@as(usize, 1), try materializedAmong(host, helper.key.digest(), helper_roots));
     for (helper_roots) |request| {
-        try std.testing.expect(helper.compile_time_roots.root(request.compile_time_root.?).payload != .unevaluated);
+        try std.testing.expect((try helper.compileTimeRoot(request.compile_time_root.?)).payload != .unevaluated);
     }
 
     // The runtime program restores the completed table from Helper's store
@@ -327,7 +327,7 @@ test "one evaluated root has one completed-value slot however many places read i
     const session = &coord.program_session.?;
     const stages = &session.completed.?;
     const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
-    const helper_roots = helper.root_requests.compile_time_requests;
+    const helper_roots = (try helper.rootRequests()).compile_time_requests;
     try std.testing.expectEqual(@as(usize, 3), helper_roots.len);
 
     // Every one of these values is computed, read at runtime, and
@@ -524,7 +524,7 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
     const app = coord.appRootCheckedArtifact();
     var expects = std.ArrayList(CheckedArtifact.RootRequest).empty;
     defer expects.deinit(allocator);
-    for (app.root_requests.requests) |request| {
+    for ((try app.rootRequests()).requests) |request| {
         if (request.kind == .test_expect) try expects.append(allocator, request);
     }
     try std.testing.expectEqual(@as(usize, 2), expects.items.len);

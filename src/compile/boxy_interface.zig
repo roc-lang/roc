@@ -264,17 +264,15 @@ pub const Digests = struct {
     /// its own module's interface.
     fn hashTemplateRef(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) Allocator.Error!void {
         hasher.update(&self.nameOf(ref.artifact.bytes));
-        hasher.update(std.mem.asBytes(&@as(u32, @backingInt(ref.template))));
+        ref.template.digestInto(hasher);
         if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return;
-        const templates = &artifact.checked_procedure_templates;
-        const template = templates.templates.items[@backingInt(ref.template)];
         const schema = try artifact.dispatch().templateSchema(ref.template);
         hasher.update(std.mem.asBytes(&schema.vars.len));
         for (schema.params) |param| {
             hashBytes(hasher, artifact.canonical_names.methodNameText(param.method));
             hasher.update(std.mem.asBytes(&(param.slot orelse @as(u32, std.math.maxInt(u32)))));
         }
-        hasher.update(std.mem.asBytes(&@as(u32, @intCast(templates.templateLiteralRequirements(&template).len))));
+        hasher.update(std.mem.asBytes(&@as(u32, @intCast((try artifact.dispatch().templateLiteralRequirements(ref.template)).len))));
     }
 
     /// How an importer reads a constant: the value stored for it, or the
@@ -288,7 +286,7 @@ pub const Digests = struct {
                     .hoisted_root => |hoisted| (artifact.hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
                     .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
                 };
-                try self.hashRootValue(hasher, artifact, artifact.compile_time_roots.root(root));
+                try self.hashRootValue(hasher, artifact, (try artifact.compileTimeRoot(root)));
             },
             .reserved, .unimplemented => {},
         }

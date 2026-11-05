@@ -247,7 +247,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const root = coord.executableRootCheckedArtifact();
+    const root = (try coord.executableRootCheckedArtifact());
     const app_artifact = coord.appRootCheckedArtifact();
     const app_view = check.CheckedArtifact.importedView(app_artifact);
     const imports = try coord.collectImportedArtifactViews(arena, root);
@@ -297,13 +297,13 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try expectRootRequestBefore(app_artifact, indirect_local.root, indirect_top.id);
     try expectPatternExtractionRoots(app_artifact);
 
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root.rootRequests()).runtime_requests);
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         .{ .requests = lir_roots },
@@ -414,7 +414,7 @@ test "imported checked bodies restore their module's hoisted constants" {
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const root = coord.executableRootCheckedArtifact();
+    const root = (try coord.executableRootCheckedArtifact());
     const app_artifact = coord.appRootCheckedArtifact();
     const app_view = check.CheckedArtifact.importedView(app_artifact);
     const imports = try coord.collectImportedArtifactViews(arena, root);
@@ -426,17 +426,17 @@ test "imported checked bodies restore their module's hoisted constants" {
     const forty_two = findStoredI64(helper, 42) orelse return error.ImportedHoistedFortyTwoNotFound;
     try std.testing.expectEqual(
         check.CheckedArtifact.CompileTimeRootKind.hoisted_constant,
-        app_artifact.compile_time_roots.root(app_imported_const_use.root).kind,
+        (try app_artifact.compileTimeRoot(app_imported_const_use.root)).kind,
     );
     try std.testing.expect(@backingInt(forty_one.root) < @backingInt(forty_two.root));
 
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root.rootRequests()).runtime_requests);
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         .{ .requests = lir_roots },
@@ -506,16 +506,16 @@ test "hoisted list constants lower to internal static data in request order" {
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const root = coord.executableRootCheckedArtifact();
+    const root = (try coord.executableRootCheckedArtifact());
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root.rootRequests()).runtime_requests);
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         .{
@@ -541,7 +541,7 @@ test "hoisted list constants lower to internal static data in request order" {
     const exports = try static_data_exports.buildStaticData(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         &lowered,
@@ -637,16 +637,16 @@ test "hoisted Dec and I128 list constants keep their elements 16-aligned in stat
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const root = coord.executableRootCheckedArtifact();
+    const root = (try coord.executableRootCheckedArtifact());
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root.rootRequests()).runtime_requests);
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         .{
@@ -661,7 +661,7 @@ test "hoisted Dec and I128 list constants keep their elements 16-aligned in stat
     const exports = try static_data_exports.buildStaticData(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         &lowered,
@@ -776,16 +776,16 @@ fn expectInlineListStaticDataLiteral(gpa: std.mem.Allocator, source: []const u8)
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const root = coord.executableRootCheckedArtifact();
+    const root = (try coord.executableRootCheckedArtifact());
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root.rootRequests()).runtime_requests);
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         .{
@@ -1028,16 +1028,16 @@ test "an empty list with capacity in a record frozen into static data is the emp
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const root = coord.executableRootCheckedArtifact();
+    const root = (try coord.executableRootCheckedArtifact());
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root.rootRequests()).runtime_requests);
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         .{
@@ -1053,7 +1053,7 @@ test "an empty list with capacity in a record frozen into static data is the emp
     const exports = try static_data_exports.buildStaticData(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         &lowered,
@@ -1131,16 +1131,16 @@ fn lowerEchoApp(source: []const u8, comptime inspect: fn (*lir.Program.Result) H
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const root = coord.executableRootCheckedArtifact();
+    const root = (try coord.executableRootCheckedArtifact());
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root.rootRequests()).runtime_requests);
     defer gpa.free(lir_roots);
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.CheckedArtifact.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         .{
@@ -2574,7 +2574,7 @@ fn expectPendingProcedureAliasRoot(
             try std.testing.expect(false);
             return;
         };
-        const root = artifact.compile_time_roots.root(root_id);
+        const root = (try artifact.compileTimeRoot(root_id));
         try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootKind.callable_binding, root.kind);
         try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootPayload.pending, root.payload);
         try std.testing.expect(compileTimeRequestIndexForRoot(artifact, root.id) == null);
@@ -2586,7 +2586,7 @@ fn expectPendingProcedureAliasRoot(
 fn expectExportedRuntimeEntrypoint(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) HoistedConstantsTestError!void {
-    for (artifact.root_requests.runtime_requests) |root| {
+    for ((try artifact.rootRequests()).runtime_requests) |root| {
         if (root.kind == .runtime_entrypoint and
             root.abi == .roc and
             root.exposure == .exported and
@@ -2612,8 +2612,8 @@ fn compileTimeRequestIndexForRoot(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     root_id: check.CheckedArtifact.ComptimeRootId,
 ) ?usize {
-    const root = artifact.compile_time_roots.root(root_id);
-    for (artifact.root_requests.compile_time_requests, 0..) |request, i| {
+    const root = (try artifact.compileTimeRoot(root_id));
+    for ((try artifact.rootRequests()).compile_time_requests, 0..) |request, i| {
         if (rootRequestMatchesCompileTimeRoot(root, request)) return i;
     }
     return null;
@@ -2885,7 +2885,7 @@ fn storedI64(
     artifact: check.CheckedArtifact.ImportedModuleView,
     entry: check.CheckedArtifact.HoistedConstEntry,
 ) HoistedConstantsTestError!i64 {
-    const root = artifact.compile_time_roots.root(entry.root);
+    const root = (try artifact.compileTimeRoot(entry.root));
     if (root.kind != .hoisted_constant) return error.HoistedRootKindMismatch;
 
     const node_from_root = switch (root.payload) {

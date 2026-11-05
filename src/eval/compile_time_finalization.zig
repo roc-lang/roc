@@ -210,7 +210,7 @@ const DebugEvents = struct {
     /// compilation, the stored roots its program demands.
     fn appendStored(self: *DebugEvents, module: *const checked.CheckedModuleArtifact) Allocator.Error!void {
         for (module.compile_time_debug.entries) |entry| {
-            try self.appendEvent(module.key.digest(), module.compile_time_roots.root(entry.root), module.compile_time_debug.message(entry), false);
+            try self.appendEvent(module.key.digest(), (try module.compileTimeRoot(entry.root)), module.compile_time_debug.message(entry), false);
         }
     }
 
@@ -1000,7 +1000,7 @@ pub fn finalizeProgram(
         respecialized.completed = null;
         runtime_root_count = 0;
     }
-    sealUndemandedRoots(modules);
+    try sealUndemandedRoots(modules);
     const runtime_positions = try runtimeRootPositions(allocator, program_roots, runtime_roots, runtime_root_count, lss_runtime);
     var positions_owned = true;
     errdefer if (positions_owned) allocator.free(runtime_positions);
@@ -1085,14 +1085,14 @@ fn specializeAndEvaluate(
     var source_modules = std.ArrayList(checked.ModuleId).empty;
     defer source_modules.deinit(allocator);
     for (modules) |entry| {
-        for (entry.module.root_requests.compile_time_requests) |request| {
+        for ((try entry.module.rootRequests()).compile_time_requests) |request| {
             // A reopened artifact's roots that an earlier compilation
             // evaluated are read from its store like any other module's.
-            const root_id = compileTimeRootForRequest(entry.module, request);
-            if (entry.module.compile_time_roots.root(root_id).payload != .pending) continue;
+            const root_id = (try compileTimeRootForRequest(entry.module, request));
+            if ((try entry.module.compileTimeRoot(root_id)).payload != .pending) continue;
             // A literal argument root is the `.boxy` evaluator's (design.md
             // "Literal Arguments").
-            if (entry.module.compile_time_roots.root(root_id).kind == .literal_argument) continue;
+            if (root_id.kind() == .literal_argument) continue;
             if (root_filter) |filter| if (!filter.contains(.{ .module = entry.module.key.digest().bytes, .root = root_id })) continue;
             try requests.append(allocator, request);
             try source_modules.append(allocator, entry.module.key.digest());
@@ -1125,8 +1125,8 @@ fn specializeAndEvaluate(
         var declared = std.AutoHashMapUnmanaged(lir.CheckedPipeline.LiteralDemand.DeclaredRoot, void).empty;
         defer declared.deinit(allocator);
         for (modules) |entry| {
-            for (entry.module.root_requests.compile_time_requests) |request| {
-                try declared.put(allocator, .{ .module = entry.module.key.digest(), .root = compileTimeRootForRequest(entry.module, request) }, {});
+            for ((try entry.module.rootRequests()).compile_time_requests) |request| {
+                try declared.put(allocator, .{ .module = entry.module.key.digest(), .root = (try compileTimeRootForRequest(entry.module, request)) }, {});
             }
         }
         const checked_modules: lir.CheckedPipeline.LiteralDemand.CheckedModules = .{ .root = lowering_modules.root, .imports = lowering_modules.imports };
@@ -1514,13 +1514,13 @@ fn finalizeProgramBoxy(
     for (modules, 0..) |entry, index| {
         const entry_key = try canonical_modules.getOrPut(allocator, entry.module.key.digest().bytes);
         if (entry_key.found_existing) continue;
-        for (entry.module.root_requests.compile_time_requests) |request| {
-            const root_id = compileTimeRootForRequest(entry.module, request);
-            if (entry.module.compile_time_roots.root(root_id).payload != .pending) continue;
+        for ((try entry.module.rootRequests()).compile_time_requests) |request| {
+            const root_id = (try compileTimeRootForRequest(entry.module, request));
+            if ((try entry.module.compileTimeRoot(root_id)).payload != .pending) continue;
             // Reopening the module for another root reopened this one, whose
             // value a `.boxy` evaluation stored.
-            if (entry.module.compile_time_roots.root(root_id).boxy_value != null) {
-                entry.module.compile_time_roots.fillPayload(root_id, .unevaluated);
+            if ((try entry.module.compileTimeRoot(root_id)).boxy_value != null) {
+                try entry.module.fillRootPayload(root_id, .unevaluated);
                 continue;
             }
             try roots.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
@@ -1594,7 +1594,7 @@ fn evaluateRootsBoxy(
         allocator.free(states);
     }
     for (modules, states) |entry, *state| {
-        state.* = try RootCompletionState.init(allocator, entry.module, entry.module.root_requests.compile_time_requests);
+        state.* = try RootCompletionState.init(allocator, entry.module, (try entry.module.rootRequests()).compile_time_requests);
         states_initialized += 1;
     }
 
@@ -1605,7 +1605,7 @@ fn evaluateRootsBoxy(
     if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
         for (roots, 0..) |root, ordinal| {
             const artifact = modules[root.module].module;
-            const compile_time_root = artifact.compile_time_roots.root(root.root);
+            const compile_time_root = (try artifact.compileTimeRoot(root.root));
             var label = try devRootLabel(allocator, artifact, compile_time_root);
             defer label.deinit(allocator);
             std.debug.print("boxy-work: pending root {d} {s} {s} #{d}: {s} (deps {any})\n", .{ ordinal, artifact.moduleEnvConst().module_name, @tagName(compile_time_root.kind), @backingInt(root.root), label.snippet, graph.deps[ordinal] });
@@ -1615,7 +1615,7 @@ fn evaluateRootsBoxy(
     // value: one holding a function is validated and discarded
     // (design.md "Literal Arguments").
     for (roots, specialized) |root, *flag| {
-        flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
+        flag.* = root.root.kind() != .literal_argument and
             try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules.imports, root);
     }
     var images = BoxyLinkedImages{ .allocator = allocator };
@@ -1827,7 +1827,7 @@ const ModuleEvaluation = struct {
                 }
                 // A literal argument root is the `.boxy` evaluator's whatever
                 // reads it (design.md "Literal Arguments").
-                if (chosen[dep] or module.compile_time_roots.root(roots[dep].root).kind == .literal_argument) continue;
+                if (chosen[dep] or roots[dep].root.kind() == .literal_argument) continue;
                 chosen[dep] = true;
                 try work.append(allocator, dep);
             }
@@ -1855,7 +1855,7 @@ const ModuleEvaluation = struct {
             if (try source.objects(source.context, module)) |set| {
                 try shared.images.load(set.objects);
                 run_options.boxy_linked_images = shared.images;
-                lowering_modules = .{ .root = checked.loweringViewWithRelations(module, &.{}), .imports = set.views };
+                lowering_modules = .{ .root = try checked.loweringViewWithRelations(module, &.{}), .imports = set.views };
                 target = boxyLinkedCompileTimeTarget(source, shared.options);
                 linked = true;
             }
@@ -1958,7 +1958,7 @@ const ModuleEvaluation = struct {
         const module = shared.modules[shared.roots[pending[0]].module].module;
         std.debug.print("boxy-work: compile-time program of {s}: {d} roots\n", .{ module.moduleEnvConst().module_name, pending.len });
         for (pending) |member| {
-            const compile_time_root = module.compile_time_roots.root(shared.roots[member].root);
+            const compile_time_root = (try module.compileTimeRoot(shared.roots[member].root));
             var label = try devRootLabel(allocator, module, compile_time_root);
             defer label.deinit(allocator);
             std.debug.print("boxy-work:   root {s} #{d}: {s}\n", .{ @tagName(compile_time_root.kind), @backingInt(shared.roots[member].root), label.snippet });
@@ -2246,7 +2246,7 @@ fn runBoxyBatch(
         const previous_report_sites = owners.report_sites;
         owners.report_sites = false;
         defer owners.report_sites = previous_report_sites;
-        const alias_requests = alias_entry.module.root_requests.compile_time_requests;
+        const alias_requests = (try alias_entry.module.rootRequests()).compile_time_requests;
         for (root_ids, plans) |id, plan| {
             if (!state.isDone(id)) continue;
             const request_index = alias_state.requestIndexForRoot(id);
@@ -2321,8 +2321,8 @@ const PublishedRequests = struct {
         for (modules, self.by_module) |entry, *slot| {
             var list = std.ArrayList(checked.RootRequest).empty;
             errdefer list.deinit(allocator);
-            for (entry.module.root_requests.compile_time_requests) |request| {
-                if (demanded.contains(.{ .module = entry.module.key.bytes, .root = compileTimeRootForRequest(entry.module, request) }))
+            for ((try entry.module.rootRequests()).compile_time_requests) |request| {
+                if (demanded.contains(.{ .module = entry.module.key.bytes, .root = (try compileTimeRootForRequest(entry.module, request)) }))
                     try list.append(allocator, request);
             }
             slot.* = try list.toOwnedSlice(allocator);
@@ -2363,13 +2363,12 @@ fn recordEvaluatedRootReads(
             position += 1;
         }
         for (requests, ranges.items) |request, range| {
-            try inputs.append(allocator, .{ .root = compileTimeRootForRequest(entry.module, request), .reads = refs.items[range.start..][0..range.len] });
+            try inputs.append(allocator, .{ .root = (try compileTimeRootForRequest(entry.module, request)), .reads = refs.items[range.start..][0..range.len] });
         }
         if (inputs.items.len == 0) continue;
         const merged = try checked.CompileTimeRootReadTable.merge(
             entry.module.evaluationAllocator(),
             entry.module.compile_time_root_reads,
-            entry.module.compile_time_roots.roots.len,
             inputs.items,
         );
         if (entry.module.freesReplacedEvaluationColumns()) entry.module.compile_time_root_reads.deinit(entry.module.evaluationAllocator());
@@ -2426,19 +2425,19 @@ fn isLiteralArgumentRequest(
     const owner = if (set.source_modules.len == 0) root_key else set.source_modules[index];
     for (modules) |entry| {
         if (!entry.module.key.digest().eql(owner)) continue;
-        return entry.module.compile_time_roots.root(root_id).kind == .literal_argument;
+        return root_id.kind() == .literal_argument;
     }
     return false;
 }
 
 /// A requested root nothing demanded stays unevaluated: the explicit state a
 /// later compilation that demands it evaluates it from.
-fn sealUndemandedRoots(modules: []const ProgramModule) void {
+fn sealUndemandedRoots(modules: []const ProgramModule) Allocator.Error!void {
     for (modules) |entry| {
-        for (entry.module.root_requests.compile_time_requests) |request| {
-            const root = compileTimeRootForRequest(entry.module, request);
-            if (entry.module.compile_time_roots.root(root).payload == .pending) {
-                entry.module.compile_time_roots.fillPayload(root, .unevaluated);
+        for ((try entry.module.rootRequests()).compile_time_requests) |request| {
+            const root = (try compileTimeRootForRequest(entry.module, request));
+            if ((try entry.module.compileTimeRoot(root)).payload == .pending) {
+                try entry.module.fillRootPayload(root, .unevaluated);
             }
         }
     }
@@ -2702,7 +2701,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
             completion: RootCompletionState,
             /// The first producer naming each of this module's compile-time
             /// roots, by root id.
-            ordinals: []?usize,
+            ordinals: std.AutoHashMapUnmanaged(checked.ComptimeRootId, usize) = .empty,
         };
         const Root = struct { module: usize, request: usize };
 
@@ -2746,16 +2745,12 @@ fn Evaluation(comptime ProgramPtr: type) type {
             errdefer {
                 for (states[0..initialized]) |*state| {
                     state.completion.deinit();
-                    allocator.free(state.ordinals);
+                    state.ordinals.deinit(allocator);
                 }
                 allocator.free(states);
             }
             for (modules, states, published.by_module) |entry, *state, requests| {
-                var completion = try RootCompletionState.init(allocator, entry.module, requests);
-                errdefer completion.deinit();
-                const ordinals = try allocator.alloc(?usize, entry.module.compile_time_roots.roots.len);
-                @memset(ordinals, null);
-                state.* = .{ .completion = completion, .ordinals = ordinals };
+                state.* = .{ .completion = try RootCompletionState.init(allocator, entry.module, requests) };
                 initialized += 1;
             }
             const roots = try allocator.alloc(Root, producers.roots.len);
@@ -2770,8 +2765,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
                     finalizationInvariant("compile-time root request reached finalization without its checked root identity");
                 const state = &states[module_index];
                 root.* = .{ .module = module_index, .request = state.completion.requestIndexForRoot(root_id) };
-                const slot = &state.ordinals[@backingInt(root_id)];
-                if (slot.*) |existing| {
+                if (state.ordinals.get(root_id)) |existing| {
                     if (owners.next_alias[module_index] == null) {
                         finalizationInvariant("root plan named one compile-time root twice");
                     }
@@ -2784,13 +2778,13 @@ fn Evaluation(comptime ProgramPtr: type) type {
                     var alias: ?u32 = module_index;
                     while (alias) |index| : (alias = owners.next_alias[index]) {
                         _ = states[index].completion.requestIndexForRoot(root_id);
-                        states[index].ordinals[@backingInt(root_id)] = ordinal;
+                        try states[index].ordinals.put(allocator, root_id, ordinal);
                     }
                 }
             }
             for (states) |*state| {
                 for (state.completion.request_root_ids) |id| {
-                    if (state.ordinals[@backingInt(id)] == null) {
+                    if (!state.ordinals.contains(id)) {
                         finalizationInvariant("root plan omitted a requested compile-time root");
                     }
                 }
@@ -2827,7 +2821,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
         fn deinit(self: *Self) void {
             for (self.states) |*state| {
                 state.completion.deinit();
-                self.allocator.free(state.ordinals);
+                state.ordinals.deinit(self.allocator);
             }
             self.allocator.free(self.states);
             self.allocator.free(self.roots);
@@ -2879,7 +2873,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
                 .checked => |id| {
                     for (self.modules, self.states) |entry, state| {
                         if (!entry.module.key.digest().eql(module)) continue;
-                        return state.ordinals[@backingInt(id)] orelse continue;
+                        return state.ordinals.get(id) orelse continue;
                     }
                     finalizationInvariant("compile-time slot has no declared producer");
                 },
@@ -2895,7 +2889,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
         /// checked identity.
         fn canonical(self: *const Self, ordinal: usize) usize {
             if (ordinal >= self.roots.len) return ordinal;
-            return self.states[self.roots[ordinal].module].ordinals[@backingInt(self.rootId(ordinal))].?;
+            return self.states[self.roots[ordinal].module].ordinals.get(self.rootId(ordinal)).?;
         }
 
         fn rootPlan(self: *const Self, ordinal: usize) LirProgram.ConstRootPlan {
@@ -3013,7 +3007,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
                 for (members) |ordinal| {
                     if (ordinal >= self.roots.len) continue;
                     const entry = self.modules[self.roots[ordinal].module];
-                    if (entry.module.compile_time_roots.root(self.rootId(ordinal)).kind != .hoisted_constant)
+                    if ((try entry.module.compileTimeRoot(self.rootId(ordinal))).kind != .hoisted_constant)
                         finalizationInvariant("a cycle among compile-time roots included a root checking did not hoist");
                 }
             }
@@ -3436,7 +3430,8 @@ fn finalize(
         @as(*const Options, @ptrCast(@alignCast(raw))).*
     else
         .{};
-    const requests = module.root_requests.compile_time_requests;
+    try module.prepareLiteralRootPayloads(module.evaluationAllocator());
+    const requests = (try module.rootRequests()).compile_time_requests;
     const total_started_ns = if (requests.len != 0) if (options.timing) |timing| timing.start() else 0 else 0;
     if (requests.len != 0) {
         const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
@@ -3457,14 +3452,14 @@ fn finalize(
             // compilation leaves it for a `.boxy` compilation to evaluate
             // when it reopens the artifact, as it leaves any root it does
             // not demand (design.md "Literal Arguments").
-            if (options.strategy == .lss and !options.complete_baked_module and module.compile_time_roots.root(root_id).kind == .literal_argument) {
-                module.compile_time_roots.fillPayload(root_id, .unevaluated);
-                state.markDone(root_id);
+            if (options.strategy == .lss and !options.complete_baked_module and root_id.kind() == .literal_argument) {
+                try module.fillRootPayload(root_id, .unevaluated);
+                try state.markDone(root_id);
                 continue;
             }
             if (!try state.dependenciesComplete(request)) {
                 if (batch_requests.items.len == 0) {
-                    finalizationInvariantFmt("compile-time root request order placed root #{d} ({s}) before root #{?d} it depends on", .{ @backingInt(root_id), @tagName(module.compile_time_roots.root(root_id).kind), if (state.blocked_on) |blocked| @backingInt(blocked) else null });
+                    finalizationInvariantFmt("compile-time root request order placed root #{d} ({s}) before root #{?d} it depends on", .{ @backingInt(root_id), @tagName((try module.compileTimeRoot(root_id)).kind), if (state.blocked_on) |blocked| @backingInt(blocked) else null });
                 }
                 _ = try lowerEvalAndFinishRoots(
                     allocator,
@@ -3513,24 +3508,22 @@ fn finalize(
     }
 }
 
-const RootStatus = enum {
-    pending,
-    done,
-};
-
 const RootCompletionState = struct {
     allocator: Allocator,
     module: *checked.CheckedModuleArtifact,
-    statuses: []RootStatus,
-    requested_roots: []bool,
+    /// Each completed root.
+    done_roots: std.AutoHashMapUnmanaged(checked.ComptimeRootId, void) = .empty,
     request_root_ids: []checked.ComptimeRootId,
-    /// Position in `request_root_ids` per compile-time root id, or
-    /// `no_request` when this module requests no evaluation of that root.
-    request_index_by_root: []u32,
+    /// Position in `request_root_ids` of each compile-time root this module
+    /// requests the evaluation of.
+    request_index_by_root: std.AutoHashMapUnmanaged(checked.ComptimeRootId, u32) = .empty,
     visited_templates: []u32,
     visit: u32,
     /// Procedure templates whose dependencies are still to be checked.
     pending_templates: std.ArrayList(canonical.ProcedureTemplateRef) = .empty,
+    /// The visit stamp of each literal root's entry wrapper the walk entered.
+    visited_literal_wrappers: std.AutoHashMapUnmanaged(checked.ComptimeRootId, u32) = .empty,
+    literal_demand: std.ArrayList(checked.ComptimeRootId) = .empty,
     current_root_id: ?checked.ComptimeRootId = null,
     /// The incomplete root the last `dependenciesComplete` stopped at.
     blocked_on: ?checked.ComptimeRootId = null,
@@ -3540,28 +3533,18 @@ const RootCompletionState = struct {
         module: *checked.CheckedModuleArtifact,
         requests: []const checked.RootRequest,
     ) Allocator.Error!RootCompletionState {
-        const statuses = try allocator.alloc(RootStatus, module.compile_time_roots.roots.len);
-        errdefer allocator.free(statuses);
-        @memset(statuses, .pending);
-
-        const requested_roots = try allocator.alloc(bool, module.compile_time_roots.roots.len);
-        errdefer allocator.free(requested_roots);
-        @memset(requested_roots, false);
-
         const request_root_ids = try allocator.alloc(checked.ComptimeRootId, requests.len);
         errdefer allocator.free(request_root_ids);
-        const request_index_by_root = try allocator.alloc(u32, module.compile_time_roots.roots.len);
-        errdefer allocator.free(request_index_by_root);
-        @memset(request_index_by_root, no_request);
+        var request_index_by_root: std.AutoHashMapUnmanaged(checked.ComptimeRootId, u32) = .empty;
+        errdefer request_index_by_root.deinit(allocator);
         for (requests, 0..) |request, i| {
-            const root_id = compileTimeRootForRequest(module, request);
-            const raw = @backingInt(root_id);
-            if (requested_roots[raw]) {
+            const root_id = try compileTimeRootForRequest(module, request);
+            const slot = try request_index_by_root.getOrPut(allocator, root_id);
+            if (slot.found_existing) {
                 finalizationInvariant("compile-time root was requested more than once");
             }
-            requested_roots[raw] = true;
+            slot.value_ptr.* = @intCast(i);
             request_root_ids[i] = root_id;
-            request_index_by_root[raw] = @intCast(i);
         }
 
         const visited_templates = try allocator.alloc(u32, module.checked_procedure_templates.templates.items.len);
@@ -3571,8 +3554,6 @@ const RootCompletionState = struct {
         return .{
             .allocator = allocator,
             .module = module,
-            .statuses = statuses,
-            .requested_roots = requested_roots,
             .request_root_ids = request_root_ids,
             .request_index_by_root = request_index_by_root,
             .visited_templates = visited_templates,
@@ -3580,42 +3561,33 @@ const RootCompletionState = struct {
         };
     }
 
-    /// No compile-time request of this module evaluates the root.
-    const no_request: u32 = std.math.maxInt(u32);
-
     /// Position of a compile-time root in this module's request stream. The
     /// producer records the owner and root id on each lowered root plan, so
     /// finalization asks the owner for the position instead of assuming the
     /// plan appears at the same offset the request did.
     fn requestIndexForRoot(self: *const RootCompletionState, root_id: checked.ComptimeRootId) usize {
-        const raw = @backingInt(root_id);
-        if (raw >= self.request_index_by_root.len) {
-            finalizationInvariant("compile-time root id is outside its declared owner's root table");
-        }
-        const index = self.request_index_by_root[raw];
-        if (index == no_request) {
+        return self.request_index_by_root.get(root_id) orelse
             finalizationInvariant("lowered compile-time root was not requested by its declared owner");
-        }
-        return index;
     }
 
     fn deinit(self: *RootCompletionState) void {
         const allocator = self.allocator;
         self.pending_templates.deinit(allocator);
+        self.visited_literal_wrappers.deinit(allocator);
+        self.literal_demand.deinit(allocator);
         allocator.free(self.visited_templates);
-        allocator.free(self.request_index_by_root);
+        self.request_index_by_root.deinit(allocator);
         allocator.free(self.request_root_ids);
-        allocator.free(self.requested_roots);
-        allocator.free(self.statuses);
+        self.done_roots.deinit(allocator);
         self.* = undefined;
     }
 
     fn isDone(self: *const RootCompletionState, root_id: checked.ComptimeRootId) bool {
-        return self.statuses[@backingInt(root_id)] == .done;
+        return self.done_roots.contains(root_id);
     }
 
-    fn markDone(self: *RootCompletionState, root_id: checked.ComptimeRootId) void {
-        self.statuses[@backingInt(root_id)] = .done;
+    fn markDone(self: *RootCompletionState, root_id: checked.ComptimeRootId) Allocator.Error!void {
+        try self.done_roots.put(self.allocator, root_id, {});
     }
 
     fn rootIdForRequestIndex(self: *const RootCompletionState, request_index: usize) checked.ComptimeRootId {
@@ -3629,7 +3601,7 @@ const RootCompletionState = struct {
         self: *RootCompletionState,
         request: checked.RootRequest,
     ) Allocator.Error!bool {
-        const request_root_id = compileTimeRootForRequest(self.module, request);
+        const request_root_id = try compileTimeRootForRequest(self.module, request);
         const saved_current_root_id = self.current_root_id;
         defer self.current_root_id = saved_current_root_id;
         self.current_root_id = request_root_id;
@@ -3648,7 +3620,7 @@ const RootCompletionState = struct {
         try self.pending_templates.append(self.allocator, template_ref);
         // A literal argument root converts in the scheme its edge
         // instantiates (design.md "Literal Arguments").
-        if (self.module.compile_time_roots.root(request_root_id).literal_argument) |argument| switch (argument.edge) {
+        if ((try self.module.compileTimeRoot(request_root_id)).literal_argument) |argument| switch (argument.edge) {
             .literal => {},
             .node => |id| switch ((try self.module.dispatch().evidenceNode(id)).target.kind) {
                 .procedure => |procedure| try self.pending_templates.append(self.allocator, procedure.template),
@@ -3676,7 +3648,13 @@ const RootCompletionState = struct {
         template_ref: canonical.ProcedureTemplateRef,
     ) Allocator.Error!bool {
         if (!artifactMatches(template_ref.artifact, self.module.key)) return true;
-        const index = @backingInt(template_ref.template);
+        if (checked.templateLiteralRoot(template_ref.template)) |root| {
+            const stamp = try self.visited_literal_wrappers.getOrPut(self.allocator, root);
+            if (stamp.found_existing and stamp.value_ptr.* == self.visit) return true;
+            stamp.value_ptr.* = self.visit;
+            return try self.literalArgumentDemandComplete(template_ref.template);
+        }
+        const index = template_ref.template.index();
         if (index >= self.visited_templates.len) {
             finalizationInvariant("compile-time dependency referenced an unknown local procedure template");
         }
@@ -3700,9 +3678,15 @@ const RootCompletionState = struct {
                 .template => |dependency| try self.pending_templates.append(self.allocator, dependency),
             }
         }
-        // The literal argument roots the template's edges read (design.md
-        // "Literal Arguments").
-        for (self.module.checked_procedure_templates.templateLiteralArgumentDemand(&template)) |root| {
+        return try self.literalArgumentDemandComplete(template_ref.template);
+    }
+
+    /// Whether every literal argument root template `template`'s edges read
+    /// is complete (design.md "Literal Arguments").
+    fn literalArgumentDemandComplete(self: *RootCompletionState, template: canonical.CheckedProcedureTemplateId) Allocator.Error!bool {
+        self.literal_demand.clearRetainingCapacity();
+        try self.module.dispatch().appendLiteralArgumentDemand(self.allocator, template, &self.literal_demand);
+        for (self.literal_demand.items) |root| {
             if (!self.rootDependencyComplete(root)) return false;
         }
         return true;
@@ -3765,21 +3749,18 @@ const RootCompletionState = struct {
             finalizationInvariant("compile-time dependency checked outside a root request");
         if (dependency_root_id == dependent_root_id) return true;
 
-        const dependent = self.module.compile_time_roots.root(dependent_root_id);
-        const dependency = self.module.compile_time_roots.root(dependency_root_id);
-        const is_strict = switch (dependent.source) {
-            .def => |dependent_def| switch (dependency.source) {
-                .def => |dependency_def| self.module.moduleEnvConst().hasTopLevelDemandDependency(
-                    dependent_def,
-                    dependency_def,
-                ),
-                .expr, .statement, .required_binding, .hoisted, .literal => true,
-            },
-            .expr, .statement, .required_binding, .hoisted, .literal => true,
-        };
+        // Only two definitions' roots can depend on each other lazily; a
+        // literal root's source is its literal or its edge, never a
+        // definition.
+        const dependent_def = rootDef(self.module, dependent_root_id);
+        const dependency_def = rootDef(self.module, dependency_root_id);
+        const is_strict = if (dependent_def != null and dependency_def != null)
+            self.module.moduleEnvConst().hasTopLevelDemandDependency(dependent_def.?, dependency_def.?)
+        else
+            true;
         if (!is_strict) return true;
 
-        const complete = !self.requested_roots[@backingInt(dependency_root_id)] or self.isDone(dependency_root_id);
+        const complete = !self.request_index_by_root.contains(dependency_root_id) or self.isDone(dependency_root_id);
         if (!complete) self.blocked_on = dependency_root_id;
         return complete;
     }
@@ -3867,7 +3848,7 @@ fn lowerEvalAndFinishRoots(
     var boxy_root_ids = std.ArrayList(checked.ComptimeRootId).empty;
     defer boxy_root_ids.deinit(allocator);
     for (requests, root_ids) |request, root_id| {
-        const boxy = module.compile_time_roots.root(root_id).kind == .literal_argument or
+        const boxy = root_id.kind() == .literal_argument or
             (options.strategy == .boxy and !try checked_root_graph.rootHoldsFunction(allocator, &.{module}, lowering_imports, .{ .module = 0, .root = root_id, .request = request }));
         if (boxy) {
             try boxy_requests.append(allocator, request);
@@ -3904,7 +3885,7 @@ fn lowerEvalAndFinishBatch(
     const use_interpreter = comptime compilerHostMustUseInterpreterForCtfe();
 
     const lowering_modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = checked.loweringViewWithRelations(module, relation_modules),
+        .root = try checked.loweringViewWithRelations(module, relation_modules),
         .imports = lowering_imports,
     };
     var lowered = try lowerFinalizationModulesToLir(
@@ -3973,7 +3954,7 @@ fn evalInterpreterProgramRoots(
             finalizationInvariant("LIR lowering changed compile-time root request order");
         }
         const root_id = root_ids[i];
-        const compile_time_root = module.compile_time_roots.root(root_id);
+        const compile_time_root = (try module.compileTimeRoot(root_id));
         host.clearDebugMessages();
         var succeeded = false;
         var failed_message: ?[]const u8 = null;
@@ -4267,6 +4248,8 @@ fn checkedProducerReportedFailure(
 ) bool {
     for (owners.modules) |owner| {
         if (!artifactMatches(module, owner.module.key)) continue;
+        // Only a selected hoisted root of the root table is guarded.
+        if (root_id.rowIndex() == null) return true;
         return !owner.module.compile_time_roots.root(root_id).guarded;
     }
     finalizationInvariant("value guard producer belonged to a module this finalization does not complete");
@@ -5025,12 +5008,12 @@ const InterpreterProgram = struct {
 /// Module and root ids are the existing lowering identities, including every
 /// representation of a checked root. No source identities are reconstructed.
 const PublicationSlots = struct {
-    checked_heads: []std.ArrayList(?lir.LIR.StaticDataId),
+    checked_heads: []std.AutoHashMapUnmanaged(checked.ComptimeRootId, lir.LIR.StaticDataId),
     literal_heads: []?lir.LIR.StaticDataId,
     next: []?lir.LIR.StaticDataId,
 
     fn init(allocator: Allocator, result: *const LirProgram.Result) Allocator.Error!PublicationSlots {
-        const checked_heads = try allocator.alloc(std.ArrayList(?lir.LIR.StaticDataId), result.lowering_modules.items.len);
+        const checked_heads = try allocator.alloc(std.AutoHashMapUnmanaged(checked.ComptimeRootId, lir.LIR.StaticDataId), result.lowering_modules.items.len);
         @memset(checked_heads, .empty);
         errdefer {
             for (checked_heads) |*heads| heads.deinit(allocator);
@@ -5051,7 +5034,7 @@ const PublicationSlots = struct {
                     if (raw >= literal_heads.items.len) try literal_heads.appendNTimes(allocator, null, raw + 1 - literal_heads.items.len);
                     break :blk &literal_heads.items[raw];
                 },
-                .checked => |id| blk: {
+                .checked => |id| {
                     const reuse = if (last_key) |key| key.eql(root.module) else false;
                     if (!reuse) {
                         last_owner = result.loweringModuleId(root.module) orelse
@@ -5059,9 +5042,10 @@ const PublicationSlots = struct {
                         last_key = root.module;
                     }
                     const heads = &checked_heads[@backingInt(last_owner)];
-                    const raw = @backingInt(id);
-                    if (raw >= heads.items.len) try heads.appendNTimes(allocator, null, raw + 1 - heads.items.len);
-                    break :blk &heads.items[raw];
+                    const slot = try heads.getOrPut(allocator, id);
+                    next[index] = if (slot.found_existing) slot.value_ptr.* else null;
+                    slot.value_ptr.* = @fromBackingInt(@intCast(index));
+                    continue;
                 },
             };
             next[index] = head.*;
@@ -5073,11 +5057,7 @@ const PublicationSlots = struct {
     fn first(self: *const PublicationSlots, owner: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer) ?lir.LIR.StaticDataId {
         return switch (producer) {
             .literal => |id| if (@backingInt(id) < self.literal_heads.len) self.literal_heads[@backingInt(id)] else null,
-            .checked => |id| blk: {
-                const heads = self.checked_heads[@backingInt(owner)].items;
-                const raw = @backingInt(id);
-                break :blk if (raw < heads.len) heads[raw] else null;
-            },
+            .checked => |id| self.checked_heads[@backingInt(owner)].get(id),
         };
     }
 
@@ -5825,7 +5805,7 @@ fn evalDevProgramRoots(
             @memset(ret_buf, 0);
 
             const root_id = root_ids[i];
-            const compile_time_root = module.compile_time_roots.root(root_id);
+            const compile_time_root = (try module.compileTimeRoot(root_id));
             const label = try devRootLabel(allocator, module, compile_time_root);
             errdefer {
                 var owned = label;
@@ -6610,7 +6590,7 @@ pub fn finishPendingExhaustiveness(module: *const checked.CheckedModuleArtifact,
             continue;
         }
         const decided_statically = if (site) |checked_site| switch (checked_site.policy) {
-            .compile_time_replaced_by_root => |root| switch (module.compile_time_roots.root(root).payload) {
+            .compile_time_replaced_by_root => |root| switch ((try module.compileTimeRoot(root)).payload) {
                 .runtime => true,
                 .const_node, .fn_value, .discarded, .expect => false,
                 // A root this compilation never evaluated ran none of the
@@ -6860,18 +6840,24 @@ fn regionsEqual(a: base.Region, b: base.Region) bool {
     return a.start.offset == b.start.offset and a.end.offset == b.end.offset;
 }
 
+/// The definition a root of the module's root table evaluates, or null for
+/// any other root.
+fn rootDef(module: *const checked.CheckedModuleArtifact, root_id: checked.ComptimeRootId) ?@FieldType(checked.RootSource, "def") {
+    if (root_id.rowIndex() == null) return null;
+    return switch (module.compile_time_roots.root(root_id).source) {
+        .def => |def| def,
+        .expr, .statement, .required_binding, .hoisted, .literal => null,
+    };
+}
+
 fn compileTimeRootForRequest(
     module: *const checked.CheckedModuleArtifact,
     request: checked.RootRequest,
-) checked.ComptimeRootId {
+) Allocator.Error!checked.ComptimeRootId {
     const root_id = request.compile_time_root orelse {
         finalizationInvariant("compile-time request had no exact checked root identity");
     };
-    const raw = @backingInt(root_id);
-    if (raw >= module.compile_time_roots.roots.len) {
-        finalizationInvariant("compile-time request root identity was outside the checked root table");
-    }
-    const root = module.compile_time_roots.roots[raw];
+    const root = try module.compileTimeRoot(root_id);
     const kind_matches = switch (request.kind) {
         .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .hoisted_validation or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .literal_argument,
         .compile_time_callable => root.kind == .callable_binding,
@@ -6916,12 +6902,12 @@ fn completeRoot(
     payload: checked.CompileTimeRootPayload,
 ) ConstStoreWriter.Error!void {
     if (payload == .const_node and try writer.planHoldsBoxyFunction(root.plan)) {
-        module.compile_time_roots.fillPayload(root_id, .unevaluated);
-        module.compile_time_roots.fillBoxyValue(root_id, .{ .node = payload.const_node, .root = root_id, .root_type = try writer.storeRootType(root) });
-        state.markDone(root_id);
+        try module.fillRootPayload(root_id, .unevaluated);
+        module.fillRootBoxyValue(root_id, .{ .node = payload.const_node, .root = root_id, .root_type = try writer.storeRootType(root) });
+        try state.markDone(root_id);
         return;
     }
-    module.compile_time_roots.fillPayload(root_id, payload);
+    try module.fillRootPayload(root_id, payload);
     const stored_root_type = switch (compile_time_root.kind) {
         .constant, .hoisted_constant => try writer.storeRootType(root),
         .hoisted_validation,
@@ -6934,7 +6920,7 @@ fn completeRoot(
         => null,
     };
     finishConstRoot(module, compile_time_root, payload, stored_root_type);
-    state.markDone(root_id);
+    try state.markDone(root_id);
 }
 
 /// Record a completed constant root's stored value in its const templates.

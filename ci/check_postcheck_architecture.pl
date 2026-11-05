@@ -148,6 +148,18 @@ my @RULES = (
     # into the template table or the cache entry.
     { category => 'eager-template-demand', regex => qr/\bTemplateDemandPass\b/, allowed => {} },
     { category => 'eager-template-demand', regex => qr/\bdemand_pool\b/, allowed => {} },
+    # Literal requirements, literal edge arguments and literal roots are
+    # slot analyses (`ModuleAnalyses.literalComponent`,
+    # `unitLiteralConversions`); a literal root is named by its literal or its
+    # edge, never by a row appended to the root or template table, and the
+    # module's root requests are a slot (`ModuleAnalyses.rootRequests`).
+    { category => 'eager-literal-roots', regex => qr/\bpublishLiteralArgumentRoots\b/, allowed => {} },
+    { category => 'eager-literal-roots', regex => qr/\bpublishLiteralConversionRoots\b/, allowed => {} },
+    { category => 'eager-literal-roots', regex => qr/\bliteralConversionRootForNode\b/, allowed => {} },
+    { category => 'eager-literal-roots', regex => qr/\bliteral_requirements_pool\b/, allowed => {} },
+    { category => 'eager-literal-roots', regex => qr/\bliteral_edge_args_pool\b/, allowed => {} },
+    { category => 'eager-literal-roots', regex => qr/\bliteral_argument_demand_pool\b/, allowed => {} },
+    { category => 'eager-root-requests', regex => qr/\bRootRequestTable\.fromModule\b/, allowed => {} },
     # A module's checked data holds only its own nominal declarations; a
     # reader reads an imported declaration in the module that declares it.
     { category => 'imported-nominal-embedding', regex => qr/\bembedReachableImportedNominalDecls\b/, allowed => {} },

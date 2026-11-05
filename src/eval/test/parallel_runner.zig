@@ -1157,11 +1157,11 @@ fn materializedComptimeFloatBitsMatch(
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
         .{
-            .requests = resources.checked_artifact.root_requests.runtime_requests,
+            .requests = (try resources.checked_artifact.rootRequests()).runtime_requests,
             .static_data_requests = &.{static_request},
             .include_internal_static_data = true,
         },
@@ -1172,7 +1172,7 @@ fn materializedComptimeFloatBitsMatch(
     const exports = try static_data.buildStaticData(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
         &lowered,

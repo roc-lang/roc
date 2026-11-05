@@ -357,7 +357,7 @@ const ContentDigester = struct {
                 self.writeU32(@backingInt(procedure.proc.proc_base));
                 self.hasher.update(&procedure.template.artifact.bytes);
                 self.writeU32(@backingInt(procedure.template.proc_base));
-                self.writeU32(@backingInt(procedure.template.template));
+                self.writeU32(procedure.template.template.index());
             },
             .local_proc => |local| {
                 self.hasher.update(&self.owner.bytes);

@@ -1160,7 +1160,7 @@ pub fn devEvalTopLevelExpects(
     defer requests.deinit(allocator);
     var test_plan = std.ArrayList(lir.CheckedPipeline.RootTestPlanMetadata).empty;
     defer test_plan.deinit(allocator);
-    for (resources.checked_artifact.root_requests.requests) |request| {
+    for ((try resources.checked_artifact.rootRequests()).requests) |request| {
         if (request.kind != .test_expect) continue;
         const index: u32 = @intCast(requests.items.len);
         try requests.append(allocator, request);
@@ -1176,7 +1176,7 @@ pub fn devEvalTopLevelExpects(
     const import_views = try parsedImportViews(allocator, &resources);
     defer allocator.free(import_views);
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+        .root = try check.CheckedArtifact.loweringView(&resources.checked_artifact),
         .imports = import_views,
     };
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -1692,10 +1692,10 @@ fn lowerCheckedRootWithViews(
     if (reopened) try root_module.reopenForEvaluation(allocator);
 
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = check.CheckedArtifact.loweringView(root_module),
+        .root = try check.CheckedArtifact.loweringView(root_module),
         .imports = import_views,
     };
-    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = root_module.root_requests.runtime_requests };
+    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = (try root_module.rootRequests()).runtime_requests };
     const target = lowerToLirTarget(target_usize, options);
     var lowered = switch (target.specialization_strategy) {
         .lss => try lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, roots, target),
@@ -1711,7 +1711,7 @@ fn lowerCheckedRootWithViews(
     defer lowered.deinit();
 
     const image_data = try @import("static_data").buildStaticDataForWidth(allocator, .{
-        .root = check.CheckedArtifact.loweringView(root_module),
+        .root = try check.CheckedArtifact.loweringView(root_module),
         .imports = import_views,
     }, &lowered, target_usize, .{});
     defer @import("static_data").deinitStaticData(allocator, image_data);

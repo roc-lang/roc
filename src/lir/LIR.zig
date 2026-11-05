@@ -483,11 +483,16 @@ pub const ComptimeProducer = union(enum) {
 
     /// Feed this producer's tag and index to `hasher`.
     pub fn hash(self: ComptimeProducer, hasher: anytype) void {
-        const tag: u8, const index: u32 = switch (self) {
-            .checked => |root| .{ 0, @backingInt(root) },
-            .literal => |root| .{ 1, @backingInt(root) },
-        };
-        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
+        switch (self) {
+            .checked => |root| {
+                hasher.update(&[_]u8{0});
+                root.digestInto(hasher);
+            },
+            .literal => |root| {
+                const index: u32 = @backingInt(root);
+                hasher.update(&[_]u8{ 1, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
+            },
+        }
     }
 };
 

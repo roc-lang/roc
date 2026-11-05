@@ -71,8 +71,12 @@ pub fn reachTemplates(allocator: Allocator, modules: []const *const checked.Chec
     var out = std.ArrayList(TemplateKey).empty;
     errdefer out.deinit(allocator);
     for (walker.visited, 0..) |stamps, module| for (stamps, 0..) |stamp, index| {
-        if (stamp == walker.visit) try out.append(allocator, .{ .module = @intCast(module), .template = @fromBackingInt(@as(u32, @intCast(index))) });
+        if (stamp == walker.visit) try out.append(allocator, .{ .module = @intCast(module), .template = .row(@intCast(index)) });
     };
+    var literal_wrappers = walker.visited_literal_wrappers.iterator();
+    while (literal_wrappers.next()) |entry| {
+        if (entry.value_ptr.* == walker.visit) try out.append(allocator, entry.key_ptr.*);
+    }
     return try out.toOwnedSlice(allocator);
 }
 
@@ -124,6 +128,9 @@ const Walker = struct {
     /// can share evidence, and each summary must include all its references.
     evidence_visit: u32 = 0,
     summaries: std.AutoHashMapUnmanaged(TemplateKey, DirectDependencies) = .empty,
+    /// The walk that last visited each literal root's entry wrapper.
+    visited_literal_wrappers: std.AutoHashMapUnmanaged(TemplateKey, u32) = .empty,
+    literal_demand: std.ArrayList(checked.ComptimeRootId) = .empty,
     summary_templates: std.ArrayList(TemplateKey) = .empty,
     summary_reads: std.ArrayList(u32) = .empty,
     pending: std.ArrayList(TemplateKey) = .empty,
@@ -184,6 +191,8 @@ const Walker = struct {
     fn deinit(self: *Walker) void {
         freeStamps(self.allocator, self.visited);
         self.visited_nodes.deinit(self.allocator);
+        self.visited_literal_wrappers.deinit(self.allocator);
+        self.literal_demand.deinit(self.allocator);
         freeStamps(self.allocator, self.visited_derivations);
         self.summaries.deinit(self.allocator);
         self.summary_templates.deinit(self.allocator);
@@ -205,7 +214,7 @@ const Walker = struct {
         const wrapper = root.request.procedure_template orelse
             base.invariant("compile-time finalization invariant violated: a compile-time root has no checked wrapper template", .{});
         try self.pushTemplate(wrapper);
-        if (self.modules[root.module].compile_time_roots.root(root.root).literal_argument) |argument| try self.walkLiteralEdge(root.module, argument.edge);
+        if ((try self.modules[root.module].compileTimeRoot(root.root)).literal_argument) |argument| try self.walkLiteralEdge(root.module, argument.edge);
         while (self.pending.pop()) |next| try self.walkTemplate(next);
         std.sort.pdq(u32, self.reads.items, {}, std.sort.asc(u32));
         var out = std.ArrayList(u32).empty;
@@ -230,8 +239,9 @@ const Walker = struct {
     /// Decode a template's direct references once, then replay that summary
     /// for each root reaching it. Per-root stamps still terminate cycles.
     fn walkTemplate(self: *Walker, key: TemplateKey) Allocator.Error!void {
+        if (checked.templateLiteralRoot(key.template)) |root| return self.walkLiteralRootWrapper(key, root);
         const stamps = self.visited[key.module];
-        const index = @backingInt(key.template);
+        const index = key.template.index();
         if (index >= stamps.len) base.invariant("compile-time finalization invariant violated: a compile-time dependency named an unknown procedure template", .{});
         if (stamps[index] == self.visit) return;
         stamps[index] = self.visit;
@@ -272,7 +282,7 @@ const Walker = struct {
         }
         // The literal argument roots the template's edges read (design.md
         // "Literal Arguments").
-        for (module.checked_procedure_templates.templateLiteralArgumentDemand(&template)) |root| try self.readRoot(key.module, root);
+        try self.readLiteralArgumentDemand(key);
         const summary: DirectDependencies = .{
             .templates_start = @intCast(self.summary_templates.items.len),
             .templates_len = @intCast(self.pending.items.len - templates_start),
@@ -338,6 +348,34 @@ const Walker = struct {
             .structural => |structural| if (structural.generated_codec_derivation) |id| try self.derivations.append(self.allocator, id),
             .constraint, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
         }
+    }
+
+    /// Walk a literal root's entry wrapper: a conversion root's conversion
+    /// plan and the literal argument roots its edges read.
+    fn walkLiteralRootWrapper(self: *Walker, key: TemplateKey, root: checked.ComptimeRootId) Allocator.Error!void {
+        const stamp = try self.visited_literal_wrappers.getOrPut(self.allocator, key);
+        if (stamp.found_existing and stamp.value_ptr.* == self.visit) return;
+        stamp.value_ptr.* = self.visit;
+        const dispatch = self.modules[key.module].dispatch();
+        self.evidence_visit += 1;
+        if ((try dispatch.literalRoot(root)).plan) |plan_id| {
+            const plan = try dispatch.plan(plan_id);
+            switch (plan.resolution) {
+                .direct_closed, .direct_parametric => |direct| try self.nodes.append(self.allocator, direct.evidence),
+                .structural => if (plan.generated_codec_derivation) |id| try self.derivations.append(self.allocator, id),
+                .evidence_dependent, .checked_error, .@"unreachable", .direct_pending => {},
+            }
+            try self.drainNodes(key.module);
+        }
+        try self.readLiteralArgumentDemand(key);
+    }
+
+    /// Read the literal argument roots template `key`'s edges read (design.md
+    /// "Literal Arguments").
+    fn readLiteralArgumentDemand(self: *Walker, key: TemplateKey) Allocator.Error!void {
+        self.literal_demand.clearRetainingCapacity();
+        try self.modules[key.module].dispatch().appendLiteralArgumentDemand(self.allocator, key.template, &self.literal_demand);
+        for (self.literal_demand.items) |root| try self.readRoot(key.module, root);
     }
 
     /// Walk the scheme a literal argument root's edge instantiates: the
@@ -450,7 +488,7 @@ pub fn rootHoldsFunction(
     root: Root,
 ) Allocator.Error!bool {
     const artifact = modules[root.module];
-    if (artifact.compile_time_roots.root(root.root).kind == .callable_binding) return true;
+    if ((try artifact.compileTimeRoot(root.root)).kind == .callable_binding) return true;
     const Pending = struct { key: [32]u8, types: checked.CheckedTypeStoreView, ty: checked.CheckedTypeId };
     const Seen = struct { key: [32]u8, ty: checked.CheckedTypeId };
     var seen = std.AutoHashMapUnmanaged(Seen, void).empty;
@@ -585,7 +623,7 @@ fn expectSharedDependencies(source: []const u8, imports: []const @import("inspec
     var roots = std.ArrayList(Root).empty;
     defer roots.deinit(allocator);
     for (modules.items, 0..) |module, index| {
-        for (module.root_requests.compile_time_requests) |request| {
+        for ((try module.rootRequests()).compile_time_requests) |request| {
             try roots.append(allocator, .{ .module = @intCast(index), .root = request.compile_time_root.?, .request = request });
         }
     }
