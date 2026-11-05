@@ -1113,8 +1113,6 @@ fn isRocAppFile(contents: []const u8) bool {
 }
 
 fn checkTestAssetCoverage(ctx: Context) !void {
-    std.debug.print("---- checking test asset coverage ----\n", .{});
-
     const allocator = ctx.allocator;
     const io = ctx.io;
 
@@ -1221,11 +1219,11 @@ fn checkTestAssetCoverage(ctx: Context) !void {
         total_missing += missing_count;
     }
 
+    // Silent on success: the build runner shows any stderr output of a
+    // passing check under a "failed command" heading.
     if (total_missing > 0) {
-        return fail("{d} app .roc file(s) have no spec entry", .{total_missing});
+        return fail("{d} of {d} app .roc file(s) have no spec entry", .{ total_missing, total_checked });
     }
-
-    std.debug.print("All {d} app .roc files across {d} asset directories are covered.\n", .{ total_checked, test_asset_coverage_dirs.len });
 }
 
 fn checkBakes(ctx: Context) !void {

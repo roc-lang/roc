@@ -1090,10 +1090,16 @@ local_procedure_candidates: collections.DenseMapUnmanaged(CIR.Pattern.Idx, Local
 /// Binding patterns of the candidates whose declarations are being checked,
 /// innermost last.
 local_procedure_candidate_stack: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
-/// The candidate-stack depth at which each rigid type variable was introduced
-/// by an annotation. A rigid-variable lookup from a deeper candidate names a
-/// type variable of an enclosing function.
-rigid_var_candidate_depths: collections.DenseMapUnmanaged(CIR.TypeAnno.Idx, u32) = .empty,
+/// Where each rigid type variable was introduced: the candidate-stack depth
+/// of the annotation that introduced it, where a rigid-variable lookup from a
+/// deeper candidate names a type variable of an enclosing function, and the
+/// binding annotation it belongs to.
+rigid_var_intros: collections.DenseMapUnmanaged(CIR.TypeAnno.Idx, RigidVarIntro) = .empty,
+/// The binding annotation being generated, if any.
+generating_annotation: ?CIR.Annotation.Idx = null,
+/// The binding each annotation that introduces a type variable is written
+/// on, read for the bindings that own a body-local type's context.
+polymorphic_annotation_owners: collections.DenseMapUnmanaged(CIR.Annotation.Idx, CIR.Pattern.Idx) = .empty,
 /// Module-level type declarations; a type declaration outside this set is
 /// declared inside a function body.
 module_type_decls: collections.DenseMapUnmanaged(CIR.Statement.Idx, void) = .empty,
@@ -1436,6 +1442,11 @@ local_type_reference_frame_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .
 /// variables. Final once `finalizeLocalTypeContexts` runs.
 local_type_contexts: collections.DenseMapUnmanaged(CIR.Statement.Idx, u32) = .empty,
 local_type_contexts_final: bool = false,
+/// For each nominal type declared in a function body that has a context, a
+/// binding that owns one of its context variables, as (declaration,
+/// variable, owner); the bindings whose types `rejectEscapingLocalTypes`
+/// walks. Empty in a module with no such type.
+local_type_context_owners: std.ArrayListUnmanaged(LocalTypeContextOwner) = .empty,
 /// Type declarations being generated, innermost last.
 type_decl_generation_frames: std.ArrayListUnmanaged(TypeDeclGenerationFrame) = .empty,
 /// The right-hand side of each local declaration, by binding pattern. Built on
@@ -1909,7 +1920,9 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .selected_hoisted_roots = .keyed,
     .local_procedure_candidates = .settled,
     .local_procedure_candidate_stack = .frame_stack,
-    .rigid_var_candidate_depths = .keyed,
+    .rigid_var_intros = .keyed,
+    .generating_annotation = .lexical,
+    .polymorphic_annotation_owners = .keyed,
     .module_type_decls = .keyed,
     .local_pattern_candidate_depths = .keyed,
     .local_procedure_outer_refs = .settled,
@@ -2037,6 +2050,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .local_type_reference_frame_patterns = .keyed,
     .local_type_contexts = .keyed,
     .local_type_contexts_final = .keyed,
+    .local_type_context_owners = .keyed,
     .type_decl_generation_frames = .frame_stack,
     .local_decl_expr_by_pattern = .keyed,
     .local_decl_exprs_indexed = .keyed,
@@ -3477,6 +3491,14 @@ const LocalTypeDeclRef = struct {
     referenced: CIR.Statement.Idx,
 };
 
+/// A binding whose annotation introduced `rigid`, a context variable of the
+/// body-local nominal type `decl` (`local_type_context_owners`).
+const LocalTypeContextOwner = struct {
+    decl: CIR.Statement.Idx,
+    rigid: CIR.TypeAnno.Idx,
+    owner: CIR.Pattern.Idx,
+};
+
 /// A range of `Check.nominal_rank_context_vars`.
 const NominalRankContext = struct {
     start: u32,
@@ -4854,12 +4876,47 @@ fn markLocalProcedureCandidatesContextualFrom(self: *Self, depth: usize) void {
     }
 }
 
+/// Where an annotation introduced a rigid type variable (`rigid_var_intros`).
+const RigidVarIntro = struct {
+    depth: u32,
+    annotation: ?CIR.Annotation.Idx,
+};
+
 /// Record the candidate depth at which an annotation introduces a rigid type
-/// variable. An annotation generated more than once keeps its first depth,
-/// which is the depth of the declaration that owns it.
-fn recordRigidVarCandidateDepth(self: *Self, anno_idx: CIR.TypeAnno.Idx) Allocator.Error!void {
-    const entry = try self.rigid_var_candidate_depths.getOrPut(self.gpa, anno_idx);
-    if (!entry.found_existing) entry.value_ptr.* = @intCast(self.local_procedure_candidate_stack.items.len);
+/// variable, and the binding annotation it belongs to. An annotation
+/// generated more than once keeps its first depth, which is the depth of the
+/// declaration that owns it.
+fn recordRigidVarIntro(self: *Self, anno_idx: CIR.TypeAnno.Idx) Allocator.Error!void {
+    const entry = try self.rigid_var_intros.getOrPut(self.gpa, anno_idx);
+    if (!entry.found_existing) entry.value_ptr.* = .{
+        .depth = @intCast(self.local_procedure_candidate_stack.items.len),
+        .annotation = self.generating_annotation,
+    };
+}
+
+/// The binding whose annotation introduced a rigid variable that a type
+/// declared in a function body names: an enclosing binding, or a method or
+/// local function of the declaration itself.
+fn rigidVarOwner(self: *const Self, rigid: CIR.TypeAnno.Idx) CIR.Pattern.Idx {
+    const intro = self.rigid_var_intros.get(rigid) orelse
+        base.invariant("type checker invariant violated: rigid variable {d} named by a body-local type was never introduced", .{@backingInt(rigid)});
+    const annotation = intro.annotation orelse
+        base.invariant("type checker invariant violated: rigid variable {d} named by a body-local type was introduced outside a binding annotation", .{@backingInt(rigid)});
+    return self.polymorphic_annotation_owners.get(annotation) orelse
+        base.invariant("type checker invariant violated: the annotation introducing rigid variable {d} named by a body-local type is on no binding", .{@backingInt(rigid)});
+}
+
+fn rigidVarCandidateDepth(self: *const Self, rigid: CIR.TypeAnno.Idx) u32 {
+    const intro = self.rigid_var_intros.get(rigid) orelse return 0;
+    return intro.depth;
+}
+
+/// Record the binding an annotation is written on when the annotation
+/// introduces a type variable, which only such a binding's own body can name.
+fn recordPolymorphicAnnotationOwner(self: *Self, annotation: ?CIR.Annotation.Idx, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+    const annotation_idx = annotation orelse return;
+    if (!self.cir.store.getAnnotation(annotation_idx).introduces_type_var) return;
+    try self.polymorphic_annotation_owners.put(self.gpa, annotation_idx, pattern);
 }
 
 /// Record the candidate depth at which a pattern is bound.
@@ -4888,7 +4945,7 @@ fn noteLocalLookupForLocalProcedures(self: *Self, pattern: CIR.Pattern.Idx) Allo
 /// lookup of one of its own parameters names no enclosing function; any
 /// other lookup makes the declaration name that variable too.
 fn noteRigidVarLookupForLocalProcedures(self: *Self, rigid_var: CIR.TypeAnno.Idx) Allocator.Error!void {
-    const depth = self.rigid_var_candidate_depths.get(rigid_var) orelse 0;
+    const depth = self.rigidVarCandidateDepth(rigid_var);
     if (self.type_decl_generation_frames.items.len > 0) {
         const frame = &self.type_decl_generation_frames.items[self.type_decl_generation_frames.items.len - 1];
         for (frame.header_args) |parameter| {
@@ -5031,6 +5088,11 @@ fn appendLocalProcedureDispatchRefs(self: *Self, dispatch_refs: *std.ArrayListUn
 /// for a pass that reads contexts before local procedures are promoted.
 fn settleLocalTypeContexts(self: *Self) Allocator.Error!void {
     if (self.local_type_contexts_final) return;
+    // With no enclosing type variable named, every context is empty.
+    if (self.local_type_annotation_rigids.items.len == 0 and self.local_procedure_rigid_refs.items.len == 0) {
+        self.local_type_contexts_final = true;
+        return;
+    }
     var dispatch_refs: std.ArrayListUnmanaged(LocalProcedureOuterRef) = .empty;
     defer dispatch_refs.deinit(self.gpa);
     try self.appendLocalProcedureDispatchRefs(&dispatch_refs);
@@ -5196,7 +5258,7 @@ fn computeLocalTypeContexts(self: *Self, dispatch_refs: []const LocalProcedureOu
     for (inputs.keys(), inputs.values()) |decl, *input| {
         if (input.context.items.len == 0) continue;
         var depth: u32 = std.math.maxInt(u32);
-        for (input.context.items) |rigid| depth = @min(depth, self.rigid_var_candidate_depths.get(rigid) orelse 0);
+        for (input.context.items) |rigid| depth = @min(depth, self.rigidVarCandidateDepth(rigid));
         try self.local_type_contexts.put(gpa, decl, depth);
 
         if (self.cir.store.getStatement(decl) != .s_nominal_decl) continue;
@@ -5209,6 +5271,205 @@ fn computeLocalTypeContexts(self: *Self, dispatch_refs: []const LocalProcedureOu
         for (input.context.items, vars) |rigid, *var_| var_.* = ModuleEnv.varFrom(rigid);
         nominal_decl.context = try self.types.appendVars(vars);
         self.types.setNominalDecl(decl_entry, nominal_decl);
+
+        for (input.context.items) |rigid| {
+            try self.local_type_context_owners.append(gpa, .{ .decl = decl, .rigid = rigid, .owner = self.rigidVarOwner(rigid) });
+        }
+    }
+}
+
+/// Judges bindings for `rejectEscapingLocalTypes`: a binding may not hold a
+/// body-local type with a context unless the body of a binding that owns one
+/// of its context variables encloses it (`inside`).
+const LocalTypeEscapeJudge = struct {
+    checker: *Self,
+    self_module: base.ModuleIdentity.Idx,
+    /// The owners whose bodies enclose the binding being judged.
+    inside: std.ArrayList(CIR.Pattern.Idx) = .empty,
+    stack: std.ArrayList(Var) = .empty,
+    /// The judgment (plus one) that last visited each type node, so each
+    /// binding's type is walked once without clearing the map between them.
+    visited_by: collections.DenseMapUnmanaged(Var, u32) = .empty,
+    judgments: u32 = 0,
+    /// The local types that escaped, whose methods are rejected.
+    escaped: collections.DenseMapUnmanaged(CIR.Statement.Idx, void) = .empty,
+
+    fn deinit(judge: *LocalTypeEscapeJudge) void {
+        const gpa = judge.checker.gpa;
+        judge.inside.deinit(gpa);
+        judge.stack.deinit(gpa);
+        judge.visited_by.deinit(gpa);
+        judge.escaped.deinit(gpa);
+    }
+
+    fn ownsContext(judge: *const LocalTypeEscapeJudge, pattern: CIR.Pattern.Idx) bool {
+        for (judge.checker.local_type_context_owners.items) |entry| {
+            if (entry.owner == pattern) return true;
+        }
+        return false;
+    }
+
+    /// Reports `pattern` and makes it bind nothing when its type holds a
+    /// local type outside that type's context. Returns whether it did.
+    fn rejectIfEscaping(judge: *LocalTypeEscapeJudge, pattern: CIR.Pattern.Idx) Allocator.Error!bool {
+        const checker = judge.checker;
+        const gpa = checker.gpa;
+        if (checker.erroneous_value_patterns.contains(pattern)) return false;
+        const pattern_var = ModuleEnv.varFrom(pattern);
+        if (checker.types.resolveVar(pattern_var).desc.content == .err) return false;
+        const owners = checker.local_type_context_owners.items;
+        judge.judgments += 1;
+        const visit_mark = judge.judgments;
+        judge.stack.clearRetainingCapacity();
+        try judge.stack.append(gpa, pattern_var);
+        const escaping: usize = search: while (judge.stack.pop()) |pending| {
+            const resolved = checker.types.resolveVar(pending);
+            const visit = try judge.visited_by.getOrPut(gpa, resolved.var_);
+            if (visit.found_existing and visit.value_ptr.* == visit_mark) continue;
+            visit.value_ptr.* = visit_mark;
+            if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                const nominal = resolved.desc.content.structure.nominal_type;
+                if (nominal.origin_module == judge.self_module) {
+                    if (nominal.sourceDeclOptional()) |statement| {
+                        for (owners, 0..) |entry, entry_index| {
+                            if (@backingInt(entry.decl) != statement) continue;
+                            if (std.mem.indexOfScalar(CIR.Pattern.Idx, judge.inside.items, entry.owner) == null) break :search entry_index;
+                        }
+                    }
+                }
+            }
+            try checker.appendGrowthChildren(resolved.desc.content, &judge.stack);
+        } else return false;
+        const entry = owners[escaping];
+
+        // Only nominal declarations record context owners.
+        const header_idx = checker.cir.store.getStatement(entry.decl).s_nominal_decl.header;
+        _ = try checker.problems.appendProblem(.{ .local_type_escape = .{
+            .region = checker.cir.store.getPatternRegion(pattern),
+            .def_name = checker.getPatternIdent(pattern),
+            .def_snapshot = try checker.snapshotVarForError(pattern_var),
+            .type_name = checker.cir.store.getTypeHeader(header_idx).relative_name,
+            .type_region = checker.cir.store.getRegionAt(@fromBackingInt(@intCast(@backingInt(header_idx)))),
+            .var_name = checker.cir.store.getTypeAnno(entry.rigid).rigid_var.name,
+            .owner_name = checker.getPatternIdent(entry.owner),
+        } });
+        try checker.markErroneousValuePattern(pattern);
+        try judge.escaped.put(gpa, entry.decl, {});
+        return true;
+    }
+};
+
+/// POLICY: a body-local type stays inside the functions its identity depends
+/// on (design.md "Body-Local Types Stay In Their Context"). A nominal type
+/// declared in a function body whose context includes a type variable of an
+/// enclosing binding means a different type at every instantiation of that
+/// binding, and only code inside the binding's body can tell those apart. So
+/// such a type may not occur in the type of any binding the body of a binding
+/// that owns one of its context variables does not enclose: the owner, a
+/// top-level definition, or a binding of an enclosing body. Each such binding
+/// is reported once, at its name, and binds nothing, so every use of it
+/// crashes; the type's methods are rejected, so no dispatch outside the body
+/// reaches them.
+///
+/// A module whose body-local types all have empty contexts records no owner
+/// and does no work here. Otherwise each top-level definition is judged, and
+/// only the bodies of top-level definitions that enclose an owner declared in
+/// a function body are walked, judging each binding they bind once.
+fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
+    try self.settleLocalTypeContexts();
+    const owners = self.local_type_context_owners.items;
+    if (owners.len == 0) return;
+    const gpa = self.gpa;
+
+    var judge: LocalTypeEscapeJudge = .{ .checker = self, .self_module = self.cir.selfModuleIdentity() };
+    defer judge.deinit();
+
+    // A top-level definition is inside no function body.
+    var walked: std.ArrayList(CIR.Def.Idx) = .empty;
+    defer walked.deinit(gpa);
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
+        const def = self.cir.store.getDef(def_idx);
+        if (try judge.rejectIfEscaping(def.pattern)) continue;
+        // Only the bodies of definitions enclosing the binding that owns a
+        // context variable are walked.
+        const body_region = self.cir.store.getExprRegion(def.expr);
+        for (owners) |entry| {
+            if (self.patternIsTopLevel(entry.owner)) continue;
+            const owner_region = self.cir.store.getPatternRegion(entry.owner);
+            if (owner_region.start.offset >= body_region.start.offset and owner_region.end.offset <= body_region.end.offset) {
+                try walked.append(gpa, def_idx);
+                break;
+            }
+        }
+    }
+
+    // Each binding in a walked body is judged against the local types whose
+    // owners' bodies do not enclose it.
+    const WalkItem = union(enum) { expr: CIR.Expr.Idx, enter_owner: CIR.Pattern.Idx, leave_owner };
+    var work: std.ArrayList(WalkItem) = .empty;
+    defer work.deinit(gpa);
+    const Collector = struct {
+        work: *std.ArrayList(WalkItem),
+        judge: *LocalTypeEscapeJudge,
+        gpa: Allocator,
+
+        fn expr(collector: @This(), child: CIR.Expr.Idx) Allocator.Error!void {
+            try collector.work.append(collector.gpa, .{ .expr = child });
+        }
+
+        fn boundPattern(collector: @This(), pattern: CIR.Pattern.Idx) Allocator.Error!void {
+            _ = try collector.judge.rejectIfEscaping(pattern);
+        }
+
+        fn reassignTarget(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
+    };
+    const collector: Collector = .{ .work = &work, .judge = &judge, .gpa = gpa };
+    for (walked.items) |def_idx| {
+        std.debug.assert(judge.inside.items.len == 0);
+        try work.append(gpa, .{ .expr = self.cir.store.getDef(def_idx).expr });
+        while (work.pop()) |item| switch (item) {
+            .leave_owner => _ = judge.inside.pop(),
+            .expr => |expr| switch (self.cir.store.getExpr(expr)) {
+                .e_block => |block| {
+                    try work.append(gpa, .{ .expr = block.final_expr });
+                    const statements = self.cir.store.sliceStatements(block.stmts);
+                    var index = statements.len;
+                    while (index > 0) {
+                        index -= 1;
+                        const statement = self.cir.store.getStatement(statements[index]);
+                        if (statement == .s_decl and judge.ownsContext(statement.s_decl.pattern)) {
+                            // The owner's body may hold its own local types.
+                            _ = try judge.rejectIfEscaping(statement.s_decl.pattern);
+                            try work.append(gpa, .leave_owner);
+                            try work.append(gpa, .{ .expr = statement.s_decl.expr });
+                            try work.append(gpa, .{ .enter_owner = statement.s_decl.pattern });
+                        } else {
+                            try self.visitStatementChildren(statements[index], collector);
+                        }
+                    }
+                },
+                else => try self.visitExprChildren(expr, collector),
+            },
+            .enter_owner => |owner| try judge.inside.append(gpa, owner),
+        };
+    }
+    const escaped = &judge.escaped;
+    if (escaped.count() == 0) return;
+
+    // Values of an escaped type exist outside its context, where its methods
+    // have no declaration context to run in, so every method is rejected.
+    for (self.cir.method_defs.entries.items) |method_entry| {
+        if (!escaped.contains(method_entry.key.owner)) continue;
+        if (self.cir.store.nodes.get(method_entry.value.type_node_idx).tag != .statement_decl) continue;
+        const method = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(method_entry.value.type_node_idx)))).s_decl;
+        if (self.cir.store.getExpr(method.expr) == .e_runtime_error) continue;
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(method.expr),
+        } });
+        try self.replaceExprWithRuntimeError(method.expr, diagnostic_idx);
+        try self.markErroneousValueExpr(method.expr);
+        try self.markErroneousValuePattern(method.pattern);
     }
 }
 
@@ -5306,7 +5567,7 @@ fn addLocalTypeContextRigid(self: *Self, decl: CIR.Statement.Idx, input: *LocalT
         if (parameter == rigid) return false;
     }
     if (input.method_depth) |method_depth| {
-        if ((self.rigid_var_candidate_depths.get(rigid) orelse 0) > method_depth) return false;
+        if (self.rigidVarCandidateDepth(rigid) > method_depth) return false;
     }
     const items = input.context.items;
     var lo: usize = 0;
@@ -14023,6 +14284,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         try self.rejectSettledInfiniteTypes(settled_walk.cycles.items, null, &env);
     }
     try self.recheckNominalConstructorBackings(&env);
+    try self.rejectEscapingLocalTypes();
 
     try self.rejectEffectfulCompileTimeExecutableRoots();
     // Publish diagnostic origins while the producer still owns its private
@@ -19746,6 +20008,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     if (self.checking_executable_root) self.checking_immediate_callee = true;
     self.checking_binding_rhs = true;
     self.checking_binding_rhs_pattern = def.pattern;
+    try self.recordPolymorphicAnnotationOwner(def.annotation, def.pattern);
     // A singleton value definition has no scheme boundary and therefore owns
     // no side-table candidates. Recursive groups still provisionally own every
     // member here because the shared group boundary decides which roots
@@ -22564,6 +22827,9 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
     try self.setVarRank(annotation_var, env);
 
     const annotation = self.cir.store.getAnnotation(annotation_idx);
+    const saved_generating_annotation = self.generating_annotation;
+    self.generating_annotation = annotation_idx;
+    defer self.generating_annotation = saved_generating_annotation;
 
     // Every implicitly opened extension this generation mints is recorded for
     // the definition's bound (`boundAnnotationRows`) and the post-body audit
@@ -25423,7 +25689,7 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
     switch (anno) {
         .rigid_var => |rigid| {
             if (entering) {
-                try self.recordRigidVarCandidateDepth(anno_idx);
+                try self.recordRigidVarIntro(anno_idx);
                 if (ctx == .type_decl) {
                     if (self.type_decl_rigid_vars.get(rigid.name)) |decl_var| {
                         _ = try self.unify(anno_var, decl_var, env);
@@ -31119,6 +31385,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             }
             self.checking_binding_rhs = true;
             self.checking_binding_rhs_pattern = decl_stmt.pattern;
+            try self.recordPolymorphicAnnotationOwner(decl_stmt.anno, decl_stmt.pattern);
             // The frame's pattern var owns the scheme, so requirement
             // candidates recorded while checking the RHS and at the frame's
             // boundary belong to it.

@@ -93,6 +93,7 @@ pub const Problem = union(enum) {
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     growing_polymorphic_recursion: GrowingPolymorphicRecursion,
+    local_type_escape: LocalTypeEscape,
     row_label_conflict: RowLabelConflict,
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
@@ -453,6 +454,26 @@ pub const GrowingPolymorphicRecursion = struct {
     def_name: ?Ident.Idx,
     /// The function's type at this use.
     use_snapshot: SnapshotContentIdx,
+};
+
+/// A binding whose type contains a type declared in a function body that
+/// depends on a type variable of a function whose body the binding is not
+/// inside, so values of that type would leave the only place its
+/// instantiations can be told apart (design.md "Body-Local
+/// Types Stay In Their Context").
+pub const LocalTypeEscape = struct {
+    /// The binding's name.
+    region: base.Region,
+    def_name: ?Ident.Idx,
+    /// The binding's type.
+    def_snapshot: SnapshotContentIdx,
+    /// The body-local type and its declaration's header.
+    type_name: Ident.Idx,
+    type_region: base.Region,
+    /// The type variable the body-local type depends on, and the binding
+    /// that introduces it.
+    var_name: Ident.Idx,
+    owner_name: ?Ident.Idx,
 };
 
 /// One label repeated along a row's extension chain, whose occurrences cannot
