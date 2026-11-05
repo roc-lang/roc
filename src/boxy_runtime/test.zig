@@ -729,6 +729,39 @@ test "experimental composition shortcuts retain exact operand result association
     }
 }
 
+test "experimental composition shortcuts concurrent distinct operands stay associated" {
+    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    const state = try compiled.InProcessState.create(testing.allocator);
+    defer state.destroy();
+    var sites: [4]compose.CompositionSite = @splat(.{});
+    const Worker = struct {
+        fn run(site: *compose.CompositionSite, shared: *compiled.InProcessState, word: usize, failed: *std.atomic.Value(bool)) void {
+            const entered = shared.enter();
+            defer compiled.InProcessState.leave(entered);
+            const operands = [_]usize{ word, word + 1 };
+            for (0..2000) |_| {
+                compose.experimentPublish(site, &shared.descriptors, &shared.ops, &operands, word + 2);
+                if (compose.experimentLookup(site, &operands)) |entry| {
+                    if (entry.result != word + 2) failed.store(true, .monotonic);
+                } else if (@import("experiment.zig").worker_local) {
+                    failed.store(true, .monotonic);
+                }
+            }
+        }
+    };
+    var failed: std.atomic.Value(bool) = .init(false);
+    var threads: [8]std.Thread = undefined;
+    var started: usize = 0;
+    {
+        defer for (threads[0..started]) |thread| thread.join();
+        for (&threads, 0..) |*thread, i| {
+            thread.* = try std.Thread.spawn(.{}, Worker.run, .{ &sites[0], state, 10 * (i + 1), &failed });
+            started += 1;
+        }
+    }
+    try testing.expect(!failed.load(.monotonic));
+}
+
 test "boxy composition site concurrent writers publish whole operand result pairs" {
     if (@import("builtin").single_threaded) return error.SkipZigTest;
     const state = try compiled.InProcessState.create(testing.allocator);
