@@ -14,7 +14,7 @@ test "boxy declared primitives lower directly at closed and open call sites" {
             \\length : List(a) -> U64
             \\length = |items| items.len()
             \\main! = |args| {
-            \\    echo!(Str.inspect(rotate(17, 3)))
+            \\    echo!(Str.inspect(rotate(args.len().to_u32_wrap(), 3)))
             \\    echo!(Str.inspect(length(args)))
             \\    Ok({})
             \\}

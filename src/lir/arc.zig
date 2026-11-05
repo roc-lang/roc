@@ -2797,7 +2797,6 @@ const Inserter = struct {
                         assign.target,
                         assign.next,
                         true,
-                        borrowed_variant != null and !use_borrowed,
                     );
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.preserve_consumed_args = transfer.preserve_consumed_args;
@@ -4871,8 +4870,8 @@ const Inserter = struct {
 
     /// Low-level ops: `RcEffect` masks say which positions the op consumes
     /// or retains; this decides which of those transfers move existing units
-    /// and which pay retains. Borrowed-result variants may also retain a
-    /// borrowed input to supply the unit required by the selected owned op.
+    /// and which pay retains. An input with no owned unit, including a
+    /// dynamic view, must be retained for each consuming position.
     /// `want_unique` gates the uniqueness-claim scan, whose result only affects
     /// materialized statements.
     fn transferForLowLevel(
@@ -4884,7 +4883,6 @@ const Inserter = struct {
         target: LIR.LocalId,
         next: LIR.CFStmtId,
         want_unique: bool,
-        supply_missing_consumed_args: bool,
     ) ResourceError!LowLevelTransfer {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
             arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
@@ -4909,14 +4907,17 @@ const Inserter = struct {
             next,
             target,
         );
-        if (supply_missing_consumed_args) {
+        {
             const locals = self.store.getLocalSpan(args);
             for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
                 const bit = argMaskBit(position);
                 if (((rc_effect.consume_args & ~operand_take_mask) & bit) == 0) continue;
                 if (!self.ownsUnit(owned, GuardedList.at(locals, position))) {
-                    // The solved signature borrowed this argument. Retaining it
-                    // here supplies the unit consumed by the owned operation.
+                    // A borrowed binding has no unit to transfer. In
+                    // particular a dynamic view stays borrowed from its
+                    // backing storage even at its last consuming use.
+                    // Supply the operation's unit without taking the
+                    // container's own stored unit.
                     preserve_consumed_args |= bit;
                 }
             }
@@ -18175,6 +18176,34 @@ test "ARC dyn field view returned through a copy is retained and its base releas
     try testing.expectEqual(@as(usize, 1), d.f.countRc(view, .incref) + d.f.countRc(result, .incref));
     try d.f.expectRc(param, 0, 1, 0);
     try testing.expectEqual(@as(usize, 0), d.f.countRc(view, .decref) + d.f.countRc(result, .decref));
+    try d.expectDynamicRcShape();
+}
+
+test "ARC dyn field views supply ownership to consuming low-level operations" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const field_desc = try d.desc();
+    const elem_desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const view = try d.value(field_desc, .view);
+    const result = try d.value(field_desc, .result);
+    const ret = try d.f.ret(result);
+    // Both consuming positions read the same borrowed field. Each must get
+    // its own unit, while the container keeps its original field unit.
+    const concat = try d.f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .list_concat,
+        .rc_effect = try d.f.store.addRcEffect(LIR.LowLevel.list_concat.rcEffect()),
+        .extra = try d.f.store.addStmtRow(LIR.LowLevelExtra, .{ .dyn_elem_desc = true }),
+        .args = try d.f.span(&.{ view, view, elem_desc }),
+        .next = ret,
+    } }, .test_fixture);
+    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = 0 } }, concat);
+    const proc = try d.proc(&.{ desc, field_desc, elem_desc, param }, read, d.dynamic, result);
+    try d.run(&.{proc});
+    try d.f.expectRc(view, 2, 0, 0);
+    try d.f.expectRc(param, 0, 1, 0);
     try d.expectDynamicRcShape();
 }
 

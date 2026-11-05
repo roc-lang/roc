@@ -19959,7 +19959,13 @@ generates constraints per statement:
   as the source; the copy transfers nothing by itself, and the `incref` ARC
   emits beside it is the source's.
 - `assign_low_level`: constraints come from the op's `RcEffect`. Args in
-  `consume_args` are owned occurrences. Args outside `consume_args` and
+  `consume_args` are owned occurrences. Every consumed position must receive
+  an ownership unit: transfer an available unit, or retain the operand before
+  the operation if it has none. This applies to all consuming operations,
+  including dynamic field views that must remain borrowed to keep their
+  backing storage alive. Consuming a view's contents does not consume its
+  container's stored unit. Repeated consuming positions each need a unit.
+  Args outside `consume_args` and
   `representationArgs` are borrowed occurrences whose lender must be live at
   the call. Representation-only operands require a bound descriptor. Args in
   `retain_args` are stored by the op, so the stored value's storage
