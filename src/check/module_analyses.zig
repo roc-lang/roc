@@ -31,6 +31,9 @@ const ModuleDispatch = checked_artifact.ModuleDispatch;
 const DispatchIndex = checked_artifact.DispatchIndex;
 const PlatformRequirementRootEvidence = checked_artifact.PlatformRequirementRootEvidence;
 const DispatchScopeId = checked_artifact.DispatchScopeId;
+const TemplateDemandGraph = checked_artifact.TemplateDemandGraph;
+const TemplateDemandComponent = checked_artifact.TemplateDemandComponent;
+const SchemeVarDemand = checked_artifact.SchemeVarDemand;
 
 const TemplateSchemaSlot = collections.OnceSlot(*SchemeAnalysis, .module_template_schema);
 const ScopeSchemaSlot = collections.OnceSlot(*SchemeAnalysis, .module_scope_schema);
@@ -100,6 +103,7 @@ pub const ModuleAnalyses = struct {
     dispatch_index: collections.OnceSlot(*DispatchIndex, .module_dispatch_index) = .empty,
     module_dispatch: collections.OnceSlot(*ModuleDispatch, .module_dispatch) = .empty,
     platform_root_evidence: collections.OnceSlot(*PlatformRequirementRootEvidence, .module_platform_root_evidence) = .empty,
+    template_demand_graph: collections.OnceSlot(*TemplateDemandGraph, .module_template_demand_graph) = .empty,
 
     pub fn create(allocator: Allocator, io: std.Io, platform: ?*const CheckedModuleArtifact) Allocator.Error!*ModuleAnalyses {
         const analyses = try allocator.create(ModuleAnalyses);
@@ -120,6 +124,7 @@ pub const ModuleAnalyses = struct {
         if (self.dispatch_index.peek()) |index| index.destroy();
         if (self.module_dispatch.peek()) |result| result.destroy(allocator);
         if (self.platform_root_evidence.peek()) |result| result.destroy(allocator);
+        if (self.template_demand_graph.peek()) |graph| graph.destroy(allocator);
         allocator.free(self.dispatch_imports);
         if (self.export_closures.peek()) |closures| closures.destroy(allocator);
         if (self.public_api_dependencies.peek()) |dependencies| {
@@ -270,9 +275,80 @@ pub const ModuleAnalyses = struct {
         return null;
     }
 
+    /// The module's demand call graph: every template's own demand vector,
+    /// its demand edges and the strongly connected components they form.
+    pub fn templateDemandGraph(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*TemplateDemandGraph {
+        return self.template_demand_graph.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.demandGraph);
+    }
+
+    /// The demand vector of procedure template `template`.
+    pub fn templateDemands(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error![]const SchemeVarDemand {
+        const graph = try self.templateDemandGraph(dispatch);
+        const raw = @backingInt(template);
+        const component = try self.templateDemandComponent(dispatch, graph, graph.component_of[raw]);
+        return component.member(graph.member_index[raw]);
+    }
+
+    /// The demand vectors of component `component` of `graph`. Before it
+    /// claims a component, a consumer demands, holding no claim, every
+    /// component it reaches through local edges (callees first) and every
+    /// imported template those components call, so a component's
+    /// computation only reads finished vectors and never waits on a slot of
+    /// its own kind.
+    fn templateDemandComponent(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *TemplateDemandGraph, component: u32) Allocator.Error!*const TemplateDemandComponent {
+        if (graph.component_slots[component].peek()) |done| return done;
+        const allocator = self.allocator;
+        var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, graph.component_slots.len);
+        defer visited.deinit(allocator);
+        var order: std.ArrayList(u32) = .empty;
+        defer order.deinit(allocator);
+        const Frame = struct { component: u32, next_callee: u32 };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer frames.deinit(allocator);
+        visited.set(component);
+        try frames.append(allocator, .{ .component = component, .next_callee = 0 });
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            const callees = graph.componentCallees(frame.component);
+            if (frame.next_callee < callees.len) {
+                const callee = callees[frame.next_callee];
+                frame.next_callee += 1;
+                if (visited.isSet(callee) or graph.component_slots[callee].peek() != null) continue;
+                visited.set(callee);
+                try frames.append(allocator, .{ .component = callee, .next_callee = 0 });
+                continue;
+            }
+            try order.append(allocator, frame.component);
+            _ = frames.pop();
+        }
+        for (order.items) |next| {
+            for (graph.componentMembers(next)) |member| for (graph.templateEdges(member)) |edge| switch (edge.callee) {
+                .imported => |callee| _ = try checked_artifact.importedTemplateDemands(dispatch, callee),
+                .local => {},
+            };
+            _ = try graph.component_slots[next].getOrCompute(self.io, Allocator.Error, ComponentRequest{ .analyses = self, .dispatch = dispatch, .graph = graph, .component = next }, ComponentRequest.compute);
+        }
+        return graph.component_slots[component].peek().?;
+    }
+
+    const ComponentRequest = struct {
+        analyses: *ModuleAnalyses,
+        dispatch: CheckedDispatch,
+        graph: *const TemplateDemandGraph,
+        component: u32,
+
+        fn compute(request: ComponentRequest) Allocator.Error!*TemplateDemandComponent {
+            return checked_artifact.computeTemplateDemandComponent(request.analyses.allocator, request.dispatch, request.graph, request.component);
+        }
+    };
+
     const DispatchRequest = struct {
         analyses: *ModuleAnalyses,
         dispatch: CheckedDispatch,
+
+        fn demandGraph(request: DispatchRequest) Allocator.Error!*TemplateDemandGraph {
+            return checked_artifact.computeTemplateDemandGraph(request.analyses.allocator, request.dispatch);
+        }
 
         fn createSlots(request: DispatchRequest) Allocator.Error!*DispatchSlots {
             const source = request.dispatch.source;

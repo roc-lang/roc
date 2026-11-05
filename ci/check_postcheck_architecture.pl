@@ -131,6 +131,11 @@ my @RULES = (
     { category => 'checked-body-store', regex => qr/\bpatternIdForSource\b/, allowed => {} },
     { category => 'checked-body-store', regex => qr/\bSyntheticExprOrigin\b/, allowed => {} },
     { category => 'checked-row-coerce-variant', regex => qr/\brow_coerce\b/, scope => qr{\Asrc/check/}, allowed => {} },
+    # Template demand vectors are per-component slots of the module's
+    # analyses (`CheckedDispatch.templateDemands`). Nothing publishes them
+    # into the template table or the cache entry.
+    { category => 'eager-template-demand', regex => qr/\bTemplateDemandPass\b/, allowed => {} },
+    { category => 'eager-template-demand', regex => qr/\bdemand_pool\b/, allowed => {} },
     # Post-check code reads sealed solver stores through the checked type
     # reader and never writes one.
     {
