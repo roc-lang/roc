@@ -20498,7 +20498,7 @@ fn resetAnnotationNodes(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem
 fn enclosingRigidLookup(cir: *const ModuleEnv, nodes: []const CIR.TypeAnno.Idx, anno_idx: CIR.TypeAnno.Idx) ?CIR.TypeAnno.Idx {
     const lookup = switch (cir.store.getTypeAnno(anno_idx)) {
         .rigid_var_lookup => |lookup| lookup,
-        else => return null,
+        .underscore, .rigid_var, .lookup, .malformed, .apply, .tag_union, .tag, .tuple, .record, .@"fn", .parens => return null,
     };
     for (nodes) |node| {
         if (node == lookup.ref) return null;
