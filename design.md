@@ -15266,7 +15266,10 @@ The stored form lives in `CompileTimeRoot.boxy_value`, beside the payload the
 `.lss` evaluator fills, because a recipe means nothing to Monotype. The payload
 stays `.unevaluated`, so an `.lss` compilation of the same checked module
 evaluates the root itself and neither strategy reads the other's function
-values.
+values. A `.boxy` lowering that finds only the `.lss` evaluator's function
+value for a root, as a module's object does after an `.lss` compilation
+evaluated that root, computes the value through the root's entry wrapper,
+as it does a value no evaluation produced.
 
 A literal in a generic body converts at the first instantiation that fixes
 its type, under either strategy: as a literal argument root of the

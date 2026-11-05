@@ -1558,11 +1558,11 @@ pub const Builder = struct {
                             try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = self.currentWorker().ret, .root = wrapper.root } })
                         else
                             try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
-                        .fn_value => |fn_id| if (self.program.moduleUnit() != null)
-                            try self.restoreFn(.{ .module = self.module }, fn_id, self.currentWorker().ret)
-                        else
-                            try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
-                        .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
+                        // A function value the `.lss` evaluator stored means
+                        // nothing here ("Stored Function Values"): the
+                        // wrapper computes it, as it does a value no
+                        // evaluation produced.
+                        .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
                     },
                     // A literal argument's body is the conversion its root
                     // names, called on another module's literal.
@@ -2961,15 +2961,15 @@ pub const Builder = struct {
                 const root = owner.view.compile_time_roots.root(template.root);
                 if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
                 switch (root.payload) {
-                    .fn_value => |fn_id| try self.restoreFn(.{ .module = eval.module }, fn_id, eval.ty),
                     // Evaluation stored a value that is not a function: the
                     // crash a rejected binding is.
                     .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = node, .ty = eval.ty } }),
-                    // No compile-time evaluation produced the value (a
-                    // binding of the app a platform's roots name, or one
-                    // whose evaluation failed where it was guarded): its
-                    // entry wrapper computes it.
-                    .pending, .unevaluated, .runtime => {
+                    // No `.boxy` evaluation produced the value (a binding of
+                    // the app a platform's roots name, one whose evaluation
+                    // failed where it was guarded, or one only the `.lss`
+                    // evaluator stored, whose function value means nothing
+                    // here): its entry wrapper computes it.
+                    .fn_value, .pending, .unevaluated, .runtime => {
                         const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
                             invariant("a callable-eval binding's root has no entry wrapper");
                         const callee = try self.program.templateRefWorker(wrapper);
