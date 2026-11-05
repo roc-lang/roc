@@ -7873,11 +7873,15 @@ fn serializedCheckedArtifactBytes(
     var arena_impl = base.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     var writer = CompactWriter.init();
-    // Compare the full deterministic view in tests, without making a pairing
-    // eligible for the production module cache.
-    var inspection = artifact.*;
-    inspection.pairing_arena = null;
-    try Coordinator.serializeForCache(check.CheckedArtifact.CheckedModuleArtifact, &inspection, &writer, arena_impl.allocator());
+    // A paired artifact's deterministic view is its platform's checked
+    // module and the pairing's cache entry.
+    if (artifact.pairing) |pairing| {
+        try Coordinator.serializeForCache(check.CheckedArtifact.CheckedModuleArtifact, pairing.platform, &writer, arena_impl.allocator());
+        const header = try writer.appendAlloc(arena_impl.allocator(), check.CheckedArtifact.PlatformPairing.Serialized);
+        try header.serialize(artifact, arena_impl.allocator(), &writer);
+    } else {
+        try Coordinator.serializeForCache(check.CheckedArtifact.CheckedModuleArtifact, artifact, &writer, arena_impl.allocator());
+    }
     const bytes = try allocator.alloc(u8, writer.total_bytes);
     errdefer allocator.free(bytes);
     _ = writer.writeToBuffer(bytes) catch unreachable; // bytes was allocated with exactly writer.total_bytes

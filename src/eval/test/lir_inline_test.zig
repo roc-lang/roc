@@ -6253,7 +6253,7 @@ fn directDispatchPlanIsParametric(
     var found: ?bool = null;
     for (0..resources.checked_artifact.static_dispatch_plans.plans.len) |raw| {
         const plan = try resources.checked_artifact.dispatch().plan(@fromBackingInt(@intCast(raw)));
-        if (!std.mem.eql(u8, resources.checked_artifact.canonical_names.methodNameText(plan.method), method)) continue;
+        if (!std.mem.eql(u8, resources.checked_artifact.nameStore().methodNameText(plan.method), method)) continue;
         const parametric = switch (plan.resolution) {
             .direct_parametric => true,
             .direct_closed => false,
@@ -9655,7 +9655,7 @@ test "W6a open where-method widening and nested evidence lower through explicit 
         const plan = try compiled.resources.checked_artifact.dispatch().plan(@fromBackingInt(@intCast(raw)));
         if (!std.mem.eql(
             u8,
-            compiled.resources.checked_artifact.canonical_names.methodNameText(plan.method),
+            compiled.resources.checked_artifact.nameStore().methodNameText(plan.method),
             "plus",
         )) continue;
         switch (plan.resolution) {
@@ -13766,8 +13766,8 @@ test "issue 12491 nested closure chain bound to a block local lowers under boxy"
 /// The procedure template of `artifact` exported as `name`.
 fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) error{TestUnexpectedResult}!check.CheckedArtifact.CheckedProcedureTemplate {
     for (artifact.checked_procedure_templates.templates.items) |template| {
-        const export_name = artifact.canonical_names.procBase(template.proc_base).export_name orelse continue;
-        if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) return template;
+        const export_name = artifact.nameStore().procBase(template.proc_base).export_name orelse continue;
+        if (std.mem.eql(u8, artifact.nameStore().exportNameText(export_name), name)) return template;
     }
     std.debug.print("no template named {s}\n", .{name});
     return error.TestUnexpectedResult;
