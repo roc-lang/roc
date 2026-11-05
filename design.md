@@ -5937,6 +5937,50 @@ compile-time checked callable leaves. Privacy affects source
 name lookup and diagnostics. It must not hide checked bodies from whole-program
 post-check specialization.
 
+### Body-Local Types Stay In Their Context
+
+A body-local type whose context is not empty (Body-Local Type Context) never
+leaves the functions whose type variables it depends on. Inside the body of
+`make_local : a -> _`, every use of a local `Local` whose method reads `a`
+means the body's own `a`, so checking never needs to tell instantiations
+apart. Outside that body there is no `a` to fill in: `make_local(Apples)` and
+`make_local(Pears)` would both have type `Local`, and a list holding both
+would mix two different types under one name. So the checker rejects such a
+type in the type of the binding that owns one of its context variables (the
+binding whose annotation introduced the variable), and in the type of every
+top-level definition, which is inside no function body. It may appear
+anywhere in such a type: directly as an argument or result, or inside a
+record, tag union, list, tuple, function type, or another type's arguments.
+
+A value of a local type leaves its owner's body as an argument or result of
+the owner, which the owner's type shows, or through a monomorphic variable
+of an enclosing scope that the body unified with it (an enclosing function's
+parameter, a weak top-level value), which ends up in the type of the
+enclosing top-level definition. A nested function inside the owner may take
+or return the type freely: when the context variable belongs to an enclosing
+function, the value is still inside that function's body, and the variable
+appears in the nested function's type as the enclosing function's own
+variable. A body-local type with an empty context means the same type at
+every instantiation and may leave its body like any other type. A static
+dispatch requirement whose relation names such a type is not a value of it,
+so a requirement captured into the owner's scheme is not an escape.
+
+Checking applies the rule once contexts are final
+(`rejectEscapingLocalTypes`). Deciding a context records, for each of its
+variables, the binding that owns it (`local_type_context_owners`): a rigid
+variable remembers the binding annotation that introduced it, and each
+binding annotation that introduces a type variable remembers its binding. A
+module whose body-local types have empty contexts, or that has none, records
+no owner and does no work. Otherwise the owners' types and the top-level
+definitions' types are walked, each once, with a visited set over type
+nodes; function bodies are not walked. A rejected binding is a Local Type
+Escapes error at its name, showing its type and the local type's
+declaration, and suggesting a top-level declaration with a type parameter
+(`Local(a)`). The binding binds nothing, so every use of it crashes, and
+every method of the escaped type is rejected like a capturing method
+(Methods Never Capture), so no dispatch outside the type's context reaches a
+local procedure that needs it.
+
 ### Function Definitions
 
 `FnDef` is the checked identity of a callable body. It is used in
