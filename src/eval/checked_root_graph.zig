@@ -573,13 +573,8 @@ test "CTFE root classification resolves nominal backings throughout the checked 
         const holder = for (parsed.import_artifacts) |*artifact| {
             if (std.mem.eql(u8, artifact.moduleEnvConst().module_name, "Holder")) break artifact;
         } else return error.TestUnexpectedResult;
-        const request = for (consumer.root_requests.compile_time_requests) |request| {
-            const root = consumer.compile_time_roots.root(request.compile_time_root.?);
-            if (root.source != .def) continue;
-            const env = consumer.moduleEnvConst();
-            const pattern = env.store.getPattern(env.store.getDef(root.source.def).pattern);
-            if (pattern == .assign and std.mem.eql(u8, env.getIdent(pattern.assign.ident), "value")) break request;
-        } else return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), consumer.root_requests.compile_time_requests.len);
+        const request = consumer.root_requests.compile_time_requests[0];
         // A nominal can be supplied by the ownership anchor, a platform
         // relation, or an ordinary import. None needs a pending CTFE root.
         try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, checked.loweringView(holder), &.{checked.importedView(consumer)}, consumer, request));
