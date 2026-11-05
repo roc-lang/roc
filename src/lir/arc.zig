@@ -4695,15 +4695,13 @@ const Inserter = struct {
         };
     }
 
-    fn aliasesContain(aliases: []const LIR.LocalId, local: LIR.LocalId) bool {
-        for (aliases) |alias| if (alias == local) return true;
-        return false;
-    }
+    /// The same-value aliases of a carried root, by local.
+    const AliasSet = collections.DenseMapUnmanaged(LIR.LocalId, void);
 
-    fn spanContainsAlias(self: *const Inserter, span: LIR.LocalSpan, aliases: []const LIR.LocalId) bool {
+    fn spanContainsAlias(self: *const Inserter, span: LIR.LocalSpan, aliases: *const AliasSet) bool {
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |index| {
-            if (aliasesContain(aliases, GuardedList.at(locals, index))) return true;
+            if (aliases.contains(GuardedList.at(locals, index))) return true;
         }
         return false;
     }
@@ -4720,8 +4718,8 @@ const Inserter = struct {
         root: LIR.LocalId,
         next: LIR.CFStmtId,
     ) ResourceError!?OutcomeRestitution {
-        var aliases = std.ArrayList(LIR.LocalId).empty;
-        try aliases.append(self.emission_allocator, root);
+        var aliases: AliasSet = .empty;
+        try aliases.put(self.emission_allocator, root, {});
         var cursor = next;
         while (true) {
             const stmt = self.store.getCFStmt(cursor);
@@ -4729,27 +4727,25 @@ const Inserter = struct {
                 const assign = stmt.assign_ref;
                 switch (assign.op.kind) {
                     .local => {
-                        if (aliasesContain(aliases.items, assign.op.source)) {
-                            if (!aliasesContain(aliases.items, assign.target)) {
-                                try aliases.append(self.emission_allocator, assign.target);
-                            }
+                        if (aliases.contains(assign.op.source)) {
+                            try aliases.put(self.emission_allocator, assign.target, {});
                         }
                     },
                     .field => {
-                        if (aliasesContain(aliases.items, assign.op.source) and self.localContainsRefcounted(assign.target)) {
+                        if (aliases.contains(assign.op.source) and self.localContainsRefcounted(assign.target)) {
                             return null;
                         }
                     },
-                    .discriminant => if (aliasesContain(aliases.items, assign.op.source)) return null,
-                    .tag_payload => if (aliasesContain(aliases.items, assign.op.source)) return null,
-                    .tag_payload_struct => if (aliasesContain(aliases.items, assign.op.source)) return null,
-                    inline .list_reinterpret, .nominal => if (aliasesContain(aliases.items, assign.op.source)) return null,
+                    .discriminant => if (aliases.contains(assign.op.source)) return null,
+                    .tag_payload => if (aliases.contains(assign.op.source)) return null,
+                    .tag_payload_struct => if (aliases.contains(assign.op.source)) return null,
+                    inline .list_reinterpret, .nominal => if (aliases.contains(assign.op.source)) return null,
                 }
                 cursor = assign.next;
             } else if (stmt == .assign_literal) {
                 cursor = stmt.assign_literal.next;
             } else if (stmt == .assign_low_level) {
-                if (self.spanContainsAlias(stmt.assign_low_level.args, aliases.items)) return null;
+                if (self.spanContainsAlias(stmt.assign_low_level.args, &aliases)) return null;
                 cursor = stmt.assign_low_level.next;
             } else if (stmt == .assign_call) {
                 const args = self.store.getLocalSpan(stmt.assign_call.args);
@@ -4759,7 +4755,7 @@ const Inserter = struct {
                     if (arg == carrier) {
                         if (carrier_position != null) return null;
                         carrier_position = position;
-                    } else if (aliasesContain(aliases.items, arg)) {
+                    } else if (aliases.contains(arg)) {
                         return null;
                     }
                 }

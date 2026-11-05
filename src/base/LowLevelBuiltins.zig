@@ -224,6 +224,7 @@ pub fn strOp(op: LowLevel) BuiltinFn {
 
         .{ LowLevel.str_split_on, BuiltinFn.str_split },
         .{ LowLevel.str_join_with, BuiltinFn.str_join_with },
+        .{ LowLevel.str_from_parts, BuiltinFn.str_from_parts },
         .{ LowLevel.str_inspect, BuiltinFn.str_escape_and_quote },
     });
 }

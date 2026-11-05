@@ -52,7 +52,7 @@ pub const tests = [_]TestCase{
         \\    s = values.collect()
         \\    empty : List(U64)
         \\    empty = []
-        \\    s.to_list() == [3, 1, 4] and s.iter().size_hint() == Known(3) and List.from_iter(s.iter_rev()) == [4, 1, 3] and Set.from_iter(empty.iter()).len() == 0
+        \\    s.to_list() == [3, 1, 4] and s.iter().len_if_known() == Ok(3) and List.from_iter(s.iter_rev()) == [4, 1, 3] and Set.from_iter(empty.iter()).len() == 0
         \\}
         ,
         .expected = .{ .inspect_str = "True" },

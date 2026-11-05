@@ -46,6 +46,10 @@ pub const LowLevel = enum(u16) {
     str_from_utf8,
     str_split_on,
     str_join_with,
+    /// An interpolated `Str` literal's parts (its non-empty segments and its
+    /// values, in order, any number of them) written once: the lengths summed,
+    /// one string allocated, each part copied in. Every part is borrowed.
+    str_from_parts,
     str_inspect,
 
     // Numeric to_str operations
@@ -1225,6 +1229,7 @@ pub const LowLevel = enum(u16) {
         .crypto_blake3_hasher_finish = byType(.allocates()),
 
         .str_join_with = byType(.allocatesConsumingArgs(arg_0)),
+        .str_from_parts = byType(.allocates()),
 
         .box_box = byLayout(.allocatesRetainingArgs(arg_0)).elements(&.{.layout}),
 

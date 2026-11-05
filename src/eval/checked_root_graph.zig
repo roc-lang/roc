@@ -536,6 +536,46 @@ pub fn rootHoldsFunction(
     return false;
 }
 
+test "CTFE root classification resolves nominal backings throughout the checked program" {
+    const allocator = std.testing.allocator;
+    for ([_]struct { source: []const u8, holds_function: bool }{
+        .{ .source =
+        \\Holder := { value : I64 }.{
+        \\    make : I64 -> Holder
+        \\    make = |n| { value: n }
+        \\}
+        , .holds_function = false },
+        .{ .source =
+        \\Holder := { call : I64 -> I64 }.{
+        \\    make : I64 -> Holder
+        \\    make = |n| { call: |x| x + n }
+        \\}
+        , .holds_function = true },
+    }) |case| {
+        var parsed = try @import("inspected.zig").parseProgram(allocator, .module,
+            \\module [value]
+            \\import Holder
+            \\value : Holder
+            \\value = Holder.make(7)
+        , &.{.{ .name = "Holder", .source = case.source }}, .{ .roots = .published_only });
+        defer parsed.deinit(allocator);
+        try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
+        const consumer = &parsed.checked_artifact;
+        // The import artifacts list the builtin module, then the program's
+        // imports in order; `Holder` is the program's only import.
+        try std.testing.expectEqual(@as(usize, 2), parsed.import_artifacts.len);
+        const holder = &parsed.import_artifacts[1];
+        try std.testing.expectEqual(@as(usize, 1), consumer.root_requests.compile_time_requests.len);
+        const request = consumer.root_requests.compile_time_requests[0];
+        // A nominal can be supplied by the ownership anchor, a platform
+        // relation, or an ordinary import. None needs a pending CTFE root.
+        const root: Root = .{ .module = 0, .root = request.compile_time_root.?, .request = request };
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringView(holder), .imports = &.{checked.importedView(consumer)} }, root));
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringViewWithRelations(consumer, &.{checked.importedView(holder)}) }, root));
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringView(consumer), .imports = &.{checked.importedView(holder)} }, root));
+    }
+}
+
 fn expectSharedDependencies(source: []const u8, imports: []const @import("inspected.zig").ModuleSource) (@import("inspected.zig").Error || Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
     var parsed = try @import("inspected.zig").parseProgram(allocator, .module, source, imports, .{ .roots = .published_only });

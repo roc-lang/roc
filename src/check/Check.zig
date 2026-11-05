@@ -16631,8 +16631,11 @@ fn recordOwnDispatch(self: *Self, constraint: StaticDispatchConstraint) Allocato
     try self.own_dispatch_exprs.putNoClobber(constraint.fn_var, intro);
 }
 
-/// Record that `fn_var` is the callable of a `for` loop's own `iter` or `next`
-/// dispatch over `iterable` (`loop_dispatch_iterables`).
+/// Record that `fn_var` is the callable of a synthetic iterator dispatch the
+/// expression `iterable` owns (`loop_dispatch_iterables`): a `for` loop's
+/// `iter` or `next` over its iterable, or an interpolation's `iter` or
+/// `append` building the iterator its assembler receives, over the
+/// interpolation itself.
 fn recordLoopDispatch(self: *Self, fn_var: Var, iterable: CIR.Expr.Idx) Allocator.Error!void {
     // Keyed by raw var, as `own_dispatch_exprs` is.
     std.debug.assert(!self.types.savepointActive());
@@ -33411,11 +33414,11 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
 
     // The conversion receives the literal segments at compile time and returns
     // the assembler the interpolation calls with its values at runtime:
-    // `List(Str) -> Try((List(item) -> a), [InvalidInterpolation(Str)])`.
+    // `List(Str) -> Try((Iter(item) -> a), [InvalidInterpolation(Str)])`.
     const segments_var = try self.freshFromContent(try self.mkListContent(try self.freshStr(env, expr_region)), env, expr_region);
-    const values_var = try self.freshFromContent(try self.mkListContent(item_var), env, expr_region);
+    const iterator_var = try self.mkForLoopSequenceVar(.iter, item_var, env, expr_region);
     const assembler_var = try self.freshFromContent(.{ .structure = .{ .fn_pure = Func{
-        .args = try self.types.appendVars(&.{values_var}),
+        .args = try self.types.appendVars(&.{iterator_var}),
         .ret = expr_var,
     } } }, env, expr_region);
 
@@ -33431,6 +33434,17 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
             interpolation.method_name_region,
             expr_idx,
         );
+        // The iterator the assembler receives is built at runtime from the
+        // values on the stack: `iter` on an empty `List(item)`, then `append`
+        // for each value in order. Both are ordinary builtin dispatches
+        // the interpolation owns, like a `for` loop's `iter` and `next`.
+        const seed_list_var = try self.freshFromContent(try self.mkListContent(item_var), env, expr_region);
+        const iter_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("iter"));
+        const append_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("append"));
+        const iter_fn_var = try self.mkSyntheticReceiverDispatchConstraint(seed_list_var, &.{}, iterator_var, iter_method, env, expr_region);
+        const append_fn_var = try self.mkSyntheticReceiverDispatchConstraint(iterator_var, &.{item_var}, iterator_var, append_method, env, expr_region);
+        try self.recordLoopDispatch(iter_fn_var, expr_idx);
+        try self.recordLoopDispatch(append_fn_var, expr_idx);
         try self.cir.store.replaceExprWithInterpolationConstraint(
             expr_idx,
             interpolation.first,
@@ -33439,6 +33453,13 @@ fn resumeInterpolationCheck(self: *Self, task: *ExprTask, state: *InterpolationC
             constraint_fn_var,
             assembler_var,
             dispatcher_var,
+            .{
+                .item_var = item_var,
+                .iterator_var = iterator_var,
+                .seed_list_var = seed_list_var,
+                .iter_fn_var = iter_fn_var,
+                .append_fn_var = append_fn_var,
+            },
         );
     }
     return .done;
@@ -52050,7 +52071,7 @@ fn satisfyBuiltinStrInterpolation(
         try self.poisonConstraintFailureSource(dispatcher_var, constraint, failure_expr orelse self.instantiatedInterpolationOwner(constraint));
         return true;
     }
-    // `Str.from_interpolation` receives `Iter((Str, Str))`, so the
+    // `Str.from_interpolation`'s assembler receives `Iter(Str)`, so the
     // constraint's generated item type is Str. A generic body that keeps the
     // dispatch calls that method with an iterator of this item type.
     _ = try self.unify(metadata.item_var, expected_str_var, env);

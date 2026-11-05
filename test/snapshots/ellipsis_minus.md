@@ -141,7 +141,7 @@ subtract_negated = |a| a - -...
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-dispatch-call (method "negate") (constraint-fn-var 268)
+			(e-dispatch-call (method "negate") (constraint-fn-var 271)
 				(receiver
 					(e-not-implemented))
 				(args))))
@@ -152,11 +152,11 @@ subtract_negated = |a| a - -...
 				(p-underscore))
 			(e-list
 				(elems
-					(e-dispatch-call (method "negate") (constraint-fn-var 270)
+					(e-dispatch-call (method "negate") (constraint-fn-var 273)
 						(receiver
 							(e-not-implemented))
 						(args))
-					(e-dispatch-call (method "negate") (constraint-fn-var 272)
+					(e-dispatch-call (method "negate") (constraint-fn-var 275)
 						(receiver
 							(e-not-implemented))
 						(args))))))
@@ -170,7 +170,7 @@ subtract_negated = |a| a - -...
 					(p-underscore)
 					(e-lookup-local
 						(p-assign (ident "a"))))
-				(e-dispatch-call (method "negate") (constraint-fn-var 274)
+				(e-dispatch-call (method "negate") (constraint-fn-var 277)
 					(receiver
 						(e-not-implemented))
 					(args)))))
@@ -179,7 +179,7 @@ subtract_negated = |a| a - -...
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-dispatch-call (method "minus") (constraint-fn-var 276)
+			(e-dispatch-call (method "minus") (constraint-fn-var 279)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "a"))))
@@ -190,7 +190,7 @@ subtract_negated = |a| a - -...
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-dispatch-call (method "minus") (constraint-fn-var 278)
+			(e-dispatch-call (method "minus") (constraint-fn-var 281)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "a"))))
@@ -201,7 +201,7 @@ subtract_negated = |a| a - -...
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-dispatch-call (method "minus") (constraint-fn-var 287)
+			(e-dispatch-call (method "minus") (constraint-fn-var 290)
 				(receiver
 					(e-not-implemented))
 				(args
@@ -211,7 +211,7 @@ subtract_negated = |a| a - -...
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-dispatch-call (method "minus") (constraint-fn-var 289)
+			(e-dispatch-call (method "minus") (constraint-fn-var 292)
 				(receiver
 					(e-not-implemented))
 				(args
@@ -221,12 +221,12 @@ subtract_negated = |a| a - -...
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-dispatch-call (method "minus") (constraint-fn-var 293)
+			(e-dispatch-call (method "minus") (constraint-fn-var 296)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "a"))))
 				(args
-					(e-dispatch-call (method "negate") (constraint-fn-var 291)
+					(e-dispatch-call (method "negate") (constraint-fn-var 294)
 						(receiver
 							(e-not-implemented))
 						(args)))))))

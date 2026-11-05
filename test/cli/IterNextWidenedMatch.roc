@@ -11,7 +11,7 @@ counted : U64 -> Iter(U64)
 counted = |limit|
     Iter.custom(
         0,
-        Unknown,
+        Err(Unknown),
         |n| if n < limit Ok((n, n + 1)) else Err(NoMore),
     )
 
@@ -53,7 +53,7 @@ kept_after_skip = |items| match items.iter().keep_if(|n| n > 1).next() {
     Other => "Other"
 }
 
-constant = match Iter.custom(0, Unknown, |_| Err(NoMore)).next() {
+constant = match Iter.custom(0, Err(Unknown), |_| Err(NoMore)).next() {
     One(_) => "One"
     Skip(_) => "Skip"
     Done => "Done"
