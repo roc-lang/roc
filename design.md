@@ -5962,24 +5962,28 @@ means the body's own `a`, so checking never needs to tell instantiations
 apart. Outside that body there is no `a` to fill in: `make_local(Apples)` and
 `make_local(Pears)` would both have type `Local`, and a list holding both
 would mix two different types under one name. So the checker rejects such a
-type in the type of the binding that owns one of its context variables (the
-binding whose annotation introduced the variable), and in the type of every
-top-level definition, which is inside no function body. It may appear
-anywhere in such a type: directly as an argument or result, or inside a
-record, tag union, list, tuple, function type, or another type's arguments.
+type in the type of every binding that the body of a binding owning one of
+its context variables (the binding whose annotation introduced the variable)
+does not enclose. That covers the owner itself, every top-level definition,
+which is inside no function body, and every binding of an enclosing body
+outside the owner's. It may appear anywhere in such a binding's type:
+directly as an argument or result, or inside a record, tag union, list,
+tuple, function type, or another type's arguments.
 
 A value of a local type leaves its owner's body as an argument or result of
 the owner, which the owner's type shows, or through a monomorphic variable
-of an enclosing scope that the body unified with it (an enclosing function's
-parameter, a weak top-level value), which ends up in the type of the
-enclosing top-level definition. A nested function inside the owner may take
-or return the type freely: when the context variable belongs to an enclosing
-function, the value is still inside that function's body, and the variable
-appears in the nested function's type as the enclosing function's own
-variable. A body-local type with an empty context means the same type at
-every instantiation and may leave its body like any other type. A static
-dispatch requirement whose relation names such a type is not a value of it,
-so a requirement captured into the owner's scheme is not an escape.
+of an enclosing scope that the body unified with it: a weak top-level value,
+an enclosing function's parameter, which shows in the enclosing top-level
+definition's type, or a local of an enclosing body (`acc = []` that a nested
+function's body appends its local values to), which shows in that local's
+type. A nested function inside the owner may take or return the type
+freely: when the context variable belongs to an enclosing function, the
+value is still inside that function's body, and the variable appears in the
+nested function's type as the enclosing function's own variable. A
+body-local type with an empty context means the same type at every
+instantiation and may leave its body like any other type. A static dispatch
+requirement whose relation names such a type is not a value of it, so a
+requirement captured into the owner's scheme is not an escape.
 
 Checking applies the rule once contexts are final
 (`rejectEscapingLocalTypes`). Deciding a context records, for each of its
@@ -5987,10 +5991,14 @@ variables, the binding that owns it (`local_type_context_owners`): a rigid
 variable remembers the binding annotation that introduced it, and each
 binding annotation that introduces a type variable remembers its binding. A
 module whose body-local types have empty contexts, or that has none, records
-no owner and does no work. Otherwise the owners' types and the top-level
-definitions' types are walked, each once, with a visited set over type
-nodes; function bodies are not walked. A rejected binding is a Local Type
-Escapes error at its name, showing its type and the local type's
+no owner and does no work. Otherwise each top-level definition's type is
+judged, and the bodies of the top-level definitions that enclose an owner
+declared in a function body are walked: every binding they bind (a
+declaration, a lambda or `for` parameter, a `match` pattern) is judged by
+its type against the local types whose owners' bodies do not enclose it
+(`LocalTypeEscapeJudge`). Each binding's type is walked once, with a visited
+set over type nodes; no other body is walked. A rejected binding is a Local
+Type Escapes error at its name, showing its type and the local type's
 declaration, and suggesting a top-level declaration with a type parameter
 (`Local(a)`). The binding binds nothing, so every use of it crashes, and
 every method of the escaped type is rejected like a capturing method

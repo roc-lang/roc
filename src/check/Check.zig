@@ -5278,103 +5278,183 @@ fn computeLocalTypeContexts(self: *Self, dispatch_refs: []const LocalProcedureOu
     }
 }
 
+/// Judges bindings for `rejectEscapingLocalTypes`: a binding may not hold a
+/// body-local type with a context unless the body of a binding that owns one
+/// of its context variables encloses it (`inside`).
+const LocalTypeEscapeJudge = struct {
+    checker: *Self,
+    self_module: base.ModuleIdentity.Idx,
+    /// The owners whose bodies enclose the binding being judged.
+    inside: std.ArrayList(CIR.Pattern.Idx) = .empty,
+    stack: std.ArrayList(Var) = .empty,
+    /// The judgment (plus one) that last visited each type node, so each
+    /// binding's type is walked once without clearing the map between them.
+    visited_by: collections.DenseMapUnmanaged(Var, u32) = .empty,
+    judgments: u32 = 0,
+    /// The local types that escaped, whose methods are rejected.
+    escaped: collections.DenseMapUnmanaged(CIR.Statement.Idx, void) = .empty,
+
+    fn deinit(judge: *LocalTypeEscapeJudge) void {
+        const gpa = judge.checker.gpa;
+        judge.inside.deinit(gpa);
+        judge.stack.deinit(gpa);
+        judge.visited_by.deinit(gpa);
+        judge.escaped.deinit(gpa);
+    }
+
+    fn ownsContext(judge: *const LocalTypeEscapeJudge, pattern: CIR.Pattern.Idx) bool {
+        for (judge.checker.local_type_context_owners.items) |entry| {
+            if (entry.owner == pattern) return true;
+        }
+        return false;
+    }
+
+    /// Reports `pattern` and makes it bind nothing when its type holds a
+    /// local type outside that type's context. Returns whether it did.
+    fn rejectIfEscaping(judge: *LocalTypeEscapeJudge, pattern: CIR.Pattern.Idx) Allocator.Error!bool {
+        const checker = judge.checker;
+        const gpa = checker.gpa;
+        if (checker.erroneous_value_patterns.contains(pattern)) return false;
+        const pattern_var = ModuleEnv.varFrom(pattern);
+        if (checker.types.resolveVar(pattern_var).desc.content == .err) return false;
+        const owners = checker.local_type_context_owners.items;
+        judge.judgments += 1;
+        const visit_mark = judge.judgments;
+        judge.stack.clearRetainingCapacity();
+        try judge.stack.append(gpa, pattern_var);
+        const escaping: usize = search: while (judge.stack.pop()) |pending| {
+            const resolved = checker.types.resolveVar(pending);
+            const visit = try judge.visited_by.getOrPut(gpa, resolved.var_);
+            if (visit.found_existing and visit.value_ptr.* == visit_mark) continue;
+            visit.value_ptr.* = visit_mark;
+            if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                const nominal = resolved.desc.content.structure.nominal_type;
+                if (nominal.origin_module == judge.self_module) {
+                    if (nominal.sourceDeclOptional()) |statement| {
+                        for (owners, 0..) |entry, entry_index| {
+                            if (@backingInt(entry.decl) != statement) continue;
+                            if (std.mem.indexOfScalar(CIR.Pattern.Idx, judge.inside.items, entry.owner) == null) break :search entry_index;
+                        }
+                    }
+                }
+            }
+            try checker.appendGrowthChildren(resolved.desc.content, &judge.stack);
+        } else return false;
+        const entry = owners[escaping];
+
+        // Only nominal declarations record context owners.
+        const header_idx = checker.cir.store.getStatement(entry.decl).s_nominal_decl.header;
+        _ = try checker.problems.appendProblem(.{ .local_type_escape = .{
+            .region = checker.cir.store.getPatternRegion(pattern),
+            .def_name = checker.getPatternIdent(pattern),
+            .def_snapshot = try checker.snapshotVarForError(pattern_var),
+            .type_name = checker.cir.store.getTypeHeader(header_idx).relative_name,
+            .type_region = checker.cir.store.getRegionAt(@fromBackingInt(@intCast(@backingInt(header_idx)))),
+            .var_name = checker.cir.store.getTypeAnno(entry.rigid).rigid_var.name,
+            .owner_name = checker.getPatternIdent(entry.owner),
+        } });
+        try checker.markErroneousValuePattern(pattern);
+        try judge.escaped.put(gpa, entry.decl, {});
+        return true;
+    }
+};
+
 /// POLICY: a body-local type stays inside the functions its identity depends
 /// on (design.md "Body-Local Types Stay In Their Context"). A nominal type
 /// declared in a function body whose context includes a type variable of an
 /// enclosing binding means a different type at every instantiation of that
 /// binding, and only code inside the binding's body can tell those apart. So
-/// such a type may not occur in the type of a binding that owns one of its
-/// context variables, nor in the type of any top-level definition, which is
-/// inside no function body. Each such binding is reported once, at its name,
-/// and binds nothing, so every use of it crashes; the type's methods are
-/// rejected, so no dispatch outside the body reaches them.
+/// such a type may not occur in the type of any binding the body of a binding
+/// that owns one of its context variables does not enclose: the owner, a
+/// top-level definition, or a binding of an enclosing body. Each such binding
+/// is reported once, at its name, and binds nothing, so every use of it
+/// crashes; the type's methods are rejected, so no dispatch outside the body
+/// reaches them.
 ///
 /// A module whose body-local types all have empty contexts records no owner
-/// and does no work here. Otherwise each owner's type and each top-level
-/// definition's type is walked once, with a visited set over type nodes.
+/// and does no work here. Otherwise each top-level definition is judged, and
+/// only the bodies of top-level definitions that enclose an owner declared in
+/// a function body are walked, judging each binding they bind once.
 fn rejectEscapingLocalTypes(self: *Self) Allocator.Error!void {
     try self.settleLocalTypeContexts();
     const owners = self.local_type_context_owners.items;
     if (owners.len == 0) return;
     const gpa = self.gpa;
 
-    // The bindings whose types are judged, in order: each owner, with the
-    // indices of its entries in `owners`, then each top-level definition not
-    // already listed, which may hold none of the types.
-    var judged: std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, std.ArrayListUnmanaged(u32)) = .empty;
-    defer {
-        for (judged.values()) |*entries| entries.deinit(gpa);
-        judged.deinit(gpa);
-    }
-    for (owners, 0..) |entry, index| {
-        const slot = try judged.getOrPut(gpa, entry.owner);
-        if (!slot.found_existing) slot.value_ptr.* = .empty;
-        try slot.value_ptr.append(gpa, @intCast(index));
-    }
+    var judge: LocalTypeEscapeJudge = .{ .checker = self, .self_module = self.cir.selfModuleIdentity() };
+    defer judge.deinit();
+
+    // A top-level definition is inside no function body.
+    var walked: std.ArrayList(CIR.Def.Idx) = .empty;
+    defer walked.deinit(gpa);
     for (0..self.cir.all_defs.span.len) |def_offset| {
-        const def = self.cir.store.getDef(self.cir.store.defAt(self.cir.all_defs, def_offset));
-        const slot = try judged.getOrPut(gpa, def.pattern);
-        if (!slot.found_existing) slot.value_ptr.* = .empty;
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
+        const def = self.cir.store.getDef(def_idx);
+        if (try judge.rejectIfEscaping(def.pattern)) continue;
+        // Only the bodies of definitions enclosing the binding that owns a
+        // context variable are walked.
+        const body_region = self.cir.store.getExprRegion(def.expr);
+        for (owners) |entry| {
+            if (self.patternIsTopLevel(entry.owner)) continue;
+            const owner_region = self.cir.store.getPatternRegion(entry.owner);
+            if (owner_region.start.offset >= body_region.start.offset and owner_region.end.offset <= body_region.end.offset) {
+                try walked.append(gpa, def_idx);
+                break;
+            }
+        }
     }
 
-    const self_module = self.cir.selfModuleIdentity();
-    var stack: std.ArrayList(Var) = .empty;
-    defer stack.deinit(gpa);
-    // The binding index (plus one) that last visited each type node, so each
-    // binding's type is walked once without clearing the map between them.
-    var visited_by = collections.DenseMap(Var, u32).init(gpa);
-    defer visited_by.deinit();
-    // The local types that escaped, whose methods are rejected.
-    var escaped: collections.DenseMap(CIR.Statement.Idx, void) = .init(gpa);
-    defer escaped.deinit();
-    for (judged.keys(), judged.values(), 0..) |pattern, entries, judged_index| {
-        if (self.erroneous_value_patterns.contains(pattern)) continue;
-        const pattern_var = ModuleEnv.varFrom(pattern);
-        if (self.types.resolveVar(pattern_var).desc.content == .err) continue;
-        // A top-level definition may hold none of the types; an owner may
-        // not hold the types whose context it owns a variable of.
-        const top_level = self.patternIsTopLevel(pattern);
-        const visit_mark: u32 = @intCast(judged_index + 1);
-        stack.clearRetainingCapacity();
-        try stack.append(gpa, pattern_var);
-        const escaping: ?u32 = search: while (stack.pop()) |pending| {
-            const resolved = self.types.resolveVar(pending);
-            const visit = try visited_by.getOrPut(resolved.var_);
-            if (visit.found_existing and visit.value_ptr.* == visit_mark) continue;
-            visit.value_ptr.* = visit_mark;
-            if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
-                const nominal = resolved.desc.content.structure.nominal_type;
-                if (nominal.origin_module == self_module) {
-                    if (nominal.sourceDeclOptional()) |statement| {
-                        for (entries.items) |entry_index| {
-                            if (@backingInt(owners[entry_index].decl) == statement) break :search entry_index;
-                        }
-                        if (top_level) {
-                            for (owners, 0..) |entry, entry_index| {
-                                if (@backingInt(entry.decl) == statement) break :search @intCast(entry_index);
-                            }
+    // Each binding in a walked body is judged against the local types whose
+    // owners' bodies do not enclose it.
+    const WalkItem = union(enum) { expr: CIR.Expr.Idx, enter_owner: CIR.Pattern.Idx, leave_owner };
+    var work: std.ArrayList(WalkItem) = .empty;
+    defer work.deinit(gpa);
+    const Collector = struct {
+        work: *std.ArrayList(WalkItem),
+        judge: *LocalTypeEscapeJudge,
+        gpa: Allocator,
+
+        fn expr(collector: @This(), child: CIR.Expr.Idx) Allocator.Error!void {
+            try collector.work.append(collector.gpa, .{ .expr = child });
+        }
+
+        fn boundPattern(collector: @This(), pattern: CIR.Pattern.Idx) Allocator.Error!void {
+            _ = try collector.judge.rejectIfEscaping(pattern);
+        }
+
+        fn reassignTarget(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
+    };
+    const collector: Collector = .{ .work = &work, .judge = &judge, .gpa = gpa };
+    for (walked.items) |def_idx| {
+        std.debug.assert(judge.inside.items.len == 0);
+        try work.append(gpa, .{ .expr = self.cir.store.getDef(def_idx).expr });
+        while (work.pop()) |item| switch (item) {
+            .leave_owner => _ = judge.inside.pop(),
+            .expr => |expr| switch (self.cir.store.getExpr(expr)) {
+                .e_block => |block| {
+                    try work.append(gpa, .{ .expr = block.final_expr });
+                    const statements = self.cir.store.sliceStatements(block.stmts);
+                    var index = statements.len;
+                    while (index > 0) {
+                        index -= 1;
+                        const statement = self.cir.store.getStatement(statements[index]);
+                        if (statement == .s_decl and judge.ownsContext(statement.s_decl.pattern)) {
+                            // The owner's body may hold its own local types.
+                            _ = try judge.rejectIfEscaping(statement.s_decl.pattern);
+                            try work.append(gpa, .leave_owner);
+                            try work.append(gpa, .{ .expr = statement.s_decl.expr });
+                            try work.append(gpa, .{ .enter_owner = statement.s_decl.pattern });
+                        } else {
+                            try self.visitStatementChildren(statements[index], collector);
                         }
                     }
-                }
-            }
-            try self.appendGrowthChildren(resolved.desc.content, &stack);
-        } else null;
-        const entry = owners[escaping orelse continue];
-
-        // Only nominal declarations record context owners.
-        const header_idx = self.cir.store.getStatement(entry.decl).s_nominal_decl.header;
-        _ = try self.problems.appendProblem(.{ .local_type_escape = .{
-            .region = self.cir.store.getPatternRegion(pattern),
-            .def_name = self.getPatternIdent(pattern),
-            .def_snapshot = try self.snapshotVarForError(pattern_var),
-            .type_name = self.cir.store.getTypeHeader(header_idx).relative_name,
-            .type_region = self.cir.store.getRegionAt(@fromBackingInt(@intCast(@backingInt(header_idx)))),
-            .var_name = self.cir.store.getTypeAnno(entry.rigid).rigid_var.name,
-            .owner_name = self.getPatternIdent(entry.owner),
-        } });
-        try self.markErroneousValuePattern(pattern);
-        try escaped.put(entry.decl, {});
+                },
+                else => try self.visitExprChildren(expr, collector),
+            },
+            .enter_owner => |owner| try judge.inside.append(gpa, owner),
+        };
     }
+    const escaped = &judge.escaped;
     if (escaped.count() == 0) return;
 
     // Values of an escaped type exist outside its context, where its methods
@@ -5478,11 +5558,8 @@ fn addLocalTypeContextRigid(self: *Self, decl: CIR.Statement.Idx, input: *LocalT
     for (self.typeDeclHeaderArgs(decl)) |parameter| {
         if (parameter == rigid) return false;
     }
-    // A variable whose binding is declared inside the declaration's block, a
-    // method or a function inside one, is the method's own.
     if (input.method_depth) |method_depth| {
-        const owner = self.rigidVarOwner(rigid);
-        if (!self.patternIsTopLevelDef(owner) and (self.local_pattern_candidate_depths.get(owner) orelse 0) >= method_depth) return false;
+        if (self.rigidVarCandidateDepth(rigid) > method_depth) return false;
     }
     const items = input.context.items;
     var lo: usize = 0;

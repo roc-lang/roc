@@ -103,6 +103,26 @@ nested_owner = |n| {
 	Str.concat(make(n).label(), make("s").label())
 }
 
+# The nested function's body puts values of its local type into a list the
+# body around it owns, so the list mixes the types of both instantiations.
+mixed_local : U64 -> U64
+mixed_local = |n| {
+	acc = []
+	add : b -> U64
+	add = |_y| {
+		Local := [L].{
+			label : Local -> Str
+			label = |_| {
+				empty : List(b)
+				empty = []
+				Str.repeat("?", List.len(empty))
+			}
+		}
+		List.len(List.append(acc, Local.L))
+	}
+	add(1.U8) + add("s") + n
+}
+
 expect direct(Apples.Apples).label() == ""
 
 expect {
@@ -124,3 +144,5 @@ expect in_closure(Apples.Apples)({}).label() == "apples"
 expect outer(Pears.Pears).label() == "pears"
 
 expect nested_owner(1) == ""
+
+expect mixed_local(1) == 3

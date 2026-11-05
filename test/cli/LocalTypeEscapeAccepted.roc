@@ -39,6 +39,19 @@ make_plain = |_x| {
 	Plain.P
 }
 
+# The local type depends on the nested function's variable, and its values
+# stay inside the nested function's body, each call at one instantiation.
+count_inside : U64 -> U64
+count_inside = |n| {
+	count : b -> U64
+	count = |y| {
+		Local := [L(b)]
+		items = [Local.L(y), Local.L(y)]
+		List.len(items)
+	}
+	count(n) + count("s")
+}
+
 expect describe_twice(Apples.Apples) == "local apples, local apples"
 
 expect describe_twice(Pears.Pears) == "local pears, local pears"
@@ -47,3 +60,5 @@ expect {
 	both = [make_plain(1.U8), make_plain("x")]
 	List.map(both, |p| p.label()) == ["plain", "plain"]
 }
+
+expect count_inside(1) == 4
