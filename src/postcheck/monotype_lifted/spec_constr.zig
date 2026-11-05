@@ -9242,7 +9242,7 @@ const Cloner = struct {
                 self.spare_lists.exprs.give(self.pass.allocator, task.new_initials);
                 task.attempt_lists_owned = false;
                 self.subst.restore(task.split_start);
-                self.rewindLoopAttempt(task.attempt_mark);
+                try self.rewindLoopAttempt(task.attempt_mark, task.shapes);
                 // Back edges demoted their unsupplied leaves in place. Any slot that
                 // still carries constructor structure is worth another split attempt.
                 task.has_constructor = false;
@@ -9335,7 +9335,7 @@ const Cloner = struct {
     fn nextLoopAttempt(self: *Cloner, frame: *CloneFrame, task: *LoopValueTask) Common.LowerError!CloneStep {
         const arena = self.arena.allocator();
         if (task.has_constructor) {
-            task.attempt_mark = self.markLoopAttempt();
+            task.attempt_mark = try self.markLoopAttempt();
             task.new_params = try arena.create(std.ArrayList(Ast.TypedLocal));
             task.new_params.* = self.spare_lists.typed_locals.take();
             task.new_initials = try arena.create(std.ArrayList(Ast.ExprId));
@@ -12888,6 +12888,10 @@ const Cloner = struct {
     /// path that returns, or a known part of an argument or capture reaches a
     /// consumer in the callee.
     fn directInlineIsProductive(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!bool {
+        // The query's resolved reads and step paths are its own: only the
+        // answer leaves it, so the arena gives them back when it returns.
+        const position = self.arena.mark();
+        defer self.arena.restore(position);
         const analysis = self.productivity();
         const result_demand = try self.callResultDemand(expr_id);
         for (result_demand) |read| {
@@ -13349,35 +13353,89 @@ const Cloner = struct {
         rebased_inline_scope_changes: usize,
         recorded_value_keys: usize,
         clone_templates: usize,
-        let_case_depth: usize,
+        /// The jump sites of every active let-of-case join, as the attempt
+        /// found them.
+        let_case_sites: []const LetCaseSitesMark,
+        /// Taken last, so everything above outlives the rewind.
+        arena: collections.SingleThreadArena.Mark,
     };
 
-    fn markLoopAttempt(self: *Cloner) LoopAttemptMark {
+    const LetCaseSitesMark = struct {
+        join: *LetCaseJoin,
+        sites: std.ArrayList(LetCaseJumpSite),
+    };
+
+    fn markLoopAttempt(self: *Cloner) Allocator.Error!LoopAttemptMark {
         std.debug.assert(self.purpose != .loop_exit_selection);
+        var join_count: usize = 0;
+        for (self.let_case_builds.items) |build| join_count += build.joins.len;
+        const let_case_sites = try self.arena.allocator().alloc(LetCaseSitesMark, join_count);
+        var next: usize = 0;
+        for (self.let_case_builds.items) |build| {
+            for (build.joins) |*join| {
+                let_case_sites[next] = .{ .join = join, .sites = join.sites };
+                next += 1;
+            }
+        }
         return .{
             .analysis = self.pass.markAnalysis(),
             .callable_workers = self.pass.callable_workers.count(),
             .rebased_inline_scope_changes = self.rebased_inline_scope_changes.items.len,
             .recorded_value_keys = self.recorded_value_keys.items.len,
             .clone_templates = self.clone_templates.items.len,
-            .let_case_depth = self.let_case_builds.items.len,
+            .let_case_sites = let_case_sites,
+            .arena = self.arena.mark(),
         };
     }
 
-    /// Rewind a rejected loop attempt when all of its output is still private to
-    /// that attempt. Callable workers and active let-of-case joins can retain
-    /// or mutate references outside the append-only program suffix, so those
-    /// attempts keep their unreachable output. Exit selection never retries.
+    /// Discard a rejected loop attempt. Everything the attempt allocated in
+    /// the clone arena goes back to it, except the demoted entry shapes in
+    /// `shapes`, which the next attempt starts from and which are copied
+    /// across the rewind. The jump sites the attempt's discarded output
+    /// added to enclosing let-of-case joins are dropped, so a join sees only
+    /// the jumps of the output that survives.
+    ///
+    /// A callable worker the attempt created stays: it is keyed by its
+    /// template and ABIs alone, so the retry and every later clone reuse it,
+    /// and its body lies in the program suffix the attempt appended. The
+    /// suffix, and the ids minted for it, are rewound only when the attempt
+    /// created no worker. Exit selection never retries.
     fn rewindLoopAttempt(
         self: *Cloner,
         mark: LoopAttemptMark,
-    ) void {
-        if (mark.let_case_depth != 0 or
-            self.pass.callable_workers.count() != mark.callable_workers)
-        {
-            return;
+        shapes: []Shape,
+    ) Allocator.Error!void {
+        // A site list's buffer from before the mark still holds its first
+        // `len` sites: sites are only ever appended.
+        for (mark.let_case_sites) |entry| entry.join.sites = entry.sites;
+
+        // Recorded values live in the arena and belong to the attempt's
+        // discarded output.
+        while (self.recorded_value_keys.items.len > mark.recorded_value_keys) {
+            const key = self.recorded_value_keys.pop() orelse
+                Common.invariant("recorded value change log underflow");
+            const removed = switch (key) {
+                .arm_values => |emitted| self.arm_values.remove(emitted),
+                .block_tail => |emitted| self.block_tail_values.remove(emitted),
+            };
+            if (!removed) Common.invariant("recorded value change had no map entry");
         }
 
+        if (self.pass.callable_workers.count() == mark.callable_workers) {
+            self.rewindProgramSuffix(mark);
+        }
+
+        var carried_arena = collections.SingleThreadArena.init(self.pass.allocator);
+        defer carried_arena.deinit();
+        const carried = try carried_arena.allocator().alloc(Shape, shapes.len);
+        for (carried, shapes) |*copy, shape| copy.* = try copyShape(carried_arena.allocator(), shape);
+        self.arena.restore(mark.arena);
+        for (shapes, carried) |*shape, copy| shape.* = try copyShape(self.arena.allocator(), copy);
+    }
+
+    /// Rewind the program suffix a rejected attempt appended, with the ids
+    /// minted for it and the clone state that names them.
+    fn rewindProgramSuffix(self: *Cloner, mark: LoopAttemptMark) void {
         while (self.rebased_inline_scope_changes.items.len > mark.rebased_inline_scope_changes) {
             const key = self.rebased_inline_scope_changes.pop() orelse
                 Common.invariant("inline-scope rebase change log underflow");
@@ -13388,17 +13446,8 @@ const Cloner = struct {
             }
         }
 
-        // The rewind reuses the attempt's expression ids: every value recorded
-        // for them, and every template range covering them, must go with it.
-        while (self.recorded_value_keys.items.len > mark.recorded_value_keys) {
-            const key = self.recorded_value_keys.pop() orelse
-                Common.invariant("recorded value change log underflow");
-            const removed = switch (key) {
-                .arm_values => |emitted| self.arm_values.remove(emitted),
-                .block_tail => |emitted| self.block_tail_values.remove(emitted),
-            };
-            if (!removed) Common.invariant("recorded value change had no map entry");
-        }
+        // The rewind reuses the attempt's expression ids: every template range
+        // covering them must go with it.
         self.clone_templates.shrinkRetainingCapacity(mark.clone_templates);
 
         self.pass.rewindAnalysis(mark.analysis);

@@ -8970,10 +8970,25 @@ carry explicit continuation targets.
 
 Each normalization or discovery clone owns a short-lived scratch arena. Only
 accepted call patterns are copied into pass-wide storage, so discarded symbolic
-value graphs do not accumulate across functions. Generic analysis follows
-existing constructor evidence; a structural consumer requests a producer's
-result shape through the separate demand path, which propagates through the
-callee's exact used-argument plan.
+value graphs do not accumulate across functions. Within one clone, work whose
+results are discarded gives its scratch back as well, so scratch is bounded by
+the output a clone keeps rather than by how often it retries:
+
+- A direct-inline productivity query returns only its answer; the resolved
+  reads and step paths it builds are released when it returns.
+- Loop scalarization decides a split by attempt (clone the body, let each
+  `continue` supply or demote the slot leaves, retry while any demoted). A
+  rejected attempt releases everything it allocated in the clone arena; only
+  the demoted entry shapes the next attempt starts from are carried across.
+  Its jump sites in enclosing let-of-case joins are dropped, so a join sees
+  only the jumps of output that survives. Its program suffix and the ids
+  minted for it are rewound too, except when the attempt created a callable
+  worker: a worker is keyed by its template and ABIs alone, the retry and
+  every later clone reuse it, and its body lies in that suffix.
+
+Generic analysis follows existing constructor evidence; a structural consumer
+requests a producer's result shape through the separate demand path, which
+propagates through the callee's exact used-argument plan.
 
 Inlining a call additionally requires exact closed Monotype identity between
 the call-site result and the callee body's result. Independently specialized
