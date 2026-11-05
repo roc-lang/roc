@@ -186,6 +186,7 @@ comptime {
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(host_prelink);
+        std.testing.refAllDecls(patch_link);
         std.testing.refAllDecls(wasm_link);
         std.testing.refAllDecls(wasm_host_image);
         std.testing.refAllDecls(@import("test/platform_config.zig"));
@@ -5312,6 +5313,9 @@ fn checkedArtifactForBuild(
     if (artifact.hasUnboundPlatformRequirements()) {
         return ctx.fail(.{ .platform_requires_app = .{ .platform_path = source_path } });
     }
+    // A `provides` entry whose type is erroneous declares no host ABI, so no
+    // program exists to link; the error was rendered with the diagnostics.
+    if (artifact.hasProvidedExportWithoutAbi()) return error.TypeCheckingFailed;
     return artifact;
 }
 
@@ -6750,6 +6754,12 @@ fn lowerRunUnits(
     try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), reporter, build_env.getTimingInfo());
 
     const root_artifact = build_env.executableRootCheckedArtifact();
+    // A `provides` entry whose type is erroneous declares no host ABI, so no
+    // program exists to run; the error was rendered with the diagnostics.
+    if (root_artifact.hasProvidedExportWithoutAbi()) {
+        reporter.fail();
+        return error.TypeCheckingFailed;
+    }
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
@@ -9756,6 +9766,7 @@ fn compileLlvmAppObject(
         codegen.enable_default_platform_runtime = enable_default_platform_runtime;
         codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
         codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
+        codegen.optimize_for_size = llvmOptimizationLevel(args.opt) == .size;
         codegen.stack_checks = stack_checks;
         codegen.debug_producer = "roc " ++ @import("compiler_version").compiler_version;
         defer codegen.deinit();
@@ -11852,6 +11863,8 @@ const FastDevLink = struct {
             .{ .name = "Images placed", .count = timing.images_placed },
             .{ .name = "Bytes written", .count = timing.bytes_written },
             .{ .name = "Patch sites", .count = timing.sites_patched },
+            .{ .name = "References fixed", .count = timing.refs_fixed },
+            .{ .name = "Hole bytes dropped", .count = timing.hole_bytes },
         });
     }
 };

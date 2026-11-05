@@ -499,6 +499,11 @@ pub const MonoLlvmCodeGen = struct {
     /// Synthetic default-platform apps preserve source proc names and local
     /// debug locations for crash and stack-overflow diagnostics.
     enable_default_platform_diagnostics: bool = false,
+    /// Every function this module defines is optimized for size rather than
+    /// speed (`--opt=size`): it carries LLVM's `optsize` and `minsize`, no
+    /// `inlinehint`, and no shape-based `alwaysinline`, so LLVM's size cost
+    /// model is the one measure of every inlining decision.
+    optimize_for_size: bool = false,
     /// Translates to DW_AT_producer for the compile unit (in DWARF). Users of
     /// this module for codegen should set the value (with the following format)
     /// so that it carries the compiler version:
@@ -1859,15 +1864,7 @@ pub const MonoLlvmCodeGen = struct {
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
-        if (self.enable_default_platform_diagnostics) {
-            try attrs_wip.addFnAttr(.@"noinline", builder);
-        } else {
-            if (self.inlineEverywhere(proc_id)) {
-                try attrs_wip.addFnAttr(.alwaysinline, builder);
-            } else {
-                try attrs_wip.addFnAttr(.inlinehint, builder);
-            }
-        }
+        try self.addInliningAttrs(&attrs_wip, proc_id);
         // The erased ABI's unused host pointer and the argument pack are
         // distinct objects. The return slot can point into a reused allocation.
         // In the erased ABI, capture also
@@ -2548,15 +2545,7 @@ pub const MonoLlvmCodeGen = struct {
         func.setLinkage(if (proc.linked or proc.exported) .external else .internal, builder);
         func.setCallConv(self.fastCallConv(proc), builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
-        if (self.enable_default_platform_diagnostics) {
-            try attrs_wip.addFnAttr(.@"noinline", builder);
-        } else {
-            if (self.inlineEverywhere(proc_id)) {
-                try attrs_wip.addFnAttr(.alwaysinline, builder);
-            } else {
-                try attrs_wip.addFnAttr(.inlinehint, builder);
-            }
-        }
+        try self.addInliningAttrs(&attrs_wip, proc_id);
         if (self.enable_default_platform_runtime) {
             try attrs_wip.addFnAttr(.{ .string = .{
                 .kind = builder.string("frame-pointer") catch return error.OutOfMemory,
@@ -3994,7 +3983,33 @@ pub const MonoLlvmCodeGen = struct {
     /// statements with no loop, and a leaf of moderate size. Larger bodies
     /// remain ordinary calls, so LLVM can simplify them before deciding
     /// whether to duplicate them into their callers.
+    /// The inlining attributes of a generated procedure. Diagnostics builds
+    /// keep every procedure out of line so crash frames name it. A speed
+    /// build inlines the procedures `computeInlineEverywhere` selects
+    /// everywhere and hints the rest. A size build adds neither: with every
+    /// function in the module marked `minsize` (`builder.zig` marks the
+    /// whole module before optimization), LLVM's size cost model decides
+    /// each call on the callee's expanded size alone.
+    fn addInliningAttrs(self: *MonoLlvmCodeGen, attrs_wip: *LlvmBuilder.FunctionAttributes.Wip, proc_id: LirProcSpecId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (self.enable_default_platform_diagnostics) {
+            try attrs_wip.addFnAttr(.@"noinline", builder);
+        } else if (self.inlineEverywhere(proc_id)) {
+            try attrs_wip.addFnAttr(.alwaysinline, builder);
+        } else if (!self.optimize_for_size) {
+            try attrs_wip.addFnAttr(.inlinehint, builder);
+        }
+    }
+
+    /// Select the procedures a speed build inlines everywhere: wrappers (no
+    /// loop, few statements) and leaves (no calls, moderate size), whose
+    /// per-call cost in their callers' loops exceeds the work they do. That
+    /// is a speed policy; a size build selects nothing and leaves every
+    /// decision to LLVM's size cost model.
     fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+        self.inline_everywhere.clearRetainingCapacity();
+        try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
+        if (self.optimize_for_size) return;
         const shapes = try self.allocator.alloc(InlineShape, procs.len);
         defer {
             for (shapes) |*shape| shape.callees.deinit(self.allocator);
@@ -4005,8 +4020,6 @@ pub const MonoLlvmCodeGen = struct {
             if (proc.is_static_initializer) continue;
             if (proc.body) |body| try self.inlineShapeOf(body, &shapes[i]);
         }
-        self.inline_everywhere.clearRetainingCapacity();
-        try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
         for (procs, 0..) |proc, i| {
             if (proc.body == null or proc.is_static_initializer) continue;
             const shape = &shapes[i];
