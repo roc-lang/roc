@@ -14221,7 +14221,8 @@ the program and never shared between programs.
 
 Temporary composition keys, field-order buffers, and traversal stacks do not
 escape the composition operation. In-process execution allocates these from
-the reclaiming SMP allocator and frees them when the operation finishes;
+the reclaiming SMP allocator (the wasm allocator in the freestanding compiler)
+and frees them when the operation finishes;
 platform runtimes retain their existing host allocation/free operations.
 Published descriptors and copied interning keys still use program-lifetime
 storage. Repeated cache hits must not retain temporary buffers in that storage.

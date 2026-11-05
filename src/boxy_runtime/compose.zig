@@ -376,9 +376,14 @@ const PlatformImmortals = struct {
 
 /// Reclaimable composition scratch. Published descriptors and interned keys
 /// use the program-lifetime allocator separately; these buffers do not escape.
+const scratch_allocator: std.mem.Allocator = if (builtin.os.tag == .freestanding)
+    std.heap.wasm_allocator
+else
+    std.heap.smp_allocator;
+
 pub fn scratchAlloc(comptime T: type, count: usize, ops: *RocOps) []T {
     if (comptime builtins.host_abi.host_role != .platform) {
-        return std.heap.smp_allocator.alloc(T, count) catch ops.crash("out of memory allocating descriptor scratch");
+        return scratch_allocator.alloc(T, count) catch ops.crash("out of memory allocating descriptor scratch");
     }
     const items: [*]T = @ptrCast(@alignCast(ops.allocRaw(count * @sizeOf(T), @alignOf(T))));
     return items[0..count];
@@ -386,7 +391,7 @@ pub fn scratchAlloc(comptime T: type, count: usize, ops: *RocOps) []T {
 
 pub fn scratchFree(comptime T: type, items: []T, ops: *RocOps) void {
     if (comptime builtins.host_abi.host_role != .platform) {
-        std.heap.smp_allocator.free(items);
+        scratch_allocator.free(items);
     } else ops.dealloc(@ptrCast(items.ptr), @alignOf(T));
 }
 
