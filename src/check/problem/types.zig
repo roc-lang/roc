@@ -677,8 +677,9 @@ pub const LocalTypeEscapeCause = union(enum) {
     context_argument: types_mod.NominalDecl.Idx,
     /// A root operand, a side of the failed leaf pair, or a failed
     /// requirement's dispatcher was this context variable (its annotation's
-    /// variable), which a value of the type carried outside the body that
-    /// introduces it.
+    /// variable) in a relation checked after the binding owning it, which
+    /// only a value of the type that left that binding's body could carry
+    /// there.
     context_variable: Var,
 };
 

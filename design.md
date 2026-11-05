@@ -5969,7 +5969,11 @@ instantiating a method of the declaration for a dispatch on an application,
 a source dispatch or a generated codec's call of a format method alike
 (`receiverContext`): the method's scheme names the context variables as the
 enclosing functions' own, and its instance reads them as the receiver's
-context arguments. A method whose signature does not name its type (a
+context arguments. A method of a type an imported module declares in a
+function body is copied with the importing module's copy of the
+declaration's context formals in place of the context variables
+(`importedOwnerContextSubstitutions`), so its instance reads them as the
+receiver's context arguments the same way. A method whose signature does not name its type (a
 format's `encode_str : Str, s -> Try(s, e)`) is otherwise related to the
 receiver by nothing, so a fresh copy would make each derivation that
 instantiates it ask for a format no derivation in its chain matches. Instantiation
@@ -6189,11 +6193,16 @@ context is that report's consequence and is withdrawn once every relation is
 checked (`withdrawLocalTypeEscapeConsequences`): the unifier marks a
 mismatch whose two applications of the type disagreed at a context argument
 (values of two instantiations met), or one of whose operands is a context
-variable of the type (which a value of it carried out of the body that
-introduced it, so that body's annotation could not generalize it, as an
+variable of the type in a relation checked once the binding owning the
+variable is checked, generalization boundary included
+(`checked_polymorphic_bindings`): no more of that binding's body is checked
+then, so only a value of the type that left the body could carry the
+variable there, and the body's annotation could not generalize it (as an
 enclosing body's `acc = []` carries the variable of the nested function
-whose local values it holds), with the type and that variable
-(`problem.LocalTypeEscapeCause`). The binding binds nothing, so every use of it crashes, and
+whose local values it holds). The checker records the type and that
+variable (`problem.LocalTypeEscapeCause`). A failure against the variable
+inside the owner's body is the body's own error and is reported alongside
+the escape. The binding binds nothing, so every use of it crashes, and
 every method of the escaped type is rejected like a capturing method
 (Methods Never Capture), so no dispatch outside the type's context reaches a
 local procedure that needs it.
