@@ -991,7 +991,7 @@ fn topLevelConstNode(
     reason: *TargetConfigResolveReason,
 ) ?checked.ConstNodeId {
     for (checked_module.top_level_values.entries) |entry| {
-        const source_name = checked_module.canonical_names.exportNameText(entry.source_name);
+        const source_name = checked_module.nameStore().exportNameText(entry.source_name);
         if (!Ident.textEql(source_name, ident)) continue;
 
         const const_ref = switch (entry.value) {

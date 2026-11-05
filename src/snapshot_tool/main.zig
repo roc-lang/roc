@@ -3742,7 +3742,7 @@ fn snapshotProvidedEntrypointName(
 
     for (root_artifact.provides_requires.provides) |entry| {
         if (entry.source_name == top_level.source_name) {
-            return root_artifact.canonical_names.externalSymbolNameText(entry.ffi_symbol);
+            return root_artifact.nameStore().externalSymbolNameText(entry.ffi_symbol);
         }
     }
 

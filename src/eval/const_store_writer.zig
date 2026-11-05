@@ -91,7 +91,7 @@ pub const Writer = struct {
         module: *checked.CheckedModuleArtifact,
         program: *const LirProgram.Result,
     ) Writer {
-        return initStore(allocator, &module.const_store, &module.canonical_names, program);
+        return initStore(allocator, &module.const_store, module.internedNameStore(), program);
     }
 
     /// A writer into `store`, translating stored types into `names`.

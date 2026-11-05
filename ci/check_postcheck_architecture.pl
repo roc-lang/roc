@@ -166,6 +166,20 @@ my @RULES = (
     { category => 'imported-nominal-embedding', regex => qr/\bembedOneImportedNominalDecl\b/, allowed => {} },
     { category => 'imported-nominal-embedding', regex => qr/\bembedImportedNominalDeclFor\b/, allowed => {} },
     { category => 'imported-nominal-embedding', regex => qr/\bownerViewAndDeclForImportedNominal\b/, allowed => {} },
+    # A platform/app pairing reads its platform in place: a type read under
+    # the pairing resolves through the pairing's overlay on demand, and the
+    # facts that depend on those types are per-pairing slots. Nothing
+    # substitutes, clones or borrows the platform's types, names or tables.
+    { category => 'eager-pairing', regex => qr/\bborrowForPairing\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bPairingTypeColumn\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bPairingTypeImage\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bpairing_types\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bPlatformRelationTypeSubstitutions\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bapplyToPublication\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bpublicationPairingTypes\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\brootsReachingAny\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bpairingCapabilitySource\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bborrowed_columns\b/, allowed => {} },
     # Post-check code reads sealed solver stores through the checked type
     # reader and never writes one.
     {

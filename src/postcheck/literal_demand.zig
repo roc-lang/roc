@@ -468,7 +468,7 @@ const Builder = struct {
     /// Add one template's own flags and edges.
     fn addTemplate(self: *Builder, view: checked.ImportedModuleView, node: NodeId, template: checked.CheckedProcedureTemplate) Allocator.Error!void {
         if (template.target == .hosted) return;
-        try self.addTypeEdge(node, view, template.checked_fn_root);
+        try self.addTypeEdge(node, view, try view.checked_types.pairedType(template.checked_fn_root));
 
         const refs = view.resolved_value_refs;
         for (refs.template_refs[template.resolved_value_refs.start..][0..template.resolved_value_refs.len]) |ref_id| {
@@ -558,13 +558,9 @@ const Builder = struct {
         const conversion_root, const dependent: Flags = switch (bodies.index().nodeKind(plan.node)) {
             // A custom literal pattern's node keys both its conversion plan
             // and its equality plan.
-            .pattern => blk: {
-                const conversion = bodies.literalConversion(plan.node);
-                if (conversion.plan != plan_id) return .{};
-                break :blk switch (conversion.literal) {
-                    .numeral => .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },
-                    .quote => .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_quote = true } },
-                };
+            .pattern => switch (bodies.literalDispatchKind(plan.node)) {
+                .numeral => if (bodies.numeralPlan(plan.node) != plan_id) return .{} else .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },
+                .quote => if (bodies.quotePlan(plan.node) != plan_id) return .{} else .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_quote = true } },
             },
             .expr => switch (bodies.exprData(@fromBackingInt(plan.node))) {
                 .numeral => .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },

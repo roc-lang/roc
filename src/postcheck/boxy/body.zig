@@ -594,7 +594,7 @@ pub const Builder = struct {
 
     /// The type of `expr`'s own value.
     pub fn exprType(self: *Builder, expr: ExprId) Allocator.Error!TypeId {
-        const own = try self.convert(self.bodies().exprType(expr));
+        const own = try self.convert(try self.bodies().exprType(expr));
         // A value flowing to a destination of the same shape is built at the
         // destination's type; a diverging value's own type can differ in
         // shape, and it builds nothing. A value no construction builds
@@ -612,7 +612,7 @@ pub const Builder = struct {
     /// value as a read does (`retagInto`), and its own value's type
     /// otherwise.
     pub fn valueType(self: *Builder, expr: ExprId) Allocator.Error!TypeId {
-        const wide = self.bodies().rowCoercion(expr) orelse return try self.exprType(expr);
+        const wide = try self.bodies().rowCoercion(expr) orelse return try self.exprType(expr);
         const own = try self.convert(wide);
         if (self.destination_types.get(expr)) |destination| {
             if (try self.retagInto(own, destination) != null) return own;
@@ -625,14 +625,14 @@ pub const Builder = struct {
     /// coercion's type for a row-coerced result, and the destination its
     /// parent gives it otherwise.
     fn ownDestination(self: *Builder, expr: ExprId) ?TypeId {
-        if (self.bodies().rowCoercion(expr) != null) return self.coerced_destinations.get(expr);
+        if (self.bodies().hasRowCoercion(expr)) return self.coerced_destinations.get(expr);
         return self.destination_types.get(expr);
     }
 
     /// Whether `expr`'s own value is the procedure's result. A row-coerced
     /// result's value is its coercion's, never the procedure's directly.
     pub fn isTail(self: *Builder, expr: ExprId) bool {
-        if (self.bodies().rowCoercion(expr) != null) return false;
+        if (self.bodies().hasRowCoercion(expr)) return false;
         return self.tail_exprs.contains(expr);
     }
 
@@ -665,7 +665,7 @@ pub const Builder = struct {
     /// read's own, closed type, converted into its destination where that
     /// widens it, or else the type `exprType` gives it.
     pub fn constReadType(self: *Builder, expr: ExprId) Allocator.Error!TypeId {
-        const own = try self.convert(self.bodies().exprType(expr));
+        const own = try self.convert(try self.bodies().exprType(expr));
         if (self.program.store.isClosed(own)) return own;
         return try self.exprType(expr);
     }
@@ -676,7 +676,7 @@ pub const Builder = struct {
     }
 
     pub fn patternType(self: *Builder, pattern: PatternId) Allocator.Error!TypeId {
-        return self.convert(self.bodies().patternType(pattern));
+        return self.convert(try self.bodies().patternType(pattern));
     }
 
     // -- Statements --
@@ -2740,17 +2740,17 @@ pub const Builder = struct {
             // lowered, and an expression there stands for a value no
             // execution produces.
             .expr => |expr| if (self.hole == null) {
-                const checked_ty = self.bodies().valueType(expr);
+                const checked_ty = try self.bodies().valueType(expr);
                 try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.valueType(expr), .frame));
             } else try self.stepExpr(expr),
             .own_expr => |expr| if (self.hole == null) {
-                const checked_ty = self.bodies().exprType(expr);
+                const checked_ty = try self.bodies().exprType(expr);
                 try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.exprType(expr), .frame));
             } else try self.stepOwnExpr(expr),
             .root_body => |root| try self.lowerRootBody(root),
             .root_pattern_match => |root| try self.rootPatternMatch(root),
             .literal_pattern_guard => |pattern| if (self.hole == null) {
-                const checked_ty = self.bodies().literalPatternGuard(pattern).?.equality_ty;
+                const checked_ty = (try self.bodies().literalPatternGuard(pattern)).?.equality_ty;
                 try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.convert(checked_ty), .frame));
             } else {
                 try self.push(.{ .restore_region = self.region });
@@ -2766,7 +2766,7 @@ pub const Builder = struct {
             } else {
                 try self.push(.{ .restore_region = self.region });
                 self.region = self.nodeRegion(@backingInt(pattern));
-                const conversion = self.bodies().literalConversion(@backingInt(pattern));
+                const conversion = try self.bodies().literalConversion(@backingInt(pattern));
                 const conversion_root = try self.bodies().literalConversionRoot(@backingInt(pattern));
                 switch (conversion.literal) {
                     .numeral => |literal| try self.lowerNumeral(.{ .pattern = pattern }, literal, conversion.plan, conversion_root),
@@ -2967,7 +2967,7 @@ pub const Builder = struct {
                 // A `?` inside an `expect` that evaluated an `Err`: the
                 // expect fails with the rendered value.
                 const value = self.popValue();
-                const expr = self.bodies().expr(fail.expr);
+                const expr = try self.bodies().expr(fail.expr);
                 const rendered = try self.closedLocal(.str);
                 try self.emitDyn(rendered, .{ .inspect = .{ .value = value, .desc = try self.descOf(fail.value) } });
                 const prefix_text = try std.fmt.allocPrint(self.allocator, "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(", .{self.bodies().text(expr.data.expect_err.snippet)});
@@ -3147,7 +3147,7 @@ pub const Builder = struct {
 
     /// Lower an expression as its parent reads it.
     fn lowerExpr(self: *Builder, expr_id: ExprId) Allocator.Error!void {
-        if (self.bodies().rowCoercion(expr_id)) |wide| return try self.lowerRowCoercion(expr_id, wide);
+        if (try self.bodies().rowCoercion(expr_id)) |wide| return try self.lowerRowCoercion(expr_id, wide);
         try self.lowerOwnExpr(expr_id);
     }
 
@@ -3165,7 +3165,7 @@ pub const Builder = struct {
     }
 
     fn lowerOwnExpr(self: *Builder, expr_id: ExprId) Allocator.Error!void {
-        const expr = self.bodies().expr(expr_id);
+        const expr = try self.bodies().expr(expr_id);
         if (self.ownDestination(expr_id)) |destination| try self.passDestination(expr.data, destination);
         self.region = expr.source_region;
         if (self.ownDestination(expr_id) != null and !try self.program.converter().hasError(self.module, expr.ty)) {
@@ -3209,7 +3209,7 @@ pub const Builder = struct {
                 if (diverges_at == null) {
                     try self.push(.{ .expr = block.final_expr });
                 } else {
-                    const block_ty = self.bodies().exprType(expr_id);
+                    const block_ty = try self.bodies().exprType(expr_id);
                     try self.push(.{ .diverged = if (try self.program.converter().hasError(self.module, block_ty)) null else try self.exprType(expr_id) });
                 }
                 while (index > 0) {
@@ -3297,7 +3297,7 @@ pub const Builder = struct {
             .runtime_error => |runtime_error| {
                 // A retired expression evaluates the operands it still
                 // evaluates, each for its effects, then crashes.
-                const checked_ty = self.bodies().exprType(expr_id);
+                const checked_ty = try self.bodies().exprType(expr_id);
                 try self.push(.{ .runtime_error = if (try self.program.converter().hasError(self.module, checked_ty)) null else try self.exprType(expr_id) });
                 var index = runtime_error.evaluated.len;
                 while (index > 0) {
@@ -4092,7 +4092,7 @@ pub const Builder = struct {
                     // A custom literal pattern's literal converts at the
                     // pattern's type.
                     if (self.bodies().index().nodeKind(node) == .pattern) {
-                        const conversion = self.bodies().literalConversion(node);
+                        const conversion = try self.bodies().literalConversion(node);
                         const kind: LIR.LiteralRejectionKind = switch (conversion.literal) {
                             .numeral => .numeral,
                             .quote => .quote,
@@ -4165,7 +4165,7 @@ pub const Builder = struct {
                                 },
                                 .callable_eval => invariant("a literal argument's edge uses a computed callable"),
                             };
-                            const use_ty = try self.convert(self.bodies().exprType(expr));
+                            const use_ty = try self.convert(try self.bodies().exprType(expr));
                             self.chain_frame = true;
                             defer self.chain_frame = false;
                             const instance = if (tag == .platform_required_proc)
@@ -4360,7 +4360,7 @@ pub const Builder = struct {
     pub fn finishInterpolation(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const assembler = self.popValue();
         const interpolation = self.bodies().exprData(expr_id).interpolation;
-        const assembler_ty = try self.convert(self.bodies().interpolationAssemblerType(expr_id));
+        const assembler_ty = try self.convert(try self.bodies().interpolationAssemblerType(expr_id));
         const values_ty = switch (self.program.store.get(assembler_ty)) {
             .function => |function| blk: {
                 const args = self.program.store.span(function.args);
@@ -4498,7 +4498,7 @@ pub const Builder = struct {
         defer self.allocator.free(generic_bound);
         for (generic_bound[0..scheme.scheme_vars.len], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(outer_count + index));
         for (generic_bound[scheme.scheme_vars.len..], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-        const alias_ty = self.bodies().exprType(local.expr);
+        const alias_ty = try self.bodies().exprType(local.expr);
         const generic_fn = try self.program.converter().convert(self.module, alias_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
         const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.exprType(expr_id) }}, outer_count + scheme.scheme_vars.len);
         defer self.allocator.free(related);
@@ -4575,7 +4575,7 @@ pub const Builder = struct {
         const generic_bound = try self.allocator.alloc(TypeId, vars.len);
         defer self.allocator.free(generic_bound);
         for (generic_bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-        const lambda_ty = self.bodies().exprType(lambda_expr);
+        const lambda_ty = try self.bodies().exprType(lambda_expr);
         const generic_fn = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
         // The procedure's own variables take the types the use's
         // instantiation gives them.
@@ -4686,7 +4686,7 @@ pub const Builder = struct {
     /// declaring body never ran here (it ran at compile time, and a closure
     /// it built was stored) gets its worker now.
     pub fn localProcWorker(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!struct { WorkerId, WorkerId } {
-        const closure_expr = self.bodies().expr(local.expr);
+        const closure_expr = try self.bodies().expr(local.expr);
         const lambda_expr = switch (closure_expr.data) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
@@ -4718,7 +4718,7 @@ pub const Builder = struct {
         const fn_ty = try self.program.converter().convert(self.module, closure_expr.ty, env);
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
-        for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.capturedType(capture.pattern, try self.program.converter().convert(self.module, self.bodies().patternType(capture.pattern), env));
+        for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.capturedType(capture.pattern, try self.program.converter().convert(self.module, try self.bodies().patternType(capture.pattern), env));
         return .{ scope_worker, try self.program.lambdaWorker(scope_worker, lambda_expr, captures, capture_types, fn_ty, own) };
     }
 
@@ -4920,7 +4920,7 @@ pub const Builder = struct {
         defer self.allocator.free(generic_bound);
         for (generic_bound[0..scheme.scheme_vars.len], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(outer_count + index));
         for (generic_bound[scheme.scheme_vars.len..], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-        const lambda_ty = self.bodies().exprType(lambda_expr);
+        const lambda_ty = try self.bodies().exprType(lambda_expr);
         const generic_fn = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
         const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.valueType(call.func) }}, outer_count + scheme.scheme_vars.len);
         defer self.allocator.free(related);
@@ -5278,7 +5278,7 @@ pub const Builder = struct {
                 const owner = self.program.worker(owner_worker).*;
                 const owner_view = self.program.module(owner.module);
                 const site_expr = checked.nestedProcSiteExpr(nested.site);
-                const expr = owner_view.bodies().expr(site_expr);
+                const expr = try owner_view.bodies().expr(site_expr);
                 const lambda_expr = switch (expr.data) {
                     .lambda => site_expr,
                     .closure => |closure| closure.lambda,
@@ -5313,7 +5313,7 @@ pub const Builder = struct {
                 defer relations.deinit(self.allocator);
                 try relations.append(self.allocator, .{ generic_fn, fn_ty });
                 for (captures, capture_types, stored_captures) |capture, *capture_ty, *stored_capture| {
-                    capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), generic);
+                    capture_ty.* = try self.program.converter().convert(owner.module, try owner_view.bodies().patternType(capture.pattern), generic);
                     stored_capture.* = for (stored.captures) |candidate| {
                         if (std.meta.eql(candidate.id, capture.capture_id)) break candidate;
                     } else invariant("a stored closure lacks one of its site's captures");
@@ -5379,7 +5379,7 @@ pub const Builder = struct {
                 const concrete_capture_types = try self.allocator.alloc(TypeId, captures.len);
                 defer self.allocator.free(concrete_capture_types);
                 for (captures, concrete_capture_types) |capture, *concrete_ty| {
-                    concrete_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), concrete);
+                    concrete_ty.* = try self.program.converter().convert(owner.module, try owner_view.bodies().patternType(capture.pattern), concrete);
                 }
                 const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
                 const descs = try self.program.arena.allocator().alloc(LocalId, bound.len);
@@ -5465,7 +5465,7 @@ pub const Builder = struct {
     pub fn storedLambdaWorker(self: *Builder, owner_worker: WorkerId, lambda_expr: ExprId, captured_scheme: bool) Allocator.Error!WorkerId {
         const owner = self.program.worker(owner_worker).*;
         const owner_view = self.program.module(owner.module);
-        const expr = owner_view.bodies().expr(lambda_expr);
+        const expr = try owner_view.bodies().expr(lambda_expr);
         const captures = try self.program.siteCaptures(owner.module, lambda_expr);
         const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr })) |scope_id| blk: {
             var scheme = try self.localSchemeIn(owner_view, scope_id);
@@ -5483,7 +5483,7 @@ pub const Builder = struct {
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
         for (captures, capture_types) |capture, *capture_ty| {
-            capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().patternType(capture.pattern), generic);
+            capture_ty.* = try self.program.converter().convert(owner.module, try owner_view.bodies().patternType(capture.pattern), generic);
         }
         return try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
     }
@@ -5825,7 +5825,7 @@ pub const Builder = struct {
     }
 
     pub fn lowerCall(self: *Builder, expr_id: ExprId, call: @FieldType(bodies_mod.ExprData, "call")) Allocator.Error!void {
-        const func = self.bodies().expr(call.func);
+        const func = try self.bodies().expr(call.func);
         const resolved: ?checked.ResolvedValueRefId = switch (func.data) {
             .lookup_external => self.bodies().resolvedRef(call.func) orelse invariant("a call's external callee was unresolved"),
             .lookup_required => self.bodies().resolvedRef(call.func) orelse invariant("a call's platform requirement callee was unresolved"),
@@ -6751,7 +6751,7 @@ pub const Builder = struct {
             .vars = try owner.view.dispatch().templateSchemeVars(wrapper.template),
             .params = try owner.view.dispatch().evidenceParams(wrapper.template),
             .literal_requirements = try owner.view.dispatch().templateLiteralRequirements(wrapper.template),
-            .fn_ty = template.checked_fn_root,
+            .fn_ty = try view.view.checked_types.pairedType(template.checked_fn_root),
         };
     }
 
@@ -7364,7 +7364,7 @@ pub const Builder = struct {
     /// on the value the pattern matches and the pattern's literal converted
     /// at its type (`checked_bodies.LiteralPatternGuard`).
     fn lowerLiteralPatternGuard(self: *Builder, pattern: PatternId) Allocator.Error!void {
-        const guard = self.bodies().literalPatternGuard(pattern) orelse invariant("a literal guard was asked of a pattern compared directly");
+        const guard = try self.bodies().literalPatternGuard(pattern) orelse invariant("a literal guard was asked of a pattern compared directly");
         self.region = self.nodeRegion(@backingInt(pattern));
         try self.lowerDispatchAt(guard.equality_plan orelse invariant("a custom literal pattern had no checked equality plan"), try self.convert(guard.equality_ty));
     }
@@ -7372,7 +7372,7 @@ pub const Builder = struct {
     /// The value of a custom literal pattern's guard operand where no
     /// execution reaches it: a value of the pattern's type.
     fn literalPatternDeadValue(self: *Builder, pattern: PatternId) Allocator.Error!LocalId {
-        if (try self.program.converter().hasError(self.module, self.bodies().patternType(pattern))) return try self.closedLocal(.zst);
+        if (try self.program.converter().hasError(self.module, try self.bodies().patternType(pattern))) return try self.closedLocal(.zst);
         return try self.localOf(try self.patternType(pattern), .frame);
     }
 
@@ -7783,7 +7783,7 @@ pub const Builder = struct {
             const bound = try self.allocator.alloc(TypeId, vars.len);
             defer self.allocator.free(bound);
             for (bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
-            break :blk try self.program.converter().convert(self.module, self.bodies().exprType(expr_id), .{ .module = self.module, .vars = vars, .bound = bound });
+            break :blk try self.program.converter().convert(self.module, try self.bodies().exprType(expr_id), .{ .module = self.module, .vars = vars, .bound = bound });
         } else try self.exprType(expr_id);
         const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) null else scheme) else null;
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
@@ -7822,7 +7822,7 @@ pub const Builder = struct {
                 else
                     try self.program.converter().sealedScheme(self.module, variable);
             }
-            try self.resolveOwnKinds(self.bodies().exprType(expr_id), scheme, own_types);
+            try self.resolveOwnKinds(try self.bodies().exprType(expr_id), scheme, own_types);
             for (own_types) |own_ty| try own_descs.append(self.allocator, try self.descOf(own_ty));
             const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }).?;
             const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
@@ -8168,7 +8168,7 @@ pub const Builder = struct {
     }
 
     pub fn finishTag(self: *Builder, expr_id: ExprId, at_ty: ?TypeId) Allocator.Error!void {
-        const expr = self.bodies().expr(expr_id);
+        const expr = try self.bodies().expr(expr_id);
         const label, const arg_count: usize = switch (expr.data) {
             .tag => |tag| .{ tag.name, tag.args.len },
             .zero_argument_tag => |tag| .{ tag.name, 0 },
@@ -8225,7 +8225,7 @@ pub const Builder = struct {
     }
 
     pub fn finishList(self: *Builder, expr_id: ExprId) Allocator.Error!void {
-        const expr = self.bodies().expr(expr_id);
+        const expr = try self.bodies().expr(expr_id);
         const count: usize = switch (expr.data) {
             .list => |items| items.len,
             .empty_list => 0,
@@ -8789,7 +8789,7 @@ pub const Builder = struct {
         // which every exit of the path delivers to one join.
         const segment_count = access.segments.len;
         const optional = for (0..segment_count) |position| {
-            if (self.bodies().fieldAccessSegment(access.segments, @intCast(position)).mode == .optional) break true;
+            if (self.bodies().fieldAccessSegmentIsOptional(access.segments, @intCast(position))) break true;
         } else false;
         var result_join: ?struct { join: LIR.JoinPointId, after: CFStmtId, result: LocalId } = null;
         if (optional) {
@@ -8799,7 +8799,7 @@ pub const Builder = struct {
             result_join = .{ .join = join, .after = after, .result = result };
         }
         for (0..segment_count) |segment_position| {
-            const segment = self.bodies().fieldAccessSegment(access.segments, @intCast(segment_position));
+            const segment = try self.bodies().fieldAccessSegment(access.segments, @intCast(segment_position));
             const name = try self.program.store.internName(self.view.nameStore().recordFieldLabelText(segment.field_name));
             const structural = try self.structuralType(record_ty);
             const record = switch (self.program.store.get(structural)) {
@@ -9092,7 +9092,7 @@ pub const Builder = struct {
         // A loop whose pattern checking rejected evaluates its iterable,
         // then crashes where it would begin: its pattern binds nothing.
         const item_ty = self.view.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)].item_ty;
-        if (try self.program.converter().hasError(self.module, item_ty) or try self.program.converter().hasError(self.module, self.bodies().patternType(pattern))) {
+        if (try self.program.converter().hasError(self.module, item_ty) or try self.program.converter().hasError(self.module, try self.bodies().patternType(pattern))) {
             try self.push(.{ .rejected_for = plan_id });
             try self.push(.{ .expr = iterable });
             return;

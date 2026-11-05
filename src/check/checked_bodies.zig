@@ -429,8 +429,6 @@ pub const Tables = struct {
     /// exhaustiveness sites.
     module_analyses: ?*checked_artifact.ModuleAnalyses = null,
     exported_defs: []const CIR.Def.Idx = &.{},
-    /// The pairing's types for a platform read under a platform/app pairing.
-    pairing_types: ?*const checked_artifact.PairingTypeColumn = null,
     /// The reader over the module's dispatch resolution.
     dispatch: ?checked_artifact.CheckedDispatch = null,
 };
@@ -466,7 +464,8 @@ pub const LiteralPatternGuard = struct {
 pub const CheckedBodies = struct {
     env: *const ModuleEnv,
     names: *const canonical.CanonicalNameStore,
-    /// The module's checked type view, read without the pairing.
+    /// The module's checked type view, under the module's platform/app
+    /// pairing when it is read under one.
     types: checked_artifact.CheckedTypeStoreView,
     analyses: *body_analyses.BodyAnalyses,
     tables: Tables = .{},
@@ -499,38 +498,41 @@ pub const CheckedBodies = struct {
     }
 
     /// The checked type a node with solver variable `var_` has: the
-    /// variable's own, or the pairing's image of it when the module is read
-    /// under a pairing.
-    pub fn typeOf(self: CheckedBodies, var_: Var) CheckedTypeId {
-        const own = self.typeOfVar(var_);
-        if (self.tables.pairing_types) |column| return column.image(own);
-        return own;
+    /// variable's own, or its image under the pairing the module is read
+    /// under.
+    pub fn typeOf(self: CheckedBodies, var_: Var) Allocator.Error!CheckedTypeId {
+        return try self.types.pairedType(self.typeOfVar(var_));
     }
 
-    pub fn exprType(self: CheckedBodies, id: ExprId) CheckedTypeId {
-        return self.typeOf(ModuleEnv.varFrom(id));
+    pub fn exprType(self: CheckedBodies, id: ExprId) Allocator.Error!CheckedTypeId {
+        return try self.typeOf(ModuleEnv.varFrom(id));
     }
 
     /// A pattern's type; a global definition's pattern has its definition's
     /// type.
-    pub fn patternType(self: CheckedBodies, id: PatternId) CheckedTypeId {
+    pub fn patternType(self: CheckedBodies, id: PatternId) Allocator.Error!CheckedTypeId {
         const var_: Var = if (self.index().topLevelDef(id)) |def| ModuleEnv.varFrom(def) else ModuleEnv.varFrom(id);
-        return self.typeOf(var_);
+        return try self.typeOf(var_);
     }
 
     /// The type a parent receives an expression's value at: the widened type
     /// of its row coercion when checking recorded one, its own type
     /// otherwise.
-    pub fn valueType(self: CheckedBodies, id: ExprId) CheckedTypeId {
-        return self.rowCoercion(id) orelse self.exprType(id);
+    pub fn valueType(self: CheckedBodies, id: ExprId) Allocator.Error!CheckedTypeId {
+        return (try self.rowCoercion(id)) orelse try self.exprType(id);
     }
 
     /// The widened type a row-coerced result flows into its parent at, when
     /// checking recorded one (`ModuleEnv.RowCoercedResult`). Lowering
     /// coerces the node's value to it wherever a parent reads the node.
-    pub fn rowCoercion(self: CheckedBodies, id: ExprId) ?CheckedTypeId {
+    pub fn rowCoercion(self: CheckedBodies, id: ExprId) Allocator.Error!?CheckedTypeId {
         const wide = self.env.rowCoercedResultWideVar(ModuleEnv.nodeIdxFrom(id)) orelse return null;
-        return self.typeOf(wide);
+        return try self.typeOf(wide);
+    }
+
+    /// Whether checking recorded a row coercion of the node's result.
+    pub fn hasRowCoercion(self: CheckedBodies, id: ExprId) bool {
+        return self.env.rowCoercedResultWideVar(ModuleEnv.nodeIdxFrom(id)) != null;
     }
 
     /// Whether checking recorded the node as erroneous in its own right.
@@ -580,19 +582,19 @@ pub const CheckedBodies = struct {
         }
     }
 
-    pub fn expr(self: CheckedBodies, id: ExprId) Expr {
+    pub fn expr(self: CheckedBodies, id: ExprId) Allocator.Error!Expr {
         return .{
             .id = id,
-            .ty = self.exprType(id),
+            .ty = try self.exprType(id),
             .source_region = self.regionOf(@backingInt(id)),
             .data = self.exprData(id),
         };
     }
 
-    pub fn pattern(self: CheckedBodies, id: PatternId) Pattern {
+    pub fn pattern(self: CheckedBodies, id: PatternId) Allocator.Error!Pattern {
         return .{
             .id = id,
-            .ty = self.patternType(id),
+            .ty = try self.patternType(id),
             .source_region = self.regionOf(@backingInt(id)),
             .data = self.patternData(id),
         };
@@ -647,17 +649,17 @@ pub const CheckedBodies = struct {
     }
 
     /// A call's function constraint type.
-    pub fn callFnType(self: CheckedBodies, id: ExprId) CheckedTypeId {
+    pub fn callFnType(self: CheckedBodies, id: ExprId) Allocator.Error!CheckedTypeId {
         const call = self.store().getExpr(id);
         if (call != .e_call) invariant("a call type was requested for an expression that is not a call");
-        return self.typeOf(call.e_call.constraint_fn_var orelse invariant("a checked call had no function constraint type"));
+        return try self.typeOf(call.e_call.constraint_fn_var orelse invariant("a checked call had no function constraint type"));
     }
 
     /// The type of the assembler a custom interpolation's conversion returns.
-    pub fn interpolationAssemblerType(self: CheckedBodies, id: ExprId) CheckedTypeId {
+    pub fn interpolationAssemblerType(self: CheckedBodies, id: ExprId) Allocator.Error!CheckedTypeId {
         const interpolation = self.store().getExpr(id);
         if (interpolation != .e_interpolation) invariant("an assembler type was requested for an expression that is not an interpolation");
-        return self.typeOf(interpolation.e_interpolation.assembler_fn_var orelse invariant("a checked interpolation had no assembler type"));
+        return try self.typeOf(interpolation.e_interpolation.assembler_fn_var orelse invariant("a checked interpolation had no assembler type"));
     }
 
     /// The compile-time root that evaluates a literal's conversion, when that
@@ -896,21 +898,27 @@ pub const CheckedBodies = struct {
         };
     }
 
+    /// Whether a literal node converts through `from_numeral` or `from_quote`.
+    pub fn literalDispatchKind(self: CheckedBodies, raw_node: u32) can.NodeStore.LiteralDispatchPlan.Kind {
+        const plan = self.env.store.literalDispatchPlanForNode(@fromBackingInt(@intCast(raw_node))) orelse invariant("a literal conversion was requested for a node with no literal dispatch plan");
+        return plan.dispatchKind();
+    }
+
     /// The conversion of a custom literal pattern's literal at the pattern's
     /// type, or of a literal expression at its own type.
-    pub fn literalConversion(self: CheckedBodies, raw_node: u32) LiteralConversion {
+    pub fn literalConversion(self: CheckedBodies, raw_node: u32) Allocator.Error!LiteralConversion {
         const node: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node));
         const plan = self.env.store.literalDispatchPlanForNode(node) orelse invariant("a literal conversion was requested for a node with no literal dispatch plan");
         return switch (plan.dispatchKind()) {
             .numeral => .{
                 .literal = .{ .numeral = self.numeralLiteral(raw_node) },
                 .plan = self.numeralPlan(raw_node),
-                .ty = self.typeOf(ModuleEnv.varFrom(node)),
+                .ty = try self.typeOf(ModuleEnv.varFrom(node)),
             },
             .quote => .{
                 .literal = .{ .quote = self.quoteText(raw_node) },
                 .plan = self.quotePlan(raw_node),
-                .ty = self.typeOf(ModuleEnv.varFrom(node)),
+                .ty = try self.typeOf(ModuleEnv.varFrom(node)),
             },
         };
     }
@@ -918,7 +926,7 @@ pub const CheckedBodies = struct {
     /// The equality test of a literal pattern whose comparison dispatches to
     /// its type's `from_numeral` or `from_quote` and `is_eq`, or null for a
     /// pattern compared directly.
-    pub fn literalPatternGuard(self: CheckedBodies, pattern_id: PatternId) ?LiteralPatternGuard {
+    pub fn literalPatternGuard(self: CheckedBodies, pattern_id: PatternId) Allocator.Error!?LiteralPatternGuard {
         if (!self.literalPatternIsCustom(pattern_id)) return null;
         const raw = @backingInt(pattern_id);
         const node = ModuleEnv.nodeIdxFrom(pattern_id);
@@ -926,10 +934,10 @@ pub const CheckedBodies = struct {
         const context = plan.patternContext(&self.env.store) orelse invariant("a custom literal pattern had no pattern context");
         if (context.equality_fn_var_plus_one == 0) invariant("a custom literal pattern had no equality function");
         const equality_fn: Var = @fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1));
-        const equality_fn_ty = self.typeOf(equality_fn);
+        const equality_fn_ty = try self.typeOf(equality_fn);
         return .{
             .pattern = pattern_id,
-            .conversion = self.literalConversion(raw),
+            .conversion = try self.literalConversion(raw),
             .equality_plan = self.dispatchPlan(raw),
             .equality_ty = checked_artifact.checkedFunctionPayload(self.types, equality_fn_ty, "literal pattern equality").ret,
         };
@@ -1141,13 +1149,19 @@ pub const CheckedBodies = struct {
         return self.recordFieldLabel(self.store().getUnsetField(id).name);
     }
 
-    pub fn fieldAccessSegment(self: CheckedBodies, span: CIR.Expr.FieldAccessSegment.Span, position: u32) FieldAccessSegment {
+    /// Whether segment `position` of a field-access path is a `.?` access.
+    pub fn fieldAccessSegmentIsOptional(self: CheckedBodies, span: CIR.Expr.FieldAccessSegment.Span, position: u32) bool {
+        const node_store = self.store();
+        return node_store.getFieldAccessSegment(node_store.fieldAccessSegmentAt(span, position)).mode == .optional;
+    }
+
+    pub fn fieldAccessSegment(self: CheckedBodies, span: CIR.Expr.FieldAccessSegment.Span, position: u32) Allocator.Error!FieldAccessSegment {
         const node_store = self.store();
         const segment_idx = node_store.fieldAccessSegmentAt(span, position);
         const segment = node_store.getFieldAccessSegment(segment_idx);
         return .{
             .field_name = self.recordFieldLabel(segment.name),
-            .success_ty = self.typeOf(ModuleEnv.varFrom(segment_idx)),
+            .success_ty = try self.typeOf(ModuleEnv.varFrom(segment_idx)),
             .source_region = node_store.getFieldAccessSegmentRegion(segment_idx),
             .mode = switch (segment.mode) {
                 .required => .required,

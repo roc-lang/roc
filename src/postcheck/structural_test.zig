@@ -1194,7 +1194,7 @@ test "Monotype iterator One bodies preserve explicit reachability guard frames" 
         "fn beginIteratorOneBranch(",
         "fn finishIteratorLoop(",
     );
-    try expectContains(iterator, "self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell)");
+    try expectContains(iterator, "self.constrainCheckedInterfaceToCell((try self.view.bodies.pattern(for_.pattern)).ty, item_cell)");
     try expectContains(iterator, "self.withIteratorOneRuntimeDemandGuardFrame(for_.pattern, step)");
     try expectContains(iterator, "task.one_guard_frames = self.runtime_demand_guard_frames");
     try expectContains(lower_source, "self.runtime_demand_guard_frames = task.one_guard_frames");

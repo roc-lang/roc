@@ -2569,7 +2569,7 @@ fn expectPendingProcedureAliasRoot(
     source_name: []const u8,
 ) HoistedConstantsTestError!void {
     for (artifact.top_level_values.entries) |entry| {
-        if (!std.mem.eql(u8, artifact.canonical_names.exportNameText(entry.source_name), source_name)) continue;
+        if (!std.mem.eql(u8, artifact.nameStore().exportNameText(entry.source_name), source_name)) continue;
         const root_id = artifact.compile_time_roots.lookupIdByPattern(entry.pattern) orelse {
             try std.testing.expect(false);
             return;

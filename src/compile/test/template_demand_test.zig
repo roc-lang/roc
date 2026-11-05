@@ -41,8 +41,8 @@ fn expectDemands(source: []const u8, expected: []const struct { []const u8, []co
     for (expected) |entry| {
         const name, const demands = entry;
         const template = for (templates.templates.items) |*template| {
-            const export_name = artifact.canonical_names.procBase(template.proc_base).export_name orelse continue;
-            if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) break template;
+            const export_name = artifact.nameStore().procBase(template.proc_base).export_name orelse continue;
+            if (std.mem.eql(u8, artifact.nameStore().exportNameText(export_name), name)) break template;
         } else {
             std.debug.print("no template named {s}\n", .{name});
             return error.TestUnexpectedResult;
