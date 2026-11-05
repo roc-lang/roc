@@ -322,9 +322,11 @@ const carry_alignment = 16;
 
 /// A function value of the erased-record entry `callable_fn` whose capture
 /// is the dynamic record at `record`, whose first word is the record's own
-/// descriptor; the callable takes over the record's references. With a
-/// hot-reload drop, the capture is preceded by the hot-reload header holding
-/// `code_ref`, and that drop runs the record's release after it.
+/// descriptor and whose second word this writes as the allocation's capture
+/// capacity (design.md "Function Values"); the callable takes over the
+/// record's references. With a hot-reload drop, the capture is preceded by
+/// the hot-reload header holding `code_ref`, and that drop runs the record's
+/// release after it.
 pub fn roc_desc_closure(
     callable_fn: builtins.erased_callable.CallableFnPtr,
     record: [*]const u8,
@@ -332,9 +334,73 @@ pub fn roc_desc_closure(
     hot_reload_drop: ?builtins.erased_callable.OnDropFn,
 ) callconv(.c) [*]u8 {
     const erased = builtins.erased_callable;
-    const record_desc: *const TypeDesc = @as(*const *const TypeDesc, @ptrCast(@alignCast(record))).*;
-    const prefix: usize = if (hot_reload_drop != null) erased.hot_reload_capture_prefix_size else 0;
+    const record_desc = captureRecordDesc(record);
+    const prefix = hotReloadPrefix(hot_reload_drop);
     const data = erased.allocate(callable_fn, hot_reload_drop orelse &roc_desc_capture_drop, prefix + record_desc.size, ops());
+    writeClosure(data, callable_fn, record, record_desc, record_desc.size, hot_reload_code_ref, hot_reload_drop);
+    return data;
+}
+
+/// `roc_desc_closure` repacking the consumed erased callable `reuse` in
+/// place when it is unique (or `unique` says the compiler proved it) and
+/// the record fits its capture capacity: its old capture is released by its
+/// drop callback first, then the header and capture are overwritten. A
+/// shared or too small allocation is released and the callable is fresh. A
+/// null `reuse` transfers nothing.
+pub fn roc_desc_closure_reuse(
+    callable_fn: builtins.erased_callable.CallableFnPtr,
+    record: [*]const u8,
+    reuse: ?[*]u8,
+    unique: u8,
+    hot_reload_code_ref: ?*anyopaque,
+    hot_reload_drop: ?builtins.erased_callable.OnDropFn,
+) callconv(.c) [*]u8 {
+    const erased = builtins.erased_callable;
+    const old = reuse orelse return roc_desc_closure(callable_fn, record, hot_reload_code_ref, hot_reload_drop);
+    const record_desc = captureRecordDesc(record);
+    const prefix = hotReloadPrefix(hot_reload_drop);
+    const old_capture = erased.capturePtr(old) + prefix;
+    const capacity = readWord(old_capture + @sizeOf(usize));
+    if (record_desc.size <= capacity and (unique != 0 or builtins.utils.isUnique(old, ops()))) {
+        const payload = erased.payloadPtr(old);
+        if (payload.on_drop) |old_drop| old_drop(erased.capturePtr(old), ops());
+        writeClosure(old, callable_fn, record, record_desc, capacity, hot_reload_code_ref, hot_reload_drop);
+        return old;
+    }
+    const fresh = roc_desc_closure(callable_fn, record, hot_reload_code_ref, hot_reload_drop);
+    erased.decref(old, ops());
+    return fresh;
+}
+
+fn captureRecordDesc(record: [*]const u8) *const TypeDesc {
+    return @ptrFromInt(readWord(record));
+}
+
+fn readWord(ptr: [*]const u8) usize {
+    return @as(*align(1) const usize, @ptrCast(ptr)).*;
+}
+
+fn hotReloadPrefix(hot_reload_drop: ?builtins.erased_callable.OnDropFn) usize {
+    return if (hot_reload_drop != null) builtins.erased_callable.hot_reload_capture_prefix_size else 0;
+}
+
+/// Write the header and capture of the closure `data` (an allocation of at
+/// least `capacity` capture bytes after any hot-reload header): the record,
+/// with the capacity in its second word.
+fn writeClosure(
+    data: [*]u8,
+    callable_fn: builtins.erased_callable.CallableFnPtr,
+    record: [*]const u8,
+    record_desc: *const TypeDesc,
+    capacity: usize,
+    hot_reload_code_ref: ?*anyopaque,
+    hot_reload_drop: ?builtins.erased_callable.OnDropFn,
+) void {
+    const erased = builtins.erased_callable;
+    erased.payloadPtr(data).* = .{
+        .callable_fn_ptr = callable_fn,
+        .on_drop = hot_reload_drop orelse &roc_desc_capture_drop,
+    };
     const capture = erased.capturePtr(data);
     if (hot_reload_drop != null) {
         @as(*erased.HotReloadCaptureHeader, @ptrCast(@alignCast(capture))).* = .{
@@ -342,6 +408,7 @@ pub fn roc_desc_closure(
             .original_on_drop = &roc_desc_capture_drop,
         };
     }
+    const prefix = hotReloadPrefix(hot_reload_drop);
     @memcpy((capture + prefix)[0..record_desc.size], record[0..record_desc.size]);
-    return data;
+    @as(*align(1) usize, @ptrCast(capture + prefix + @sizeOf(usize))).* = capacity;
 }

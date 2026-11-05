@@ -3330,7 +3330,13 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
         .call_erased => {
             const defined = target orelse solveInvariant("ARC dyn erased call had no target");
             const call = op.call_erased;
+            if (!LIR.erasedCallReuseFieldsMatch(call)) {
+                solveInvariant("erased call reuse flag and ownership source disagreed");
+            }
             try solver.binding_facts.append(allocator, .{ .fresh = defined });
+            if (call.reuse_source) |reuse_source| {
+                try solver.binding_facts.append(allocator, .{ .demand = reuse_source });
+            }
             if (call.args) |args| {
                 try solver.binding_facts.append(allocator, .{ .demand = args });
                 try liftVisibilitySeed(solver, args);
@@ -3338,7 +3344,11 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
             try liftVisibilitySeed(solver, call.closure);
             try liftVisibilitySeed(solver, defined);
             try solver.unique_facts.append(allocator, .{ .foreign = defined });
-            try solver.unique_facts.append(allocator, .{ .destroy = call.closure });
+            if (call.reuse_source) |reuse_source| {
+                try solver.unique_facts.append(allocator, .{ .consume = .{ .local = reuse_source, .stmt = current } });
+            } else {
+                try solver.unique_facts.append(allocator, .{ .destroy = call.closure });
+            }
             if (call.args) |args| try solver.unique_facts.append(allocator, .{ .destroy = args });
         },
     }

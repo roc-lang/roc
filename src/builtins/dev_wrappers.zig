@@ -2571,8 +2571,8 @@ pub fn roc_builtins_native_callable_call(callable: erased_callable.CallableFnPtr
     native_callable.call(callable, ret, args, capture, reuse);
 }
 /// Transfer ARC's deferred call to the waiter's pending cell.
-pub fn roc_builtins_native_callable_defer(pending: *native_callable.Pending, callable: erased_callable.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize) callconv(.c) void {
-    native_callable.deferCall(pending, callable, closure, args, args_len);
+pub fn roc_builtins_native_callable_defer(pending: *native_callable.Pending, callable: erased_callable.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize, transfer: u8) callconv(.c) void {
+    native_callable.deferCall(pending, callable, closure, args, args_len, transfer != 0);
 }
 /// Run a producer-declared chain of pending monomorphic calls, out of line
 /// (`native_callable.drivePending`).
