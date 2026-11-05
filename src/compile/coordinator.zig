@@ -2237,6 +2237,7 @@ pub const Coordinator = struct {
     /// Source publications of the parametric platform. Session composition
     /// consumes its checked output without publishing another module.
     platform_root_publish_count: u32 = 0,
+    /// Platform/app pairings whose evaluation no cache entry supplied.
     platform_pairing_count: u32 = 0,
     /// Module compile time tracking (min/max/sum for computing avg)
     module_time_min_ns: u64,
@@ -2974,21 +2975,6 @@ pub const Coordinator = struct {
         const platform_root = self.findRootModule(.platform) orelse return;
         const app = app_root.mod.checkedArtifact().?;
         const platform = platform_root.mod.checkedArtifact().?;
-        if (self.tryLoadCachedPlatformPairing(platform, app)) |loaded| {
-            var paired = loaded;
-            const paired_ptr = allocateCheckedArtifact(paired) catch |err| {
-                paired.deinitRetainingModuleEnv(self.gpa);
-                return err;
-            };
-            var owned = true;
-            errdefer if (owned) destroyCheckedArtifact(paired_ptr, true);
-            self.unregisterCheckedArtifact(platform_root.mod);
-            try platform_root.mod.replaceWithPairedCheckedArtifact(paired_ptr, &self.retired_checked_artifacts, self.gpa);
-            owned = false;
-            try self.registerCheckedArtifact(platform_root.pkg, platform_root.mod);
-            return;
-        }
-        self.platform_pairing_count += 1;
         var available = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
         defer available.deinit(self.gpa);
         try available.append(self.gpa, CheckedArtifact.importedView(&self.builtin_modules.checked_artifact));
@@ -3000,6 +2986,18 @@ pub const Coordinator = struct {
         var paired = try CheckedArtifact.pairCheckedPlatform(self.gpa, platform, app, available.items);
         var paired_owned = true;
         errdefer if (paired_owned) paired.deinitRetainingModuleEnv(self.gpa);
+        if (self.installCachedPlatformPairing(&paired, app)) {
+            const paired_ptr = try allocateCheckedArtifact(paired);
+            paired_owned = false;
+            var owned = true;
+            errdefer if (owned) destroyCheckedArtifact(paired_ptr, true);
+            self.unregisterCheckedArtifact(platform_root.mod);
+            try platform_root.mod.replaceWithPairedCheckedArtifact(paired_ptr, &self.retired_checked_artifacts, self.gpa);
+            owned = false;
+            try self.registerCheckedArtifact(platform_root.pkg, platform_root.mod);
+            return;
+        }
+        self.platform_pairing_count += 1;
         const state = try self.gpa.create(messages.PendingEvaluationState);
         var state_owned = true;
         errdefer if (state_owned) self.gpa.destroy(state);
@@ -4664,57 +4662,39 @@ pub const Coordinator = struct {
         manager.storeFamilyBytes(.pairing, key.bytes, bytes, directory, artifact.moduleEnvConst().module_name);
     }
 
-    fn tryLoadCachedPlatformPairing(self: *Coordinator, platform: *const CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) ?CheckedArtifact.CheckedModuleArtifact {
-        const manager = self.cache_manager orelse return null;
-        if (!manager.config.enabled) return null;
-        const directory = self.cache_entry_dirs.platform_pairing orelse return null;
-        const key = cache_key_mod.platformPairingCacheKey(platform.key, app.key);
-        const data = manager.loadFamilyMapped(manager.allocator, .checked, .pairing, key.bytes, directory) orelse return null;
+    /// Install the cached evaluation output of `paired`, a pairing awaiting
+    /// evaluation, when the cache holds an entry for it. Returns whether it
+    /// did.
+    fn installCachedPlatformPairing(self: *Coordinator, paired: *CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) bool {
+        const manager = self.cache_manager orelse return false;
+        if (!manager.config.enabled) return false;
+        const directory = self.cache_entry_dirs.platform_pairing orelse return false;
+        const key = cache_key_mod.platformPairingCacheKey(paired.key, app.key);
+        const data = manager.loadFamilyMapped(manager.allocator, .checked, .pairing, key.bytes, directory) orelse return false;
         defer data.deinit(manager.allocator);
         const bodies = decodeCheckedCacheEnvelope(.platform_pairing, key, data.data()) orelse {
             manager.stats.recordInvalidation();
-            return null;
+            return false;
         };
         if (bodies.env_body.len != 0 or bodies.artifact_body.len < @sizeOf(CheckedArtifact.PlatformPairing.Serialized)) {
             manager.stats.recordInvalidation();
-            return null;
+            return false;
         }
-        const arena = self.gpa.create(base.SingleThreadArena) catch return null;
-        arena.* = base.SingleThreadArena.init(self.gpa);
-        var installed = false;
-        defer if (!installed) {
-            arena.deinit();
-            self.gpa.destroy(arena);
-        };
-        const buffer = arena.allocator().alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.artifact_body.len) catch return null;
+        // The pairing's arena owns the relocated output for as long as the
+        // pairing lives.
+        const buffer = paired.pairing_arena.?.allocator().alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.artifact_body.len) catch return false;
         @memcpy(buffer, bodies.artifact_body);
         const header: *const CheckedArtifact.PlatformPairing.Serialized = @ptrCast(buffer.ptr);
         header.validate(buffer.len) catch {
             manager.stats.recordInvalidation();
-            return null;
+            return false;
         };
-        const platform_keys = platform.checked_types.sealed_keys orelse coordinatorInvariant("a platform was paired before its key slots were attached", .{});
-        // The pairing reads the platform's capabilities and the types they
-        // name, so they exist before the pairing borrows the platform's types.
-        _ = platform.typesView().interfaceCapabilities(self.moduleResolver()) catch return null;
-        const synthesized_keys = CheckedArtifact.SynthesizedTypeKeys.create(platform_keys.allocator, platform_keys.io, header.synthesizedTypeCount(platform)) catch return null;
-        const body_analyses = CheckedArtifact.BodyAnalyses.create(
-            platform_keys.allocator,
-            platform_keys.io,
-            platform.moduleEnvConst(),
-            platform.checked_procedure_templates.promoted,
-        ) catch {
-            synthesized_keys.destroy();
-            return null;
-        };
-        const module_analyses = CheckedArtifact.ModuleAnalyses.create(platform_keys.allocator, platform_keys.io, platform) catch {
-            body_analyses.destroy();
-            synthesized_keys.destroy();
-            return null;
-        };
-
-        installed = true;
-        return header.install(platform, arena, synthesized_keys, body_analyses, module_analyses);
+        if (!header.matches(paired)) {
+            manager.stats.recordInvalidation();
+            return false;
+        }
+        header.install(paired);
+        return true;
     }
 
     /// Write `artifact`'s checked entry. This reads none of the module's
@@ -8003,7 +7983,7 @@ fn compileAppRootIdentityExpecting(
     for (expected_constants) |expected| {
         var found = false;
         for (root.top_level_values.entries) |entry| {
-            if (!std.mem.eql(u8, root.canonical_names.exportNameText(entry.source_name), expected.name)) continue;
+            if (!std.mem.eql(u8, root.nameStore().exportNameText(entry.source_name), expected.name)) continue;
             const state = root.const_templates.get(entry.value.const_ref).state;
             try std.testing.expect(state == .stored_const);
             var value = root.const_store.get(state.stored_const.node);
@@ -8727,21 +8707,21 @@ test "app artifact records platform requirement solutions from checking" {
     // own published top-level value table.
     const top_level = app_artifact.top_level_values.lookupByDef(solution.def) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(solution.pattern, top_level.pattern);
-    try std.testing.expectEqualStrings("prog", app_artifact.canonical_names.exportNameText(top_level.source_name));
+    try std.testing.expectEqualStrings("prog", app_artifact.nameStore().exportNameText(top_level.source_name));
 
     // The solved requirement type is the record the app provided.
-    const solved_payload = app_artifact.checked_types.payload(solution.solved_root);
+    const solved_payload = app_artifact.typeStore().payload(solution.solved_root);
     try std.testing.expect(solved_payload == .record);
 
     // Exactly one identity variable (the for-clause `model`), solved to the
     // app's `Model` alias.
     try std.testing.expectEqual(@as(u32, 1), solution.identity_len);
     const identity_root = table.identitySlice(solution)[0];
-    const identity_payload = app_artifact.checked_types.payload(identity_root);
+    const identity_payload = app_artifact.typeStore().payload(identity_root);
     try std.testing.expect(identity_payload == .alias);
     try std.testing.expectEqualStrings(
         "Model",
-        app_artifact.canonical_names.typeNameText(identity_payload.alias.name),
+        app_artifact.nameStore().typeNameText(identity_payload.alias.name),
     );
 }
 
@@ -8804,11 +8784,11 @@ fn checkNominalIdentityFixture(
 
     const app = coord.appRootCheckedArtifact();
     var count: usize = 0;
-    for (app.checked_types.nominal_declarations.items()) |declaration| {
-        const name = app.canonical_names.typeNameText(app.checked_types.nominalDeclarationName(declaration));
+    for (app.typeStore().nominal_declarations.items()) |declaration| {
+        const name = app.nameStore().typeNameText(app.typeStore().nominalDeclarationName(declaration));
         if (!std.mem.eql(u8, name, type_name)) continue;
         out[count] = .{
-            .module_identity = app.canonical_names.moduleIdentityBytes(declaration.nominal.module).*,
+            .module_identity = app.nameStore().moduleIdentityBytes(declaration.nominal.module).*,
             .source_decl = declaration.nominal.source_decl,
         };
         count += 1;
@@ -9041,7 +9021,7 @@ test "platform requirement relation specializes identity reached through app ali
     try std.testing.expectEqual(@as(usize, 1), relations.len);
 
     const relation = relations[0];
-    const payload = platform_artifact.checked_types.payload(relation.requested_source_ty_payload);
+    const payload = platform_artifact.typeStore().payload(relation.requested_source_ty_payload);
     try std.testing.expect(payload != .pending);
 }
 
@@ -9218,11 +9198,11 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     try std.testing.expectEqual(@as(usize, 1), table.solutions.len);
     const solution = table.solutions[0];
     try std.testing.expectEqual(@as(u32, 1), solution.identity_len);
-    const identity_payload = app_artifact.checked_types.payload(table.identitySlice(solution)[0]);
+    const identity_payload = app_artifact.typeStore().payload(table.identitySlice(solution)[0]);
     try std.testing.expect(identity_payload == .alias);
     try std.testing.expectEqualStrings(
         "Model",
-        app_artifact.canonical_names.typeNameText(identity_payload.alias.name),
+        app_artifact.nameStore().typeNameText(identity_payload.alias.name),
     );
     try std.testing.expect(identity_payload.alias.owner_module.eql(app_artifact.key.digest()));
 
@@ -9233,7 +9213,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     const platform_artifact = coord.executableRootCheckedArtifact();
     const relations = platform_artifact.platform_requirement_relations.relations;
     try std.testing.expectEqual(@as(usize, 1), relations.len);
-    try std.testing.expect(platform_artifact.checked_types.payload(relations[0].requested_source_ty_payload) != .pending);
+    try std.testing.expect(platform_artifact.typeStore().payload(relations[0].requested_source_ty_payload) != .pending);
 }
 
 fn writeHostedDistinctnessFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {

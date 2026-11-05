@@ -196,7 +196,7 @@ pub const BuildError = eval.CompileTimeFinalization.RuntimeMaterializationError 
 /// `unit`'s object, from the cache or built and filed there.
 pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const gpa = unit.gpa;
-    const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
+    const module_name = unit.artifact.nameStore().moduleNameText(unit.artifact.module_identity.module_name);
     if (try restore(gpa, unit.cache_manager, unit.key, unit.interfaces)) |entry| {
         defer object_cache.deinitEntry(gpa, entry);
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });

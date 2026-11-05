@@ -4125,8 +4125,11 @@ cache is enabled; a `--no-cache` build serializes nothing.
 A platform/app pairing entry is keyed by the content hashes of the platform's
 and the app's checked entries. It holds only the pairing's evaluation output:
 the completed app-dependent evaluation results and their recorded debug
-observations. It never holds bodies, types, templates, source environments or a
-live checker continuation, because a pairing rewrites none of those. Only a
+observations. It never holds bodies, types, templates, names, relations, root
+requests, source environments or a live checker continuation, because a
+pairing rewrites none of those. A hit is installed over a pairing created from
+the two modules exactly as without a hit, and every other fact of the pairing
+is computed on demand. Only a
 completed pairing without new checking or evaluation diagnostics may be
 cached; already-replayed earlier-stage reports do not prevent caching. A hit
 consumes its stored outcomes and replays its recorded debug observations without
@@ -5229,15 +5232,31 @@ requests and deferred diagnostics remain explicit checked data that a pairing
 activates.
 
 Platform/app composition is an overlay, not a clone. A pairing owns a map from
-each platform identity formal (its solver variable, including alias
-statements) to the app's solved actual. A type read of platform data under
-that pairing resolves through the map lazily, and the pairing memoizes each
-image it actually reads as a synthesized-type entry of its own. Facts that
-depend on the substituted types (direct targets, required-reference
-classification, root requests, exhaustiveness policy) are per-pairing
-on-demand analyses. Bodies, templates, names and roots are never rewritten:
-both lowering strategies read the platform's own CIR, templates and roots, and
-only the types they read through the pairing differ.
+each platform identity formal (its solver variable, including each for-clause
+alias statement's roots) to the app's solved actual, projected into the
+platform's store once when the pairing is created (`PairingOverlay`). A type
+read of platform data under that pairing resolves through the map on first
+demand (`CheckedTypeStoreView.pairedType`, `pairedScheme`; `CheckedBodies.typeOf`
+reads through it): a type that reaches no formal is its own image, and every
+other type's image is a synthesized type of the platform's store, created
+under the store's creation lock and memoized by the pairing, which publishes
+each image of a type that existed when it was created in a lock-free column.
+Whether a type reaches a formal is classified on demand too, over exactly the
+types the demanded type reaches. A consumer reads a template's, an entry or
+intrinsic wrapper's, a compile-time root's or a resolved reference's type
+through the pairing; root requests and provided exports carry their images.
+The paired artifact holds no type store or name store of its own: its types
+and names are its platform's (`typeStore`, `nameStore`), and anything the
+pairing interns (an app type's names, an evaluated constant's names) is
+interned into the platform's name store as a shared writer. Facts that depend
+on the substituted types (direct targets, required-reference classification,
+requirement relations, required bindings, provided exports, exhaustiveness
+policy) are per-pairing on-demand analyses; the pairing's root requests are
+built once when it is created (`pairingRootRequests`) and read its required
+bindings and reference classification. Bodies, templates, names, roots and
+tables are never copied or rewritten: both lowering strategies read the
+platform's own CIR, templates and roots, and only the types they read through
+the pairing differ.
 
 Calls to requirement declarations receive their direct-call classification
 from the bound app procedure kind using the checked output rule;
@@ -5403,8 +5422,16 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   procedure sites and per-template exhaustiveness sites are its
   platform's, its exhaustiveness policies are its own (it decides its
   platform's checks by its own root requests, after demanding its
-  platform's), and a pairing demands its platform's capabilities before it
-  borrows the platform's types. A constant's
+  platform's), and a pairing demands the capabilities of its platform, its
+  app and every module it resolves against before it creates any type. A
+  pairing's own slots (`PlatformPairing`) are its requirement relations and
+  required bindings (`relationTables`, which project each requirement's
+  solved app type into the platform's store under its creation lock), its
+  resolved value references (`valueRefs`: each requirement lookup classified
+  by its binding, the lookups of requirements the app rejected retired, and
+  each call of a bound procedure requirement given its direct target; it
+  demands `relationTables` first) and its provided exports at their types
+  under the pairing (`providedExports`). A constant's
   closure follows the template its compile-time root evaluates
   whether or not evaluation has stored the constant's value, so the result
   is the same before and after evaluation.
@@ -5503,8 +5530,8 @@ of a node's shape costs what reading the node costs:
   (`literalPatternIsCustom`), and whether a declaration binds a recursive
   value (`declIsRecursive`);
 - types, from the sealed store: `typeOf` is the node's solver variable's
-  checked type, or its image under the pairing's type column when the module
-  is read under a platform/app pairing (`PairingTypeColumn`); `exprType` and
+  checked type, or its image under the pairing when the module is read
+  under a platform/app pairing (`CheckedTypeStoreView.pairedType`); `exprType` and
   `patternType` are a node's own type (a top-level definition's pattern is
   read at the definition's type); `valueType` is the type a parent reads an
   expression at;

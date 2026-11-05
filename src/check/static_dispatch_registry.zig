@@ -2665,7 +2665,7 @@ pub const StaticDispatchPlanTable = struct {
         for (bodies.index().node_kinds, 0..) |kind, raw| {
             if (kind != .pattern) continue;
             const pattern: CIR.Pattern.Idx = @fromBackingInt(@intCast(raw));
-            if (bodies.literalPatternGuard(pattern) == null) continue;
+            if (!bodies.literalPatternIsCustom(pattern)) continue;
             const source = module_env.store.literalDispatchPlanForNode(@fromBackingInt(@intCast(raw))) orelse unreachable; // literalPatternGuard reports only pattern nodes that carry a literal dispatch plan
             const context = source.patternContext(&module_env.store) orelse unreachable; // recordLiteralDispatchPlan allocates a pattern context for every pattern node's plan
             std.debug.assert(context.equality_fn_var_plus_one != 0);
@@ -3289,7 +3289,7 @@ fn literalNodeConverts(bodies: anytype, node: u32, kind: LiteralConversionKind) 
                 .quote => data == .str and bodies.quoteIsCustom(node),
             };
         },
-        .pattern => return bodies.literalPatternGuard(@fromBackingInt(@intCast(node))) != null,
+        .pattern => return bodies.literalPatternIsCustom(@fromBackingInt(@intCast(node))),
         .statement, .unreached => return false,
     }
 }

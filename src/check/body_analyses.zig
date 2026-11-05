@@ -1613,7 +1613,7 @@ const InspectElision = struct {
             }
             try self.chain.append(self.allocator, position);
             if (!elisionCandidate(bodies.nodeTag(raw))) break false;
-            if (bodies.rowCoercion(current) != null) break false;
+            if (bodies.hasRowCoercion(current)) break false;
             const data = bodies.exprData(current);
             switch (data) {
                 .lambda, .closure, .lookup_local, .lookup_external, .lookup_required => break true,
@@ -1621,7 +1621,7 @@ const InspectElision = struct {
                 .numeral, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => break false,
             }
             const access = data.field_access;
-            if (bodies.rowCoercion(access.receiver) != null) break false;
+            if (bodies.hasRowCoercion(access.receiver)) break false;
             const receiver = bodies.exprData(access.receiver);
             if (receiver != .record) break false;
             const record = receiver.record;
@@ -1630,7 +1630,7 @@ const InspectElision = struct {
             // field directly; `.?` segments and longer chains evaluate more
             // than the field value, so they are never elided here.
             if (access.segments.len != 1) break false;
-            const segment = bodies.fieldAccessSegment(access.segments, 0);
+            const segment = try bodies.fieldAccessSegment(access.segments, 0);
             if (segment.mode != .required) break false;
             const field = bodies.recordField(record.fields[0]);
             if (field.label != segment.field_name) break false;

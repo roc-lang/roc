@@ -832,13 +832,14 @@ pub const Program = struct {
         var sealed_slots: std.ArrayList(u32) = .empty;
         defer sealed_slots.deinit(self.allocator);
         const evidence_params = try view.view.dispatch().evidenceParams(template_id);
+        const template_fn_ty = try view.view.checked_types.pairedType(template.checked_fn_root);
         for (checked_scheme_vars, 0..) |variable, slot| {
             // A platform requirement's identity variable is the app type
             // this program lowers the platform at (`solvePlatformIdentities`):
             // every mention converts to that type, so it is no hidden
             // parameter either.
             if (self.converter().platformIdentity(module_index, variable) != null) continue;
-            if (try self.converter().sealedSchemeVar(module_index, variable, template.checked_fn_root, evidence_params)) {
+            if (try self.converter().sealedSchemeVar(module_index, variable, template_fn_ty, evidence_params)) {
                 try sealed_slots.append(self.allocator, @intCast(slot));
                 continue;
             }
@@ -855,7 +856,7 @@ pub const Program = struct {
         const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.items.len);
         for (bound, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
         const env: types.Env = .{ .module = module_index, .vars = scheme_vars.items, .bound = bound };
-        const fn_ty = try self.converter().convert(module_index, template.checked_fn_root, env);
+        const fn_ty = try self.converter().convert(module_index, template_fn_ty, env);
         const signature = switch (self.store.get(fn_ty)) {
             .function => |function| function,
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a procedure template's checked root is not a function type"),
@@ -1984,7 +1985,7 @@ pub const Program = struct {
         const key: WorkerKey = .{ .default = .{ .module = module_index, .expr = expr } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
-        const ret = try self.converter().convert(module_index, view.bodies().exprType(expr), .{ .module = module_index, .vars = &.{}, .bound = &.{} });
+        const ret = try self.converter().convert(module_index, try view.bodies().exprType(expr), .{ .module = module_index, .vars = &.{}, .bound = &.{} });
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const identity = self.workerIdentity(key);
         const imported = !self.ownsModule(module_index);
@@ -2658,7 +2659,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
 /// Whether checking rejected `template`'s signature: it has no type to lower
 /// at, and every use of it is a runtime error of its own.
 fn templateRejected(program: *Program, view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) Allocator.Error!bool {
-    return try program.converter().hasError(view.index, template.checked_fn_root);
+    return try program.converter().hasError(view.index, try view.view.checked_types.pairedType(template.checked_fn_root));
 }
 
 /// Whether a module unit emits `template` (design.md "Per-Module Output"):

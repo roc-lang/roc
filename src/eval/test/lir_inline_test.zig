@@ -9472,7 +9472,7 @@ test "custom literal field default gets an ordinary conversion root" {
     var quote_roots: usize = 0;
     const bodies = resources.checked_artifact.bodies();
     for (bodies.defaultExprs()) |default_expr| {
-        const conversion = resources.checked_artifact.compile_time_roots.root(bodies.literalConversion(default_expr).conversion_root orelse
+        const conversion = resources.checked_artifact.compile_time_roots.root((try bodies.literalConversion(default_expr)).conversion_root orelse
             return error.TestUnexpectedResult);
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
@@ -9484,7 +9484,7 @@ test "custom literal field default gets an ordinary conversion root" {
     try std.testing.expectEqual(@as(usize, 1), quote_roots);
 
     // A root link needs its proof of independence: the conversion is closed.
-    const plan_id = bodies.literalConversion(bodies.defaultExprs()[0]).plan orelse return error.TestUnexpectedResult;
+    const plan_id = (try bodies.literalConversion(bodies.defaultExprs()[0])).plan orelse return error.TestUnexpectedResult;
     try std.testing.expect((try resources.checked_artifact.dispatch().plan(plan_id)).resolution == .direct_closed);
 }
 

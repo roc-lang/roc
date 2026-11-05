@@ -269,7 +269,7 @@ const Extractor = struct {
         const input = self.inputs.items[input_index];
         const module_env = input.module_env;
         const view = input.artifact.typesView();
-        const names = &input.artifact.canonical_names;
+        const names = input.artifact.nameStore();
         self.current_input = input_index;
         self.current_module = input.exposed_name;
 
@@ -380,7 +380,7 @@ const Extractor = struct {
         self.current_item = "";
 
         const view = input.artifact.typesView();
-        const names = &input.artifact.canonical_names;
+        const names = input.artifact.nameStore();
 
         var exposed_names = try exposedNameSet(self.gpa, input);
         defer exposed_names.deinit(self.gpa);

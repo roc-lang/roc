@@ -1586,7 +1586,7 @@ fn findHostedBindingView(
     relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
 ) ?HostedBindingView {
     if (root_artifact.module_identity.kind == .platform) {
-        return .{ .table = &root_artifact.hosted_bindings, .names = &root_artifact.canonical_names };
+        return .{ .table = &root_artifact.hosted_bindings, .names = root_artifact.nameStore() };
     }
     for (imported_artifacts) |view| {
         if (view.module_identity.kind == .platform) {
@@ -1774,7 +1774,7 @@ fn checkedInterpreterHostIdentity(
     updateHashBytes(&hasher, "roc-run-checked-host-interface-v3");
     updateHashU32(&hasher, @backingInt(target_usize));
 
-    const declarations_hash = try root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names, root_artifact.typesView());
+    const declarations_hash = try root_artifact.platform_required_declarations.identityHash(root_artifact.nameStore(), root_artifact.typesView());
     hasher.update(&declarations_hash);
     updatePlatformAppRelationIdentity(&hasher, root_artifact);
     updateHostBoundaryIdentity(&hasher, root_metadata);
@@ -9405,8 +9405,8 @@ fn buildBoxyLibraryObjects(
     };
     if (reach_session) |*open| try open.submit(.{ .id = 0, .context = &reach_task, .run = BoxyReachTask.run }) else reach_task.compute();
     if (dev_diagnostics.isSet(.trace_boxy_work)) {
-        std.debug.print("boxy-work: root {s} key {s} codegen {s} identity {s}\n", .{ root_artifact.canonical_names.moduleNameText(root_artifact.module_identity.module_name), &std.fmt.bytesToHex(root_artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.module_identity.stable_hash[0..8], .lower) });
-        for (units.items) |artifact| std.debug.print("boxy-work: unit {s} key {s} codegen {s} identity {s}\n", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), &std.fmt.bytesToHex(artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.module_identity.stable_hash[0..8], .lower) });
+        std.debug.print("boxy-work: root {s} key {s} codegen {s} identity {s}\n", .{ root_artifact.nameStore().moduleNameText(root_artifact.module_identity.module_name), &std.fmt.bytesToHex(root_artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.module_identity.stable_hash[0..8], .lower) });
+        for (units.items) |artifact| std.debug.print("boxy-work: unit {s} key {s} codegen {s} identity {s}\n", .{ artifact.nameStore().moduleNameText(artifact.module_identity.module_name), &std.fmt.bytesToHex(artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.module_identity.stable_hash[0..8], .lower) });
         if (platform) |view| std.debug.print("boxy-work: platform {s} key {s}\n", .{ view.module_env.module_name, &std.fmt.bytesToHex(view.key.bytes[0..8], .lower) });
     }
     var index_by_key = std.AutoHashMap([32]u8, u32).init(ctx.gpa);

@@ -1910,7 +1910,7 @@ const StaticDataBuilder = struct {
             const request = self.requestedLayout(data.const_ref);
             const initializer = request.initializer orelse
                 staticDataInvariant("provided static data export had no closed LIR initializer");
-            const entrypoint_name = self.root.module.canonical_names.externalSymbolNameText(data.ffi_symbol);
+            const entrypoint_name = self.root.module.nameStore().externalSymbolNameText(data.ffi_symbol);
             const symbol_name = try self.allocator.dupe(u8, entrypoint_name);
             errdefer self.allocator.free(symbol_name);
 

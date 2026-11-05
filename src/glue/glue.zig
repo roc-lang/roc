@@ -237,13 +237,14 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         const artifact = mod.semantic.checked_artifact orelse return error.ModuleRetrieval;
         type_table.clearVarMap();
 
-        try provides_entries.ensureUnusedCapacity(gpa, artifact.provided_exports.exports.len);
-        for (artifact.provided_exports.exports) |provided| {
+        const provided_exports = try artifact.providedExports();
+        try provides_entries.ensureUnusedCapacity(gpa, provided_exports.exports.len);
+        for (provided_exports.exports) |provided| {
             const source_name, const ffi_symbol = switch (provided) {
                 .procedure => |procedure| .{ procedure.source_name, procedure.ffi_symbol },
                 .data => |data| .{ data.source_name, data.ffi_symbol },
             };
-            type_table.boundary_value_name = artifact.canonical_names.exportNameText(source_name);
+            type_table.boundary_value_name = artifact.nameStore().exportNameText(source_name);
             defer type_table.boundary_value_name = null;
             const exported: CollectedProvidedExport = switch (provided) {
                 .procedure => |procedure| .{ .procedure = type_table.providedProcedureSignature(artifact, procedure.checked_type) catch |err| switch (err) {
@@ -257,8 +258,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             };
             var entry = CollectedProvidesEntry{ .name = &.{}, .ffi_symbol = &.{}, .exported = exported };
             errdefer entry.deinit(gpa);
-            entry.name = try gpa.dupe(u8, artifact.canonical_names.exportNameText(source_name));
-            entry.ffi_symbol = try gpa.dupe(u8, artifact.canonical_names.externalSymbolNameText(ffi_symbol));
+            entry.name = try gpa.dupe(u8, artifact.nameStore().exportNameText(source_name));
+            entry.ffi_symbol = try gpa.dupe(u8, artifact.nameStore().externalSymbolNameText(ffi_symbol));
             provides_entries.appendAssumeCapacity(entry);
         }
         break;
@@ -908,7 +909,7 @@ fn collectHostedProcGlobalIndices(
                 .artifact_key = .{ .bytes = binding.target_checked_module.bytes },
                 .def_idx = binding.target_def,
                 .index = dispatch_index,
-                .symbol = platform.canonical_names.externalSymbolNameText(binding.external_symbol_name),
+                .symbol = platform.nameStore().externalSymbolNameText(binding.external_symbol_name),
             });
         }
         return try indices.toOwnedSlice(allocator);
@@ -1535,7 +1536,7 @@ const TypeTable = struct {
         saved: []?BoundSource,
         bound_formals: []bool,
     ) Allocator.Error!void {
-        const formals = lookup.declaration.formalArgs(&lookup.artifact.checked_types);
+        const formals = lookup.declaration.formalArgs(lookup.artifact.typeStore());
         if (formals.len != nominal.args.len) glueInvariant("nominal application arity disagreed with its declaration in glue metadata opening", .{});
 
         for (formals, nominal.args, saved, bound_formals) |formal, arg, *slot, *is_bound| {
@@ -1557,7 +1558,7 @@ const TypeTable = struct {
         saved: []const ?BoundSource,
         bound_formals: []const bool,
     ) void {
-        const formals = lookup.declaration.formalArgs(&lookup.artifact.checked_types);
+        const formals = lookup.declaration.formalArgs(lookup.artifact.typeStore());
         for (formals, saved, bound_formals) |formal, slot, is_bound| {
             if (!is_bound) continue;
             const fkey = TypeTableKey{ .artifact_key = lookup.artifact.key, .checked_type = formal };
@@ -1575,7 +1576,7 @@ const TypeTable = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
     ) TypeTableError!HostedFunctionTypeMetadata {
-        return self.metadataForFunctionPayload(artifact, CheckedArtifact.checkedFunctionPayload(&artifact.checked_types, checked_type, "hosted declaration"));
+        return self.metadataForFunctionPayload(artifact, CheckedArtifact.checkedFunctionPayload(artifact.typeStore(), checked_type, "hosted declaration"));
     }
 
     /// The signature of a provided procedure export, whose arguments and
@@ -1585,7 +1586,7 @@ const TypeTable = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
     ) TypeTableError!CollectedFunctionSignature {
-        return self.signatureRoots(artifact, CheckedArtifact.checkedFunctionPayload(&artifact.checked_types, checked_type, "provided procedure export"));
+        return self.signatureRoots(artifact, CheckedArtifact.checkedFunctionPayload(artifact.typeStore(), checked_type, "provided procedure export"));
     }
 
     /// Register a function's result and arguments as roots and return their
@@ -1656,8 +1657,8 @@ const TypeTable = struct {
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
                 return std.mem.lessThan(
                     u8,
-                    ctx.fields[a].artifact.canonical_names.recordFieldLabelText(ctx.fields[a].field.name),
-                    ctx.fields[b].artifact.canonical_names.recordFieldLabelText(ctx.fields[b].field.name),
+                    ctx.fields[a].artifact.nameStore().recordFieldLabelText(ctx.fields[a].field.name),
+                    ctx.fields[b].artifact.nameStore().recordFieldLabelText(ctx.fields[b].field.name),
                 );
             }
         };
@@ -1674,7 +1675,7 @@ const TypeTable = struct {
         for (indices) |idx| {
             const entry = fields.items[idx];
             const field = entry.field;
-            const name = try self.gpa.dupe(u8, entry.artifact.canonical_names.recordFieldLabelText(field.name));
+            const name = try self.gpa.dupe(u8, entry.artifact.nameStore().recordFieldLabelText(field.name));
             errdefer self.gpa.free(name);
             const type_str = try self.typeStringAllocBound(entry.artifact, field.ty);
             errdefer self.gpa.free(type_str);
@@ -1769,7 +1770,7 @@ const TypeTable = struct {
         buf: *std.ArrayList(u8),
         active: *std.AutoHashMap(TypeTableKey, void),
     ) Allocator.Error!void {
-        const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
+        const name = TypeTable.getTypeDisplayName(artifact.nameStore().typeNameText(nominal.name));
         try buf.appendSlice(self.gpa, name);
         if (nominal.args.len == 0) return;
         try buf.append(self.gpa, '(');
@@ -1827,8 +1828,8 @@ const TypeTable = struct {
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
                 return std.mem.lessThan(
                     u8,
-                    ctx.fields[a].artifact.canonical_names.recordFieldLabelText(ctx.fields[a].field.name),
-                    ctx.fields[b].artifact.canonical_names.recordFieldLabelText(ctx.fields[b].field.name),
+                    ctx.fields[a].artifact.nameStore().recordFieldLabelText(ctx.fields[a].field.name),
+                    ctx.fields[b].artifact.nameStore().recordFieldLabelText(ctx.fields[b].field.name),
                 );
             }
         };
@@ -1838,7 +1839,7 @@ const TypeTable = struct {
         for (indices, 0..) |src_idx, i| {
             if (i > 0) try buf.appendSlice(self.gpa, ", ");
             const field = all_fields.items[src_idx];
-            try buf.appendSlice(self.gpa, field.artifact.canonical_names.recordFieldLabelText(field.field.name));
+            try buf.appendSlice(self.gpa, field.artifact.nameStore().recordFieldLabelText(field.field.name));
             // An optional field renders its kind (`name ?: T`), mirroring the
             // solver-side TypeWriter (design.md "Field Kinds").
             try buf.appendSlice(self.gpa, if (field.field.kind.tag == .optional) " ?: " else " : ");
@@ -1877,7 +1878,7 @@ const TypeTable = struct {
         try buf.append(self.gpa, '[');
         for (all_tags.items, 0..) |tag, i| {
             if (i > 0) try buf.appendSlice(self.gpa, ", ");
-            try buf.appendSlice(self.gpa, artifact.canonical_names.tagLabelText(tag.name));
+            try buf.appendSlice(self.gpa, artifact.nameStore().tagLabelText(tag.name));
             const tag_args = tag.args;
             if (tag_args.len > 0) {
                 try buf.append(self.gpa, '(');
@@ -3034,7 +3035,7 @@ const TypeTable = struct {
         nominal: CheckedArtifact.CheckedNominalType,
         position: ValuePosition,
     ) TypeTableError!CollectedTypeRepr {
-        const display_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
+        const display_name = TypeTable.getTypeDisplayName(artifact.nameStore().typeNameText(nominal.name));
 
         if (nominal.builtin) |builtin_nominal| {
             switch (builtin_nominal) {
@@ -3095,7 +3096,7 @@ const TypeTable = struct {
             // Open the declaration's backing TEMPLATE with the application's
             // args substituted for the declaration's formals (issue #9983).
             const decl = lookup.declaration;
-            const formals = decl.formalArgs(&lookup.artifact.checked_types);
+            const formals = decl.formalArgs(lookup.artifact.typeStore());
             if (formals.len != nominal.args.len) glueInvariant("nominal application arity disagreed with its declaration in glue backing opening", .{});
 
             // Resolve the application's args through the CURRENT (outer)
@@ -3178,7 +3179,7 @@ const TypeTable = struct {
 
         fn identity(self: NominalDeclarationLookup) NominalDeclIdentity {
             return .{
-                .module = self.artifact.canonical_names.moduleIdentityBytes(self.declaration.nominal.module).*,
+                .module = self.artifact.nameStore().moduleIdentityBytes(self.declaration.nominal.module).*,
                 .source_decl = self.declaration.nominal.source_decl,
             };
         }
@@ -3203,19 +3204,19 @@ const TypeTable = struct {
         return switch (nominal.representation) {
             .local_declaration => |declaration_id| .{
                 .artifact = artifact,
-                .declaration = artifact.checked_types.nominalDeclarationById(declaration_id),
+                .declaration = artifact.typeStore().nominalDeclarationById(declaration_id),
             },
             .imported_declaration => |imported| blk: {
                 const owner = self.artifacts_by_key.get(CheckedArtifact.importedNominalDeclarationModuleId(imported)) orelse
                     glueInvariant("imported nominal declaration referenced an artifact that glue did not load", .{});
                 break :blk .{
                     .artifact = owner,
-                    .declaration = owner.checked_types.nominalDeclarationById(imported.declaration),
+                    .declaration = owner.typeStore().nominalDeclarationById(imported.declaration),
                 };
             },
             .local_box_payload_capability => |capability_ref| blk: {
                 const capability = artifact.typesView().demandedInterfaceCapabilities().boxPayloadCapability(capability_ref.capability);
-                const declaration = artifact.checked_types.nominalDeclaration(capability.nominal) orelse
+                const declaration = artifact.typeStore().nominalDeclaration(capability.nominal) orelse
                     glueInvariant("boxed payload capability referenced a nominal declaration that is not in the owner artifact", .{});
                 break :blk .{ .artifact = artifact, .declaration = declaration };
             },
@@ -3223,7 +3224,7 @@ const TypeTable = struct {
                 const owner = self.artifacts_by_key.get(CheckedArtifact.importedBoxPayloadCapabilityModuleId(capability_ref)) orelse
                     glueInvariant("imported boxed payload capability referenced an artifact that glue did not load", .{});
                 const capability = owner.typesView().demandedInterfaceCapabilities().boxPayloadCapability(capability_ref.capability);
-                const declaration = owner.checked_types.nominalDeclaration(capability.nominal) orelse
+                const declaration = owner.typeStore().nominalDeclaration(capability.nominal) orelse
                     glueInvariant("imported boxed payload capability referenced a nominal declaration that is not in the owner artifact", .{});
                 break :blk .{ .artifact = owner, .declaration = declaration };
             },
@@ -3266,7 +3267,7 @@ const TypeTable = struct {
         var populated: usize = 0;
         errdefer self.freeCollectedRecordFields(collected_fields, populated);
         for (fields, 0..) |field, i| {
-            const field_name = artifact.canonical_names.recordFieldLabelText(field.name);
+            const field_name = artifact.nameStore().recordFieldLabelText(field.name);
             // design.md "Field Kinds": `required` and `defaulted` fields hold
             // their value inline. Checking rejects optional fields in every
             // host-visible signature, so one reaching glue is a checker bug.
@@ -3348,7 +3349,7 @@ const TypeTable = struct {
                 return ctx.names.tagLabelTextLessThan(ctx.tags[a].name, ctx.tags[b].name);
             }
         };
-        std.mem.sort(usize, tag_indices, SortCtx{ .tags = all_tags.items, .names = &artifact.canonical_names }, SortCtx.lessThan);
+        std.mem.sort(usize, tag_indices, SortCtx{ .tags = all_tags.items, .names = artifact.nameStore() }, SortCtx.lessThan);
 
         // Collect tags in discriminant order.
         const collected_tags = try self.gpa.alloc(CollectedTagInfo, all_tags.items.len);
@@ -3364,7 +3365,7 @@ const TypeTable = struct {
         // Also build auto-generated name from variant names joined with "Or"
         var name_len: usize = 0;
         for (tag_indices) |src_idx| {
-            const nt = artifact.canonical_names.tagLabelText(all_tags.items[src_idx].name);
+            const nt = artifact.nameStore().tagLabelText(all_tags.items[src_idx].name);
             name_len += nt.len;
         }
         // Add "Or" separators between names
@@ -3375,7 +3376,7 @@ const TypeTable = struct {
 
         for (tag_indices, 0..) |src_idx, dst_idx| {
             const tag = all_tags.items[src_idx];
-            const name_text = artifact.canonical_names.tagLabelText(tag.name);
+            const name_text = artifact.nameStore().tagLabelText(tag.name);
 
             const tag_args = tag.args;
             const payload_ids = try self.gpa.alloc(u64, tag_args.len);
@@ -4171,14 +4172,14 @@ fn checkedTypePayload(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     checked_type: CheckedArtifact.CheckedTypeId,
 ) CheckedArtifact.CheckedTypePayload {
-    return artifact.checked_types.payload(checked_type);
+    return artifact.typeStore().payload(checked_type);
 }
 
 fn checkedTypeRootForScheme(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     scheme: CheckedArtifact.CheckedTypeSchemeId,
 ) CheckedArtifact.CheckedTypeId {
-    return artifact.checked_types.scheme(scheme).root;
+    return artifact.typeStore().scheme(scheme).root;
 }
 
 fn appendRecordRowFields(
@@ -4218,7 +4219,7 @@ fn sortRecordFieldsByName(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     fields: []CheckedArtifact.CheckedRecordField,
 ) void {
-    std.mem.sort(CheckedArtifact.CheckedRecordField, fields, &artifact.canonical_names, checkedRecordFieldLessThan);
+    std.mem.sort(CheckedArtifact.CheckedRecordField, fields, artifact.nameStore(), checkedRecordFieldLessThan);
 }
 
 fn checkedRecordFieldLessThan(
@@ -4312,7 +4313,7 @@ fn writeNominalTypeString(
     buf: *std.ArrayList(u8),
     active: *collections.DenseMap(CheckedArtifact.CheckedTypeId, void),
 ) Allocator.Error!void {
-    const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
+    const name = TypeTable.getTypeDisplayName(artifact.nameStore().typeNameText(nominal.name));
     try buf.appendSlice(gpa, name);
     if (nominal.args.len == 0) return;
     try buf.append(gpa, '(');
@@ -4374,13 +4375,13 @@ fn writeRecordTypeString(
             );
         }
     };
-    std.mem.sort(usize, indices, SortCtx{ .fields = all_fields.items, .names = &artifact.canonical_names }, SortCtx.lessThan);
+    std.mem.sort(usize, indices, SortCtx{ .fields = all_fields.items, .names = artifact.nameStore() }, SortCtx.lessThan);
 
     try buf.appendSlice(gpa, "{ ");
     for (indices, 0..) |src_idx, i| {
         if (i > 0) try buf.appendSlice(gpa, ", ");
         const field = all_fields.items[src_idx];
-        try buf.appendSlice(gpa, artifact.canonical_names.recordFieldLabelText(field.name));
+        try buf.appendSlice(gpa, artifact.nameStore().recordFieldLabelText(field.name));
         // An optional field renders its kind (`name ?: T`), mirroring the
         // solver-side TypeWriter (design.md "Field Kinds").
         try buf.appendSlice(gpa, if (field.kind.tag == .optional) " ?: " else " : ");
@@ -4419,7 +4420,7 @@ fn writeTagUnionTypeString(
     try buf.append(gpa, '[');
     for (all_tags.items, 0..) |tag, i| {
         if (i > 0) try buf.appendSlice(gpa, ", ");
-        try buf.appendSlice(gpa, artifact.canonical_names.tagLabelText(tag.name));
+        try buf.appendSlice(gpa, artifact.nameStore().tagLabelText(tag.name));
         const tag_args = tag.args;
         if (tag_args.len > 0) {
             try buf.append(gpa, '(');
@@ -4443,8 +4444,8 @@ fn collectModuleTypeInfo(
 ) TypeTableError!?CollectedModuleTypeInfo {
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
     errdefer gpa.free(main_type_str);
-    for (artifact.checked_types.nominal_declarations.items()) |declaration| {
-        const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(artifact.checked_types.nominalDeclarationName(declaration)));
+    for (artifact.typeStore().nominal_declarations.items()) |declaration| {
+        const type_name = TypeTable.getTypeDisplayName(artifact.nameStore().typeNameText(artifact.typeStore().nominalDeclarationName(declaration)));
         if (std.mem.eql(u8, type_name, module_name)) {
             gpa.free(main_type_str);
             main_type_str = try typeStringAlloc(gpa, artifact, declaration.declaration_root);
@@ -4501,7 +4502,7 @@ fn collectModuleTypeInfo(
         const is_member = member_by_def.get(def_idx) != null;
         const hosted_proc_for_entry = hostedProcForDef(&artifact.hosted_procs, def_idx);
         if (!is_member and hosted_proc_for_entry == null) continue;
-        const source_name = artifact.canonical_names.exportNameText(entry.source_name);
+        const source_name = artifact.nameStore().exportNameText(entry.source_name);
         const local_name = if (is_member)
             try moduleLocalMemberName(gpa, module_name, source_name)
         else

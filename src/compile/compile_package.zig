@@ -203,9 +203,7 @@ pub const PlatformRequirementsCheckOutput = struct {
 /// Public `ArtifactPublicationInputs` declaration.
 pub const ArtifactPublicationInputs = struct {
     available_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
-    relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
-    platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
     problem_store: ?*check.problem.Store = null,
     /// Waits on the published module's key slots.
@@ -591,7 +589,6 @@ pub fn typeCheckModule(
         imported_artifacts,
         .{
             .platform_requirement_context = platform_requirement_context,
-            .platform_app_relation = null,
             .explicit_roots = explicit_roots,
             .available_artifacts = available_artifacts,
             .problem_store = &checker.problems,
@@ -670,9 +667,7 @@ pub fn publishFromPrebuiltModules(
             .io = publication.io,
             .imports = imported_artifacts,
             .available_artifacts = publication.available_artifacts,
-            .relation_artifacts = publication.relation_artifacts,
             .platform_requirement_context = publication.platform_requirement_context,
-            .platform_app_relation = publication.platform_app_relation,
             .explicit_roots = publication.explicit_roots,
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
             .evaluation_phase = publication.evaluation_phase,

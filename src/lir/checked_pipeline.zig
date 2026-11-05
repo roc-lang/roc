@@ -2172,7 +2172,7 @@ fn collectStaticDataRequests(
 
     if (!include_provided) return try requests.toOwnedSlice(allocator);
 
-    for (root.provided_exports.exports) |provided| {
+    for ((try root.providedExports()).exports) |provided| {
         switch (provided) {
             .data => |data| {
                 try requests.append(allocator, .{
@@ -2441,9 +2441,9 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
         const root = modules.root.module;
         try list.append(allocator, .{
             .key = root.key.bytes,
-            .name = root.canonical_names.moduleNameText(root.module_identity.display_module_name),
+            .name = root.nameStore().moduleNameText(root.module_identity.display_module_name),
             .kind = @tagName(root.module_identity.kind),
-            .names = &root.canonical_names,
+            .names = root.nameStore(),
             .types = root.typesView(),
             .templates = &root.checked_procedure_templates,
             .env = root.moduleEnvConst(),

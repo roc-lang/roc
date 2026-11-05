@@ -246,7 +246,7 @@ pub const Digests = struct {
     fn hashNominals(hasher: *Sha256, artifact: *const Artifact) void {
         const checked_types = artifact.typesView();
         for (checked_types.nominalDeclarationRows()) |declaration| {
-            hashBytes(hasher, artifact.canonical_names.typeNameText(checked_types.nominalDeclarationName(declaration)));
+            hashBytes(hasher, artifact.nameStore().typeNameText(checked_types.nominalDeclarationName(declaration)));
         }
     }
 
@@ -271,7 +271,7 @@ pub const Digests = struct {
         const schema = try artifact.dispatch().templateSchema(ref.template);
         hasher.update(std.mem.asBytes(&schema.vars.len));
         for (schema.params) |param| {
-            hashBytes(hasher, artifact.canonical_names.methodNameText(param.method));
+            hashBytes(hasher, artifact.nameStore().methodNameText(param.method));
             hasher.update(std.mem.asBytes(&(param.slot orelse @as(u32, std.math.maxInt(u32)))));
         }
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(templates.templateLiteralRequirements(&template).len))));
