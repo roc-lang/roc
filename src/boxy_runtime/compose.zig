@@ -526,6 +526,7 @@ const open_size = std.math.maxInt(u32);
 /// The key words of a recursive member: `key` names its type and `vars`
 /// are its type variables' descriptors. Caller deinits the scratch.
 fn recursiveKey(scratch: *Scratch(u64, 16), ops: *RocOps, key: *const u8, vars: []const *const TypeDesc) []const u64 {
+    if (comptime !experiment.intern) return &.{};
     const words = scratch.get(2 + vars.len, ops);
     words[0] = @backingInt(KeyTag.recursive);
     words[1] = ptrWord(key);
@@ -582,14 +583,17 @@ fn container(cache: *Cache, ops: *RocOps, comptime kind: Kind, child: *const Typ
 pub fn record(cache: *Cache, ops: *RocOps, fields: []const FieldInput) *const TypeDesc {
     var key_scratch: Scratch(u64, 64) = .{};
     defer key_scratch.deinit(ops);
-    const key = key_scratch.get(2 + (name_key_words + 1) * fields.len, ops);
-    key[0] = @backingInt(KeyTag.record);
-    key[1] = fields.len;
-    for (fields, 0..) |field, index| {
-        const at = 2 + (name_key_words + 1) * index;
-        putNameWords(key, at, field.name);
-        key[at + name_key_words] = ptrWord(field.desc);
-    }
+    const key: []const u64 = if (comptime experiment.intern) make_key: {
+        const words = key_scratch.get(2 + (name_key_words + 1) * fields.len, ops);
+        words[0] = @backingInt(KeyTag.record);
+        words[1] = fields.len;
+        for (fields, 0..) |field, index| {
+            const at = 2 + (name_key_words + 1) * index;
+            putNameWords(words, at, field.name);
+            words[at + name_key_words] = ptrWord(field.desc);
+        }
+        break :make_key words;
+    } else &.{};
     if (cache.lookup(key)) |existing| return existing;
 
     var rank_scratch: Scratch(u32, 32) = .{};
@@ -688,15 +692,18 @@ pub fn declaredRecord(cache: *Cache, ops: *RocOps, fields: []const DeclaredField
     var key_scratch: Scratch(u64, 64) = .{};
     defer key_scratch.deinit(ops);
     const words_per_field = name_key_words + 2;
-    const key = key_scratch.get(2 + words_per_field * fields.len, ops);
-    key[0] = @backingInt(KeyTag.declared_record);
-    key[1] = fields.len;
-    for (fields, 0..) |field, index| {
-        const at = 2 + words_per_field * index;
-        putNameWords(key, at, field.name);
-        key[at + name_key_words] = ptrWord(field.desc);
-        key[at + name_key_words + 1] = field.is_padding;
-    }
+    const key: []const u64 = if (comptime experiment.intern) make_key: {
+        const words = key_scratch.get(2 + words_per_field * fields.len, ops);
+        words[0] = @backingInt(KeyTag.declared_record);
+        words[1] = fields.len;
+        for (fields, 0..) |field, index| {
+            const at = 2 + words_per_field * index;
+            putNameWords(words, at, field.name);
+            words[at + name_key_words] = ptrWord(field.desc);
+            words[at + name_key_words + 1] = field.is_padding;
+        }
+        break :make_key words;
+    } else &.{};
     if (cache.lookup(key)) |existing| return existing;
 
     var named_count: u32 = 0;
@@ -758,10 +765,13 @@ pub fn args(cache: *Cache, ops: *RocOps, descs: []const *const TypeDesc) *const 
 fn positional(cache: *Cache, ops: *RocOps, comptime tag: KeyTag, descs: []const *const TypeDesc) *const TypeDesc {
     var key_scratch: Scratch(u64, 64) = .{};
     defer key_scratch.deinit(ops);
-    const key = key_scratch.get(2 + descs.len, ops);
-    key[0] = @backingInt(tag);
-    key[1] = descs.len;
-    for (descs, 0..) |d, index| key[2 + index] = ptrWord(d);
+    const key: []const u64 = if (comptime experiment.intern) make_key: {
+        const words = key_scratch.get(2 + descs.len, ops);
+        words[0] = @backingInt(tag);
+        words[1] = descs.len;
+        for (descs, 0..) |d, index| words[2 + index] = ptrWord(d);
+        break :make_key words;
+    } else &.{};
     if (cache.lookup(key)) |existing| return existing;
 
     var member_scratch: Scratch(Member, 32) = .{};
@@ -802,21 +812,24 @@ pub fn tagUnion(cache: *Cache, ops: *RocOps, variants: []const VariantInput) *co
     for (variants) |variant| key_len += name_key_words + 1 + variant.payload_count;
     var key_scratch: Scratch(u64, 64) = .{};
     defer key_scratch.deinit(ops);
-    const key = key_scratch.get(key_len, ops);
-    key[0] = @backingInt(KeyTag.tag_union);
-    key[1] = variants.len;
-    {
-        var at: usize = 2;
-        for (variants) |variant| {
-            putNameWords(key, at, variant.name);
-            key[at + name_key_words] = variant.payload_count;
-            at += name_key_words + 1;
-            for (variant.payloadSlice()) |payload| {
-                key[at] = ptrWord(payload);
-                at += 1;
+    const key: []const u64 = if (comptime experiment.intern) make_key: {
+        const words = key_scratch.get(key_len, ops);
+        words[0] = @backingInt(KeyTag.tag_union);
+        words[1] = variants.len;
+        {
+            var at: usize = 2;
+            for (variants) |variant| {
+                putNameWords(words, at, variant.name);
+                words[at + name_key_words] = variant.payload_count;
+                at += name_key_words + 1;
+                for (variant.payloadSlice()) |payload| {
+                    words[at] = ptrWord(payload);
+                    at += 1;
+                }
             }
         }
-    }
+        break :make_key words;
+    } else &.{};
     if (cache.lookup(key)) |existing| return existing;
 
     var rank_scratch: Scratch(u32, 32) = .{};

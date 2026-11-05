@@ -452,16 +452,19 @@ pub fn dictCompose(callable_fn: erased_callable.CallableFnPtr, capture_prefix: u
     var key_buffer: [16]u64 = undefined;
     var scratch: ?[*]u64 = null;
     const key_len = 3 + captures.len;
-    const key: []u64 = if (key_len <= key_buffer.len) key_buffer[0..key_len] else blk: {
-        const words = compose.scratchAlloc(u64, key_len, immortal_ops).ptr;
-        scratch = words;
-        break :blk words[0..key_len];
-    };
+    const key: []const u64 = if (comptime @import("experiment.zig").intern) make_key: {
+        const key_words: []u64 = if (key_len <= key_buffer.len) key_buffer[0..key_len] else blk: {
+            const words = compose.scratchAlloc(u64, key_len, immortal_ops).ptr;
+            scratch = words;
+            break :blk words[0..key_len];
+        };
+        key_words[0] = dict_compose_tag;
+        key_words[1] = @intFromPtr(callable_fn);
+        key_words[2] = capture_prefix;
+        for (captures, key_words[3..]) |capture, *word| word.* = capture;
+        break :make_key key_words;
+    } else &.{};
     defer if (scratch) |words| compose.scratchFree(u64, words[0..key_len], immortal_ops);
-    key[0] = dict_compose_tag;
-    key[1] = @intFromPtr(callable_fn);
-    key[2] = capture_prefix;
-    for (captures, key[3..]) |capture, *word| word.* = capture;
     if (dictionaryCache().lookup(key)) |existing| return @ptrCast(@constCast(existing));
 
     const capture_size = capture_prefix + captures.len * @sizeOf(usize);
@@ -490,14 +493,17 @@ pub fn dictRecord(methods: []const usize, immortal_ops: *RocOps) [*]const usize 
     var key_buffer: [16]u64 = undefined;
     var scratch: ?[*]u64 = null;
     const key_len = 1 + methods.len;
-    const key: []u64 = if (key_len <= key_buffer.len) key_buffer[0..key_len] else blk: {
-        const words = compose.scratchAlloc(u64, key_len, immortal_ops).ptr;
-        scratch = words;
-        break :blk words[0..key_len];
-    };
+    const key: []const u64 = if (comptime @import("experiment.zig").intern) make_key: {
+        const key_words: []u64 = if (key_len <= key_buffer.len) key_buffer[0..key_len] else blk: {
+            const words = compose.scratchAlloc(u64, key_len, immortal_ops).ptr;
+            scratch = words;
+            break :blk words[0..key_len];
+        };
+        key_words[0] = dict_record_tag;
+        for (methods, key_words[1..]) |method, *word| word.* = method;
+        break :make_key key_words;
+    } else &.{};
     defer if (scratch) |words| compose.scratchFree(u64, words[0..key_len], immortal_ops);
-    key[0] = dict_record_tag;
-    for (methods, key[1..]) |method, *word| word.* = method;
     if (dictionaryCache().lookup(key)) |existing| return @ptrCast(@alignCast(existing));
 
     const record: [*]usize = @ptrCast(@alignCast(compose.immortalBytes(immortal_ops, @max(methods.len, 1) * @sizeOf(usize), @alignOf(usize))));
