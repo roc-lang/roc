@@ -1458,7 +1458,7 @@ pub fn prepareCheckedModulesMonotype(
             checkedModules(modules),
             rootRequests(roots, layout_requests, static_data_requests),
             .{
-                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
@@ -1752,7 +1752,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
         .dict_seed_mode = if (target.zero_dict_seed) .comptime_zero else .runtime,
-        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
         .host_boundary_digests = target.host_boundary_digests,
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
@@ -1932,6 +1932,7 @@ fn finishLoweredOutput(
 
     try LirDump.run(&lowered.lir_result);
     if (SpecCensus.enabled()) try SpecCensus.runLir(allocator, &lowered.lir_result);
+    ProcCensus.run(&lowered.lir_result, target.specialization_strategy);
 
     if (root_count != 0 and lowered.lir_result.root_procs.items.len == 0) {
         checkedPipelineInvariant("explicit root set produced no LIR roots");
@@ -1986,7 +1987,7 @@ pub const PreparedBoxy = struct {
                 .run => .run,
                 .omit => .omit,
             },
-            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
             .list_in_place_map = target.list_in_place_map,
             .host_boundary_digests = target.host_boundary_digests,
             .compile_time = target.boxy_compile_time,
@@ -2390,6 +2391,42 @@ test "adopting completed compile-time values drops their initializers and identi
 /// function type or an erased callable, and the request and solved type
 /// digests. Never enabled by default; it only reads the finished stores, and a
 /// compiler built without developer diagnostics carries none of it.
+/// Print the procedures of every lowered LIR program (`ROC_PROC_CENSUS`):
+/// one `proc-census: program` line per program, numbered in lowering order,
+/// then one `proc-census:   proc` line per procedure with its debug name, so
+/// procedures one compilation compiles in more than one program can be
+/// counted. Selected at compile time, so a compiler that does not read
+/// developer diagnostics carries none of it.
+const ProcCensus = if (!base.dev_diagnostics.available) struct {
+    fn enabled() bool {
+        return false;
+    }
+
+    fn run(_: *const LirProgram.Result, _: SpecializationStrategy) void {}
+} else struct {
+    var programs: std.atomic.Value(u32) = .init(0);
+
+    fn enabled() bool {
+        return base.dev_diagnostics.isSet(.proc_census);
+    }
+
+    fn run(result: *const LirProgram.Result, strategy: SpecializationStrategy) void {
+        if (!enabled()) return;
+        const store = &result.store;
+        const program = programs.fetchAdd(1, .monotonic);
+        var with_body: usize = 0;
+        for (0..store.procSpecCount()) |index| {
+            if (store.getProcSpecImmediate(@fromBackingInt(@intCast(index))).body != null) with_body += 1;
+        }
+        std.debug.print("proc-census: program {d} ({s}): {d} procedures, {d} roots\n", .{ program, @tagName(strategy), with_body, result.root_procs.items.len });
+        for (0..store.procSpecCount()) |index| {
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+            if (store.getProcSpecImmediate(proc_id).body == null) continue;
+            std.debug.print("proc-census:   {d} {s}\n", .{ program, store.procDebugName(proc_id) orelse "?" });
+        }
+    }
+};
+
 const SpecCensus = if (!base.dev_diagnostics.available) struct {
     fn enabled() bool {
         return false;

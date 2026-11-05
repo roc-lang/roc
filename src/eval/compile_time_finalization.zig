@@ -938,14 +938,16 @@ pub fn finalizeProgram(
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
-    // The literal argument roots that read no value the Solved program
-    // computes complete first, so the specialization restores their values
-    // wherever it converts their literals at their types; the rest complete
-    // once that program's roots have.
-    try evaluateLiteralArgumentRoots(allocator, modules, lowering_modules, options, &debug_events, .independent);
+    // Every root whose evaluation reads no function value is the `.boxy`
+    // evaluator's, and completes first in one program, so the specialization
+    // restores every value it reads, as a compilation of cached modules
+    // does; the literal argument roots that read a value the Solved program
+    // computes complete once that program's roots have (design.md
+    // "Compile-Time Evaluation Under `.lss`").
+    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, .before_solved);
     var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, options, &debug_events, lss_runtime, demand_driven, null);
     errdefer specialized.deinit();
-    try evaluateLiteralArgumentRoots(allocator, modules, lowering_modules, options, &debug_events, .remaining);
+    try evaluateBoxyRoots(allocator, modules, lowering_modules, options, &debug_events, .after_solved);
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
     errdefer switch (runtime_stages) {
         .evaluation => {},
@@ -1034,27 +1036,35 @@ pub fn finalizeProgram(
     };
 }
 
-/// Which pending literal argument roots `evaluateLiteralArgumentRoots`
+/// Which pending roots of a Solved compilation `evaluateBoxyRoots`
 /// evaluates.
-const LiteralArgumentPhase = enum {
-    /// Those whose evaluation reads no value of another pending root, other
-    /// than one of these.
-    independent,
-    /// Every one still pending, with every pending root whose value one
-    /// reads: a root the Solved program did not demand.
-    remaining,
+const BoxyPhase = enum {
+    /// Before the Solved program is specialized: every pending root that
+    /// neither holds a function value nor reads, directly or through other
+    /// roots, a value of a root that does. A literal argument root holding a
+    /// function value counts as holding none: the `.boxy` evaluator
+    /// evaluates it for its outcome and discards the value.
+    before_solved,
+    /// After the Solved program's roots completed: every literal argument
+    /// root still pending, with every pending root whose value one reads (a
+    /// root the Solved program did not demand).
+    after_solved,
 };
 
-/// Evaluate the pending literal argument roots of a Solved compilation's
-/// modules with the `.boxy` evaluator, which owns them under either strategy
-/// (design.md "Literal Arguments"), and store their values in their modules.
-fn evaluateLiteralArgumentRoots(
+/// Evaluate pending roots of a Solved compilation's modules with the `.boxy`
+/// evaluator, and store their values in their modules (design.md
+/// "Compile-Time Evaluation Under `.lss`"). A root holding a function value
+/// is the Solved program's, since a `.boxy` function value means nothing to
+/// Monotype ("Stored Function Values"), and so is every root that reads one;
+/// a literal argument root is the `.boxy` evaluator's whatever it reads
+/// ("Literal Arguments").
+fn evaluateBoxyRoots(
     allocator: Allocator,
     modules: []const ProgramModule,
     lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
     options: Options,
     debug_events: *DebugEvents,
-    phase: LiteralArgumentPhase,
+    phase: BoxyPhase,
 ) FinalizeError!void {
     // The pending roots of the first artifact of each checked identity;
     // another artifact of the same identity repeats its results.
@@ -1074,7 +1084,8 @@ fn evaluateLiteralArgumentRoots(
             try pending.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
         }
     }
-    if (!any_literal) return;
+    if (pending.items.len == 0) return;
+    if (phase == .after_solved and !any_literal) return;
 
     const artifacts = try allocator.alloc(*checked.CheckedModuleArtifact, modules.len);
     defer allocator.free(artifacts);
@@ -1083,12 +1094,15 @@ fn evaluateLiteralArgumentRoots(
     defer graph.deinit(allocator);
     const chosen = try allocator.alloc(bool, pending.items.len);
     defer allocator.free(chosen);
-    for (pending.items, chosen) |root, *flag| flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument;
     switch (phase) {
-        // A root waits for the Solved program when its evaluation reads a
-        // value that program computes, directly or through another literal
-        // argument root.
-        .independent => {
+        // A root waits for the Solved program when it holds a function
+        // value or its evaluation reads a value of one that does, directly
+        // or through other roots.
+        .before_solved => {
+            for (pending.items, chosen) |root, *flag| {
+                flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument or
+                    !try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules.imports, root);
+            }
             var changed = true;
             while (changed) {
                 changed = false;
@@ -1102,10 +1116,13 @@ fn evaluateLiteralArgumentRoots(
                 }
             }
         },
-        .remaining => {
+        .after_solved => {
             var work = std.ArrayList(u32).empty;
             defer work.deinit(allocator);
-            for (chosen, 0..) |flag, ordinal| if (flag) try work.append(allocator, @intCast(ordinal));
+            for (pending.items, chosen, 0..) |root, *flag, ordinal| {
+                flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument;
+                if (flag.*) try work.append(allocator, @intCast(ordinal));
+            }
             while (work.pop()) |ordinal| for (graph.deps[ordinal]) |dep| {
                 if (chosen[dep]) continue;
                 chosen[dep] = true;
@@ -1117,15 +1134,7 @@ fn evaluateLiteralArgumentRoots(
     defer selected.deinit(allocator);
     for (pending.items, chosen) |root, flag| if (flag) try selected.append(allocator, root);
     if (selected.items.len == 0) return;
-    // A Solved compilation links no module objects, so a module's program
-    // lowers everything its roots reach; the literal argument roots of every
-    // module share one program, which lowers what they reach once. A root
-    // holding a function value is evaluated by its module's own programs
-    // (`evaluateFunctionRoots`).
-    const one_program = for (selected.items) |root| {
-        if (artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument) break false;
-    } else true;
-    try evaluateRootsBoxy(allocator, modules, lowering_modules, selected.items, options, debug_events, if (one_program) .one_program else .per_module);
+    try evaluateRootsBoxy(allocator, modules, lowering_modules, selected.items, options, debug_events);
     for (modules) |entry| {
         if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
     }
@@ -1876,7 +1885,7 @@ fn finalizeProgramBoxy(
         }
     }
 
-    try evaluateRootsBoxy(allocator, modules, lowering_modules, roots.items, options, &debug_events, .per_module);
+    try evaluateRootsBoxy(allocator, modules, lowering_modules, roots.items, options, &debug_events);
     // Every root is complete: a runtime program restores each value from
     // its module's store, and every literal of a generic body converts
     // through its literal argument (design.md "Literal Arguments").
@@ -1924,7 +1933,6 @@ fn evaluateRootsBoxy(
     roots: []const checked_root_graph.Root,
     options: Options,
     debug_events: *DebugEvents,
-    grouping: BoxyGrouping,
 ) FinalizeError!void {
     if (roots.len == 0) return;
     var evaluation_options = options;
@@ -1971,14 +1979,15 @@ fn evaluateRootsBoxy(
     }
     var images = BoxyLinkedImages{ .allocator = allocator };
     defer images.deinit();
-    var evaluations = switch (grouping) {
-        .per_module => try ModuleEvaluations.init(allocator, modules, roots, &graph),
-        .one_program => one: {
-            if (options.boxy_objects != null) finalizationInvariant("roots of several modules were grouped into one program in a compilation that links module objects");
-            for (specialized) |flag| if (flag) finalizationInvariant("a root holding a function value was grouped into a program of several modules");
-            break :one try ModuleEvaluations.initOne(allocator, modules, roots);
-        },
-    };
+    // A compilation that links module objects compiles each module's code
+    // once, in its object, so each module's roots run as a program of their
+    // own against its imports' objects. Without objects, a module's program
+    // would lower everything its roots reach, so every root runs in one
+    // program, which lowers and compiles each procedure once.
+    var evaluations = if (options.boxy_objects != null)
+        try ModuleEvaluations.init(allocator, modules, roots, &graph)
+    else
+        try ModuleEvaluations.initOne(allocator, modules, roots);
     defer evaluations.deinit();
     const source = options.boxy_objects;
     // A module with no pending root is complete before anything runs.
@@ -2018,16 +2027,6 @@ fn evaluateRootsBoxy(
         if (!try objects.progress(objects.context)) finalizationInvariant("a module's compile-time program waits for an import no unit builds");
     }
 }
-
-/// How `evaluateRootsBoxy` groups roots into programs.
-const BoxyGrouping = enum {
-    /// One evaluation per module, each built when its reads and its
-    /// imports' objects are complete.
-    per_module,
-    /// One evaluation of every root, for a compilation that links no module
-    /// objects and whose roots hold no function values.
-    one_program,
-};
 
 /// The evaluation of each module with pending roots.
 const ModuleEvaluations = struct {
@@ -2131,9 +2130,10 @@ const ModuleEvaluations = struct {
     }
 };
 
-/// The pending roots of one module, through the steps of their
-/// evaluation. The roots whose values hold function values run first, with
-/// every pending root of the module they read, as programs that keep what
+/// The pending roots of one module, or of every module in a compilation
+/// that links no module objects (`evaluateRootsBoxy`), through the steps of
+/// their evaluation. The roots whose values hold function values run first,
+/// with every pending root of the evaluation they read, as programs that keep what
 /// storing a function value takes (`evaluateFunctionRoots`). Every root still
 /// pending is then lowered as one `.boxy` program (`ProgramBuild`), whose roots read
 /// each other through compile-time value slots (`Program.rootValueSlot`),
@@ -2143,9 +2143,10 @@ const ModuleEvaluations = struct {
 const ModuleEvaluation = struct {
     /// Position in the evaluations.
     index: u32,
-    /// Position in the modules.
+    /// Position in the modules: the module whose roots the evaluation
+    /// holds, or the module of its first root when it holds every module's.
     module: u32,
-    /// The module's pending roots: positions in the roots, ascending.
+    /// The evaluation's pending roots: positions in the roots, ascending.
     members: []const u32,
     /// The evaluations whose roots' values the module's roots read.
     reads: []const u32,
@@ -2191,7 +2192,6 @@ const ModuleEvaluation = struct {
     /// the module's program: on the scheduler's session, or here.
     fn start(self: *ModuleEvaluation, shared: Shared, evaluations: *ModuleEvaluations) FinalizeError!void {
         const allocator = evaluations.allocator;
-        const module_index = self.module;
         const module = self.artifact(shared);
         const roots = shared.roots;
         const chosen = try allocator.alloc(bool, roots.len);
@@ -2209,13 +2209,15 @@ const ModuleEvaluation = struct {
         while (work.pop()) |member| {
             try solved.append(allocator, member);
             for (shared.graph.deps[member]) |dep| {
-                if (roots[dep].module != module_index) {
-                    if (roots[dep].module > module_index) finalizationInvariant("a compile-time root reads a value of a module evaluated after its own");
+                // A root another evaluation owns completed before this one
+                // started (`ModuleEvaluations.readsDone`).
+                if (evaluations.of_module[roots[dep].module].? != self.index) {
+                    if (!shared.states[roots[dep].module].isDone(roots[dep].root)) finalizationInvariant("a compile-time root reads a value of a module evaluated after its own");
                     continue;
                 }
                 // A literal argument root is the `.boxy` evaluator's whatever
                 // reads it (design.md "Literal Arguments").
-                if (chosen[dep] or module.compile_time_roots.root(roots[dep].root).kind == .literal_argument) continue;
+                if (chosen[dep] or shared.modules[roots[dep].module].module.compile_time_roots.root(roots[dep].root).kind == .literal_argument) continue;
                 chosen[dep] = true;
                 try work.append(allocator, dep);
             }
@@ -2343,7 +2345,15 @@ const ModuleEvaluation = struct {
     fn noteProgram(allocator: Allocator, shared: Shared, pending: []const u32) Allocator.Error!void {
         if (shared.options.timing) |timing| timing.specialization_passes.add(1);
         if (!base.dev_diagnostics.isSet(.trace_boxy_work)) return;
-        std.debug.print("boxy-work: compile-time program of {s}: {d} roots\n", .{ shared.modules[shared.roots[pending[0]].module].module.moduleEnvConst().module_name, pending.len });
+        const first_module = shared.roots[pending[0]].module;
+        const one_module = for (pending) |member| {
+            if (shared.roots[member].module != first_module) break false;
+        } else true;
+        if (one_module) {
+            std.debug.print("boxy-work: compile-time program of {s}: {d} roots\n", .{ shared.modules[first_module].module.moduleEnvConst().module_name, pending.len });
+        } else {
+            std.debug.print("boxy-work: compile-time program of several modules: {d} roots\n", .{pending.len});
+        }
         for (pending) |member| {
             const module = shared.modules[shared.roots[member].module].module;
             const compile_time_root = module.compile_time_roots.root(shared.roots[member].root);
