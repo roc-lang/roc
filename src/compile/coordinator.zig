@@ -12799,20 +12799,20 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
             try coord.finishCheckedProgram(.none);
             try std.testing.expect(!coord.hasUserErrors());
             const session = &coord.program_session.?;
-            // Evaluation completed `answer`, so the runtime program is
-            // specialized once more, from the stored value, with no stage of
-            // its own: it registers no literal root.
-            try std.testing.expect(session.runtime_stages == .respecialized);
-            try std.testing.expect(session.runtime_stages.respecialized == null);
-            const stage_count: u32 = @intCast(session.completed.?.programs().len);
+            // The `.boxy` evaluator completed `answer` before the Solved
+            // program was specialized, so that program restores the stored
+            // value and is specialized once, and the runtime consumer
+            // continues it: it registers no literal root.
+            try std.testing.expect(session.runtime_stages == .evaluation);
+            const stage_count: u32 = if (session.completed) |*completed| @intCast(completed.programs().len) else 0;
             try std.testing.expect(session.runtime_prepared != null);
-            try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
-            try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
+            try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
             try std.testing.expectEqual(stage_count, metrics.lir_continuations);
             var runtime = try session.takeRuntime(allocator, requests, target);
             defer runtime.deinit();
-            try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
-            try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
+            try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
             try std.testing.expectEqual(stage_count + 1, metrics.lir_continuations);
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
             // The runtime consumer lowers its own continuation, where the
