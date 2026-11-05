@@ -729,6 +729,17 @@ test "experimental composition shortcuts retain exact operand result association
     }
 }
 
+test "composition temporary large keys do not grow the immortal arena on hits" {
+    if (!@import("experiment.zig").reclaim_scratch) return error.SkipZigTest;
+    const state = try compiled.InProcessState.create(testing.allocator);
+    defer state.destroy();
+    const elems: [65]*const TypeDesc = @splat(compose.scalarDesc(.u64));
+    const first = compose.tuple(&state.descriptors, &state.ops, &elems);
+    const capacity = state.arena.queryCapacity();
+    for (0..2000) |_| try testing.expectEqual(first, compose.tuple(&state.descriptors, &state.ops, &elems));
+    try testing.expectEqual(capacity, state.arena.queryCapacity());
+}
+
 test "experimental composition shortcuts concurrent distinct operands stay associated" {
     if (@import("builtin").single_threaded) return error.SkipZigTest;
     const state = try compiled.InProcessState.create(testing.allocator);

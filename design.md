@@ -13759,6 +13759,10 @@ template parameters/results as additional hidden arguments, using the callee's
 declared types substituted through the checked call edge. Those descriptors
 are prepared in the caller's entry chain and consumed directly by the callee.
 It does not pass descriptors recovered by inspecting a runtime value.
+Additional scratch experiments allocate temporary descriptor keys and traversal
+stacks from the compiler's reclaiming SMP allocator, separately from immutable
+descriptors and interned keys in the program-lifetime arena. Platform runtimes
+retain their existing host allocation/free operations for temporary storage.
 
 A local whose checked type mentions a type variable in scope has the LIR
 layout `dynamic` and names the local holding its descriptor. A dynamic local

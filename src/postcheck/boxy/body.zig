@@ -657,7 +657,7 @@ pub const Builder = struct {
     /// Replace `hole` with `stmt`.
     pub fn fill(self: *Builder, hole: CFStmtId, stmt: LIR.CFStmt, kind: LIR.OriginKind) Allocator.Error!void {
         var emitted = stmt;
-        if (@import("boxy_runtime").experiment.mode != .none and self.program.input.composition_sites and emitted == .dyn and lir_core.DynOps.isComposition(self.store.stmtRow(emitted.dyn.data))) {
+        if (@import("boxy_runtime").experiment.site_enabled and self.program.input.composition_sites and emitted == .dyn and lir_core.DynOps.isComposition(self.store.stmtRow(emitted.dyn.data))) {
             std.debug.assert(emitted.dyn.composition_cache == null);
             const site = self.composition_site_count;
             self.composition_site_count = std.math.add(u32, site, 1) catch return error.OutOfMemory;
