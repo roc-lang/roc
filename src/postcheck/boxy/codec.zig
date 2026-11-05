@@ -1278,7 +1278,9 @@ const Gen = struct {
                 // The result is adapted to the call's own type, since a
                 // sealed row of it may be widened here (design.md "Sealed
                 // Result Rows").
-                const all = try std.mem.concat(b.allocator, LocalId, &.{ call_args, instance.hidden });
+                const passed = try b.callDescriptorArgs(callee, instance.bound);
+                defer b.allocator.free(passed);
+                const all = try std.mem.concat(b.allocator, LocalId, &.{ call_args, instance.hidden, passed });
                 defer b.allocator.free(all);
                 const target = try self.local(instance.ret);
                 try b.emitLinear(.{ .assign_call = .{ .target = target, .proc = target_worker.proc, .args = try b.store.addLocalSpan(all), .next = undefined } });

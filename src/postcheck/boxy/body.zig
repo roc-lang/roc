@@ -7039,7 +7039,7 @@ pub const Builder = struct {
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
     }
 
-    fn callDescriptorArgs(self: *Builder, callee: WorkerId, bound: ?[]const TypeId) Allocator.Error![]LocalId {
+    pub fn callDescriptorArgs(self: *Builder, callee: WorkerId, bound: ?[]const TypeId) Allocator.Error![]LocalId {
         const required = try self.program.passedDescriptorTypes(self.allocator, callee);
         defer self.allocator.free(required);
         const result = try self.allocator.alloc(LocalId, required.len);

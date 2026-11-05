@@ -211,13 +211,13 @@ fn localSite(site: *CompositionSite) *LocalSite {
 
 /// Read-only on a hit. Frozen shared slots are never overwritten.
 pub fn experimentLookup(site: *CompositionSite, operands: []const usize) ?*const CompositionEntry {
-    if (comptime experiment.worker_local) {
+    if (comptime experiment.worker_local and builtins.host_abi.host_role != .platform) {
         for (localSite(site).entries) |maybe| {
             if (maybe) |entry| if (entry.holds(operands)) return entry;
         }
     } else {
         const slots: [*]?*const CompositionEntry = @ptrCast(site);
-        for (0..experiment.ways) |i| {
+        for (0..(if (experiment.worker_local) 1 else experiment.ways)) |i| {
             const entry = @atomicLoad(?*const CompositionEntry, &slots[i], .acquire) orelse continue;
             if (entry.holds(operands)) return entry;
         }
@@ -226,20 +226,20 @@ pub fn experimentLookup(site: *CompositionSite, operands: []const usize) ?*const
 }
 
 pub fn experimentPublish(site: *CompositionSite, cache: *Cache, ops: *RocOps, operands: []const usize, result: usize) void {
-    if (comptime experiment.worker_local) {
+    if (comptime experiment.worker_local and builtins.host_abi.host_role != .platform) {
         const slot = localSite(site);
         slot.entries[slot.next] = CompositionSite.snapshot(cache, ops, operands, result);
         slot.next = (slot.next + 1) % experiment.ways;
     } else {
         const slots: [*]?*const CompositionEntry = @ptrCast(site);
         var fresh: ?*const CompositionEntry = null;
-        for (0..experiment.ways) |i| {
+        for (0..(if (experiment.worker_local) 1 else experiment.ways)) |i| {
             if (@atomicLoad(?*const CompositionEntry, &slots[i], .acquire)) |entry| {
                 if (entry.holds(operands)) return;
                 continue;
             }
             if (fresh == null) fresh = CompositionSite.snapshot(cache, ops, operands, result);
-            if (@cmpxchgStrong(?*const CompositionEntry, &slots[i], null, fresh, .release, .acquire)) |raced| {
+            if (@cmpxchgStrong(?*const CompositionEntry, &slots[i], null, fresh, .acq_rel, .acquire)) |raced| {
                 if (raced.?.holds(operands)) return;
             } else return;
         }

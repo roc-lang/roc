@@ -13749,7 +13749,10 @@ shortcut, worker-local one/four-entry shortcuts, and shared one/four-entry
 shortcuts whose entries publish once and are never replaced. Worker-local
 shortcuts check both the exact site and all operand identities, and clear on
 entry/exit of in-process execution so code/data address reuse cannot resurrect
-expired descriptors. Recursive open placeholders cannot enter any shortcut.
+expired descriptors. The worker-local experiment applies to in-process CTFE
+and tests; freestanding platform runtimes have no worker-local host ABI and
+use the explicitly selected shared non-replacing single entry instead.
+Recursive open placeholders cannot enter any shortcut.
 The native dev backend implements these experiments; wasm dev already omits
 site shortcuts. A separate caller experiment passes descriptors of dynamic
 template parameters/results as additional hidden arguments, using the callee's
