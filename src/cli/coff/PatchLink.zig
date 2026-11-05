@@ -547,7 +547,7 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         }
     }
     @memset(unwind_out[@intCast(kept_total)..], 0);
-    sortEntries(unwind_out[0..@intCast(kept_total)], entry_size);
+    UnitImage.sortFunctionTable(unwind_out[0..@intCast(kept_total)], entry_size);
     var index: usize = 0;
     while (index < exe.symbol_count) {
         const entry = mapped[@intCast(symtab_offset + index * symbol_size)..][0..symbol_size];
@@ -699,27 +699,6 @@ fn encodeRelocations(gpa: Allocator, out: *std.ArrayList(u8), rvas: []const u64)
         if (padded != count) try out.appendSlice(gpa, &.{ 0, 0 });
         at = end;
     }
-}
-
-/// Sort function table entries by their first word, the function's
-/// image-relative address.
-fn sortEntries(entries: []u8, entry_size: u64) void {
-    const Sorter = struct {
-        bytes: []u8,
-        size: usize,
-
-        pub fn lessThan(self: @This(), a: usize, b: usize) bool {
-            return std.mem.readInt(u32, self.bytes[a * self.size ..][0..4], .little) < std.mem.readInt(u32, self.bytes[b * self.size ..][0..4], .little);
-        }
-        pub fn swap(self: @This(), a: usize, b: usize) void {
-            var scratch: [12]u8 = undefined;
-            @memcpy(scratch[0..self.size], self.bytes[a * self.size ..][0..self.size]);
-            @memcpy(self.bytes[a * self.size ..][0..self.size], self.bytes[b * self.size ..][0..self.size]);
-            @memcpy(self.bytes[b * self.size ..][0..self.size], scratch[0..self.size]);
-        }
-    };
-    const size: usize = @intCast(entry_size);
-    std.sort.pdqContext(0, entries.len / size, Sorter{ .bytes = entries, .size = size });
 }
 
 /// Write the link's build id into the host's CodeView debug entry, whose
@@ -1009,17 +988,4 @@ test "base relocation blocks group words by page and pad to a word" {
     try std.testing.expectEqual(@as(u16, 0), std.mem.readInt(u16, out.items[14..16], .little));
     try std.testing.expectEqual(@as(u32, 0x3000), std.mem.readInt(u32, out.items[16..20], .little));
     try std.testing.expectEqual(@as(u32, 12), std.mem.readInt(u32, out.items[20..24], .little));
-}
-
-test "function table entries sort by address" {
-    var entries: [36]u8 = @splat(0);
-    std.mem.writeInt(u32, entries[0..4], 0x3000, .little);
-    std.mem.writeInt(u32, entries[12..16], 0x1000, .little);
-    std.mem.writeInt(u32, entries[16..20], 7, .little);
-    std.mem.writeInt(u32, entries[24..28], 0x2000, .little);
-    sortEntries(&entries, 12);
-    try std.testing.expectEqual(@as(u32, 0x1000), std.mem.readInt(u32, entries[0..4], .little));
-    try std.testing.expectEqual(@as(u32, 7), std.mem.readInt(u32, entries[4..8], .little));
-    try std.testing.expectEqual(@as(u32, 0x2000), std.mem.readInt(u32, entries[12..16], .little));
-    try std.testing.expectEqual(@as(u32, 0x3000), std.mem.readInt(u32, entries[24..28], .little));
 }

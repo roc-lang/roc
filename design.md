@@ -25323,7 +25323,14 @@ the mapping decides: each host import (a hosted symbol, the runtime set,
 or one of the builtins through which code tracks its image, which the shim
 defines in place of the support image's), resolved once by name and then
 filled at each of its sites, and each 64-bit address into the image, which
-the shim rebases by the image's address. Every composed image carries its
+the shim rebases by the image's address. An image composed from COFF unit
+images also carries their unwind tables after its code: one function table
+holding the entries of the functions it places, sorted by function start,
+and each placed image's unwind information. Their image-relative fields
+count from the start of the image's code and are resolved when the image is
+composed; the shim registers the table with the process, with that start as
+its base, once the image is loaded, and deregisters it when it destroys the
+loaded image. Every composed image carries its
 own builtins and Boxy runtime, so the runtime state a program composes
 (its descriptor interning, keyed by addresses in that program) is never
 shared between generations. Its constants live in its code blocks at a

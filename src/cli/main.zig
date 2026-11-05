@@ -190,6 +190,7 @@ comptime {
         std.testing.refAllDecls(macho_patch_link);
         std.testing.refAllDecls(coff_host_prelink);
         std.testing.refAllDecls(coff_patch_link);
+        std.testing.refAllDecls(run_image_link);
         std.testing.refAllDecls(@import("patch_fanout.zig"));
         std.testing.refAllDecls(@import("link_output.zig"));
         std.testing.refAllDecls(patch_link);
@@ -6982,6 +6983,10 @@ fn writeComposedRunImage(
         // its own process.
         const support_imports = try ctx.arena.alloc([]const u8, support_view.imports().len);
         for (support_view.imports(), support_imports) |import, *name| name.* = try ctx.arena.dupe(u8, support_view.name(import.name));
+        // The run targets this host, checked above, and only 64-bit x86 and
+        // ARM hosts load unit images.
+        const target_arch = units.target.toCpuArch();
+        std.debug.assert(target_arch == .x86_64 or target_arch == .aarch64);
         const link_inputs: run_image_link.Inputs = .{
             .support = .{ .view = support_view },
             .units = inputs,
@@ -6989,6 +6994,7 @@ fn writeComposedRunImage(
             .entrypoints = units.entrypoint_names,
             .host_symbols = try fast_dev_link.sortedUnion(ctx.arena, &.{ units.hosted_symbols, &host_symbols.runtime_symbols, sorted_shim_builtins, support_imports }),
             .shim_builtins = sorted_shim_builtins,
+            .function_table_entry_size = if (target_arch == .aarch64) 8 else 12,
         };
         var plan = run_image_link.plan(ctx.gpa, ctx.io.std_io, link_inputs) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,

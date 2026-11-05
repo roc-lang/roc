@@ -1023,6 +1023,27 @@ pub fn build(allocator: Allocator, objects: []const []const u8, options: BuildOp
     return out;
 }
 
+/// Sort a Windows function table's entries by their first word, the
+/// function's image-relative address, as the unwinder's lookup requires.
+pub fn sortFunctionTable(entries: []u8, entry_size: u64) void {
+    const Sorter = struct {
+        bytes: []u8,
+        size: usize,
+
+        pub fn lessThan(self: @This(), a: usize, b: usize) bool {
+            return std.mem.readInt(u32, self.bytes[a * self.size ..][0..4], .little) < std.mem.readInt(u32, self.bytes[b * self.size ..][0..4], .little);
+        }
+        pub fn swap(self: @This(), a: usize, b: usize) void {
+            var scratch: [12]u8 = undefined;
+            @memcpy(scratch[0..self.size], self.bytes[a * self.size ..][0..self.size]);
+            @memcpy(self.bytes[a * self.size ..][0..self.size], self.bytes[b * self.size ..][0..self.size]);
+            @memcpy(self.bytes[b * self.size ..][0..self.size], scratch[0..self.size]);
+        }
+    };
+    const size: usize = @intCast(entry_size);
+    std.sort.pdqContext(0, entries.len / size, Sorter{ .bytes = entries, .size = size });
+}
+
 /// The width in bytes of a site's field.
 pub fn kindWidth(kind: SiteKind) u64 {
     return switch (kind) {
@@ -3472,4 +3493,17 @@ test "arm64 sites encode branches, pages and scaled offsets" {
     try std.testing.expectEqual(ldr_q0_x16 | ((0x130 >> 4) << 10), std.mem.readInt(u32, &field, .little));
     field = words(&.{ret_instruction});
     try std.testing.expect(!applySite(&field, .pageoff12, 0, 0));
+}
+
+test "function table entries sort by address" {
+    var entries: [36]u8 = @splat(0);
+    std.mem.writeInt(u32, entries[0..4], 0x3000, .little);
+    std.mem.writeInt(u32, entries[12..16], 0x1000, .little);
+    std.mem.writeInt(u32, entries[16..20], 7, .little);
+    std.mem.writeInt(u32, entries[24..28], 0x2000, .little);
+    sortFunctionTable(&entries, 12);
+    try std.testing.expectEqual(@as(u32, 0x1000), std.mem.readInt(u32, entries[0..4], .little));
+    try std.testing.expectEqual(@as(u32, 7), std.mem.readInt(u32, entries[4..8], .little));
+    try std.testing.expectEqual(@as(u32, 0x2000), std.mem.readInt(u32, entries[12..16], .little));
+    try std.testing.expectEqual(@as(u32, 0x3000), std.mem.readInt(u32, entries[24..28], .little));
 }
