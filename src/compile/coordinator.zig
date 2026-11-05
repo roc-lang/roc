@@ -4758,7 +4758,7 @@ pub const Coordinator = struct {
             return null;
         };
         const platform_keys = platform.checked_types.sealed_keys orelse coordinatorInvariant("a platform was paired before its key slots were attached", .{});
-        const synthesized_keys = CheckedArtifact.SynthesizedTypeKeys.create(platform_keys.allocator, platform_keys.io, header.synthesizedTypeCount(platform)) catch return null;
+        const synthesized_keys = CheckedArtifact.SynthesizedTypeKeys.create(platform_keys.allocator, platform_keys.io, header.typeRootCount(platform)) catch return null;
         const body_analyses = CheckedArtifact.BodyAnalyses.create(
             platform_keys.allocator,
             platform_keys.io,

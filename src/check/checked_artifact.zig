@@ -3827,7 +3827,7 @@ pub const CheckedTypeStoreView = struct {
         if (left == right) return true;
         if (try self.rootHasIdentityVariables(left)) return false;
         if (try self.rootHasIdentityVariables(right)) return false;
-        return std.mem.eql(u8, &(try self.rootKey(left)).bytes, &(try self.rootKey(right)).bytes);
+        return std.meta.eql(try self.rootKey(left), try self.rootKey(right));
     }
 
     /// The checked type of the source variable `var_`, or null when
@@ -22622,10 +22622,9 @@ pub const PlatformPairing = struct {
             try artifact_serialize.validateSerialized(Serialized, self, len);
         }
 
-        /// The number of synthesized types the pairing installed over
-        /// `platform` holds, which the key slots passed to `install` must
-        /// cover.
-        pub fn synthesizedTypeCount(self: *const Serialized, platform: *const CheckedModuleArtifact) usize {
+        /// The number of type roots the pairing installed over `platform`
+        /// holds, which the key slots passed to `install` must cover.
+        pub fn typeRootCount(self: *const Serialized, platform: *const CheckedModuleArtifact) usize {
             const roots_bit = @backingInt(CheckedTypeStore.BorrowedColumn.roots);
             if (self.borrowed_types & (@as(u32, 1) << roots_bit) != 0) return platform.checked_types.roots.items.len;
             return @intCast(self.checked_types.roots.len);
@@ -23531,12 +23530,16 @@ const NominalCapabilitySeenKey = struct {
         pub fn hash(_: Context, key: NominalCapabilitySeenKey) u64 {
             var hasher = std.hash.Wyhash.init(0);
             std.hash.autoHash(&hasher, key.nominal);
-            hasher.update(std.mem.sliceAsBytes(key.args));
+            for (key.args) |arg| std.hash.autoHash(&hasher, arg);
             return hasher.final();
         }
 
         pub fn eql(_: Context, left: NominalCapabilitySeenKey, right: NominalCapabilitySeenKey) bool {
-            return std.meta.eql(left.nominal, right.nominal) and std.mem.eql(CheckedTypeId, left.args, right.args);
+            if (!std.meta.eql(left.nominal, right.nominal) or left.args.len != right.args.len) return false;
+            for (left.args, right.args) |left_arg, right_arg| {
+                if (left_arg != right_arg) return false;
+            }
+            return true;
         }
     };
 };
@@ -26996,7 +26999,7 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
     var bindings = std.ArrayList(ImportedProcedureBindingView).empty;
     try bindings.append(gpa, .{
         .binding = .{ .artifact = key_a.digest(), .def = @fromBackingInt(@intCast(1)), .pattern = @fromBackingInt(@intCast(2)) },
-        .source_scheme = @fromBackingInt(0),
+        .source_scheme = @fromBackingInt(@intCast(1)),
         .body = .{ .callable_eval_template = @fromBackingInt(@intCast(3)) },
         .intrinsic = .str_inspect,
         .iterator_procedure = .map,
@@ -27037,7 +27040,7 @@ test "platform relation procedure use preserves exported runtime result provenan
             .def = @fromBackingInt(@intCast(1)),
             .pattern = app_pattern,
         },
-        .source_scheme = @fromBackingInt(0),
+        .source_scheme = @fromBackingInt(@intCast(1)),
         .body = .{ .callable_eval_template = @fromBackingInt(@intCast(4)) },
         .runtime_result_provenance = .list_element_read,
     };
@@ -27046,7 +27049,7 @@ test "platform relation procedure use preserves exported runtime result provenan
         .def = exported.binding.def,
         .pattern = app_pattern,
         .source_name = @fromBackingInt(@intCast(6)),
-        .source_scheme = @fromBackingInt(0),
+        .source_scheme = @fromBackingInt(@intCast(1)),
         .value = .{ .procedure_binding = procedure_binding },
     };
     const app_value_ref = TopLevelValueRef{
