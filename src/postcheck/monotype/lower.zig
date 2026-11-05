@@ -11933,6 +11933,18 @@ const Builder = struct {
         self.module_index.putAssumeCapacity(self.root_view.key.bytes, .root);
     }
 
+    /// The view of the module declaring a local procedure method target,
+    /// which names it by module index: `site`, the view whose evidence
+    /// selected the target, when that is the declaring module, and otherwise
+    /// the module of that index an importing module reaches it in.
+    fn localProcTargetView(self: *Builder, site: ModuleView, module_idx: u32) ModuleView {
+        if (site.module_identity.module_idx == module_idx) return site;
+        for (self.moduleViews()) |*view| {
+            if (view.module_identity.module_idx == module_idx) return view;
+        }
+        Common.invariant("a checked method target named a module that is not in the lowering input");
+    }
+
     /// The module view whose content identity matches `origin_hash`, or null
     /// (used to resolve a defaulted field's declaring module—design.md
     /// "Defaulted Fields").
@@ -53280,7 +53292,7 @@ const BodyContext = struct {
                 .view = self.builder.moduleForDigest(names.procTemplateModuleDigest(procedure.template)),
                 .target = node.target,
             },
-            .local_proc => .{ .view = site_view, .target = node.target },
+            .local_proc => .{ .view = self.builder.localProcTargetView(site_view, node.target.module_idx), .target = node.target },
             .structural => Common.invariant("structural method target reached callable checked evidence"),
         };
         const lookup = try self.methodLookupForEvidencePurpose(base_lookup, purpose);
@@ -54634,8 +54646,11 @@ const BodyContext = struct {
                 .view = self.builder.moduleForDigest(names.procTemplateModuleDigest(procedure.template)),
                 .target = target,
             },
+            // A method of a type declared in a function body belongs to the
+            // module declaring that body, which an importing module reaches
+            // through a requirement its scheme carries.
             .local_proc => .{
-                .view = self.view,
+                .view = self.builder.localProcTargetView(self.view, target.module_idx),
                 .target = target,
             },
             .structural => Common.invariant("structural method registry result reached callable checked evidence"),

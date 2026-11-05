@@ -669,6 +669,19 @@ pub const UnusedValue = struct {
 
 // type mismatch //
 
+/// Why a failed relation follows from a body-local type leaving the
+/// functions its identity depends on.
+pub const LocalTypeEscapeCause = union(enum) {
+    /// Two applications of the declaration disagreed at a context argument:
+    /// values of two instantiations of its functions met.
+    context_argument: types_mod.NominalDecl.Idx,
+    /// A root operand, a side of the failed leaf pair, or a failed
+    /// requirement's dispatcher was this context variable (its annotation's
+    /// variable), which a value of the type carried outside the body that
+    /// introduces it.
+    context_variable: Var,
+};
+
 /// These two variables mismatch. This should usually be cast into a more
 /// specific error depending on context.
 pub const TypeMismatch = struct {
@@ -695,6 +708,10 @@ pub const TypeMismatch = struct {
     /// Set when the relation failed because it required one type to have two
     /// different methods of the same name.
     method_conflict: ?MethodConflict = null,
+    /// The body-local type whose escape this failure follows from, withdrawn
+    /// once the escape rule reports that type (design.md "Body-Local Types
+    /// Stay In Their Context").
+    local_type_escape: ?LocalTypeEscapeCause = null,
     /// How the report suggests turning the actual value into the expected
     /// builtin `Str`.
     str_conversion: StrConversion = .none,
@@ -965,6 +982,9 @@ pub const DispatcherNotNominal = struct {
     /// Set when the obligation is a copy a use made out of another
     /// definition's type.
     copied: ?CopiedRequirement = null,
+    /// Set when the dispatcher is a context variable of a body-local type
+    /// (`TypeMismatch.local_type_escape`).
+    local_type_escape: ?LocalTypeEscapeCause = null,
 };
 
 /// Error when you try to static dispatch but the dispatcher does not have that method
@@ -995,6 +1015,9 @@ pub const DispatcherDoesNotImplMethod = struct {
     /// Set when the obligation is a copy a use made out of another
     /// definition's type.
     copied: ?CopiedRequirement = null,
+    /// Set when the dispatcher is a context variable of a body-local type
+    /// (`TypeMismatch.local_type_escape`).
+    local_type_escape: ?LocalTypeEscapeCause = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };

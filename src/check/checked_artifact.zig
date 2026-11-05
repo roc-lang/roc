@@ -5992,13 +5992,15 @@ fn appendCheckedNominalDeclarationFromStatement(
 
     // A declaration in a function body takes the enclosing type variables its
     // identity depends on as formals after its own (design.md "Body-Local
-    // Type Context"). Each is the variable itself, which its backing and its
-    // methods name directly, so every use's matching argument binds it.
+    // Type Context"): its template application lists each variable itself,
+    // which its backing and its methods name directly, after its header's.
     const type_store = module.typeStoreConst();
     const statement_type = type_store.resolveVar(ModuleEnv.varFrom(statement_idx)).desc.content.unwrapNominalType() orelse
         checkedArtifactInvariant("nominal declaration statement variable was not a nominal type", .{});
-    const context_vars = type_store.nominalContextVars(statement_type);
-    const formal_count = header_args.len + context_vars.len;
+    const template_args = type_store.sliceNominalArgs(statement_type);
+    std.debug.assert(template_args.len >= header_args.len);
+    const context_vars = template_args[header_args.len..];
+    const formal_count = template_args.len;
     const formal_args = if (formal_count == 0) &.{} else blk: {
         const out = try allocator.alloc(CheckedTypeId, formal_count);
         errdefer allocator.free(out);
@@ -6676,15 +6678,11 @@ const DeclarationAnnoWalk = struct {
                 const generic_root = try self.appendRoot(var_);
                 if (actual_args.len == 0) return generic_root;
                 // A declaration in a function body keeps its context
-                // arguments: each is the enclosing variable itself.
-                const type_store = self.module.typeStoreConst();
-                const context_len = if (type_store.resolveVar(var_).desc.content.unwrapNominalType()) |nominal|
-                    type_store.nominalContextVars(nominal).len
-                else
-                    0;
-                if (context_len == 0) return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.names, self.store, generic_root, actual_args);
-                const generic_args = self.store.payload(generic_root).nominal.args;
-                std.debug.assert(generic_args.len == actual_args.len + context_len);
+                // arguments, which its template lists after its declared
+                // ones: each is the enclosing variable itself.
+                const generic_payload = self.store.payload(generic_root);
+                const generic_args: []const CheckedTypeId = if (generic_payload == .nominal) generic_payload.nominal.args else &.{};
+                if (generic_args.len <= actual_args.len) return try appendInstantiatedNamedApplicationFromTemplate(gpa, self.names, self.store, generic_root, actual_args);
                 const all_args = try gpa.alloc(CheckedTypeId, generic_args.len);
                 defer gpa.free(all_args);
                 @memcpy(all_args[0..actual_args.len], actual_args);
@@ -8307,10 +8305,7 @@ const SourceTypeGraphFactsContext = struct {
             .structure => |structure| switch (structure) {
                 .empty_record, .empty_tag_union => {},
                 .tuple => |tuple| try out.addAll(types_store.sliceVars(tuple.elems)),
-                .nominal_type => |nominal| {
-                    try out.addAll(types_store.sliceNominalArgs(nominal));
-                    try out.addAll(types_store.nominalContextVars(nominal));
-                },
+                .nominal_type => |nominal| try out.addAll(types_store.sliceNominalArgs(nominal)),
                 .fn_pure, .fn_effectful, .fn_unbound => |function| {
                     try out.addAll(types_store.sliceVars(function.args));
                     try out.add(function.ret);
@@ -8994,24 +8989,7 @@ const CheckedTypePublisher = struct {
                         };
                         return rangeStep(type_store.sliceNominalArgs(nominal));
                     },
-                    1 => {
-                        build.nominal.args = input.?.get(.ids);
-                        // A declaration in a function body lists the enclosing
-                        // type variables its identity depends on after its
-                        // own arguments (design.md "Body-Local Type Context").
-                        const context = type_store.nominalContextVars(nominal);
-                        if (context.len != 0) return rangeStep(context);
-                    },
-                    else => {
-                        const context_ids = input.?.get(.ids);
-                        defer self.allocator.free(context_ids);
-                        const own = build.nominal.args;
-                        const all = try self.allocator.alloc(CheckedTypeId, own.len + context_ids.len);
-                        @memcpy(all[0..own.len], own);
-                        @memcpy(all[own.len..], context_ids);
-                        if (own.len != 0) self.allocator.free(own);
-                        build.nominal.args = all;
-                    },
+                    else => build.nominal.args = input.?.get(.ids),
                 },
                 .fn_pure, .fn_unbound => |func| if (stepFunction(build, cursor, input, type_store, .pure, func)) |step| return step,
                 .fn_effectful => |func| if (stepFunction(build, cursor, input, type_store, .effectful, func)) |step| return step,

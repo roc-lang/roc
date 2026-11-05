@@ -756,19 +756,16 @@ pub const NominalDecl = struct {
     source: NominalType.Source,
     /// The declaration's formal type parameters (rigid vars), in declaration
     /// order. Instantiating the backing for a nominal application substitutes
-    /// the application's actual args for these, positionally.
+    /// the application's actual args for these, positionally. The last
+    /// `flags.context_len` of them are the declaration's context variables
+    /// (design.md "Body-Local Type Context"): the type variables of enclosing
+    /// functions that a declaration in a function body depends on, which
+    /// every application lists after its declared arguments.
     formals: Var.SafeList.Range,
     /// The declaration's backing template. It references `formals` and is
     /// never unified against directly—backing access instantiates a copy
     /// with actual args substituted for formals.
     backing: Var,
-    /// The type variables of enclosing functions that this declaration's
-    /// identity depends on, in source order: those its backing reaches and
-    /// those its methods name, directly or through other declarations in
-    /// function bodies (design.md "Body-Local Type Context"). Only a
-    /// declaration in a function body has any. They are not formals: the
-    /// backing names them as themselves, and no application lists them.
-    context: Var.SafeList.Range = Var.SafeList.Range.empty(),
     /// Declaration flags, padding-free so serialized bytes are deterministic.
     flags: Flags,
 
@@ -779,8 +776,18 @@ pub const NominalDecl = struct {
         /// invalid recursion). Applications of invalid declarations poison
         /// to err.
         valid: bool,
-        _unused: u31 = 0,
+        /// How many trailing formals are context variables. Only a
+        /// declaration in a function body has any.
+        context_len: u16 = 0,
+        _unused: u15 = 0,
     };
+
+    /// How many of the declaration's formals it declares itself, before its
+    /// context variables.
+    pub fn declaredFormalCount(self: NominalDecl) u32 {
+        std.debug.assert(self.flags.context_len <= self.formals.count);
+        return self.formals.count - self.flags.context_len;
+    }
 
     /// The statement index of this declaration in its origin module env.
     pub fn statement(self: NominalDecl) u32 {

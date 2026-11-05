@@ -242,10 +242,6 @@ pub const Store = struct {
     /// Stores whose history is unknown (zero-copy views of serialized data)
     /// keep the default.
     invalid_nominal_decl_written: bool = true,
-    /// False only while no entry of `nominal_decls` has ever had context
-    /// variables (`NominalDecl.context`). Stores whose history is unknown
-    /// keep the default.
-    contextual_nominal_decl_written: bool = true,
 
     /// The payload each accepted derived `map`/`map!` relation selects, by the
     /// class of the relation's callable, sorted by class descriptor so lookups
@@ -407,7 +403,6 @@ pub const Store = struct {
             .nominal_decls = try NominalDecl.SafeList.initCapacity(gpa, 16),
             .nominal_decl_index = try NominalDeclIndexEntry.SafeList.initCapacity(gpa, 16),
             .invalid_nominal_decl_written = false,
-            .contextual_nominal_decl_written = false,
         };
     }
 
@@ -501,7 +496,6 @@ pub const Store = struct {
             .nominal_decls = try self.nominal_decls.clone(gpa),
             .nominal_decl_index = try self.nominal_decl_index.clone(gpa),
             .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
-            .contextual_nominal_decl_written = self.contextual_nominal_decl_written,
             .derived_map_plans = try self.derived_map_plans.clone(gpa),
         };
     }
@@ -2073,14 +2067,16 @@ pub const Store = struct {
         return self.lookupNominalDeclByKey(nominal.origin_module, source_decl.statement);
     }
 
-    /// The context variables of a nominal application's declaration
-    /// (`NominalDecl.context`): the enclosing functions' type variables its
-    /// identity depends on, which every checked use of it lists after its
-    /// own arguments.
-    pub fn nominalContextVars(self: *const Self, nominal: NominalType) []Var {
-        if (!self.contextual_nominal_decl_written) return &.{};
-        const idx = self.lookupNominalDecl(nominal) orelse return &.{};
-        return self.vars.sliceRange(self.getNominalDecl(idx).context);
+    /// The arguments a nominal application gives its declaration's declared
+    /// formals: every argument but the trailing context arguments of a
+    /// declaration in a function body (design.md "Body-Local Type Context"),
+    /// which no source type and no printed type shows.
+    pub fn nominalDeclaredArgs(self: *const Self, nominal: NominalType) []Var {
+        const args = self.sliceNominalArgs(nominal);
+        const idx = self.lookupNominalDecl(nominal) orelse return args;
+        const context_len = self.getNominalDecl(idx).flags.context_len;
+        std.debug.assert(context_len <= args.len);
+        return args[0 .. args.len - context_len];
     }
 
     /// Get a nominal declaration by index.
@@ -2099,7 +2095,6 @@ pub const Store = struct {
 
     fn noteNominalDeclWrite(self: *Self, decl: NominalDecl) void {
         if (!decl.isValid()) self.invalid_nominal_decl_written = true;
-        if (decl.context.count != 0) self.contextual_nominal_decl_written = true;
     }
 
     /// Mark a nominal declaration invalid (malformed backing or invalid
@@ -2706,7 +2701,6 @@ pub const Store = struct {
                 .derived_map_plans = try self.derived_map_plans.deserializeWithCopy(base_addr, gpa),
             };
             store.invalid_nominal_decl_written = false;
-            store.contextual_nominal_decl_written = false;
             for (store.nominal_decls.items.items) |decl| store.noteNominalDeclWrite(decl);
             return store;
         }
