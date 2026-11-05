@@ -19058,6 +19058,8 @@ test "issue 11128 procedure template extension stays amortized" {
     try std.testing.expect(bytes.allocated_bytes <= 8 * count * @sizeOf(CheckedProcedureTemplate));
 }
 
+/// Each generalized local scope of `scopes` by the expression it is checked
+/// at.
 pub fn nestedProcScopeMap(
     allocator: Allocator,
     scopes: []const DispatchRefScope,
