@@ -5269,23 +5269,19 @@ pub const Builder = struct {
                 const owner_worker = if (nested.default_root) |identity| blk: {
                     const declaring = self.program.by_identity.get(identity.bytes) orelse invariant("a stored default-root closure's module is not in this lowering");
                     const declaring_view = self.program.module(declaring);
-                    const default_site = declaring_view.view.nested_proc_sites.sites[@backingInt(nested.site)];
-                    break :blk switch (default_site.owner) {
-                        .default_root => |default_expr| try self.program.defaultWorker(declaring, default_expr),
-                        .template => invariant("a stored default-root closure's site is owned by a template"),
-                    };
+                    const default_owner = declaring_view.bodies().nestedProcSiteDefaultOwner(nested.site);
+                    break :blk try self.program.defaultWorker(declaring, default_owner.default_root);
                 } else try self.program.templateRefScope(nested.owner);
                 const owner = self.program.worker(owner_worker).*;
                 const owner_view = self.program.module(owner.module);
-                const site = owner_view.view.nested_proc_sites.sites[@backingInt(nested.site)];
-                const site_expr = site.checked_expr orelse invariant("a stored closure's site has no checked expression");
+                const site_expr = checked.nestedProcSiteExpr(nested.site);
                 const expr = owner_view.bodies().expr(site_expr);
                 const lambda_expr = switch (expr.data) {
                     .lambda => site_expr,
                     .closure => |closure| closure.lambda,
                     .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored closure's site is not a lambda or closure"),
                 };
-                const captures = try self.program.runtimeCaptures(owner_view, @backingInt(nested.site));
+                const captures = try self.program.runtimeCaptures(owner_view, site_expr);
                 // The closure in its owner's scope (and, for a generalized
                 // lambda, its own scheme's), whose variables the stored
                 // value's type instantiates; the value captures them all.

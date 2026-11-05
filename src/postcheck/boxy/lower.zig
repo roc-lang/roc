@@ -563,7 +563,6 @@ pub const Program = struct {
     /// `composedInBody` of each type asked about.
     composed_in_body: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
     /// The nested procedure site of each lambda and closure expression.
-    sites_by_expr: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
     /// Modules by their stable identity hash.
     by_identity: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
     /// The default a record construction that omits a field materializes.
@@ -753,7 +752,6 @@ pub const Program = struct {
         self.local_scopes.deinit(self.allocator);
         self.local_procs.deinit(self.allocator);
         self.by_identity.deinit(self.allocator);
-        self.sites_by_expr.deinit(self.allocator);
         self.nominal_overrides.deinit(self.allocator);
         self.composed_in_body.deinit(self.allocator);
         self.omitted_defaults.deinit(self.allocator);
@@ -1961,21 +1959,18 @@ pub const Program = struct {
     /// What the function value of lambda or closure expression `expr`
     /// captures: the binders of enclosing bodies whose values it needs,
     /// which are its own captures and those of the local procedures its
-    /// body uses (`NestedProcSite.runtime_captures`).
+    /// body uses (`CheckedBodies.nestedProcRuntimeCaptures`).
     pub fn siteCaptures(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error![]const checked.CheckedCapture {
-        const site_index = self.sites_by_expr.get(.{ .module = module_index, .expr = expr }) orelse
-            invariant("a lambda or closure has no nested procedure site");
-        return try self.runtimeCaptures(self.module(module_index), site_index);
+        return try self.runtimeCaptures(self.module(module_index), expr);
     }
 
-    /// The runtime captures of nested procedure site `site_index` of `view`.
-    /// A scheme alias owns no value: each of its uses lowers the callable it
+    /// The runtime captures of the procedure `view` constructs at `expr` (a
+    /// nested procedure site's expression or a closure site's lambda). A
+    /// scheme alias owns no value: each of its uses lowers the callable it
     /// names, whose own captures the site lists, so it takes no capture.
-    pub fn runtimeCaptures(self: *Program, view: *const types.ModuleView, site_index: anytype) Allocator.Error![]const checked.CheckedCapture {
-        const table = view.view.nested_proc_sites;
-        const span = table.sites[site_index].runtime_captures;
-        const listed = table.runtime_captures[span.start..][0..span.len];
+    pub fn runtimeCaptures(self: *Program, view: *const types.ModuleView, expr: ExprId) Allocator.Error![]const checked.CheckedCapture {
         const bodies = view.bodies();
+        const listed = try bodies.nestedProcRuntimeCaptures(expr);
         var kept: std.ArrayList(checked.CheckedCapture) = .empty;
         for (listed) |capture| {
             if (bodies.binder(capture.pattern).is_scheme_alias) continue;
@@ -2469,13 +2464,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             }
         }
         try program.by_identity.put(allocator, view.view.module_identity.stable_hash, view.index);
-        for (view.view.nested_proc_sites.sites, 0..) |site, site_index| {
-            const site_expr = site.checked_expr orelse continue;
-            try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
-            // A closure's site is also its lambda's, which names its worker.
-            const site_data = view.bodies().exprData(site_expr);
-            if (site_data == .closure) try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_data.closure.lambda }, @intCast(site_index));
-        }
         for (bodies.recordOmittedDefaults()) |source_omitted| {
             const omitted = bodies.recordOmittedDefault(source_omitted);
             const name = try program.store.internName(view.nameStore().recordFieldLabelText(omitted.field_name));

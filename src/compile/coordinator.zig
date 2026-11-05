@@ -7644,7 +7644,7 @@ fn compileAppWithCheckedModuleCache(
     const hoisted_constants = countHoistedConstants(root, imports, relations);
     const hoisted_validations = countHoistedValidations(root, imports, relations);
     const pattern_extraction_regions = try collectPatternExtractionRegionStats(root, imports, relations);
-    const exhaustiveness_sites = collectExhaustivenessSiteStats(root, imports, relations);
+    const exhaustiveness_sites = try collectExhaustivenessSiteStats(root, imports, relations);
 
     return .{
         .build = coord.getBuildStats(),
@@ -9511,13 +9511,13 @@ fn collectExhaustivenessSiteStats(
     root: *const check.CheckedArtifact.CheckedModuleArtifact,
     imports: []const check.CheckedArtifact.ImportedModuleView,
     relations: []const check.CheckedArtifact.ImportedModuleView,
-) ExhaustivenessSiteStats {
+) Allocator.Error!ExhaustivenessSiteStats {
     var hasher = base.Sha256.init(.{});
     var count: usize = 0;
 
-    hashExhaustivenessSitesForView(&hasher, &count, check.CheckedArtifact.importedView(root));
-    for (imports) |view| hashExhaustivenessSitesForView(&hasher, &count, view);
-    for (relations) |view| hashExhaustivenessSitesForView(&hasher, &count, view);
+    try hashExhaustivenessSitesForView(&hasher, &count, check.CheckedArtifact.importedView(root));
+    for (imports) |view| try hashExhaustivenessSitesForView(&hasher, &count, view);
+    for (relations) |view| try hashExhaustivenessSitesForView(&hasher, &count, view);
 
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
@@ -9528,8 +9528,8 @@ fn hashExhaustivenessSitesForView(
     hasher: *base.Sha256,
     count: *usize,
     view: check.CheckedArtifact.ImportedModuleView,
-) void {
-    for (view.exhaustiveness_sites.sites) |site| {
+) Allocator.Error!void {
+    for ((try view.exhaustivenessSites()).sites) |site| {
         count.* += 1;
         hasher.update(&view.key.bytes);
         hashU32IntoSha256(hasher, @backingInt(site.id));

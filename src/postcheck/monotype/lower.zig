@@ -1466,7 +1466,6 @@ const ModuleViewData = struct {
     names: *const names.NameStore,
     types: checked.CheckedTypeStoreView,
     bodies: checked.CheckedBodies,
-    exhaustiveness_sites: *const checked.CheckedExhaustivenessSiteTable,
     checked_const_bodies: *const checked.CheckedConstBodyTable,
     templates: *const checked.CheckedProcedureTemplateTable,
     compile_time_roots: *const checked.CompileTimeRootTable,
@@ -1480,7 +1479,6 @@ const ModuleViewData = struct {
     method_registry: *const static_dispatch.MethodRegistry,
     direct_import_module_keys: []const checked.CheckedModuleArtifactKey,
     resolved_refs: *const checked.ResolvedValueTable,
-    nested_proc_sites: *const checked.NestedProcSiteTable,
     exported_procedure_bindings: checked.ExportedProcedureBindingView,
     exported_const_templates: checked.ExportedConstTemplateView,
     top_level_procedure_bindings: *const checked.TopLevelProcedureBindingTable,
@@ -6135,7 +6133,6 @@ const Builder = struct {
     /// Nested-fn specialization records keyed by function id; the durable
     /// identity and status live on the `Ast.SpecRecord`.
     lowered_nested_by_fn: collections.DenseMap(Ast.FnId, Ast.SpecId),
-    nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     /// Whether each checked type reaches the error type (see
     /// `checkedTypeContainsError`).
     checked_type_contains_error: CheckedTypeMemo(bool) = .empty,
@@ -6348,7 +6345,6 @@ const Builder = struct {
             .function_scan_path = collections.DenseMap(Type.TypeId, void).init(allocator),
             .resolved_callable_vectors = .empty,
             .lowered_nested_by_fn = collections.DenseMap(Ast.FnId, Ast.SpecId).init(allocator),
-            .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
             .static_data_uses = .empty,
@@ -6607,7 +6603,6 @@ const Builder = struct {
         self.static_data_uses.deinit(self.allocator);
         self.static_data_ids.deinit();
         self.const_expr_cache.deinit();
-        self.nested_site_cache.deinit();
         self.checked_type_contains_error.deinit(self.allocator);
         self.request_determined_result_rows.deinit(self.allocator);
         self.checked_type_representation_fixed.deinit(self.allocator);
@@ -13261,7 +13256,7 @@ const Builder = struct {
                 const fn_target = try self.lowerDraftNestedFromContext(
                     &fn_ctx,
                     fn_ctx.draft.current_owner,
-                    checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def),
+                    try checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def),
                     nested,
                     fn_template.source_fn_ty,
                     fn_template.source_fn_key,
@@ -13345,69 +13340,6 @@ const Builder = struct {
         if (fn_.signature_relation == .exact_graph) return;
         fn_.signature_relation = .exact_graph;
         self.program.setFn(fn_id, fn_);
-    }
-
-    fn nestedFnForExpr(
-        self: *Builder,
-        view: ModuleView,
-        owner: names.ProcTemplate,
-        expr_id: CIR.Expr.Idx,
-        context_fn_key: names.TypeDigest,
-        local_proc_context_digest: ?names.TypeDigest,
-        in_default_expr: bool,
-    ) Allocator.Error!Ast.NestedFn {
-        const site = try self.nestedSiteForExpr(view, owner, expr_id, in_default_expr);
-        return .{
-            .owner = owner,
-            .site = site,
-            // A default-root site belongs to no template; the produced
-            // reference carries the declaring module's content identity so a
-            // stored function value built from it stays resolvable outside
-            // materialization context (const-store restore).
-            .default_root = switch (view.nested_proc_sites.sites[@backingInt(site)].owner) {
-                .template => null,
-                .default_root => .{ .bytes = view.module_identity.stable_hash },
-            },
-            .context_fn_key = context_fn_key,
-            .local_proc_context_digest = local_proc_context_digest,
-        };
-    }
-
-    /// The checked nested-procedure site `owner` lowers `expr_id` at.
-    fn nestedSiteForExpr(
-        self: *Builder,
-        view: ModuleView,
-        owner: names.ProcTemplate,
-        expr_id: CIR.Expr.Idx,
-        in_default_expr: bool,
-    ) Allocator.Error!names.NestedProcSiteId {
-        const address = NestedSiteAddress.from(view.key, owner, expr_id);
-        const site = if (self.nested_site_cache.get(address)) |cached|
-            cached
-        else blk: {
-            for (view.nested_proc_sites.sites) |candidate| {
-                if (candidate.checked_expr == null or candidate.checked_expr.? != expr_id) continue;
-                // A default-root site (a lambda/closure inside a defaulted-field
-                // expression) is matched only while materializing a default; it
-                // has no owning template, so the requesting context's owner
-                // does not participate. A template-owned site is matched only
-                // by its own template.
-                switch (candidate.owner) {
-                    .template => |site_owner| {
-                        if (in_default_expr) continue;
-                        if (!names.procedureTemplateRefEql(site_owner, owner)) continue;
-                    },
-                    .default_root => if (!in_default_expr) continue,
-                }
-                try self.nested_site_cache.put(address, candidate.site);
-                break :blk candidate.site;
-            }
-            Common.invariant("nested function expression reached Monotype without a checked nested function site");
-        };
-        if (@backingInt(site) >= view.nested_proc_sites.sites.len) {
-            Common.invariant("nested function site id was outside the CheckedModule procedure-site table");
-        }
-        return site;
     }
 
     fn lowerDraftNestedFromContext(
@@ -13787,23 +13719,16 @@ const Builder = struct {
         } else try nested_ctx.instNode(source_fn_ty);
         if (owned_scope) |scope| {
             try nested_ctx.graph.unify(root_node, try nested_ctx.lowerExprTypeNode(expr_id));
-            const raw_site = @backingInt(nested.site);
-            if (raw_site >= nested_ctx.view.nested_proc_sites.sites.len) {
-                Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
-            }
-            switch (nested_ctx.view.nested_proc_sites.sites[raw_site].owner) {
-                .template => try nested_ctx.instantiateTemplateDispatchRelations(
-                    nested_ctx.view.templates.get(nested_ctx.owner_template.template),
-                    scope,
-                ),
-                // A default-root site has no owning template, and by the
-                // parameter-constraint judgment (design.md "Defaulted
-                // Fields") a default is checked at its concrete field type:
-                // there is no enclosing scheme whose relations could apply.
-                // The default's own dispatch relations flow through its
-                // collected default-root evidence spans.
-                .default_root => {},
-            }
+            // A default-root site has no owning template, and by the
+            // parameter-constraint judgment (design.md "Defaulted Fields") a
+            // default is checked at its concrete field type: there is no
+            // enclosing scheme whose relations could apply. The default's own
+            // dispatch relations flow through its collected default-root
+            // evidence spans.
+            if (nested.default_root == null) try nested_ctx.instantiateTemplateDispatchRelations(
+                nested_ctx.view.templates.get(nested_ctx.owner_template.template),
+                scope,
+            );
         }
         if (try nested_ctx.graph.containsGeneratedPrivate(request_fn_node)) {
             try relateGeneratedPrivateRequestInterface(nested_ctx.graph, root_node, request_fn_node);
@@ -16287,7 +16212,7 @@ const Builder = struct {
         try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, ty);
         const draft = FinalBodyOutputGuard.begin(self);
 
-        const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
+        const lambda_expr_id = try checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
         const lambda_expr = checkedExpr(fn_view, lambda_expr_id);
         for (fn_value.captures) |capture| _ = constCaptureBinder(capture.id);
         var bound_captures = try self.bindConstSourceCaptures(&fn_ctx, store_view, fn_view, fn_value, static_data_const_locator, false);
@@ -30314,7 +30239,7 @@ const BodyContext = struct {
                         break :ty lambda.ty;
                     } else checkedExpr(self.view, expr_id).ty,
                 };
-                const nested = try self.builder.nestedFnForExpr(
+                const nested = try nestedFnForExpr(
                     self.view,
                     self.owner_template,
                     expr_id.node(),
@@ -45529,7 +45454,7 @@ const BodyContext = struct {
         self.owner_template = context.owner_template;
         defer self.owner_template = previous_owner_template;
         const context_fn_key = self.localProcUseContextKey(context);
-        const nested = try self.builder.nestedFnForExpr(
+        const nested = try nestedFnForExpr(
             self.view,
             context.owner_template,
             local.expr,
@@ -48151,7 +48076,7 @@ const BodyContext = struct {
                 return try self.builder.lowerDraftNestedFromContext(
                     &fn_ctx,
                     restored_owner_scope.previous,
-                    checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
+                    try checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
                     nested,
                     source_fn_ty,
                     source_fn_key,
@@ -48216,7 +48141,7 @@ const BodyContext = struct {
             ),
         }
 
-        const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
+        const lambda_expr_id = try checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
         const lambda_expr = checkedExpr(fn_view, lambda_expr_id);
 
         for (fn_value.captures) |capture| _ = constCaptureBinder(capture.id);
@@ -50678,7 +50603,7 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         capture_entry_guards: []const NodeId,
     ) Allocator.Error!DraftFnTarget {
-        const nested = try self.builder.nestedFnForExpr(
+        const nested = try nestedFnForExpr(
             self.view,
             self.owner_template,
             expr_id.node(),
@@ -50830,19 +50755,11 @@ const BodyContext = struct {
         expr_id: ExprSite,
         request_fn_node: NodeId,
     ) Allocator.Error!NestedSiteEvidence {
-        const raw_site = @backingInt(nested.site);
-        if (raw_site >= self.view.nested_proc_sites.sites.len) {
-            Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
+        if (checked.nestedProcSiteExpr(nested.site) != expr_id.node()) {
+            Common.invariant("nested function site did not match its checked expression");
         }
-        const site = self.view.nested_proc_sites.sites[raw_site];
-        const owner_matches = switch (site.owner) {
-            .template => |site_owner| !self.in_default_expr and
-                names.procedureTemplateRefEql(site_owner, self.owner_template),
-            .default_root => self.in_default_expr,
-        };
-        if (!owner_matches or site.checked_expr == null or site.checked_expr.? != expr_id.node()) {
-            Common.invariant("nested function site did not match its checked expression owner");
-        }
+        const site_owner: checked.NestedProcSiteOwner = if (self.in_default_expr) self.view.bodies.nestedProcSiteDefaultOwner(nested.site) else .{ .template = self.owner_template };
+        const site = try self.view.bodies.nestedProcSite(site_owner, nested.site);
 
         const lexical_scope: LexicalDispatchScope = switch (site.lexical_scope) {
             .root => .root,
@@ -52024,24 +51941,8 @@ const BodyContext = struct {
                     self.builder.moduleForConstFnDef(fn_value.fn_def)
                 else
                     owner_view;
-                const raw_site = @backingInt(nested.site);
-                if (raw_site >= site_view.nested_proc_sites.sites.len) {
-                    Common.invariant("stored nested function referenced an unknown checked site");
-                }
-                const site = site_view.nested_proc_sites.sites[raw_site];
-                switch (site.owner) {
-                    .template => |site_owner| {
-                        if (nested.default_root != null) {
-                            Common.invariant("stored default-root function referenced a template-owned checked site");
-                        }
-                        if (!names.procedureTemplateRefEql(site_owner, owner)) {
-                            Common.invariant("stored nested function site belonged to a different checked template");
-                        }
-                    },
-                    .default_root => if (nested.default_root == null) {
-                        Common.invariant("stored nested function referenced a default-root checked site without a default-root qualifier");
-                    },
-                }
+                const site_owner: checked.NestedProcSiteOwner = if (nested.default_root != null) site_view.bodies.nestedProcSiteDefaultOwner(nested.site) else .{ .template = owner };
+                const site = try site_view.bodies.nestedProcSite(site_owner, nested.site);
                 break :blk switch (site.lexical_scope) {
                     .root => .root,
                     .generalized => |scope_id| .{ .generalized = scope_id },
@@ -52410,17 +52311,13 @@ const BodyContext = struct {
         evidence: EvidenceChain,
         request_fn_node: NodeId,
     ) Allocator.Error!EvidenceChain {
-        const raw_site = @backingInt(nested.site);
-        if (raw_site >= self.view.nested_proc_sites.sites.len) {
-            Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
-        }
-        const site = self.view.nested_proc_sites.sites[raw_site];
+        const site = try checkedNestedSite(self.view, nested);
         const scope_id = switch (site.lexical_scope) {
             .root => return evidence,
             .generalized => |scope_id| scope_id,
         };
         const scope = self.view.templates.dispatch_scopes[@backingInt(scope_id)];
-        if (site.checked_expr == null or scope.checked_expr != site.checked_expr.?) return evidence;
+        if (scope.checked_expr != site.checked_expr) return evidence;
         switch (evidence.scope.lexical) {
             .generalized => |frame_scope| if (frame_scope != scope_id) {
                 Common.invariant("nested function that owns a dispatch scope was requested outside that scope's frame");
@@ -53588,7 +53485,7 @@ const BodyContext = struct {
         const root_fn_ty = if (target.instantiation) |instantiation| instantiation.callable_ty else target.target.callable_ty;
         const owner = switch (target.target.kind) {
             .procedure => |procedure| procedure.template,
-            .local_proc => |local| self.localMethodOwnerTemplate(.{
+            .local_proc => |local| try self.localMethodOwnerTemplate(.{
                 .view = target.view,
                 .target = target.target,
                 .local_proc_context = target.local_proc_context,
@@ -54502,7 +54399,7 @@ const BodyContext = struct {
     ) Allocator.Error!BodyContext {
         const owner_template = switch (lookup.target.kind) {
             .procedure => |procedure| procedure.template,
-            .local_proc => |local| self.localMethodOwnerTemplate(lookup, local),
+            .local_proc => |local| try self.localMethodOwnerTemplate(lookup, local),
             .structural => Common.invariant("structural method registry result has no callable body context"),
         };
         return BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, self.graph, self.draft);
@@ -54512,7 +54409,7 @@ const BodyContext = struct {
         self: *BodyContext,
         lookup: MethodLookup,
         local: static_dispatch.LocalProcedureMethodTarget,
-    ) names.ProcTemplate {
+    ) Allocator.Error!names.ProcTemplate {
         if (lookup.local_proc_context) |context_id| {
             return self.validateLocalProcContext(
                 context_id,
@@ -54524,14 +54421,12 @@ const BodyContext = struct {
         }
         // Without a lowered declaration instance, the target's checked
         // declaration names the procedure template whose body declares it.
-        for (lookup.view.nested_proc_sites.sites) |site| {
-            if (site.checked_expr == null or site.checked_expr.? != local.expr) continue;
-            return switch (site.owner) {
-                .template => |template| template,
-                .default_root => Common.invariant("local method declaration had no owning procedure template"),
-            };
-        }
-        Common.invariant("local method declaration had no checked nested procedure site");
+        const template = try lookup.view.bodies.localProcedureTemplate(local.expr);
+        return .{
+            .artifact = moduleDigestFromId(lookup.view.key),
+            .proc_base = lookup.view.templates.get(template).proc_base,
+            .template = template,
+        };
     }
 
     /// `relateFunctionRequestInterface` for a resolved dispatch target. When
@@ -63084,12 +62979,12 @@ const BodyContext = struct {
         };
         const checked_site = if (ExhaustivenessContext.siteHasPendingStaticDiagnostic(shared_site_kind))
             switch (shared_site_kind) {
-                .match => self.view.exhaustiveness_sites.lookupByMatchExpr(expr_id.node()),
+                .match => try self.view.bodies.matchExhaustivenessSite(expr_id.node()),
                 .destructure => blk: {
                     if (match.branches.count() != 1) break :blk null;
                     const patterns = matchBranchAt(self.view, match.branches, 0).patterns;
                     if (patterns.len() != 1) break :blk null;
-                    break :blk self.view.exhaustiveness_sites.lookupByDestructurePattern(patterns.at(self.view, 0).pattern);
+                    break :blk try self.view.bodies.destructureExhaustivenessSite(patterns.at(self.view, 0).pattern);
                 },
             }
         else
@@ -64407,7 +64302,7 @@ const BodyContext = struct {
 
                 const source_expr = try self.addExprWithTypeCell(value_cell, .{ .local = source_local });
                 const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and try self.patternCanMiss(pattern))
-                    try self.addComptimeSite(.destructure, statement.source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern))
+                    try self.addComptimeSite(.destructure, statement.source_region, try self.view.bodies.destructureExhaustivenessSite(pattern))
                 else
                     null;
                 try self.appendRecordRestPatternStatements(
@@ -64447,7 +64342,7 @@ const BodyContext = struct {
                     try self.addComptimeSite(
                         .destructure,
                         statement.source_region,
-                        self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern),
+                        try self.view.bodies.destructureExhaustivenessSite(pattern),
                     )
                 else
                     null;
@@ -65276,7 +65171,7 @@ const BodyContext = struct {
             },
         };
         const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and try self.patternCanMiss(pattern))
-            try self.addComptimeSite(.destructure, source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern))
+            try self.addComptimeSite(.destructure, source_region, try self.view.bodies.destructureExhaustivenessSite(pattern))
         else
             null;
         if (!try self.patternNeedsExplicitBinding(pattern)) {
@@ -65575,7 +65470,7 @@ const BodyContext = struct {
             .base_key = restored.base_key,
             .restored_specialization_key = restoredLocalProcUseContextKey(restored.base_key, restored.source_context_digest, binder),
             .entries = entries,
-            .evidence = self.restoredLocalProcDeclarationEvidence(view, expr),
+            .evidence = try self.restoredLocalProcDeclarationEvidence(view, expr),
         }) catch |err| {
             self.allocator.free(entries);
             return err;
@@ -65588,22 +65483,10 @@ const BodyContext = struct {
         self: *BodyContext,
         view: ModuleView,
         expr: CIR.Expr.Idx,
-    ) EvidenceChain {
-        var site: ?checked.NestedProcSite = null;
-        for (view.nested_proc_sites.sites) |candidate| {
-            if (candidate.checked_expr == null or candidate.checked_expr.? != expr) continue;
-            switch (candidate.owner) {
-                .template => |site_owner| {
-                    if (self.in_default_expr) continue;
-                    if (!names.procedureTemplateRefEql(site_owner, self.owner_template)) continue;
-                },
-                .default_root => if (!self.in_default_expr) continue,
-            }
-            if (site != null) Common.invariant("restored local procedure matched multiple checked nested sites");
-            site = candidate;
-        }
-        const nested_site = site orelse
-            Common.invariant("restored local procedure had no checked nested site");
+    ) Allocator.Error!EvidenceChain {
+        const site = checked.nestedProcSiteId(expr);
+        const site_owner: checked.NestedProcSiteOwner = if (self.in_default_expr) view.bodies.nestedProcSiteDefaultOwner(site) else .{ .template = self.owner_template };
+        const nested_site = try view.bodies.nestedProcSite(site_owner, site);
         const wanted: LexicalDispatchScope = switch (nested_site.lexical_scope) {
             .root => .root,
             .generalized => |scope_id| blk: {
@@ -69089,7 +68972,6 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .names = checked.importedNames(view),
         .types = view.checked_types,
         .bodies = view.checked_bodies,
-        .exhaustiveness_sites = view.exhaustiveness_sites,
         .checked_const_bodies = view.checked_const_bodies,
         .templates = view.checked_procedure_templates,
         .compile_time_roots = view.compile_time_roots,
@@ -69102,7 +68984,6 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .method_registry = view.method_registry,
         .direct_import_module_keys = view.direct_import_module_keys,
         .resolved_refs = view.resolved_value_refs,
-        .nested_proc_sites = view.nested_proc_sites,
         .exported_procedure_bindings = view.exported_procedure_bindings,
         .exported_const_templates = view.exported_const_templates,
         .top_level_procedure_bindings = view.top_level_procedure_bindings,
@@ -69476,11 +69357,10 @@ fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.C
     return view.types.payload(checked_ty);
 }
 
-fn checkedLambdaExprIdForConstFn(view: ModuleView, fn_def: anytype) ExprSite {
+fn checkedLambdaExprIdForConstFn(view: ModuleView, fn_def: anytype) Allocator.Error!ExprSite {
     return switch (fn_def) {
         .nested => |nested| blk: {
-            const site = checkedNestedSite(view, nested);
-            const expr_id = site.checked_expr orelse Common.invariant("stored nested function had no checked expression site");
+            const expr_id = (try checkedNestedSite(view, nested)).checked_expr;
             const expr = checkedExpr(view, ExprSite.read(expr_id));
             break :blk switch (expr.data) {
                 .lambda => ExprSite.read(expr_id),
@@ -69530,26 +69410,43 @@ fn templateForConstFnDef(fn_def: check.ConstStore.FnDef) names.ProcTemplate {
     };
 }
 
-fn checkedNestedSite(view: ModuleView, nested: anytype) checked.NestedProcSite {
-    // A default-root-qualified stored function names the declaring module's
-    // default root as the site owner; `view` is already that module
-    // (`moduleForConstFnDef` resolves it by content identity), so the match
-    // is by site id against the `.default_root` owner (design.md "Defaulted
-    // Fields"—const-store restore is the second sanctioned resolver of
-    // default-root sites, after live default materialization).
-    const wants_default_root = nested.default_root != null;
-    for (view.nested_proc_sites.sites) |site| {
-        if (site.site != nested.site) continue;
-        switch (site.owner) {
-            .template => |site_owner| {
-                if (wants_default_root) continue;
-                if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
-            },
-            .default_root => if (!wants_default_root) continue,
-        }
-        return site;
-    }
-    Common.invariant("stored nested function referenced a missing checked nested site");
+/// The nested function `owner` constructs at `expr_id`. A default-root site
+/// (a lambda or closure inside a defaulted-field expression) is matched only
+/// while materializing a default; its owner is the default, so the
+/// requesting context's owner does not participate, and the produced
+/// reference carries the declaring module's content identity so a stored
+/// function value built from it stays resolvable outside materialization
+/// context (const-store restore). A template-owned site is matched only by
+/// its own template.
+fn nestedFnForExpr(
+    view: ModuleView,
+    owner: names.ProcTemplate,
+    expr_id: CIR.Expr.Idx,
+    context_fn_key: names.TypeDigest,
+    local_proc_context_digest: ?names.TypeDigest,
+    in_default_expr: bool,
+) Allocator.Error!Ast.NestedFn {
+    const site = checked.nestedProcSiteId(expr_id);
+    const site_owner: checked.NestedProcSiteOwner = if (in_default_expr) view.bodies.nestedProcSiteDefaultOwner(site) else .{ .template = owner };
+    return .{
+        .owner = owner,
+        .site = (try view.bodies.nestedProcSite(site_owner, site)).id(),
+        .default_root = if (in_default_expr) .{ .bytes = view.module_identity.stable_hash } else null,
+        .context_fn_key = context_fn_key,
+        .local_proc_context_digest = local_proc_context_digest,
+    };
+}
+
+/// The checked site of nested function `nested`. A default-root-qualified
+/// function names the declaring module's default root as the site owner;
+/// `view` is that module (`moduleForConstFnDef` resolves it by content
+/// identity), so the site resolves against the default that contains it
+/// (design.md "Defaulted Fields"—const-store restore is the second
+/// sanctioned resolver of default-root sites, after live default
+/// materialization).
+fn checkedNestedSite(view: ModuleView, nested: anytype) Allocator.Error!checked.NestedProcSite {
+    const owner: checked.NestedProcSiteOwner = if (nested.default_root != null) view.bodies.nestedProcSiteDefaultOwner(nested.site) else .{ .template = nested.owner };
+    return view.bodies.nestedProcSite(owner, nested.site);
 }
 
 fn checkedBinderType(view: ModuleView, binder: BinderId) checked.CheckedTypeId {
@@ -70054,26 +69951,6 @@ fn checkedTypeAddress(view: ModuleView, checked_ty: checked.CheckedTypeId) Check
         .type_id = checked_ty,
     };
 }
-
-const NestedSiteAddress = struct {
-    module_bytes: [32]u8,
-    owner_proc_base: u32,
-    owner_template: u32,
-    expr: u32,
-
-    fn from(
-        module_key: checked.ModuleId,
-        owner: names.ProcTemplate,
-        expr_id: CIR.Expr.Idx,
-    ) NestedSiteAddress {
-        return .{
-            .module_bytes = module_key.bytes,
-            .owner_proc_base = @backingInt(owner.proc_base),
-            .owner_template = @backingInt(owner.template),
-            .expr = @backingInt(expr_id),
-        };
-    }
-};
 
 test "hosted extern boundary admits only the declared host ABI type" {
     const allocator = std.testing.allocator;

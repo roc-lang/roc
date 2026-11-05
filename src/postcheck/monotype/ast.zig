@@ -274,9 +274,9 @@ pub const NestedFn = struct {
     site: names.ProcSiteId,
     /// Set iff `site` is a DEFAULT-ROOT site (a lambda/closure inside a
     /// defaulted-field expression, design.md "Defaulted Fields"): the
-    /// declaring module's 32-byte content identity. `site` indexes THAT
-    /// module's `nested_proc_sites` table, where the site's owner is
-    /// `.default_root` (the site belongs to no procedure template).
+    /// declaring module's 32-byte content identity. `site` names an
+    /// expression of THAT module, and the site's owner is the default
+    /// containing it (the site belongs to no procedure template).
     default_root: ?names.ModuleContentIdentity = null,
     context_fn_key: names.TypeDigest,
     /// Digest of every local-procedure declaration context visible inside this

@@ -425,7 +425,9 @@ pub const Tables = struct {
     const_templates: ?*const checked_artifact.ConstTemplateTable = null,
     templates: ?*const checked_artifact.CheckedProcedureTemplateTable = null,
     top_level_procedure_bindings: ?*const checked_artifact.TopLevelProcedureBindingTable = null,
-    nested_proc_sites: ?*const checked_artifact.NestedProcSiteTable = null,
+    /// The module's analyses, which hold its nested procedure sites and
+    /// exhaustiveness sites.
+    module_analyses: ?*checked_artifact.ModuleAnalyses = null,
     exported_defs: []const CIR.Def.Idx = &.{},
     /// The pairing's types for a platform read under a platform/app pairing.
     pairing_types: ?*const checked_artifact.PairingTypeColumn = null,
@@ -1041,6 +1043,76 @@ pub const CheckedBodies = struct {
     /// constructs exactly once, as the function of a call.
     pub fn nestedProcSiteIsSingleSourceCall(self: CheckedBodies, site: canonical.NestedProcSiteId) Allocator.Error!bool {
         return self.analyses.nestedProcSiteIsSingleSourceCall(self, site);
+    }
+
+    fn moduleAnalyses(self: CheckedBodies) *checked_artifact.ModuleAnalyses {
+        return self.tables.module_analyses orelse invariant("nested procedure or exhaustiveness sites were read from bodies without module analyses");
+    }
+
+    /// The nested procedure sites of `owner`'s body.
+    pub fn nestedProcSites(self: CheckedBodies, owner: checked_artifact.NestedProcSiteOwner) Allocator.Error!*const checked_artifact.OwnerNestedProcSites {
+        return self.moduleAnalyses().nestedProcSites(self, owner);
+    }
+
+    /// Site `site` of `owner`, which `owner`'s body constructs.
+    pub fn nestedProcSite(self: CheckedBodies, owner: checked_artifact.NestedProcSiteOwner, site: canonical.NestedProcSiteId) Allocator.Error!checked_artifact.NestedProcSite {
+        return (try self.nestedProcSites(owner)).find(site) orelse
+            invariant("a nested procedure site was read from an owner whose body does not construct it");
+    }
+
+    /// The defaulted-field default whose expression contains nested
+    /// procedure site `site`.
+    pub fn nestedProcSiteDefaultOwner(self: CheckedBodies, site: canonical.NestedProcSiteId) checked_artifact.NestedProcSiteOwner {
+        const module_index = self.index();
+        const unit = module_index.unit(module_index.unitOf(@backingInt(checked_artifact.nestedProcSiteExpr(site))));
+        if (unit.kind != .default) invariant("a default-root nested procedure site lies outside every defaulted-field default");
+        return .{ .default_root = @fromBackingInt(unit.root) };
+    }
+
+    /// The module's nested procedure sites by expression.
+    pub fn moduleNestedProcSites(self: CheckedBodies) Allocator.Error!*const checked_artifact.ModuleNestedProcSites {
+        return self.moduleAnalyses().moduleNestedProcSites(self);
+    }
+
+    /// The binders of enclosing frames whose values the procedure
+    /// constructed at `site_expr` (a nested procedure site's expression or a
+    /// closure site's lambda) needs at runtime.
+    pub fn nestedProcRuntimeCaptures(self: CheckedBodies, site_expr: ExprId) Allocator.Error![]const checked_artifact.CheckedCapture {
+        return (try self.moduleNestedProcSites()).runtimeCaptures(site_expr) orelse
+            invariant("runtime captures were read for an expression that constructs no nested procedure");
+    }
+
+    /// The procedure template whose body declares the local procedure at
+    /// `proc_expr`: the first template, in template order, whose body constructs
+    /// a procedure there.
+    pub fn localProcedureTemplate(self: CheckedBodies, proc_expr: ExprId) Allocator.Error!canonical.CheckedProcedureTemplateId {
+        const sites = try self.moduleNestedProcSites();
+        const found = sites.position(proc_expr) orelse invariant("a local procedure declaration constructs no nested procedure");
+        return sites.first_templates[found] orelse invariant("a local procedure declaration belongs to no procedure template");
+    }
+
+    /// The exhaustiveness check of match expression `match_expr`, if checking
+    /// left one to evaluation.
+    pub fn matchExhaustivenessSite(self: CheckedBodies, match_expr: ExprId) Allocator.Error!?checked_artifact.CheckedExhaustivenessSiteId {
+        return self.analyses.exhaustivenessSiteOf(self, @backingInt(match_expr), .match_expr);
+    }
+
+    /// Append every exhaustiveness check of `source` kind at node `raw_node`
+    /// to `found`.
+    pub fn appendExhaustivenessSitesAt(
+        self: CheckedBodies,
+        raw_node: u32,
+        source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source),
+        allocator: Allocator,
+        found: *std.ArrayList(checked_artifact.CheckedExhaustivenessSiteId),
+    ) Allocator.Error!void {
+        return self.analyses.appendExhaustivenessSitesAt(self, raw_node, source, allocator, found);
+    }
+
+    /// The exhaustiveness check of destructuring pattern `destructure`, if
+    /// checking left one to evaluation.
+    pub fn destructureExhaustivenessSite(self: CheckedBodies, destructure: PatternId) Allocator.Error!?checked_artifact.CheckedExhaustivenessSiteId {
+        return self.analyses.exhaustivenessSiteOf(self, @backingInt(destructure), .destructure_pattern);
     }
 
     pub fn matchBranch(self: CheckedBodies, id: CIR.Expr.Match.Branch.Idx) MatchBranch {

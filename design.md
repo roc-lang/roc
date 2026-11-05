@@ -5107,8 +5107,9 @@ after checking, are on-demand analyses of the sealed module
   `erroneous_nodes` entry, any child's, a dispatch total resolution rejected,
   and, when a dispatch was rejected, a resolved local constant reference to
   an erroneous value; the constant-following part crosses definitions, so it
-  is one slot for the module), and which templates and nested procedure sites
-  are single-source calls.
+  is one slot for the module), which templates and nested procedure sites
+  are single-source calls, and the exhaustiveness check checking left at
+  each match expression and destructuring pattern.
 
 There is no propagation pass over finished bodies during checking or
 checked module assembly, and no analysis result is serialized.
@@ -5313,17 +5314,25 @@ computed by whichever consumer first needs it, exactly once, into a slot owned
 by the module. Nothing computes such a fact eagerly for a whole module, and no
 cache entry stores one: a cache hit recomputes each fact on its first demand.
 
-- Per-root slots: a type's canonical key; a template's nested
-  procedure sites; a declaration's synthesized template; a template's
-  exhaustiveness sites; a top-level unit's body-level analyses
-  (divergence, inspect elision, state merges and loop mutations).
+- Per-root slots: a type's canonical key; the nested procedure sites of
+  a template's body and of a defaulted-field default
+  (`ModuleAnalyses.nestedProcSites`: each lambda, closure and hosted
+  lambda the body constructs a procedure at, identified within its owner
+  by its expression, with its lexical dispatch scope and its construction
+  evidence, whose span names the evidence pool of the resolution that
+  holds it); a declaration's synthesized template; the exhaustiveness
+  checks a template's body reaches
+  (`ModuleAnalyses.templateExhaustivenessSites`); a top-level unit's
+  body-level analyses (divergence, inspect elision, state merges and loop
+  mutations).
 - Per-component slots: analyses that are fixpoints over the call graph
   (template demand vectors, literal requirements) are claimed for a whole
   strongly connected component of the module's call graph, never per root.
 - Per-module slots: the key index (one over source types, one over
   synthesized types), the method registry view, provided exports, the
-  nodes whose dispatch plan cannot run, diagnostic errors, and
-  single-source calls.
+  nodes whose dispatch plan cannot run, diagnostic errors, single-source
+  calls, and the exhaustiveness check checking left at each match
+  expression and destructuring pattern, by node.
 - Per-module slots of `check.ModuleAnalyses`
   (`src/check/module_analyses.zig`), which every checked module owns:
   the template closures of the module's export rows (`exportClosures`),
@@ -5352,13 +5361,27 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   (`templateDispatchRelations`), the module's resolution of what no
   template binds, with its generated codecs (`moduleDispatch`), and an
   app's root evidence for its platform requirement solutions
-  (`platformRequirementRootEvidence`). Each resolution owns the evidence
-  pool its evidence ids name, and a plan's or site's resolution is the
-  first template's, in template order, that holds it, otherwise the
-  module's. A platform/app pairing has analyses of its own; its export
-  closures, public API dependencies, interface capabilities and dispatch
-  resolution are its platform's, and a pairing demands its platform's
-  capabilities before it borrows the platform's types. A constant's
+  (`platformRequirementRootEvidence`), and the module's nested procedure
+  sites by expression with the runtime captures of each
+  (`moduleNestedProcSites`), and every exhaustiveness check with the owner
+  and policy that decide it (`exhaustivenessSites`: the first compile-time
+  root, in root order, whose evaluation replaces the check's source,
+  otherwise the first template, in template order, whose body reaches it,
+  decided by whether the module's root requests reach that template at
+  runtime, only at compile time, or only through a pairing). Runtime
+  captures are one slot for the module rather than one per component of
+  the call graph: the relation that defines them crosses owners (a
+  promoted local procedure's body selects local procedures its enclosing
+  template's body declares) and its components are not the call graph's.
+  Each resolution owns the evidence pool its evidence ids name, and a
+  plan's or site's resolution is the first template's, in template order,
+  that holds it, otherwise the module's. A platform/app pairing has
+  analyses of its own; its export closures, public API dependencies,
+  interface capabilities, dispatch resolution, nested procedure sites and
+  per-template exhaustiveness sites are its platform's, its exhaustiveness
+  policies are its own (it decides its platform's checks by its own root
+  requests, after demanding its platform's), and a pairing demands its
+  platform's capabilities before it borrows the platform's types. A constant's
   closure follows the template its compile-time root evaluates
   whether or not evaluation has stored the constant's value, so the result
   is the same before and after evaluation.
@@ -6181,11 +6204,13 @@ flow. It pairs the checked function identity with the checked source function
 type. Later stages must carry it forward instead of recovering the checked
 function type from generated procedures, runtime layouts, or call sites.
 
-Checked module output assigns a `NestedProcSiteId` to every
-expression-position function inside each checked procedure template. A nested
+Every expression-position function inside a checked procedure template has a
+`NestedProcSiteId`: the node id of its lambda, closure or hosted lambda
+expression, unique among its owner's sites. A nested
 function is identified by `(owner template, nested site, context function
-digest)`. The site id is assigned from the checked body traversal before
-post-check lowering starts. The context function digest is assigned by Monotype
+digest)`. The owner's nested procedure sites are an on-demand analysis of its
+checked body ("On-Demand Analyses And Write-Once Slots"), computed before
+post-check lowering reads them. The context function digest is assigned by Monotype
 from the `FnTemplate` whose body currently owns the nested function occurrence.
 Monotype lowering carries that checked identity together with the checked source
 function type and the lowered monomorphic function type. Post-check stages must
@@ -6193,10 +6218,11 @@ consume those checked data; they must not name nested functions by allocation
 order, generated symbols, source display strings, body shape, capture shape,
 runtime layout, or LIR procedure ids.
 
-The nested-site table stores each site's checked expression, owner, lexical
-scope, evidence, and runtime captures. It does not retain a copy of the
-traversal path to each site: site identity is already explicit, and storing
-all ancestor paths costs quadratic space for deeply nested functions.
+An owner's nested procedure sites record each site's checked expression,
+lexical scope and evidence; runtime captures are the module's analysis by
+site expression. Neither retains a copy of the traversal path to each site:
+site identity is already explicit, and storing all ancestor paths costs
+quadratic space for deeply nested functions.
 
 Monotype body lowering tracks two function-context digests:
 
@@ -8238,13 +8264,15 @@ plays no part. Checking outputs, per module, the procedure templates its
 source calls at exactly one site and never uses as a value, among those no
 other module can call: promoted local procedures, and source definitions that
 are neither exposed nor methods, since another module can dispatch to any
-method (`CheckedProcedureTemplateTable.single_source_call_templates`).
-A nested function site qualifies the same way
-(`NestedProcSite.single_source_call`): its expression is the function of a
-call, or the whole value of a non-recursive binding of one name whose only
-reference is the function of a call. A site inside a defaulted-field
-expression never qualifies, since that expression is lowered at every
-construction site that omits its field.
+method (`CheckedBodies.templateHasSingleSourceCall`, the module's
+single-source calls analysis). A nested function site qualifies the same way
+(`CheckedBodies.nestedProcSiteIsSingleSourceCall`): its expression is the
+function of a call, or the whole value of a non-recursive binding of one name
+whose only reference is the function of a call. A site inside a
+defaulted-field expression never qualifies, since that expression is lowered
+at every construction site that omits its field, and neither does an
+expression more than one owner constructs a procedure at, since it is
+lowered once per owner.
 Monotype stamps the flag on each function template, and a body without a
 procedure-relative return that has it is a source-single-use candidate,
 whether or not it captures. Every call to it in any program is that one site, lowered in some
@@ -12789,8 +12817,9 @@ vector through the ordinary `siteEvidence` lookup—lowering consumes
 explicit checked evidence and never reconstructs it. Defaults likewise
 carry their own NESTED-FUNCTION SITES: the default root's nested
 procedure sites analysis records each interior lambda/closure as a
-`NestedProcSite` owned by the module's `default_root` (a default
-belongs to no procedure template). Lowering resolves those sites at
+`NestedProcSite` owned by the default itself
+(`NestedProcSiteOwner.default_root`; a default belongs to no procedure
+template). Lowering resolves those sites at
 exactly two sanctioned points. First, while materializing a default
 (the materialization context is explicit, mirroring its view/binder
 swaps—same-module materialization swaps in fresh binder state exactly
@@ -15885,14 +15914,16 @@ own evidence's answer for that variable, which places it in exactly the class
 that relating the binders in the nested context would have; the relations
 themselves are not rebuilt per nested context.
 
-The nested-site walk records each site's runtime captures: the binders of
-enclosing frames whose values the site needs, which are its source captures
-plus the runtime captures of every local procedure its body selects (a lookup
+Each site expression's runtime captures are the binders of enclosing frames
+whose values the procedure constructed there needs: its source captures plus
+the runtime captures of every local procedure its body selects (a lookup
 resolved to a local procedure; methods never capture, so a dispatch adds none),
 less the binders the site itself binds. A site's needs propagate to its lexical
-parent the same way, and the walk records which site binds each binder so the
-subtraction is exact. Recursive selections make this a least fixpoint, solved
-after the walk over the recorded selections.
+parent the same way. Each owner's nested-site walk records its sites' lexical
+parents, the site that binds each binder and each site's selections, so the
+subtraction is exact; the module's runtime-capture analysis merges the owners'
+records by expression and solves the least fixpoint recursive selections make.
+Runtime captures are therefore a function of the site expression alone.
 Stored function evidence remains graph-free across root and cache boundaries.
 Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and

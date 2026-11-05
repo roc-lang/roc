@@ -6510,8 +6510,8 @@ fn comptimeSiteMayResolvePending(
     module: *const checked.CheckedModuleArtifact,
     root_id: ?checked.ComptimeRootId,
     checked_site: checked.CheckedExhaustivenessSiteId,
-) bool {
-    const site = module.exhaustiveness_sites.get(checked_site);
+) Allocator.Error!bool {
+    const site = try module.exhaustivenessSite(checked_site);
     if (site.requires_pairing) return false;
     return switch (site.policy) {
         .compile_time_replaced_by_root => |owner_root| if (root_id) |id| owner_root == id else false,
@@ -6537,15 +6537,15 @@ fn appendCompileTimeExhaustivenessProblem(
     const site_owner = lir_result.loweringModuleId(loweredModuleOfKey(lir_result, failure.module)).?;
     var alias: ?u32 = owners.position(site_owner) orelse
         finalizationInvariant("empirical exhaustiveness failure named a checked module this finalization does not complete");
-    discardUnreachedRootComptimeSites(owners, lir_result, root_proc, site_owner, checked_site);
+    try discardUnreachedRootComptimeSites(owners, lir_result, root_proc, site_owner, checked_site);
     while (alias) |index| : (alias = owners.next_alias[index]) {
         const owner = owners.modules[index];
         const problem_store = owner.problem_store orelse {
             finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
         };
         const owning_root: ?checked.ComptimeRootId = if (site_owner == root_owner) root.id else null;
-        if (!comptimeSiteMayResolvePending(owner.module, owning_root, checked_site)) {
-            const site_record = owner.module.exhaustiveness_sites.get(checked_site);
+        const site_record = try owner.module.exhaustivenessSite(checked_site);
+        if (!try comptimeSiteMayResolvePending(owner.module, owning_root, checked_site)) {
             if (!site_record.requires_pairing) switch (site_record.policy) {
                 .runtime_reachable => {},
                 .not_pending,
@@ -6554,7 +6554,7 @@ fn appendCompileTimeExhaustivenessProblem(
                 => finalizationInvariant("compile-time exhaustiveness failure had an impossible site policy"),
             };
         }
-        const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(checked_site, owner.module.exhaustiveness_sites.get(checked_site).requires_pairing);
+        const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(checked_site, site_record.requires_pairing);
         if (!matched) {
             finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
         }
@@ -6567,7 +6567,7 @@ fn discardUnreachedRootComptimeSites(
     root_proc: lir.LIR.LirProcSpecId,
     failed_owner: lir.LIR.LoweringModuleId,
     failed_checked_site: checked.CheckedExhaustivenessSiteId,
-) void {
+) Allocator.Error!void {
     for (lir_result.comptime_sites.items) |root_site| {
         if (root_site.proc != root_proc) continue;
         const checked_site = root_site.checked_site orelse continue;
@@ -6576,7 +6576,7 @@ fn discardUnreachedRootComptimeSites(
         while (alias) |index| : (alias = owners.next_alias[index]) {
             const owner = owners.modules[index];
             const problem_store = owner.problem_store orelse continue;
-            const site = owner.module.exhaustiveness_sites.get(checked_site);
+            const site = try owner.module.exhaustivenessSite(checked_site);
             if (site.requires_pairing) continue;
             switch (site.policy) {
                 .compile_time_replaced_by_root,
@@ -6603,7 +6603,7 @@ pub fn finishPendingExhaustiveness(module: *const checked.CheckedModuleArtifact,
     var retained: usize = 0;
     for (store.pending_static_exhaustiveness.items) |pending| {
         if (pending.reported) continue;
-        const site = if (pending.site) |id| module.exhaustiveness_sites.get(id) else null;
+        const site = if (pending.site) |id| try module.exhaustivenessSite(id) else null;
         if (site != null and site.?.requires_pairing) {
             store.pending_static_exhaustiveness.items[retained] = pending;
             retained += 1;

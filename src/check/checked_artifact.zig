@@ -10322,13 +10322,11 @@ const TestImportViewTables = struct {
     /// these views resolve no dispatch, so it stays empty.
     checked_type_store: CheckedTypeStore = .{},
     checked_const_bodies: CheckedConstBodyTable = .{},
-    exhaustiveness_sites: CheckedExhaustivenessSiteTable = .{},
     checked_procedure_templates: CheckedProcedureTemplateTable = .{},
     compile_time_roots: CompileTimeRootTable = .{},
     entry_wrappers: EntryWrapperTable = .{},
     intrinsic_wrappers: IntrinsicWrapperTable = .{},
     resolved_value_refs: ResolvedValueRefTable = .{},
-    nested_proc_sites: NestedProcSiteTable = .{},
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable = .{},
     hosted_procs: HostedProcTable = .{},
     hosted_bindings: HostedBindingTable = .{},
@@ -10386,14 +10384,12 @@ const TestImportViewTables = struct {
                 .types = checked_types,
                 .analyses = analyses,
             },
-            .exhaustiveness_sites = &self.exhaustiveness_sites,
             .checked_const_bodies = &self.checked_const_bodies,
             .checked_procedure_templates = &self.checked_procedure_templates,
             .compile_time_roots = &self.compile_time_roots,
             .entry_wrappers = &self.entry_wrappers,
             .intrinsic_wrappers = &self.intrinsic_wrappers,
             .resolved_value_refs = &self.resolved_value_refs,
-            .nested_proc_sites = &self.nested_proc_sites,
             .static_dispatch_plans = &self.static_dispatch_plans,
             .hosted_procs = &self.hosted_procs,
             .hosted_bindings = &self.hosted_bindings,
@@ -10709,23 +10705,10 @@ pub const CheckedExhaustivenessSite = struct {
     requires_pairing: bool = false,
 };
 
-/// Table of checked exhaustiveness sites keyed by checked expressions or patterns.
+/// Every exhaustiveness check of a module, by site id, with the owner and
+/// policy that decide it (`ModuleAnalyses.exhaustivenessSites`).
 pub const CheckedExhaustivenessSiteTable = struct {
     sites: []CheckedExhaustivenessSite = &.{},
-
-    pub fn lookupByMatchExpr(self: *const CheckedExhaustivenessSiteTable, expr: CIR.Expr.Idx) ?CheckedExhaustivenessSiteId {
-        for (self.sites) |site| {
-            if (site.checked_expr != null and site.checked_expr.? == expr) return site.id;
-        }
-        return null;
-    }
-
-    pub fn lookupByDestructurePattern(self: *const CheckedExhaustivenessSiteTable, pattern: CIR.Pattern.Idx) ?CheckedExhaustivenessSiteId {
-        for (self.sites) |site| {
-            if (site.checked_pattern != null and site.checked_pattern.? == pattern) return site.id;
-        }
-        return null;
-    }
 
     pub fn get(self: *const CheckedExhaustivenessSiteTable, id: CheckedExhaustivenessSiteId) CheckedExhaustivenessSite {
         const raw = @backingInt(id);
@@ -10733,15 +10716,10 @@ pub const CheckedExhaustivenessSiteTable = struct {
         return self.sites[raw];
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-
-    pub const Serialized = extern struct {
-        sites: SerializedSlice(CheckedExhaustivenessSite) = .{},
-
-        const Serde = artifact_serialize.SliceStoreSerde(CheckedExhaustivenessSiteTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
+    pub fn destroy(self: *CheckedExhaustivenessSiteTable, allocator: Allocator) void {
+        allocator.free(self.sites);
+        allocator.destroy(self);
+    }
 };
 
 /// Public `CheckedCapture` declaration.
@@ -17685,7 +17663,6 @@ fn sealConstEvalTemplatesForRoots(
             .source_scheme = const_ref.source_scheme,
             .resolved_value_refs = template.resolved_value_refs,
             .static_dispatch_plans = template.static_dispatch_plans,
-            .nested_proc_sites = template.nested_proc_sites,
         });
     }
 }
@@ -18361,12 +18338,6 @@ pub const TopLevelUseSummaryRef = struct {
     len: u32 = 0,
 };
 
-/// Public `NestedProcSiteTableRef` declaration.
-pub const NestedProcSiteTableRef = struct {
-    start: u32 = 0,
-    len: u32 = 0,
-};
-
 /// Public `NestedProcKind` declaration.
 pub const NestedProcKind = enum {
     local_function,
@@ -18388,18 +18359,27 @@ pub const NestedProcEvidenceSource = enum {
 /// body, which borrows its template's identity). Defaulted-field expressions
 /// (design.md "Defaulted Fields") are the exception: they belong to no
 /// template—each is lowered standalone at every construction site that omits
-/// its field—so their nested-function sites are owned by the declaring
-/// module's default-expression root set.
+/// its field—so each default expression owns the sites inside it.
 pub const NestedProcSiteOwner = union(enum) {
     template: canonical.ProcedureTemplateRef,
-    /// The defaulted-field expression whose root set owns the site.
+    /// The defaulted-field expression that owns the site.
     default_root: CIR.Expr.Idx,
 };
 
-/// Public `NestedProcSite` declaration.
+/// The id of a nested procedure site within its owner: the node id of the
+/// lambda, closure or hosted lambda expression it constructs a procedure at.
+pub fn nestedProcSiteId(expr: CIR.Expr.Idx) canonical.NestedProcSiteId {
+    return @fromBackingInt(@backingInt(expr));
+}
+
+/// The expression a nested procedure site constructs its procedure at.
+pub fn nestedProcSiteExpr(site: canonical.NestedProcSiteId) CIR.Expr.Idx {
+    return @fromBackingInt(@backingInt(site));
+}
+
+/// One lambda, closure or hosted lambda an owner's body constructs a
+/// procedure at. Its id is its expression's (`nestedProcSiteId`).
 pub const NestedProcSite = struct {
-    site: canonical.NestedProcSiteId,
-    owner: NestedProcSiteOwner,
     /// Exact generalized-local scope lexically owning this site, or the
     /// template root when the site is outside every generalized local.
     lexical_scope: DispatchScope,
@@ -18407,115 +18387,139 @@ pub const NestedProcSite = struct {
     /// The construction site's checked evidence when
     /// `evidence_source == .checked_site`; empty otherwise.
     evidence: static_dispatch.EvidenceSpan,
-    /// Range into `NestedProcSiteTable.runtime_captures`: every binder of an
-    /// enclosing frame whose value this procedure needs at runtime. A
-    /// closure's own captures come first, in their checked order; after them
-    /// come the binders that constructing the local procedures this procedure
-    /// (or a procedure nested in it) selects requires, ordered by binder id.
-    runtime_captures: artifact_serialize.Span = .{},
     kind: NestedProcKind,
-    checked_expr: ?CIR.Expr.Idx,
-    checked_pattern: ?CIR.Pattern.Idx,
+    checked_expr: CIR.Expr.Idx,
+
+    pub fn id(self: NestedProcSite) canonical.NestedProcSiteId {
+        return nestedProcSiteId(self.checked_expr);
+    }
 };
 
-/// Public `NestedProcSiteTable` declaration.
-pub const NestedProcSiteTable = struct {
-    sites: []NestedProcSite = &.{},
-    template_refs: []canonical.NestedProcSiteId = &.{},
-    /// Flat pool of every site's `runtime_captures`.
-    runtime_captures: []CheckedCapture = &.{},
+/// The nested procedure sites of one owner's body, in scan order, and the
+/// lexical facts of the same scan that the module's runtime captures read
+/// (`ModuleNestedProcSites`). Computed on first demand per owner
+/// (`ModuleAnalyses.nestedProcSites`).
+pub const OwnerNestedProcSites = struct {
+    sites: []const NestedProcSite = &.{},
+    /// Positions in `sites`, ordered by expression.
+    by_expr: []const u32 = &.{},
+    /// Per site: the position of the site whose body lexically encloses it.
+    parents: []const ?u32 = &.{},
+    /// Every binder the owner's body binds, with the position of the
+    /// innermost site whose body binds it; null for the owner's own body.
+    binders: []const BinderSite = &.{},
+    /// Each local procedure a site's own body selects.
+    selections: []const SiteSelection = &.{},
 
-    pub const Serialized = extern struct {
-        sites: SerializedSlice(NestedProcSite) = .{},
-        template_refs: SerializedSlice(canonical.NestedProcSiteId) = .{},
-        runtime_captures: SerializedSlice(CheckedCapture) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(NestedProcSiteTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
+    pub const BinderSite = struct {
+        binder: CIR.Pattern.Idx,
+        site: ?u32,
     };
 
-    pub fn fromTemplates(
-        allocator: Allocator,
-        owner_artifact: canonical.ArtifactRef,
-        bodies: CheckedBodies,
-        default_exprs: []const CIR.Expr.Idx,
-        compile_time_roots: *const CompileTimeRootTable,
-        checked_types: *const CheckedTypeStore,
-        static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-        method_registry: *const static_dispatch.MethodRegistry,
-        entry_wrappers: *const EntryWrapperTable,
-        templates: *CheckedProcedureTemplateTable,
-        resolved_value_refs: *const ResolvedValueRefTable,
-    ) Allocator.Error!NestedProcSiteTable {
-        var scope_by_checked_expr = try nestedProcScopeMap(allocator, templates.dispatch_scopes);
-        defer scope_by_checked_expr.deinit();
-        var builder = NestedProcSiteBuilder.init(
-            allocator,
-            bodies,
-            checked_types,
-            templates,
-            static_dispatch_plans,
-            method_registry,
-            templates.dispatch_scopes,
-            &scope_by_checked_expr,
-        );
-        builder.resolved_value_refs = resolved_value_refs;
-        defer builder.deinitScratch();
-        errdefer builder.deinitAll();
+    pub const SiteSelection = struct {
+        site: u32,
+        proc_expr: CIR.Expr.Idx,
+    };
 
-        for (templates.templates.items) |*template| {
-            const start: u32 = @intCast(builder.template_refs.items.len);
-            switch (template.body) {
-                .checked_body => |root_expr| try builder.scanCheckedBody(root_expr, .{
-                    .artifact = owner_artifact,
-                    .proc_base = template.proc_base,
-                    .template = template.template_id,
-                }),
-                .entry_wrapper => |wrapper_id| {
-                    const wrapper = entry_wrappers.get(wrapper_id);
-                    try builder.scanEntryWrapper(wrapper, compile_time_roots.root(wrapper.root));
-                },
-                .intrinsic_wrapper, .unimplemented => {},
-            }
-            template.nested_proc_sites = .{
-                .start = start,
-                .len = @intCast(builder.template_refs.items.len - start),
-            };
+    /// The position of the site at `expr`.
+    pub fn position(self: *const OwnerNestedProcSites, expr: CIR.Expr.Idx) ?u32 {
+        var low: usize = 0;
+        var high: usize = self.by_expr.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const candidate = self.sites[self.by_expr[mid]].checked_expr;
+            if (@backingInt(candidate) == @backingInt(expr)) return self.by_expr[mid];
+            if (@backingInt(candidate) < @backingInt(expr)) low = mid + 1 else high = mid;
         }
-
-        // Defaulted-field expressions (design.md "Defaulted Fields") are value
-        // expressions no template body reaches: each is lowered standalone at
-        // every construction site that omits its field. Scan each default as
-        // its own root—the same walk a template body gets—so a lambda or
-        // closure inside a default reaches lowering with a checked
-        // nested-function site. The default's ROOT expression is not
-        // suppressed: unlike a template body (whose root lambda IS the
-        // procedure), a default's root lambda is an ordinary nested function
-        // value.
-        for (default_exprs) |default| {
-            builder.current_scope = .root;
-            try builder.scanExpr(default, .{ .default_root = default }, false);
-        }
-
-        const sites = try builder.sites.toOwnedSlice(allocator);
-        errdefer allocator.free(sites);
-
-        const runtime_captures = try builder.publishRuntimeCaptures(sites);
-        errdefer allocator.free(runtime_captures);
-
-        return .{
-            .sites = sites,
-            .template_refs = try builder.template_refs.toOwnedSlice(allocator),
-            .runtime_captures = runtime_captures,
-        };
+        return null;
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    /// The site `site`, when this owner constructs one there.
+    pub fn find(self: *const OwnerNestedProcSites, site: canonical.NestedProcSiteId) ?NestedProcSite {
+        const found = self.position(nestedProcSiteExpr(site)) orelse return null;
+        return self.sites[found];
+    }
 
-    /// The binders of enclosing frames whose values the procedure at `site`
-    /// needs at runtime (see `NestedProcSite.runtime_captures`).
-    pub fn runtimeCaptures(self: *const NestedProcSiteTable, site: NestedProcSite) []const CheckedCapture {
-        return self.runtime_captures[site.runtime_captures.start..][0..site.runtime_captures.len];
+    pub fn destroy(self: *OwnerNestedProcSites, allocator: Allocator) void {
+        allocator.free(self.sites);
+        allocator.free(self.by_expr);
+        allocator.free(self.parents);
+        allocator.free(self.binders);
+        allocator.free(self.selections);
+        allocator.destroy(self);
+    }
+};
+
+/// The nested procedure sites of a module's owners, keyed by expression:
+/// which owners construct a procedure at each site expression and the
+/// binders of enclosing frames whose values that procedure needs at runtime
+/// (its runtime captures). A closure's own captures come first, in their
+/// checked order; after them come the binders that constructing the local
+/// procedures this procedure (or a procedure nested in it) selects requires,
+/// ordered by binder id. Computed on first demand per module
+/// (`ModuleAnalyses.moduleNestedProcSites`).
+pub const ModuleNestedProcSites = struct {
+    /// Every site expression of every owner, ascending.
+    exprs: []const CIR.Expr.Idx = &.{},
+    /// Per expression: the first template, in template order, whose body
+    /// constructs a procedure there; null when only defaults do.
+    first_templates: []const ?canonical.CheckedProcedureTemplateId = &.{},
+    /// Per expression: how many owners construct a procedure there.
+    owner_counts: []const u32 = &.{},
+    /// Per expression: its runtime captures, a range of `captures`.
+    capture_spans: []const artifact_serialize.Span = &.{},
+    captures: []const CheckedCapture = &.{},
+    /// Each closure site's lambda with its closure's expression, ordered by
+    /// lambda: a closure's lambda names the closure's site.
+    closure_lambdas: []const ClosureLambda = &.{},
+
+    pub const ClosureLambda = struct {
+        lambda: CIR.Expr.Idx,
+        closure: CIR.Expr.Idx,
+    };
+
+    /// The position of site expression `expr`, or of the closure whose
+    /// lambda `expr` is.
+    pub fn position(self: *const ModuleNestedProcSites, expr: CIR.Expr.Idx) ?usize {
+        if (exprPosition(self.exprs, expr)) |found| return found;
+        var low: usize = 0;
+        var high: usize = self.closure_lambdas.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const candidate = self.closure_lambdas[mid].lambda;
+            if (@backingInt(candidate) == @backingInt(expr)) return exprPosition(self.exprs, self.closure_lambdas[mid].closure);
+            if (@backingInt(candidate) < @backingInt(expr)) low = mid + 1 else high = mid;
+        }
+        return null;
+    }
+
+    /// The runtime captures of the procedure constructed at `expr` (a site
+    /// expression or a closure site's lambda).
+    pub fn runtimeCaptures(self: *const ModuleNestedProcSites, expr: CIR.Expr.Idx) ?[]const CheckedCapture {
+        const found = self.position(expr) orelse return null;
+        const span = self.capture_spans[found];
+        return self.captures[span.start..][0..span.len];
+    }
+
+    pub fn destroy(self: *ModuleNestedProcSites, allocator: Allocator) void {
+        allocator.free(self.exprs);
+        allocator.free(self.first_templates);
+        allocator.free(self.owner_counts);
+        allocator.free(self.capture_spans);
+        allocator.free(self.captures);
+        allocator.free(self.closure_lambdas);
+        allocator.destroy(self);
+    }
+
+    fn exprPosition(exprs: []const CIR.Expr.Idx, expr: CIR.Expr.Idx) ?usize {
+        var low: usize = 0;
+        var high: usize = exprs.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (@backingInt(exprs[mid]) == @backingInt(expr)) return mid;
+            if (@backingInt(exprs[mid]) < @backingInt(expr)) low = mid + 1 else high = mid;
+        }
+        return null;
     }
 };
 
@@ -18544,7 +18548,6 @@ pub const CheckedProcedureTemplate = struct {
     specialization_interface_relations: artifact_serialize.Span = .{},
     resolved_value_refs: ResolvedValueRefTableRef,
     top_level_value_uses: TopLevelUseSummaryRef,
-    nested_proc_sites: NestedProcSiteTableRef,
     target: ProcTarget,
     /// The low-level operation this template's body runs over its parameters,
     /// for a Builtin definition the Builtin low-level transform produced.
@@ -18799,7 +18802,6 @@ pub const CheckedProcedureTemplateTable = struct {
                 .static_dispatch_plans = .{},
                 .resolved_value_refs = .{},
                 .top_level_value_uses = .{},
-                .nested_proc_sites = .{},
                 .target = if (intrinsic != null)
                     .intrinsic
                 else if (isHostedProcedureExpr(def.expr.data))
@@ -18871,7 +18873,6 @@ pub const CheckedProcedureTemplateTable = struct {
                 .static_dispatch_plans = .{},
                 .resolved_value_refs = .{},
                 .top_level_value_uses = .{},
-                .nested_proc_sites = .{},
                 .target = .roc,
             });
             entry.* = .{ .pattern = promoted.pattern, .template = template_ref };
@@ -18944,7 +18945,6 @@ pub const CheckedProcedureTemplateTable = struct {
                 .static_dispatch_plans = .{},
                 .resolved_value_refs = .{},
                 .top_level_value_uses = .{},
-                .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
                     .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => .comptime_only,
@@ -19047,7 +19047,6 @@ test "issue 11128 procedure template extension stays amortized" {
             .static_dispatch_plans = .{},
             .resolved_value_refs = .{},
             .top_level_value_uses = .{},
-            .nested_proc_sites = .{},
             .target = .comptime_only,
         });
     }
@@ -19059,7 +19058,7 @@ test "issue 11128 procedure template extension stays amortized" {
     try std.testing.expect(bytes.allocated_bytes <= 8 * count * @sizeOf(CheckedProcedureTemplate));
 }
 
-fn nestedProcScopeMap(
+pub fn nestedProcScopeMap(
     allocator: Allocator,
     scopes: []const DispatchRefScope,
 ) Allocator.Error!collections.DenseMap(CIR.Expr.Idx, DispatchScopeId) {
@@ -19097,99 +19096,46 @@ fn nestedProcLexicalScope(
     return .{ .generalized = scope_id };
 }
 
-const NestedProcSiteBuilder = struct {
+/// The scan of one owner's body for its nested procedure sites
+/// (`computeOwnerNestedProcSites`).
+const NestedProcSiteScan = struct {
     allocator: Allocator,
     bodies: CheckedBodies,
-    checked_types: *const CheckedTypeStore,
-    templates: *const CheckedProcedureTemplateTable,
-
+    dispatch: CheckedDispatch,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     method_registry: *const static_dispatch.MethodRegistry,
+    resolved_value_refs: *const ResolvedValueRefTable,
     dispatch_scopes: []const DispatchRefScope,
     scope_by_checked_expr: *const collections.DenseMap(CIR.Expr.Idx, DispatchScopeId),
-    current_scope: DispatchScope,
-    sites: std.ArrayList(NestedProcSite),
-    template_refs: std.ArrayList(canonical.NestedProcSiteId),
+    current_scope: DispatchScope = .root,
+    sites: std.ArrayList(NestedProcSite) = .empty,
+    /// Per site, by position: the site lexically enclosing it, if any.
+    parents: std.ArrayList(?u32) = .empty,
+    binders: std.ArrayList(OwnerNestedProcSites.BinderSite) = .empty,
+    selections: std.ArrayList(OwnerNestedProcSites.SiteSelection) = .empty,
     work: std.ArrayList(ScanWork) = .empty,
-    /// Resolves local lookups to the local procedures they select. Absent only
-    /// in type-inventory unit tests, which select no procedures.
-    resolved_value_refs: ?*const ResolvedValueRefTable = null,
-    /// Per site, by site index: the site lexically enclosing it, if any.
-    site_parents: std.ArrayList(?u32) = .empty,
-    /// Per pattern binder, by binder node: the innermost site whose body
-    /// binds it, or null when the enclosing template body binds it.
-    binder_sites: std.ArrayList(?u32) = .empty,
-    /// The sites whose bodies the walk is inside, innermost last.
-    open_sites: std.ArrayList(canonical.NestedProcSiteId) = .empty,
-    /// Every local procedure a site's own body selects.
-    selected_procs: std.ArrayList(SelectedLocalProc) = .empty,
+    /// The positions of the sites whose bodies the walk is inside, innermost
+    /// last.
+    open_sites: std.ArrayList(u32) = .empty,
 
-    const SelectedLocalProc = struct {
-        site: u32,
-        proc_expr: CIR.Expr.Idx,
-    };
-
-    fn init(
-        allocator: Allocator,
-        bodies: CheckedBodies,
-        checked_types: *const CheckedTypeStore,
-        templates: *const CheckedProcedureTemplateTable,
-        static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-        method_registry: *const static_dispatch.MethodRegistry,
-        dispatch_scopes: []const DispatchRefScope,
-        scope_by_checked_expr: *const collections.DenseMap(CIR.Expr.Idx, DispatchScopeId),
-    ) NestedProcSiteBuilder {
-        return .{
-            .allocator = allocator,
-            .bodies = bodies,
-            .checked_types = checked_types,
-            .templates = templates,
-            .static_dispatch_plans = static_dispatch_plans,
-            .method_registry = method_registry,
-            .dispatch_scopes = dispatch_scopes,
-            .scope_by_checked_expr = scope_by_checked_expr,
-            .current_scope = .root,
-            .sites = .empty,
-            .template_refs = .empty,
-        };
-    }
-
-    fn deinitScratch(self: *NestedProcSiteBuilder) void {
-        self.site_parents.deinit(self.allocator);
-        self.binder_sites.deinit(self.allocator);
-        self.open_sites.deinit(self.allocator);
-        self.selected_procs.deinit(self.allocator);
-        self.work.deinit(self.allocator);
-    }
-
-    fn deinitAll(self: *NestedProcSiteBuilder) void {
+    fn deinit(self: *NestedProcSiteScan) void {
         self.sites.deinit(self.allocator);
-        self.template_refs.deinit(self.allocator);
+        self.parents.deinit(self.allocator);
+        self.binders.deinit(self.allocator);
+        self.selections.deinit(self.allocator);
+        self.work.deinit(self.allocator);
+        self.open_sites.deinit(self.allocator);
     }
 
-    fn scanCheckedBody(self: *NestedProcSiteBuilder, root_expr: CIR.Expr.Idx, template: canonical.ProcedureTemplateRef) Allocator.Error!void {
-        self.current_scope = .root;
-        try self.scanExpr(root_expr, .{ .template = template }, true);
-    }
-
-    fn scanEntryWrapper(self: *NestedProcSiteBuilder, wrapper: EntryWrapper, root: CompileTimeRoot) Allocator.Error!void {
-        self.current_scope = .root;
+    fn scanEntryWrapper(self: *NestedProcSiteScan, root: CompileTimeRoot) Allocator.Error!void {
         const parts = root.bodyParts();
-        if (parts.expr) |expr| try self.scanExpr(expr, .{ .template = wrapper.template }, false);
-        if (parts.pattern) |pattern| try self.scanPattern(pattern, .{ .template = wrapper.template });
+        if (parts.expr) |expr| try self.scanExpr(expr, false);
+        if (parts.pattern) |pattern| try self.scanPattern(pattern);
         // A literal conversion root converts its literal's value as data and
         // owns no nested procedure site.
     }
 
-    fn addSite(
-        self: *NestedProcSiteBuilder,
-        owner: NestedProcSiteOwner,
-        kind: NestedProcKind,
-        checked_expr: ?CIR.Expr.Idx,
-        checked_pattern: ?CIR.Pattern.Idx,
-    ) Allocator.Error!void {
-        const site: canonical.NestedProcSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.sites.items.len))));
-
+    fn addSite(self: *NestedProcSiteScan, kind: NestedProcKind, checked_expr: CIR.Expr.Idx) Allocator.Error!void {
         const evidence_source, const evidence = switch (self.current_scope) {
             .root => .{ NestedProcEvidenceSource.inherited, static_dispatch.EvidenceSpan{} },
             .generalized => |scope_id| blk: {
@@ -19197,34 +19143,23 @@ const NestedProcSiteBuilder = struct {
                 if (raw_scope >= self.dispatch_scopes.len) {
                     checkedArtifactInvariant("nested procedure site owned an unknown checked dispatch scope", .{});
                 }
-                const scope = self.dispatch_scopes[raw_scope];
-                if (checked_expr == null or scope.checked_expr != checked_expr.?) {
+                if (self.dispatch_scopes[raw_scope].checked_expr != checked_expr) {
                     break :blk .{ NestedProcEvidenceSource.inherited, static_dispatch.EvidenceSpan{} };
                 }
-                const span = (try self.bodies.tables.dispatch.?.siteEvidenceSpan(checked_expr.?)) orelse
+                const span = (try self.dispatch.siteEvidenceSpan(checked_expr)) orelse
                     checkedArtifactInvariant("nested procedure scope had no producer-authored construction evidence", .{});
                 break :blk .{ NestedProcEvidenceSource.checked_site, span };
             },
         };
 
-        try self.site_parents.append(self.allocator, self.innermostOpenSite());
+        try self.parents.append(self.allocator, self.innermostOpenSite());
         try self.sites.append(self.allocator, .{
-            .site = site,
-            .owner = owner,
             .lexical_scope = self.current_scope,
             .evidence_source = evidence_source,
             .evidence = evidence,
             .kind = kind,
             .checked_expr = checked_expr,
-            .checked_pattern = checked_pattern,
         });
-        // `template_refs` is the per-template site pool (each template holds a
-        // span into it); default-root sites belong to no template and are
-        // reached through the module-level table instead.
-        switch (owner) {
-            .template => try self.template_refs.append(self.allocator, site),
-            .default_root => {},
-        }
     }
 
     /// Scan a checked expression for nested procedure sites. The scan keeps
@@ -19232,45 +19167,32 @@ const NestedProcSiteBuilder = struct {
     /// depth. Children are pushed in reverse so they are scanned in source
     /// order, and each expression's exit is pushed before its children so it
     /// restores the lexical state they saw once they are all scanned.
-    fn scanExpr(
-        self: *NestedProcSiteBuilder,
-        expr_id: CIR.Expr.Idx,
-        owner: NestedProcSiteOwner,
-        suppress_current_site: bool,
-    ) Allocator.Error!void {
-        const base_len = self.work.items.len;
-        try self.work.append(self.allocator, .{ .expr = .{ .id = expr_id, .owner = owner, .suppress_current_site = suppress_current_site } });
-        while (self.work.items.len > base_len) {
-            switch (self.work.pop().?) {
-                .expr => |item| try self.enterExpr(item.id, item.owner, item.suppress_current_site),
-                .exit_expr => |exit| self.exitExpr(exit),
-                .pattern => |item| try self.enterPattern(item.id, item.owner),
-                .statement => |item| try self.enterStatement(item.id, item.owner),
-                .generated_interpolation_segments => |item| try self.pushInterpolationChildren(item.id, item.owner),
-            }
-        }
+    fn scanExpr(self: *NestedProcSiteScan, expr_id: CIR.Expr.Idx, suppress_current_site: bool) Allocator.Error!void {
+        try self.work.append(self.allocator, .{ .expr = .{ .id = expr_id, .suppress_current_site = suppress_current_site } });
+        try self.drain();
     }
 
-    fn scanPattern(self: *NestedProcSiteBuilder, pattern_id: CIR.Pattern.Idx, owner: NestedProcSiteOwner) Allocator.Error!void {
-        const base_len = self.work.items.len;
-        try self.pushPattern(pattern_id, owner);
-        while (self.work.items.len > base_len) {
-            switch (self.work.pop().?) {
-                .expr => |item| try self.enterExpr(item.id, item.owner, item.suppress_current_site),
-                .exit_expr => |exit| self.exitExpr(exit),
-                .pattern => |item| try self.enterPattern(item.id, item.owner),
-                .statement => |item| try self.enterStatement(item.id, item.owner),
-                .generated_interpolation_segments => |item| try self.pushInterpolationChildren(item.id, item.owner),
-            }
-        }
+    fn scanPattern(self: *NestedProcSiteScan, pattern_id: CIR.Pattern.Idx) Allocator.Error!void {
+        try self.pushPattern(pattern_id);
+        try self.drain();
+    }
+
+    fn drain(self: *NestedProcSiteScan) Allocator.Error!void {
+        while (self.work.pop()) |work| switch (work) {
+            .expr => |item| try self.enterExpr(item.id, item.suppress_current_site),
+            .exit_expr => |exit| self.exitExpr(exit),
+            .pattern => |item| try self.enterPattern(item.id),
+            .statement => |item| try self.enterStatement(item.id),
+            .generated_interpolation_segments => |item| try self.pushInterpolationChildren(item.id),
+        };
     }
 
     const ScanWork = union(enum) {
-        expr: struct { id: CIR.Expr.Idx, owner: NestedProcSiteOwner, suppress_current_site: bool },
+        expr: struct { id: CIR.Expr.Idx, suppress_current_site: bool },
         exit_expr: ExprExit,
-        pattern: struct { id: CIR.Pattern.Idx, owner: NestedProcSiteOwner },
-        statement: struct { id: CIR.Statement.Idx, owner: NestedProcSiteOwner },
-        generated_interpolation_segments: struct { id: CIR.Expr.Idx, owner: NestedProcSiteOwner },
+        pattern: struct { id: CIR.Pattern.Idx },
+        statement: struct { id: CIR.Statement.Idx },
+        generated_interpolation_segments: struct { id: CIR.Expr.Idx },
     };
 
     /// The lexical state an expression restores once its children are scanned.
@@ -19281,30 +19203,29 @@ const NestedProcSiteBuilder = struct {
 
     /// Children are pushed in source order between `beginChildren` and
     /// `endChildren`, which reverses them on the work stack.
-    fn beginChildren(self: *const NestedProcSiteBuilder) usize {
+    fn beginChildren(self: *const NestedProcSiteScan) usize {
         return self.work.items.len;
     }
 
-    fn endChildren(self: *NestedProcSiteBuilder, start: usize) void {
+    fn endChildren(self: *NestedProcSiteScan, start: usize) void {
         std.mem.reverse(ScanWork, self.work.items[start..]);
     }
 
-    fn pushWork(self: *NestedProcSiteBuilder, work: ScanWork) Allocator.Error!void {
+    fn pushWork(self: *NestedProcSiteScan, work: ScanWork) Allocator.Error!void {
         try self.work.append(self.allocator, work);
     }
 
-    fn pushExpr(self: *NestedProcSiteBuilder, expr_id: CIR.Expr.Idx, owner: NestedProcSiteOwner) Allocator.Error!void {
-        try self.pushWork(.{ .expr = .{ .id = expr_id, .owner = owner, .suppress_current_site = false } });
+    fn pushExpr(self: *NestedProcSiteScan, expr_id: CIR.Expr.Idx) Allocator.Error!void {
+        try self.pushWork(.{ .expr = .{ .id = expr_id, .suppress_current_site = false } });
     }
 
-    fn pushPattern(self: *NestedProcSiteBuilder, pattern_id: CIR.Pattern.Idx, owner: NestedProcSiteOwner) Allocator.Error!void {
-        try self.pushWork(.{ .pattern = .{ .id = pattern_id, .owner = owner } });
+    fn pushPattern(self: *NestedProcSiteScan, pattern_id: CIR.Pattern.Idx) Allocator.Error!void {
+        try self.pushWork(.{ .pattern = .{ .id = pattern_id } });
     }
 
     fn enterExpr(
-        self: *NestedProcSiteBuilder,
+        self: *NestedProcSiteScan,
         expr_id: CIR.Expr.Idx,
-        owner: NestedProcSiteOwner,
         suppress_current_site: bool,
     ) Allocator.Error!void {
         const previous_scope = self.current_scope;
@@ -19321,116 +19242,116 @@ const NestedProcSiteBuilder = struct {
         switch (data) {
             .closure => |closure| {
                 if (!suppress_current_site) {
-                    try self.addSite(owner, .closure, expr_id, null);
+                    try self.addSite(.closure, expr_id);
                     try self.openSite();
                 }
-                try self.pushWork(.{ .expr = .{ .id = closure.lambda, .owner = owner, .suppress_current_site = true } });
+                try self.pushWork(.{ .expr = .{ .id = closure.lambda, .suppress_current_site = true } });
             },
             .lambda => |lambda| {
                 if (!suppress_current_site) {
-                    try self.addSite(owner, .local_function, expr_id, null);
+                    try self.addSite(.local_function, expr_id);
                     try self.openSite();
                 }
-                for (lambda.args) |arg| try self.pushPattern(arg, owner);
-                try self.pushExpr(lambda.body, owner);
+                for (lambda.args) |arg| try self.pushPattern(arg);
+                try self.pushExpr(lambda.body);
             },
             .str => |segments| if (bodies.quoteIsCustom(@backingInt(expr_id))) {
-                try self.pushStaticDispatchPlanArgs(bodies.quotePlan(@backingInt(expr_id)) orelse checkedArtifactInvariant("checked from_quote expression reached nested procedure site collection without a dispatch plan", .{}), owner);
+                try self.pushStaticDispatchPlanArgs(bodies.quotePlan(@backingInt(expr_id)) orelse checkedArtifactInvariant("checked from_quote expression reached nested procedure site collection without a dispatch plan", .{}));
             } else {
-                for (segments) |segment| try self.pushExpr(segment, owner);
+                for (segments) |segment| try self.pushExpr(segment);
             },
             .list,
             .tuple,
             => |items| {
-                for (items) |item| try self.pushExpr(item, owner);
+                for (items) |item| try self.pushExpr(item);
             },
             .match_ => |match| {
-                try self.pushExpr(match.cond, owner);
+                try self.pushExpr(match.cond);
                 for (match.branches) |branch_idx| {
                     const branch = bodies.matchBranch(branch_idx);
-                    for (branch.patterns) |branch_pattern| try self.pushPattern(bodies.matchBranchPattern(branch_pattern).pattern, owner);
-                    if (branch.guard) |guard| try self.pushExpr(guard, owner);
-                    try self.pushExpr(branch.value, owner);
+                    for (branch.patterns) |branch_pattern| try self.pushPattern(bodies.matchBranchPattern(branch_pattern).pattern);
+                    if (branch.guard) |guard| try self.pushExpr(guard);
+                    try self.pushExpr(branch.value);
                 }
             },
             .if_ => |if_| {
                 for (if_.branches) |branch_idx| {
                     const branch = bodies.ifBranch(branch_idx);
-                    try self.pushExpr(branch.cond, owner);
-                    try self.pushExpr(branch.body, owner);
+                    try self.pushExpr(branch.cond);
+                    try self.pushExpr(branch.body);
                 }
-                try self.pushExpr(if_.final_else, owner);
+                try self.pushExpr(if_.final_else);
             },
             .call => |call| {
-                try self.pushExpr(call.func, owner);
-                for (call.args) |arg| try self.pushExpr(arg, owner);
+                try self.pushExpr(call.func);
+                for (call.args) |arg| try self.pushExpr(arg);
             },
             .record => |record| {
-                if (record.ext) |ext| try self.pushExpr(ext, owner);
-                for (record.fields) |field| try self.pushExpr(bodies.recordFieldValue(field), owner);
+                if (record.ext) |ext| try self.pushExpr(ext);
+                for (record.fields) |field| try self.pushExpr(bodies.recordFieldValue(field));
             },
             .block => |block| {
-                for (block.statements) |statement| try self.pushWork(.{ .statement = .{ .id = statement, .owner = owner } });
-                try self.pushExpr(block.final_expr, owner);
+                for (block.statements) |statement| try self.pushWork(.{ .statement = .{ .id = statement } });
+                try self.pushExpr(block.final_expr);
             },
             .tag => |tag| {
-                for (tag.args) |arg| try self.pushExpr(arg, owner);
+                for (tag.args) |arg| try self.pushExpr(arg);
             },
-            .nominal => |nominal| try self.pushExpr(nominal.backing_expr, owner),
+            .nominal => |nominal| try self.pushExpr(nominal.backing_expr),
             .binop => |binop| {
-                try self.pushExpr(binop.lhs, owner);
-                try self.pushExpr(binop.rhs, owner);
+                try self.pushExpr(binop.lhs);
+                try self.pushExpr(binop.rhs);
             },
-            inline .unary_minus, .dbg => |child| try self.pushExpr(child, owner),
-            .expect_err => |expect_err| try self.pushExpr(expect_err.expr, owner),
-            .expect => |child| try self.pushExpr(child, owner),
+            inline .unary_minus, .dbg => |child| try self.pushExpr(child),
+            .expect_err => |expect_err| try self.pushExpr(expect_err.expr),
+            .expect => |child| try self.pushExpr(child),
             .break_ => {},
             .return_ => |ret| {
                 // `ret.lambda` is the enclosing lambda context for early-return
                 // lowering, not an owned child expression.
-                try self.pushExpr(ret.expr, owner);
+                try self.pushExpr(ret.expr);
             },
-            .field_access => |field| try self.pushExpr(field.receiver, owner),
+            .field_access => |field| try self.pushExpr(field.receiver),
             .dispatch_call,
             .method_eq,
             .type_dispatch_call,
-            => try self.pushStaticDispatchPlanArgs(bodies.dispatchPlan(@backingInt(expr_id)) orelse checkedArtifactInvariant("checked dispatch expression reached nested procedure site collection without a static-dispatch plan", .{}), owner),
+            => try self.pushStaticDispatchPlanArgs(bodies.dispatchPlan(@backingInt(expr_id)) orelse checkedArtifactInvariant("checked dispatch expression reached nested procedure site collection without a static-dispatch plan", .{})),
             .interpolation => |interpolation| if (bodies.interpolationIsBuiltinStr(expr_id)) {
-                try self.pushExpr(interpolation.first, owner);
-                for (interpolation.parts) |part| try self.pushExpr(part, owner);
+                try self.pushExpr(interpolation.first);
+                for (interpolation.parts) |part| try self.pushExpr(part);
             } else {
-                try self.pushStaticDispatchPlanArgs(bodies.dispatchPlan(@backingInt(expr_id)) orelse checkedArtifactInvariant("checked interpolation expression reached nested procedure site collection without a static-dispatch plan", .{}), owner);
+                try self.pushStaticDispatchPlanArgs(bodies.dispatchPlan(@backingInt(expr_id)) orelse checkedArtifactInvariant("checked interpolation expression reached nested procedure site collection without a static-dispatch plan", .{}));
             },
-            .numeral => if (bodies.numeralPlan(@backingInt(expr_id))) |plan_id| try self.pushStaticDispatchPlanArgs(plan_id, owner),
+            .numeral => if (bodies.numeralPlan(@backingInt(expr_id))) |plan_id| try self.pushStaticDispatchPlanArgs(plan_id),
             .structural_eq => |eq| {
-                try self.pushExpr(eq.lhs, owner);
-                try self.pushExpr(eq.rhs, owner);
+                try self.pushExpr(eq.lhs);
+                try self.pushExpr(eq.rhs);
             },
             .structural_hash => |h| {
-                try self.pushExpr(h.value, owner);
-                try self.pushExpr(h.hasher, owner);
+                try self.pushExpr(h.value);
+                try self.pushExpr(h.hasher);
             },
-            .tuple_access => |access| try self.pushExpr(access.tuple, owner),
+            .tuple_access => |access| try self.pushExpr(access.tuple),
             .for_ => |for_| {
-                try self.pushPattern(for_.pattern, owner);
-                try self.pushExpr(for_.expr, owner);
-                try self.pushExpr(for_.body, owner);
+                try self.pushPattern(for_.pattern);
+                try self.pushExpr(for_.expr);
+                try self.pushExpr(for_.body);
             },
             .hosted_lambda => |hosted| {
                 if (!suppress_current_site) {
-                    try self.addSite(owner, .local_function, expr_id, null);
+                    try self.addSite(.local_function, expr_id);
                     try self.openSite();
                 }
-                for (hosted.args) |arg| try self.pushPattern(arg, owner);
+                for (hosted.args) |arg| try self.pushPattern(arg);
             },
             .run_low_level => |run| {
-                for (run.args) |arg| try self.pushExpr(arg, owner);
+                for (run.args) |arg| try self.pushExpr(arg);
             },
             .lookup_local, .lookup_external, .lookup_required => {
                 if (data == .lookup_local) try self.selectLookupTarget(expr_id);
             },
             .runtime_error => |runtime_error| {
-                for (runtime_error.evaluated) |operand| try self.pushExpr(operand, owner);
+                for (runtime_error.evaluated) |operand| try self.pushExpr(operand);
             },
             .str_segment,
             .bytes_literal,
@@ -19445,7 +19366,7 @@ const NestedProcSiteBuilder = struct {
         self.endChildren(children);
     }
 
-    fn exitExpr(self: *NestedProcSiteBuilder, exit: ExprExit) void {
+    fn exitExpr(self: *NestedProcSiteScan, exit: ExprExit) void {
         self.open_sites.items.len = exit.open_site_mark;
         self.current_scope = exit.previous_scope;
     }
@@ -19453,9 +19374,8 @@ const NestedProcSiteBuilder = struct {
     /// Push a static-dispatch plan's checked operands among the children
     /// currently being pushed.
     fn pushStaticDispatchPlanArgs(
-        self: *NestedProcSiteBuilder,
+        self: *NestedProcSiteScan,
         plan_id: static_dispatch.StaticDispatchPlanId,
-        owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         const raw = @backingInt(plan_id);
         if (raw >= self.static_dispatch_plans.plans.len) {
@@ -19463,16 +19383,15 @@ const NestedProcSiteBuilder = struct {
         }
         const plan = self.static_dispatch_plans.plans[raw];
         for (plan.argsSlice(self.static_dispatch_plans)) |arg| switch (arg) {
-            .checked_expr => |expr| try self.pushExpr(expr, owner),
-            .generated_interpolation_segments => |expr| try self.pushWork(.{ .generated_interpolation_segments = .{ .id = expr, .owner = owner } }),
+            .checked_expr => |expr| try self.pushExpr(expr),
+            .generated_interpolation_segments => |expr| try self.pushWork(.{ .generated_interpolation_segments = .{ .id = expr } }),
             .generated_numeral, .generated_quote, .literal_pattern_value, .literal_pattern_conversion => {},
         };
     }
 
     fn pushInterpolationChildren(
-        self: *NestedProcSiteBuilder,
+        self: *NestedProcSiteScan,
         expr_id: CIR.Expr.Idx,
-        owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         const data = self.bodies.exprData(expr_id);
         if (data != .interpolation) {
@@ -19480,15 +19399,14 @@ const NestedProcSiteBuilder = struct {
         }
         const interpolation = data.interpolation;
         const children = self.beginChildren();
-        try self.pushExpr(interpolation.first, owner);
-        for (interpolation.parts) |part| try self.pushExpr(part, owner);
+        try self.pushExpr(interpolation.first);
+        for (interpolation.parts) |part| try self.pushExpr(part);
         self.endChildren(children);
     }
 
     fn enterPattern(
-        self: *NestedProcSiteBuilder,
+        self: *NestedProcSiteScan,
         pattern_id: CIR.Pattern.Idx,
-        owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         const bodies = self.bodies;
         const data = bodies.patternData(pattern_id);
@@ -19498,27 +19416,27 @@ const NestedProcSiteBuilder = struct {
         }
         const children = self.beginChildren();
         switch (data) {
-            .as => |as| try self.pushPattern(as.pattern, owner),
+            .as => |as| try self.pushPattern(as.pattern),
             .applied_tag => |tag| {
-                for (tag.args) |arg| try self.pushPattern(arg, owner);
+                for (tag.args) |arg| try self.pushPattern(arg);
             },
-            .nominal => |nominal| try self.pushPattern(nominal.backing_pattern, owner),
+            .nominal => |nominal| try self.pushPattern(nominal.backing_pattern),
             .record_destructure => |destructs| {
-                for (destructs) |destruct| try self.pushPattern(bodies.recordDestructPattern(destruct), owner);
+                for (destructs) |destruct| try self.pushPattern(bodies.recordDestructPattern(destruct));
             },
             .list => |list| {
-                for (list.patterns) |child| try self.pushPattern(child, owner);
+                for (list.patterns) |child| try self.pushPattern(child);
                 if (list.rest) |rest| {
-                    if (rest.pattern) |child| try self.pushPattern(child, owner);
+                    if (rest.pattern) |child| try self.pushPattern(child);
                 }
             },
             .tuple => |items| {
-                for (items) |child| try self.pushPattern(child, owner);
+                for (items) |child| try self.pushPattern(child);
             },
             .str_interpolation => |str| {
                 var offset: u32 = 0;
                 while (offset < str.steps.span.len) : (offset += 1) {
-                    if (bodies.strPatternStep(str.steps, offset).capture) |capture| try self.pushPattern(capture, owner);
+                    if (bodies.strPatternStep(str.steps, offset).capture) |capture| try self.pushPattern(capture);
                 }
             },
             .numeral_literal,
@@ -19532,48 +19450,47 @@ const NestedProcSiteBuilder = struct {
     }
 
     fn enterStatement(
-        self: *NestedProcSiteBuilder,
+        self: *NestedProcSiteScan,
         statement_id: CIR.Statement.Idx,
-        owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         const children = self.beginChildren();
         switch (self.bodies.statementData(statement_id)) {
             .decl => |decl| {
-                try self.pushPattern(decl.pattern, owner);
-                try self.pushExpr(decl.expr, owner);
+                try self.pushPattern(decl.pattern);
+                try self.pushExpr(decl.expr);
             },
             // The promoted procedure's sites belong to its own template.
             .promoted_proc => {},
             .var_ => |var_| {
-                try self.pushPattern(var_.pattern, owner);
-                try self.pushExpr(var_.expr, owner);
+                try self.pushPattern(var_.pattern);
+                try self.pushExpr(var_.expr);
             },
             .var_uninitialized => |var_| {
-                try self.pushPattern(var_.pattern, owner);
+                try self.pushPattern(var_.pattern);
             },
             .reassign => |reassign| {
-                try self.pushPattern(reassign.pattern, owner);
-                try self.pushExpr(reassign.expr, owner);
+                try self.pushPattern(reassign.pattern);
+                try self.pushExpr(reassign.expr);
             },
-            inline .dbg, .expr, .expect => |child| try self.pushExpr(child, owner),
+            inline .dbg, .expr, .expect => |child| try self.pushExpr(child),
             .return_ => |ret| {
                 // `ret.lambda` is the enclosing lambda context for early-return
                 // lowering, not an owned child expression.
-                try self.pushExpr(ret.expr, owner);
+                try self.pushExpr(ret.expr);
             },
             .for_ => |for_| {
-                try self.pushPattern(for_.pattern, owner);
-                try self.pushExpr(for_.expr, owner);
-                try self.pushExpr(for_.body, owner);
+                try self.pushPattern(for_.pattern);
+                try self.pushExpr(for_.expr);
+                try self.pushExpr(for_.body);
             },
             inline .while_, .infinite_loop, .breakable_loop => |while_| {
-                try self.pushExpr(while_.cond, owner);
-                try self.pushExpr(while_.body, owner);
+                try self.pushExpr(while_.cond);
+                try self.pushExpr(while_.body);
             },
             .alias_decl,
             .where_alias_decl,
             .nominal_decl,
-            => try self.pushAttachedLocalProcedures(statement_id, owner),
+            => try self.pushAttachedLocalProcedures(statement_id),
             .crash,
             .rejected_method_decl,
             .break_,
@@ -19587,16 +19504,15 @@ const NestedProcSiteBuilder = struct {
     }
 
     fn pushAttachedLocalProcedures(
-        self: *NestedProcSiteBuilder,
+        self: *NestedProcSiteScan,
         statement_id: CIR.Statement.Idx,
-        owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         for (self.method_registry.entries) |entry| {
             const target = entry.target orelse continue;
             switch (target.kind) {
                 .local_proc => |local| {
                     if (local.context_anchor == statement_id) {
-                        try self.pushExpr(local.expr, owner);
+                        try self.pushExpr(local.expr);
                     }
                 },
                 .procedure, .structural => {},
@@ -19605,34 +19521,29 @@ const NestedProcSiteBuilder = struct {
     }
 
     /// Enter the body of the site `addSite` just recorded.
-    fn openSite(self: *NestedProcSiteBuilder) Allocator.Error!void {
-        try self.open_sites.append(self.allocator, @fromBackingInt(@intCast(self.sites.items.len - 1)));
+    fn openSite(self: *NestedProcSiteScan) Allocator.Error!void {
+        try self.open_sites.append(self.allocator, @intCast(self.sites.items.len - 1));
     }
 
-    fn innermostOpenSite(self: *const NestedProcSiteBuilder) ?u32 {
-        const site = self.open_sites.getLastOrNull() orelse return null;
-        return @backingInt(site);
+    fn innermostOpenSite(self: *const NestedProcSiteScan) ?u32 {
+        return self.open_sites.getLastOrNull();
     }
 
-    fn recordBinderSite(self: *NestedProcSiteBuilder, binder: CIR.Pattern.Idx) Allocator.Error!void {
-        const raw = @backingInt(binder);
-        if (raw >= self.binder_sites.items.len) {
-            try self.binder_sites.appendNTimes(self.allocator, null, raw + 1 - self.binder_sites.items.len);
-        }
-        self.binder_sites.items[raw] = self.innermostOpenSite();
+    fn recordBinderSite(self: *NestedProcSiteScan, binder: CIR.Pattern.Idx) Allocator.Error!void {
+        try self.binders.append(self.allocator, .{ .binder = binder, .site = self.innermostOpenSite() });
     }
 
     /// Record that the innermost open site's own body selects the local
-    /// procedure whose lambda or closure is `proc_expr`. The enclosing
-    /// template body holds every binder a procedure it selects needs, so a
-    /// selection outside every site records nothing.
-    fn selectLocalProc(self: *NestedProcSiteBuilder, proc_expr: CIR.Expr.Idx) Allocator.Error!void {
+    /// procedure whose lambda or closure is `proc_expr`. The owner's body
+    /// holds every binder a procedure it selects needs, so a selection
+    /// outside every site records nothing.
+    fn selectLocalProc(self: *NestedProcSiteScan, proc_expr: CIR.Expr.Idx) Allocator.Error!void {
         const site = self.innermostOpenSite() orelse return;
-        try self.selected_procs.append(self.allocator, .{ .site = site, .proc_expr = proc_expr });
+        try self.selections.append(self.allocator, .{ .site = site, .proc_expr = proc_expr });
     }
 
-    fn selectLookupTarget(self: *NestedProcSiteBuilder, expr_id: CIR.Expr.Idx) Allocator.Error!void {
-        const refs = self.resolved_value_refs orelse return;
+    fn selectLookupTarget(self: *NestedProcSiteScan, expr_id: CIR.Expr.Idx) Allocator.Error!void {
+        const refs = self.resolved_value_refs;
         const id = refs.lookupIdByExpr(expr_id) orelse return;
         switch (refs.callableTarget(id).ref) {
             .local_proc => |local| try self.selectLocalProc(local.expr),
@@ -19655,116 +19566,309 @@ const NestedProcSiteBuilder = struct {
         }
     }
 
-    /// Whether the body of `site`, or of a site nested in it, binds `binder`.
-    fn binderBoundWithin(self: *const NestedProcSiteBuilder, site: u32, binder: CIR.Pattern.Idx) bool {
-        const raw = @backingInt(binder);
-        if (raw >= self.binder_sites.items.len) {
-            checkedArtifactInvariant("nested procedure runtime capture named a binder no scanned pattern binds", .{});
-        }
-        var current = self.binder_sites.items[raw];
-        while (current) |candidate| {
-            if (candidate == site) return true;
-            current = self.site_parents.items[candidate];
-        }
-        return false;
-    }
-
-    fn ownSiteCaptures(self: *const NestedProcSiteBuilder, site: NestedProcSite) []const CIR.Expr.Capture.Idx {
-        const expr_id = site.checked_expr orelse return &.{};
-        const data = self.bodies.exprData(expr_id);
-        return if (data == .closure) data.closure.captures else &.{};
-    }
-
-    fn checkedCapture(self: *const NestedProcSiteBuilder, capture_idx: CIR.Expr.Capture.Idx) CheckedCapture {
-        const capture = self.bodies.capture(capture_idx);
-        if (!patternBindsName(self.bodies.env, capture.pattern)) {
-            checkedArtifactInvariant("nested procedure capture referenced a non-binding pattern", .{});
-        }
-        return .{ .pattern = capture.pattern, .scope_depth = capture.scope_depth, .capture_id = capture.capture_id };
-    }
-
-    /// Add `binder` to the sorted set `set`; whether it was absent.
-    fn insertBinder(allocator: Allocator, set: *std.ArrayList(CIR.Pattern.Idx), binder: CIR.Pattern.Idx) Allocator.Error!bool {
-        const index = std.sort.lowerBound(CIR.Pattern.Idx, set.items, binder, struct {
-            fn order(key: CIR.Pattern.Idx, item: CIR.Pattern.Idx) std.math.Order {
-                return std.math.order(@backingInt(key), @backingInt(item));
-            }
-        }.order);
-        if (index < set.items.len and set.items[index] == binder) return false;
-        try set.insert(allocator, index, binder);
-        return true;
-    }
-
-    /// Publish each site's runtime captures: its own captures, then every
-    /// binder of an enclosing frame that constructing a local procedure it
-    /// selects requires, directly or through a site nested in it. A selected
-    /// procedure needs its own runtime captures, so this is the least
-    /// fixpoint of that relation, with each site keeping only the binders
-    /// its own body does not bind.
-    fn publishRuntimeCaptures(self: *NestedProcSiteBuilder, sites: []NestedProcSite) Allocator.Error![]CheckedCapture {
+    fn finish(self: *NestedProcSiteScan) Allocator.Error!*OwnerNestedProcSites {
         const allocator = self.allocator;
-        var site_by_expr = collections.DenseMapUnmanaged(CIR.Expr.Idx, u32){};
-        defer site_by_expr.deinit(allocator);
-        for (sites, 0..) |site, index| {
-            const expr_id = site.checked_expr orelse continue;
-            try site_by_expr.put(allocator, expr_id, @intCast(index));
-            const data = self.bodies.exprData(expr_id);
-            if (data == .closure) try site_by_expr.put(allocator, data.closure.lambda, @intCast(index));
-        }
-
-        const needs = try allocator.alloc(std.ArrayList(CIR.Pattern.Idx), sites.len);
-        defer allocator.free(needs);
-        for (needs) |*need| need.* = .empty;
-        defer for (needs) |*need| need.deinit(allocator);
-        for (sites, needs) |site, *need| {
-            for (self.ownSiteCaptures(site)) |capture| _ = try insertBinder(allocator, need, self.checkedCapture(capture).pattern);
-        }
-
-        var changed = true;
-        while (changed) {
-            changed = false;
-            for (self.selected_procs.items) |selected| {
-                const proc_site = site_by_expr.get(selected.proc_expr) orelse continue;
-                var index: usize = 0;
-                while (index < needs[proc_site].items.len) : (index += 1) {
-                    const binder = needs[proc_site].items[index];
-                    if (self.binderBoundWithin(selected.site, binder)) continue;
-                    if (try insertBinder(allocator, &needs[selected.site], binder)) changed = true;
-                }
+        const by_expr = try allocator.alloc(u32, self.sites.items.len);
+        errdefer allocator.free(by_expr);
+        for (by_expr, 0..) |*position, index| position.* = @intCast(index);
+        const sites = self.sites.items;
+        std.mem.sort(u32, by_expr, sites, struct {
+            fn lessThan(all: []const NestedProcSite, left: u32, right: u32) bool {
+                return @backingInt(all[left].checked_expr) < @backingInt(all[right].checked_expr);
             }
-            for (self.site_parents.items, 0..) |maybe_parent, child| {
-                const parent = maybe_parent orelse continue;
-                var index: usize = 0;
-                while (index < needs[child].items.len) : (index += 1) {
-                    const binder = needs[child].items[index];
-                    if (self.binderBoundWithin(parent, binder)) continue;
-                    if (try insertBinder(allocator, &needs[parent], binder)) changed = true;
-                }
+        }.lessThan);
+        for (by_expr[0..by_expr.len -| 1], by_expr[@min(1, by_expr.len)..]) |left, right| {
+            if (sites[left].checked_expr == sites[right].checked_expr) {
+                checkedArtifactInvariant("an owner's body constructed two nested procedures at one expression", .{});
             }
         }
-
-        var pool = std.ArrayList(CheckedCapture).empty;
-        errdefer pool.deinit(allocator);
-        for (sites, needs) |*site, need| {
-            const start: u32 = @intCast(pool.items.len);
-            const own = self.ownSiteCaptures(site.*);
-            for (own) |capture| try pool.append(allocator, self.checkedCapture(capture));
-            for (need.items) |binder| {
-                const already_own = for (own) |capture| {
-                    if (self.checkedCapture(capture).pattern == binder) break true;
-                } else false;
-                if (already_own) continue;
-                try pool.append(allocator, .{
-                    .pattern = binder,
-                    .scope_depth = 0,
-                    .capture_id = CaptureId.fromBinder(binder),
-                });
-            }
-            site.runtime_captures = .{ .start = start, .len = @as(u32, @intCast(pool.items.len)) - start };
-        }
-        return try pool.toOwnedSlice(allocator);
+        const result = try allocator.create(OwnerNestedProcSites);
+        errdefer allocator.destroy(result);
+        const owned_sites = try self.sites.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_sites);
+        const parents = try self.parents.toOwnedSlice(allocator);
+        errdefer allocator.free(parents);
+        const binders = try self.binders.toOwnedSlice(allocator);
+        errdefer allocator.free(binders);
+        result.* = .{
+            .sites = owned_sites,
+            .by_expr = by_expr,
+            .parents = parents,
+            .binders = binders,
+            .selections = try self.selections.toOwnedSlice(allocator),
+        };
+        return result;
     }
 };
+
+/// The nested procedure sites `owner`'s body constructs, scanned from
+/// `bodies` (design.md "On-Demand Analyses And Write-Once Slots").
+pub fn computeOwnerNestedProcSites(
+    allocator: Allocator,
+    bodies: CheckedBodies,
+    scope_by_checked_expr: *const collections.DenseMap(CIR.Expr.Idx, DispatchScopeId),
+    owner: NestedProcSiteOwner,
+) Allocator.Error!*OwnerNestedProcSites {
+    const dispatch = bodies.tables.dispatch orelse checkedArtifactInvariant("nested procedure sites were scanned from bodies without dispatch", .{});
+    const source = dispatch.source;
+    var scan = NestedProcSiteScan{
+        .allocator = allocator,
+        .bodies = bodies,
+        .dispatch = dispatch,
+        .static_dispatch_plans = source.plans,
+        .method_registry = source.method_registry,
+        .resolved_value_refs = source.refs,
+        .dispatch_scopes = source.templates.dispatch_scopes,
+        .scope_by_checked_expr = scope_by_checked_expr,
+    };
+    defer scan.deinit();
+    switch (owner) {
+        .template => |template_ref| switch (source.templates.get(template_ref.template).body) {
+            .checked_body => |root_expr| try scan.scanExpr(root_expr, true),
+            .entry_wrapper => |wrapper_id| {
+                const wrapper = source.entry_wrappers.get(wrapper_id);
+                try scan.scanEntryWrapper(source.compile_time_roots.root(wrapper.root));
+            },
+            .intrinsic_wrapper, .unimplemented => {},
+        },
+        // Unlike a template body, whose root lambda is the procedure
+        // itself, a default's root lambda is an ordinary nested function
+        // value, so the default's root is a site.
+        .default_root => |default| try scan.scanExpr(default, false),
+    }
+    return scan.finish();
+}
+
+/// The module's nested procedure sites by expression with their runtime
+/// captures, from every owner's sites: each template's in template order,
+/// then each defaulted-field default's. A procedure's runtime captures are
+/// its own captures, then every binder of an enclosing frame that
+/// constructing a local procedure it selects requires, directly or through
+/// a site nested in it. A selected procedure needs its own runtime
+/// captures, so this is the least fixpoint of that relation, with each site
+/// keeping only the binders its own body does not bind. The relation is a
+/// function of the site expressions alone, and it crosses owners: a
+/// promoted local procedure's body selects local procedures its enclosing
+/// template's body declares.
+pub fn computeModuleNestedProcSites(
+    allocator: Allocator,
+    bodies: CheckedBodies,
+    analyses: *ModuleAnalyses,
+) Allocator.Error!*ModuleNestedProcSites {
+    const templates = bodies.tables.templates orelse checkedArtifactInvariant("nested procedure sites were computed without the module's templates", .{});
+    const defaults = bodies.index().defaults;
+    const owners = try allocator.alloc(*const OwnerNestedProcSites, templates.templates.items.len + defaults.len);
+    defer allocator.free(owners);
+    for (templates.templates.items, owners[0..templates.templates.items.len]) |template, *owner| {
+        owner.* = try analyses.nestedProcSites(bodies, .{ .template = .{ .proc_base = template.proc_base, .template = template.template_id } });
+    }
+    for (defaults, owners[templates.templates.items.len..]) |default, *owner| {
+        owner.* = try analyses.nestedProcSites(bodies, .{ .default_root = @fromBackingInt(default) });
+    }
+
+    // Every owner's site expressions, grouped by expression in owner order.
+    const Occurrence = struct {
+        expr: CIR.Expr.Idx,
+        template: ?canonical.CheckedProcedureTemplateId,
+
+        fn lessThan(_: void, left: @This(), right: @This()) bool {
+            return @backingInt(left.expr) < @backingInt(right.expr);
+        }
+    };
+    var occurrences = std.ArrayList(Occurrence).empty;
+    defer occurrences.deinit(allocator);
+    for (owners, 0..) |owner, owner_index| {
+        const template: ?canonical.CheckedProcedureTemplateId = if (owner_index < templates.templates.items.len) @fromBackingInt(@intCast(owner_index)) else null;
+        for (owner.sites) |site| try occurrences.append(allocator, .{ .expr = site.checked_expr, .template = template });
+    }
+    std.mem.sortUnstable(Occurrence, occurrences.items, {}, Occurrence.lessThan);
+    var exprs = std.ArrayList(CIR.Expr.Idx).empty;
+    defer exprs.deinit(allocator);
+    var first_templates = std.ArrayList(?canonical.CheckedProcedureTemplateId).empty;
+    defer first_templates.deinit(allocator);
+    var owner_counts = std.ArrayList(u32).empty;
+    defer owner_counts.deinit(allocator);
+    for (occurrences.items) |occurrence| {
+        const last = exprs.items.len;
+        if (last != 0 and exprs.items[last - 1] == occurrence.expr) {
+            owner_counts.items[last - 1] += 1;
+            if (occurrence.template) |template| {
+                const first = &first_templates.items[last - 1];
+                if (first.* == null or @backingInt(template) < @backingInt(first.*.?)) first.* = template;
+            }
+            continue;
+        }
+        try exprs.append(allocator, occurrence.expr);
+        try first_templates.append(allocator, occurrence.template);
+        try owner_counts.append(allocator, 1);
+    }
+    const count = exprs.items.len;
+    const lookup = ModuleNestedProcSites{ .exprs = exprs.items };
+
+    // The lexical facts of the site expressions, merged over owners: an
+    // owner's scan starts below its own root, so where one owner's site has
+    // no enclosing site another owner's may.
+    const parents = try allocator.alloc(?u32, count);
+    defer allocator.free(parents);
+    @memset(parents, null);
+    var binder_sites = collections.DenseMap(CIR.Pattern.Idx, ?u32).init(allocator);
+    defer binder_sites.deinit();
+    const Selection = struct { site: u32, proc_expr: CIR.Expr.Idx };
+    var selections = std.ArrayList(Selection).empty;
+    defer selections.deinit(allocator);
+    for (owners) |owner| {
+        for (owner.sites, owner.parents) |site, maybe_parent| {
+            const parent = maybe_parent orelse continue;
+            const child_position = lookup.position(site.checked_expr).?;
+            const parent_position: u32 = @intCast(lookup.position(owner.sites[parent].checked_expr).?);
+            if (parents[child_position]) |existing| {
+                if (existing != parent_position) checkedArtifactInvariant("two owners disagreed on a nested procedure site's enclosing site", .{});
+            }
+            parents[child_position] = parent_position;
+        }
+        for (owner.binders) |bound| {
+            const position: ?u32 = if (bound.site) |site| @intCast(lookup.position(owner.sites[site].checked_expr).?) else null;
+            const entry = try binder_sites.getOrPut(bound.binder);
+            if (!entry.found_existing or entry.value_ptr.* == null) {
+                entry.value_ptr.* = position;
+            } else if (position) |found| {
+                if (entry.value_ptr.*.? != found) checkedArtifactInvariant("two owners disagreed on the site binding a binder", .{});
+            }
+        }
+        for (owner.selections) |selection| {
+            try selections.append(allocator, .{ .site = @intCast(lookup.position(owner.sites[selection.site].checked_expr).?), .proc_expr = selection.proc_expr });
+        }
+    }
+
+    // Each closure site's lambda, through which a selection names the
+    // closure's site.
+    var closure_lambdas = std.ArrayList(ModuleNestedProcSites.ClosureLambda).empty;
+    defer closure_lambdas.deinit(allocator);
+    for (exprs.items) |expr| {
+        const data = bodies.exprData(expr);
+        if (data == .closure) try closure_lambdas.append(allocator, .{ .lambda = data.closure.lambda, .closure = expr });
+    }
+    std.mem.sortUnstable(ModuleNestedProcSites.ClosureLambda, closure_lambdas.items, {}, struct {
+        fn lessThan(_: void, left: ModuleNestedProcSites.ClosureLambda, right: ModuleNestedProcSites.ClosureLambda) bool {
+            return @backingInt(left.lambda) < @backingInt(right.lambda);
+        }
+    }.lessThan);
+    const with_lambdas = ModuleNestedProcSites{ .exprs = exprs.items, .closure_lambdas = closure_lambdas.items };
+
+    const needs = try allocator.alloc(std.ArrayList(CIR.Pattern.Idx), count);
+    defer allocator.free(needs);
+    for (needs) |*need| need.* = .empty;
+    defer for (needs) |*need| need.deinit(allocator);
+    for (exprs.items, needs) |expr, *need| {
+        for (ownSiteCaptures(bodies, expr)) |capture| _ = try insertSortedBinder(allocator, need, checkedSiteCapture(bodies, capture).pattern);
+    }
+
+    const Fixpoint = struct {
+        parents: []const ?u32,
+        binder_sites: *const collections.DenseMap(CIR.Pattern.Idx, ?u32),
+
+        /// Whether the body of `site`, or of a site nested in it, binds `binder`.
+        fn boundWithin(self: @This(), site: u32, binder: CIR.Pattern.Idx) bool {
+            var current = self.binder_sites.get(binder) orelse
+                checkedArtifactInvariant("nested procedure runtime capture named a binder no scanned pattern binds", .{});
+            while (current) |candidate| {
+                if (candidate == site) return true;
+                current = self.parents[candidate];
+            }
+            return false;
+        }
+    };
+    const fixpoint = Fixpoint{ .parents = parents, .binder_sites = &binder_sites };
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (selections.items) |selection| {
+            const proc_site = with_lambdas.position(selection.proc_expr) orelse continue;
+            var index: usize = 0;
+            while (index < needs[proc_site].items.len) : (index += 1) {
+                const binder = needs[proc_site].items[index];
+                if (fixpoint.boundWithin(selection.site, binder)) continue;
+                if (try insertSortedBinder(allocator, &needs[selection.site], binder)) changed = true;
+            }
+        }
+        for (parents, 0..) |maybe_parent, child| {
+            const parent = maybe_parent orelse continue;
+            var index: usize = 0;
+            while (index < needs[child].items.len) : (index += 1) {
+                const binder = needs[child].items[index];
+                if (fixpoint.boundWithin(parent, binder)) continue;
+                if (try insertSortedBinder(allocator, &needs[parent], binder)) changed = true;
+            }
+        }
+    }
+
+    var pool = std.ArrayList(CheckedCapture).empty;
+    defer pool.deinit(allocator);
+    const capture_spans = try allocator.alloc(artifact_serialize.Span, count);
+    errdefer allocator.free(capture_spans);
+    for (exprs.items, needs, capture_spans) |expr, need, *span| {
+        const start: u32 = @intCast(pool.items.len);
+        const own = ownSiteCaptures(bodies, expr);
+        for (own) |capture| try pool.append(allocator, checkedSiteCapture(bodies, capture));
+        for (need.items) |binder| {
+            const already_own = for (own) |capture| {
+                if (checkedSiteCapture(bodies, capture).pattern == binder) break true;
+            } else false;
+            if (already_own) continue;
+            try pool.append(allocator, .{
+                .pattern = binder,
+                .scope_depth = 0,
+                .capture_id = CaptureId.fromBinder(binder),
+            });
+        }
+        span.* = .{ .start = start, .len = @as(u32, @intCast(pool.items.len)) - start };
+    }
+
+    const result = try allocator.create(ModuleNestedProcSites);
+    errdefer allocator.destroy(result);
+    const owned_exprs = try exprs.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_exprs);
+    const owned_first_templates = try first_templates.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_first_templates);
+    const owned_owner_counts = try owner_counts.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_owner_counts);
+    const owned_captures = try pool.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_captures);
+    result.* = .{
+        .exprs = owned_exprs,
+        .first_templates = owned_first_templates,
+        .owner_counts = owned_owner_counts,
+        .capture_spans = capture_spans,
+        .captures = owned_captures,
+        .closure_lambdas = try closure_lambdas.toOwnedSlice(allocator),
+    };
+    return result;
+}
+
+fn ownSiteCaptures(bodies: CheckedBodies, expr: CIR.Expr.Idx) []const CIR.Expr.Capture.Idx {
+    const data = bodies.exprData(expr);
+    return if (data == .closure) data.closure.captures else &.{};
+}
+
+fn checkedSiteCapture(bodies: CheckedBodies, capture_idx: CIR.Expr.Capture.Idx) CheckedCapture {
+    const capture = bodies.capture(capture_idx);
+    if (!patternBindsName(bodies.env, capture.pattern)) {
+        checkedArtifactInvariant("nested procedure capture referenced a non-binding pattern", .{});
+    }
+    return .{ .pattern = capture.pattern, .scope_depth = capture.scope_depth, .capture_id = capture.capture_id };
+}
+
+/// Add `binder` to the sorted set `set`; whether it was absent.
+fn insertSortedBinder(allocator: Allocator, set: *std.ArrayList(CIR.Pattern.Idx), binder: CIR.Pattern.Idx) Allocator.Error!bool {
+    const index = std.sort.lowerBound(CIR.Pattern.Idx, set.items, binder, struct {
+        fn order(key: CIR.Pattern.Idx, item: CIR.Pattern.Idx) std.math.Order {
+            return std.math.order(@backingInt(key), @backingInt(item));
+        }
+    }.order);
+    if (index < set.items.len and set.items[index] == binder) return false;
+    try set.insert(allocator, index, binder);
+    return true;
+}
 
 /// Public `HostedProc` declaration.
 pub const HostedProc = struct {
@@ -20932,7 +21036,7 @@ pub const PlatformRequiredBindingTable = struct {
         closure_pool: ClosurePool.Serialized = .{},
 
         comptime {
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 15);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(PlatformRequiredBindingTable, @This());
@@ -23337,7 +23441,7 @@ pub const PlatformPairing = struct {
     /// versioning folds it into the platform-pairing cache entry's admission hash.
     // Bump the version for changes to the borrowed-column mask interpretation as
     // well as other semantics not visible in the serialized layout fingerprint.
-    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 4);
+    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 5);
 
     pub const Serialized = extern struct {
         relation: [32]u8,
@@ -23352,7 +23456,6 @@ pub const PlatformPairing = struct {
         resolved_value_refs: ResolvedValueRefTable.Serialized,
         provided_exports: ProvidedExportTable.Serialized,
         root_requests: RootRequestTable.Serialized,
-        exhaustiveness_sites: CheckedExhaustivenessSiteTable.Serialized,
         entry_wrappers: EntryWrapperTable.Serialized,
         intrinsic_wrappers: IntrinsicWrapperTable.Serialized,
         compile_time_roots: CompileTimeRootTable.Serialized,
@@ -23388,7 +23491,6 @@ pub const PlatformPairing = struct {
                 "exported_procedure_bindings",
                 "method_registry",
                 "static_dispatch_plans",
-                "nested_proc_sites",
                 "top_level_procedure_bindings",
                 "callable_eval_templates",
                 "hosted_procs",
@@ -23440,7 +23542,6 @@ pub const PlatformPairing = struct {
             try self.resolved_value_refs.serialize(&artifact.resolved_value_refs, gpa, writer);
             try self.provided_exports.serialize(&artifact.provided_exports, gpa, writer);
             try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
-            try self.exhaustiveness_sites.serialize(&artifact.exhaustiveness_sites, gpa, writer);
             try self.entry_wrappers.serialize(&artifact.entry_wrappers, gpa, writer);
             try self.intrinsic_wrappers.serialize(&artifact.intrinsic_wrappers, gpa, writer);
             const compile_time_roots_empty: CompileTimeRootTable = .{};
@@ -23504,7 +23605,6 @@ pub const PlatformPairing = struct {
             result.resolved_value_refs = self.resolved_value_refs.deserialize(address);
             result.provided_exports = self.provided_exports.deserialize(address);
             result.root_requests = self.root_requests.deserialize(address);
-            result.exhaustiveness_sites = self.exhaustiveness_sites.deserialize(address);
             result.entry_wrappers = self.entry_wrappers.deserialize(address);
             result.intrinsic_wrappers = self.intrinsic_wrappers.deserialize(address);
             if (self.has_dependent_evaluation) result.compile_time_roots = self.compile_time_roots.deserialize(address);
@@ -23727,17 +23827,6 @@ pub fn pairCheckedPlatform(
         result.const_templates = try copyPairingColumns(ConstTemplateTable, platform.const_templates, session);
         result.exported_const_templates = try copyPairingColumns(ExportedConstTemplateTable, platform.exported_const_templates, session);
         result.const_store = try copyPairingColumns(ConstStore, platform.const_store, session);
-    }
-    result.exhaustiveness_sites = try copyPairingColumns(CheckedExhaustivenessSiteTable, platform.exhaustiveness_sites, session);
-    var reachability = try ExhaustivenessTemplateReachability.build(session, result.key, &result.root_requests, &result.checked_procedure_templates, &result.entry_wrappers, &result.callable_eval_templates, &result.top_level_procedure_bindings, &result.platform_required_bindings, &result.resolved_value_refs);
-    for (result.exhaustiveness_sites.sites) |*site| {
-        site.requires_pairing = false;
-        if (site.owner) |owner| switch (owner) {
-            .procedure_template => |template| {
-                if (reachability.templateIsRuntimeReachable(template)) site.policy = .runtime_reachable else if (reachability.templateIsCompileTimeReachable(template)) site.policy = .compile_time_only;
-            },
-            .root => {},
-        };
     }
     result.checked_types.key_names = null;
     result.checked_types.markPublished();
@@ -26042,12 +26131,14 @@ fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
     };
 }
 
+/// The local procedure templates a module's root requests reach at runtime,
+/// at compile time, and at compile time only through a further pairing.
 const ExhaustivenessTemplateReachability = struct {
     allocator: Allocator,
     artifact_key: CheckedModuleArtifactKey,
     procedure_templates: *const CheckedProcedureTemplateTable,
     entry_wrappers: *const EntryWrapperTable,
-    callable_eval_templates: *const CallableEvalTemplateTable,
+    callable_eval_templates: CallableEvalTemplateTableView,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     resolved_value_refs: *const ResolvedValueRefTable,
@@ -26064,7 +26155,7 @@ const ExhaustivenessTemplateReachability = struct {
         artifact_key: CheckedModuleArtifactKey,
         procedure_templates: *const CheckedProcedureTemplateTable,
         entry_wrappers: *const EntryWrapperTable,
-        callable_eval_templates: *const CallableEvalTemplateTable,
+        callable_eval_templates: CallableEvalTemplateTableView,
         top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         resolved_value_refs: *const ResolvedValueRefTable,
@@ -26106,7 +26197,7 @@ const ExhaustivenessTemplateReachability = struct {
         root_requests: *const RootRequestTable,
         procedure_templates: *const CheckedProcedureTemplateTable,
         entry_wrappers: *const EntryWrapperTable,
-        callable_eval_templates: *const CallableEvalTemplateTable,
+        callable_eval_templates: CallableEvalTemplateTableView,
         top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         resolved_value_refs: *const ResolvedValueRefTable,
@@ -26291,7 +26382,7 @@ const ExhaustivenessTemplateReachability = struct {
         template_id: CallableEvalTemplateId,
     ) Allocator.Error!void {
         const raw = @backingInt(template_id);
-        if (raw >= self.callable_eval_templates.templates.items.len) {
+        if (raw >= self.callable_eval_templates.templates.len) {
             checkedArtifactInvariant("reachable callable-eval template id was outside table", .{});
         }
         const template = self.callable_eval_templates.get(template_id);
@@ -26357,20 +26448,179 @@ const ExhaustivenessTemplateReachability = struct {
     }
 };
 
-fn publishCheckedExhaustivenessSites(
+/// The exhaustiveness checks a procedure template's body reaches
+/// (`ModuleAnalyses.templateExhaustivenessSites`).
+pub const TemplateExhaustivenessSites = struct {
+    /// Ascending.
+    sites: []const CheckedExhaustivenessSiteId = &.{},
+
+    pub fn destroy(self: *TemplateExhaustivenessSites, allocator: Allocator) void {
+        allocator.free(self.sites);
+        allocator.destroy(self);
+    }
+};
+
+/// The exhaustiveness checks the body of procedure template `template`
+/// reaches.
+pub fn computeTemplateExhaustivenessSites(
     allocator: Allocator,
     bodies: CheckedBodies,
-    owner_artifact: canonical.ArtifactRef,
-    templates: *const CheckedProcedureTemplateTable,
-    compile_time_roots: *const CompileTimeRootTable,
+    template: canonical.CheckedProcedureTemplateId,
+) Allocator.Error!*TemplateExhaustivenessSites {
+    const templates = bodies.tables.templates orelse checkedArtifactInvariant("exhaustiveness sites were collected from bodies without templates", .{});
+    var found = std.ArrayList(CheckedExhaustivenessSiteId).empty;
+    defer found.deinit(allocator);
+    switch (templates.get(template).body) {
+        .checked_body => |root| try collectExhaustivenessSites(allocator, bodies, root, &found),
+        .intrinsic_wrapper, .entry_wrapper, .unimplemented => {},
+    }
+    const sites = try sortedUniqueSites(allocator, found.items);
+    errdefer allocator.free(sites);
+    const result = try allocator.create(TemplateExhaustivenessSites);
+    result.* = .{ .sites = sites };
+    return result;
+}
+
+fn sortedUniqueSites(allocator: Allocator, sites: []CheckedExhaustivenessSiteId) Allocator.Error![]CheckedExhaustivenessSiteId {
+    std.mem.sortUnstable(CheckedExhaustivenessSiteId, sites, {}, struct {
+        fn lessThan(_: void, left: CheckedExhaustivenessSiteId, right: CheckedExhaustivenessSiteId) bool {
+            return @backingInt(left) < @backingInt(right);
+        }
+    }.lessThan);
+    var len: usize = 0;
+    for (sites) |site| {
+        if (len > 0 and sites[len - 1] == site) continue;
+        sites[len] = site;
+        len += 1;
+    }
+    return allocator.dupe(CheckedExhaustivenessSiteId, sites[0..len]);
+}
+
+/// Every exhaustiveness check of `owner` (an index of
+/// `ModuleEnv.exhaustiveness_obligations`) with the owner and policy that
+/// decide it. A check whose source no body reaches is decided by its checking
+/// mode. Otherwise the first compile-time root, in root order, whose
+/// evaluation replaces the check's source owns it, else the first template,
+/// in template order, whose body reaches it; a template-owned check is
+/// runtime reachable or compile-time only by whether the module's root
+/// requests reach its template at runtime or only at compile time, and by
+/// its checking mode when they reach it at neither.
+///
+/// A platform/app pairing decides its platform's checks (`platform_sites`)
+/// by its own root requests: a template-owned check its requests reach at
+/// runtime is runtime reachable, one they reach only at compile time is
+/// compile-time only, and none waits for a further pairing.
+pub fn computeExhaustivenessSites(
+    allocator: Allocator,
+    analyses: *ModuleAnalyses,
+    owner: ImportedModuleView,
+    platform_sites: ?*const CheckedExhaustivenessSiteTable,
+) Allocator.Error!*CheckedExhaustivenessSiteTable {
+    const root_requests = owner.root_requests;
+    var reachability = try ExhaustivenessTemplateReachability.build(
+        allocator,
+        owner.key,
+        root_requests,
+        owner.checked_procedure_templates,
+        owner.entry_wrappers,
+        owner.callable_eval_templates,
+        owner.top_level_procedure_bindings,
+        owner.platform_required_bindings,
+        owner.resolved_value_refs,
+    );
+    defer reachability.deinit();
+
+    const sites = if (platform_sites) |platform|
+        try pairingExhaustivenessSites(allocator, platform, &reachability)
+    else
+        try moduleExhaustivenessSites(allocator, analyses, owner, root_requests, &reachability);
+    errdefer allocator.free(sites);
+    const result = try allocator.create(CheckedExhaustivenessSiteTable);
+    result.* = .{ .sites = sites };
+    return result;
+}
+
+fn pairingExhaustivenessSites(
+    allocator: Allocator,
+    platform: *const CheckedExhaustivenessSiteTable,
+    reachability: *const ExhaustivenessTemplateReachability,
+) Allocator.Error![]CheckedExhaustivenessSite {
+    const sites = try allocator.dupe(CheckedExhaustivenessSite, platform.sites);
+    for (sites) |*site| {
+        site.requires_pairing = false;
+        if (site.owner) |owner| switch (owner) {
+            .procedure_template => |template| {
+                if (reachability.templateIsRuntimeReachable(template)) site.policy = .runtime_reachable else if (reachability.templateIsCompileTimeReachable(template)) site.policy = .compile_time_only;
+            },
+            .root => {},
+        };
+    }
+    return sites;
+}
+
+fn moduleExhaustivenessSites(
+    allocator: Allocator,
+    analyses: *ModuleAnalyses,
+    owner: ImportedModuleView,
     root_requests: *const RootRequestTable,
     reachability: *const ExhaustivenessTemplateReachability,
-) Allocator.Error!CheckedExhaustivenessSiteTable {
+) Allocator.Error![]CheckedExhaustivenessSite {
+    const bodies = owner.checked_bodies;
     const obligations = bodies.env.exhaustiveness_obligations.items.items;
     const sites = try allocator.alloc(CheckedExhaustivenessSite, obligations.len);
     errdefer allocator.free(sites);
+    if (obligations.len == 0) return sites;
 
-    for (obligations, sites, 0..) |obligation, *site, index| {
+    // The first template, in template order, whose body reaches each check.
+    const templates = owner.checked_procedure_templates.templates.items;
+    const owner_templates = try allocator.alloc(?canonical.CheckedProcedureTemplateId, obligations.len);
+    defer allocator.free(owner_templates);
+    @memset(owner_templates, null);
+    for (0..templates.len) |raw_template| {
+        const template: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(raw_template));
+        for ((try analyses.templateExhaustivenessSites(bodies, template)).sites) |site| {
+            const slot = &owner_templates[@backingInt(site)];
+            if (slot.* == null) slot.* = template;
+        }
+    }
+
+    // The first compile-time root, in root order, whose evaluation replaces
+    // each check's source.
+    const replacing_roots = try allocator.alloc(?CompileTimeRoot, obligations.len);
+    defer allocator.free(replacing_roots);
+    @memset(replacing_roots, null);
+    var found = std.ArrayList(CheckedExhaustivenessSiteId).empty;
+    defer found.deinit(allocator);
+    for (owner.compile_time_roots.roots) |root| {
+        if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
+        // A literal conversion converts literal data and contains no site.
+        if (root.literalConversionKind() != null) continue;
+        found.clearRetainingCapacity();
+        if (root.hoisted_body) |body| switch (body) {
+            .pattern_extraction, .pattern_validation => {
+                const base_expr, const exact_pattern = switch (body) {
+                    .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
+                    .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
+                    .expr, .pattern_error, .valueless_binding => unreachable, // the enclosing prong matches only pattern_extraction and pattern_validation
+                };
+                // Pattern roots evaluate both their match of the base
+                // expression against the pattern and the base expression
+                // itself.
+                try bodies.appendExhaustivenessSitesAt(@backingInt(exact_pattern), .destructure_pattern, allocator, &found);
+                try collectExhaustivenessSites(allocator, bodies, base_expr, &found);
+            },
+            // A rejected destructure binder's root crashes and contains no site.
+            .pattern_error => continue,
+            .expr, .valueless_binding => try collectExhaustivenessSites(allocator, bodies, root.rootExpr(), &found),
+        } else try collectExhaustivenessSites(allocator, bodies, root.rootExpr(), &found);
+        for (found.items) |site| {
+            const slot = &replacing_roots[@backingInt(site)];
+            if (slot.* == null) slot.* = root;
+        }
+    }
+
+    const owner_artifact = owner.key.digest();
+    for (obligations, sites, owner_templates, replacing_roots, 0..) |obligation, *site, owner_template_id, replacing_root, index| {
         const id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(index));
         const kind: CheckedComptimeSiteKind = switch (obligation.source) {
             .match_expr => .match,
@@ -26384,11 +26634,11 @@ fn publishCheckedExhaustivenessSites(
             .match_expr => null,
             .destructure_pattern => |source_pattern| source_pattern,
         };
-        const source_is_published = switch (obligation.source) {
+        const source_is_reached = switch (obligation.source) {
             .match_expr => |source_expr| bodies.index().reachesExpr(source_expr),
             .destructure_pattern => |source_pattern| bodies.index().reachesPattern(source_pattern),
         };
-        if (!source_is_published) {
+        if (!source_is_reached) {
             // Checking may replace an erroneous enclosing expression with a
             // runtime-error node. Its child source occurrences are then
             // intentionally absent from the checked body graph, so no
@@ -26404,12 +26654,11 @@ fn publishCheckedExhaustivenessSites(
             continue;
         }
 
-        const needle: CheckedBodyNeedle = switch (obligation.source) {
-            .match_expr => |source_expr| .{ .expr = source_expr },
-            .destructure_pattern => |source_pattern| .{ .pattern = source_pattern },
-        };
-        const owner_template = try exhaustivenessOwnerTemplateForSource(allocator, bodies, owner_artifact, templates, needle);
-        const replacing_root = try exhaustivenessReplacingRootForSource(allocator, bodies, compile_time_roots, needle);
+        const owner_template: ?canonical.ProcedureTemplateRef = if (owner_template_id) |template_id| .{
+            .artifact = owner_artifact,
+            .proc_base = templates[@backingInt(template_id)].proc_base,
+            .template = template_id,
+        } else null;
         const policy: ExhaustivenessResolutionPolicy = if (replacing_root) |root|
             .{ .compile_time_replaced_by_root = root.id }
         else if (owner_template) |template_ref|
@@ -26434,55 +26683,46 @@ fn publishCheckedExhaustivenessSites(
             const template_index = reachability.localTemplateIndex(template).?;
             break :blk reachability.pairing_templates[template_index] and !reachability.runtime_templates[template_index];
         } else false;
-        const owner: ?CheckedExhaustivenessSiteOwner = if (replacing_root) |root|
-            .{ .root = root.id }
-        else if (owner_template) |template_ref|
-            .{ .procedure_template = template_ref }
-        else
-            null;
         site.* = .{
             .id = id,
             .kind = kind,
             .region = obligation.region,
-            .owner = owner,
+            .owner = if (replacing_root) |root|
+                .{ .root = root.id }
+            else if (owner_template) |template_ref|
+                .{ .procedure_template = template_ref }
+            else
+                null,
             .checked_expr = checked_expr,
             .checked_pattern = checked_pattern,
             .policy = policy,
             .requires_pairing = requires_pairing,
         };
     }
-
-    return .{ .sites = sites };
+    return sites;
 }
 
-/// What a checked body search looks for.
-const CheckedBodyNeedle = union(enum) {
-    expr: CIR.Expr.Idx,
-    pattern: CIR.Pattern.Idx,
-};
-
-/// Whether `needle` occurs within the checked expression tree rooted at
-/// `root`. Nested lambdas' bodies are searched; promoted procedures' bodies
-/// are their own templates'. Nodes wait on an explicit stack, so body
-/// nesting never becomes native call depth.
-fn checkedExprContains(
+/// Append the exhaustiveness checks within the checked expression tree
+/// rooted at `root` to `found`. Nested lambdas' bodies are searched;
+/// promoted procedures' bodies are their own templates'. Nodes wait on an
+/// explicit stack, so body nesting never becomes native call depth.
+fn collectExhaustivenessSites(
     allocator: Allocator,
     bodies: CheckedBodies,
     root: CIR.Expr.Idx,
-    needle: CheckedBodyNeedle,
-) Allocator.Error!bool {
+    found: *std.ArrayList(CheckedExhaustivenessSiteId),
+) Allocator.Error!void {
     const Node = union(enum) {
         expr: CIR.Expr.Idx,
         statement: CIR.Statement.Idx,
         pattern: CIR.Pattern.Idx,
     };
-    const patterns = needle == .pattern;
     var pending: std.ArrayList(Node) = .empty;
     defer pending.deinit(allocator);
     try pending.append(allocator, .{ .expr = root });
     while (pending.pop()) |node| switch (node) {
         .expr => |expr_id| {
-            if (needle == .expr and needle.expr == expr_id) return true;
+            try bodies.appendExhaustivenessSitesAt(@backingInt(expr_id), .match_expr, allocator, found);
             switch (bodies.exprData(expr_id)) {
                 .str => |segments| if (!bodies.quoteIsCustom(@backingInt(expr_id))) for (segments) |segment| try pending.append(allocator, .{ .expr = segment }),
                 .list, .tuple => |items| for (items) |item| try pending.append(allocator, .{ .expr = item }),
@@ -26490,9 +26730,7 @@ fn checkedExprContains(
                     try pending.append(allocator, .{ .expr = match.cond });
                     for (match.branches) |branch_idx| {
                         const branch = bodies.matchBranch(branch_idx);
-                        if (patterns) {
-                            for (branch.patterns) |branch_pattern| try pending.append(allocator, .{ .pattern = bodies.matchBranchPattern(branch_pattern).pattern });
-                        }
+                        for (branch.patterns) |branch_pattern| try pending.append(allocator, .{ .pattern = bodies.matchBranchPattern(branch_pattern).pattern });
                         if (branch.guard) |guard| try pending.append(allocator, .{ .expr = guard });
                         try pending.append(allocator, .{ .expr = branch.value });
                     }
@@ -26521,7 +26759,7 @@ fn checkedExprContains(
                 .nominal => |nominal| try pending.append(allocator, .{ .expr = nominal.backing_expr }),
                 .closure => |closure| try pending.append(allocator, .{ .expr = closure.lambda }),
                 .lambda => |lambda| {
-                    if (patterns) for (lambda.args) |arg| try pending.append(allocator, .{ .pattern = arg });
+                    for (lambda.args) |arg| try pending.append(allocator, .{ .pattern = arg });
                     try pending.append(allocator, .{ .expr = lambda.body });
                 },
                 .binop => |binop| {
@@ -26546,12 +26784,12 @@ fn checkedExprContains(
                 .expect_err => |expect_err| try pending.append(allocator, .{ .expr = expect_err.expr }),
                 .return_ => |ret| try pending.append(allocator, .{ .expr = ret.expr }),
                 .for_ => |for_| {
-                    if (patterns) try pending.append(allocator, .{ .pattern = for_.pattern });
+                    try pending.append(allocator, .{ .pattern = for_.pattern });
                     try pending.append(allocator, .{ .expr = for_.expr });
                     try pending.append(allocator, .{ .expr = for_.body });
                 },
                 .run_low_level => |run| for (run.args) |arg| try pending.append(allocator, .{ .expr = arg }),
-                .hosted_lambda => |hosted| if (patterns) for (hosted.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
+                .hosted_lambda => |hosted| for (hosted.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
                 .numeral,
                 .str_segment,
                 .bytes_literal,
@@ -26574,23 +26812,23 @@ fn checkedExprContains(
         },
         .statement => |statement_id| switch (bodies.statementData(statement_id)) {
             .decl => |decl| {
-                if (patterns) try pending.append(allocator, .{ .pattern = decl.pattern });
+                try pending.append(allocator, .{ .pattern = decl.pattern });
                 try pending.append(allocator, .{ .expr = decl.expr });
             },
             // The promoted procedure's lambda is its own template's body.
-            .promoted_proc => |promoted| if (patterns) try pending.append(allocator, .{ .pattern = promoted.pattern }),
+            .promoted_proc => |promoted| try pending.append(allocator, .{ .pattern = promoted.pattern }),
             .var_ => |var_| {
-                if (patterns) try pending.append(allocator, .{ .pattern = var_.pattern });
+                try pending.append(allocator, .{ .pattern = var_.pattern });
                 try pending.append(allocator, .{ .expr = var_.expr });
             },
-            .var_uninitialized => |var_| if (patterns) try pending.append(allocator, .{ .pattern = var_.pattern }),
+            .var_uninitialized => |var_| try pending.append(allocator, .{ .pattern = var_.pattern }),
             .reassign => |reassign| {
-                if (patterns) try pending.append(allocator, .{ .pattern = reassign.pattern });
+                try pending.append(allocator, .{ .pattern = reassign.pattern });
                 try pending.append(allocator, .{ .expr = reassign.expr });
             },
             .dbg, .expr, .expect => |expr| try pending.append(allocator, .{ .expr = expr }),
             .for_ => |for_| {
-                if (patterns) try pending.append(allocator, .{ .pattern = for_.pattern });
+                try pending.append(allocator, .{ .pattern = for_.pattern });
                 try pending.append(allocator, .{ .expr = for_.expr });
                 try pending.append(allocator, .{ .expr = for_.body });
             },
@@ -26612,7 +26850,7 @@ fn checkedExprContains(
             => {},
         },
         .pattern => |pattern_id| {
-            if (needle.pattern == pattern_id) return true;
+            try bodies.appendExhaustivenessSitesAt(@backingInt(pattern_id), .destructure_pattern, allocator, found);
             switch (bodies.patternData(pattern_id)) {
                 .as => |as| try pending.append(allocator, .{ .pattern = as.pattern }),
                 .applied_tag => |tag| for (tag.args) |arg| try pending.append(allocator, .{ .pattern = arg }),
@@ -26640,64 +26878,6 @@ fn checkedExprContains(
             }
         },
     };
-    return false;
-}
-
-fn exhaustivenessOwnerTemplateForSource(
-    allocator: Allocator,
-    bodies: CheckedBodies,
-    owner_artifact: canonical.ArtifactRef,
-    templates: *const CheckedProcedureTemplateTable,
-    needle: CheckedBodyNeedle,
-) Allocator.Error!?canonical.ProcedureTemplateRef {
-    for (templates.templates.items) |template| {
-        const root = switch (template.body) {
-            .checked_body => |root| root,
-            .intrinsic_wrapper, .entry_wrapper, .unimplemented => continue,
-        };
-        if (try checkedExprContains(allocator, bodies, root, needle)) return .{
-            .artifact = owner_artifact,
-            .proc_base = template.proc_base,
-            .template = template.template_id,
-        };
-    }
-    return null;
-}
-
-fn exhaustivenessReplacingRootForSource(
-    allocator: Allocator,
-    bodies: CheckedBodies,
-    compile_time_roots: *const CompileTimeRootTable,
-    needle: CheckedBodyNeedle,
-) Allocator.Error!?CompileTimeRoot {
-    for (compile_time_roots.roots) |root| {
-        if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
-        // A literal conversion converts literal data and contains no site.
-        if (root.literalConversionKind() != null) continue;
-        if (root.hoisted_body) |body| switch (body) {
-            .pattern_extraction, .pattern_validation => {
-                const base_expr, const exact_pattern = switch (body) {
-                    .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
-                    .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
-                    .expr, .pattern_error, .valueless_binding => unreachable, // the enclosing prong matches only pattern_extraction and pattern_validation
-                };
-                if (needle == .pattern and needle.pattern == exact_pattern) return root;
-
-                // Pattern roots evaluate both their match of the base
-                // expression against the pattern and the base expression
-                // itself. The exact-pattern check above owns the former;
-                // sites contained by the base expression belong to the
-                // latter.
-                if (try checkedExprContains(allocator, bodies, base_expr, needle)) return root;
-                continue;
-            },
-            // A rejected destructure binder's root crashes and contains no site.
-            .pattern_error => continue,
-            .expr, .valueless_binding => {},
-        };
-        if (try checkedExprContains(allocator, bodies, root.rootExpr(), needle)) return root;
-    }
-    return null;
 }
 
 fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
@@ -27341,12 +27521,6 @@ pub const ArtifactStaticDispatchPlanTableRef = struct {
     table: StaticDispatchPlanTableRef,
 };
 
-/// Public `ArtifactNestedProcSiteTableRef` declaration.
-pub const ArtifactNestedProcSiteTableRef = struct {
-    artifact: CheckedModuleDigest,
-    table: NestedProcSiteTableRef,
-};
-
 /// Public `ArtifactModuleInterfaceCapabilitiesRef` declaration.
 pub const ArtifactModuleInterfaceCapabilitiesRef = struct {
     artifact: CheckedModuleDigest,
@@ -27362,7 +27536,6 @@ pub const ImportedTemplateClosureView = struct {
     checked_procedure_templates: []const ArtifactProcedureTemplateRef = &.{},
     callable_eval_templates: []const ArtifactCallableEvalTemplateRef = &.{},
     const_templates: []const ConstRef = &.{},
-    nested_proc_sites: []const ArtifactNestedProcSiteTableRef = &.{},
     resolved_value_refs: []const ArtifactResolvedValueRefTableRef = &.{},
     static_dispatch_plans: []const ArtifactStaticDispatchPlanTableRef = &.{},
     method_registry_entries: []const MethodRegistryEntryRef = &.{},
@@ -27376,7 +27549,7 @@ const closure_fields = @typeInfo(ImportedTemplateClosureView).@"struct".field_na
 pub const ClosureRange = extern struct { start: u32 = 0, len: u32 = 0 };
 
 /// Relocation-invariant (POD) mirror of `ImportedTemplateClosureView`: each of
-/// the 13 closure slices is replaced by a `ClosureRange` into the owning
+/// the 12 closure slices is replaced by a `ClosureRange` into the owning
 /// `ClosurePool`. Stored by value in closure-bearing table rows so each row
 /// relocates with a constant number of base-pointer fixups. The public
 /// `ImportedTemplateClosureView` (with slices) is reconstructed on demand.
@@ -27389,7 +27562,6 @@ pub const StoredImportedTemplateClosure = extern struct {
     checked_procedure_templates: ClosureRange = .{},
     callable_eval_templates: ClosureRange = .{},
     const_templates: ClosureRange = .{},
-    nested_proc_sites: ClosureRange = .{},
     resolved_value_refs: ClosureRange = .{},
     static_dispatch_plans: ClosureRange = .{},
     method_registry_entries: ClosureRange = .{},
@@ -27409,7 +27581,6 @@ pub const ClosurePool = struct {
     checked_procedure_templates: std.ArrayList(ArtifactProcedureTemplateRef) = .empty,
     callable_eval_templates: std.ArrayList(ArtifactCallableEvalTemplateRef) = .empty,
     const_templates: std.ArrayList(ConstRef) = .empty,
-    nested_proc_sites: std.ArrayList(ArtifactNestedProcSiteTableRef) = .empty,
     resolved_value_refs: std.ArrayList(ArtifactResolvedValueRefTableRef) = .empty,
     static_dispatch_plans: std.ArrayList(ArtifactStaticDispatchPlanTableRef) = .empty,
     method_registry_entries: std.ArrayList(MethodRegistryEntryRef) = .empty,
@@ -27468,14 +27639,13 @@ pub const ClosurePool = struct {
         checked_procedure_templates: SerializedSlice(ArtifactProcedureTemplateRef) = .{},
         callable_eval_templates: SerializedSlice(ArtifactCallableEvalTemplateRef) = .{},
         const_templates: SerializedSlice(ConstRef) = .{},
-        nested_proc_sites: SerializedSlice(ArtifactNestedProcSiteTableRef) = .{},
         resolved_value_refs: SerializedSlice(ArtifactResolvedValueRefTableRef) = .{},
         static_dispatch_plans: SerializedSlice(ArtifactStaticDispatchPlanTableRef) = .{},
         method_registry_entries: SerializedSlice(MethodRegistryEntryRef) = .{},
         interface_capabilities: SerializedSlice(ArtifactModuleInterfaceCapabilitiesRef) = .{},
 
         comptime {
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 13);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 12);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ClosurePool, @This());
@@ -28145,7 +28315,6 @@ const PublicApiClosureDependencyCollector = struct {
                 for (closure.checked_procedure_templates) |value| try pending.append(gpa, .{ .procedure_template = value });
                 for (closure.callable_eval_templates) |value| try pending.append(gpa, .{ .callable_eval_template = value });
                 for (closure.const_templates) |value| try pending.append(gpa, .{ .const_ref = value });
-                for (closure.nested_proc_sites) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
                 for (closure.resolved_value_refs) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
                 for (closure.static_dispatch_plans) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
                 for (closure.interface_capabilities) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
@@ -28799,7 +28968,6 @@ fn constEvalTemplate(
                 .source_scheme = const_ref.source_scheme,
                 .resolved_value_refs = entry.resolved_value_refs,
                 .static_dispatch_plans = entry.static_dispatch_plans,
-                .nested_proc_sites = entry.nested_proc_sites,
             };
         },
         .unimplemented => null,
@@ -28817,7 +28985,6 @@ const ImportedTemplateClosureBuilder = struct {
     checked_procedure_templates: UniqueList(ArtifactProcedureTemplateRef) = .empty,
     callable_eval_templates: UniqueList(ArtifactCallableEvalTemplateRef) = .empty,
     const_templates: UniqueList(ConstRef) = .empty,
-    nested_proc_sites: UniqueList(ArtifactNestedProcSiteTableRef) = .empty,
     resolved_value_refs: UniqueList(ArtifactResolvedValueRefTableRef) = .empty,
     static_dispatch_plans: UniqueList(ArtifactStaticDispatchPlanTableRef) = .empty,
     method_registry_entries: UniqueList(MethodRegistryEntryRef) = .empty,
@@ -28892,7 +29059,6 @@ const ImportedTemplateClosureBuilder = struct {
                 }
                 try self.appendCheckedTypeRoot(template.checked_fn_root);
                 try self.appendCheckedTypeScheme(template.checked_fn_scheme);
-                try self.appendNestedProcSites(template.nested_proc_sites);
                 try self.appendResolvedValueRefs(template.resolved_value_refs);
                 try self.appendStaticDispatchPlans(template.static_dispatch_plans);
                 try self.appendDirectProcedureDependencies(template.resolved_value_refs, pending);
@@ -28951,15 +29117,6 @@ const ImportedTemplateClosureBuilder = struct {
         std.debug.assert(@backingInt(scheme) < self.context.checked_types.schemeRows().len);
         const ref = ArtifactCheckedTypeSchemeRef{ .artifact = self.context.artifact_key.digest(), .scheme = scheme };
         _ = try self.checked_type_schemes.append(self.context.allocator, ref);
-    }
-
-    fn appendNestedProcSites(
-        self: *ImportedTemplateClosureBuilder,
-        table: NestedProcSiteTableRef,
-    ) Allocator.Error!void {
-        if (table.len == 0) return;
-        const ref = ArtifactNestedProcSiteTableRef{ .artifact = self.context.artifact_key.digest(), .table = table };
-        _ = try self.nested_proc_sites.append(self.context.allocator, ref);
     }
 
     fn appendResolvedValueRefs(
@@ -29150,7 +29307,6 @@ const ImportedTemplateClosureBuilder = struct {
 
         const eval = constEvalTemplate(self.context.const_templates_table, self.context.checked_const_bodies, self.context.entry_wrappers, self.context.checked_templates, const_ref) orelse return;
         try self.appendCheckedConstBody(eval.body);
-        try self.appendNestedProcSites(eval.nested_proc_sites);
         try self.appendResolvedValueRefs(eval.resolved_value_refs);
         try self.appendStaticDispatchPlans(eval.static_dispatch_plans);
         var pending: std.ArrayListUnmanaged(ClosureStep) = .empty;
@@ -29453,7 +29609,6 @@ pub const ConstEvalTemplate = struct {
     source_scheme: CheckedTypeSchemeId,
     resolved_value_refs: ResolvedValueRefTableRef = .{},
     static_dispatch_plans: StaticDispatchPlanTableRef = .{},
-    nested_proc_sites: NestedProcSiteTableRef = .{},
 };
 
 /// Public `StoredConstTemplate` declaration.
@@ -29930,7 +30085,6 @@ pub const CheckedModuleArtifact = struct {
     /// The images of the module's source types under the platform/app
     /// relation it was published or paired with; empty otherwise.
     pairing_types: PairingTypeColumn = .{},
-    exhaustiveness_sites: CheckedExhaustivenessSiteTable = .{},
     evaluation_diagnostics: EvaluationDiagnostics = .{},
     checked_const_bodies: CheckedConstBodyTable = .{},
     exported_procedure_templates: ExportedProcedureTemplateTable = .{},
@@ -29941,7 +30095,6 @@ pub const CheckedModuleArtifact = struct {
     method_registry: static_dispatch.MethodRegistry,
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable,
     resolved_value_refs: ResolvedValueRefTable,
-    nested_proc_sites: NestedProcSiteTable = .{},
     checked_procedure_templates: CheckedProcedureTemplateTable,
     entry_wrappers: EntryWrapperTable = .{},
     intrinsic_wrappers: IntrinsicWrapperTable = .{},
@@ -30079,7 +30232,7 @@ pub const CheckedModuleArtifact = struct {
             .const_templates = &self.const_templates,
             .templates = &self.checked_procedure_templates,
             .top_level_procedure_bindings = &self.top_level_procedure_bindings,
-            .nested_proc_sites = &self.nested_proc_sites,
+            .module_analyses = self.module_analyses,
             .exported_defs = self.exports.defs,
             .pairing_types = if (self.pairing_types.images.len != 0) &self.pairing_types else null,
             .dispatch = if (self.module_analyses != null) .{ .source = self.dispatchSource() } else null,
@@ -30111,6 +30264,11 @@ pub const CheckedModuleArtifact = struct {
     /// The reader over the module's dispatch resolution.
     pub fn dispatch(self: *const CheckedModuleArtifact) CheckedDispatch {
         return .{ .source = self.dispatchSource() };
+    }
+
+    /// Exhaustiveness check `id` with the owner and policy that decide it.
+    pub fn exhaustivenessSite(self: *const CheckedModuleArtifact, id: CheckedExhaustivenessSiteId) Allocator.Error!CheckedExhaustivenessSite {
+        return (try importedView(self).exhaustivenessSites()).get(id);
     }
 
     pub fn moduleEnv(self: *CheckedModuleArtifact) *ModuleEnv {
@@ -30290,7 +30448,6 @@ pub const CheckedModuleArtifact = struct {
         checked_types: CheckedTypeStore.Serialized,
         pairing_types: PairingTypeColumn.Serialized,
         checked_const_bodies: CheckedConstBodyTable.Serialized,
-        exhaustiveness_sites: CheckedExhaustivenessSiteTable.Serialized,
         evaluation_diagnostics: EvaluationDiagnostics.Serialized,
         exported_procedure_templates: ExportedProcedureTemplateTable.Serialized,
         exported_procedure_bindings: ExportedProcedureBindingTable.Serialized,
@@ -30300,7 +30457,6 @@ pub const CheckedModuleArtifact = struct {
         method_registry: static_dispatch.MethodRegistry.Serialized,
         static_dispatch_plans: static_dispatch.StaticDispatchPlanTable.Serialized,
         resolved_value_refs: ResolvedValueRefTable.Serialized,
-        nested_proc_sites: NestedProcSiteTable.Serialized,
         checked_procedure_templates: CheckedProcedureTemplateTable.Serialized,
         entry_wrappers: EntryWrapperTable.Serialized,
         intrinsic_wrappers: IntrinsicWrapperTable.Serialized,
@@ -30344,7 +30500,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 174);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 169);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -30468,7 +30624,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 115;
+    const serialized_layout_version: u32 = 116;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -30950,41 +31106,6 @@ pub const CheckedModuleArtifact = struct {
                 // An unimplemented declaration publishes no body to verify.
                 .unimplemented => {},
             }
-
-            const nested_end = template.nested_proc_sites.start + template.nested_proc_sites.len;
-            std.debug.assert(nested_end <= self.nested_proc_sites.template_refs.len);
-            for (self.nested_proc_sites.template_refs[template.nested_proc_sites.start..nested_end]) |site_id| {
-                std.debug.assert(@backingInt(site_id) < self.nested_proc_sites.sites.len);
-                const site = self.nested_proc_sites.sites[@backingInt(site_id)];
-                switch (site.owner) {
-                    .template => |owner_template| {
-                        std.debug.assert(owner_template.template == template.template_id);
-                        std.debug.assert(owner_template.proc_base == template.proc_base);
-                        std.debug.assert(std.meta.eql(owner_template.artifact.bytes, self.key.bytes));
-                    },
-                    .default_root => checkedArtifactInvariant("template nested procedure span references a default-root site", .{}),
-                }
-            }
-        }
-
-        for (self.nested_proc_sites.sites, 0..) |site, i| {
-            std.debug.assert(@backingInt(site.site) == i);
-            switch (site.owner) {
-                .template => |owner_template| std.debug.assert(@backingInt(owner_template.template) < self.checked_procedure_templates.templates.items.len),
-                // A default-root site always names its checked lambda/closure
-                // expression (defaults are archived checked expressions).
-                .default_root => std.debug.assert(site.checked_expr != null),
-            }
-            switch (site.lexical_scope) {
-                .root => {},
-                .generalized => |scope| std.debug.assert(@backingInt(scope) < self.checked_procedure_templates.dispatch_scopes.len),
-            }
-            switch (site.evidence_source) {
-                .inherited => std.debug.assert(site.evidence.len == 0),
-                .checked_site => std.debug.assert(site.lexical_scope == .generalized),
-            }
-            if (site.checked_expr) |expr| std.debug.assert(@backingInt(expr) < self.moduleEnvConst().store.nodes.len());
-            if (site.checked_pattern) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
         }
 
         for (self.exported_procedure_templates.templates) |exported| {
@@ -31278,14 +31399,12 @@ pub const ImportedModuleView = struct {
     exports: ExportTableView,
     checked_types: CheckedTypeStoreView,
     checked_bodies: CheckedBodies,
-    exhaustiveness_sites: *const CheckedExhaustivenessSiteTable,
     checked_const_bodies: *const CheckedConstBodyTable,
     checked_procedure_templates: *const CheckedProcedureTemplateTable,
     compile_time_roots: *const CompileTimeRootTable,
     entry_wrappers: *const EntryWrapperTable,
     intrinsic_wrappers: *const IntrinsicWrapperTable,
     resolved_value_refs: *const ResolvedValueRefTable,
-    nested_proc_sites: *const NestedProcSiteTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     hosted_procs: *const HostedProcTable,
     hosted_bindings: *const HostedBindingTable,
@@ -31340,6 +31459,12 @@ pub const ImportedModuleView = struct {
     pub fn loweringVisibility(self: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!*const LoweringVisibility {
         return self.analyses().loweringVisibility(self, resolver);
     }
+
+    /// Every exhaustiveness check of the module with the owner and policy
+    /// that decide it.
+    pub fn exhaustivenessSites(self: ImportedModuleView) Allocator.Error!*const CheckedExhaustivenessSiteTable {
+        return self.analyses().exhaustivenessSites(self);
+    }
 };
 
 const empty_root_requests: RootRequestTable = .{};
@@ -31369,14 +31494,12 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exports = artifact.exports.view(),
         .checked_types = artifact.typesView(),
         .checked_bodies = artifact.bodies(),
-        .exhaustiveness_sites = &artifact.exhaustiveness_sites,
         .checked_const_bodies = &artifact.checked_const_bodies,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
         .compile_time_roots = &artifact.compile_time_roots,
         .entry_wrappers = &artifact.entry_wrappers,
         .intrinsic_wrappers = &artifact.intrinsic_wrappers,
         .resolved_value_refs = &artifact.resolved_value_refs,
-        .nested_proc_sites = &artifact.nested_proc_sites,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
         .hosted_procs = &artifact.hosted_procs,
         .hosted_bindings = &artifact.hosted_bindings,
@@ -33153,21 +33276,6 @@ pub fn publishFromTypedModule(
     );
     errdefer root_requests.deinit(allocator);
 
-    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(
-        allocator,
-        owner_artifact,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
-        default_exprs,
-        &compile_time_roots,
-        checked_types,
-        &static_dispatch_plans,
-        &method_registry,
-        &entry_wrappers,
-        &checked_procedure_templates,
-        &resolved_value_refs,
-    );
-    errdefer nested_proc_sites.deinit(allocator);
-
     sealConstEvalTemplatesForRoots(
         &const_templates,
         &compile_time_roots,
@@ -33177,30 +33285,6 @@ pub fn publishFromTypedModule(
         &top_level_values,
         &hoisted_constants,
     );
-
-    var exhaustiveness_reachability = try ExhaustivenessTemplateReachability.build(
-        allocator,
-        artifact_key,
-        &root_requests,
-        &checked_procedure_templates,
-        &entry_wrappers,
-        &callable_eval_templates,
-        &top_level_procedure_bindings,
-        &platform_required_bindings,
-        &resolved_value_refs,
-    );
-    defer exhaustiveness_reachability.deinit();
-
-    var exhaustiveness_sites = try publishCheckedExhaustivenessSites(
-        allocator,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
-        owner_artifact,
-        &checked_procedure_templates,
-        &compile_time_roots,
-        &root_requests,
-        &exhaustiveness_reachability,
-    );
-    errdefer exhaustiveness_sites.deinit(allocator);
 
     var evaluation_diagnostics = if (module_env.module_kind == .platform and inputs.problem_store != null)
         try EvaluationDiagnostics.fromStore(allocator, inputs.problem_store.?)
@@ -33272,7 +33356,6 @@ pub fn publishFromTypedModule(
         .exports = .{ .defs = exports },
         .checked_types = checked_types.*,
         .pairing_types = pairing_types,
-        .exhaustiveness_sites = exhaustiveness_sites,
         .evaluation_diagnostics = evaluation_diagnostics,
         .checked_const_bodies = checked_const_bodies,
         .exported_procedure_templates = exported_procedure_templates,
@@ -33286,7 +33369,6 @@ pub fn publishFromTypedModule(
         .method_registry = method_registry,
         .static_dispatch_plans = static_dispatch_plans,
         .resolved_value_refs = resolved_value_refs,
-        .nested_proc_sites = nested_proc_sites,
         .checked_procedure_templates = checked_procedure_templates,
         .entry_wrappers = entry_wrappers,
         .intrinsic_wrappers = intrinsic_wrappers,
@@ -33493,7 +33575,6 @@ test "checked module owns post-check inputs at the checked boundary" {
     try std.testing.expect(@hasField(CheckedModuleArtifact, "method_registry"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "static_dispatch_plans"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "resolved_value_refs"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "nested_proc_sites"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "checked_procedure_templates"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "entry_wrappers"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "intrinsic_wrappers"));
@@ -34314,7 +34395,6 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
     // Total-dispatch plans: resolutions, evidence nodes/refs, site evidence,
     // and iterator plans must survive artifact caching byte-exactly.
     try expectAllSliceStoreRoundTrips(static_dispatch.StaticDispatchPlanTable);
-    try expectAllSliceStoreRoundTrips(NestedProcSiteTable); // transform-B: now POD after side-list conversion
     try expectAllSliceStoreRoundTrips(HostedProcTable); // transform-B: order_key moved to byte pool
     try expectAllSliceStoreRoundTrips(HostedBindingTable);
 }
@@ -34363,14 +34443,12 @@ fn testVisibilityImportedView(
         .exports = undefined,
         .checked_types = undefined,
         .checked_bodies = undefined,
-        .exhaustiveness_sites = undefined,
         .checked_const_bodies = undefined,
         .checked_procedure_templates = undefined,
         .compile_time_roots = undefined,
         .entry_wrappers = undefined,
         .intrinsic_wrappers = undefined,
         .resolved_value_refs = undefined,
-        .nested_proc_sites = undefined,
         .static_dispatch_plans = undefined,
         .hosted_procs = undefined,
         .hosted_bindings = undefined,
@@ -34781,29 +34859,6 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     var canonical_names_src = canonical.CanonicalNameStore.init(gpa);
     defer canonical_names_src.deinit();
 
-    var exhaustiveness_site_entries = std.ArrayList(CheckedExhaustivenessSite).empty;
-    defer exhaustiveness_site_entries.deinit(gpa);
-    const match_site_id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(exhaustiveness_site_entries.items.len))));
-    try exhaustiveness_site_entries.append(gpa, .{
-        .id = match_site_id,
-        .kind = .match,
-        .region = base.Region.from_raw_offsets(11, 22),
-        .owner = .{ .root = @fromBackingInt(@intCast(4)) },
-        .checked_expr = @fromBackingInt(@intCast(3)),
-        .policy = .{ .compile_time_replaced_by_root = @fromBackingInt(@intCast(4)) },
-    });
-    const destructure_site_id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(exhaustiveness_site_entries.items.len))));
-    try exhaustiveness_site_entries.append(gpa, .{
-        .id = destructure_site_id,
-        .kind = .destructure,
-        .region = base.Region.from_raw_offsets(33, 44),
-        .checked_pattern = @fromBackingInt(@intCast(7)),
-        .policy = .compile_time_only,
-    });
-    const exhaustiveness_sites_src = CheckedExhaustivenessSiteTable{
-        .sites = exhaustiveness_site_entries.items,
-    };
-
     const identity = ModuleIdentity{
         .stable_hash = @as([32]u8, @splat(0x42)),
         .module_idx = 9,
@@ -34839,7 +34894,6 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .hoisted_constants = .{},
         .const_templates = .{},
         .checked_types = checked_types_src,
-        .exhaustiveness_sites = exhaustiveness_sites_src,
         .const_store = const_store_src,
     };
 
@@ -34880,35 +34934,6 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(1)), loaded.checked_types.roots.items()[1].id);
     try std.testing.expectEqual(StoredCheckedTypePayload.empty_record, loaded.checked_types.payloads.items()[0]);
     try std.testing.expectEqual(StoredCheckedTypePayload.empty_tag_union, loaded.checked_types.payloads.items()[1]);
-
-    // exhaustiveness_sites survive, including lookup indexes used by compile-time
-    // finalization.
-    try std.testing.expectEqual(@as(usize, 2), loaded.exhaustiveness_sites.sites.len);
-    const match_site = loaded.exhaustiveness_sites.sites[0];
-    try std.testing.expectEqual(match_site_id, match_site.id);
-    try std.testing.expectEqual(CheckedComptimeSiteKind.match, match_site.kind);
-    try std.testing.expect(match_site.region.eq(base.Region.from_raw_offsets(11, 22)));
-    try std.testing.expectEqual(@as(?CIR.Expr.Idx, @fromBackingInt(@intCast(3))), match_site.checked_expr);
-    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), match_site.checked_pattern);
-    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, match_site_id), loaded.exhaustiveness_sites.lookupByMatchExpr(@fromBackingInt(@intCast(3))));
-    switch (match_site.owner.?) {
-        .root => |root| try std.testing.expectEqual(@as(ComptimeRootId, @fromBackingInt(@intCast(4))), root),
-        .procedure_template => return error.TestExpectedEqual,
-    }
-    switch (match_site.policy) {
-        .compile_time_replaced_by_root => |root| try std.testing.expectEqual(@as(ComptimeRootId, @fromBackingInt(@intCast(4))), root),
-        .compile_time_only, .runtime_reachable, .not_pending => return error.TestExpectedEqual,
-    }
-
-    const destructure_site = loaded.exhaustiveness_sites.sites[1];
-    try std.testing.expectEqual(destructure_site_id, destructure_site.id);
-    try std.testing.expectEqual(CheckedComptimeSiteKind.destructure, destructure_site.kind);
-    try std.testing.expect(destructure_site.region.eq(base.Region.from_raw_offsets(33, 44)));
-    try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), destructure_site.checked_expr);
-    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, @fromBackingInt(@intCast(7))), destructure_site.checked_pattern);
-    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteId, destructure_site_id), loaded.exhaustiveness_sites.lookupByDestructurePattern(@fromBackingInt(@intCast(7))));
-    try std.testing.expectEqual(@as(?CheckedExhaustivenessSiteOwner, null), destructure_site.owner);
-    if (destructure_site.policy != .compile_time_only) return error.TestExpectedEqual;
 }
 
 test "module source input hash uses explicit file dependency state" {

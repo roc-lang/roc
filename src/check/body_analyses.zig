@@ -11,8 +11,9 @@
 //! owned by the module and is never serialized: each top-level unit has one
 //! slot holding its divergence, inspect-elision, state-merge and
 //! loop-mutation facts; the module has one slot for its diagnostic-error
-//! facts, whose recovery path follows constant references across units, and
-//! one for its single-source calls.
+//! facts, whose recovery path follows constant references across units, one
+//! for its single-source calls, and one indexing its exhaustiveness checks by
+//! node.
 
 const std = @import("std");
 const base = @import("base");
@@ -764,12 +765,81 @@ pub const NodeBits = struct {
 const SingleSourceFacts = struct {
     /// Local templates, ascending.
     templates: []canonical.CheckedProcedureTemplateId,
-    /// Per nested procedure site of the module.
-    sites: []bool,
+    /// Nested procedure site expressions, ascending.
+    sites: []u32,
 
     fn destroy(self: *SingleSourceFacts, allocator: Allocator) void {
         allocator.free(self.templates);
         allocator.free(self.sites);
+        allocator.destroy(self);
+    }
+};
+
+fn orderU32(key: u32, item: u32) std.math.Order {
+    return std.math.order(key, item);
+}
+
+/// The module's exhaustiveness checks by node: each match expression's and
+/// each destructuring pattern's check, whose site id is its index in
+/// `ModuleEnv.exhaustiveness_obligations`.
+const ExhaustivenessIndex = struct {
+    /// Ordered by node, then by site.
+    entries: []Entry,
+
+    const Entry = struct {
+        node: u32,
+        source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source),
+        site: checked_artifact.CheckedExhaustivenessSiteId,
+
+        fn lessThan(_: void, left: Entry, right: Entry) bool {
+            if (left.node != right.node) return left.node < right.node;
+            return @backingInt(left.site) < @backingInt(right.site);
+        }
+    };
+
+    fn compute(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!*ExhaustivenessIndex {
+        const obligations = env.exhaustiveness_obligations.items.items;
+        const entries = try allocator.alloc(Entry, obligations.len);
+        errdefer allocator.free(entries);
+        for (obligations, entries, 0..) |obligation, *entry, raw_site| {
+            entry.* = .{
+                .node = switch (obligation.source) {
+                    .match_expr => |expr| @backingInt(expr),
+                    .destructure_pattern => |pattern| @backingInt(pattern),
+                },
+                .source = obligation.source,
+                .site = @fromBackingInt(@intCast(raw_site)),
+            };
+        }
+        std.mem.sort(Entry, entries, {}, Entry.lessThan);
+        const index = try allocator.create(ExhaustivenessIndex);
+        index.* = .{ .entries = entries };
+        return index;
+    }
+
+    /// The checks at `raw_node`, in site order.
+    fn atNode(self: *const ExhaustivenessIndex, raw_node: u32) []const Entry {
+        var low: usize = 0;
+        var high: usize = self.entries.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (self.entries[mid].node < raw_node) low = mid + 1 else high = mid;
+        }
+        var end = low;
+        while (end < self.entries.len and self.entries[end].node == raw_node) end += 1;
+        return self.entries[low..end];
+    }
+
+    /// The first check, in site order, of `source` kind at `raw_node`.
+    fn find(self: *const ExhaustivenessIndex, raw_node: u32, source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source)) ?checked_artifact.CheckedExhaustivenessSiteId {
+        for (self.atNode(raw_node)) |entry| {
+            if (entry.source == source) return entry.site;
+        }
+        return null;
+    }
+
+    fn destroy(self: *ExhaustivenessIndex, allocator: Allocator) void {
+        allocator.free(self.entries);
         allocator.destroy(self);
     }
 };
@@ -785,6 +855,7 @@ pub const BodyAnalyses = struct {
     dispatch_crashes: collections.OnceSlot(*NodeBits, .body_dispatch_crashes) = .empty,
     diagnostic_errors: collections.OnceSlot(*NodeBits, .body_diagnostic_errors) = .empty,
     single_source: collections.OnceSlot(*SingleSourceFacts, .body_single_source_calls) = .empty,
+    exhaustiveness_index: collections.OnceSlot(*ExhaustivenessIndex, .body_exhaustiveness_index) = .empty,
 
     /// The analyses of `env`'s bodies. `promoted` lists the module's
     /// promoted local procedures, each with its binding `pattern`.
@@ -821,6 +892,7 @@ pub const BodyAnalyses = struct {
             }
         }
         if (self.single_source.peek()) |facts| facts.destroy(allocator);
+        if (self.exhaustiveness_index.peek()) |index| index.destroy(allocator);
         self.index.deinit(allocator);
         allocator.destroy(self);
     }
@@ -927,8 +999,45 @@ pub const BodyAnalyses = struct {
 
     pub fn nestedProcSiteIsSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, site: canonical.NestedProcSiteId) Allocator.Error!bool {
         const facts = try self.singleSourceFacts(bodies);
-        return facts.sites[@backingInt(site)];
+        return std.sort.binarySearch(u32, facts.sites, @backingInt(site), orderU32) != null;
     }
+
+    /// The exhaustiveness check checking left to evaluation at a match
+    /// expression or destructuring pattern node.
+    pub fn exhaustivenessSiteOf(
+        self: *BodyAnalyses,
+        bodies: CheckedBodies,
+        raw_node: u32,
+        source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source),
+    ) Allocator.Error!?checked_artifact.CheckedExhaustivenessSiteId {
+        const index = try self.exhaustiveness_index.getOrCompute(self.io, Allocator.Error, ExhaustivenessIndexRequest{ .analyses = self, .bodies = bodies }, ExhaustivenessIndexRequest.compute);
+        return index.find(raw_node, source);
+    }
+
+    /// Append every exhaustiveness check of `source` kind at `raw_node`, in
+    /// site order, to `found`.
+    pub fn appendExhaustivenessSitesAt(
+        self: *BodyAnalyses,
+        bodies: CheckedBodies,
+        raw_node: u32,
+        source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source),
+        allocator: Allocator,
+        found: *std.ArrayList(checked_artifact.CheckedExhaustivenessSiteId),
+    ) Allocator.Error!void {
+        const index = try self.exhaustiveness_index.getOrCompute(self.io, Allocator.Error, ExhaustivenessIndexRequest{ .analyses = self, .bodies = bodies }, ExhaustivenessIndexRequest.compute);
+        for (index.atNode(raw_node)) |entry| {
+            if (entry.source == source) try found.append(allocator, entry.site);
+        }
+    }
+
+    const ExhaustivenessIndexRequest = struct {
+        analyses: *BodyAnalyses,
+        bodies: CheckedBodies,
+
+        fn compute(request: ExhaustivenessIndexRequest) Allocator.Error!*ExhaustivenessIndex {
+            return ExhaustivenessIndex.compute(request.analyses.allocator, request.bodies.env);
+        }
+    };
 
     fn singleSourceFacts(self: *BodyAnalyses, bodies: CheckedBodies) Allocator.Error!*SingleSourceFacts {
         return self.single_source.getOrCompute(self.io, Allocator.Error, SingleSourceRequest{ .analyses = self, .bodies = bodies }, SingleSourceRequest.compute);
@@ -2404,7 +2513,6 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     const templates = tables.templates orelse invariant("single-source calls were computed without the module's templates");
     const refs = tables.refs orelse invariant("single-source calls were computed without the module's value references");
     const bindings = tables.top_level_procedure_bindings orelse invariant("single-source calls were computed without the module's procedure bindings");
-    const sites = tables.nested_proc_sites orelse invariant("single-source calls were computed without the module's nested procedure sites");
     const module = tables.module orelse invariant("single-source calls were computed without the module's identity");
     const env = bodies.env;
 
@@ -2513,11 +2621,11 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
         }
     }
 
-    const site_flags = try singleSourceSites(allocator, sites.sites, &shapes);
-    errdefer allocator.free(site_flags);
+    const sites = try singleSourceSites(allocator, try bodies.moduleNestedProcSites(), &shapes);
+    errdefer allocator.free(sites);
 
     const facts = try allocator.create(SingleSourceFacts);
-    facts.* = .{ .templates = try published.toOwnedSlice(allocator), .sites = site_flags };
+    facts.* = .{ .templates = try published.toOwnedSlice(allocator), .sites = sites };
     return facts;
 }
 
@@ -2582,21 +2690,18 @@ const SourceCallShapes = struct {
     }
 };
 
-/// Each template-owned site whose function the module's source calls at one
-/// site and never otherwise uses: either the site's expression is that
-/// call's function, or it is the whole value of a non-recursive binding of
-/// one name whose one reference is. A default-root site is lowered at every
-/// construction site that omits its field, and an expression with more than
-/// one site is lowered once per site, so neither qualifies.
+/// The expressions of the template-owned sites whose function the module's
+/// source calls at one site and never otherwise uses, ascending: either the
+/// site's expression is that call's function, or it is the whole value of a
+/// non-recursive binding of one name whose one reference is. A default-root
+/// site is lowered at every construction site that omits its field, and an
+/// expression more than one owner constructs a procedure at is lowered once
+/// per owner, so neither qualifies.
 fn singleSourceSites(
     allocator: Allocator,
-    sites: []const checked_artifact.NestedProcSite,
+    sites: *const checked_artifact.ModuleNestedProcSites,
     shapes: *const SourceCallShapes,
-) Allocator.Error![]bool {
-    const flags = try allocator.alloc(bool, sites.len);
-    errdefer allocator.free(flags);
-    @memset(flags, false);
-
+) Allocator.Error![]u32 {
     // Each pattern's references, and how many of them are a call's function.
     var references = collections.DenseMap(u32, u32).init(allocator);
     defer references.deinit();
@@ -2607,23 +2712,16 @@ fn singleSourceSites(
         if (shapes.callees.isSet(lookup.expr)) (try calls.getOrPutValue(lookup.pattern, 0)).value_ptr.* += 1;
     }
 
-    // How many sites each expression has.
-    var site_counts = collections.DenseMap(u32, u32).init(allocator);
-    defer site_counts.deinit();
-    for (sites) |site| {
-        const expr = site.checked_expr orelse continue;
-        (try site_counts.getOrPutValue(@backingInt(expr), 0)).value_ptr.* += 1;
-    }
-
-    for (sites, flags) |site, *flag| {
-        if (site.owner != .template) continue;
-        const expr = site.checked_expr orelse continue;
+    var qualifying = std.ArrayList(u32).empty;
+    errdefer qualifying.deinit(allocator);
+    for (sites.exprs, sites.first_templates, sites.owner_counts) |expr, first_template, owner_count| {
+        if (owner_count != 1 or first_template == null) continue;
         const raw = @backingInt(expr);
-        if (site_counts.get(raw).? != 1) continue;
-        flag.* = shapes.callees.isSet(raw) or if (shapes.bound_by.get(raw)) |pattern|
+        const single = shapes.callees.isSet(raw) or if (shapes.bound_by.get(raw)) |pattern|
             (references.get(pattern) orelse 0) == 1 and (calls.get(pattern) orelse 0) == 1
         else
             false;
+        if (single) try qualifying.append(allocator, raw);
     }
-    return flags;
+    return qualifying.toOwnedSlice(allocator);
 }

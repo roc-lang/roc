@@ -131,6 +131,18 @@ my @RULES = (
     { category => 'checked-body-store', regex => qr/\bpatternIdForSource\b/, allowed => {} },
     { category => 'checked-body-store', regex => qr/\bSyntheticExprOrigin\b/, allowed => {} },
     { category => 'checked-row-coerce-variant', regex => qr/\brow_coerce\b/, scope => qr{\Asrc/check/}, allowed => {} },
+    # Nested procedure sites, runtime captures, single-source calls and
+    # exhaustiveness sites are slot analyses computed on first demand; no
+    # eager pass computes them for a whole module and no cache entry stores
+    # them.
+    { category => 'eager-nested-proc-sites', regex => qr/\bNestedProcSiteTable\b/, allowed => {} },
+    { category => 'eager-nested-proc-sites', regex => qr/\bNestedProcSiteBuilder\b/, allowed => {} },
+    { category => 'eager-nested-proc-sites', regex => qr/\bfromTemplates\b/, allowed => {} },
+    { category => 'eager-runtime-captures', regex => qr/\bpublishRuntimeCaptures\b/, allowed => {} },
+    { category => 'eager-single-source-calls', regex => qr/\bmarkSingleSourceCalls\b/, allowed => {} },
+    { category => 'eager-single-source-calls', regex => qr/\bSingleSourceCalls\b/, allowed => {} },
+    { category => 'eager-exhaustiveness-sites', regex => qr/\bpublishCheckedExhaustivenessSites\b/, allowed => {} },
+    { category => 'eager-exhaustiveness-sites', regex => qr/\bexhaustivenessOwnerTemplateForSource\b/, allowed => {} },
     # Post-check code reads sealed solver stores through the checked type
     # reader and never writes one.
     {

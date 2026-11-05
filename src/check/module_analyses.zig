@@ -31,6 +31,13 @@ const ModuleDispatch = checked_artifact.ModuleDispatch;
 const DispatchIndex = checked_artifact.DispatchIndex;
 const PlatformRequirementRootEvidence = checked_artifact.PlatformRequirementRootEvidence;
 const DispatchScopeId = checked_artifact.DispatchScopeId;
+const CheckedBodies = checked_artifact.CheckedBodies;
+const NestedProcSiteOwner = checked_artifact.NestedProcSiteOwner;
+const OwnerNestedProcSites = checked_artifact.OwnerNestedProcSites;
+const ModuleNestedProcSites = checked_artifact.ModuleNestedProcSites;
+const TemplateExhaustivenessSites = checked_artifact.TemplateExhaustivenessSites;
+const CheckedExhaustivenessSiteTable = checked_artifact.CheckedExhaustivenessSiteTable;
+const CIR = @import("can").CIR;
 
 const TemplateSchemaSlot = collections.OnceSlot(*SchemeAnalysis, .module_template_schema);
 const ScopeSchemaSlot = collections.OnceSlot(*SchemeAnalysis, .module_scope_schema);
@@ -81,6 +88,54 @@ const DispatchSlots = struct {
     }
 };
 
+const OwnerNestedSitesSlot = collections.OnceSlot(*OwnerNestedProcSites, .module_owner_nested_proc_sites);
+const TemplateExhaustivenessSlot = collections.OnceSlot(*TemplateExhaustivenessSites, .module_template_exhaustiveness_sites);
+
+/// The per-owner slots of a module's body analyses: the nested procedure
+/// sites of each template and of each defaulted-field default, and the
+/// exhaustiveness sites each template's body reaches.
+const OwnerSlots = struct {
+    template_nested_sites: []OwnerNestedSitesSlot,
+    default_nested_sites: []OwnerNestedSitesSlot,
+    template_exhaustiveness: []TemplateExhaustivenessSlot,
+    /// Each generalized local scope by the expression it is checked at.
+    scope_by_checked_expr: collections.DenseMap(CIR.Expr.Idx, DispatchScopeId),
+
+    fn create(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!*OwnerSlots {
+        const templates = (bodies.tables.templates orelse checked_artifact.checkedArtifactInvariant("owner analyses were demanded of bodies without templates", .{}));
+        const template_count = templates.templates.items.len;
+        const slots = try allocator.create(OwnerSlots);
+        errdefer allocator.destroy(slots);
+        const template_nested_sites = try allocator.alloc(OwnerNestedSitesSlot, template_count);
+        errdefer allocator.free(template_nested_sites);
+        const default_nested_sites = try allocator.alloc(OwnerNestedSitesSlot, bodies.index().defaults.len);
+        errdefer allocator.free(default_nested_sites);
+        const template_exhaustiveness = try allocator.alloc(TemplateExhaustivenessSlot, template_count);
+        errdefer allocator.free(template_exhaustiveness);
+        @memset(template_nested_sites, .empty);
+        @memset(default_nested_sites, .empty);
+        @memset(template_exhaustiveness, .empty);
+        slots.* = .{
+            .template_nested_sites = template_nested_sites,
+            .default_nested_sites = default_nested_sites,
+            .template_exhaustiveness = template_exhaustiveness,
+            .scope_by_checked_expr = try checked_artifact.nestedProcScopeMap(allocator, templates.dispatch_scopes),
+        };
+        return slots;
+    }
+
+    fn destroy(self: *OwnerSlots, allocator: Allocator) void {
+        for (self.template_nested_sites) |*slot| if (slot.peek()) |result| result.destroy(allocator);
+        for (self.default_nested_sites) |*slot| if (slot.peek()) |result| result.destroy(allocator);
+        for (self.template_exhaustiveness) |*slot| if (slot.peek()) |result| result.destroy(allocator);
+        allocator.free(self.template_nested_sites);
+        allocator.free(self.default_nested_sites);
+        allocator.free(self.template_exhaustiveness);
+        self.scope_by_checked_expr.deinit();
+        allocator.destroy(self);
+    }
+};
+
 /// The per-module analyses of one checked module. `allocator` must be safe
 /// to use from every thread that reads the module.
 pub const ModuleAnalyses = struct {
@@ -100,6 +155,9 @@ pub const ModuleAnalyses = struct {
     dispatch_index: collections.OnceSlot(*DispatchIndex, .module_dispatch_index) = .empty,
     module_dispatch: collections.OnceSlot(*ModuleDispatch, .module_dispatch) = .empty,
     platform_root_evidence: collections.OnceSlot(*PlatformRequirementRootEvidence, .module_platform_root_evidence) = .empty,
+    owner_slots: collections.OnceSlot(*OwnerSlots, .module_owner_slots) = .empty,
+    nested_proc_sites: collections.OnceSlot(*ModuleNestedProcSites, .module_nested_proc_sites) = .empty,
+    exhaustiveness_sites: collections.OnceSlot(*CheckedExhaustivenessSiteTable, .module_exhaustiveness_sites) = .empty,
 
     pub fn create(allocator: Allocator, io: std.Io, platform: ?*const CheckedModuleArtifact) Allocator.Error!*ModuleAnalyses {
         const analyses = try allocator.create(ModuleAnalyses);
@@ -120,6 +178,9 @@ pub const ModuleAnalyses = struct {
         if (self.dispatch_index.peek()) |index| index.destroy();
         if (self.module_dispatch.peek()) |result| result.destroy(allocator);
         if (self.platform_root_evidence.peek()) |result| result.destroy(allocator);
+        if (self.owner_slots.peek()) |slots| slots.destroy(allocator);
+        if (self.nested_proc_sites.peek()) |result| result.destroy(allocator);
+        if (self.exhaustiveness_sites.peek()) |result| result.destroy(allocator);
         allocator.free(self.dispatch_imports);
         if (self.export_closures.peek()) |closures| closures.destroy(allocator);
         if (self.public_api_dependencies.peek()) |dependencies| {
@@ -179,6 +240,107 @@ pub const ModuleAnalyses = struct {
             defer request.store.endCreation(analyses.io);
             capabilities.* = try ModuleInterfaceCapabilities.compute(allocator, request.store, request.current_module);
             return capabilities;
+        }
+    };
+
+    fn ownerSlots(self: *ModuleAnalyses, bodies: CheckedBodies) Allocator.Error!*OwnerSlots {
+        return self.owner_slots.getOrCompute(self.io, Allocator.Error, BodiesRequest{ .analyses = self, .bodies = bodies }, BodiesRequest.ownerSlots);
+    }
+
+    /// The nested procedure sites of `owner`'s body. `bodies` are this
+    /// module's; a platform/app pairing reads its platform's sites.
+    pub fn nestedProcSites(self: *ModuleAnalyses, bodies: CheckedBodies, owner: NestedProcSiteOwner) Allocator.Error!*const OwnerNestedProcSites {
+        if (self.platform) |platform| return platformAnalyses(platform).nestedProcSites(platform.bodies(), owner);
+        const slots = try self.ownerSlots(bodies);
+        const slot = switch (owner) {
+            .template => |template| blk: {
+                const raw = @backingInt(template.template);
+                if (raw >= slots.template_nested_sites.len) checked_artifact.checkedArtifactInvariant("nested procedure sites were demanded of a template outside the module's templates", .{});
+                break :blk &slots.template_nested_sites[raw];
+            },
+            .default_root => |default| &slots.default_nested_sites[defaultPosition(bodies, default)],
+        };
+        return slot.getOrCompute(self.io, Allocator.Error, OwnerRequest{ .bodies = bodies, .slots = slots, .owner = owner, .allocator = self.allocator }, OwnerRequest.nestedProcSites);
+    }
+
+    /// The module's nested procedure sites by expression, with their runtime
+    /// captures. A platform/app pairing reads its platform's.
+    pub fn moduleNestedProcSites(self: *ModuleAnalyses, bodies: CheckedBodies) Allocator.Error!*const ModuleNestedProcSites {
+        if (self.platform) |platform| return platformAnalyses(platform).moduleNestedProcSites(platform.bodies());
+        return self.nested_proc_sites.getOrCompute(self.io, Allocator.Error, BodiesRequest{ .analyses = self, .bodies = bodies }, BodiesRequest.moduleNestedProcSites);
+    }
+
+    /// The exhaustiveness sites procedure template `template`'s body
+    /// reaches. A platform/app pairing reads its platform's.
+    pub fn templateExhaustivenessSites(self: *ModuleAnalyses, bodies: CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const TemplateExhaustivenessSites {
+        if (self.platform) |platform| return platformAnalyses(platform).templateExhaustivenessSites(platform.bodies(), template);
+        const slots = try self.ownerSlots(bodies);
+        const raw = @backingInt(template);
+        if (raw >= slots.template_exhaustiveness.len) checked_artifact.checkedArtifactInvariant("exhaustiveness sites were demanded of a template outside the module's templates", .{});
+        return slots.template_exhaustiveness[raw].getOrCompute(self.io, Allocator.Error, ExhaustivenessRequest{ .allocator = self.allocator, .bodies = bodies, .template = template }, ExhaustivenessRequest.compute);
+    }
+
+    /// Every exhaustiveness check of `owner` with the policy that decides
+    /// it. A platform/app pairing decides its platform's checks by its own
+    /// root requests.
+    pub fn exhaustivenessSites(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const CheckedExhaustivenessSiteTable {
+        const platform_sites: ?*const CheckedExhaustivenessSiteTable = if (self.platform) |platform|
+            try platformAnalyses(platform).exhaustivenessSites(checked_artifact.importedView(platform))
+        else
+            null;
+        return self.exhaustiveness_sites.getOrCompute(self.io, Allocator.Error, PolicyRequest{ .analyses = self, .owner = owner, .platform_sites = platform_sites }, PolicyRequest.compute);
+    }
+
+    fn defaultPosition(bodies: CheckedBodies, default: CIR.Expr.Idx) usize {
+        const defaults = bodies.index().defaults;
+        return std.sort.binarySearch(u32, defaults, @backingInt(default), struct {
+            fn order(key: u32, item: u32) std.math.Order {
+                return std.math.order(key, item);
+            }
+        }.order) orelse checked_artifact.checkedArtifactInvariant("nested procedure sites were demanded of an expression that is not a defaulted-field default", .{});
+    }
+
+    const BodiesRequest = struct {
+        analyses: *ModuleAnalyses,
+        bodies: CheckedBodies,
+
+        fn ownerSlots(request: BodiesRequest) Allocator.Error!*OwnerSlots {
+            return OwnerSlots.create(request.analyses.allocator, request.bodies);
+        }
+
+        fn moduleNestedProcSites(request: BodiesRequest) Allocator.Error!*ModuleNestedProcSites {
+            return checked_artifact.computeModuleNestedProcSites(request.analyses.allocator, request.bodies, request.analyses);
+        }
+    };
+
+    const OwnerRequest = struct {
+        allocator: Allocator,
+        bodies: CheckedBodies,
+        slots: *const OwnerSlots,
+        owner: NestedProcSiteOwner,
+
+        fn nestedProcSites(request: OwnerRequest) Allocator.Error!*OwnerNestedProcSites {
+            return checked_artifact.computeOwnerNestedProcSites(request.allocator, request.bodies, &request.slots.scope_by_checked_expr, request.owner);
+        }
+    };
+
+    const ExhaustivenessRequest = struct {
+        allocator: Allocator,
+        bodies: CheckedBodies,
+        template: canonical.CheckedProcedureTemplateId,
+
+        fn compute(request: ExhaustivenessRequest) Allocator.Error!*TemplateExhaustivenessSites {
+            return checked_artifact.computeTemplateExhaustivenessSites(request.allocator, request.bodies, request.template);
+        }
+    };
+
+    const PolicyRequest = struct {
+        analyses: *ModuleAnalyses,
+        owner: ImportedModuleView,
+        platform_sites: ?*const CheckedExhaustivenessSiteTable,
+
+        fn compute(request: PolicyRequest) Allocator.Error!*CheckedExhaustivenessSiteTable {
+            return checked_artifact.computeExhaustivenessSites(request.analyses.allocator, request.analyses, request.owner, request.platform_sites);
         }
     };
 
