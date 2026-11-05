@@ -1538,7 +1538,10 @@ fn parseElf(arena: Allocator, bytes: []const u8, options: BuildOptions) BuildErr
     for (raw, sections, 0..) |section, *out, index| {
         const class = try classifyElf(section.name, section.type, section.flags, section.addralign, options);
         if (class == .text and text_section == null and std.mem.eql(u8, section.name, ".text")) text_section = @intCast(index);
-        if (class == .rodata and static_data_section == null and std.mem.eql(u8, section.name, ".rodata")) static_data_section = @intCast(index);
+        // The dev backend's static data: `.rodata`, or `.data.rel.ro` when
+        // it holds absolute pointers.
+        const static_data = (class == .rodata and std.mem.eql(u8, section.name, ".rodata")) or (class == .data and std.mem.eql(u8, section.name, ".data.rel.ro"));
+        if (static_data and static_data_section == null) static_data_section = @intCast(index);
         out.* = .{
             .class = class,
             .bytes = if (section.type == SHT_NOBITS or section.type == SHT_NULL) &.{} else bytes[@intCast(section.offset)..][0..@intCast(section.size)],
