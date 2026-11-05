@@ -186,6 +186,12 @@ comptime {
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(host_prelink);
+        std.testing.refAllDecls(macho_host_prelink);
+        std.testing.refAllDecls(macho_patch_link);
+        std.testing.refAllDecls(coff_host_prelink);
+        std.testing.refAllDecls(coff_patch_link);
+        std.testing.refAllDecls(@import("patch_fanout.zig"));
+        std.testing.refAllDecls(@import("link_output.zig"));
         std.testing.refAllDecls(wasm_link);
         std.testing.refAllDecls(wasm_host_image);
         std.testing.refAllDecls(@import("test/platform_config.zig"));
@@ -198,9 +204,14 @@ const linker = @import("linker.zig");
 const fast_dev_link = @import("fast_dev_link.zig");
 const host_prelink = @import("host_prelink.zig");
 const patch_link = @import("patch_link.zig");
+const macho_host_prelink = @import("macho/HostPrelink.zig");
+const macho_patch_link = @import("macho/PatchLink.zig");
+const coff_host_prelink = @import("coff/HostPrelink.zig");
+const coff_patch_link = @import("coff/PatchLink.zig");
 const wasm_link = @import("wasm_link.zig");
 const wasm_host_image = @import("wasm_host_image.zig");
 const run_image_link = @import("run_image_link.zig");
+const unit_walk = @import("unit_walk.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
 
@@ -613,7 +624,7 @@ const EmbeddedTargetObjects = struct {
         };
         objects.boxy_runtime = embedded(dir ++ "roc_boxy_runtime" ++ ext);
         objects.boxy_runtime_digest = embeddedBlake3("boxy_runtime_" ++ name);
-        if (target.toOsTag() == .linux and target.toCpuArch() == .x86_64) {
+        if (fastDevLinkFormat(target) != null) {
             objects.support_image = embedded(dir ++ "roc_support.rbxu");
         }
         if (target.toCpuArch() == .wasm32) {
@@ -640,16 +651,16 @@ const EmbeddedTargetObjects = struct {
         return objects;
     }
 
-    /// A generic Linux target uses the native builtins and its glibc twin's
-    /// default platform.
+    /// A generic Linux target uses the native builtins, and its glibc twin's
+    /// default platform and support image: the image's builtins and Boxy
+    /// runtime are the twin's, compiled for the same architecture and
+    /// operating system and calling no libc, like the native ones.
     fn linuxAlias(comptime glibc: EmbeddedTargetObjects) EmbeddedTargetObjects {
         var objects = glibc;
         objects.builtins_extern = native.builtins_extern;
         objects.builtins_extern_digest = native.builtins_extern_digest;
         objects.boxy_runtime = native.boxy_runtime;
         objects.boxy_runtime_digest = native.boxy_runtime_digest;
-        // The glibc twin's support image holds its own builtins, not these.
-        objects.support_image = null;
         return objects;
     }
 
@@ -6622,20 +6633,16 @@ fn unitImageRunApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.Sp
     if (opt != .dev or strategy != .boxy) return false;
     // A run without a cache neither reads nor files unit images.
     if (no_cache) return false;
-    if (comptime !(builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64)) return false;
+    // The hosts whose units carry images are the hosts whose shim composes
+    // them.
+    if (comptime backend.dev.UnitImageLoader == void) return false;
     return unitImageTarget(target);
 }
 
-/// Whether `target`'s programs can be built from unit images: a Linux
-/// x86_64 target whose support image the compiler embeds.
+/// Whether `target`'s programs can be built from unit images: a target
+/// with a fast dev link format, whose support image the compiler embeds.
 fn unitImageTarget(target: RocTarget) bool {
-    return switch (target) {
-        .x64musl, .x64glibc => true,
-        .x64mac, .x64win, .x64mingw, .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf => false,
-        .x64v1mac, .x64v1win, .x64v1mingw, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd, .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf => false,
-        .arm64mac, .arm64win, .arm64mingw, .arm64linux, .arm64musl, .arm64glibc, .arm64v1win, .arm64v1mingw, .arm64v1linux, .arm64v1musl, .arm64v1glibc => false,
-        .arm32linux, .arm32musl, .wasm32, .wasm32v1 => false,
-    };
+    return fastDevLinkFormat(target) != null;
 }
 
 /// What a dev run composed from unit images lowers against: the export
@@ -6939,7 +6946,7 @@ fn writeComposedRunImage(
     hot_reload_allocation: ?HotReloadImageAllocation,
 ) CliMainError!DevRunImagePublication {
     if (comptime !backend.host_lir_codegen_available) {
-        unreachable; // `unitImageRunApplies` selects composed runs only on Linux x86_64 hosts
+        unreachable; // `unitImageRunApplies` selects composed runs only on hosts whose units carry images
     } else {
         if (!devShimTargetCompatible(units.target, backend.HostLirCodeGen.roc_target)) {
             return rejectRunTargetNotExecutable(ctx, units.target);
@@ -6959,12 +6966,18 @@ fn writeComposedRunImage(
         var shim_builtins: [shim_builtin_count][]const u8 = undefined;
         for (builtins_registry.BuiltinFn.image_tracking, &shim_builtins) |builtin_fn, *name| name.* = builtin_fn.symbolName();
         const sorted_shim_builtins = try fast_dev_link.sortedUnion(ctx.arena, &.{&shim_builtins});
+        const support_view = backend.dev.UnitImage.View.init(support) catch base.invariant("roc run invariant violated: the embedded support image does not read", .{});
+        // The support image's imports: the runtime set and the system
+        // library functions its builtins call, which the shim resolves in
+        // its own process.
+        const support_imports = try ctx.arena.alloc([]const u8, support_view.imports().len);
+        for (support_view.imports(), support_imports) |import, *name| name.* = try ctx.arena.dupe(u8, support_view.name(import.name));
         const link_inputs: run_image_link.Inputs = .{
-            .support = .{ .view = backend.dev.UnitImage.View.init(support) catch base.invariant("roc run invariant violated: the embedded support image does not read", .{}) },
+            .support = .{ .view = support_view },
             .units = inputs,
             .root = library.images.len,
             .entrypoints = units.entrypoint_names,
-            .host_symbols = try fast_dev_link.sortedUnion(ctx.arena, &.{ units.hosted_symbols, &host_symbols.runtime_symbols, sorted_shim_builtins }),
+            .host_symbols = try fast_dev_link.sortedUnion(ctx.arena, &.{ units.hosted_symbols, &host_symbols.runtime_symbols, sorted_shim_builtins, support_imports }),
             .shim_builtins = sorted_shim_builtins,
         };
         var plan = run_image_link.plan(ctx.gpa, ctx.io.std_io, link_inputs) catch |err| switch (err) {
@@ -11141,12 +11154,26 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
 }
 
+/// The format a fast dev link of `target`'s executables patches, for the
+/// targets whose units carry unit images and whose support image the
+/// compiler embeds.
+fn fastDevLinkFormat(target: RocTarget) ?fast_dev_link.Format {
+    return switch (target) {
+        .x64musl, .x64glibc, .x64linux, .x64elf, .x64freebsd, .x64openbsd, .x64netbsd => .elf,
+        .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd => .elf,
+        .arm64musl, .arm64glibc, .arm64linux, .arm64v1musl, .arm64v1glibc, .arm64v1linux => .elf,
+        .arm64mac, .x64mac, .x64v1mac => .macho,
+        .x64win, .x64mingw, .arm64win, .arm64mingw, .x64v1win, .x64v1mingw, .arm64v1win, .arm64v1mingw => .coff,
+        .arm32linux, .arm32musl, .wasm32, .wasm32v1 => null,
+    };
+}
+
 /// Whether `roc build` links its executable with a fast dev link
-/// (`fast_dev_link.zig`): a `.boxy` dev build of a Linux x86_64 executable.
-/// Every other combination composes a program object and links it with LLD.
+/// (`fast_dev_link.zig`): a `.boxy` dev build of an executable for a target
+/// with a fast dev link format, on any compiler host, whose output file the
+/// link writes through the host's own system calls. Every other combination
+/// composes a program object and links it with LLD.
 fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args: cli_args.BuildArgs) bool {
-    // The fast dev link writes its output through Linux system calls.
-    if (comptime builtin.target.os.tag != .linux) return false;
     if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
     // The fast dev link reads unit images and the pre-linked host from the
     // cache; without one, a build composes and links with LLD as before
@@ -11160,13 +11187,7 @@ fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args:
         .shared, .archive => false,
     };
     if (!executable) return false;
-    return switch (target) {
-        .x64musl, .x64glibc => true,
-        .x64mac, .x64win, .x64mingw, .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf => false,
-        .x64v1mac, .x64v1win, .x64v1mingw, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd, .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf => false,
-        .arm64mac, .arm64win, .arm64mingw, .arm64linux, .arm64musl, .arm64glibc, .arm64v1win, .arm64v1mingw, .arm64v1linux, .arm64v1musl, .arm64v1glibc => false,
-        .arm32linux, .arm32musl, .wasm32, .wasm32v1 => false,
-    };
+    return fastDevLinkFormat(target) != null;
 }
 
 /// Whether a build lowers and files per-module wasm units for its wasm
@@ -11196,10 +11217,9 @@ const WasmUnits = struct {
 
 /// Whether a build links its wasm output by composing images instead of
 /// with LLD (`wasm_link.zig`): a build whose wasm units apply
-/// (`wasmUnitsApply`) on a Linux host, whose system calls the output file
-/// uses, for any output: a module (`exe` or `shared`) or an archive.
+/// (`wasmUnitsApply`), on any compiler host, for any output: a module
+/// (`exe` or `shared`) or an archive.
 fn wasmFastLinkApplies(target: RocTarget, args: cli_args.BuildArgs) bool {
-    if (comptime builtin.target.os.tag != .linux) return false;
     if (args.synthetic_default_platform) return false;
     return wasmUnitsApply(target, args);
 }
@@ -11694,6 +11714,7 @@ const FastDevLink = struct {
 
         self.* = .{
             .spec = .{
+                .format = fastDevLinkFormat(target) orelse unreachable, // fastDevLinkApplies chose the target
                 .target = target,
                 .link_abi = buildLinkAbi(target, args.synthetic_default_platform),
                 .platform_files_pre = link_inputs.platform_files_pre,
@@ -11728,6 +11749,32 @@ const FastDevLink = struct {
         return self;
     }
 
+    /// Each `provides` symbol's kind and layout size, as the program's
+    /// images define it: what a Mach-O or COFF host's windows are sized by.
+    fn provideLayouts(
+        self: *FastDevLink,
+        ctx: *CliCtx,
+        support_view: backend.dev.UnitImage.View,
+        units: []const patch_link.ImageInput,
+    ) CliMainError![]const host_prelink.Provide {
+        var images: std.ArrayList(unit_walk.ImageInput) = .empty;
+        defer images.deinit(ctx.gpa);
+        try images.append(ctx.gpa, .{ .view = support_view });
+        try images.appendSlice(ctx.gpa, units);
+        var exports = try unit_walk.collectExports(ctx.gpa, images.items);
+        defer exports.deinit(ctx.gpa);
+        const out = try ctx.arena.alloc(host_prelink.Provide, self.spec.provides.len);
+        for (self.spec.provides, out) |name, *provide| {
+            // The checked program defines every `provides` symbol (the
+            // checker rejects an app that lacks one).
+            const found = exports.get(name) orelse base.invariant("roc build invariant violated: no unit image defines the provided symbol {s}", .{name});
+            const symbol = images.items[found.image].view.symbols()[found.symbol];
+            const procedure = @as(backend.dev.UnitImage.SymbolType, @fromBackingInt(symbol.type)) == .func;
+            provide.* = .{ .name = name, .kind = if (procedure) .procedure else .data, .size = if (procedure) 0 else symbol.size };
+        }
+        return out;
+    }
+
     fn deinit(self: *FastDevLink, gpa: Allocator) void {
         self.job.deinit();
         if (!self.published) self.output.discard();
@@ -11755,8 +11802,25 @@ const FastDevLink = struct {
         var prelink_ns: u64 = 0;
         var owned_record: ?[]align(16) u8 = null;
         defer if (owned_record) |record| ctx.gpa.free(record);
-        const host_view: host_prelink.View = switch (self.job.outcome) {
-            .pending => unreachable, // waiting joined the job, which always records an outcome
+
+        const units = try ctx.gpa.alloc(patch_link.ImageInput, library.images.len + 1);
+        defer ctx.gpa.free(units);
+        for (library.images, units[0..library.images.len]) |image, *unit| {
+            unit.* = .{ .view = backend.dev.UnitImage.View.init(image) catch base.invariant("roc build invariant violated: a unit image does not read", .{}) };
+        }
+        units[library.images.len] = .{ .view = backend.dev.UnitImage.View.init(root_image) catch base.invariant("roc build invariant violated: the root unit image does not read", .{}) };
+        const support_view = backend.dev.UnitImage.View.init(self.support) catch
+            unreachable; // `start` read this image
+
+        // A Mach-O or COFF host's key covers the provides' kinds and layout
+        // sizes, which the images tell; its lookup waits for them.
+        var provides: []const host_prelink.Provide = &.{};
+        if (self.spec.format == .macho or self.spec.format == .coff) {
+            provides = try self.provideLayouts(ctx, support_view, units);
+            if (self.job.outcome == .hashed) self.job.lookupWithLayouts(provides);
+        }
+        const record_bytes: []align(16) const u8 = switch (self.job.outcome) {
+            .pending, .hashed => unreachable, // waiting joined the job, which always records an outcome, and a lookup by layouts followed
             .unreadable_input => |path| {
                 reporter.fail();
                 std.log.err("Reading the platform link input {s} failed", .{path});
@@ -11769,10 +11833,10 @@ const FastDevLink = struct {
                     else => |file_err| ctx.fail(.{ .file_write_failed = .{ .path = self.output.dest, .err = file_err } }),
                 };
             },
-            .hit => |hit| host_prelink.View.init(hit.mapping) catch unreachable, // the job admitted the record it reports
+            .hit => |hit| hit.mapping,
             .miss => miss: {
                 const started = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
-                const record = fast_dev_link.prelink(ctx, &self.spec, self.job.key, self.job.manager, scratch_dir) catch |err| {
+                const record = fast_dev_link.prelink(ctx, &self.spec, self.job.key, self.job.manager, scratch_dir, provides) catch |err| {
                     reporter.fail();
                     return switch (err) {
                         error.OutOfMemory => error.OutOfMemory,
@@ -11784,8 +11848,12 @@ const FastDevLink = struct {
                     };
                 };
                 owned_record = record;
-                const view = host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{});
-                self.output.writeStart(view.host()) catch |err| {
+                const host_start: []const u8 = switch (self.spec.format) {
+                    .elf => (host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{})).host(),
+                    .macho => (macho_host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{})).segments(),
+                    .coff => (coff_host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{})).sections(),
+                };
+                self.output.writeStart(host_start) catch |err| {
                     reporter.fail();
                     return switch (err) {
                         error.OutOfMemory => error.OutOfMemory,
@@ -11793,27 +11861,36 @@ const FastDevLink = struct {
                     };
                 };
                 prelink_ns = @intCast(@max(0, std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - started));
-                break :miss view;
+                break :miss record;
             },
         };
 
-        const units = try ctx.gpa.alloc(patch_link.ImageInput, library.images.len + 1);
-        defer ctx.gpa.free(units);
-        for (library.images, units[0..library.images.len]) |image, *unit| {
-            unit.* = .{ .view = backend.dev.UnitImage.View.init(image) catch base.invariant("roc build invariant violated: a unit image does not read", .{}) };
-        }
-        units[library.images.len] = .{ .view = backend.dev.UnitImage.View.init(root_image) catch base.invariant("roc build invariant violated: the root unit image does not read", .{}) };
-        const support_view = backend.dev.UnitImage.View.init(self.support) catch
-            unreachable; // `start` read this image
         var timing: patch_link.Timing = .{};
         var outcome: patch_link.Outcome = .{};
-        patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
-            .host = host_view,
-            .support = .{ .view = support_view },
-            .units = units,
-            .root = library.images.len,
-            .host_required = self.spec.host_required,
-        }, &self.output, build_env.postCheckExecutor(), &timing, &outcome) catch |err| {
+        const linked: patch_link.LinkError!void = switch (self.spec.format) {
+            .elf => patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
+                .host = host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
+                .support = .{ .view = support_view },
+                .units = units,
+                .root = library.images.len,
+                .host_required = self.spec.host_required,
+            }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
+            .macho => macho_patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
+                .host = macho_host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
+                .support = .{ .view = support_view },
+                .units = units,
+                .root = library.images.len,
+                .host_required = self.spec.host_required,
+            }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
+            .coff => coff_patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
+                .host = coff_host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
+                .support = .{ .view = support_view },
+                .units = units,
+                .root = library.images.len,
+                .host_required = self.spec.host_required,
+            }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
+        };
+        linked catch |err| {
             reporter.fail();
             return switch (err) {
                 error.OutOfMemory => error.OutOfMemory,
@@ -11902,9 +11979,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
     try prepareBuildOutput(ctx, final_output_path);
 
-    // A Linux x86_64 dev executable of a `.boxy` program is linked by a fast
-    // dev link, whose output file and host job start before any compile
-    // work.
+    // A dev executable of a `.boxy` program for a target with a fast dev
+    // link format is linked by a fast dev link, whose output file and host
+    // job start before any compile work.
     const fast_link: ?*FastDevLink = if (fastDevLinkApplies(target, link_type, args))
         try FastDevLink.start(ctx, args, &build_env, platform_dir, target, final_output_path)
     else
@@ -15290,7 +15367,7 @@ fn unitImageTestApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.S
 }
 
 /// Whether this compiler can load test units' images into its own process.
-const unit_image_tests_supported = builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64;
+const unit_image_tests_supported = backend.dev.UnitImageLoader != void;
 
 /// A test root's wrapper in a test unit, by its module and its index among
 /// the module's test roots.
@@ -15389,23 +15466,44 @@ const UnitImageTestProgram = struct {
     }
 
     /// Bind every one of `names` the units call to a stub that reports the
-    /// call as a crash, as a hosted call in an in-process test does.
+    /// call as a crash, as a hosted call in an in-process test does. The
+    /// stub calls `roc_crashed(message, length)` in the host's own calling
+    /// convention and traps after it.
     fn bindHostedStubs(self: *UnitImageTestProgram, arena: Allocator, names: []const []const u8) CliMainError!void {
         if (names.len == 0) return;
-        // sub rsp, 8; mov rdi, message; mov rsi, length; mov rax, crashed;
-        // call rax; ud2
-        const stub_size = 4 + 10 + 10 + 10 + 2 + 2;
+        const stub_size: usize = if (builtin.cpu.arch == .aarch64) 15 * 4 else 4 + 10 + 10 + 10 + 2 + 2;
+        const crashed = @import("builtins").in_process_host.Symbol.roc_crashed.address();
         const code = try arena.alloc(u8, names.len * stub_size);
         for (names, 0..) |name, index| {
             const message = try std.fmt.allocPrint(arena, "hosted function `{s}` is not available while evaluating at compile time", .{name});
             const stub = code[index * stub_size ..][0..stub_size];
-            stub[0..4].* = .{ 0x48, 0x83, 0xec, 0x08 };
-            stub[4..6].* = .{ 0x48, 0xbf };
+            if (builtin.cpu.arch == .aarch64) {
+                // movz/movk x0, message; movz/movk x1, length; movz/movk
+                // x16, crashed; blr x16; brk #0
+                var word: usize = 0;
+                for ([_]u64{ @intFromPtr(message.ptr), message.len, crashed }, [_]u32{ 0, 1, 16 }) |value, register| {
+                    for (0..4) |quarter| {
+                        const imm: u32 = @truncate(value >> @intCast(quarter * 16));
+                        const opcode: u32 = if (quarter == 0) 0xd280_0000 else 0xf280_0000;
+                        std.mem.writeInt(u32, stub[word * 4 ..][0..4], opcode | (@as(u32, @intCast(quarter)) << 21) | (imm << 5) | register, .little);
+                        word += 1;
+                    }
+                }
+                std.mem.writeInt(u32, stub[word * 4 ..][0..4], 0xd63f_0200, .little);
+                std.mem.writeInt(u32, stub[(word + 1) * 4 ..][0..4], 0xd420_0000, .little);
+                continue;
+            }
+            // sub rsp, 8 (or 40 for the Windows shadow space); mov (rdi or
+            // rcx), message; mov (rsi or rdx), length; mov rax, crashed;
+            // call rax; ud2
+            const win64 = builtin.os.tag == .windows;
+            stub[0..4].* = .{ 0x48, 0x83, 0xec, if (win64) 0x28 else 0x08 };
+            stub[4..6].* = .{ 0x48, if (win64) 0xb9 else 0xbf };
             std.mem.writeInt(u64, stub[6..14], @intFromPtr(message.ptr), .little);
-            stub[14..16].* = .{ 0x48, 0xbe };
+            stub[14..16].* = .{ 0x48, if (win64) 0xba else 0xbe };
             std.mem.writeInt(u64, stub[16..24], message.len, .little);
             stub[24..26].* = .{ 0x48, 0xb8 };
-            std.mem.writeInt(u64, stub[26..34], @import("builtins").in_process_host.Symbol.roc_crashed.address(), .little);
+            std.mem.writeInt(u64, stub[26..34], crashed, .little);
             stub[34..36].* = .{ 0xff, 0xd0 };
             stub[36..38].* = .{ 0x0f, 0x0b };
         }
@@ -15430,7 +15528,7 @@ fn prepareUnitImageTests(
     reporter: *progress.Reporter,
     test_plan: *const CliTestPlan,
 ) CliMainError!UnitImageTestProgram {
-    if (comptime !unit_image_tests_supported) unreachable; // unitImageTestApplies holds only on a Linux x86_64 compiler
+    if (comptime !unit_image_tests_supported) unreachable; // unitImageTestApplies holds only on a compiler that loads unit images
     const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
     const target = RocTarget.detectNative();
     var program: UnitImageTestProgram = .{ .gpa = ctx.gpa, .tables = RunUnitTables.init(ctx) };

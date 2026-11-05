@@ -345,9 +345,16 @@ pub const ElfWriter = struct {
             .abs32s => .{
                 .kind = switch (self.arch) {
                     .x86_64 => ELF.R_X86_64_32S,
-                    .aarch64 => invariant("ELF invariant violated: abs32s data relocation in aarch64 code, which only a Linux x86_64 test unit emits", .{}),
+                    .aarch64 => invariant("ELF invariant violated: abs32s data relocation in aarch64 code, which only an x86_64 test unit emits", .{}),
                 },
                 .addend = std.mem.readInt(i32, self.text[@intCast(offset)..][0..4], .little),
+            },
+            .abs64_field => .{
+                .kind = switch (self.arch) {
+                    .x86_64 => invariant("ELF invariant violated: abs64_field data relocation in x86_64 code, which only an arm64 test unit emits", .{}),
+                    .aarch64 => ELF.R_AARCH64_ABS64,
+                },
+                .addend = std.mem.readInt(i64, self.text[@intCast(offset)..][0..8], .little),
             },
         };
 

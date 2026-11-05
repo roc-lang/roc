@@ -110,6 +110,13 @@ pub const HostSiteKind = enum(u8) {
     pc32 = 1,
     /// The symbol's 64-bit address.
     abs64 = 2,
+    /// An arm64 `B` or `BL` word displacement, which reaches the host
+    /// symbol through the import's jump stub.
+    branch26 = 3,
+    /// An arm64 `ADRP` page displacement to the import's jump stub.
+    page21 = 4,
+    /// The low 12 bits of the import's jump stub in an arm64 `ADD`.
+    pageoff12 = 5,
 };
 
 /// One field of a composed image holding a host symbol's address. `offset`
@@ -851,7 +858,7 @@ fn relocationKindForData(kind: DataRelocationKind) RelocationKind {
         .rel32 => .linked_data_rel32,
         .page21 => .linked_data_page21,
         .pageoff12 => .linked_data_pageoff12,
-        .abs32s => base.invariant("run image invariant violated: an abs32s data relocation, which only a test unit emits, and no run image holds a test unit's code", .{}),
+        .abs32s, .abs64_field => base.invariant("run image invariant violated: an expect-site data relocation, which only a test unit emits, and no run image holds a test unit's code", .{}),
     };
 }
 

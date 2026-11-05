@@ -1,4 +1,5 @@
-//! The pre-linked host of a fast dev link (Linux x86_64 executables).
+//! The pre-linked host of a fast dev link of an ELF executable: Linux or a
+//! BSD, x86_64 or AArch64.
 //!
 //! A platform's host is linked once, with the existing embedded LLD flags,
 //! from the platform's link inputs plus one generated object, and filed in
@@ -26,6 +27,34 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
+
+/// Whether a `provides` symbol is a procedure or a value.
+pub const ProvideKind = enum(u8) { procedure = 0, data = 1 };
+
+/// One `provides` symbol of the platform, as a Mach-O or COFF host link
+/// places it: those hosts size each symbol's window by its kind and layout
+/// size, which the program's images tell before the host is looked up.
+pub const Provide = struct {
+    /// The C name, without any Mach-O underscore.
+    name: []const u8,
+    kind: ProvideKind,
+    /// A data symbol's layout size; 0 for a procedure.
+    size: u64,
+
+    /// The bytes the symbol's window takes.
+    pub fn windowSize(self: Provide) u64 {
+        return switch (self.kind) {
+            .procedure => procedure_window,
+            .data => std.mem.alignForward(u64, self.size, window_align),
+        };
+    }
+};
+
+/// A procedure window of a Mach-O or COFF host: room for a long jump and a
+/// trap.
+pub const procedure_window: u64 = 16;
+/// The alignment of every window of a Mach-O or COFF host.
+pub const window_align: u64 = 16;
 
 /// The address the app region starts at. The host must end below it, and
 /// app code reaches host code with 32-bit displacements, so the app region
@@ -57,8 +86,8 @@ const reserve_section_name = ".roc_phdrs";
 
 /// The generated object of a host link: the reserved program header table
 /// and an absolute definition of every name in `provides`, which must be
-/// sorted and distinct.
-pub fn linkObject(allocator: Allocator, provides: []const []const u8) Allocator.Error![]u8 {
+/// sorted and distinct. `arm64` selects the AArch64 machine over x86_64.
+pub fn linkObject(allocator: Allocator, arm64: bool, provides: []const []const u8) Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     try out.appendNTimes(allocator, 0, 64);
@@ -122,7 +151,7 @@ pub fn linkObject(allocator: Allocator, provides: []const []const u8) Allocator.
     ehdr[5] = 1;
     ehdr[6] = 1;
     std.mem.writeInt(u16, ehdr[16..18], ET_REL, .little);
-    std.mem.writeInt(u16, ehdr[18..20], EM_X86_64, .little);
+    std.mem.writeInt(u16, ehdr[18..20], if (arm64) EM_AARCH64 else EM_X86_64, .little);
     std.mem.writeInt(u32, ehdr[20..24], 1, .little);
     std.mem.writeInt(u64, ehdr[40..48], shoff, .little);
     std.mem.writeInt(u16, ehdr[52..54], 64, .little);
@@ -134,11 +163,17 @@ pub fn linkObject(allocator: Allocator, provides: []const []const u8) Allocator.
 
 /// Everything a pre-linked host is a function of, as content.
 pub const KeyInput = struct {
+    /// The record format the host is filed in (`format_version` here, or
+    /// the Mach-O record's).
+    record_version: u32,
     target: []const u8,
     /// The link ABI the host links with (`linker.TargetAbi`).
     link_abi: []const u8,
     /// Sorted, distinct.
     provides: []const []const u8,
+    /// For a Mach-O or COFF host, each provide's kind and layout size, in
+    /// the provides' order; empty for an ELF host, whose windows are fixed.
+    provide_layouts: []const Provide = &.{},
     /// The symbols kept for the app region; sorted, distinct.
     keep: []const []const u8,
     /// The platform's link items as its header names them, relative to its
@@ -156,7 +191,7 @@ pub fn key(input: KeyInput) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update("roc-prelinked-host-v1");
     hasher.update(&build_options.compiler_compatibility_hash);
-    hashU64(&hasher, format_version);
+    hashU64(&hasher, input.record_version);
     hashU64(&hasher, app_base);
     hashU64(&hasher, provide_window);
     hashU64(&hasher, phdr_capacity);
@@ -164,6 +199,11 @@ pub fn key(input: KeyInput) [32]u8 {
     hashBytes(&hasher, input.target);
     hashBytes(&hasher, input.link_abi);
     hashList(&hasher, input.provides);
+    hashU64(&hasher, input.provide_layouts.len);
+    for (input.provide_layouts) |layout| {
+        hasher.update(&.{@backingInt(layout.kind)});
+        hashU64(&hasher, layout.size);
+    }
     hashList(&hasher, input.keep);
     hashList(&hasher, input.link_items);
     if (input.bundle_hash) |bundle| {
@@ -260,7 +300,8 @@ pub const FinishError = Allocator.Error || error{
 /// one the host defines.
 pub fn finish(allocator: Allocator, exe: []u8, provides: []const []const u8, keep: []const []const u8) FinishError![]align(16) u8 {
     if (exe.len < 64 or !std.mem.eql(u8, exe[0..4], "\x7fELF") or exe[4] != 2 or exe[5] != 1) return error.UnexpectedHostLayout;
-    if (readU16(exe, 16) != ET_EXEC or readU16(exe, 18) != EM_X86_64) return error.UnexpectedHostLayout;
+    const machine = readU16(exe, 18);
+    if (readU16(exe, 16) != ET_EXEC or (machine != EM_X86_64 and machine != EM_AARCH64)) return error.UnexpectedHostLayout;
     const phoff = readU64(exe, 32);
     const shoff = readU64(exe, 40);
     const phentsize = readU16(exe, 54);
@@ -498,7 +539,15 @@ pub const View = struct {
         if (header.sht_offset % 8 != 0 or header.sht_offset + @as(u64, header.shnum) * 64 > bytes.len) return error.InvalidRecord;
         if (header.build_id_offset + header.build_id_size > header.host_size) return error.InvalidRecord;
         if (header.host_end_vaddr > app_base) return error.InvalidRecord;
+        if (header.host_size < 64) return error.InvalidRecord;
+        const machine = readU16(bytes[host_offset..], 18);
+        if (machine != EM_X86_64 and machine != EM_AARCH64) return error.InvalidRecord;
         return .{ .bytes = bytes, .header = header };
+    }
+
+    /// Whether the host is an AArch64 executable rather than an x86_64 one.
+    pub fn arm64(self: View) bool {
+        return readU16(self.host(), 18) == EM_AARCH64;
     }
 
     /// The host executable's bytes, ending with its string table when it
@@ -618,6 +667,7 @@ const PT_PHDR = 6;
 const ET_REL = 1;
 const ET_EXEC = 2;
 const EM_X86_64 = 62;
+const EM_AARCH64 = 183;
 const SHT_PROGBITS = 1;
 const SHT_SYMTAB = 2;
 const SHT_STRTAB = 3;
@@ -633,8 +683,9 @@ const STV_HIDDEN = 2;
 
 test "the host link object defines each provide at its window" {
     const allocator = std.testing.allocator;
-    const object = try linkObject(allocator, &.{ "roc_answer", "roc_main" });
+    const object = try linkObject(allocator, false, &.{ "roc_answer", "roc_main" });
     defer allocator.free(object);
+    try std.testing.expectEqual(@as(u16, EM_X86_64), readU16(object, 18));
     try std.testing.expectEqual(@as(u16, 5), readU16(object, 60));
     const shoff = readU64(object, 40);
     const symtab: usize = @intCast(shoff + 2 * 64);
@@ -642,10 +693,14 @@ test "the host link object defines each provide at its window" {
     try std.testing.expectEqual(@as(usize, 3 * 24), entries.len);
     try std.testing.expectEqual(provideAddress(1), readU64(entries, 2 * 24 + 8));
     try std.testing.expectEqual(@as(u16, SHN_ABS), readU16(entries, 24 + 6));
+    const aarch64 = try linkObject(allocator, true, &.{ "roc_answer", "roc_main" });
+    defer allocator.free(aarch64);
+    try std.testing.expectEqual(@as(u16, EM_AARCH64), readU16(aarch64, 18));
+    try std.testing.expectEqualSlices(u8, object[20..], aarch64[20..]);
 }
 
 test "a host key is a function of contents, not of where they are" {
-    const input: KeyInput = .{ .target = "x64musl", .link_abi = "musl", .provides = &.{"roc_main"}, .keep = &.{"roc_alloc"}, .link_items = &.{ "crt1.o", "libhost.a" }, .bundle_hash = null, .input_digests = &.{ @splat(1), @splat(2) } };
+    const input: KeyInput = .{ .record_version = format_version, .target = "x64musl", .link_abi = "musl", .provides = &.{"roc_main"}, .keep = &.{"roc_alloc"}, .link_items = &.{ "crt1.o", "libhost.a" }, .bundle_hash = null, .input_digests = &.{ @splat(1), @splat(2) } };
     const baseline = key(input);
     try std.testing.expectEqual(baseline, key(input));
     var changed = input;
@@ -654,4 +709,7 @@ test "a host key is a function of contents, not of where they are" {
     var bundled = input;
     bundled.bundle_hash = "abc";
     try std.testing.expect(!std.mem.eql(u8, &baseline, &key(bundled)));
+    var sized = input;
+    sized.provide_layouts = &.{.{ .name = "roc_main", .kind = .procedure, .size = 0 }};
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &key(sized)));
 }
