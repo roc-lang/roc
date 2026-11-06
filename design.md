@@ -2486,7 +2486,7 @@ Zig module built for minimum size. The pinned forwarding builtins keep
 A linked builtin is pinned with `alwaysinline` only when it is a forwarding
 wrapper: its body packs its arguments and hands them to one out-of-line builtin
 routine, and any choice among forms of that routine tests only arguments that
-are constants at every call site (an update mode, or whether elements are
+are constants at every call site (an update mode, or whether items are
 reference-counted). Inlining such a body replaces a call with a call, so no
 caller grows, whatever its size and however many sites it has, and the pin
 needs no account of code growth. `builder.zig` names the pinned set
