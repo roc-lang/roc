@@ -78,12 +78,18 @@ pub const Recorder = struct {
     }
 
     /// Forget every entity recorded since `mark`: what a discarded body named.
-    /// A keyed entity recorded again is appended again, since `ref` ignores a
-    /// position past the list's end.
+    /// Each forgotten keyed entity leaves `refs` too, so a later entity that
+    /// takes its position is never found under its key, and the entity is
+    /// appended again if a body names it again.
     pub fn rewind(self: *Recorder, entities_mark: u32) void {
         for (self.entities.items[entities_mark..]) |entity| switch (entity) {
             .message => |bytes| self.allocator.free(bytes),
-            .rc_helper, .reserved_rc_helper, .rc_helper_table, .static_str, .static_data, .pic_base, .fragment => {},
+            .rc_helper, .reserved_rc_helper, .rc_helper_table, .static_str, .static_data, .pic_base, .fragment => {
+                const entity_key = entity.key() orelse unreachable; // every entity but a message has a key
+                if (self.refs.get(entity_key)) |position| {
+                    if (position >= entities_mark) _ = self.refs.remove(entity_key);
+                }
+            },
         };
         self.entities.shrinkRetainingCapacity(entities_mark);
     }
@@ -94,7 +100,7 @@ pub const Recorder = struct {
         const ref_index: u32 = @intCast(self.entities.items.len);
         if (entity.key()) |entity_key| {
             const entry = try self.refs.getOrPut(self.allocator, entity_key);
-            if (entry.found_existing and entry.value_ptr.* < ref_index) return entry.value_ptr.*;
+            if (entry.found_existing) return entry.value_ptr.*;
             entry.value_ptr.* = ref_index;
             errdefer _ = self.refs.remove(entity_key);
             try self.entities.append(self.allocator, entity);
@@ -213,4 +219,17 @@ test "resolving deferred operands patches padded operands in place and splices c
     try testing.expectEqual(@as(usize, 1), finished.import_relocations.items.len);
     try testing.expectEqual(reloc_pos, finished.import_relocations.items[0].index.code_pos);
     try testing.expectEqual(SymbolIndex.fromRaw(11), finished.import_relocations.items[0].index.symbol_index);
+}
+
+test "a rewound keyed entity is recorded again rather than found at a position another entity took" {
+    var recorder = Recorder.init(std.testing.allocator);
+    defer recorder.deinit();
+    const mark = recorder.mark();
+    try std.testing.expectEqual(@as(u32, 0), try recorder.ref(.{ .pic_base = .memory }));
+    recorder.rewind(mark);
+    const message = try recorder.ref(.{ .message = "crashed" });
+    const pic_base = try recorder.ref(.{ .pic_base = .memory });
+    try std.testing.expect(pic_base != message);
+    try std.testing.expect(recorder.entities.items[pic_base] == .pic_base);
+    try std.testing.expectEqual(pic_base, try recorder.ref(.{ .pic_base = .memory }));
 }

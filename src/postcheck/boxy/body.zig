@@ -1233,26 +1233,9 @@ pub const Builder = struct {
 
     /// The types whose descriptors compose `ty`'s. Caller frees.
     pub fn descComponents(self: *Builder, ty: TypeId) Allocator.Error![]TypeId {
-        const store = &self.program.store;
         var out: std.ArrayList(TypeId) = .empty;
         errdefer out.deinit(self.allocator);
-        switch (store.get(ty)) {
-            .list => |elem| try out.append(self.allocator, elem),
-            .box => |payload| try out.append(self.allocator, payload),
-            .tuple => |items| try out.appendSlice(self.allocator, store.span(items)),
-            .record => |record| {
-                if (record.ext) |ext| try out.append(self.allocator, ext);
-                const storage = try self.program.layouts.recordStorage(record);
-                defer self.allocator.free(storage);
-                try out.appendSlice(self.allocator, storage);
-            },
-            .tag_union => |tag_union| {
-                if (tag_union.ext) |ext| try out.append(self.allocator, ext);
-                for (store.tagSpan(tag_union.tags)) |tag| try out.appendSlice(self.allocator, store.span(tag.payloads));
-            },
-            .nominal => try out.append(self.allocator, try self.program.converter().backing(ty)),
-            .primitive, .empty_record, .function, .variable => {},
-        }
+        try self.program.appendDescriptorComponents(ty, &out, self.allocator);
         return try out.toOwnedSlice(self.allocator);
     }
 
@@ -7305,7 +7288,24 @@ pub const Builder = struct {
     pub fn finishCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, bound: []const TypeId, arg_types: []const TypeId, ret: TypeId, result_ty: TypeId) Allocator.Error!void {
         const explicit = try self.popValues(@intCast(arg_types.len));
         defer self.allocator.free(explicit);
-        try self.argsAtParams(explicit, arg_types, callee, bound);
+        // Checking identifies compiler-provided operations explicitly. Emit
+        // that operation at its checked instantiation, using the same path
+        // as the wrapper's own body, rather than calling the wrapper.
+        const worker = self.program.worker(callee).*;
+        if (worker.key == .template) {
+            const key = worker.key.template;
+            const owner = self.program.module(key.module);
+            const template = owner.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+            if (template.provided_low_level) |op| {
+                const adapted_types = try self.allocator.dupe(TypeId, arg_types);
+                defer self.allocator.free(adapted_types);
+                try self.argsAtParams(explicit, arg_types, callee, bound, adapted_types);
+                try self.emitLowLevelCall(op, explicit, ret, adapted_types);
+                const value = self.popValue();
+                return try self.pushValue(try self.adaptValue(value, ret, result_ty));
+            }
+        }
+        try self.argsAtParams(explicit, arg_types, callee, bound, null);
         const passed = try self.callDescriptorArgs(callee, bound);
         defer self.allocator.free(passed);
         const args = try std.mem.concat(self.allocator, LocalId, &.{ explicit, hidden, passed });
@@ -7334,13 +7334,18 @@ pub const Builder = struct {
     /// `bound` stores a record in another order: a padded nominal passed to
     /// a parameter of its record row (design.md "Nominal Record Field
     /// Order"), which the callee reads by the structural rule.
-    fn argsAtParams(self: *Builder, args: []LocalId, arg_types: []const TypeId, callee: WorkerId, bound: []const TypeId) Allocator.Error!void {
+    fn argsAtParams(self: *Builder, args: []LocalId, arg_types: []const TypeId, callee: WorkerId, bound: []const TypeId, adapted_types: ?[]TypeId) Allocator.Error!void {
         const store = &self.program.store;
-        for (args, arg_types, self.program.worker(callee).params[0..args.len]) |*arg, arg_ty, param| {
+        for (args, arg_types, self.program.worker(callee).params[0..args.len], 0..) |*arg, arg_ty, param, index| {
             // A variable has the one representation of whatever it binds.
             if (store.get(param) == .variable) continue;
             const param_ty = if (store.isClosed(param)) param else try self.program.substitute(self.allocator, param, bound);
-            if (try self.recordOrderDiffers(arg_ty, param_ty)) arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
+            if (try self.recordOrderDiffers(arg_ty, param_ty)) {
+                arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
+                // A direct primitive consumes these adapted bytes, so its
+                // descriptor operands must describe the adapted type too.
+                if (adapted_types) |types_after_adaptation| types_after_adaptation[index] = param_ty;
+            }
         }
     }
 
@@ -7669,6 +7674,10 @@ pub const Builder = struct {
     pub fn finishLowLevel(self: *Builder, op: LIR.LowLevel, arg_count: u32, result_ty: TypeId, arg_types: []const TypeId) Allocator.Error!void {
         const args = try self.popValues(arg_count);
         defer self.allocator.free(args);
+        try self.emitLowLevelCall(op, args, result_ty, arg_types);
+    }
+
+    fn emitLowLevelCall(self: *Builder, op: LIR.LowLevel, args: []const LocalId, result_ty: TypeId, arg_types: []const TypeId) Allocator.Error!void {
         const store = &self.program.store;
         var open = !store.isClosed(result_ty);
         for (arg_types) |arg_ty| open = open or !store.isClosed(arg_ty);

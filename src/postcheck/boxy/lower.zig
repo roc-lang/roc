@@ -311,6 +311,8 @@ pub const Worker = struct {
     dictionary_params: []const u32,
     params: []const TypeId,
     ret: TypeId,
+    /// Immutable descriptor requirements derived from the declared signature.
+    passed_descriptor_types: ?[]const TypeId = null,
     lowered: bool = false,
     /// Whether the worker's body is queued for lowering.
     queued: bool = false,
@@ -697,22 +699,56 @@ pub const Program = struct {
         }, base.SourceLoc.none);
     }
 
-    /// Composite descriptor arguments supplied by the caller.
-    /// The signature alone declares these requirements, identically in an
-    /// importing unit and a defining unit; no body discovery is involved.
+    /// The signature's dynamic descriptor graph, in breadth-first order.
+    /// Both defining and importing units derive it from checked types alone.
+    /// Passing its components also covers body uses of a nominal's backing
+    /// or a nested payload without asking an importer to inspect the body.
     pub fn passedDescriptorTypes(self: *Program, allocator: Allocator, id: WorkerId) Allocator.Error![]TypeId {
+        if (self.worker(id).passed_descriptor_types) |cached| return allocator.dupe(TypeId, cached);
         var result: std.ArrayList(TypeId) = .empty;
-        errdefer result.deinit(allocator);
+        defer result.deinit(self.allocator);
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
         const target = self.worker(id).*;
         if (target.key == .template) {
-            for (0..target.params.len + 1) |i| {
-                const ty = if (i < target.params.len) target.params[i] else target.ret;
+            try pending.appendSlice(self.allocator, target.params);
+            try pending.append(self.allocator, target.ret);
+            var index: usize = 0;
+            while (index < pending.items.len) : (index += 1) {
+                const ty = pending.items[index];
+                if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
                 if (self.store.get(ty) == .variable or try self.converter().representationClosed(ty)) continue;
-                if (std.mem.findScalar(TypeId, result.items, ty) != null) continue;
-                try result.append(allocator, ty);
+                try result.append(self.allocator, ty);
+                try self.appendDescriptorComponents(ty, &pending, self.allocator);
             }
         }
-        return result.toOwnedSlice(allocator);
+        const cached = try self.arena.allocator().dupe(TypeId, result.items);
+        self.worker(id).passed_descriptor_types = cached;
+        return allocator.dupe(TypeId, cached);
+    }
+
+    /// The immediate types whose descriptors compose `ty`'s. This is the
+    /// same graph for caller preparation and the body's composition walk.
+    pub fn appendDescriptorComponents(self: *Program, ty: TypeId, out: *std.ArrayList(TypeId), allocator: Allocator) Allocator.Error!void {
+        const store = &self.store;
+        switch (store.get(ty)) {
+            .list, .box => |elem| try out.append(allocator, elem),
+            .tuple => |items| try out.appendSlice(allocator, store.span(items)),
+            .record => |record| {
+                if (record.ext) |ext| try out.append(allocator, ext);
+                const storage = try self.layouts.recordStorage(record);
+                defer self.allocator.free(storage);
+                try out.appendSlice(allocator, storage);
+            },
+            .tag_union => |tag_union| {
+                if (tag_union.ext) |ext| try out.append(allocator, ext);
+                for (store.tagSpan(tag_union.tags)) |tag| try out.appendSlice(allocator, store.span(tag.payloads));
+            },
+            .nominal => try out.append(allocator, try self.converter().backing(ty)),
+            .primitive, .empty_record, .function, .variable => {},
+        }
     }
 
     /// Declare the signature of imported template worker `id`, exactly as
