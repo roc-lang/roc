@@ -20533,6 +20533,24 @@ pub fn computePlatformRequirementSolutions(allocator: Allocator, owner: Imported
         if (!kind_matches) {
             checkedArtifactInvariant("platform requirement solution value kind disagrees with the published app value", .{});
         }
+        if (builtin.mode == .debug) {
+            const rows = try owner.exportRows();
+            const is_exported = switch (top_level.value) {
+                .procedure_binding => blk: {
+                    for (rows.procedure_bindings) |binding| {
+                        if (binding.binding.def == top_level.def and binding.binding.pattern == top_level.pattern) break :blk true;
+                    }
+                    break :blk false;
+                },
+                .const_ref => blk: {
+                    for (rows.const_templates) |template| {
+                        if (template.def == top_level.def and template.pattern == top_level.pattern) break :blk true;
+                    }
+                    break :blk false;
+                },
+            };
+            if (!is_exported) checkedArtifactInvariant("platform requirement solution references an unexported app value", .{});
+        }
 
         const identity_start: u32 = @intCast(identity_solutions.items.len);
         const identity_vars = env.platformRequirementIdentityVars(input);
