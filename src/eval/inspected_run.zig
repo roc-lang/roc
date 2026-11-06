@@ -255,7 +255,6 @@ fn returnedResult(
     };
 }
 
-/// Return the layout indices for `main_proc`'s arguments.
 /// A root's `(ret_ptr, args_ptr)` entry wrapper, called on the evaluation
 /// stack.
 const EntryCall = struct {
@@ -268,6 +267,7 @@ const EntryCall = struct {
     }
 };
 
+/// Return the layout indices for `main_proc`'s arguments.
 pub fn mainProcArgLayouts(allocator: Allocator, store: *const lir.LirStore, main_proc: LirProcSpecId) Allocator.Error![]LayoutIdx {
     const proc = store.getProcSpec(main_proc);
     const arg_locals = store.getLocalSpan(proc.args);

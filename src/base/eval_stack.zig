@@ -47,14 +47,14 @@ pub const Error = error{OutOfMemory};
 /// The entry a run calls on the evaluation stack.
 pub const Entry = *const fn (context: *anyopaque) callconv(.c) void;
 
-const os_kind: enum { posix, windows, unsupported } = switch (builtin.os.tag) {
-    .linux, .macos => switch (builtin.cpu.arch) {
-        .x86_64, .aarch64 => .posix,
-        else => .unsupported,
-    },
-    .windows => .windows,
-    else => .unsupported,
-};
+const switches_stack_pointer = builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64;
+
+const os_kind: enum { posix, windows, unsupported } = if ((builtin.os.tag == .linux or builtin.os.tag == .macos) and switches_stack_pointer)
+    .posix
+else if (builtin.os.tag == .windows)
+    .windows
+else
+    .unsupported;
 
 /// Whether this target runs compiled code on an evaluation stack.
 pub const supported = os_kind != .unsupported;
@@ -177,8 +177,8 @@ const Posix = struct {
     const switchStack: *const fn (context: *anyopaque, entry: Entry, top: usize) callconv(.c) void = @ptrCast(&switchStackImpl);
 
     fn switchStackImpl() callconv(.naked) void {
-        switch (comptime builtin.cpu.arch) {
-            .x86_64 => asm volatile (
+        if (comptime builtin.cpu.arch == .x86_64) {
+            asm volatile (
                 \\pushq %%rbp
                 \\movq %%rsp, %%rbp
                 \\pushq %%rbx
@@ -189,8 +189,9 @@ const Posix = struct {
                 \\popq %%rbx
                 \\popq %%rbp
                 \\retq
-            ),
-            .aarch64 => asm volatile (
+            );
+        } else if (comptime builtin.cpu.arch == .aarch64) {
+            asm volatile (
                 \\stp x29, x30, [sp, #-32]!
                 \\mov x29, sp
                 \\str x19, [sp, #16]
@@ -201,8 +202,9 @@ const Posix = struct {
                 \\ldr x19, [sp, #16]
                 \\ldp x29, x30, [sp], #32
                 \\ret
-            ),
-            else => unreachable, // `os_kind` is `.posix` only on x86_64 and aarch64
+            );
+        } else {
+            @compileError("the evaluation stack switch supports only x86_64 and aarch64");
         }
     }
 };
