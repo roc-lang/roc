@@ -1453,6 +1453,20 @@ pub const LowLevel = enum(u16) {
         return self.arcBorrowedResultVariant() != null;
     }
 
+    /// Whether this operation's result differs from what it is given only in
+    /// the capacity the caller asked it to hold. A compile-time constant holds
+    /// its contents and not their capacity, so a hoisted root never stands for
+    /// one of these: evaluating it ahead of time would drop the request and
+    /// remove no runtime work (design.md "Compile-Time Constants and Hoisted
+    /// Roots").
+    pub fn requestsCapacity(self: LowLevel) bool {
+        return self == .str_with_capacity or
+            self == .str_reserve or
+            self == .list_with_capacity or
+            self == .list_reserve or
+            self == .list_reserve_for_append;
+    }
+
     /// Whether this primitive can consume borrowed string views directly,
     /// without first materializing them into RocStr values.
     pub fn acceptsStrViewArgs(self: LowLevel) bool {

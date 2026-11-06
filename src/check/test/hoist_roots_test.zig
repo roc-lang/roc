@@ -2354,3 +2354,35 @@ test "issue 11993 - generic is_eq whose evidence is a rejected capturing local i
 
     try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }
+
+test "hoist roots are not selected for capacity requests" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    var $s = "prefix".reserve(40)
+        \\    $s = Str.concat($s, arg)
+        \\    $s = Str.concat($s, Str.with_capacity(30))
+        \\    xs = List.with_capacity(8)
+        \\    ys = List.reserve([1.U8, 2], 16)
+        \\    Str.concat($s, Str.inspect((List.append(xs, 1.U8), ys)))
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots cover a capacity request inside a larger closed expression" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    s = Str.concat("prefix".reserve(40), "suffix")
+        \\    Str.concat(s, arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try expectExprTag(&test_env, roots[0].expr, .e_call);
+}

@@ -6029,6 +6029,20 @@ Low-level operations may participate only through explicit checked purity and
 totality metadata; they must never be allowed by whitelist, name, or backend
 knowledge.
 
+A call to a Builtin procedure whose body is a capacity request
+(`LowLevel.requestsCapacity`: `Str.with_capacity`, `Str.reserve`,
+`List.with_capacity`, `List.reserve` and the append reservation) is never a
+hoisted root of its own, as an expression or as a binding's right-hand side:
+post-solve pruning drops such a root, and the call evaluates at runtime.
+Its result differs from its input only in capacity, which a stored constant
+does not hold beyond its contents, so evaluating it ahead of time would drop
+the request and leave the runtime to grow the value again on its first
+append, while removing no work: the request is an allocation either way. Its
+operands may still be roots, and an enclosing expression that is a root
+evaluates the request as part of its own value. The checker decides this
+after solving, from the procedure the call selects, through the same method
+lookup dispatch uses.
+
 Checking errors are dependency-local for hoistability. A malformed expression,
 unresolved static-dispatch call, type error, or other checker-owned diagnostic
 poisons the expression that owns the error and any expression that explicitly
@@ -6112,7 +6126,12 @@ archived as a unit constant. A binder-free source declaration may then be erased
 from runtime lowering. The pending exhaustiveness site is explicitly classified
 for empirical compile-time validation when the eligible candidate is recorded.
 No candidate is recorded inside an ordinary top-level constant, because that
-enclosing root already evaluates and owns the destructure site. Validation uses
+enclosing root already evaluates and owns the destructure site. Only a root
+that has a compile-time root request owns the sites its evaluation reaches. A
+selected root whose checked type is not context-free has no request: it never
+evaluates on its own, and every reader evaluates its body in place, so each
+site in that body is classified by the procedure template that contains it, as
+if no root had been selected there. Validation uses
 the checked pattern compiler and compile-time evaluator; it never reinterprets
 source patterns separately.
 
@@ -23743,6 +23762,21 @@ either width; one too large for its destination's widths (a 32-bit target's
 lengths, or the ConstStore's) is `error.OutOfMemory`, as it would be on that
 target at runtime.
 
+Compile-time evaluation runs in a 32-bit address space on every compiler
+host. Its result belongs to every target and must be the same whichever
+host computed it, and a 32-bit compiler host's interpreter can address no
+more, so both evaluators' hosts grant Roc code at most what a 32-bit
+target's `roc_alloc` can be asked for. An allocation request past that, or
+one the compiler's own memory cannot satisfy, is an out-of-memory crash of
+the root at the operation that asked for it, never an error of the
+compilation: it is reported, or for a guarded root deferred to runtime,
+exactly like any other compile-time crash. A target that would refuse the
+same request at runtime crashes there too, so a hoisted expression that
+exceeds a 32-bit target's address space fails the same way at compile time
+as it would in that target's program, and never asks the compiler's host
+for memory no 32-bit target has. Only the host's own bookkeeping running out
+of memory fails the compilation.
+
 Diagnostic behavior must be identical between the dev-backend evaluator and the
 host-restricted LIR interpreter. A mismatch in crashes, expect failures,
 empirical exhaustiveness diagnostics, literal conversion diagnostics, or
@@ -25283,9 +25317,10 @@ The contract is carried by types rather than prose: the Zig ABI declarations
 return a non-optional pointer, generated Rust glue returns `NonNull<c_void>`,
 generated C glue declares both symbols `returns_nonnull`, and the LLVM backend
 marks their declarations' return values `nonnull` in the linked module.
-Compiler-internal hosts follow the same contract: the compile-time evaluator's
-host turns allocation failure into a Roc crash by unwinding the interpreter it
-serves, rather than signaling it with null.
+Compiler-internal hosts follow the same contract: both compile-time
+evaluators' hosts turn allocation failure into a Roc crash, unwinding the
+interpreter they serve or the generated code they called, rather than
+signaling it with null (see "Compile-Time Constants").
 
 `roc_crashed` never returns to Roc. A platform host ends the process; a host
 that keeps running, like the compiler's own hosts, longjmps to a crash

@@ -994,17 +994,10 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     var typed_cir_modules = try check.TypedCIR.Modules.init(allocator, &source_modules);
     defer typed_cir_modules.deinit();
 
-    var builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
-        allocator,
-        &typed_cir_modules,
-        1,
-        .{
-            .module_env_storage = .{ .static_builtin = builtin_module.env },
-            .io = @as(std.Io, undefined),
-            .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
-            .inference = check.CheckedArtifact.CheckedModuleArtifact.bakedInference(compiled_builtins.builtin_artifact_bin[0..]) catch return error.CorruptEmbeddedBuiltins,
-        },
-    );
+    var builtin_artifact = eval.bakedBuiltinArtifact(allocator, @as(std.Io, undefined), builtin_module.env) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.CorruptBuiltinArtifact, error.BuiltinArtifactVersionMismatch, error.CorruptArtifact => return error.CorruptEmbeddedBuiltins,
+    };
     errdefer builtin_artifact.deinitRetainingModuleEnv(allocator);
 
     var publish_imports = [_]check.CheckedArtifact.PublishImportArtifact{.{

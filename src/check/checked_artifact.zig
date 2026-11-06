@@ -27505,14 +27505,32 @@ fn moduleExhaustivenessSites(
         }
     }
 
-    // The first compile-time root, in root order, whose evaluation replaces
-    // each check's source.
+    // The request of each root of the table that has one. A root with no
+    // request (its checked type is not context-free) is never evaluated on
+    // its own: every reader evaluates its body in place, so it replaces no
+    // check's source.
+    const root_table = owner.compile_time_roots.roots;
+    const root_requests_by_position = try allocator.alloc(?RootRequest, root_table.len);
+    defer allocator.free(root_requests_by_position);
+    @memset(root_requests_by_position, null);
+    for (root_requests.requests) |request| {
+        if (request.abi != .compile_time) continue;
+        const root_id = request.compile_time_root orelse continue;
+        const position = owner.compile_time_roots.position(root_id) orelse continue;
+        root_requests_by_position[position] = request;
+    }
+
+    // The first requested compile-time root, in root order, whose evaluation
+    // replaces each check's source.
     const replacing_roots = try allocator.alloc(?CompileTimeRoot, obligations.len);
     defer allocator.free(replacing_roots);
     @memset(replacing_roots, null);
+    const replacing_requests = try allocator.alloc(RootRequest, obligations.len);
+    defer allocator.free(replacing_requests);
     var found = std.ArrayList(CheckedExhaustivenessSiteId).empty;
     defer found.deinit(allocator);
-    for (owner.compile_time_roots.roots) |root| {
+    for (root_table, root_requests_by_position) |root, maybe_request| {
+        const request = maybe_request orelse continue;
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
         // A literal conversion converts literal data and contains no site.
         if (root.literalConversionKind() != null) continue;
@@ -27536,12 +27554,15 @@ fn moduleExhaustivenessSites(
         } else try collectExhaustivenessSites(allocator, bodies, root.rootExpr(), &found);
         for (found.items) |site| {
             const slot = &replacing_roots[@backingInt(site)];
-            if (slot.* == null) slot.* = root;
+            if (slot.* == null) {
+                slot.* = root;
+                replacing_requests[@backingInt(site)] = request;
+            }
         }
     }
 
     const owner_artifact = owner.key.digest();
-    for (obligations, sites, owner_templates, replacing_roots, 0..) |obligation, *site, owner_template_id, replacing_root, index| {
+    for (obligations, sites, owner_templates, replacing_roots, replacing_requests, 0..) |obligation, *site, owner_template_id, replacing_root, replacing_request, index| {
         const id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(index));
         const kind: CheckedComptimeSiteKind = switch (obligation.source) {
             .match_expr => .match,
@@ -27595,12 +27616,9 @@ fn moduleExhaustivenessSites(
             .empirical => .compile_time_only,
             .static => .runtime_reachable,
         };
-        const requires_pairing = if (replacing_root) |root| blk: {
-            for (root_requests.requests) |request| {
-                if (request.compile_time_root == root.id) break :blk request.requires_pairing;
-            }
-            break :blk false;
-        } else if (owner_template) |template| blk: {
+        const requires_pairing = if (replacing_root != null)
+            replacing_request.requires_pairing
+        else if (owner_template) |template| blk: {
             const template_index = reachability.localTemplateIndex(template).?;
             break :blk reachability.pairing_templates[template_index] and !reachability.runtime_templates[template_index];
         } else false;
@@ -31898,15 +31916,6 @@ pub const CheckedModuleArtifact = struct {
             return error.BuiltinArtifactVersionMismatch;
         }
         return blob[0..serialized_len];
-    }
-
-    /// The inference output a baked artifact blob (`builtin_compiler`'s)
-    /// holds, aliasing the blob.
-    pub fn bakedInference(blob: []const u8) error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch, CorruptArtifact }!InferenceOutput {
-        const serialized_bytes = try splitVersionTrailer(blob);
-        const serialized: *const Serialized = @ptrCast(@alignCast(serialized_bytes.ptr));
-        try serialized.validate(serialized_bytes.len);
-        return serialized.inference.deserialize(@intFromPtr(serialized));
     }
 
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {

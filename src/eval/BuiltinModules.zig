@@ -19,6 +19,31 @@ const BuiltinIndices = CIR.BuiltinIndices;
 const CompactWriter = collections.CompactWriter;
 const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
 
+/// The builtin compiler's baked artifact for `env` (the embedded builtin
+/// module), with the evaluation output it baked: every compile-time root of
+/// Builtin is already complete, so no embedder evaluates one again. Every
+/// thread that reads the artifact's key slots waits on them through `io`.
+pub fn bakedArtifact(allocator: Allocator, io: std.Io, env: *can.ModuleEnv) error{ OutOfMemory, CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch, CorruptArtifact }!CheckedModuleArtifact {
+    // The baked blob is the serialized artifact followed by a layout-version
+    // trailer. Validate and strip it before relocating: a mismatch means the
+    // embedded blob is stale relative to this compiler (a build-system
+    // inconsistency), which we reject rather than relocate into a differently-
+    // shaped struct.
+    const artifact_blob = compiled_builtins.builtin_artifact_bin[0..];
+    const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(artifact_blob);
+    const artifact_buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
+        @alignCast(artifact_blob[0..serialized_bytes.len]);
+
+    const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
+    // L-10: bounds-check every relocatable marker against the buffer before any
+    // sub-store aliases it, so a corrupt/truncated baked blob fails cleanly.
+    try serialized.validate(artifact_buffer.len);
+    var checked_artifact = serialized.deserializeStatic(artifact_buffer, allocator, .{ .static_builtin = env });
+    errdefer checked_artifact.deinitRetainingModuleEnv(allocator);
+    try checked_artifact.attachSealedTypes(allocator, io);
+    return checked_artifact;
+}
+
 /// Centralized container for all builtin modules
 pub const BuiltinModules = struct {
     allocator: Allocator,
@@ -52,26 +77,7 @@ pub const BuiltinModules = struct {
             try builtin_static.validateBuiltinIndices(builtin_module.env, indices);
         }
 
-        // The baked blob is the serialized artifact followed by a layout-version
-        // trailer. Validate and strip it before relocating: a mismatch means the
-        // embedded blob is stale relative to this compiler (a build-system
-        // inconsistency), which we reject rather than relocate into a differently-
-        // shaped struct.
-        const artifact_blob = compiled_builtins.builtin_artifact_bin[0..];
-        const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(artifact_blob);
-        const artifact_buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
-            @alignCast(artifact_blob[0..serialized_bytes.len]);
-
-        const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
-        // L-10: bounds-check every relocatable marker against the buffer before any
-        // sub-store aliases it, so a corrupt/truncated baked blob fails cleanly.
-        try serialized.validate(artifact_buffer.len);
-        var checked_artifact = serialized.deserializeStatic(
-            artifact_buffer,
-            allocator,
-            .{ .static_builtin = builtin_module.env },
-        );
-        try checked_artifact.attachSealedTypes(allocator, io);
+        const checked_artifact = try bakedArtifact(allocator, io, builtin_module.env);
 
         return BuiltinModules{
             .allocator = allocator,

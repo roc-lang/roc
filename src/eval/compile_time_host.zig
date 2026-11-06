@@ -43,6 +43,18 @@ const max_payload_skew = if (std.debug.runtime_safety) max_allocation_alignment 
 /// no compile-time allocation produced, or hands back twice, is caught.
 const allocation_header_stamp: u64 = 0x5f6d_6f63_7074_696d;
 
+/// The largest allocation compile-time evaluation grants Roc code: the most
+/// a 32-bit target's `roc_alloc` can be asked for. A completed value belongs to
+/// every target and to every compiler host, including the 32-bit hosts whose
+/// compile-time interpreter cannot address more, so evaluation runs in that
+/// address space wherever the compiler runs (design.md "Compile-Time
+/// Constants"). A request past it, like one the host
+/// cannot satisfy, is the root's out-of-memory crash.
+pub const max_roc_allocation_bytes: usize = std.math.maxInt(u32);
+
+/// The crash message of a compile-time allocation that was refused.
+pub const out_of_memory_message = "ran out of memory";
+
 const AllocationHeader = extern struct {
     size: usize,
     alignment: usize,
@@ -397,6 +409,7 @@ fn allocateRocBytes(self: *CompileTimeHost, length: usize, alignment: usize) [*]
     if (alignment > max_allocation_alignment or !std.math.isPowerOfTwo(alignment)) {
         base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"});
     }
+    if (length > max_roc_allocation_bytes) self.rocOutOfMemory();
     const size = @max(length, 1);
     const header: *AllocationHeader = if (size <= max_small_payload)
         self.allocateSmallBlock(smallClass(size))
@@ -416,15 +429,15 @@ fn allocateSmallBlock(self: *CompileTimeHost, class: usize) *AllocationHeader {
     }
     const block_bytes = @as(usize, 1) << @intCast(class + min_small_block_log2);
     const block = self.arena.allocator().alignedAlloc(u8, .fromByteUnits(allocation_header_bytes), block_bytes) catch {
-        self.jump(.host_oom);
+        self.rocOutOfMemory();
     };
     return @ptrCast(@alignCast(block.ptr));
 }
 
 fn allocateLargeBlock(self: *CompileTimeHost, size: usize) *AllocationHeader {
-    const total = std.math.add(usize, large_block_overhead, size) catch self.jump(.host_oom);
+    const total = std.math.add(usize, large_block_overhead, size) catch self.rocOutOfMemory();
     const block = self.arena.child_allocator.alignedAlloc(u8, .fromByteUnits(allocation_header_bytes), total) catch {
-        self.jump(.host_oom);
+        self.rocOutOfMemory();
     };
     const links: *LargeLinks = @ptrCast(@alignCast(block.ptr));
     links.* = .{ .prev = null, .next = self.large_blocks };
@@ -484,8 +497,18 @@ fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c
 
 fn rocCrashed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
+    self.crash(bytes[0..len]);
+}
+
+/// Refuse an allocation Roc code asked for: the root crashes where it asked,
+/// as a host that cannot satisfy `roc_alloc` stops the program.
+fn rocOutOfMemory(self: *CompileTimeHost) noreturn {
+    self.crash(out_of_memory_message);
+}
+
+fn crash(self: *CompileTimeHost, message: []const u8) noreturn {
     self.failure = self.currentFailurePoint(@frameAddress());
-    self.appendEvent(.crashed, bytes[0..len]);
+    self.appendEvent(.crashed, message);
     self.jump(.crashed);
 }
 

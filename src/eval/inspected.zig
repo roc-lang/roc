@@ -17,6 +17,7 @@ const reporting = @import("reporting");
 
 const builtin_static = can.BuiltinStatic;
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
+const BuiltinModules = @import("BuiltinModules.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const RuntimeHostEnv = @import("runtime_host.zig");
@@ -1900,17 +1901,10 @@ fn publishImportArtifacts(
             .view = check.CheckedArtifact.importedView(ppb.artifact),
         });
     } else {
-        const builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
-            allocator,
-            typed_cir_modules,
-            1,
-            .{
-                .module_env_storage = .{ .static_builtin = builtin_module.?.env },
-                .io = io,
-                .compile_time_finalizer = CompileTimeFinalization.finalizer(),
-                .inference = check.CheckedArtifact.CheckedModuleArtifact.bakedInference(compiled_builtins.builtin_artifact_bin[0..]) catch return error.CorruptEmbeddedBuiltins,
-            },
-        );
+        const builtin_artifact = BuiltinModules.bakedArtifact(allocator, io, builtin_module.?.env) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.CorruptBuiltinArtifact, error.BuiltinArtifactVersionMismatch, error.CorruptArtifact => return error.CorruptEmbeddedBuiltins,
+        };
         builtin_module_owned_by_artifact.* = true;
         // Move into stable storage first, then build the view from that pointer.
         // On failure the artifact is owned by `artifacts` and freed by errdefer.
