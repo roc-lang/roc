@@ -1591,6 +1591,11 @@ const TypeDigest = struct {
     /// type that names it would otherwise hash all of it again.
     declaration_digests: collections.DenseMap(CIR.Statement.Idx, [32]u8),
     stack: std.ArrayList(CheckedTypeId) = .empty,
+    children: std.ArrayList(CheckedTypeId) = .empty,
+    /// Exact ordered root vectors within this immutable publication context.
+    /// Memoize whole traversals, never independently hashed children: the
+    /// walk's positions encode recursive edges and shared type variables.
+    completed: std.StringHashMapUnmanaged([32]u8) = .empty,
     declarations: []const DeclarationIdentity = &.{},
 
     fn init(allocator: Allocator, inputs: Inputs) TypeDigest {
@@ -1608,6 +1613,10 @@ const TypeDigest = struct {
         self.top_level.deinit();
         self.declaration_digests.deinit();
         self.stack.deinit(self.allocator);
+        self.children.deinit(self.allocator);
+        var keys = self.completed.keyIterator();
+        while (keys.next()) |key| self.allocator.free(key.*);
+        self.completed.deinit(self.allocator);
     }
 
     fn digest(self: *TypeDigest, root: CheckedTypeId) Allocator.Error![32]u8 {
@@ -1615,6 +1624,16 @@ const TypeDigest = struct {
     }
 
     fn digestRoots(self: *TypeDigest, roots: []const CheckedTypeId) Allocator.Error![32]u8 {
+        const key = std.mem.sliceAsBytes(roots);
+        if (self.completed.get(key)) |result| return result;
+        const result = try self.walkRoots(roots);
+        const owned_key = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(owned_key);
+        try self.completed.put(self.allocator, owned_key, result);
+        return result;
+    }
+
+    fn walkRoots(self: *TypeDigest, roots: []const CheckedTypeId) Allocator.Error![32]u8 {
         self.visited.clearRetainingCapacity();
         self.stack.clearRetainingCapacity();
         var hasher = Sha256.init(.{});
@@ -1627,8 +1646,7 @@ const TypeDigest = struct {
         }
         var next_position: u32 = 0;
         // Children are pushed in reverse so they pop, and are written, in order.
-        var children = std.ArrayList(CheckedTypeId).empty;
-        defer children.deinit(self.allocator);
+        const children = &self.children;
         while (self.stack.pop()) |ty| {
             if (self.visited.get(ty)) |position| {
                 hashTag(&hasher, "seen");
@@ -1638,7 +1656,7 @@ const TypeDigest = struct {
             try self.visited.put(ty, next_position);
             next_position += 1;
             children.clearRetainingCapacity();
-            try self.writeNode(&hasher, ty, &children);
+            try self.writeNode(&hasher, ty, children);
             hashU32(&hasher, @intCast(children.items.len));
             var index = children.items.len;
             while (index > 0) {
@@ -2102,4 +2120,41 @@ fn hashValue(hasher: *Sha256, value: anytype) void {
         .spirv,
         => @compileError("value identity cannot hash " ++ @typeName(T)),
     }
+}
+
+test "type digest memo preserves ordered roots and recursive sharing" {
+    const allocator = std.testing.allocator;
+    var store = checked_artifact.CheckedTypeStore{};
+    defer store.deinit(allocator);
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    const a: CheckedTypeId = @fromBackingInt(0);
+    const b: CheckedTypeId = @fromBackingInt(1);
+    const recursive: CheckedTypeId = @fromBackingInt(2);
+    try store.payloads.append(allocator, .empty_record);
+    try store.payloads.append(allocator, .empty_tag_union);
+    try store.type_id_pool.appendSlice(allocator, &.{ a, recursive, a });
+    try store.payloads.append(allocator, .{ .tuple = .{ .start = 0, .len = 3 } });
+    // These fixture types contain no declarations or names; only the frozen
+    // type view and name store are consumed by their identity walk.
+    var inputs: Inputs = undefined;
+    inputs.types = store.view();
+    inputs.names = &names;
+    var digest = TypeDigest.init(allocator, inputs);
+    defer digest.deinit();
+    const vectors = [_][]const CheckedTypeId{ &.{}, &.{a}, &.{ a, b }, &.{ b, a }, &.{ a, a }, &.{recursive}, &.{ recursive, a }, &.{ a, recursive } };
+    for (vectors) |roots| {
+        const expected = try digest.walkRoots(roots);
+        try std.testing.expectEqual(expected, try digest.digestRoots(roots));
+    }
+    const count = digest.completed.count();
+    for (vectors) |roots| {
+        // A new slice with identical IDs must share the completed result.
+        const copied = try allocator.dupe(CheckedTypeId, roots);
+        defer allocator.free(copied);
+        try std.testing.expectEqual(try digest.walkRoots(roots), try digest.digestRoots(copied));
+    }
+    try std.testing.expectEqual(count, digest.completed.count());
+    try std.testing.expect(!std.meta.eql(try digest.digestRoots(&.{ a, b }), try digest.digestRoots(&.{ b, a })));
+    try std.testing.expect(!std.meta.eql(try digest.digestRoots(&.{recursive}), try digest.digestRoots(&.{ recursive, a })));
 }

@@ -4436,6 +4436,16 @@ data, not new cache-id inputs. Finalized compile-time values are such output:
 each belongs to this exact checked module and is restored with its checked entry
 ("Content-Addressed Compile-Time Values").
 
+Within one immutable checked publication, complete type-identity traversals are
+memoized by their exact ordered vector of checked type IDs. The memo is local
+to that publication and identity mode; ordinary value identities and test
+identities have different declaration/import contexts and never share it.
+A hit reuses the complete traversal digest, including its first-encounter
+positions for recursive edges and shared type variables. Independently hashing
+children and substituting their digests would lose those relationships and is
+not equivalent. This memo adds no persistent cache, cache-key input, or source
+path identity.
+
 `module_identity` includes the module's name. Canonicalization output is not
 a function of source bytes alone—a type module's main type takes its name
 from the module's file name—so no key or identity derived from module
@@ -20344,8 +20354,14 @@ both sides share.
 Backends follow these marks and nothing else: a deferred call becomes a call
 to the runtime's record function, a drive becomes a call to its drive
 function, and `returns_pending` becomes a query of the pending record
-followed by a return. The pending call is per-thread runtime state, held the
-same way the runtime holds its active-runtime selection.
+followed by a return. Pending state belongs exclusively to the waiter's
+frame, including its argument packet. Packets of at most 32 bytes occupy
+inline byte storage in the cell; larger packets occupy an exact-sized host
+allocation. The driver copies an inline packet into separate 16-byte-aligned
+invocation storage before calling, so a subsequent deferral cannot overwrite
+arguments the active callee still reads. Heap packets remain owned by that
+invocation until it returns. Storage selection uses the explicit packet byte
+length, never a guessed type, signature, or lifetime.
 
 ### RC Planning and Materialization
 
