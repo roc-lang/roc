@@ -23375,6 +23375,23 @@ A read that no definition reaches, in code no path from entry reaches or of a
 possibly-uninitialized local that LIR reads only behind its initialization
 guard, yields zero of the local's type, never `undef` or `poison`.
 
+A record or tag literal writes each byte of its storage once: its fields, or
+its payload and discriminant, and then zeroes only the bytes those leave (the
+padding between fields, the bytes between a short payload and the
+discriminant, and the alignment tail). It never zero-fills its storage and
+then overwrites it. LLVM's SROA rewrites an `llvm.memset` that lands on a part
+of a slot it promotes as a vector by first loading that part's old value. The
+load makes the slot live into its block, so mem2reg gives every join inside a
+loop around the write a phi of the slot's previous-iteration bytes, which
+nothing reads. A zero-fill under every field puts such a memset on every part
+of the slot; zeroing only the gaps puts it only on bytes nothing else writes.
+In a procedure with thousands of constructions in the arms of a large `match`
+inside a loop, whole-slot zero-fills give SROA's output tens of millions of
+dead phi incoming edges, and LLVM's value-range propagation queries every one
+of them before a later pass deletes the phis. Builtins that write only part of
+a result through its address still receive zeroed storage: that address
+escapes, so SROA never promotes the slot.
+
 Join parameters are ordinary locals: LIR jumps carry no operands, and lowering
 snapshots every replacement value before writing any parameter. Each write is
 an ordinary definition in program order, so simultaneous updates, including
