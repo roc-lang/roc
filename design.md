@@ -5205,7 +5205,9 @@ writer at a time under its own lock (`NameInterner.insertShared`), which
 it holds for no wait, while readers read its columns and probing table
 without a lock (a grown table replaces the current one and the old one
 stays alive). A cache entry holds exactly the names the store held at that
-point, and procedure bases are interned only before. The store's own label
+point. A procedure's base is no name: it is its kind and the source it
+comes from (`ProcBase`), a function of the module's checked data, so no
+store interns one. The store's own label
 rank caches hold the ranks of exactly those names; a reader that ranks
 labels interned since ranks them in its own cache.
 
@@ -5433,8 +5435,13 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   instance's backing holds no callable, read through the declaring modules
   of the nominal types the backing reaches), and the module's dispatch
   resolution, which the module's dispatch reader (`CheckedDispatch`)
-  answers from: the indexes of the checker's dispatch records
-  (`dispatchIndex`), the schema of each template and of each generalized
+  answers from: the modules it searches for method targets and procedure
+  schemes and resolves the types it reads in (`dispatchImports`: every
+  module the module's direct imports and the owners of its types' names
+  reach, transitively through those modules' own direct imports and
+  type-name owners, in first-reach order, which covers an app's platform
+  whose types its requirement solutions name), the indexes of the
+  checker's dispatch records (`dispatchIndex`), the schema of each template and of each generalized
   local scope (`templateSchema`, `scopeSchema`), each template's
   call-edge evidence (`templateDispatch`: the total resolution of the
   plans, iterator plans and use sites its body reaches that its scheme
@@ -5549,7 +5556,12 @@ memoizes, never what an image is.
 
 An analysis that reads modules other than its own finds them through the
 `ModuleResolver` its consumer passes: publication's imports, a build's
-coordinator, or a list of available modules. Every resolver resolves every
+coordinator, or a list of available modules. Dispatch resolution, which
+every reader of the module reaches through one reader, finds them through
+the resolver the module was opened with: the build coordinator's for a
+loaded module (`ModuleAnalyses.attachResolver`), a copy of the views its
+publication resolved against for a published one
+(`ModuleAnalyses.attachImportViews`). Every resolver resolves every
 module of the build, so the result does not depend on which consumer
 computed it.
 
@@ -5629,10 +5641,9 @@ a row by its identity. A literal root is no row: a literal conversion root is na
 fixes its type and the callee requirement it converts
 (`literalArgumentRootId`). A literal root's entry wrapper is no row of the
 template table either: its template id is its root's identity
-(`literalRootWrapperTemplate`), its procedure base is the one every literal
-root's wrapper of the module shares (`literal_root_proc_base`, interned with
-the module's other procedure bases while its names are still private to its
-check), and
+(`literalRootWrapperTemplate`), its procedure base is the one every
+compile-time root's entry wrapper of the module shares
+(`ProcBase.entry_wrapper`), and
 `CheckedDispatch.procedureTemplate` describes it from the slot that holds
 the root. Its function type and scheme are created by that slot. What
 compile-time evaluation stores for a literal root is evaluation output keyed
@@ -6327,7 +6338,6 @@ const GeneratedFn = union(enum) {
 
 const FnTemplate = struct {
     fn_def: FnDef,
-    source_fn_ty: TypeId,
     source_fn_key: TypeDigest,
     mono_fn_ty: MonotypeTypeId,
 };
@@ -23654,7 +23664,7 @@ A stored function value keeps checked identity only:
 ```zig
 const ConstFn = struct {
     fn_def: FnDef,
-    source_fn_ty: TypeId,
+    source_fn_key: TypeDigest,
     captures: Span(ConstCapture),
 };
 
@@ -23678,7 +23688,14 @@ const ConstCapture = struct {
 
 `fn_def` names a checked, imported, nested, hosted, promoted, or checked-stage
 generated procedure template that the checked module owns or references
-explicitly.
+explicitly. `source_fn_key` is the key of the checked function type the value
+was specialized from; a stored value names its own function type by key
+alone, and a restoring compilation reads a nested function's checked type
+from its lambda in the module `fn_def` names. Every checked type a stored function's
+dispatch evidence names (a target's callable, an edge's instantiation, a
+structural edge's dispatcher and callable) is a solver variable of the module
+the evidence names, a function of that module's sealed data, never a
+synthesized type.
 `captures` bind the exact capture identities required by that function to
 stored const nodes. `ty` is the exact target-independent runtime representation
 of the captured value. The temporary LIR function-result metadata separately
@@ -23745,7 +23762,7 @@ const ErasedFn = struct {
 
 const FnTemplate = struct {
     fn_def: FnDef,
-    source_fn_ty: TypeId,
+    source_fn_key: TypeDigest,
 };
 
 const CaptureSlot = struct {

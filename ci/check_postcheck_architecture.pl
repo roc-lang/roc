@@ -191,6 +191,19 @@ my @RULES = (
     { category => 'evaluation-in-checked-rows', regex => qr/\bcompile_time_debug\b/, allowed => {} },
     { category => 'evaluation-diagnostics-copy', regex => qr/\bevaluation_diagnostics\b/, allowed => {} },
     { category => 'evaluation-diagnostics-copy', regex => qr/\bEvaluationDiagnostics\b/, allowed => {} },
+    # Procedure bases are structural (`ProcBase`: kind and source ordinal),
+    # never interned into a name store; a stored constant's function value
+    # names its checked type by key and reads the type from its definition.
+    { category => 'interned-proc-base', regex => qr/\binternProcBase\b/, allowed => {} },
+    { category => 'interned-proc-base', regex => qr/\bProcBaseKeyRef\b/, allowed => {} },
+    { category => 'interned-proc-base', regex => qr/\bProcBaseKey\b/, allowed => {} },
+    { category => 'interned-proc-base', regex => qr/\bproc_base_by_key\b/, allowed => {} },
+    { category => 'interned-proc-base', regex => qr/\bliteral_root_proc_base\b/, allowed => {} },
+    { category => 'stored-source-fn-type', regex => qr/\bgenerated_encoder_source_fn_ty\b/, allowed => {} },
+    # The modules dispatch resolution searches are a slot computed from the
+    # module's imports and type-name owners, never a list publication records.
+    { category => 'published-dispatch-imports', regex => qr/\bdispatch_view_keys\b/, allowed => {} },
+    { category => 'published-dispatch-imports', regex => qr/\b(?:attachDispatchImports|setDispatchImports|dispatchViewKeys)\b/, allowed => {} },
     # Post-check code reads sealed solver stores through the checked type
     # reader and never writes one.
     {

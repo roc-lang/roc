@@ -8223,7 +8223,6 @@ const Builder = struct {
                 const fn_template = self.fnDefForProcedureBindingBody(
                     view,
                     binding.body,
-                    source_fn_ty,
                     try view.types.rootKey(source_fn_ty),
                     fn_ty,
                 );
@@ -8316,7 +8315,6 @@ const Builder = struct {
                 const fn_template = self.fnDefForProcedureBindingBody(
                     view,
                     binding.body,
-                    source_fn_ty,
                     try view.types.rootKey(source_fn_ty),
                     mono_fn_ty,
                 );
@@ -8485,7 +8483,6 @@ const Builder = struct {
         const fn_template = self.fnDefForTemplate(
             view,
             template_ref,
-            source_fn_ty,
             try source_ty_view.types.rootKey(source_fn_ty),
             fn_ty,
         );
@@ -8904,7 +8901,7 @@ const Builder = struct {
         }
 
         resolution_profile.enter(.native_classification);
-        var fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, lower_fn_ty);
+        var fn_template = self.fnDefForTemplate(view, template_ref, source_fn_key, lower_fn_ty);
         fn_template.evidence_digest = evidence_digest;
         // Only a closed request names a specialization the object cache can
         // hold: a function type in its arguments or result outside a `Box`
@@ -8914,8 +8911,7 @@ const Builder = struct {
         // A hosted template has no procedure of its own to cache: callers
         // reach the host directly through its declared ABI.
         if (dev_diagnostics.isSet(.spec_census) and template.target != .hosted and try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
-            const proc_base = view.names.procBase(template_ref.proc_base);
-            const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
+            const name: []const u8 = checked.procBaseDefName(view.module_env, template_ref.proc_base) orelse "?";
             const types = self.program.types.view();
             var where: []const u8 = "ret";
             var position: usize = 0;
@@ -8937,8 +8933,7 @@ const Builder = struct {
             fn_template.spec_key = key;
             if (template.provided_low_level) |op| fn_template.procedure_keyed_by_layout = op.procedureKeyedByLayout();
             if (dev_diagnostics.isSet(.spec_census)) {
-                const proc_base = view.names.procBase(template_ref.proc_base);
-                const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
+                const name: []const u8 = checked.procBaseDefName(view.module_env, template_ref.proc_base) orelse "?";
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
         }
@@ -9250,7 +9245,6 @@ const Builder = struct {
                 var hosted_fn_template = self.fnDefForTemplate(
                     view,
                     template_ref,
-                    declared_source_fn_ty,
                     declared_source_fn_key,
                     lower_fn_ty,
                 );
@@ -9572,8 +9566,7 @@ const Builder = struct {
             },
         };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-        const proc_base = view.names.procBase(template_ref.proc_base);
-        const name: []const u8 = if (proc_base.export_name) |export_name| view.names.exportNameText(export_name) else "?";
+        const name: []const u8 = checked.procBaseDefName(view.module_env, template_ref.proc_base) orelse "?";
         std.debug.print("ctfe-demand {s} {s}.{s} fn#{d}\n", .{
             decision,
             view.names.moduleNameText(view.module_identity.module_name),
@@ -10897,7 +10890,6 @@ const Builder = struct {
         const fn_id = try source_ctx.draft.addFn(.{
             .source = .{
                 .fn_def = fn_def,
-                .source_fn_ty = source_fn_ty,
                 .source_fn_key = source_fn_key,
                 .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
                 .evidence_digest = evidence_digest,
@@ -11273,7 +11265,6 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         template: names.ProcTemplate,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         mono_fn_ty: Type.TypeId,
     ) Ast.FnTemplate {
@@ -11293,7 +11284,6 @@ const Builder = struct {
 
         return .{
             .fn_def = fn_def,
-            .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .mono_fn_ty = mono_fn_ty,
         };
@@ -11374,9 +11364,7 @@ const Builder = struct {
         template: names.ProcTemplate,
     ) Allocator.Error!void {
         if (!self.proc_debug_names) return;
-        const proc_base = view.names.procBase(template.proc_base);
-        const export_name = proc_base.export_name orelse return;
-        const name = try self.program.names.internExportName(view.names.exportNameText(export_name));
+        const name = try self.program.names.internExportName(checked.procBaseDefName(view.module_env, template.proc_base) orelse return);
         try self.program.setProcDebugName(symbol, name);
     }
 
@@ -11388,9 +11376,7 @@ const Builder = struct {
         template: names.ProcTemplate,
     ) Allocator.Error!void {
         if (!self.proc_debug_names) return;
-        const proc_base = view.names.procBase(template.proc_base);
-        const export_name = proc_base.export_name orelse return;
-        const name = try self.activeNameStore().internExportName(view.names.exportNameText(export_name));
+        const name = try self.activeNameStore().internExportName(checked.procBaseDefName(view.module_env, template.proc_base) orelse return);
         try draft.proc_debug_names.append(self.allocator, .{ .symbol = symbol, .name = name });
     }
 
@@ -11398,12 +11384,11 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         body: checked.ProcedureBindingBody,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         mono_fn_ty: Type.TypeId,
     ) Ast.FnTemplate {
         return switch (body) {
-            .direct_template => |direct| self.fnDefForCallableTemplate(view, direct.template, source_fn_ty, source_fn_key, mono_fn_ty),
+            .direct_template => |direct| self.fnDefForCallableTemplate(view, direct.template, source_fn_key, mono_fn_ty),
             .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
             .callable_eval_template => Common.invariant("callable eval template must be restored through ConstStore before Monotype lowering"),
         };
@@ -11413,12 +11398,11 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         template: names.CallableProcTemplate,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         mono_fn_ty: Type.TypeId,
     ) Ast.FnTemplate {
         return switch (template) {
-            .checked => |checked_template| self.fnDefForTemplate(view, checked_template, source_fn_ty, source_fn_key, mono_fn_ty),
+            .checked => |checked_template| self.fnDefForTemplate(view, checked_template, source_fn_key, mono_fn_ty),
             .lifted,
             .synthetic,
             => Common.invariant("checked procedure binding referenced a post-check function template"),
@@ -12137,26 +12121,29 @@ const Builder = struct {
     fn templateSiteDigest(self: *Builder, template: names.ProcTemplate) ?names.TypeDigest {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template));
         if (view.module_env.module_kind != .app) return null;
-        const proc_base = view.names.procBase(template.proc_base);
+        const proc_base = template.proc_base;
         var hasher = TypeDigestHasher.init();
         hasher.update("roc.monotype.site.v1");
-        const module_name = view.names.moduleNameText(proc_base.module_name);
+        const module_name = view.module_env.module_name;
         hasher.update(std.mem.asBytes(&@as(u32, @intCast(module_name.len))));
         hasher.update(module_name);
-        hasher.update(@tagName(proc_base.kind));
-        if (template.template.rowIndex() == null) {
-            // Every literal root's entry wrapper shares one procedure base;
-            // its template id, its root's identity, names it.
-            hasher.update("literal_root");
-            template.template.digestInto(&hasher);
-        } else if (proc_base.export_name) |name| {
-            const text = view.names.exportNameText(name);
+        hasher.update(@tagName(proc_base.kind()));
+        if (proc_base.kind() == .entry_wrapper) {
+            // Every compile-time root's entry wrapper shares one procedure
+            // base; its root's identity names it.
+            hasher.update("root");
+            const root: checked.ComptimeRootKey = checked.templateLiteralRoot(template.template) orelse switch (view.templates.get(template.template).body) {
+                .entry_wrapper => |wrapper| view.entry_wrappers.get(wrapper).root,
+                .checked_body, .intrinsic_wrapper, .literal_root, .unimplemented => Common.invariant("an entry wrapper procedure base named a template that wraps no root"),
+            };
+            root.digestInto(&hasher);
+        } else if (checked.procBaseDefName(view.module_env, proc_base)) |text| {
             hasher.update("named");
             hasher.update(std.mem.asBytes(&@as(u32, @intCast(text.len))));
             hasher.update(text);
         } else {
             hasher.update("ordinal");
-            hasher.update(std.mem.asBytes(&proc_base.ordinal));
+            hasher.update(std.mem.asBytes(&proc_base.ordinal()));
         }
         return .{ .bytes = hasher.finalResult() };
     }
@@ -13289,7 +13276,7 @@ const Builder = struct {
                     fn_ctx.draft.current_owner,
                     try checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def),
                     nested,
-                    fn_template.source_fn_ty,
+                    try constFnSourceType(fn_view, fn_value.fn_def),
                     fn_template.source_fn_key,
                     request_fn_node,
                     &.{},
@@ -13665,7 +13652,6 @@ const Builder = struct {
 
         const fn_id = try source_ctx.draft.addFn(.{ .source = .{
             .fn_def = .{ .nested = nested },
-            .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
             .owner_fn_ty = if (source_ctx.owner_fn_node) |owner_fn_node| DraftTypeCell.fromGraphNode(owner_fn_node) else null,
@@ -15945,7 +15931,6 @@ const Builder = struct {
     ) Allocator.Error!Ast.FnTemplate {
         return .{
             .fn_def = try self.constFnDefToMono(fn_value.fn_def),
-            .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = mono_fn_ty,
             .const_evidence = if (retain_program_evidence) try self.program.addConstFnEvidence(fn_value.evidence) else .{},
@@ -16240,7 +16225,8 @@ const Builder = struct {
             .nested => |nested| nested.context_fn_key,
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("capturing stored function had no nested function identity"),
         };
-        try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, ty);
+        const source_fn_ty = try constFnSourceType(fn_view, fn_value.fn_def);
+        try fn_ctx.constrainTypeToMono(source_fn_ty, ty);
         const draft = FinalBodyOutputGuard.begin(self);
 
         const lambda_expr_id = try checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
@@ -16271,7 +16257,7 @@ const Builder = struct {
             fn_ctx.draft.current_owner,
             lambda_expr_id,
             nested,
-            template.source_fn_ty,
+            source_fn_ty,
             template.source_fn_key,
             request_fn_node,
             capture_entry_guards,
@@ -16419,16 +16405,13 @@ const Builder = struct {
             str_ty,
         );
 
-        const saved_encoder_source_fn_ty = fn_ctx.generated_encoder_source_fn_ty;
         const saved_encoder_source_expr = fn_ctx.generated_encoder_source_expr;
         const saved_encoder_lambda_index = fn_ctx.generated_encoder_lambda_index;
         if (kind == .encoder) {
-            fn_ctx.generated_encoder_source_fn_ty = fn_value.source_fn_ty;
             fn_ctx.generated_encoder_source_expr = runtime.expr;
             fn_ctx.generated_encoder_lambda_index = 0;
         }
         defer {
-            fn_ctx.generated_encoder_source_fn_ty = saved_encoder_source_fn_ty;
             fn_ctx.generated_encoder_source_expr = saved_encoder_source_expr;
             fn_ctx.generated_encoder_lambda_index = saved_encoder_lambda_index;
         }
@@ -16473,7 +16456,6 @@ const Builder = struct {
                     .expr = runtime.expr,
                 } },
             },
-            .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = ty,
             .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
@@ -16786,7 +16768,6 @@ fn DraftSpan(comptime ElementType: type) type {
 
 const DraftFnTemplate = struct {
     fn_def: Ast.FnDef,
-    source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: DraftTypeCell,
     owner_fn_ty: ?DraftTypeCell = null,
@@ -17559,7 +17540,7 @@ const DraftOpenCandidateSelection = struct {
 
 const DraftTemplateFamilyAddress = struct {
     module: [32]u8,
-    proc_base: u32,
+    proc_base: u64,
     template: u128,
     source_fn_key: [32]u8,
 
@@ -17611,7 +17592,7 @@ const ActiveTemplateRoot = struct {
 
 const DraftNestedFamilyAddress = struct {
     module: [32]u8,
-    owner_proc_base: u32,
+    owner_proc_base: u64,
     owner_template: u128,
     owner_fn_key: [32]u8,
     site: u32,
@@ -18627,7 +18608,7 @@ const RuntimeDemandGuardFrameKind = enum {
 const RuntimeDemandGuardFrameAddress = struct {
     module: [32]u8,
     owner_module: [32]u8,
-    owner_proc_base: u32,
+    owner_proc_base: u64,
     owner_template: u128,
     pattern: u32,
     kind: RuntimeDemandGuardFrameKind,
@@ -20894,7 +20875,6 @@ const BodyDraftStore = struct {
     ) Allocator.Error!Ast.FnTemplate {
         return .{
             .fn_def = template.fn_def,
-            .source_fn_ty = template.source_fn_ty,
             .source_fn_key = template.source_fn_key,
             .mono_fn_ty = try template.mono_fn_ty.sealCommitted(committed_types),
             .owner_fn_ty = if (template.owner_fn_ty) |owner_fn_ty| try owner_fn_ty.sealCommitted(committed_types) else null,
@@ -22351,7 +22331,6 @@ const BodyContext = struct {
     owner_fn_node: ?NodeId = null,
     current_fn_key: names.TypeDigest,
     comptime_exhaustiveness_context: ExhaustivenessContext.Context,
-    generated_encoder_source_fn_ty: ?checked.CheckedTypeId,
     generated_encoder_source_expr: ?CIR.Expr.Idx,
     generated_encoder_lambda_index: u64,
     binders: BinderMap,
@@ -23270,7 +23249,6 @@ const BodyContext = struct {
             .owner_context_fn_key = .{},
             .current_fn_key = .{},
             .comptime_exhaustiveness_context = .{},
-            .generated_encoder_source_fn_ty = null,
             .generated_encoder_source_expr = null,
             .generated_encoder_lambda_index = 0,
             .binders = try BinderMap.init(allocator, view.bodies.nodeCount()),
@@ -24101,7 +24079,6 @@ const BodyContext = struct {
         return try self.draft.addFn(.{
             .source = .{
                 .fn_def = source.fn_def,
-                .source_fn_ty = source.source_fn_ty,
                 .source_fn_key = source.source_fn_key,
                 .mono_fn_ty = try self.draftTypeCell(source.mono_fn_ty),
                 .const_evidence = draft_evidence.entries,
@@ -25332,7 +25309,6 @@ const BodyContext = struct {
         child.owner_fn_node = self.owner_fn_node;
         child.current_fn_key = current_fn_key;
         child.comptime_exhaustiveness_context = self.comptime_exhaustiveness_context;
-        child.generated_encoder_source_fn_ty = self.generated_encoder_source_fn_ty;
         child.generated_encoder_source_expr = self.generated_encoder_source_expr;
         child.generated_encoder_lambda_index = self.generated_encoder_lambda_index;
         child.inheritFrozenEmissionContext(self);
@@ -25553,7 +25529,7 @@ const BodyContext = struct {
                 hashU32(&hasher, @backingInt(anchor));
             } else hasher.update(&.{0});
             hasher.update(&names.procTemplateModuleDigest(context.owner_template).bytes);
-            hashU32(&hasher, @backingInt(context.owner_template.proc_base));
+            hashU64(&hasher, @backingInt(context.owner_template.proc_base));
             context.owner_template.template.digestInto(&hasher);
             hasher.update(&context.base_key.bytes);
             if (context.restored_specialization_key) |key| {
@@ -37697,8 +37673,8 @@ const BodyContext = struct {
             .field_names_rename_fields => try self.lowerFieldNamesRenameFieldNames(args, arg_tys, ret_ty, lowered_args),
             .field_names_shortest_name => try self.lowerFieldNamesNameBound(args, arg_tys, ret_ty, .shortest, lowered_args),
             .field_names_longest_name => try self.lowerFieldNamesNameBound(args, arg_tys, ret_ty, .longest, lowered_args),
-            .field_names_iter => try self.lowerFieldNamesIter(task.checked_expr_id, task.source_fn_ty, args, arg_tys, ret_ty, .all, lowered_args),
-            .field_names_for_size => try self.lowerFieldNamesIter(task.checked_expr_id, task.source_fn_ty, args, arg_tys, ret_ty, .for_size, lowered_args),
+            .field_names_iter => try self.lowerFieldNamesIter(task.checked_expr_id, args, arg_tys, ret_ty, .all, lowered_args),
+            .field_names_for_size => try self.lowerFieldNamesIter(task.checked_expr_id, args, arg_tys, ret_ty, .for_size, lowered_args),
             .field_name => try self.lowerFieldName(args, arg_tys, ret_ty, lowered_args),
             .str_inspect, .structural_eq => unreachable, // call-site intrinsic tasks carry only intrinsics with a callsiteArity, which excludes these
         };
@@ -37803,7 +37779,6 @@ const BodyContext = struct {
         const wrapper_template = self.builder.fnDefForTemplate(
             view,
             wrapper.template,
-            try view.types.pairedType(wrapper.checked_fn_root),
             try view.types.rootKey(try view.types.pairedType(wrapper.checked_fn_root)),
             wrapper_fn_ty,
         );
@@ -38889,7 +38864,6 @@ const BodyContext = struct {
     fn lowerFieldNamesIter(
         self: *BodyContext,
         checked_expr_id: ExprSite,
-        checked_source_ty: checked.CheckedTypeId,
         args: []const CIR.Expr.Idx,
         arg_tys: []const Type.TypeId,
         ret_ty: Type.TypeId,
@@ -38937,7 +38911,6 @@ const BodyContext = struct {
                 step_shape.ret,
                 size_local,
                 arg_tys,
-                checked_source_ty,
                 checked_expr_id,
             );
         } else if (mode == .all) blk: {
@@ -38952,7 +38925,6 @@ const BodyContext = struct {
                 step_fn_ty,
                 step_shape.ret,
                 null,
-                checked_source_ty,
                 checked_expr_id,
             );
         } else blk: {
@@ -38966,7 +38938,6 @@ const BodyContext = struct {
                 step_shape.ret,
                 size_local.?,
                 arg_tys[1],
-                checked_source_ty,
                 checked_expr_id,
             );
         };
@@ -39822,7 +39793,6 @@ const BodyContext = struct {
         step_ret_ty: Type.TypeId,
         size_local: ?DraftLocalId,
         arg_tys: []const Type.TypeId,
-        checked_source_ty: checked.CheckedTypeId,
         source_expr_id: ExprSite,
     ) Allocator.Error!DraftExprId {
         const fields_backing_ty = namedBackingType(self.typeStore(), fields_ty) orelse
@@ -39850,7 +39820,6 @@ const BodyContext = struct {
             step_fn_ty,
             step_ret_ty,
             if (size_local) |local| FieldNamesSizeFilter{ .local = local, .ty = arg_tys[1] } else null,
-            checked_source_ty,
             source_expr_id,
         );
         const body_with_items = try self.wrapLet(items_local, info.items_field.ty, items_expr, body, iter_ty);
@@ -39892,7 +39861,6 @@ const BodyContext = struct {
         step_fn_ty: Type.TypeId,
         step_ret_ty: Type.TypeId,
         size_filter: ?FieldNamesSizeFilter,
-        checked_source_ty: checked.CheckedTypeId,
         source_expr_id: ExprSite,
     ) Allocator.Error!DraftExprId {
         const mode: FieldNamesIterMode = if (size_filter == null) .all else .for_size;
@@ -39912,7 +39880,7 @@ const BodyContext = struct {
             scan = index + 1;
         };
         const done_level = levels.pop().?;
-        const done_step = try self.lowerFieldNamesDoneStep(checked_source_ty, source_expr_id, done_start, mode, step_fn_ty, step_ret_ty);
+        const done_step = try self.lowerFieldNamesDoneStep(source_expr_id, done_start, mode, step_fn_ty, step_ret_ty);
         var rest_expr = try self.lowerGeneratedIterRecord(iter_ty, backing_ty, done_level.len, done_step);
 
         while (levels.pop()) |level| {
@@ -39926,7 +39894,6 @@ const BodyContext = struct {
             };
             const step_expr = if (size_filter) |filter|
                 try self.lowerFieldNamesSizeFilteredStep(
-                    checked_source_ty,
                     source_expr_id,
                     level.index,
                     item_expr,
@@ -39938,7 +39905,6 @@ const BodyContext = struct {
                 )
             else
                 try self.lowerFieldNamesOneStep(
-                    checked_source_ty,
                     source_expr_id,
                     level.index,
                     item_expr,
@@ -39962,7 +39928,6 @@ const BodyContext = struct {
         step_ret_ty: Type.TypeId,
         size_local: DraftLocalId,
         size_ty: Type.TypeId,
-        checked_source_ty: checked.CheckedTypeId,
         source_expr_id: ExprSite,
     ) Allocator.Error!DraftExprId {
         var body = try self.lowerFieldNamesIterForLen(
@@ -39976,7 +39941,6 @@ const BodyContext = struct {
             step_fn_ty,
             step_ret_ty,
             null,
-            checked_source_ty,
             source_expr_id,
         );
 
@@ -40005,7 +39969,6 @@ const BodyContext = struct {
                 step_fn_ty,
                 step_ret_ty,
                 null,
-                checked_source_ty,
                 source_expr_id,
             );
             const size_expr = try self.localExpr(size_local, size_ty);
@@ -40068,7 +40031,6 @@ const BodyContext = struct {
 
     fn lowerFieldNamesDoneStep(
         self: *BodyContext,
-        checked_source_ty: checked.CheckedTypeId,
         source_expr_id: ExprSite,
         index: usize,
         mode: FieldNamesIterMode,
@@ -40083,12 +40045,11 @@ const BodyContext = struct {
             .name = done_tag.name,
             .payloads = .empty(),
         } } });
-        return try self.lowerFieldNamesStepLambda(checked_source_ty, source_expr_id, index, mode, step_fn_ty, body);
+        return try self.lowerFieldNamesStepLambda(source_expr_id, index, mode, step_fn_ty, body);
     }
 
     fn lowerFieldNamesOneStep(
         self: *BodyContext,
-        checked_source_ty: checked.CheckedTypeId,
         source_expr_id: ExprSite,
         index: usize,
         item_expr: DraftExprId,
@@ -40110,12 +40071,11 @@ const BodyContext = struct {
             .payloads = try self.addExprSpan(&[_]DraftExprId{one_payload}),
         } } });
 
-        return try self.lowerFieldNamesStepLambda(checked_source_ty, source_expr_id, index, .all, step_fn_ty, one_body);
+        return try self.lowerFieldNamesStepLambda(source_expr_id, index, .all, step_fn_ty, one_body);
     }
 
     fn lowerFieldNamesSizeFilteredStep(
         self: *BodyContext,
-        checked_source_ty: checked.CheckedTypeId,
         source_expr_id: ExprSite,
         index: usize,
         item_expr: DraftExprId,
@@ -40163,7 +40123,7 @@ const BodyContext = struct {
             try self.ifExpr(cond, one_body, skip_body, step_ret_ty),
             step_ret_ty,
         );
-        return try self.lowerFieldNamesStepLambda(checked_source_ty, source_expr_id, index, .for_size, step_fn_ty, body);
+        return try self.lowerFieldNamesStepLambda(source_expr_id, index, .for_size, step_fn_ty, body);
     }
 
     fn lowerGeneratedIterRecord(
@@ -40304,7 +40264,6 @@ const BodyContext = struct {
 
     fn lowerFieldNamesStepLambda(
         self: *BodyContext,
-        checked_source_ty: checked.CheckedTypeId,
         source_expr_id: ExprSite,
         index: usize,
         mode: FieldNamesIterMode,
@@ -40313,7 +40272,6 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const fn_id = try self.addFn(.{
             .fn_def = .{ .checked_generated = self.owner_template },
-            .source_fn_ty = checked_source_ty,
             .source_fn_key = generatedFieldNamesIterStepKey(self.current_fn_key, source_expr_id, index, mode),
             .mono_fn_ty = step_fn_ty,
         });
@@ -48045,7 +48003,6 @@ const BodyContext = struct {
             store_view,
             fn_value,
             try self.builder.constFnDefToMono(fn_value.fn_def),
-            fn_value.source_fn_ty,
             fn_value.source_fn_key,
             retained_evidence,
             request_fn_node,
@@ -48068,7 +48025,6 @@ const BodyContext = struct {
         store_view: ModuleView,
         fn_value: check.ConstStore.ConstFn,
         fn_def: Ast.FnDef,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         retained_evidence: EvidenceChain,
         request_fn_node: NodeId,
@@ -48100,7 +48056,7 @@ const BodyContext = struct {
                     restored_owner_scope.previous,
                     try checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
                     nested,
-                    source_fn_ty,
+                    try constFnSourceType(fn_view, fn_value.fn_def),
                     source_fn_key,
                     request_fn_node,
                     &.{},
@@ -48153,11 +48109,12 @@ const BodyContext = struct {
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("capturing stored function had no nested function identity"),
         };
         fn_ctx.current_fn_key = capture_nested.context_fn_key;
+        const source_fn_ty = try constFnSourceType(fn_view, fn_value.fn_def);
         switch (request) {
-            .sealed => |ty| try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, ty),
+            .sealed => |ty| try fn_ctx.constrainTypeToMono(source_fn_ty, ty),
             .node => |request_fn_node| _ = try checkedMonoRequestNode(
                 self.graph,
-                try fn_ctx.instNode(fn_value.source_fn_ty),
+                try fn_ctx.instNode(source_fn_ty),
                 request_fn_node,
                 .exact,
             ),
@@ -48202,7 +48159,7 @@ const BodyContext = struct {
                     restored_owner_scope.previous,
                     lambda_expr_id,
                     capture_nested,
-                    fn_value.source_fn_ty,
+                    source_fn_ty,
                     fn_value.source_fn_key,
                     request_fn_node,
                     capture_entry_guards,
@@ -48329,16 +48286,13 @@ const BodyContext = struct {
             str_ty,
         );
 
-        const saved_encoder_source_fn_ty = self.generated_encoder_source_fn_ty;
         const saved_encoder_source_expr = self.generated_encoder_source_expr;
         const saved_encoder_lambda_index = self.generated_encoder_lambda_index;
         if (kind == .encoder) {
-            self.generated_encoder_source_fn_ty = boundary.fn_value.source_fn_ty;
             self.generated_encoder_source_expr = runtime.expr;
             self.generated_encoder_lambda_index = 0;
         }
         defer {
-            self.generated_encoder_source_fn_ty = saved_encoder_source_fn_ty;
             self.generated_encoder_source_expr = saved_encoder_source_expr;
             self.generated_encoder_lambda_index = saved_encoder_lambda_index;
         }
@@ -48396,7 +48350,6 @@ const BodyContext = struct {
                     .expr = runtime.expr,
                 } },
             },
-            .source_fn_ty = boundary.fn_value.source_fn_ty,
             .source_fn_key = boundary.fn_value.source_fn_key,
             .mono_fn_ty = request_cell,
             .const_evidence = draft_evidence.entries,
@@ -55714,7 +55667,6 @@ const BodyContext = struct {
                 .owner = self.owner_template,
                 .expr = dispatchPlanExpr(plan),
             } },
-            .source_fn_ty = plan.callable_ty,
             .source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_parser_runtime", self.current_fn_key, dispatchPlanExpr(plan)),
             .mono_fn_ty = ret_ty,
             .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
@@ -55786,16 +55738,13 @@ const BodyContext = struct {
 
         const runtime_source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_encoder_for_runtime", self.current_fn_key, dispatchPlanExpr(plan));
         const saved_current_fn_key = self.current_fn_key;
-        const saved_encoder_source_fn_ty = self.generated_encoder_source_fn_ty;
         const saved_encoder_source_expr = self.generated_encoder_source_expr;
         const saved_encoder_lambda_index = self.generated_encoder_lambda_index;
         self.current_fn_key = runtime_source_fn_key;
-        self.generated_encoder_source_fn_ty = plan.callable_ty;
         self.generated_encoder_source_expr = dispatchPlanExpr(plan);
         self.generated_encoder_lambda_index = 0;
         defer {
             self.current_fn_key = saved_current_fn_key;
-            self.generated_encoder_source_fn_ty = saved_encoder_source_fn_ty;
             self.generated_encoder_source_expr = saved_encoder_source_expr;
             self.generated_encoder_lambda_index = saved_encoder_lambda_index;
         }
@@ -55823,7 +55772,6 @@ const BodyContext = struct {
                 .owner = self.owner_template,
                 .expr = dispatchPlanExpr(plan),
             } },
-            .source_fn_ty = plan.callable_ty,
             .source_fn_key = runtime_source_fn_key,
             .mono_fn_ty = ret_ty,
             .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
@@ -57272,8 +57220,6 @@ const BodyContext = struct {
         args: []const BodyTypedLocal,
         body: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const source_fn_ty = self.generated_encoder_source_fn_ty orelse
-            Common.invariant("generated encoder callback requested outside generated encoder lowering");
         const source_expr = self.generated_encoder_source_expr orelse
             Common.invariant("generated encoder callback source expression was missing");
         const lambda_index = self.generated_encoder_lambda_index;
@@ -57283,7 +57229,6 @@ const BodyContext = struct {
                 .owner = self.owner_template,
                 .expr = source_expr,
             } },
-            .source_fn_ty = source_fn_ty,
             .source_fn_key = generatedEncoderCallbackKey(self.current_fn_key, source_expr, lambda_index),
             .mono_fn_ty = lambda_ty,
             .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
@@ -67343,8 +67288,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
     };
     const fn_template = Ast.FnTemplate{
         .fn_def = .{ .local_template = template_ref },
-        // This test never lowers the template, so its checked type is not read.
-        .source_fn_ty = undefined,
         .source_fn_key = .{},
         .mono_fn_ty = ty,
     };
@@ -67523,7 +67466,7 @@ test "draft specialization lookup preserves family evidence and request identity
                 var different_family = family;
                 if (@typeInfo(@FieldType(Family, field_name)) == .array) {
                     @field(different_family, field_name)[byte] = 1;
-                } else if (@FieldType(Family, field_name) == u32 or @FieldType(Family, field_name) == u128) {
+                } else if (@FieldType(Family, field_name) == u32 or @FieldType(Family, field_name) == u64 or @FieldType(Family, field_name) == u128) {
                     @field(different_family, field_name) = 1;
                 } else if (@FieldType(Family, field_name) == bool) {
                     @field(different_family, field_name) = true;
@@ -69376,6 +69319,13 @@ fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.C
     return view.types.payload(checked_ty);
 }
 
+/// The checked function type of a stored nested function value: its lambda's
+/// type in `view`, the module its definition names. A stored value keeps only
+/// the type's key; a restoring compilation reads the type itself here.
+fn constFnSourceType(view: ModuleView, fn_def: check.ConstStore.FnDef) Allocator.Error!checked.CheckedTypeId {
+    return try checkedExprType(view, try checkedLambdaExprIdForConstFn(view, fn_def));
+}
+
 fn checkedLambdaExprIdForConstFn(view: ModuleView, fn_def: anytype) Allocator.Error!ExprSite {
     return switch (fn_def) {
         .nested => |nested| blk: {
@@ -69603,6 +69553,11 @@ fn procedureUseRootIdentity(request: checked.RootRequest, source_fn_key: names.T
     }
     hasher.update(&source_fn_key.bytes);
     return hasher.finalResult();
+}
+
+fn hashU64(hasher: *TypeDigestHasher, value: u64) void {
+    const little = std.mem.nativeToLittle(u64, value);
+    hasher.update(std.mem.asBytes(&little));
 }
 
 fn hashU32(hasher: *TypeDigestHasher, value: u32) void {

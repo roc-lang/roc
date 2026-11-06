@@ -321,7 +321,6 @@ pub const FnTemplate = struct {
     /// SHA-256 template, callable-ABI, and capture-ABI digests in that order.
     frozen_worker: ?[96]u8 = null,
     fn_def: FnDef,
-    source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
     /// For a nested function, the function type of the template specialization
@@ -405,12 +404,12 @@ pub const GeneratedId = enum(u32) { _ };
 pub const CallableIdentity = union(enum(u8)) {
     proc_template: struct {
         module: names.CheckedModuleDigest,
-        proc_base: u32,
+        proc_base: u64,
         template: u128,
     },
     nested_site: struct {
         module: names.CheckedModuleDigest,
-        owner_proc_base: u32,
+        owner_proc_base: u64,
         owner_template: u128,
         owner_fn_digest: names.TypeDigest,
         site: u32,
@@ -471,13 +470,13 @@ pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
         .proc_template => |template| {
             hasher.update("proc_template");
             hasher.update(&template.module.bytes);
-            writeU32(&hasher, template.proc_base);
+            writeU64(&hasher, template.proc_base);
             names.digestId(template.template, &hasher);
         },
         .nested_site => |site| {
             hasher.update("nested_site");
             hasher.update(&site.module.bytes);
-            writeU32(&hasher, site.owner_proc_base);
+            writeU64(&hasher, site.owner_proc_base);
             names.digestId(site.owner_template, &hasher);
             hasher.update(&site.owner_fn_digest.bytes);
             writeU32(&hasher, site.site);
@@ -902,10 +901,10 @@ fn writeMethodTarget(
         .procedure => |procedure| {
             const proc_module = names.procedureValueModuleDigest(procedure.proc);
             writeBytes(hasher, &proc_module.bytes);
-            writeU32(hasher, @backingInt(procedure.proc.proc_base));
+            writeU64(hasher, @backingInt(procedure.proc.proc_base));
             const template_module = names.procTemplateModuleDigest(procedure.template);
             writeBytes(hasher, &template_module.bytes);
-            writeU32(hasher, @backingInt(procedure.template.proc_base));
+            writeU64(hasher, @backingInt(procedure.template.proc_base));
             procedure.template.template.digestInto(hasher);
         },
         .local_proc => |local| {
@@ -1073,7 +1072,7 @@ fn writeHostedFn(hasher: *TypeDigestHasher, name_store: *const names.NameStore, 
 fn writeProcTemplate(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
     const module_digest = names.procTemplateModuleDigest(template);
     hasher.update(&module_digest.bytes);
-    writeU32(hasher, @backingInt(template.proc_base));
+    writeU64(hasher, @backingInt(template.proc_base));
     template.template.digestInto(hasher);
 }
 
@@ -1084,6 +1083,11 @@ fn writeBytes(hasher: anytype, bytes: []const u8) void {
 
 fn writeU8(hasher: anytype, value: u8) void {
     hasher.update(&.{value});
+}
+
+fn writeU64(hasher: anytype, value: u64) void {
+    const little = std.mem.nativeToLittle(u64, value);
+    hasher.update(std.mem.asBytes(&little));
 }
 
 fn writeU32(hasher: anytype, value: u32) void {
@@ -3175,21 +3179,15 @@ fn collectSingleShardLocalCallTargets(
 fn testFnSource(mono_fn_ty: Type.TypeId) FnTemplate {
     return .{
         .fn_def = undefined, // call-target verifier tests do not inspect the source callable
-        .source_fn_ty = undefined, // call-target verifier tests do not inspect the checked type id
         .source_fn_key = .{},
         .mono_fn_ty = mono_fn_ty,
     };
 }
 
-fn testProcTemplate(name_store: *names.NameStore, template_id: u32) std.mem.Allocator.Error!names.ProcTemplate {
+fn testProcTemplate(template_id: u32) names.ProcTemplate {
     return .{
         .artifact = .{},
-        .proc_base = try name_store.internProcBase(.{
-            .module_name = try name_store.internModuleName("SourceDigest"),
-            .export_name = null,
-            .kind = .checked_source,
-            .ordinal = 0,
-        }),
+        .proc_base = names.ProcBase.of(.checked_source, 0),
         .template = @fromBackingInt(@intCast(template_id)),
     };
 }
@@ -3211,13 +3209,11 @@ test "function template identity ignores the requester's checked source type" {
     // from differs, which is caller provenance and not identity.
     const mono_fn_ty = try types.add(.zst);
     const first: FnTemplate = .{
-        .fn_def = .{ .local_template = try testProcTemplate(&name_store, 1) },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
+        .fn_def = .{ .local_template = testProcTemplate(1) },
         .source_fn_key = testTemplateDigestKey(1),
         .mono_fn_ty = mono_fn_ty,
     };
     var second = first;
-    second.source_fn_ty = @fromBackingInt(@intCast(9));
     second.source_fn_key = testTemplateDigestKey(2);
 
     try std.testing.expect(fnTemplateIdentityEql(first, second));
@@ -3228,7 +3224,7 @@ test "function template identity ignores the requester's checked source type" {
 
     // The identity still separates a different callable and a different type.
     var other_callable = first;
-    other_callable.fn_def = .{ .local_template = try testProcTemplate(&name_store, 2) };
+    other_callable.fn_def = .{ .local_template = testProcTemplate(2) };
     try std.testing.expect(!fnTemplateIdentityEql(first, other_callable));
     var other_type = first;
     other_type.mono_fn_ty = try types.add(.{ .primitive = .str });
@@ -3250,8 +3246,7 @@ test "function template identity keeps generated bodies of one owner apart" {
     // says they are different code, so identity must carry it.
     const mono_fn_ty = try types.add(.zst);
     const first_step: FnTemplate = .{
-        .fn_def = .{ .checked_generated = try testProcTemplate(&name_store, 1) },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
+        .fn_def = .{ .checked_generated = testProcTemplate(1) },
         .source_fn_key = testTemplateDigestKey(1),
         .mono_fn_ty = mono_fn_ty,
     };
@@ -3275,10 +3270,9 @@ test "function template identity keeps generated bodies of one owner apart" {
     // Generated runtime callables carry the key the same way.
     const first_callback: FnTemplate = .{
         .fn_def = .{ .encoder_for_runtime = .{
-            .owner = try testProcTemplate(&name_store, 1),
+            .owner = testProcTemplate(1),
             .expr = @fromBackingInt(@intCast(3)),
         } },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
         .source_fn_key = testTemplateDigestKey(1),
         .mono_fn_ty = mono_fn_ty,
     };

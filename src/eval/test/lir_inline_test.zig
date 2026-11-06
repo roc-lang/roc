@@ -13766,8 +13766,8 @@ test "issue 12491 nested closure chain bound to a block local lowers under boxy"
 /// The procedure template of `artifact` exported as `name`.
 fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) error{TestUnexpectedResult}!check.CheckedArtifact.CheckedProcedureTemplate {
     for (artifact.checked_procedure_templates.templates.items) |template| {
-        const export_name = artifact.nameStore().procBase(template.proc_base).export_name orelse continue;
-        if (std.mem.eql(u8, artifact.nameStore().exportNameText(export_name), name)) return template;
+        const def_name = check.CheckedArtifact.procBaseDefName(artifact.moduleEnvConst(), template.proc_base) orelse continue;
+        if (std.mem.eql(u8, def_name, name)) return template;
     }
     std.debug.print("no template named {s}\n", .{name});
     return error.TestUnexpectedResult;

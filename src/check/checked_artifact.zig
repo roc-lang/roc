@@ -694,72 +694,65 @@ pub const LoweringVisibility = struct {
     }
 };
 
-/// Ordered checked-module registries visible to method lookup after the
-/// current module's local registry. Checking owns this ordering, and later
-/// stages consume the published scope directly.
-/// The import views method-target lookup searches after the local registry,
-/// in search order: the available views a platform relation or direct import
-/// does not supersede, the platform-relation views, then the direct-import
-/// views. (Snapshot-style compiles pass the builtin module only as a direct
-/// import, so searching `available` alone misses every builtin-owned method.)
-fn methodLookupViews(allocator: Allocator, import_views: CheckedImportViews) Allocator.Error![]const *const ImportedModuleView {
-    var views = try std.ArrayList(*const ImportedModuleView).initCapacity(
-        allocator,
-        import_views.available.len + import_views.relations.len + import_views.direct.len,
-    );
+/// The import views method-target lookup searches after the local registry:
+/// the module's dispatch imports (`ModuleAnalyses.dispatchImports`), in their
+/// order.
+fn methodLookupViews(allocator: Allocator, views: []const ImportedModuleView) Allocator.Error![]const *const ImportedModuleView {
+    const result = try allocator.alloc(*const ImportedModuleView, views.len);
+    for (views, result) |*view, *entry| entry.* = view;
+    return result;
+}
+
+/// The modules a module's dispatch resolution searches for method targets and
+/// procedure schemes and resolves the types it reads in: every module its
+/// direct imports and the owners of its types' names reach, transitively,
+/// through those modules' own direct imports and type-name owners, which
+/// `resolver` resolves. The module itself is not one. The order is the walk's
+/// first-reach order from the module's direct imports, then its type-name
+/// owners, so it is a function of the modules' checked data alone. A module
+/// that reads no other module needs no resolver.
+pub fn computeDispatchImports(
+    allocator: Allocator,
+    module: ModuleId,
+    direct_imports: []const CheckedModuleArtifactKey,
+    origins: []const sealed_type_view.SealedOriginRow,
+    resolver: ?ModuleResolver,
+) Allocator.Error![]ImportedModuleView {
+    var reached = std.AutoHashMap([32]u8, void).init(allocator);
+    defer reached.deinit();
+    try reached.put(module.bytes, {});
+    var order = std.ArrayList(ModuleId).empty;
+    defer order.deinit(allocator);
+    try appendDispatchImportKeys(allocator, &reached, &order, direct_imports, origins);
+    var views = std.ArrayList(ImportedModuleView).empty;
     errdefer views.deinit(allocator);
-    for (import_views.available) |*available| {
-        if (moduleViewIsSuperseded(available, import_views.relations, import_views.direct)) continue;
-        views.appendAssumeCapacity(available);
+    var next: usize = 0;
+    while (next < order.items.len) : (next += 1) {
+        const view = (resolver orelse checkedArtifactInvariant("a module that reads other modules was given no resolver", .{})).require(order.items[next]);
+        try views.append(allocator, view);
+        const view_origins: []const sealed_type_view.SealedOriginRow = if (view.checked_types.sealed) |sealed| sealed.origins else &.{};
+        try appendDispatchImportKeys(allocator, &reached, &order, view.direct_import_module_keys, view_origins);
     }
-    for (import_views.relations) |*relation| views.appendAssumeCapacity(relation);
-    for (import_views.direct) |*import| views.appendAssumeCapacity(&import.view);
     return try views.toOwnedSlice(allocator);
 }
 
-/// Give `analyses` the modules its dispatch resolution searches, in
-/// method-lookup order, and return their keys
-/// (`CheckedModuleArtifact.dispatch_view_keys`).
-fn dispatchViewKeys(allocator: Allocator, analyses: *ModuleAnalyses, import_views: CheckedImportViews) Allocator.Error![]ModuleId {
-    const lookup_views = try methodLookupViews(allocator, import_views);
-    defer allocator.free(lookup_views);
-    const views = try allocator.alloc(ImportedModuleView, lookup_views.len);
-    defer allocator.free(views);
-    const keys = try allocator.alloc(ModuleId, lookup_views.len);
-    errdefer allocator.free(keys);
-    for (lookup_views, views, keys) |view, *copy, *key| {
-        copy.* = view.*;
-        key.* = view.key.digest();
+fn appendDispatchImportKeys(
+    allocator: Allocator,
+    reached: *std.AutoHashMap([32]u8, void),
+    order: *std.ArrayList(ModuleId),
+    direct_imports: []const CheckedModuleArtifactKey,
+    origins: []const sealed_type_view.SealedOriginRow,
+) Allocator.Error!void {
+    for (direct_imports) |key| {
+        const id = key.digest();
+        if ((try reached.getOrPut(id.bytes)).found_existing) continue;
+        try order.append(allocator, id);
     }
-    try analyses.setDispatchImports(views);
-    return keys;
-}
-
-/// Give a loaded artifact's analyses the modules its dispatch resolution
-/// searches: the modules its `dispatch_view_keys` name, which `resolver`
-/// resolves.
-pub fn attachDispatchImports(analyses: *ModuleAnalyses, dispatch_view_keys: []const ModuleId, resolver: ModuleResolver) Allocator.Error!void {
-    const allocator = analyses.allocator;
-    const views = try allocator.alloc(ImportedModuleView, dispatch_view_keys.len);
-    defer allocator.free(views);
-    for (dispatch_view_keys, views) |key, *view| view.* = resolver.require(key);
-    try analyses.setDispatchImports(views);
-}
-
-fn moduleViewIsSuperseded(
-    view: *const ImportedModuleView,
-    relation_artifacts: []const ImportedModuleView,
-    direct_imports: []const PublishImportArtifact,
-) bool {
-    for (relation_artifacts) |*relation| {
-        if (base.ModuleIdentity.eql(&view.module_identity.stable_hash, &relation.module_identity.stable_hash) and
-            !CheckedModuleArtifactKey.eql(view.key, relation.key)) return true;
+    for (origins) |origin| {
+        if (origin.has_owner == 0) continue;
+        if ((try reached.getOrPut(origin.owner.bytes)).found_existing) continue;
+        try order.append(allocator, origin.owner);
     }
-    for (direct_imports) |*direct| {
-        if (base.ModuleIdentity.eql(&view.module_identity.stable_hash, &direct.view.module_identity.stable_hash) and
-            !CheckedModuleArtifactKey.eql(view.key, direct.key)) return true;
-    }
-    return false;
 }
 
 /// Public `PublishInputs` declaration.
@@ -1247,16 +1240,15 @@ fn moduleRootRequests(allocator: Allocator, owner: ImportedModuleView) Allocator
 
     // The literal roots: each unit's conversion roots, then each literal
     // component's argument roots.
-    const literal_proc_base = procedure_templates.literal_root_proc_base;
     for (0..dispatch.source.module_index.units.len) |unit| {
         const conversions = try dispatch.source.analyses.unitLiteralConversions(dispatch, @fromBackingInt(@intCast(unit)));
-        for (conversions.records) |*record| try appendLiteralRootRequest(&requests, allocator, owner.key.digest(), literal_proc_base, record);
+        for (conversions.records) |*record| try appendLiteralRootRequest(&requests, allocator, owner.key.digest(), record);
     }
     {
         const graph = try dispatch.literalGraph();
         for (0..graph.components.count()) |component| {
             const done = try dispatch.source.analyses.literalComponent(dispatch, graph, @intCast(component));
-            for (done.roots) |*record| try appendLiteralRootRequest(&requests, allocator, owner.key.digest(), literal_proc_base, record);
+            for (done.roots) |*record| try appendLiteralRootRequest(&requests, allocator, owner.key.digest(), record);
         }
     }
 
@@ -1327,7 +1319,6 @@ fn appendLiteralRootRequest(
     requests: *std.ArrayList(RootRequest),
     allocator: Allocator,
     owner: canonical.ArtifactRef,
-    proc_base: canonical.ProcBaseKeyRef,
     record: *const LiteralRootRecord,
 ) Allocator.Error!void {
     if (!compileTimeRootRequestIsEligible(record.root)) return;
@@ -1341,7 +1332,7 @@ fn appendLiteralRootRequest(
         .exposure = .private,
         .procedure_template = .{
             .artifact = owner,
-            .proc_base = proc_base,
+            .proc_base = canonical.ProcBase.entry_wrapper,
             .template = literalRootWrapperTemplate(record.root.id),
         },
     });
@@ -13759,6 +13750,8 @@ pub const DispatchSource = struct {
     callable_eval_templates: CallableEvalTemplateTableView,
     compile_time_roots: *const CompileTimeRootTable,
     analyses: *ModuleAnalyses,
+    /// The modules the module imports directly.
+    direct_imports: []const CheckedModuleArtifactKey,
 };
 
 /// The reader over a module's dispatch resolution and dispatch schemas,
@@ -13914,8 +13907,8 @@ pub const CheckedDispatch = struct {
     }
 
     /// The module `key` names among the modules dispatch resolution reads.
-    pub fn importedView(self: CheckedDispatch, key: ModuleId) ?ImportedModuleView {
-        const imports = CheckedImportViews{ .current_owner = self.source.key.digest(), .direct = &.{}, .available = self.source.analyses.dispatch_imports };
+    pub fn importedView(self: CheckedDispatch, key: ModuleId) Error!?ImportedModuleView {
+        const imports = CheckedImportViews{ .current_owner = self.source.key.digest(), .direct = &.{}, .available = try self.analyses().dispatchImports(self) };
         return imports.viewForKey(key);
     }
 
@@ -14030,7 +14023,7 @@ pub const CheckedDispatch = struct {
         const root = templateLiteralRoot(template) orelse return self.source.templates.get(template);
         const record = try self.literalRoot(root);
         return .{
-            .proc_base = self.source.templates.literal_root_proc_base,
+            .proc_base = canonical.ProcBase.entry_wrapper,
             .template_id = template,
             .body = .{ .literal_root = root },
             .checked_fn_scheme = record.checked_fn_scheme,
@@ -14255,7 +14248,7 @@ const EvidencePass = struct {
         const import_views = CheckedImportViews{
             .current_owner = source.key.digest(),
             .direct = &.{},
-            .available = source.analyses.dispatch_imports,
+            .available = try source.analyses.dispatchImports(dispatch),
         };
         return .{
             .allocator = allocator,
@@ -14265,7 +14258,7 @@ const EvidencePass = struct {
             .module_index = source.module_index,
             .local_method_registry = source.method_registry,
             .import_views = import_views,
-            .method_lookup_views = try methodLookupViews(allocator, import_views),
+            .method_lookup_views = try methodLookupViews(allocator, import_views.available),
             .plan_table = source.plans,
             .templates = source.templates,
             .resolved_value_refs = source.refs,
@@ -18631,7 +18624,7 @@ pub const ProcTarget = union(enum) {
 
 /// Public `CheckedProcedureTemplate` declaration.
 pub const CheckedProcedureTemplate = struct {
-    proc_base: canonical.ProcBaseKeyRef,
+    proc_base: canonical.ProcBase,
     template_id: canonical.CheckedProcedureTemplateId,
     body: CheckedProcedureBody,
     checked_fn_scheme: CheckedTypeSchemeId,
@@ -18753,9 +18746,6 @@ pub const CheckedProcedureTemplateTable = struct {
     dispatch_ref_scopes: []DispatchScope = &.{},
     /// The other sites each template's body reaches.
     dispatch_sites: TemplateDispatchSites = .{},
-    /// The procedure base every literal root's entry wrapper shares; a
-    /// wrapper's template id, its root's identity, tells them apart.
-    literal_root_proc_base: canonical.ProcBaseKeyRef = @fromBackingInt(0),
     /// Relation semantics of each `dispatch_plan_refs` entry.
     dispatch_relation_kinds: []DispatchRelationKind = &.{},
     /// Generalized-local scopes referenced by `dispatch_ref_scopes`.
@@ -18773,7 +18763,6 @@ pub const CheckedProcedureTemplateTable = struct {
         dispatch_plan_refs: SerializedSlice(static_dispatch.StaticDispatchPlanId) = .{},
         dispatch_ref_scopes: SerializedSlice(DispatchScope) = .{},
         dispatch_sites: TemplateDispatchSites.Serialized = .{},
-        literal_root_proc_base: artifact_serialize.SerializedScalar(canonical.ProcBaseKeyRef, @fromBackingInt(0)) = .{},
         dispatch_relation_kinds: SerializedSlice(DispatchRelationKind) = .{},
         dispatch_scopes: SerializedSlice(DispatchRefScope) = .{},
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
@@ -18787,7 +18776,6 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         value_binding_defs: []const CIR.Def.Idx,
-        names: *canonical.CanonicalNameStore,
         owner_artifact: canonical.ArtifactRef,
         checked_type_publication: *CheckedTypePublication,
         module_index: *const ModuleIndex,
@@ -18798,8 +18786,6 @@ pub const CheckedProcedureTemplateTable = struct {
         var by_def = std.ArrayList(static_dispatch.ProcedureTemplateLookupEntry).empty;
         errdefer by_def.deinit(allocator);
 
-        const module_name = try names.internModuleName(module.moduleEnvConst().module_name);
-
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
             if (def.expr.data == .e_derived_method) {
@@ -18807,18 +18793,11 @@ pub const CheckedProcedureTemplateTable = struct {
             }
             if (!topLevelExprIsAlreadyProcedure(module, def_idx, def.expr.data)) continue;
 
-            const export_name = if (def.patternName()) |name|
-                try names.internExportIdent(module.identStoreConst(), name)
-            else
-                null;
             const intrinsic = intrinsicForProcedureDef(module, def_idx);
-            const proc_base = try names.internProcBase(.{
-                .module_name = module_name,
-                .export_name = export_name,
-                .kind = if (intrinsic != null) .intrinsic_wrapper else if (isHostedProcedureExpr(def.expr.data)) .hosted_wrapper else .checked_source,
-                .ordinal = @backingInt(def_idx),
-                .source_def_idx = @backingInt(def_idx),
-            });
+            const proc_base = canonical.ProcBase.of(
+                if (intrinsic != null) .intrinsic_wrapper else if (isHostedProcedureExpr(def.expr.data)) .hosted_wrapper else .checked_source,
+                @backingInt(def_idx),
+            );
             const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(templates.items.len))));
             const template_ref = canonical.ProcedureTemplateRef{
                 .artifact = owner_artifact,
@@ -18882,12 +18861,6 @@ pub const CheckedProcedureTemplateTable = struct {
         return .{
             .templates = templates,
             .by_def = by_def_slice,
-            .literal_root_proc_base = try names.internProcBase(.{
-                .module_name = module_name,
-                .export_name = null,
-                .kind = .literal_root_wrapper,
-                .ordinal = 0,
-            }),
         };
     }
 
@@ -18899,14 +18872,12 @@ pub const CheckedProcedureTemplateTable = struct {
         self: *CheckedProcedureTemplateTable,
         allocator: Allocator,
         module: TypedCIR.Module,
-        names: *canonical.CanonicalNameStore,
         owner_artifact: canonical.ArtifactRef,
         checked_type_publication: *CheckedTypePublication,
         module_index: *const ModuleIndex,
         promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
     ) Allocator.Error!void {
         if (promoted_local_procedures.len == 0) return;
-        const module_name = try names.internModuleName(module.moduleEnvConst().module_name);
         const entries = try allocator.alloc(PromotedProcedureTemplateEntry, promoted_local_procedures.len);
         errdefer allocator.free(entries);
         try self.templates.ensureUnusedCapacity(allocator, promoted_local_procedures.len);
@@ -18920,13 +18891,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 checkedArtifactInvariant("promoted local procedure was not a lambda or closure", .{});
             if (!module_index.reachesExpr(lambda_source)) checkedArtifactInvariant("promoted local procedure lambda was not published", .{});
             const root_expr = lambda_source;
-            const proc_base = try names.internProcBase(.{
-                .module_name = module_name,
-                .export_name = null,
-                .kind = .promoted_local,
-                .ordinal = @backingInt(lambda_source),
-                .source_def_idx = null,
-            });
+            const proc_base = canonical.ProcBase.of(.promoted_local, @backingInt(lambda_source));
             const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
             const template_ref = canonical.ProcedureTemplateRef{
                 .artifact = owner_artifact,
@@ -18972,8 +18937,6 @@ pub const CheckedProcedureTemplateTable = struct {
     pub fn appendEntryWrappersForRoots(
         self: *CheckedProcedureTemplateTable,
         allocator: Allocator,
-        module: TypedCIR.Module,
-        names: *canonical.CanonicalNameStore,
         owner_artifact: canonical.ArtifactRef,
         checked_types: *CheckedTypeStore,
         entry_wrappers: *EntryWrapperTable,
@@ -18983,9 +18946,7 @@ pub const CheckedProcedureTemplateTable = struct {
         try self.templates.ensureTotalCapacityPrecise(allocator, self.templates.items.len + roots.len);
         try entry_wrappers.wrappers.ensureTotalCapacityPrecise(allocator, entry_wrappers.wrappers.items.len + roots.len);
 
-        const module_name = try names.internModuleName(module.moduleEnvConst().module_name);
-
-        for (roots, 0..) |root, position| {
+        for (roots) |root| {
             const checked_fn_root = try checked_types.appendSyntheticFunctionRoot(
                 allocator,
                 .pure,
@@ -18993,13 +18954,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 root.checked_type,
             );
             const checked_fn_scheme = try checked_types.ensureSchemeForRoot(allocator, checked_fn_root);
-            const proc_base = try names.internProcBase(.{
-                .module_name = module_name,
-                .export_name = null,
-                .kind = .entry_wrapper,
-                .ordinal = @intCast(position),
-                .source_def_idx = null,
-            });
+            const proc_base = canonical.ProcBase.entry_wrapper;
             const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
             const template_ref = canonical.ProcedureTemplateRef{
                 .artifact = owner_artifact,
@@ -21723,6 +21678,16 @@ pub fn literalRootName(id: ComptimeRootKey) ?LiteralRootName {
     }
 }
 
+/// The name the definition procedure base `base` comes from binds, or null
+/// for a base that names no definition or a definition whose pattern binds no
+/// single name.
+pub fn procBaseDefName(env: *const ModuleEnv, base_: canonical.ProcBase) ?[]const u8 {
+    const def_idx = base_.sourceDef() orelse return null;
+    const pattern = env.store.getPattern(env.store.getDef(@fromBackingInt(def_idx)).pattern);
+    if (pattern == .assign) return env.getIdent(pattern.assign.ident);
+    return null;
+}
+
 /// The entry wrapper of literal root `root`: a template named by the root's
 /// identity, which no row of the template table holds.
 pub fn literalRootWrapperTemplate(root: ComptimeRootKey) canonical.CheckedProcedureTemplateId {
@@ -21824,8 +21789,8 @@ pub const UnitLiteralConversions = struct {
 };
 
 /// The import views a module's dispatch resolution reads.
-fn dispatchImportViews(dispatch: CheckedDispatch) CheckedImportViews {
-    return .{ .current_owner = dispatch.source.key.digest(), .direct = &.{}, .available = dispatch.source.analyses.dispatch_imports };
+fn dispatchImportViews(dispatch: CheckedDispatch) Allocator.Error!CheckedImportViews {
+    return .{ .current_owner = dispatch.source.key.digest(), .direct = &.{}, .available = try dispatch.source.analyses.dispatchImports(dispatch) };
 }
 
 /// Demand, holding no claim, the interface capabilities of the module `dispatch`
@@ -21833,7 +21798,7 @@ fn dispatchImportViews(dispatch: CheckedDispatch) CheckedImportViews {
 /// dispatch analysis reads, so every analysis reads their nominal types at
 /// the representation the capabilities give them.
 pub fn demandDispatchCapabilities(dispatch: CheckedDispatch, modules: []const ModuleId) Allocator.Error!void {
-    const import_views = dispatchImportViews(dispatch);
+    const import_views = try dispatchImportViews(dispatch);
     const store = dispatch.source.types.store;
     if (store.capability_source != null) _ = try store.view().interfaceCapabilities(import_views.resolver());
     for (modules) |module| {
@@ -21876,7 +21841,7 @@ pub fn computeUnitLiteralConversions(allocator: Allocator, dispatch: CheckedDisp
     errdefer allocator.free(nodes);
     const records = try allocator.alloc(LiteralRootRecord, candidates.items.len);
     errdefer allocator.free(records);
-    const import_views = dispatchImportViews(dispatch);
+    const import_views = try dispatchImportViews(dispatch);
     const store = source.types.store;
     try demandDispatchCapabilities(dispatch, &.{});
     for (candidates.items, nodes, records) |candidate, *node, *record| {
@@ -22335,10 +22300,10 @@ const LiteralEdgeWalker = struct {
 /// The template a procedure value reference instantiates the scheme of: the
 /// procedure's, or an exact procedure alias's entry wrapper, whose scheme is
 /// the alias's. A use of a computed callable instantiates nothing.
-fn literalTemplateOfValueRef(dispatch: CheckedDispatch, ref: ResolvedValueRef) ?canonical.ProcedureTemplateRef {
+fn literalTemplateOfValueRef(dispatch: CheckedDispatch, ref: ResolvedValueRef) Allocator.Error!?canonical.ProcedureTemplateRef {
     const source = dispatch.source;
     const owner = source.key.digest();
-    const import_views = dispatchImportViews(dispatch);
+    const import_views = try dispatchImportViews(dispatch);
     const use: ProcedureUseTemplate = switch (ref) {
         .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| use,
         .platform_required_proc => |required| required.procedure,
@@ -22521,7 +22486,7 @@ pub fn computeLiteralGraph(allocator: Allocator, dispatch: CheckedDispatch) Allo
             try self.evidence(found_.items, scope, record.expr);
             const callee: LiteralCallee = switch (record.ref) {
                 .local_proc => |local| .{ .scope = local.dispatch_scope orelse return },
-                .top_level_proc, .imported_proc, .promoted_top_level_proc, .platform_required_proc, .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_declaration, .platform_required_checked_error => .{ .template = literalTemplateOfValueRef(self.dispatch, record.ref) orelse return },
+                .top_level_proc, .imported_proc, .promoted_top_level_proc, .platform_required_proc, .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_declaration, .platform_required_checked_error => .{ .template = (try literalTemplateOfValueRef(self.dispatch, record.ref)) orelse return },
             };
             try self.add(.{
                 .key = .{ .use = record.expr },
@@ -22846,7 +22811,7 @@ fn literalAliasChainSteps(
 ) Allocator.Error!bool {
     const source = dispatch.source;
     const owner = source.key.digest();
-    const import_views = dispatchImportViews(dispatch);
+    const import_views = try dispatchImportViews(dispatch);
     const alias = node.target.alias orelse checkedArtifactInvariant("an alias-instantiated target has no alias binding", .{});
     // The alias binding is in the target's module, which this module is only
     // where the target's template is its own: a module index tells modules
@@ -22966,7 +22931,7 @@ pub fn computeLiteralComponent(
     const names = source.names;
     const io = source.analyses.io;
     const templates = source.templates;
-    const import_views = dispatchImportViews(dispatch);
+    const import_views = try dispatchImportViews(dispatch);
     const members = graph.components.componentMembers(component);
 
     var orderer = CheckedIdentityOrderer.init(allocator, names, store);
@@ -24414,7 +24379,6 @@ pub const PlatformPairing = struct {
                 "canonical_names",
                 "module_identity",
                 "direct_import_module_keys",
-                "dispatch_view_keys",
                 "module_env",
                 "exports",
                 "checked_types",
@@ -26267,7 +26231,7 @@ pub fn computeTemplateDemandComponent(
 
 /// The demand vector of a template of a module dispatch resolution reads.
 pub fn importedTemplateDemands(dispatch: CheckedDispatch, callee: canonical.ProcedureTemplateRef) Allocator.Error![]const SchemeVarDemand {
-    const view = dispatch.importedView(callee.artifact) orelse
+    const view = (try dispatch.importedView(callee.artifact)) orelse
         checkedArtifactInvariant("a demand edge named a module dispatch resolution does not read", .{});
     return view.dispatch().templateDemands(callee.template);
 }
@@ -27066,7 +27030,7 @@ const TemplateDemandWalk = struct {
     fn importedTemplate(self: *TemplateDemandWalk, imported: ImportedProcedureBindingRef) Allocator.Error!?canonical.ProcedureTemplateRef {
         const key: ImportedDefKey = .{ .artifact = imported.artifact, .def = imported.def };
         if (self.imported_templates.get(key)) |cached| return cached;
-        const view = self.dispatch.importedView(imported.artifact) orelse return null;
+        const view = (try self.dispatch.importedView(imported.artifact)) orelse return null;
         const template = if (importedProcedureBindingForDef(view, imported.def)) |binding|
             directProcedureBindingTemplate(binding.body)
         else
@@ -27095,7 +27059,7 @@ const TemplateDemandWalk = struct {
         const callee_vars = if (local)
             try self.dispatch.templateSchemeVars(callee.template)
         else blk: {
-            const view = self.dispatch.importedView(callee.artifact) orelse return false;
+            const view = (try self.dispatch.importedView(callee.artifact)) orelse return false;
             break :blk try view.dispatch().templateSchemeVars(callee.template);
         };
         if (subst.len != callee_vars.len) return false;
@@ -31370,7 +31334,6 @@ pub const CheckedModuleArtifact = struct {
     /// publication saw that a platform relation or direct import does not
     /// supersede, then the platform relation's modules, then the direct
     /// imports.
-    dispatch_view_keys: []ModuleId = &.{},
     module_env: ModuleEnvStorage,
     exports: ExportTable,
     /// The module's types. Empty in a paired artifact, which reads its
@@ -31481,9 +31444,7 @@ pub const CheckedModuleArtifact = struct {
 
     /// Give a deserialized artifact its module's sealed source types and fresh
     /// key slots, which `io` waits on. Keys are never serialized, so every
-    /// slot starts empty. An artifact whose dispatch resolution reads other
-    /// modules (`dispatch_view_keys`) is also given them through
-    /// `attachDispatchImports`.
+    /// slot starts empty.
     pub fn attachSealedTypes(self: *CheckedModuleArtifact, gpa: Allocator, io: std.Io) Allocator.Error!void {
         const env = self.moduleEnvConst();
         const keys = try sealed_type_keys.SealedTypeKeys.create(gpa, io, env);
@@ -31589,6 +31550,7 @@ pub const CheckedModuleArtifact = struct {
             .callable_eval_templates = self.callable_eval_templates.view(),
             .compile_time_roots = &self.compile_time_roots,
             .analyses = analyses,
+            .direct_imports = self.direct_import_module_keys,
         };
     }
 
@@ -31809,7 +31771,6 @@ pub const CheckedModuleArtifact = struct {
         source_hash: [32]u8,
         module_identity: ModuleIdentitySerialized,
         direct_import_module_keys: SerializedSlice(CheckedModuleArtifactKey),
-        dispatch_view_keys: SerializedSlice(ModuleId),
         canonical_names: canonical.CanonicalNameStore.Serialized,
         checking_context_identity: CheckingContextIdentity.Serialized,
         exports: ExportTable.Serialized,
@@ -31859,12 +31820,12 @@ pub const CheckedModuleArtifact = struct {
         comptime {
             // The TRUE total relocation fixup count: 1 (`direct_import_module_keys`)
             // + the recursive sum of every sub-store, including the `SafeList`/
-            // interner base pointers (`canonical_names` = 22 via its 7 interners +
-            // `proc_bases`; `checked_types` = 18, one per column).
+            // interner base pointers (`canonical_names` = 21 via its
+            // interners; `checked_types` = 18, one per column).
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 179);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 176);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -31986,7 +31947,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 121;
+    const serialized_layout_version: u32 = 122;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -32606,7 +32567,6 @@ pub const CheckedModuleArtifact = struct {
                     const binding = self.top_level_procedure_bindings.get(binding_ref);
                     switch (binding.body) {
                         .direct_template => |direct| {
-                            _ = self.nameStore().procBase(direct.proc_value.proc_base);
                             switch (direct.template) {
                                 .checked => |template| {
                                     std.debug.assert(template.proc_base == direct.proc_value.proc_base);
@@ -34207,8 +34167,7 @@ pub fn publishFromTypedModule(
     // module it imports or resolves against.
     for (inputs.imports) |import| _ = try import.view.checked_types.interfaceCapabilities(import_views.resolver());
     for (inputs.available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities(import_views.resolver());
-    const dispatch_view_keys = try dispatchViewKeys(allocator, module_analyses, import_views);
-    errdefer allocator.free(dispatch_view_keys);
+    try module_analyses.attachImportViews(inputs.imports, inputs.available_artifacts);
 
     // Omitted defaults name their fields and origin modules through the
     // module's names.
@@ -34242,7 +34201,6 @@ pub fn publishFromTypedModule(
         allocator,
         module,
         value_binding_defs,
-        &canonical_names,
         owner_artifact,
         &checked_type_publication,
         module_index,
@@ -34252,7 +34210,6 @@ pub fn publishFromTypedModule(
     try checked_procedure_templates.appendPromotedLocalProcedures(
         allocator,
         module,
-        &canonical_names,
         owner_artifact,
         &checked_type_publication,
         module_index,
@@ -34316,8 +34273,6 @@ pub fn publishFromTypedModule(
     errdefer entry_wrappers.deinit(allocator);
     try checked_procedure_templates.appendEntryWrappersForRoots(
         allocator,
-        module,
-        &canonical_names,
         owner_artifact,
         checked_types,
         &entry_wrappers,
@@ -34522,7 +34477,6 @@ pub fn publishFromTypedModule(
         .module_identity = module_identity,
         .checking_context_identity = checking_context_identity,
         .direct_import_module_keys = direct_import_module_keys,
-        .dispatch_view_keys = dispatch_view_keys,
         .module_env = inputs.module_env_storage,
         .exports = .{ .defs = exports },
         .checked_types = checked_types.*,
@@ -36225,8 +36179,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x8A, 0xEB, 0x04, 0xFD, 0x46, 0xBD, 0x7B, 0x09, 0x87, 0x5F, 0x53, 0xE7, 0xDB, 0x9A, 0x48, 0x7F,
-        0x98, 0x8B, 0xF9, 0x50, 0x1E, 0xE2, 0x67, 0xC8, 0x36, 0xB1, 0x07, 0xFA, 0xF0, 0xDE, 0x94, 0x9C,
+        0x0D, 0x54, 0x3A, 0x93, 0xC0, 0x37, 0xB3, 0x20, 0x9A, 0x37, 0xB8, 0x3D, 0xB3, 0x87, 0xBC, 0xF4,
+        0x28, 0xE6, 0x78, 0x41, 0x77, 0xC1, 0x35, 0x25, 0xB7, 0xD7, 0xBD, 0xBB, 0xC1, 0x61, 0xDC, 0x3F,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

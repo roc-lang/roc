@@ -2406,10 +2406,9 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
         env: ModuleEnvPtr,
     };
 
-    fn defName(info: *const ModuleInfo, proc_base: u32) []const u8 {
-        const key = info.names.procBase(@fromBackingInt(@intCast(proc_base)));
-        if (key.export_name) |export_name| return info.names.exportNameText(export_name);
-        const def_idx = key.source_def_idx orelse return "?";
+    fn defName(info: *const ModuleInfo, proc_base: u64) []const u8 {
+        const base_: check.CheckedNames.ProcBase = @fromBackingInt(proc_base);
+        const def_idx = base_.sourceDef() orelse return "?";
         const def = info.env.store.getDef(@fromBackingInt(@intCast(def_idx)));
         return switch (info.env.store.getPattern(def.pattern)) {
             inline .assign, .var_assign => |assign| info.env.getIdent(assign.ident),
@@ -2740,7 +2739,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             var callable_kind: []const u8 = "generated";
             var callable_kind_is_template = false;
             var module_key: ?[32]u8 = null;
-            var proc_base: u32 = 0;
+            var proc_base: u64 = 0;
             var sub: u128 = 0;
             switch (spec.identity.callable) {
                 .proc_template => |template| {

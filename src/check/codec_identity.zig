@@ -354,9 +354,9 @@ const ContentDigester = struct {
         switch (target.kind) {
             .procedure => |procedure| {
                 self.hasher.update(&procedure.proc.artifact.bytes);
-                self.writeU32(@backingInt(procedure.proc.proc_base));
+                self.writeU64(@backingInt(procedure.proc.proc_base));
                 self.hasher.update(&procedure.template.artifact.bytes);
-                self.writeU32(@backingInt(procedure.template.proc_base));
+                self.writeU64(@backingInt(procedure.template.proc_base));
                 self.writeU32(procedure.template.template.index());
             },
             .local_proc => |local| {
@@ -461,6 +461,12 @@ const ContentDigester = struct {
     fn writeU32(self: *ContentDigester, value: u32) void {
         var bytes: [4]u8 = undefined;
         std.mem.writeInt(u32, &bytes, value, .little);
+        self.hasher.update(&bytes);
+    }
+
+    fn writeU64(self: *ContentDigester, value: u64) void {
+        var bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &bytes, value, .little);
         self.hasher.update(&bytes);
     }
 

@@ -149,7 +149,6 @@ pub const FnTemplate = struct {
     /// Exact member specialization within the shared frozen Solved owner.
     frozen_context: ?FrozenCallableContext = null,
     fn_def: const_store.FnDef,
-    source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     owner_fn_ty: ?const_store.ConstTypeId = null,
     evidence: const_store.ConstFnEvidenceVector = .{},

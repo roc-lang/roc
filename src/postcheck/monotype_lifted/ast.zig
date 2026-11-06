@@ -2371,15 +2371,10 @@ fn testLiftedProgram(allocator: std.mem.Allocator) Program {
     );
 }
 
-fn testSourceDigestTemplate(name_store: *names.NameStore, template_id: u32) std.mem.Allocator.Error!names.ProcTemplate {
+fn testSourceDigestTemplate(template_id: u32) names.ProcTemplate {
     return .{
         .artifact = .{},
-        .proc_base = try name_store.internProcBase(.{
-            .module_name = try name_store.internModuleName("SourceDigest"),
-            .export_name = null,
-            .kind = .checked_source,
-            .ordinal = 0,
-        }),
+        .proc_base = names.ProcBase.of(.checked_source, 0),
         .template = @fromBackingInt(@intCast(template_id)),
     };
 }
@@ -2415,7 +2410,7 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     defer program.deinit();
 
     const ret_ty = try program.types.add(.zst);
-    const template = try testSourceDigestTemplate(&program.names, 1);
+    const template = testSourceDigestTemplate(1);
 
     // Two requesters reserved one specialization of one checked template at
     // one closed type. They instantiated it from different checked types, and
@@ -2425,12 +2420,10 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     // this digest for the reading program to check.
     const ordinary: Mono.FnTemplate = .{
         .fn_def = .{ .local_template = template },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
         .source_fn_key = testSourceDigestKey(1),
         .mono_fn_ty = ret_ty,
     };
     var other_requester = ordinary;
-    other_requester.source_fn_ty = @fromBackingInt(@intCast(9));
     other_requester.source_fn_key = testSourceDigestKey(2);
 
     const ordinary_fn = try addSourceDigestFn(&program, &symbols, ordinary, ret_ty);
@@ -2444,7 +2437,6 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     // step of one expression shares this `fn_def`, its evidence, and its type.
     const first_step: Mono.FnTemplate = .{
         .fn_def = .{ .checked_generated = template },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
         .source_fn_key = testSourceDigestKey(1),
         .mono_fn_ty = ret_ty,
     };
@@ -2459,7 +2451,6 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     // Generated runtime callbacks of one encoder carry the key the same way.
     const first_callback: Mono.FnTemplate = .{
         .fn_def = .{ .encoder_for_runtime = .{ .owner = template, .expr = @fromBackingInt(@intCast(3)) } },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
         .source_fn_key = testSourceDigestKey(1),
         .mono_fn_ty = ret_ty,
     };
@@ -2473,7 +2464,7 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
 
     // What the digest does name still separates procedures.
     var other_callable = ordinary;
-    other_callable.fn_def = .{ .local_template = try testSourceDigestTemplate(&program.names, 2) };
+    other_callable.fn_def = .{ .local_template = testSourceDigestTemplate(2) };
     var other_evidence = ordinary;
     other_evidence.evidence_digest = .{ .bytes = testSourceDigestKey(5).bytes };
     var other_type = ordinary;
@@ -2512,11 +2503,10 @@ test "code reaching the app digests what it reaches there and names its app call
     program.platform_requirement_filling = .{ .app_module = app_identity, .relation = @splat(17) };
     const ret_ty = try program.types.add(.zst);
     const fn_ty = try program.types.add(.{ .func = .{ .args = Type.Span.empty(), .ret = ret_ty } });
-    var app_template = try testSourceDigestTemplate(&program.names, 1);
+    var app_template = testSourceDigestTemplate(1);
     app_template.artifact.bytes = app_identity;
     const app_source: Mono.FnTemplate = .{
         .fn_def = .{ .local_template = app_template },
-        .source_fn_ty = @fromBackingInt(7),
         .source_fn_key = .{},
         .mono_fn_ty = fn_ty,
     };
@@ -2525,10 +2515,9 @@ test "code reaching the app digests what it reaches there and names its app call
     site_app_source.spec_key = testSourceDigestKey(4);
     const app_fn = try addSourceDigestFn(&program, &symbols, app_source, ret_ty);
     const site_app_fn = try addSourceDigestFn(&program, &symbols, site_app_source, ret_ty);
-    const template = try testSourceDigestTemplate(&program.names, 2);
+    const template = testSourceDigestTemplate(2);
     const ordinary: Mono.FnTemplate = .{
         .fn_def = .{ .local_template = template },
-        .source_fn_ty = @fromBackingInt(7),
         .source_fn_key = .{},
         .mono_fn_ty = fn_ty,
     };
@@ -2706,13 +2695,18 @@ fn writeTemplateDigest(hasher: *TypeDigestHasher, template: names.ProcTemplate, 
 
 fn writeProcTemplateDigest(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
     hasher.update(&template.artifact.bytes);
-    writeIdentityU32(hasher, @backingInt(template.proc_base));
+    writeIdentityU64(hasher, @backingInt(template.proc_base));
     template.template.digestInto(hasher);
 }
 
 fn writeIdentityBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
     writeIdentityU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
+}
+
+fn writeIdentityU64(hasher: *TypeDigestHasher, value: u64) void {
+    writeIdentityU32(hasher, @truncate(value));
+    writeIdentityU32(hasher, @truncate(value >> 32));
 }
 
 fn writeIdentityU32(hasher: *TypeDigestHasher, value: u32) void {

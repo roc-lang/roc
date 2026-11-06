@@ -15850,7 +15850,6 @@ fn constFnTemplateForFn(self: *Lowerer, fn_id: Type.FnId) std.mem.Allocator.Erro
             },
         },
         .fn_def = constFnDefFromMono(template.fn_def),
-        .source_fn_ty = template.source_fn_ty,
         .source_fn_key = template.source_fn_key,
         .owner_fn_ty = if (template.owner_fn_ty) |owner_fn_ty| try self.constTypeOfMono(owner_fn_ty) else null,
         .evidence = evidence,

@@ -215,7 +215,7 @@ pub const LookupResult = union(enum(u8)) {
 pub const SpecLookupAddress = struct {
     callable_kind: u8,
     module_bytes: [32]u8,
-    index_a: u32,
+    index_a: u64,
     index_b: u128,
     index_c: u32,
     owner_fn_digest: [32]u8,

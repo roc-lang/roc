@@ -499,7 +499,7 @@ test "native root export removes seamless-slice native pointers" {
 
 // Native graph export does not inspect the source template/type metadata.
 fn testTemplate() Program.FnTemplate {
-    return .{ .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined };
+    return .{ .fn_def = undefined, .source_fn_key = undefined };
 }
 
 // Only slot, plan and storage are read by these synthetic capture export tests.

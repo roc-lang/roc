@@ -3807,8 +3807,7 @@ pub const Builder = struct {
                 const view = self.program.module(key.module);
                 if (key.template.rowIndex() == null) break :blk "a literal root";
                 const template = view.view.checked_procedure_templates.get(key.template);
-                const export_name = view.nameStore().procBase(template.proc_base).export_name orelse break :blk "a template";
-                break :blk view.nameStore().exportNameText(export_name);
+                break :blk checked.procBaseDefName(view.view.module_env, template.proc_base) orelse "a template";
             },
             inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| @tagName(kind),
         };

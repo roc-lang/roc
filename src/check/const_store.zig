@@ -6,6 +6,7 @@ const can = @import("can");
 const collections = @import("collections");
 
 const checked_ids = @import("checked_ids.zig");
+const checked_type_ids = @import("checked_type_ids.zig");
 const names = @import("canonical_names.zig");
 const artifact_serialize = @import("artifact_serialize.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
@@ -282,6 +283,8 @@ pub const ConstFnCallableInstantiation = struct {
     /// Stable checked identity of `callable_ty`. The raw checked id remains
     /// replay payload and may differ between equivalent fresh instantiations.
     callable_key: names.CanonicalTypeKey,
+    /// A source type of `view`'s module (the solver variable checking
+    /// recorded for the edge), so a function of that module's sealed data.
     callable_ty: checked_ids.CheckedTypeId,
 };
 
@@ -372,6 +375,7 @@ pub const RecordedStructuralEdge = struct {
     /// modules are one specialization.
     view: names.CheckedModuleDigest,
     dispatcher_key: names.CanonicalTypeKey,
+    /// Source types of `view`'s module, so functions of its sealed data.
     dispatcher_ty: checked_ids.CheckedTypeId,
     callable_key: names.CanonicalTypeKey,
     callable_ty: checked_ids.CheckedTypeId,
@@ -392,6 +396,8 @@ pub const StoredCodecEdge = struct {
 /// module when the function is restored in another compilation.
 pub const ConstFnTargetEvidence = struct {
     view: names.CheckedModuleDigest,
+    /// Its `callable_ty` is the target definition's solver variable in
+    /// `view`'s module.
     method: static_dispatch.MethodTarget,
     /// Stable checked identity of `method.callable_ty`.
     method_callable_key: names.CanonicalTypeKey,
@@ -549,7 +555,8 @@ pub const ConstFnEvidenceFrame = struct {
 /// Function value stored by compile-time evaluation.
 pub const ConstFn = struct {
     fn_def: FnDef,
-    source_fn_ty: checked_ids.CheckedTypeId,
+    /// The key of the checked function type the value was specialized from.
+    /// A restoring compilation reads the type itself from `fn_def`.
     source_fn_key: names.TypeDigest,
     /// For a nested function, the function type of the template specialization
     /// that built it. A variable of that template can reach neither this
@@ -701,7 +708,6 @@ const StoredValue = union(enum) {
 /// POD form of `ConstFn`: captures slice → range into `capture_pool`.
 const StoredFn = struct {
     fn_def: FnDef,
-    source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     owner_fn_ty: ?ConstTypeId = null,
     captures: ConstRange = .{},
@@ -1305,6 +1311,7 @@ pub const ConstStore = struct {
     /// retains ownership of the input `captures` slice and frees it.
     pub fn appendFn(self: *ConstStore, fn_value: ConstFn) Allocator.Error!ConstFnId {
         try validateEvidenceFrames(self.allocator, fn_value);
+        assertEvidenceNamesSourceTypes(fn_value.evidence);
         const id: ConstFnId = @fromBackingInt(std.math.cast(u32, self.fns.items.len) orelse return error.OutOfMemory);
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
         const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence.nodes);
@@ -1316,7 +1323,6 @@ pub const ConstStore = struct {
         const evidence_frames = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidenceFrame, &self.evidence_frame_pool, self.allocator, fn_value.evidence_frames);
         try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,
-            .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .owner_fn_ty = fn_value.owner_fn_ty,
             .captures = captures_range,
@@ -1327,6 +1333,30 @@ pub const ConstStore = struct {
             .evidence_frame_head = fn_value.evidence_frame_head,
         });
         return id;
+    }
+
+    /// Every checked type a stored evidence vector names is a source type of
+    /// the module the entry names: a solver variable, a function of that
+    /// module's sealed data, never an entry of its synthesized-type store.
+    fn assertEvidenceNamesSourceTypes(evidence: ConstFnEvidenceVector) void {
+        if (!std.debug.runtime_safety) return;
+        for (evidence.targets) |target| {
+            if (checked_type_ids.isSynthesized(target.method.callable_ty)) constStoreInvariant("stored target evidence named a synthesized method callable type");
+            if (target.instantiation) |instantiation| {
+                if (checked_type_ids.isSynthesized(instantiation.callable_ty)) constStoreInvariant("stored target evidence named a synthesized instantiation");
+            }
+        }
+        for (evidence.structurals) |structural| {
+            const checked = structural.checked orelse continue;
+            switch (checked) {
+                .recorded => |recorded| {
+                    if (checked_type_ids.isSynthesized(recorded.dispatcher_ty) or checked_type_ids.isSynthesized(recorded.callable_ty)) {
+                        constStoreInvariant("stored structural evidence named a synthesized type");
+                    }
+                },
+                .codec => {},
+            }
+        }
     }
 
     fn validateEvidenceFrames(allocator: Allocator, fn_value: ConstFn) Allocator.Error!void {
@@ -1534,7 +1564,6 @@ pub const ConstStore = struct {
         const stored = self.fns.items[@backingInt(id)];
         return .{
             .fn_def = stored.fn_def,
-            .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
             .owner_fn_ty = stored.owner_fn_ty,
             .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
@@ -1576,8 +1605,8 @@ pub const ConstStore = struct {
 
         comptime {
             // 11 value/function side lists, 7 nested type-store lists and the
-            // type names' 25.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 43);
+            // type names' 24.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 42);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
@@ -1968,7 +1997,6 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         // Distinct non-zero ids: this test asserts captures round-trip; the fn_def
         // fields just need to survive, not be specific values.
         .fn_def = .{ .local_template = .{ .proc_base = @fromBackingInt(@intCast(1)), .template = @fromBackingInt(@intCast(2)) } },
-        .source_fn_ty = @fromBackingInt(@intCast(3)),
         .source_fn_key = .{},
         .captures = caps,
         .evidence = .{ .nodes = &evidence, .targets = &evidence_targets, .structurals = &evidence_structurals },
@@ -2104,7 +2132,6 @@ test "ConstStore: exact function capture back-edge survives serialization" {
     };
     const fn_id = try store.appendFn(.{
         .fn_def = .{ .local_template = .{ .proc_base = @fromBackingInt(@intCast(1)), .template = @fromBackingInt(@intCast(2)) } },
-        .source_fn_ty = @fromBackingInt(@intCast(3)),
         .source_fn_key = .{},
         .captures = &captures,
         .evidence_frames = &evidence_frames,
@@ -2154,7 +2181,6 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
             };
             _ = try store.appendFn(.{
                 .fn_def = .{ .local_template = .{ .proc_base = @fromBackingInt(@intCast(1)), .template = @fromBackingInt(@intCast(2)) } },
-                .source_fn_ty = @fromBackingInt(@intCast(3)),
                 .source_fn_key = .{},
                 .captures = caps,
                 .evidence_frames = &evidence_frames,

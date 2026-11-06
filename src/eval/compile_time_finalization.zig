@@ -7446,7 +7446,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     const entries = try allocator.dupe(LirProgram.ErasedFn, &.{.{
         .entry = worker,
         .capture_layout = .str,
-        .template = .{ .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined },
+        .template = .{ .fn_def = undefined, .source_fn_key = undefined },
         .captures = captures,
         .on_drop = .{ .rc_helper = .{ .op = .host_drop, .layout_idx = .str } },
     }});

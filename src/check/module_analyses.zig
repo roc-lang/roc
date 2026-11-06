@@ -169,6 +169,26 @@ const UnitConversionSlots = struct {
     }
 };
 
+/// The modules a module's dispatch resolution searches.
+const DispatchImports = struct {
+    views: []const ImportedModuleView,
+};
+
+const DispatchImportsRequest = struct {
+    analyses: *ModuleAnalyses,
+    dispatch: CheckedDispatch,
+
+    fn compute(self: DispatchImportsRequest) Allocator.Error!*DispatchImports {
+        const allocator = self.analyses.allocator;
+        const source = self.dispatch.source;
+        const views = try checked_artifact.computeDispatchImports(allocator, source.key.digest(), source.direct_imports, source.types.store.sealed_origins.items, self.analyses.resolver);
+        errdefer allocator.free(views);
+        const result = try allocator.create(DispatchImports);
+        result.* = .{ .views = views };
+        return result;
+    }
+};
+
 /// The per-module analyses of one checked module. `allocator` must be safe
 /// to use from every thread that reads the module.
 pub const ModuleAnalyses = struct {
@@ -181,9 +201,16 @@ pub const ModuleAnalyses = struct {
     public_api_dependencies: collections.OnceSlot(*PublicApiDependencies, .module_public_api_dependencies) = .empty,
     lowering_visibility: collections.OnceSlot(*LoweringVisibility, .module_lowering_visibility) = .empty,
     interface_capabilities: collections.OnceSlot(*ModuleInterfaceCapabilities, .module_interface_capabilities) = .empty,
-    /// The modules dispatch resolution searches for method targets and
-    /// procedure schemes, in search order (`CheckedModuleArtifact.dispatch_view_keys`).
-    dispatch_imports: []const ImportedModuleView = &.{},
+    /// Resolves the modules the module's analyses read other than its own:
+    /// the importing compilation's resolver, or one over publication's
+    /// import views (`owned_import_views`).
+    resolver: ?checked_artifact.ModuleResolver = null,
+    /// A copy of the import views publication resolved against, which
+    /// `resolver` resolves through for as long as the module lives.
+    owned_import_views: ?*checked_artifact.CheckedImportViews = null,
+    /// The modules dispatch resolution searches and resolves types in
+    /// (`checked_artifact.computeDispatchImports`).
+    dispatch_imports: collections.OnceSlot(*DispatchImports, .module_dispatch_imports) = .empty,
     dispatch_slots: collections.OnceSlot(*DispatchSlots, .module_dispatch_slots) = .empty,
     dispatch_index: collections.OnceSlot(*DispatchIndex, .module_dispatch_index) = .empty,
     module_dispatch: collections.OnceSlot(*ModuleDispatch, .module_dispatch) = .empty,
@@ -205,11 +232,36 @@ pub const ModuleAnalyses = struct {
         return analyses;
     }
 
-    /// Give the analyses the modules dispatch resolution searches, in
-    /// search order. The views must stay valid for as long as the module.
-    pub fn setDispatchImports(self: *ModuleAnalyses, views: []const ImportedModuleView) Allocator.Error!void {
-        std.debug.assert(self.dispatch_imports.len == 0);
-        self.dispatch_imports = try self.allocator.dupe(ImportedModuleView, views);
+    /// Give the analyses the resolver they find other modules through. It
+    /// must resolve every module of the build for as long as the module lives.
+    pub fn attachResolver(self: *ModuleAnalyses, resolver: checked_artifact.ModuleResolver) void {
+        std.debug.assert(self.resolver == null);
+        self.resolver = resolver;
+    }
+
+    /// Give the analyses a resolver over a copy of the views publication
+    /// resolved against: its direct imports and the modules available to it.
+    pub fn attachImportViews(
+        self: *ModuleAnalyses,
+        imports: []const checked_artifact.PublishImportArtifact,
+        available: []const ImportedModuleView,
+    ) Allocator.Error!void {
+        const owned = try self.allocator.create(checked_artifact.CheckedImportViews);
+        errdefer self.allocator.destroy(owned);
+        const direct = try self.allocator.dupe(checked_artifact.PublishImportArtifact, imports);
+        errdefer self.allocator.free(direct);
+        owned.* = .{ .current_owner = .{}, .direct = direct, .available = try self.allocator.dupe(ImportedModuleView, available) };
+        self.owned_import_views = owned;
+        self.attachResolver(owned.resolver());
+    }
+
+    /// The modules dispatch resolution searches and resolves types in,
+    /// computed on first demand from the module's direct imports and its
+    /// types' name owners, transitively.
+    pub fn dispatchImports(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error![]const ImportedModuleView {
+        self.assertPublished();
+        const result = try self.dispatch_imports.getOrCompute(self.io, Allocator.Error, DispatchImportsRequest{ .analyses = self, .dispatch = dispatch }, DispatchImportsRequest.compute);
+        return result.views;
     }
 
     /// Record that the module is published: its type store and name store
@@ -240,7 +292,15 @@ pub const ModuleAnalyses = struct {
             requests.deinit(allocator);
             allocator.destroy(requests);
         }
-        allocator.free(self.dispatch_imports);
+        if (self.dispatch_imports.peek()) |imports| {
+            allocator.free(imports.views);
+            allocator.destroy(imports);
+        }
+        if (self.owned_import_views) |owned| {
+            allocator.free(owned.direct);
+            allocator.free(owned.available);
+            allocator.destroy(owned);
+        }
         if (self.export_closures.peek()) |closures| closures.destroy(allocator);
         if (self.public_api_dependencies.peek()) |dependencies| {
             dependencies.deinit(allocator);
@@ -636,7 +696,7 @@ pub const ModuleAnalyses = struct {
         for (order.items) |next| {
             for (components.componentMembers(next)) |member| for (graph.nodeEdges(member)) |edge| switch (edge.callee) {
                 .template => |template| if (!template.artifact.eql(owner)) {
-                    if (dispatch.importedView(template.artifact)) |view| _ = try view.dispatch().templateLiteralRequirements(template.template);
+                    if (try dispatch.importedView(template.artifact)) |view| _ = try view.dispatch().templateLiteralRequirements(template.template);
                 },
                 .scope => {},
             };

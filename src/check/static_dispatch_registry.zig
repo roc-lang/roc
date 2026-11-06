@@ -818,15 +818,7 @@ pub const MethodRegistry = struct {
 
         const module_env = module.moduleEnvConst();
         const idents = module.identStoreConst();
-        const module_name = try names.internModuleName(module_env.module_name);
-
         for (module.methodDefEntries()) |entry| {
-            const method_ident = module_env.lookupMethodIdentForMethodOwnerConst(entry.key.ownerIdent(), entry.key.methodIdent()) orelse {
-                base.invariant(
-                    "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
-                    .{ @backingInt(entry.key.owner), entry.key.method_ident_bits },
-                );
-            };
             const def_idx = entry.value.def_idx;
             if (unsupportedGeneratedMethodBinding(module, entry.value)) continue;
             const method_owner = try methodOwnerForRegistryEntry(module, names, entry.key.ownerIdent());
@@ -860,14 +852,7 @@ pub const MethodRegistry = struct {
                     .structural => |kind| break :blk .{ .structural = kind },
                     .callable => {
                         const template = template_entry.template;
-                        const export_name = try names.internExportIdent(idents, method_ident);
-                        const proc_base = try names.internProcBase(.{
-                            .module_name = module_name,
-                            .export_name = export_name,
-                            .kind = .checked_source,
-                            .ordinal = @backingInt(def_idx),
-                            .source_def_idx = @backingInt(def_idx),
-                        });
+                        const proc_base = canonical.ProcBase.of(.checked_source, @backingInt(def_idx));
                         break :blk .{ .procedure = .{
                             .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
                             .template = template,

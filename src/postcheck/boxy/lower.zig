@@ -739,7 +739,7 @@ pub const Program = struct {
             const view = self.module(index);
             return .{
                 .artifact = view.view.key.digest(),
-                .proc_base = view.view.checked_procedure_templates.literal_root_proc_base,
+                .proc_base = checked_names.ProcBase.entry_wrapper,
                 .template = checked.literalRootWrapperTemplate(root),
             };
         }
@@ -2620,9 +2620,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     const view = program.module(key.module);
                     if (key.template.rowIndex() == null) break :blk "boxy.literal_root";
                     const template = view.view.checked_procedure_templates.get(key.template);
-                    const names = view.nameStore();
-                    const export_name = names.procBase(template.proc_base).export_name orelse break :blk "boxy.template";
-                    break :blk names.exportNameText(export_name);
+                    break :blk checked.procBaseDefName(view.view.module_env, template.proc_base) orelse "boxy.template";
                 },
                 inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| "boxy." ++ @tagName(kind),
             };

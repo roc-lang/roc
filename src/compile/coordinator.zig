@@ -4983,10 +4983,7 @@ pub const Coordinator = struct {
                 .source = source,
             } },
         );
-        check.CheckedArtifact.attachDispatchImports(module_analyses, artifact_ptr.dispatch_view_keys, self.moduleResolver()) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
+        module_analyses.attachResolver(self.moduleResolver());
         artifact_ptr.checked_types.attachSealedTypes(cached_env, sealed_keys, synthesized_keys);
         artifact_ptr.body_analyses = body_analyses;
         artifact_ptr.module_analyses = module_analyses;
@@ -9501,6 +9498,11 @@ fn hashRegionIntoSha256(hasher: *base.Sha256, region: base.Region) void {
     hashU32IntoSha256(hasher, region.end.offset);
 }
 
+fn hashU64IntoSha256(hasher: *base.Sha256, value: u64) void {
+    const little = std.mem.nativeToLittle(u64, value);
+    hasher.update(std.mem.asBytes(&little));
+}
+
 fn hashU32IntoSha256(hasher: *base.Sha256, value: u32) void {
     var bytes: [4]u8 = undefined;
     std.mem.writeInt(u32, &bytes, value, .little);
@@ -9562,7 +9564,7 @@ fn hashExhaustivenessOwnerIntoSha256(
         .procedure_template => |template| {
             hashU32IntoSha256(hasher, 1);
             hasher.update(&template.artifact.bytes);
-            hashU32IntoSha256(hasher, @backingInt(template.proc_base));
+            hashU64IntoSha256(hasher, @backingInt(template.proc_base));
             template.template.digestInto(hasher);
         },
         .root => |root| {

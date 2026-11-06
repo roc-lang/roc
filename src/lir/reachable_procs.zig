@@ -1277,7 +1277,6 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
                 // and frames remain independently owned template storage.
                 .template = .{
                     .fn_def = undefined,
-                    .source_fn_ty = undefined,
                     .source_fn_key = undefined,
                     .evidence = .{ .nodes = try allocator.dupe(@import("check").ConstStore.ConstFnEvidence, &.{.checked_error}) },
                     .evidence_frames = try allocator.dupe(@import("check").ConstStore.ConstFnEvidenceFrame, &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 1 }}),
