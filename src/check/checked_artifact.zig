@@ -4629,7 +4629,7 @@ fn checkedTypePairEqlStep(
                 left_nominal.is_opaque == right_nominal.is_opaque;
             return switch (nominals) {
                 .stored => same_declaration and
-                    std.meta.eql(left_nominal.representation, right_nominal.representation) and
+                    checkedNominalRepresentationEql(mode, view, left_nominal.representation, right_nominal.representation) and
                     checkedDeclaredFieldsExactEql(left_nominal.declared_fields, right_nominal.declared_fields) and
                     try appendCheckedTypePairs(allocator, pending, left_nominal.args, right_nominal.args) and
                     try appendCheckedTypePairs(allocator, pending, left_nominal.padding_field_types, right_nominal.padding_field_types),
@@ -4661,6 +4661,35 @@ fn checkedTypePairEqlStep(
             }
             try pending.append(allocator, .{ .left = left_union.ext, .right = right_union.ext });
             return true;
+        },
+    }
+}
+
+/// Whether two nominal types, whose declarations and arguments the caller
+/// compares, carry one representation. A box payload capability names an
+/// instance, so `.exact`, under which equal arguments are one instance,
+/// compares capabilities themselves, while `.alpha`, under which equal
+/// arguments may be instances over renamed variables, compares the
+/// declarations the capabilities are of.
+fn checkedNominalRepresentationEql(
+    comptime mode: CheckedTypeEqlMode,
+    view: CheckedTypeStoreView,
+    left: CheckedNominalRepresentationRef,
+    right: CheckedNominalRepresentationRef,
+) bool {
+    switch (mode) {
+        .exact => return std.meta.eql(left, right),
+        .alpha => switch (left) {
+            .local_box_payload_capability => |left_capability| {
+                const right_capability = switch (right) {
+                    .local_box_payload_capability => |capability| capability,
+                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => return false,
+                };
+                const capabilities = view.demandedInterfaceCapabilities();
+                return capabilities.boxPayloadCapability(left_capability.capability).declaration ==
+                    capabilities.boxPayloadCapability(right_capability.capability).declaration;
+            },
+            .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => return std.meta.eql(left, right),
         },
     }
 }
