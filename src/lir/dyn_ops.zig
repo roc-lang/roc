@@ -70,8 +70,10 @@ pub fn ownership(op: DynOp) Ownership {
         .dict_patch => .borrow_operands,
         // A dictionary's callables are immortal; the target borrows from it.
         .dict_method => |method| .{ .borrow_component = method.dict },
-        // A table's words are immortal; the target borrows from the table.
-        .table_entry => |entry| .{ .borrow_component = entry.table },
+        // A table's words are static data, which the target holds as a
+        // static-data literal read holds its value: a fresh owned unit of
+        // image data. The table itself holds no unit.
+        .table_entry => .borrow_operands,
         .copy => |copy| .{ .alias = copy.src },
         .field_addr => |field| .{ .borrow_component = field.base },
         .field_addr_named => |field| .{ .borrow_component = field.base },
@@ -309,7 +311,9 @@ pub fn borrowedValues(store: *const LirStore, allocator: std.mem.Allocator, op: 
         .adapt => |adapt| try out.append(allocator, adapt.src),
         .dict_record => |dict| try appendSpan(store, allocator, dict.methods, out),
         .dict_patch => |patch| try out.appendSlice(allocator, &.{ patch.dict, patch.value }),
-        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_compose, .dict_method, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
+        // The table is static data, no value.
+        .table_entry => {},
+        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_compose, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
     }
 }
 

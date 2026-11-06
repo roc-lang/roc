@@ -1410,9 +1410,9 @@ pub const DynOp = union(enum) {
     /// read at `tableEntryOffset(index, pointer width)`. A table is
     /// immutable static data, so every read of a word yields the same value:
     /// a descriptor or another table (target `opaque_ptr`), or an immortal
-    /// dictionary or literal thunk (target `erased_callable`), which the
-    /// target holds as a component of the table, as `dict_method` holds a
-    /// dictionary's method.
+    /// dictionary or literal thunk (target `erased_callable`). The target
+    /// holds the word as a `static_data` literal read holds its value: image
+    /// data, whose reference counting `immortal_locals` elides.
     table_entry: struct { table: LocalId, index: u32 },
 
     // -- Values --
@@ -1828,7 +1828,8 @@ pub const ProcShapes = packed struct(u16) {
     interned_call_result: bool = false,
     /// A direct call whose result is a string.
     str_call: bool = false,
-    /// A local assigned static data or a packed byte literal.
+    /// A local assigned static data (a static-data literal, or a word of a
+    /// type table) or a packed byte literal.
     static_literal: bool = false,
     /// A box allocation.
     box_box: bool = false,
