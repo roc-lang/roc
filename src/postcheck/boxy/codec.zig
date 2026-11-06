@@ -726,7 +726,7 @@ fn callbackWorker(program: *Program, family_index: u32, piece: Piece, fn_ty: Typ
 
 /// The dictionary of structural parser or encoder evidence: the erased
 /// constructor of the evidence's derivation.
-pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) Allocator.Error!LocalId {
+pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) Allocator.Error!Body.Word {
     const id = structural.generated_codec_derivation orelse invariant("structural codec evidence names no generated derivation");
     const family = try familyFor(b.program, b.module, id);
     return try constructorAt(b, family, try b.convert(structural.callable_ty));
@@ -734,7 +734,7 @@ pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) A
 
 /// The dictionary of generated derivation `id` of `module_index` at the
 /// method callable type `callable`.
-pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.GeneratedCodecDerivationId, callable: TypeId) Allocator.Error!LocalId {
+pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.GeneratedCodecDerivationId, callable: TypeId) Allocator.Error!Body.Word {
     const family = try familyFor(b.program, module_index, id);
     return try constructorAt(b, family, callable);
 }
@@ -742,27 +742,24 @@ pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.
 /// A family's constructor at a use whose constructor type is `actual`:
 /// the immortal callable capturing the family's local procedure values at
 /// the use's types, then its variables' descriptors, adapted to `actual`.
-fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!LocalId {
+fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Body.Word {
     const fam_ = b.program.codec.families.items[family];
     const count = fam_.env.vars.len;
     const bound = try b.relateVariables(fam_.constructor_fn, actual, count);
     defer b.allocator.free(bound);
-    const captures = try b.allocator.alloc(LocalId, fam_.locals.items.len + count);
+    const captures = try b.allocator.alloc(Body.Word, fam_.locals.items.len + count);
     defer b.allocator.free(captures);
     if (fam_.locals.items.len != 0) {
         if (fam_.module != b.module) invariant("a generated codec calling local procedures is used outside the module declaring them");
         const table = b.view.view.static_dispatch_plans;
-        // The function values are built in the entry chain, where the
-        // constructor that holds them is composed.
-        const saved = b.immortal_closures;
-        b.immortal_closures = true;
-        defer b.immortal_closures = saved;
+        // The constructor is immortal, and so are the function values it
+        // holds.
         for (fam_.locals.items, captures[0..fam_.locals.items.len]) |local, *value| {
             const fn_ty = try b.program.substitute(b.allocator, local.fn_ty, bound);
-            value.* = try b.emitIntoEntry(Builder.localMethodValue, .{ table.evidenceNode(local.node), fn_ty });
+            value.* = try b.localMethodWord(table.evidenceNode(local.node), fn_ty);
         }
     }
-    for (bound, captures[fam_.locals.items.len..]) |ty, *desc| desc.* = try b.descOf(ty);
+    for (bound, captures[fam_.locals.items.len..]) |ty, *desc| desc.* = try b.descWord(ty);
     const composed = try b.composeDictionary(try constructorWorker(b.program, family), captures);
     return try b.adaptDictionary(composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound), actual);
 }
@@ -774,7 +771,7 @@ pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, 
     if (operands.len != 1) invariant("a structural codec dispatch does not take one encoding");
     const family = try familyFor(b.program, b.module, id);
     const fn_ty = try b.convert(call_plan.callable_ty);
-    const constructor = try constructorAt(b, family, fn_ty);
+    const constructor = try b.materialize(try constructorAt(b, family, fn_ty));
     try b.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = 1, .result = result_ty } });
     try b.pushOperand(operands[0], operand_types[0]);
     try b.pushValue(constructor);
@@ -865,8 +862,7 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
     const fam_ = program.codec.families.items[family];
     const bound = try b.relateVariables(fam_.runtime_fn, fn_ty, fam_.env.vars.len);
     defer b.allocator.free(bound);
-    const descs = try program.arena.allocator().alloc(LocalId, bound.len);
-    for (bound, descs) |ty, *desc| desc.* = try b.descOf(ty);
+    const descs = try b.descWords(bound);
     try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = descs, .dicts = &.{}, .capture_types = captures, .worker_ty = try program.substitute(b.allocator, fam_.runtime_fn, bound), .ty = fn_ty } });
     // The local procedures' function values follow the names; compile-time
     // evaluation stores none of them, as a local procedure is a procedure
@@ -1285,9 +1281,11 @@ const Gen = struct {
                 // The result is adapted to the call's own type, since a
                 // sealed row of it may be widened here (design.md "Sealed
                 // Result Rows").
+                const hidden = try b.materializeAll(instance.hidden);
+                defer b.allocator.free(hidden);
                 const passed = try b.callDescriptorArgs(callee, instance.bound);
                 defer b.allocator.free(passed);
-                const all = try std.mem.concat(b.allocator, LocalId, &.{ call_args, instance.hidden, passed });
+                const all = try std.mem.concat(b.allocator, LocalId, &.{ call_args, hidden, passed });
                 defer b.allocator.free(all);
                 const target = try self.local(instance.ret);
                 try b.emitLinear(.{ .assign_call = .{ .target = target, .proc = target_worker.proc, .args = try b.store.addLocalSpan(all), .next = undefined } });

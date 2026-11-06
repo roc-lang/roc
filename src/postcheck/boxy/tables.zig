@@ -92,9 +92,10 @@ pub const Needs = struct {
 
 /// The recipes one worker's lowering builds. An acyclic recipe is interned
 /// by its content, so a recipe built twice is one recipe. A recipe that may
-/// lead back to itself (a dictionary whose requirements capture it) is
-/// reserved first, named by the recipes it reaches, and set afterwards; a
-/// reserved recipe is never interned.
+/// lead back to itself (a dictionary whose requirements capture it, or the
+/// descriptor of a nominal type whose override captures that descriptor)
+/// is reserved first, named by the recipes it reaches, and set afterwards;
+/// a reserved recipe is never interned.
 pub const Recipes = struct {
     arena: std.heap.ArenaAllocator,
     items: std.ArrayList(?Recipe) = .empty,
@@ -129,16 +130,21 @@ pub const Recipes = struct {
         return id;
     }
 
-    /// Give reserved recipe `id` its content, a callable or a table, the
-    /// kinds that can lead back to themselves.
+    /// Give reserved recipe `id` its content: a callable, a table, or a
+    /// descriptor, the kinds that can lead back to themselves.
     pub fn set(self: *Recipes, id: RecipeId, recipe: Recipe) Allocator.Error!void {
         const slot = &self.items.items[@backingInt(id)];
         std.debug.assert(slot.* == null);
         switch (recipe) {
-            .callable, .table => {},
-            .input, .desc, .args_desc => invariant("a reserved recipe is not a callable or a table"),
+            .callable, .table, .desc => {},
+            .input, .args_desc => invariant("a reserved recipe is not a callable, a table, or a descriptor"),
         }
         slot.* = try self.own(recipe);
+    }
+
+    /// Recipe `id`'s content, or null while it is reserved and not yet set.
+    pub fn peek(self: *const Recipes, id: RecipeId) ?Recipe {
+        return self.items.items[@backingInt(id)];
     }
 
     pub fn get(self: *const Recipes, id: RecipeId) Recipe {
@@ -287,6 +293,13 @@ test "recipes are interned by content and reserved recipes stay distinct" {
     const other = try recipes.reserve();
     try recipes.set(other, .{ .callable = .{ .entry = worker, .captures = &.{ .{ .recipe = inner }, .{ .static = .zero } } } });
     try std.testing.expect(head != other);
+
+    // A descriptor whose override captures it: reserved, then set.
+    const nominal = try recipes.reserve();
+    try std.testing.expect(recipes.peek(nominal) == null);
+    const method = try recipes.intern(.{ .callable = .{ .entry = worker, .captures = &.{.{ .recipe = nominal }} } });
+    try recipes.set(nominal, .{ .desc = .{ .ty = ty, .scoped = &.{.{ .nominal = ty, .methods = .{ null, null, .{ .recipe = method } } }} } });
+    try std.testing.expectEqual(method, recipes.get(nominal).desc.scoped[0].methods[2].?.recipe);
 
     const needs = try recipes.needs(2, &.{ table, head });
     try std.testing.expectEqual(@as(u32, 4), needs.wordCount());
