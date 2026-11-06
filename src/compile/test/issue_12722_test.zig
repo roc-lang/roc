@@ -7,12 +7,6 @@ const std = @import("std");
 const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
 
-const TestError = compile_build.InitError ||
-    compile_build.BuildRootError ||
-    std.Io.Dir.WriteFileError ||
-    std.Io.Dir.RealPathFileAllocError ||
-    error{ TestExpectedEqual, TestUnexpectedResult };
-
 test "issue 12722: top-level constant stores split_on pieces of a compile-time heap Str" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
