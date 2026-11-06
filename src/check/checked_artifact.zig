@@ -12238,6 +12238,8 @@ fn importedConstTemplateForDef(view: ImportedModuleView, def: CIR.Def.Idx) Alloc
     return null;
 }
 
+/// The definitions a module exports, in export order: its `exports`, then
+/// each exposed item that names a definition.
 pub fn collectPublishedExportDefs(
     allocator: Allocator,
     module_env: *const ModuleEnv,
@@ -20799,27 +20801,6 @@ fn validatePlatformAppRelationForModule(
             .{},
         );
     }
-}
-
-fn platformRequiredPayloadForDeclaration(
-    module: TypedCIR.Module,
-    checked_types: *const CheckedTypePublication,
-    declaration: PlatformRequiredDeclaration,
-) CheckedTypeId {
-    const module_env = module.moduleEnvConst();
-    if (declaration.requires_idx >= module_env.requires_types.items.items.len) {
-        base.invariant(
-            "checked artifact invariant violated: platform requirement declaration {d} has out-of-range required index {d}",
-            .{ @backingInt(declaration.id), declaration.requires_idx },
-        );
-    }
-    const required_type = module_env.requires_types.items.items[declaration.requires_idx];
-    return checked_types.rootForSourceVar(module, ModuleEnv.varFrom(required_type.type_anno)) orelse {
-        base.invariant(
-            "checked artifact invariant violated: platform requirement declaration {d} has no platform-owned checked payload",
-            .{@backingInt(declaration.id)},
-        );
-    };
 }
 
 /// Per-scheme identity origins for `EnclosingDispatchIdentity`, computed on
