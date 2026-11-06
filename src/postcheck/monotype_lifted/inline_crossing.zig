@@ -1537,6 +1537,7 @@ const Walk = struct {
 
 const Type = @import("../monotype/type.zig");
 const checked = @import("check").CheckedModule;
+const check_bodies = @import("check").CheckedBodies;
 
 /// Builds small lifted programs whose every value has one zero-sized type:
 /// the walk reads only expression shape and labels, never types.
@@ -1613,7 +1614,7 @@ const TestProgram = struct {
 
     fn captureLocal(self: *TestProgram) Allocator.Error!Ast.LocalId {
         self.next_binder += 1;
-        const binder: checked.PatternBinderId = @fromBackingInt(self.next_binder);
+        const binder: check_bodies.BinderId = @fromBackingInt(self.next_binder);
         const key = checked.CaptureId.fromBinder(binder);
         return self.program.addLocalWithCaptureIdentity(self.symbol(), self.ty, binder, key, key, .lexical);
     }
