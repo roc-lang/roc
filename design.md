@@ -5176,10 +5176,12 @@ backing and keeps the old one alive; replaced backings are freed only when
 the store is published, before any other thread reads it, and with the
 module. An item a reader can name never moves or changes. Once other threads can read the
 store, a creation holds the store's creation lock
-(`CheckedTypeStore.beginCreation`, `endCreation`) from its first append until
-every type it made is complete, waits on no slot while holding it, and lets
-an id it created reach another thread only after it ends; creation's
-in-workspace memos are read and written only under that lock. Synthesized
+(`CheckedTypeStore.beginCreation`, `finishCreation`) from its first append
+until every type it made is complete and settled (each local nominal type
+it made given its instance's box payload capability, "Nominal
+Representations"), waits on no slot while holding it, and lets an id it
+created reach another thread only after it ends; creation's in-workspace
+memos are read and written only under that lock. Synthesized
 key slots never move (`collections.StableList`), and the key index answers
 over the roots complete when it is asked, growing as roots are created. A
 cache entry holds exactly the types the store held when the module was
@@ -5428,12 +5430,12 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   types, the modules its roots, exports and platform requirement
   bindings reach, and their public API dependencies), and the box payload
   capabilities of the module's local nominal types
-  (`interfaceCapabilities`: for every local nominal source type checking
-  reached and every local nominal synthesized type the module held when
-  it was published, the instance's capability, its instantiated backing
-  and padding types, which the computation creates, and whether an opaque
-  instance's backing holds no callable, read through the declaring modules
-  of the nominal types the backing reaches), and the module's dispatch
+  (`interfaceCapabilities`: one per instance, a declaration of the module
+  at one list of argument types, with its instantiated backing and padding
+  types, which the computation creates; computed for every local nominal type
+  the module held when it was published, and grown for the types each
+  later creation makes before that creation ends, "Nominal
+  Representations" below), and the module's dispatch
   resolution, which the module's dispatch reader (`CheckedDispatch`)
   answers from: the modules it searches for method targets and procedure
   schemes and resolves the types it reads in (`dispatchImports`: every
@@ -5486,13 +5488,53 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   whether or not evaluation has stored the constant's value, so the result
   is the same before and after evaluation.
 
-A nominal type's representation as the store holds it names its
-declaration. A consumer that reads a module's nominal representations
-(Monotype and Boxy lowering of every module they read, glue, compile-time
-root graphs, the publication of every module that imports it, a
-platform/app pairing) demands the module's interface capabilities first;
-from then on every read of one of the module's nominal types carries the
-capability representation it was given (`CheckedTypeStoreView.payload`).
+#### Nominal Representations
+
+A nominal type's representation is a function of the type alone: its
+module, its declaration and its argument types, the same for every type
+entry naming that type whoever created it and whenever, cold or warm. A
+builtin is represented by its builtin. A nominal type another module
+declares is represented by that declaration in every store that holds it,
+including every projection of an imported type: an importer's arguments
+are its own types, which the declaring module's capabilities cannot name.
+A nominal type a module declares is held by its store as its declaration
+(a creation that copies one read with its capability stores the
+declaration), and once a consumer demanded the module's interface
+capabilities every read of it carries its instance's box payload
+capability (`CheckedTypeStoreView.payload`).
+
+An instance is a declaration at one list of argument types. Two argument
+lists are one when they are equal as types: a flex or rigid variable is
+itself, so an instance over variables is one instance wherever those same
+variables occur and another over any other variables, and every other type
+is compared by its structure, a nominal by its declaration and arguments
+alone (`CheckedNominalEquality.declaration_args`). Every instance has
+exactly one capability. The capabilities are computed on first demand for
+every type the store holds then, which is exactly the set it held when it
+was published, because every slot demands its module's capabilities before
+it creates a type there; the published synthesized types are settled in id
+order, then the source types checking reached, in variable order, then the
+types the capabilities created. A type created later is settled by the
+creation that made it before the creation releases the store's creation
+lock (`CheckedTypeStore.finishCreation`), so no other thread can read it
+unsettled: settling looks its instance up under the lock (an instance hash
+of each argument's constructors and names two levels deep selects a
+bucket, and type equality decides within it), and an instance first met
+there is given a new capability, whose backing and padding types are
+instantiated under the same lock. Settling reads only the store's own
+types and declarations, and waits on no slot. A creation that fails ends without settling, and the
+next creation to finish settles what it left.
+
+Capability ids follow the order instances are first met, which for the
+instances first met after publication is the order creations end, so it
+depends on demand order. An id is a table index and an equality identity
+only: nothing compares ids by order, sorts by them, hashes them into a
+digest or key, or prints them, and the types a capability creates are
+synthesized types, which no consumer orders output by either. A consumer
+that reads a module's nominal representations (Monotype and Boxy lowering
+of every module they read, glue, compile-time root graphs, the
+publication of every module that imports it, a platform/app pairing)
+demands the module's interface capabilities first.
 
 A slot (`collections.OnceSlot`) is a state word with three states: empty,
 claimed and done; a claimed word also records whether a consumer is parked on
@@ -13935,9 +13977,10 @@ function, or other named type's argument in the result
 callable the worker receives from its caller could involve it, since such a
 callable carries the caller's instantiation: a `where` requirement whose
 interface mentions the variable (the dictionary's methods), or any
-parameter holding a nominal over a callable payload, whose callable's
-interface its methods hide from the signature
-(`Converter.argumentsHoldCallablePayload`). A bounded flex that unification
+parameter holding a nominal type with a declaration, whose backing may hold
+a callable payload whose interface its methods hide from the signature
+(`Converter.argumentsHoldCallablePayload`). Every declared nominal type
+answers alike, whichever module declares it and however it is represented. A bounded flex that unification
 tied to a rigid or a closed row is not a flex, so genuine row polymorphism
 (`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
 hidden descriptors.

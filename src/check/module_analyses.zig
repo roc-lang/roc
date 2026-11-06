@@ -343,16 +343,12 @@ pub const ModuleAnalyses = struct {
         self: *ModuleAnalyses,
         store: *CheckedTypeStore,
         current_module: canonical.ModuleIdentityId,
-        module: ModuleId,
-        resolver: ModuleResolver,
     ) Allocator.Error!*const ModuleInterfaceCapabilities {
         self.assertPublished();
         return self.interface_capabilities.getOrCompute(self.io, Allocator.Error, CapabilityRequest{
             .analyses = self,
             .store = store,
             .current_module = current_module,
-            .module = module,
-            .resolver = resolver,
         }, CapabilityRequest.compute);
     }
 
@@ -361,12 +357,17 @@ pub const ModuleAnalyses = struct {
         return self.interface_capabilities.peek();
     }
 
+    /// The interface capabilities when a consumer has demanded them, for the
+    /// creation that holds the module's type store's creation lock to grow
+    /// (`CheckedTypeStore.finishCreation`).
+    pub fn growableInterfaceCapabilities(self: *const ModuleAnalyses) ?*ModuleInterfaceCapabilities {
+        return self.interface_capabilities.peek();
+    }
+
     const CapabilityRequest = struct {
         analyses: *ModuleAnalyses,
         store: *CheckedTypeStore,
         current_module: canonical.ModuleIdentityId,
-        module: ModuleId,
-        resolver: ModuleResolver,
 
         fn compute(request: CapabilityRequest) Allocator.Error!*ModuleInterfaceCapabilities {
             const analyses = request.analyses;
@@ -375,7 +376,7 @@ pub const ModuleAnalyses = struct {
             errdefer allocator.destroy(capabilities);
             request.store.beginCreation(analyses.io);
             defer request.store.endCreation(analyses.io);
-            capabilities.* = try ModuleInterfaceCapabilities.compute(allocator, request.store, request.current_module, request.module, request.resolver);
+            capabilities.* = try ModuleInterfaceCapabilities.compute(allocator, request.store, request.current_module);
             return capabilities;
         }
     };

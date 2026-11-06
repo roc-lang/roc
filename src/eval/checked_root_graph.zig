@@ -495,7 +495,6 @@ pub fn rootHoldsFunction(
     defer seen.deinit(allocator);
     var pending = std.ArrayList(Pending).empty;
     defer pending.deinit(allocator);
-    const program = ProgramModules{ .modules = modules, .imports = imports };
     const own_types = artifact.typesView();
     const own_key = artifact.key.digest().bytes;
     // The root's checked type is its wrapper's function type; its value is
@@ -507,7 +506,7 @@ pub fn rootHoldsFunction(
     while (pending.pop()) |item| {
         const seen_entry = try seen.getOrPut(allocator, .{ .key = item.key, .ty = item.ty });
         if (seen_entry.found_existing) continue;
-        _ = try item.types.interfaceCapabilities(program.resolver());
+        _ = try item.types.interfaceCapabilities();
         switch (item.types.payload(item.ty)) {
             .function => return true,
             .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
@@ -554,23 +553,13 @@ pub fn rootHoldsFunction(
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
                         try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
                     },
-                    // A nominal published as a box payload capability is
+                    // A nominal read with a box payload capability is
                     // declared in its module like any other: its value is
                     // its backing's.
                     .local_box_payload_capability => {
                         const declaration = item.types.nominalDeclarationForPayload(nominal) orelse
                             base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
                         try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = declaration.backing });
-                    },
-                    // The capability names its nominal in the declaring
-                    // module's own names.
-                    .imported_box_payload_capability => |imported| {
-                        const declaring = typesOf(modules, imports, imported.artifact) orelse
-                            base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
-                        const capabilities = try declaring.interfaceCapabilities(program.resolver());
-                        const declaration = declaring.nominalDeclaration(capabilities.boxPayloadCapability(imported.capability).nominal) orelse
-                            base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
-                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaration.backing });
                     },
                     .opaque_without_backing => {},
                 }

@@ -11709,7 +11709,7 @@ const Builder = struct {
                         .crypto_blake3_hasher,
                         => {},
                     },
-                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .opaque_without_backing => {},
                 }
                 for (nominal.args) |arg| try type_run.ops.append(gpa, .{ .child = arg });
             },
@@ -11761,7 +11761,7 @@ const Builder = struct {
                         .crypto_blake3_hasher,
                         => {},
                     },
-                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .opaque_without_backing => {},
                 }
 
                 const args = try self.allocator.dupe(Type.TypeId, results);
@@ -11777,7 +11777,7 @@ const Builder = struct {
                     .args = try self.activeTypeStore().addSpan(args),
                     .backing = switch (nominal.representation) {
                         .opaque_without_backing => null,
-                        .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => .{
+                        .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability => .{
                             .ty = try self.lowerNominalBackingType(view, nominal, args),
                             .use = backing_use,
                         },
@@ -12374,15 +12374,7 @@ const Builder = struct {
             .local_box_payload_capability => |cap| blk: {
                 const capabilities = view.types.demandedInterfaceCapabilities();
                 const capability = capabilities.boxPayloadCapability(cap.capability);
-                const decl = view.types.nominalDeclaration(capability.nominal) orelse break :blk null;
-                break :blk .{ .view = view, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(capabilities) };
-            },
-            .imported_box_payload_capability => |cap| blk: {
-                const sv = self.moduleForId(checked.importedBoxPayloadCapabilityModuleId(cap));
-                const capabilities = sv.types.demandedInterfaceCapabilities();
-                const capability = capabilities.boxPayloadCapability(cap.capability);
-                const decl = sv.types.nominalDeclaration(capability.nominal) orelse break :blk null;
-                break :blk .{ .view = sv, .declaration = decl, .padding_field_tys = capability.paddingFieldTys(capabilities) };
+                break :blk .{ .view = view, .declaration = view.types.nominalDeclarationById(capability.declaration), .padding_field_tys = capability.paddingFieldTys(capabilities) };
             },
             .builtin => |builtin_nominal| blk: {
                 const source_view = self.moduleForId(nominal.owner_module.*);
@@ -12406,7 +12398,6 @@ const Builder = struct {
             .local_declaration,
             .imported_declaration,
             .local_box_payload_capability,
-            .imported_box_payload_capability,
             => blk: {
                 const lookup = self.nominalDeclarationFor(view, nominal) orelse break :blk null;
                 break :blk .{ .view = lookup.view, .declaration = lookup.declaration };
@@ -26390,7 +26381,7 @@ const BodyContext = struct {
                 },
                 .nominal => |nominal| switch (nominal.representation) {
                     .builtin => |builtin| checked.builtinRuntimeEncoding(builtin) == .primitive,
-                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => false,
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .opaque_without_backing => false,
                 },
                 .alias, .record, .tag_union, .pending, .field_kind, .err => false,
             };
@@ -26922,7 +26913,7 @@ const BodyContext = struct {
             .empty_record, .empty_tag_union => true,
             .nominal => |nominal| switch (nominal.representation) {
                 .builtin => |builtin| checked.builtinRuntimeEncoding(builtin) == .primitive,
-                .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => false,
+                .local_declaration, .imported_declaration, .local_box_payload_capability, .opaque_without_backing => false,
             },
             // A variable is pure exactly when it is its evidence binding,
             // which `instantiatedChildIsPure` reads directly.
@@ -27126,7 +27117,7 @@ const BodyContext = struct {
                         .crypto_blake3_hasher,
                         => {},
                     },
-                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .opaque_without_backing => {},
                 }
                 frame.cursor = InstNominalCursor.args;
                 return instSliceStep(nominal.args);
@@ -27135,7 +27126,7 @@ const BodyContext = struct {
                 task.args = input.?.get(.nodes);
                 switch (nominal.representation) {
                     .opaque_without_backing => {},
-                    .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => {
+                    .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability => {
                         const source = self.nominalInstantiationSource(nominal) orelse
                             Common.invariant("nominal backing instantiation could not resolve a declaration-backed nominal");
                         frame.cursor = InstNominalCursor.backing;
@@ -27511,14 +27502,6 @@ const BodyContext = struct {
                 break :blk .{
                     .view = source_view,
                     .declaration = source_view.types.nominalDeclarationById(imported.declaration),
-                };
-            },
-            .imported_box_payload_capability => blk: {
-                const lookup = self.builder.nominalDeclarationFor(self.view, nominal.*) orelse
-                    Common.invariant("imported box-payload nominal had no declaration source");
-                break :blk .{
-                    .view = lookup.view,
-                    .declaration = lookup.declaration,
                 };
             },
             .builtin => blk: {
@@ -39244,7 +39227,7 @@ const BodyContext = struct {
         };
         const checked_try_builtin = switch (checked_try.representation) {
             .builtin => |builtin| builtin,
-            .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => Common.invariant("custom iterator advance callable returned a non-builtin Try"),
+            .local_declaration, .imported_declaration, .local_box_payload_capability, .opaque_without_backing => Common.invariant("custom iterator advance callable returned a non-builtin Try"),
         };
         if (checked.builtinRuntimeEncoding(checked_try_builtin) != .try_nominal or checked_try.args.len != 2) {
             Common.invariant("custom iterator advance callable did not return the builtin Try type");
@@ -69734,7 +69717,6 @@ fn nominalHasDeclarationBacking(nominal: checked.CheckedNominalType) bool {
         .local_declaration,
         .imported_declaration,
         .local_box_payload_capability,
-        .imported_box_payload_capability,
         => true,
     };
 }

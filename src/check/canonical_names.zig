@@ -713,7 +713,15 @@ pub const CanonicalNameStore = struct {
     /// Order record field labels by their canonical text.
     pub fn recordFieldLabelTextLessThan(self: *const CanonicalNameStore, a: RecordFieldLabelId, b: RecordFieldLabelId) bool {
         if (self.record_field_text_rank) |cache| {
-            if (cache.current(self.record_field_labels.count())) |ranks| return ranks[@backingInt(a)] < ranks[@backingInt(b)];
+            if (cache.current(self.record_field_labels.count())) |ranks| {
+                const ranked = ranks[@backingInt(a)] < ranks[@backingInt(b)];
+                // The cache was built over the labels interned when it was
+                // filled; a label interned since must rank as its text does.
+                if (std.debug.runtime_safety and ranked != Ident.textLessThan(self.recordFieldLabelText(a), self.recordFieldLabelText(b))) {
+                    base.invariant("{s}", .{"a record field label rank cache disagrees with the labels' text"});
+                }
+                return ranked;
+            }
         }
         return Ident.textLessThan(self.recordFieldLabelText(a), self.recordFieldLabelText(b));
     }
@@ -747,7 +755,15 @@ pub const CanonicalNameStore = struct {
     /// Order tag labels by their canonical text.
     pub fn tagLabelTextLessThan(self: *const CanonicalNameStore, a: TagLabelId, b: TagLabelId) bool {
         if (self.tag_text_rank) |cache| {
-            if (cache.current(self.tag_labels.count())) |ranks| return ranks[@backingInt(a)] < ranks[@backingInt(b)];
+            if (cache.current(self.tag_labels.count())) |ranks| {
+                const ranked = ranks[@backingInt(a)] < ranks[@backingInt(b)];
+                // The cache was built over the labels interned when it was
+                // filled; a label interned since must rank as its text does.
+                if (std.debug.runtime_safety and ranked != Ident.textLessThan(self.tagLabelText(a), self.tagLabelText(b))) {
+                    base.invariant("{s}", .{"a tag label rank cache disagrees with the labels' text"});
+                }
+                return ranked;
+            }
         }
         return Ident.textLessThan(self.tagLabelText(a), self.tagLabelText(b));
     }

@@ -2177,7 +2177,6 @@ const ConcreteRootScan = struct {
                     .local_declaration,
                     .imported_declaration,
                     .local_box_payload_capability,
-                    .imported_box_payload_capability,
                     => true,
                 };
                 if (needs_backing) {
@@ -3428,17 +3427,10 @@ pub const ImportedNominalDeclarationRef = struct {
     declaration: CheckedNominalDeclarationId,
 };
 
-/// Public `LocalBoxPayloadCapabilityRef` declaration.
+/// The box payload capability a local nominal type reads with: the
+/// capability of its instance in its module's interface capabilities.
 pub const LocalBoxPayloadCapabilityRef = struct {
     capability: BoxPayloadCapabilityId,
-    opaque_atomic_proof: ?OpaqueAtomicProofId = null,
-};
-
-/// Public `ImportedBoxPayloadCapabilityRef` declaration.
-pub const ImportedBoxPayloadCapabilityRef = struct {
-    artifact: CheckedModuleDigest,
-    capability: BoxPayloadCapabilityId,
-    opaque_atomic_proof: ?OpaqueAtomicProofId = null,
 };
 
 /// Return the checked module id that owns an imported nominal declaration.
@@ -3446,18 +3438,17 @@ pub fn importedNominalDeclarationModuleId(ref: ImportedNominalDeclarationRef) Mo
     return ref.artifact;
 }
 
-/// Return the checked module id that owns an imported box payload capability.
-pub fn importedBoxPayloadCapabilityModuleId(ref: ImportedBoxPayloadCapabilityRef) ModuleId {
-    return ref.artifact;
-}
-
-/// Public `CheckedNominalRepresentationRef` declaration.
+/// How a nominal type is represented, a function of the type alone: a
+/// builtin by its builtin, a nominal another module declares by that
+/// declaration, and a nominal its own module declares by that declaration
+/// as the store holds it and by its instance's box payload capability as a
+/// view reads it once the module's interface capabilities were demanded
+/// (`CheckedTypeStoreView.payload`).
 pub const CheckedNominalRepresentationRef = union(enum) {
     builtin: CheckedBuiltinNominal,
     local_declaration: CheckedNominalDeclarationId,
     imported_declaration: ImportedNominalDeclarationRef,
     local_box_payload_capability: LocalBoxPayloadCapabilityRef,
-    imported_box_payload_capability: ImportedBoxPayloadCapabilityRef,
     opaque_without_backing,
 };
 
@@ -3560,16 +3551,7 @@ pub fn nominalDeclarationSite(
         },
         .local_box_payload_capability => |capability_ref| {
             const capability = reader.demandedInterfaceCapabilities().boxPayloadCapability(capability_ref.capability);
-            const declaration = reader.nominalDeclaration(capability.nominal) orelse
-                checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
-            return .{ .module = reader_module, .types = reader, .declaration = declaration };
-        },
-        .imported_box_payload_capability => |capability_ref| {
-            const module_types = moduleTypesForSite(reader_module, reader, resolver, capability_ref.artifact);
-            const capability = module_types.demandedInterfaceCapabilities().boxPayloadCapability(capability_ref.capability);
-            const declaration = module_types.nominalDeclaration(capability.nominal) orelse
-                checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
-            return .{ .module = capability_ref.artifact, .types = module_types, .declaration = declaration };
+            return .{ .module = reader_module, .types = reader, .declaration = reader.nominalDeclarationById(capability.declaration) };
         },
     }
 }
@@ -4029,13 +4011,18 @@ pub const CheckedTypeStoreView = struct {
             self.sealedView().payload(type_ids.asVar(id))
         else
             reconstructTypeData(CheckedTypePayload, self, &self.storedPayloads()[self.synthesizedIndex(id)]);
-        if (result == .nominal) {
-            if (self.store) |store| {
+        if (result == .nominal) switch (result.nominal.representation) {
+            // A nominal type its own module declares reads with its
+            // instance's box payload capability once the module's
+            // capabilities were demanded.
+            .local_declaration => if (self.store) |store| {
                 if (store.publishedCapabilities()) |capabilities| {
-                    if (capabilities.representationOf(id)) |representation| result.nominal.representation = representation;
+                    result.nominal.representation = capabilities.representationOf(store, id, result.nominal);
                 }
-            }
-        }
+            },
+            .local_box_payload_capability => checkedArtifactInvariant("a checked type store holds a box payload capability", .{}),
+            .builtin, .imported_declaration, .opaque_without_backing => {},
+        };
         return result;
     }
 
@@ -4049,13 +4036,12 @@ pub const CheckedTypeStoreView = struct {
     }
 
     /// The interface capabilities of the module whose types the view reads,
-    /// computed on first demand; `resolver` resolves the modules declaring
-    /// the nominal types its local nominal types' backings name. Reads of
-    /// the module's nominal types carry them from then on.
-    pub fn interfaceCapabilities(self: CheckedTypeStoreView, resolver: ModuleResolver) Allocator.Error!*const ModuleInterfaceCapabilities {
+    /// computed on first demand. Reads of the module's nominal types carry
+    /// them from then on.
+    pub fn interfaceCapabilities(self: CheckedTypeStoreView) Allocator.Error!*const ModuleInterfaceCapabilities {
         const store = self.store orelse checkedArtifactInvariant("interface capabilities were demanded from a view without a store", .{});
         const source = store.capability_source orelse checkedArtifactInvariant("interface capabilities were demanded from a store without module analyses", .{});
-        return source.analyses.interfaceCapabilities(store, source.current_module, source.module, resolver);
+        return source.analyses.interfaceCapabilities(store, source.current_module);
     }
 
     /// Whether `id` is a nominal or alias type.
@@ -4222,7 +4208,7 @@ pub const CheckedTypeStoreView = struct {
         right: CheckedTypeId,
     ) Allocator.Error!bool {
         scratch.clear();
-        return try checkedTypeRootSliceEql(.exact, .named, self, &.{left}, &.{right}, scratch);
+        return try checkedTypeRootSliceEql(.exact, .named, .stored, self, &.{left}, &.{right}, scratch);
     }
 
     /// Same-store equality of the types two roots denote: transparent aliases
@@ -4235,7 +4221,7 @@ pub const CheckedTypeStoreView = struct {
         right: CheckedTypeId,
     ) Allocator.Error!bool {
         scratch.clear();
-        return try checkedTypeRootSliceEql(.exact, .transparent, self, &.{left}, &.{right}, scratch);
+        return try checkedTypeRootSliceEql(.exact, .transparent, .stored, self, &.{left}, &.{right}, scratch);
     }
 
     /// Exact same-store equality modulo a bijective renaming of flex/rigid
@@ -4266,7 +4252,7 @@ pub const CheckedTypeStoreView = struct {
             if (!std.meta.eql(try self.rootKey(left_root), try self.rootKey(right_root))) return false;
         }
         scratch.clear();
-        return try checkedTypeRootSliceEql(.alpha, .named, self, left, right, scratch);
+        return try checkedTypeRootSliceEql(.alpha, .named, .stored, self, left, right, scratch);
     }
 
     /// Bucket key for `rootAliasTransparentEql`: a hash of the alias-resolved
@@ -4324,7 +4310,7 @@ pub const CheckedTypeStoreView = struct {
     ) Allocator.Error!bool {
         if (left.len != right.len) return false;
         scratch.clear();
-        return try checkedTypeRootSliceEql(.alpha, .transparent, self, left, right, scratch);
+        return try checkedTypeRootSliceEql(.alpha, .transparent, .stored, self, left, right, scratch);
     }
 
     pub fn nominalDeclaration(
@@ -4455,6 +4441,13 @@ const CheckedTypePairSet = struct {
 /// declaration identity in both modes.
 const CheckedAliasEquality = enum { named, transparent };
 
+/// How checked type equality compares nominal types. `stored` compares
+/// everything a nominal payload holds, its representation included;
+/// `declaration_args` compares only its declaration and its arguments, the
+/// type's own identity, whose representation, padding types and declared
+/// fields follow from them.
+const CheckedNominalEquality = enum { stored, declaration_args };
+
 fn checkedTypeEqualityRoot(
     comptime aliases: CheckedAliasEquality,
     view: CheckedTypeStoreView,
@@ -4487,6 +4480,7 @@ fn checkedTypeEqualityRoot(
 fn checkedTypeRootSliceEql(
     comptime mode: CheckedTypeEqlMode,
     comptime aliases: CheckedAliasEquality,
+    comptime nominals: CheckedNominalEquality,
     view: CheckedTypeStoreView,
     left: []const CheckedTypeId,
     right: []const CheckedTypeId,
@@ -4497,7 +4491,7 @@ fn checkedTypeRootSliceEql(
     std.mem.reverse(CheckedTypeExactPair, pending.items);
     while (pending.pop()) |pair| {
         const start = pending.items.len;
-        if (!try checkedTypePairEqlStep(mode, aliases, view, pair, scratch)) return false;
+        if (!try checkedTypePairEqlStep(mode, aliases, nominals, view, pair, scratch)) return false;
         std.mem.reverse(CheckedTypeExactPair, pending.items[start..]);
     }
     return true;
@@ -4536,6 +4530,7 @@ const CheckedTypeEqlMode = enum { exact, alpha };
 fn checkedTypePairEqlStep(
     comptime mode: CheckedTypeEqlMode,
     comptime aliases: CheckedAliasEquality,
+    comptime nominals: CheckedNominalEquality,
     view: CheckedTypeStoreView,
     pair: CheckedTypeExactPair,
     scratch: *CheckedTypeStoreView.EqualityScratch,
@@ -4626,16 +4621,21 @@ fn checkedTypePairEqlStep(
         .tuple => |left_items| return try appendCheckedTypePairs(allocator, pending, left_items, right_payload.tuple),
         .nominal => |left_nominal| {
             const right_nominal = right_payload.nominal;
-            return left_nominal.name == right_nominal.name and
+            const same_declaration = left_nominal.name == right_nominal.name and
                 left_nominal.origin_module == right_nominal.origin_module and
                 std.meta.eql(left_nominal.owner_module.*, right_nominal.owner_module.*) and
                 left_nominal.source_decl == right_nominal.source_decl and
                 left_nominal.builtin == right_nominal.builtin and
-                left_nominal.is_opaque == right_nominal.is_opaque and
-                std.meta.eql(left_nominal.representation, right_nominal.representation) and
-                checkedDeclaredFieldsExactEql(left_nominal.declared_fields, right_nominal.declared_fields) and
-                try appendCheckedTypePairs(allocator, pending, left_nominal.args, right_nominal.args) and
-                try appendCheckedTypePairs(allocator, pending, left_nominal.padding_field_types, right_nominal.padding_field_types);
+                left_nominal.is_opaque == right_nominal.is_opaque;
+            return switch (nominals) {
+                .stored => same_declaration and
+                    std.meta.eql(left_nominal.representation, right_nominal.representation) and
+                    checkedDeclaredFieldsExactEql(left_nominal.declared_fields, right_nominal.declared_fields) and
+                    try appendCheckedTypePairs(allocator, pending, left_nominal.args, right_nominal.args) and
+                    try appendCheckedTypePairs(allocator, pending, left_nominal.padding_field_types, right_nominal.padding_field_types),
+                .declaration_args => same_declaration and
+                    try appendCheckedTypePairs(allocator, pending, left_nominal.args, right_nominal.args),
+            };
         },
         .function => |left_function| {
             const right_function = right_payload.function;
@@ -5030,20 +5030,72 @@ pub const CheckedTypeStore = struct {
     const PublishedCounts = [@typeInfo(Column).@"enum".field_names.len]usize;
 
     /// Begin creating synthesized types in a store other threads read. The
-    /// caller ends the creation with `endCreation` before any id it created
-    /// leaves it, and waits on no slot in between.
+    /// caller finishes the creation with `finishCreation` before any id it
+    /// created leaves it, and waits on no slot in between; a creation that
+    /// fails ends with `endCreation`, and the next creation to finish
+    /// settles what it made.
     pub fn beginCreation(self: *CheckedTypeStore, io: std.Io) void {
         self.writer_mutex.lockUncancelable(io);
         collections.HeldLocks.acquired();
+        if (std.debug.runtime_safety) CreationLedger.push(self);
         self.creation_active.store(true, .seq_cst);
     }
 
+    /// Settle the representation of every type the store holds past the
+    /// settled ones (`ModuleInterfaceCapabilities`), creating the
+    /// capabilities of the local nominal instances first met there, then
+    /// end the creation. Every type created since the module's interface
+    /// capabilities were demanded is settled before its id can reach
+    /// another thread.
+    pub fn finishCreation(self: *CheckedTypeStore, allocator: Allocator, io: std.Io) Allocator.Error!void {
+        if (self.capability_source) |source| {
+            if (source.analyses.growableInterfaceCapabilities()) |capabilities| {
+                var scratch = CheckedTypeStoreView.EqualityScratch.init(allocator);
+                defer scratch.deinit();
+                try capabilities.settleSynthesized(allocator, self, &scratch, null);
+            }
+        }
+        self.endCreation(io);
+    }
+
+    /// End a creation. A creation that succeeded ends through
+    /// `finishCreation`, which settles the types it made first.
     pub fn endCreation(self: *CheckedTypeStore, io: std.Io) void {
         self.committed_roots.store(self.roots.count(), .release);
         self.creation_active.store(false, .seq_cst);
+        if (std.debug.runtime_safety) CreationLedger.pop(self);
         collections.HeldLocks.released();
         self.writer_mutex.unlock(io);
     }
+
+    /// Whether this thread holds the store's creation, in debug builds.
+    fn createdOnThisThread(self: *const CheckedTypeStore) bool {
+        return CreationLedger.holds(self);
+    }
+
+    /// The stores whose creation each thread holds, innermost last; kept
+    /// in debug builds only.
+    const CreationLedger = struct {
+        threadlocal var stores: [8]?*const CheckedTypeStore = @splat(null);
+        threadlocal var len: u8 = 0;
+
+        fn push(store: *const CheckedTypeStore) void {
+            if (len == stores.len) checkedArtifactInvariant("a thread nested more type store creations than the ledger holds", .{});
+            stores[len] = store;
+            len += 1;
+        }
+
+        fn pop(store: *const CheckedTypeStore) void {
+            if (len == 0 or stores[len - 1] != store) checkedArtifactInvariant("a type store creation ended out of order", .{});
+            len -= 1;
+            stores[len] = null;
+        }
+
+        fn holds(store: *const CheckedTypeStore) bool {
+            for (stores[0..len]) |held| if (held == store) return true;
+            return false;
+        }
+    };
 
     /// The number of leading roots whose types are complete: every root,
     /// unless a creation is under way in another thread.
@@ -5123,7 +5175,8 @@ pub const CheckedTypeStore = struct {
     /// Copy a build payload into the store's pools. The build's own slices
     /// are released only once every copy succeeded, so a failing commit leaves
     /// the build intact for its owner to release exactly once.
-    fn commitPayload(self: *CheckedTypeStore, allocator: Allocator, build: CheckedTypePayloadBuild) Allocator.Error!StoredCheckedTypePayload {
+    fn commitPayload(self: *CheckedTypeStore, allocator: Allocator, raw_build: CheckedTypePayloadBuild) Allocator.Error!StoredCheckedTypePayload {
+        const build = self.storedRepresentationBuild(raw_build);
         const stored: StoredCheckedTypePayload = switch (build) {
             .tag_union => |tu| blk: {
                 const tags_start: u32 = @intCast(self.tag_pool.items().len);
@@ -5153,6 +5206,23 @@ pub const CheckedTypeStore = struct {
             => try self.commitTypeData(allocator, StoredCheckedTypePayload, build),
         };
         freeOwned(allocator, build);
+        return stored;
+    }
+
+    /// `build` as the store holds it: a nominal type read with its
+    /// instance's box payload capability is held by its declaration, so the
+    /// store's own representation of a type never depends on when the
+    /// capabilities were demanded. The build's slices are shared.
+    fn storedRepresentationBuild(self: *const CheckedTypeStore, build: CheckedTypePayloadBuild) CheckedTypePayloadBuild {
+        if (build != .nominal) return build;
+        const capability = switch (build.nominal.representation) {
+            .local_box_payload_capability => |capability| capability.capability,
+            .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => return build,
+        };
+        const capabilities = self.publishedCapabilities() orelse
+            checkedArtifactInvariant("a nominal type read with a box payload capability was copied into a store whose capabilities were never demanded", .{});
+        var stored = build;
+        stored.nominal.representation = .{ .local_declaration = capabilities.boxPayloadCapability(capability).declaration };
         return stored;
     }
 
@@ -7401,7 +7471,7 @@ fn appendExplicitCheckedTypePayload(
     store: *CheckedTypeStore,
     build_payload: CheckedTypePayloadBuild,
 ) Allocator.Error!CheckedTypeId {
-    var owned_payload = build_payload;
+    var owned_payload = store.storedRepresentationBuild(build_payload);
     var payload_owned = true;
     errdefer if (payload_owned) deinitCheckedTypePayloadBuild(allocator, &owned_payload);
 
@@ -7979,8 +8049,15 @@ pub const SynthesizedTypeKeys = struct {
         }
         self.index_mutex.lockUncancelable(self.io);
         defer self.index_mutex.unlock(self.io);
+        if (std.debug.runtime_safety and self.indexed < bound) checkedArtifactInvariant("a synthesized key index answered over roots it does not cover", .{});
         const found = self.index.get(key.bytes) orelse return null;
-        return if (type_ids.synthesizedIndex(found) < bound) found else null;
+        if (type_ids.synthesizedIndex(found) >= bound) return null;
+        if (std.debug.runtime_safety) {
+            const found_info = self.slots.at(type_ids.synthesizedIndex(found)).peek() orelse
+                checkedArtifactInvariant("a synthesized key index holds a root whose key was never computed", .{});
+            if (!std.mem.eql(u8, &found_info.key.bytes, &key.bytes)) checkedArtifactInvariant("a synthesized key index answered a key with a root of another key", .{});
+        }
+        return found;
     }
 };
 
@@ -17621,7 +17698,7 @@ fn specializeResolvedPlans(allocator: Allocator, pass: *EvidencePass, index: *co
     const store = source.types.store;
     // A store gets its capability source when its module is published;
     // before that, nothing has the module's capabilities to read.
-    if (store.capability_source != null) _ = try store.view().interfaceCapabilities(pass.import_views.resolver());
+    if (store.capability_source != null) _ = try store.view().interfaceCapabilities();
     const owner = source.key.digest();
     for (pass.plan_results.items) |entry| switch (entry.resolution.resolution) {
         .direct_pending => |node_id| try demandTargetCapabilities(pass, owner, node_id),
@@ -17653,9 +17730,10 @@ fn specializeResolvedPlans(allocator: Allocator, pass: *EvidencePass, index: *co
     defer specializer.deinit();
     {
         store.beginCreation(source.analyses.io);
-        defer store.endCreation(source.analyses.io);
+        errdefer store.endCreation(source.analyses.io);
         for (pass.plan_results.items) |*entry| try specializer.specializePlan(&entry.resolution);
         for (pass.iterator_results.items) |*entry| try specializer.specializeIteratorPlan(&entry.resolution);
+        try store.finishCreation(allocator, source.analyses.io);
     }
     var sites = std.ArrayList(EnclosingDispatchSite).empty;
     defer sites.deinit(allocator);
@@ -17689,7 +17767,7 @@ fn demandTargetCapabilities(pass: *EvidencePass, owner: ModuleId, node_id: stati
     if (target_key.eql(owner)) return;
     const imported = pass.import_views.viewForKey(target_key) orelse
         checkedArtifactInvariant("resolved dispatch target module was not among the modules dispatch resolution reads", .{});
-    _ = try imported.checked_types.interfaceCapabilities(pass.import_views.resolver());
+    _ = try imported.checked_types.interfaceCapabilities();
 }
 
 fn enclosingSitesFor(
@@ -20491,7 +20569,7 @@ pub const PairingOverlay = struct {
         defer identity_actuals.deinit(allocator);
         {
             store.beginCreation(io);
-            defer store.endCreation(io);
+            errdefer store.endCreation(io);
             var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, store, names, importedView(app));
             defer projector.deinit();
             for (relation.relations) |input| {
@@ -20508,6 +20586,7 @@ pub const PairingOverlay = struct {
                     try identity_actuals.append(allocator, try projector.project(app_root));
                 }
             }
+            try store.finishCreation(allocator, io);
         }
         var formals = std.ArrayList(CheckedTypeId).empty;
         errdefer formals.deinit(allocator);
@@ -20572,15 +20651,34 @@ pub const PairingOverlay = struct {
         const at = self.position(own);
         if (at) |index| {
             const known = self.images[index].load(.acquire);
-            if (known != unknown_image) return @fromBackingInt(known);
+            if (known != unknown_image) {
+                if (std.debug.runtime_safety) try self.assertImageFresh(own, @fromBackingInt(known));
+                return @fromBackingInt(known);
+            }
         }
         const result = blk: {
             self.store.beginCreation(self.io);
-            defer self.store.endCreation(self.io);
-            break :blk try self.imageLocked(own);
+            errdefer self.store.endCreation(self.io);
+            const created = try self.imageLocked(own);
+            try self.store.finishCreation(self.allocator, self.io);
+            break :blk created;
         };
         if (at) |index| self.images[index].store(@backingInt(result), .release);
         return result;
+    }
+
+    /// Debug check that the lock-free column, which covers the types that
+    /// existed when the pairing was created, answers `own` with the image
+    /// the locked memo computes for it now.
+    fn assertImageFresh(self: *PairingOverlay, own: CheckedTypeId, known: CheckedTypeId) Allocator.Error!void {
+        const fresh = if (self.store.createdOnThisThread()) try self.imageLocked(own) else fresh: {
+            self.store.beginCreation(self.io);
+            errdefer self.store.endCreation(self.io);
+            const fresh = try self.imageLocked(own);
+            try self.store.finishCreation(self.allocator, self.io);
+            break :fresh fresh;
+        };
+        if (fresh != known) checkedArtifactInvariant("a pairing's image column disagrees with the image its memo computes", .{});
     }
 
     /// The scheme `own`, a scheme of the platform's store, reads as under
@@ -20590,8 +20688,10 @@ pub const PairingOverlay = struct {
         const root_image = try self.image(root);
         if (root_image == root) return own;
         self.store.beginCreation(self.io);
-        defer self.store.endCreation(self.io);
-        return try self.store.ensureSchemeForRoot(self.allocator, root_image);
+        errdefer self.store.endCreation(self.io);
+        const scheme = try self.store.ensureSchemeForRoot(self.allocator, root_image);
+        try self.store.finishCreation(self.allocator, self.io);
+        return scheme;
     }
 
     fn imageLocked(self: *PairingOverlay, own: CheckedTypeId) Allocator.Error!CheckedTypeId {
@@ -20766,7 +20866,7 @@ pub const PlatformRequirementRelationTable = struct {
         errdefer allocator.free(rows);
 
         checked_types.beginCreation(io);
-        defer checked_types.endCreation(io);
+        errdefer checked_types.endCreation(io);
         var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, checked_types, names, app_view.*);
         defer projector.deinit();
         for (active_relation.relations, 0..) |input, i| {
@@ -20815,6 +20915,7 @@ pub const PlatformRequirementRelationTable = struct {
             };
         }
 
+        try checked_types.finishCreation(allocator, io);
         return .{ .relations = rows };
     }
 
@@ -21797,11 +21898,11 @@ fn dispatchImportViews(dispatch: CheckedDispatch) Allocator.Error!CheckedImportV
 pub fn demandDispatchCapabilities(dispatch: CheckedDispatch, modules: []const ModuleId) Allocator.Error!void {
     const import_views = try dispatchImportViews(dispatch);
     const store = dispatch.source.types.store;
-    if (store.capability_source != null) _ = try store.view().interfaceCapabilities(import_views.resolver());
+    if (store.capability_source != null) _ = try store.view().interfaceCapabilities();
     for (modules) |module| {
         if (module.eql(dispatch.source.key.digest())) continue;
         const view = import_views.viewForKey(module) orelse checkedArtifactInvariant("a literal analysis read a module its dispatch resolution does not read", .{});
-        _ = try view.checked_types.interfaceCapabilities(import_views.resolver());
+        _ = try view.checked_types.interfaceCapabilities();
     }
 }
 
@@ -21866,11 +21967,12 @@ pub fn computeUnitLiteralConversions(allocator: Allocator, dispatch: CheckedDisp
     }
     {
         store.beginCreation(source.analyses.io);
-        defer store.endCreation(source.analyses.io);
+        errdefer store.endCreation(source.analyses.io);
         for (records) |*record| {
             record.checked_fn_root = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{}, record.root.checked_type);
             record.checked_fn_scheme = try store.ensureSchemeForRoot(allocator, record.checked_fn_root);
         }
+        try store.finishCreation(allocator, source.analyses.io);
     }
     for (records) |*record| record.relation = literalRootWrapperRelation(record.checked_fn_root, record.root.checked_type);
     const result = try allocator.create(UnitLiteralConversions);
@@ -23035,7 +23137,7 @@ pub fn computeLiteralComponent(
     try demandDispatchCapabilities(dispatch, modules.items);
     {
         store.beginCreation(io);
-        defer store.endCreation(io);
+        errdefer store.endCreation(io);
         for (edge_states.items) |*state| {
             if (state.alias_steps.items.len != 0) {
                 const composed = try composeLiteralAliasChain(allocator, store, names, state.subst, state.alias_steps.items);
@@ -23054,6 +23156,7 @@ pub fn computeLiteralComponent(
                 state.substitution = CheckedTypeSubstitution.init(allocator, state.formals, state.subst);
             }
         }
+        try store.finishCreation(allocator, io);
     }
 
     const NewRoot = struct { id: ComptimeRootKey, site: LiteralSite, ty: CheckedTypeId, edge: LiteralEdge, callee_requirement: u32, owner_expr: CIR.Expr.Idx };
@@ -23074,9 +23177,11 @@ pub fn computeLiteralComponent(
                 const obligation = literalCalleeRequirements(callee, &states)[j];
                 const ty = created: {
                     store.beginCreation(io);
-                    defer store.endCreation(io);
+                    errdefer store.endCreation(io);
                     const projected = if (state.projector) |projector| try projector.project(obligation.ty) else obligation.ty;
-                    break :created if (state.substitution) |*substitution| try store.cloneCheckedTypeRootSubstituting(allocator, projected, substitution) else projected;
+                    const created = if (state.substitution) |*substitution| try store.cloneCheckedTypeRootSubstituting(allocator, projected, substitution) else projected;
+                    try store.finishCreation(allocator, io);
+                    break :created created;
                 };
                 const key: ObligationKey = .{ .site = obligation.site, .ty = try literalRequirementTypeIdentity(store, names, &orderer, ty) };
                 if (!try store.rootContainsIdentityVariables(ty)) {
@@ -23188,11 +23293,12 @@ pub fn computeLiteralComponent(
     }
     {
         store.beginCreation(io);
-        defer store.endCreation(io);
+        errdefer store.endCreation(io);
         for (roots) |*record| {
             record.checked_fn_root = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{}, record.root.checked_type);
             record.checked_fn_scheme = try store.ensureSchemeForRoot(allocator, record.checked_fn_root);
         }
+        try store.finishCreation(allocator, io);
     }
     for (roots) |*record| record.relation = literalRootWrapperRelation(record.checked_fn_root, record.root.checked_type);
 
@@ -23352,27 +23458,12 @@ fn checkedTypeHoldsFunction(
                             (import_views.viewForKey(imported.artifact) orelse checkedArtifactInvariant("a nominal type's declaring module is not available", .{})).checked_types;
                         try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
                     },
-                    // A nominal published as a box payload capability is
+                    // A nominal read with a box payload capability is
                     // declared in its module like any other.
                     .local_box_payload_capability => {
                         const declaration = item.types.nominalDeclarationForPayload(nominal) orelse
                             checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
                         try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = declaration.backing });
-                    },
-                    // The capability names its nominal in the declaring
-                    // module's own names.
-                    .imported_box_payload_capability => |imported| {
-                        if (imported.artifact.eql(own_key)) {
-                            const declaration = own_types.nominalDeclarationForPayload(nominal) orelse
-                                checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
-                            try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = own_types, .ty = declaration.backing });
-                        } else {
-                            const declaring = import_views.viewForKey(imported.artifact) orelse checkedArtifactInvariant("a nominal type's declaring module is not available", .{});
-                            const capability = (try declaring.checked_types.interfaceCapabilities(import_views.resolver())).boxPayloadCapability(imported.capability);
-                            const declaration = declaring.checked_types.nominalDeclaration(capability.nominal) orelse
-                                checkedArtifactInvariant("a box payload capability names a nominal its module does not declare", .{});
-                            try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring.checked_types, .ty = declaration.backing });
-                        }
                     },
                     .opaque_without_backing => {},
                 }
@@ -23878,7 +23969,7 @@ fn appendUniqueCheckedTypeSubstitution(
         if (builtin.mode == .debug and existing_actual != actual) {
             var scratch = CheckedTypeStoreView.EqualityScratch.init(allocator);
             defer scratch.deinit();
-            if (!try checkedTypeRootSliceEql(.alpha, .named, store.view(), &.{existing_actual}, &.{actual}, &scratch)) {
+            if (!try checkedTypeRootSliceEql(.alpha, .named, .stored, store.view(), &.{existing_actual}, &.{actual}, &scratch)) {
                 checkedArtifactInvariant("checked type substitution mapped one formal to multiple actuals", .{});
             }
         }
@@ -24465,10 +24556,9 @@ pub fn pairCheckedPlatform(
     // The pairing reads the nominal representations of the platform's, the
     // app's and every available module's types, so their capabilities exist
     // before it creates any type.
-    const capability_views = CheckedImportViews{ .current_owner = platform.key.digest(), .direct = &.{}, .available = available_artifacts };
-    _ = try platform.typesView().interfaceCapabilities(capability_views.resolver());
-    _ = try app.typesView().interfaceCapabilities(capability_views.resolver());
-    for (available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities(capability_views.resolver());
+    _ = try platform.typesView().interfaceCapabilities();
+    _ = try app.typesView().interfaceCapabilities();
+    for (available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities();
     const platform_analyses = platform.body_analyses orelse checkedArtifactInvariant("a platform was paired before its body analyses were attached", .{});
     const thread_safe = platform_analyses.allocator;
     const io = platform_analyses.io;
@@ -24864,13 +24954,16 @@ fn publishRequiresMetadata(
 
 /// Public `BoxPayloadCapabilityId` declaration.
 pub const BoxPayloadCapabilityId = enum(u32) { _ };
-/// Public `OpaqueAtomicProofId` declaration.
-pub const OpaqueAtomicProofId = enum(u32) { _ };
 
-/// Public `BoxPayloadCapabilityEntry` declaration.
+/// The box payload capability of one instance of a local nominal type: its
+/// declaration at one list of argument types, with its backing and padding
+/// types instantiated at them.
 pub const BoxPayloadCapabilityEntry = struct {
     id: BoxPayloadCapabilityId,
     nominal: canonical.NominalTypeKey,
+    declaration: CheckedNominalDeclarationId,
+    /// The type the capability was created for; its arguments are the
+    /// instance's.
     source_ty_payload: CheckedTypeId,
     backing_ty: CheckedTypeId,
     /// Range into `ModuleInterfaceCapabilities.padding_pool` for this instance's
@@ -24882,213 +24975,343 @@ pub const BoxPayloadCapabilityEntry = struct {
 
     /// This entry's instantiated padding field types within `caps.padding_pool`.
     pub fn paddingFieldTys(self: BoxPayloadCapabilityEntry, caps: *const ModuleInterfaceCapabilities) []const CheckedTypeId {
-        return caps.padding_pool[self.padding_start .. self.padding_start + self.padding_len];
+        return caps.padding_pool.items()[self.padding_start..][0..self.padding_len];
     }
 };
 
-/// Public `OpaqueAtomicProofEntry` declaration.
-pub const OpaqueAtomicProofEntry = struct {
-    id: OpaqueAtomicProofId,
-    nominal: canonical.NominalTypeKey,
-    source_ty_payload: CheckedTypeId,
-};
-
-/// The box payload capability representation one local nominal type of the
-/// module was given.
+/// The box payload capability one local nominal source type reads with.
 pub const CapabilityRepresentationRow = struct {
     ty: CheckedTypeId,
-    representation: CheckedNominalRepresentationRef,
-
-    fn lessThan(_: void, left: CapabilityRepresentationRow, right: CapabilityRepresentationRow) bool {
-        return @backingInt(left.ty) < @backingInt(right.ty);
-    }
+    capability: BoxPayloadCapabilityId,
 };
 
-/// The box payload capabilities of one module's local nominal types: every
-/// local nominal source type checking reached and every local nominal
-/// synthesized type the module held when it was published. Computed on first
-/// demand into a slot of the module's analyses (`ModuleAnalyses`); a
-/// consumer that reads nominal representations of a module's types demands
-/// them first (`CheckedTypeStoreView.interfaceCapabilities`), and reads of
-/// those types then carry them.
+/// The box payload capabilities of one module's local nominal types, one
+/// per instance: a declaration of the module at one list of argument types,
+/// where two argument lists are one when they are equal as types
+/// (`CheckedNominalEquality.declaration_args`: variables by identity, every
+/// other type by structure, a nominal by its declaration and arguments).
+/// Every type entry naming an instance reads with the instance's
+/// capability, whenever it was created. Computed on first demand into a
+/// slot of the module's analyses (`ModuleAnalyses`) for every local nominal
+/// type the store holds then, which is exactly what it held when it was
+/// published; a creation that ends later settles the types it made before
+/// any of them leaves it (`CheckedTypeStore.finishCreation`), creating the
+/// capability of an instance first met then. A consumer that reads nominal
+/// representations of a module's types demands them first
+/// (`CheckedTypeStoreView.interfaceCapabilities`), and reads of those types
+/// then carry them.
+///
+/// Capability ids follow the order instances are first met: the published
+/// types in id order, then each later creation's types in the order the
+/// creations end, which depends on demand order. An id is only a table
+/// index and an identity for equality; nothing orders anything by it.
 pub const ModuleInterfaceCapabilities = struct {
-    boxed_payload_templates: []const BoxPayloadCapabilityEntry = &.{},
-    opaque_atomic_proofs: []const OpaqueAtomicProofEntry = &.{},
+    current_module: canonical.ModuleIdentityId,
+    /// Every capability, by id. Grows under the store's creation lock while
+    /// other threads read it.
+    boxed_payload_templates: collections.PublishedList(BoxPayloadCapabilityEntry) = .empty,
     /// Shared flat pool of instantiated padding field types referenced by box
     /// entries' `(padding_start, padding_len)` ranges.
-    padding_pool: []const CheckedTypeId = &.{},
-    /// Sorted by type id.
-    representations: []const CapabilityRepresentationRow = &.{},
+    padding_pool: collections.PublishedList(CheckedTypeId) = .empty,
+    /// Every local nominal source type the store's checking reached, sorted
+    /// by type id.
+    source_representations: []const CapabilityRepresentationRow = &.{},
+    /// Per synthesized type below its count: the capability of a local
+    /// nominal type, null for any other type. Synthesized types at or past
+    /// its count belong to the creation under way and are settled before it
+    /// ends.
+    synthesized_representations: collections.PublishedList(?BoxPayloadCapabilityId) = .empty,
+    /// Read and written only under the store's creation lock: the
+    /// capabilities of each instance hash (`nominalInstanceHash`).
+    instances: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(BoxPayloadCapabilityId)) = .empty,
 
     /// Compute the capabilities of `store`'s local nominal types, creating
     /// the instantiated backing and padding types they name. The caller
-    /// holds the store's creation (`CheckedTypeStore.beginCreation`) when
-    /// other threads may read it.
+    /// holds the store's creation (`CheckedTypeStore.beginCreation`).
     pub fn compute(
         allocator: Allocator,
         checked_types: *CheckedTypeStore,
         current_module: canonical.ModuleIdentityId,
-        module: ModuleId,
-        resolver: ModuleResolver,
     ) Allocator.Error!ModuleInterfaceCapabilities {
-        var boxed_payload_templates = std.ArrayList(BoxPayloadCapabilityEntry).empty;
-        errdefer boxed_payload_templates.deinit(allocator);
-        var opaque_atomic_proofs = std.ArrayList(OpaqueAtomicProofEntry).empty;
-        errdefer opaque_atomic_proofs.deinit(allocator);
-        // Shared pool of instantiated padding field types; box entries reference ranges.
-        var padding_pool = std.ArrayList(CheckedTypeId).empty;
-        errdefer padding_pool.deinit(allocator);
-        var representations = std.ArrayList(CapabilityRepresentationRow).empty;
-        errdefer representations.deinit(allocator);
+        var result = ModuleInterfaceCapabilities{ .current_module = current_module };
+        errdefer result.deinit(allocator);
 
-        var seen_nominals = std.HashMap(NominalCapabilitySeenKey, CheckedNominalRepresentationRef, NominalCapabilitySeenKey.Context, std.hash_map.default_max_load_percentage).init(allocator);
-        defer seen_nominals.deinit();
-        var seen_args_arena = base.SingleThreadArena.init(allocator);
-        defer seen_args_arena.deinit();
-        const seen_args = seen_args_arena.allocator();
-
-        // Every local nominal type the module held when it was published:
-        // its synthesized entries, then the source types checking reached,
-        // in variable order.
+        // Every type the store holds now is a type it held when it was
+        // published: every slot demands its module's capabilities before
+        // it creates a type there, so the capabilities of a cold module and
+        // of the same module loaded from its cache entry are one table.
         const published = checked_types.published_counts orelse
             checkedArtifactInvariant("interface capabilities were computed for a store that was never published", .{});
         const synthesized_count = published[@backingInt(CheckedTypeStore.Column.payloads)];
-        var nominal_types = std.ArrayList(CheckedTypeId).empty;
-        defer nominal_types.deinit(allocator);
-        for (0..synthesized_count) |index| try nominal_types.append(allocator, type_ids.fromSynthesized(index));
+        if (std.debug.runtime_safety and checked_types.payloads.count() != synthesized_count) {
+            checkedArtifactInvariant("a module's types were created before its interface capabilities were demanded", .{});
+        }
+
+        var scratch = CheckedTypeStoreView.EqualityScratch.init(allocator);
+        defer scratch.deinit();
+
+        // The published synthesized types, then the source types checking
+        // reached, in variable order, then every type the capabilities
+        // created.
+        try result.settleSynthesized(allocator, checked_types, &scratch, synthesized_count);
+        var source_rows = std.ArrayList(CapabilityRepresentationRow).empty;
+        defer source_rows.deinit(allocator);
         for (checked_types.sealed_var_facts.items, 0..) |var_facts, raw| {
-            if (var_facts.reached) try nominal_types.append(allocator, type_ids.fromVar(@fromBackingInt(@intCast(raw))));
-        }
-
-        for (nominal_types.items) |nominal_ty| {
-            const payload = checked_types.payload(nominal_ty);
-            if (payload != .nominal) continue;
-            const nominal = payload.nominal;
-            if (nominal.builtin != null) continue;
-            if (nominal.origin_module != current_module) continue;
-            const nominal_key = checkedNominalTypeKey(nominal);
-            // nominal.args aliases type_id_pool; copy before any pool growth.
-            const nominal_args = try allocator.dupe(CheckedTypeId, nominal.args);
-            defer allocator.free(nominal_args);
-            // Roots naming one declaration over the same argument ids are
-            // one instance and share its capability; an identity-free
-            // instance is one type whichever root names it, while a type
-            // with variables keeps its own declaration representation.
-            const seen = try seen_nominals.getOrPut(.{ .nominal = nominal_key, .args = nominal_args });
-            if (seen.found_existing) {
-                if (!try checked_types.rootContainsIdentityVariables(nominal_ty)) try representations.append(allocator, .{ .ty = nominal_ty, .representation = seen.value_ptr.* });
-                continue;
+            if (!var_facts.reached) continue;
+            const ty = type_ids.fromVar(@fromBackingInt(@intCast(raw)));
+            if (try result.capabilityOfType(allocator, checked_types, &scratch, ty)) |capability| {
+                if (std.debug.runtime_safety and source_rows.items.len != 0 and @backingInt(source_rows.items[source_rows.items.len - 1].ty) >= @backingInt(ty)) {
+                    checkedArtifactInvariant("local nominal source types were settled out of id order", .{});
+                }
+                try source_rows.append(allocator, .{ .ty = ty, .capability = capability });
             }
-            errdefer _ = seen_nominals.remove(.{ .nominal = nominal_key, .args = nominal_args });
-            seen.key_ptr.args = try seen_args.dupe(CheckedTypeId, nominal_args);
-
-            const declaration = checked_types.nominalDeclaration(nominal_key) orelse {
-                checkedArtifactInvariant("nominal representation publication could not find the checked nominal declaration", .{});
-            };
-            const backing_ty = try checked_types.ensureInstantiatedNominalBackingRoot(
-                allocator,
-                declaration,
-                nominal_args,
-            );
-            const padding_field_tys = try checked_types.ensureInstantiatedPaddingFieldTypes(
-                allocator,
-                declaration,
-                nominal_args,
-            );
-            defer allocator.free(padding_field_tys);
-            const padding_start: u32 = @intCast(padding_pool.items.len);
-            const padding_len: u32 = @intCast(padding_field_tys.len);
-            try padding_pool.appendSlice(allocator, padding_field_tys);
-
-            const capability_id: BoxPayloadCapabilityId = @fromBackingInt(@intCast(@as(u32, @intCast(boxed_payload_templates.items.len))));
-            try boxed_payload_templates.append(allocator, .{
-                .id = capability_id,
-                .nominal = nominal_key,
-                .source_ty_payload = nominal_ty,
-                .backing_ty = backing_ty,
-                .padding_start = padding_start,
-                .padding_len = padding_len,
-                .is_opaque = nominal.is_opaque,
-            });
-
-            const proof_id: ?OpaqueAtomicProofId = blk: {
-                if (!nominal.is_opaque) break :blk null;
-                if (!try checkedTypeHasNoReachableCallableSlots(allocator, module, checked_types.view(), resolver, backing_ty)) break :blk null;
-
-                const id: OpaqueAtomicProofId = @fromBackingInt(@intCast(@as(u32, @intCast(opaque_atomic_proofs.items.len))));
-                try opaque_atomic_proofs.append(allocator, .{
-                    .id = id,
-                    .nominal = nominal_key,
-                    .source_ty_payload = nominal_ty,
-                });
-                break :blk id;
-            };
-
-            const representation: CheckedNominalRepresentationRef = .{ .local_box_payload_capability = .{
-                .capability = capability_id,
-                .opaque_atomic_proof = proof_id,
-            } };
-            seen.value_ptr.* = representation;
-            try representations.append(allocator, .{ .ty = nominal_ty, .representation = representation });
         }
-        std.mem.sort(CapabilityRepresentationRow, representations.items, {}, CapabilityRepresentationRow.lessThan);
-
-        return .{
-            .boxed_payload_templates = try boxed_payload_templates.toOwnedSlice(allocator),
-            .opaque_atomic_proofs = try opaque_atomic_proofs.toOwnedSlice(allocator),
-            .padding_pool = try padding_pool.toOwnedSlice(allocator),
-            .representations = try representations.toOwnedSlice(allocator),
-        };
+        result.source_representations = try source_rows.toOwnedSlice(allocator);
+        try result.settleSynthesized(allocator, checked_types, &scratch, null);
+        return result;
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub fn deinit(self: *ModuleInterfaceCapabilities, allocator: Allocator) void {
+        self.boxed_payload_templates.deinit(allocator);
+        self.padding_pool.deinit(allocator);
+        allocator.free(self.source_representations);
+        self.synthesized_representations.deinit(allocator);
+        var buckets = self.instances.valueIterator();
+        while (buckets.next()) |bucket| bucket.deinit(allocator);
+        self.instances.deinit(allocator);
+        self.* = undefined;
+    }
+
+    /// Settle every synthesized type of `store` past the settled ones, up
+    /// to `limit` (every type, including those settling creates, when
+    /// null). The caller holds the store's creation.
+    fn settleSynthesized(
+        self: *ModuleInterfaceCapabilities,
+        allocator: Allocator,
+        store: *CheckedTypeStore,
+        scratch: *CheckedTypeStoreView.EqualityScratch,
+        limit: ?usize,
+    ) Allocator.Error!void {
+        while (true) {
+            const index = self.synthesized_representations.count();
+            if (index >= limit orelse store.payloads.count()) return;
+            const capability = try self.capabilityOfType(allocator, store, scratch, type_ids.fromSynthesized(index));
+            if (std.debug.runtime_safety and self.synthesized_representations.count() != index) {
+                checkedArtifactInvariant("a synthesized type was settled while settling another", .{});
+            }
+            try self.synthesized_representations.append(allocator, capability);
+        }
+    }
+
+    /// The capability `ty` reads with when it is a local nominal type of
+    /// the module, creating its instance's capability when no type naming
+    /// the instance was settled before; null for any other type.
+    fn capabilityOfType(
+        self: *ModuleInterfaceCapabilities,
+        allocator: Allocator,
+        store: *CheckedTypeStore,
+        scratch: *CheckedTypeStoreView.EqualityScratch,
+        ty: CheckedTypeId,
+    ) Allocator.Error!?BoxPayloadCapabilityId {
+        const view = store.view();
+        const nominal = switch (view.payload(ty)) {
+            .nominal => |nominal| nominal,
+            .pending => checkedArtifactInvariant("a pending checked type was settled", .{}),
+            .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return null,
+        };
+        if (nominal.builtin != null or nominal.origin_module != self.current_module) return null;
+        const declaration_id = switch (nominal.representation) {
+            .local_declaration => |declaration_id| declaration_id,
+            .local_box_payload_capability => |capability| self.boxPayloadCapability(capability.capability).declaration,
+            .builtin, .imported_declaration, .opaque_without_backing => checkedArtifactInvariant("a nominal type its module declares is not represented by its declaration", .{}),
+        };
+        const nominal_key = checkedNominalTypeKey(nominal);
+        // nominal.args aliases type_id_pool, which instantiation grows.
+        const args = try allocator.dupe(CheckedTypeId, nominal.args);
+        defer allocator.free(args);
+
+        const hash = nominalInstanceHash(view, declaration_id, args);
+        const bucket = try self.instances.getOrPut(allocator, hash);
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        const found = found: for (bucket.value_ptr.items) |candidate| {
+            if (try self.instanceIs(view, scratch, candidate, declaration_id, args)) break :found candidate;
+        } else null;
+        if (std.debug.runtime_safety) try self.assertInstanceFound(view, scratch, declaration_id, args, found);
+        if (found) |capability| return capability;
+
+        const declaration = view.nominalDeclarationById(declaration_id);
+        const backing_ty = try store.ensureInstantiatedNominalBackingRoot(allocator, declaration, args);
+        const padding_field_tys = try store.ensureInstantiatedPaddingFieldTypes(allocator, declaration, args);
+        defer allocator.free(padding_field_tys);
+        const padding_start: u32 = @intCast(self.padding_pool.count());
+        const padding_len: u32 = @intCast(padding_field_tys.len);
+        try self.padding_pool.appendSlice(allocator, padding_field_tys);
+
+        const capability: BoxPayloadCapabilityId = @fromBackingInt(@intCast(self.boxed_payload_templates.count()));
+        try self.boxed_payload_templates.append(allocator, .{
+            .id = capability,
+            .nominal = nominal_key,
+            .declaration = declaration_id,
+            .source_ty_payload = ty,
+            .backing_ty = backing_ty,
+            .padding_start = padding_start,
+            .padding_len = padding_len,
+            .is_opaque = nominal.is_opaque,
+        });
+        try bucket.value_ptr.append(allocator, capability);
+        return capability;
+    }
+
+    /// Whether `capability` is the instance of `declaration` at `args`.
+    fn instanceIs(
+        self: *const ModuleInterfaceCapabilities,
+        view: CheckedTypeStoreView,
+        scratch: *CheckedTypeStoreView.EqualityScratch,
+        capability: BoxPayloadCapabilityId,
+        declaration: CheckedNominalDeclarationId,
+        args: []const CheckedTypeId,
+    ) Allocator.Error!bool {
+        const entry = self.boxPayloadCapability(capability);
+        if (entry.declaration != declaration) return false;
+        const instance_args = switch (view.payload(entry.source_ty_payload)) {
+            .nominal => |nominal| nominal.args,
+            .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => checkedArtifactInvariant("a box payload capability was created for a type that is not nominal", .{}),
+        };
+        if (instance_args.len != args.len) checkedArtifactInvariant("two instances of one nominal declaration have different arities", .{});
+        scratch.clear();
+        return try checkedTypeRootSliceEql(.exact, .named, .declaration_args, view, instance_args, args, scratch);
+    }
+
+    /// Debug check that the instance hash buckets every instance of a
+    /// declaration with its equal argument lists: a scan of every
+    /// capability finds the instance `found` names, or none when it is null.
+    fn assertInstanceFound(
+        self: *const ModuleInterfaceCapabilities,
+        view: CheckedTypeStoreView,
+        scratch: *CheckedTypeStoreView.EqualityScratch,
+        declaration: CheckedNominalDeclarationId,
+        args: []const CheckedTypeId,
+        found: ?BoxPayloadCapabilityId,
+    ) Allocator.Error!void {
+        var scanned: ?BoxPayloadCapabilityId = null;
+        for (self.boxed_payload_templates.items()) |entry| {
+            if (!try self.instanceIs(view, scratch, entry.id, declaration, args)) continue;
+            if (scanned != null) checkedArtifactInvariant("one nominal instance was given two box payload capabilities", .{});
+            scanned = entry.id;
+        }
+        if (scanned != found) checkedArtifactInvariant("a nominal instance's hash did not find the capability its equal arguments were given", .{});
+    }
 
     pub fn boxPayloadCapability(
         self: *const ModuleInterfaceCapabilities,
         id: BoxPayloadCapabilityId,
     ) BoxPayloadCapabilityEntry {
+        const entries = self.boxed_payload_templates.items();
         const index: usize = @backingInt(id);
-        if (index >= self.boxed_payload_templates.len) {
+        if (index >= entries.len) {
             checkedArtifactInvariant("interface capability lookup referenced missing boxed payload capability", .{});
         }
-        return self.boxed_payload_templates[index];
+        return entries[index];
     }
 
-    /// The box payload capability representation of the local nominal type
-    /// `ty`, if it was given one.
-    pub fn representationOf(self: *const ModuleInterfaceCapabilities, ty: CheckedTypeId) ?CheckedNominalRepresentationRef {
-        const raw: u32 = @backingInt(ty);
-        var low: usize = 0;
-        var high: usize = self.representations.len;
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            const row = self.representations[mid];
-            if (@backingInt(row.ty) == raw) return row.representation;
-            if (@backingInt(row.ty) < raw) low = mid + 1 else high = mid;
+    /// The representation `nominal`, the payload of the local nominal type
+    /// `ty` of `store` as the store holds it, reads with: its instance's
+    /// capability once `ty` is settled, and its declaration while the
+    /// creation that made it, on this thread, is under way.
+    fn representationOf(
+        self: *const ModuleInterfaceCapabilities,
+        store: *const CheckedTypeStore,
+        ty: CheckedTypeId,
+        nominal: CheckedNominalType,
+    ) CheckedNominalRepresentationRef {
+        const capability = if (type_ids.isSynthesized(ty)) synthesized: {
+            const index = type_ids.synthesizedIndex(ty);
+            const settled = self.synthesized_representations.items();
+            if (index >= settled.len) {
+                if (std.debug.runtime_safety and !store.createdOnThisThread()) {
+                    checkedArtifactInvariant("a local nominal type was read before the creation that made it settled its representation", .{});
+                }
+                return nominal.representation;
+            }
+            break :synthesized settled[index] orelse
+                checkedArtifactInvariant("a local nominal type was settled as no local nominal type", .{});
+        } else source: {
+            const raw: u32 = @backingInt(ty);
+            const rows = self.source_representations;
+            var low: usize = 0;
+            var high: usize = rows.len;
+            while (low < high) {
+                const mid = low + (high - low) / 2;
+                const row = rows[mid];
+                if (@backingInt(row.ty) == raw) break :source row.capability;
+                if (@backingInt(row.ty) < raw) low = mid + 1 else high = mid;
+            }
+            checkedArtifactInvariant("a local nominal source type checking never reached was read", .{});
+        };
+        if (std.debug.runtime_safety) {
+            const entry = self.boxPayloadCapability(capability);
+            if (!canonicalNominalTypeKeyEql(entry.nominal, checkedNominalTypeKey(nominal)) or nominal.representation != .local_declaration or nominal.representation.local_declaration != entry.declaration) {
+                checkedArtifactInvariant("a local nominal type reads with the capability of another declaration", .{});
+            }
         }
-        return null;
+        return .{ .local_box_payload_capability = .{ .capability = capability } };
     }
 };
 
-/// A nominal instance by in-workspace identity: its declaration and its
-/// argument ids.
-const NominalCapabilitySeenKey = struct {
-    nominal: canonical.NominalTypeKey,
-    args: []const CheckedTypeId,
+/// A bucket selector for the instance of `declaration` at `args`: equal
+/// argument lists (`CheckedNominalEquality.declaration_args`) hash alike,
+/// and `ModuleInterfaceCapabilities.instanceIs` decides within a bucket.
+/// It reads each argument's constructor and names two levels deep.
+fn nominalInstanceHash(view: CheckedTypeStoreView, declaration: CheckedNominalDeclarationId, args: []const CheckedTypeId) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    std.hash.autoHash(&hasher, declaration);
+    std.hash.autoHash(&hasher, args.len);
+    for (args) |arg| hashInstanceArgument(&hasher, view, arg, 2);
+    return hasher.final();
+}
 
-    const Context = struct {
-        pub fn hash(_: Context, key: NominalCapabilitySeenKey) u64 {
-            var hasher = std.hash.Wyhash.init(0);
-            std.hash.autoHash(&hasher, key.nominal);
-            hasher.update(std.mem.sliceAsBytes(key.args));
-            return hasher.final();
-        }
-
-        pub fn eql(_: Context, left: NominalCapabilitySeenKey, right: NominalCapabilitySeenKey) bool {
-            return std.meta.eql(left.nominal, right.nominal) and std.mem.eql(CheckedTypeId, left.args, right.args);
-        }
-    };
-};
+fn hashInstanceArgument(hasher: *std.hash.Wyhash, view: CheckedTypeStoreView, ty: CheckedTypeId, depth: u8) void {
+    const payload = view.payload(ty);
+    std.hash.autoHash(hasher, std.meta.activeTag(payload));
+    const children_depth = if (depth == 0) return else depth - 1;
+    switch (payload) {
+        .pending => checkedArtifactInvariant("a pending checked type was hashed as a nominal argument", .{}),
+        .field_kind, .err, .empty_record, .empty_tag_union => {},
+        .flex, .rigid => std.hash.autoHash(hasher, ty),
+        .alias => |alias| {
+            std.hash.autoHash(hasher, alias.name);
+            std.hash.autoHash(hasher, alias.origin_module);
+            for (alias.args) |arg| hashInstanceArgument(hasher, view, arg, children_depth);
+        },
+        .nominal => |nominal| {
+            std.hash.autoHash(hasher, nominal.origin_module);
+            std.hash.autoHash(hasher, nominal.source_decl);
+            for (nominal.args) |arg| hashInstanceArgument(hasher, view, arg, children_depth);
+        },
+        .record => |record| {
+            std.hash.autoHash(hasher, record.fields.len());
+            for (0..record.fields.len()) |field_index| {
+                const field = record.fields.get(field_index);
+                std.hash.autoHash(hasher, field.name);
+                hashInstanceArgument(hasher, view, field.ty, children_depth);
+            }
+        },
+        .tuple => |items| for (items) |item| hashInstanceArgument(hasher, view, item, children_depth),
+        .function => |function| {
+            std.hash.autoHash(hasher, finalizedFunctionKind(function.kind));
+            for (function.args) |arg| hashInstanceArgument(hasher, view, arg, children_depth);
+            hashInstanceArgument(hasher, view, function.ret, children_depth);
+        },
+        .tag_union => |tag_union| {
+            std.hash.autoHash(hasher, tag_union.tags.len());
+            for (0..tag_union.tags.len()) |tag_index| {
+                const tag = tag_union.tags.get(tag_index);
+                std.hash.autoHash(hasher, tag.name);
+                for (tag.args) |arg| hashInstanceArgument(hasher, view, arg, children_depth);
+            }
+        },
+    }
+}
 
 fn canonicalNominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
     return a.module == b.module and a.source_decl == b.source_decl;
@@ -33128,24 +33351,6 @@ const CheckedTypeStoreImportProjector = struct {
             .nominal => |nominal| {
                 try ops.append(gpa, .{ .type_name = nominal.name });
                 try ops.append(gpa, .{ .module_identity = nominal.origin_module });
-                switch (nominal.representation) {
-                    // Project the capability's backing-type root into the target store so
-                    // its key is registered there. Lowering resolves an imported
-                    // box-payload capability's backing via `checkedTypeInCurrentView` (a
-                    // key lookup); without this projection that lookup fails for a
-                    // for-clause-substituted nominal app type whose declaration backing
-                    // root is distinct from the projected nominal usage backing (issue
-                    // 9731). The projected id is unused—the registration is the point.
-                    .local_box_payload_capability => |capability| try ops.append(gpa, .{
-                        .child = self.imported.checked_types.demandedInterfaceCapabilities().boxPayloadCapability(capability.capability).backing_ty,
-                    }),
-                    .builtin,
-                    .local_declaration,
-                    .imported_declaration,
-                    .imported_box_payload_capability,
-                    .opaque_without_backing,
-                    => {},
-                }
                 for (nominal.args) |arg| try ops.append(gpa, .{ .child = arg });
                 for (nominal.padding_field_types) |padding| try ops.append(gpa, .{ .child = padding });
                 for (nominal.declared_fields) |field| switch (field) {
@@ -33230,15 +33435,12 @@ const CheckedTypeStoreImportProjector = struct {
                         .declaration = declaration,
                     } },
                     .imported_declaration => |imported_decl| .{ .imported_declaration = imported_decl },
-                    .local_box_payload_capability => |capability| capability_blk: {
-                        _ = results.typeId();
-                        break :capability_blk .{ .imported_box_payload_capability = .{
-                            .artifact = self.imported.key.digest(),
-                            .capability = capability.capability,
-                            .opaque_atomic_proof = capability.opaque_atomic_proof,
-                        } };
-                    },
-                    .imported_box_payload_capability => |capability| .{ .imported_box_payload_capability = capability },
+                    // A nominal another module declares is represented by
+                    // its declaration in every importer.
+                    .local_box_payload_capability => |capability| .{ .imported_declaration = .{
+                        .artifact = self.imported.key.digest(),
+                        .declaration = self.imported.checked_types.demandedInterfaceCapabilities().boxPayloadCapability(capability.capability).declaration,
+                    } },
                     .opaque_without_backing => .opaque_without_backing,
                 };
                 const args = try results.typeIds(gpa, nominal.args.len);
@@ -34159,11 +34361,10 @@ pub fn publishFromTypedModule(
     const module_analyses = try ModuleAnalyses.create(allocator, inputs.io, null);
     var module_analyses_owned = true;
     errdefer if (module_analyses_owned) module_analyses.destroy();
-    const import_views = CheckedImportViews{ .current_owner = artifact_key.digest(), .direct = inputs.imports, .available = inputs.available_artifacts };
     // Publication reads the nominal representations of the types of every
     // module it imports or resolves against.
-    for (inputs.imports) |import| _ = try import.view.checked_types.interfaceCapabilities(import_views.resolver());
-    for (inputs.available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities(import_views.resolver());
+    for (inputs.imports) |import| _ = try import.view.checked_types.interfaceCapabilities();
+    for (inputs.available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities();
     try module_analyses.attachImportViews(inputs.imports, inputs.available_artifacts);
 
     // Omitted defaults name their fields and origin modules through the
@@ -36176,8 +36377,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x0D, 0x54, 0x3A, 0x93, 0xC0, 0x37, 0xB3, 0x20, 0x9A, 0x37, 0xB8, 0x3D, 0xB3, 0x87, 0xBC, 0xF4,
-        0x28, 0xE6, 0x78, 0x41, 0x77, 0xC1, 0x35, 0x25, 0xB7, 0xD7, 0xBD, 0xBB, 0xC1, 0x61, 0xDC, 0x3F,
+        0x34, 0x16, 0x09, 0x15, 0xDA, 0x04, 0x5D, 0x04, 0x6C, 0x95, 0xC3, 0x60, 0x31, 0xF4, 0x12, 0xDA,
+        0xA1, 0x7D, 0x98, 0xA4, 0x90, 0x45, 0x21, 0x96, 0x8D, 0xD9, 0x13, 0x73, 0x50, 0xBD, 0x65, 0xE1,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -71,15 +71,9 @@ pub const CheckedModules = struct {
 /// Demand the interface capabilities of every module a lowering reads, so
 /// its reads of their nominal types carry them.
 pub fn demandInterfaceCapabilities(modules: CheckedModules) std.mem.Allocator.Error!void {
-    const views = checked.CheckedImportViews{
-        .current_owner = modules.root.module.key.digest(),
-        .direct = &.{},
-        .available = modules.imports,
-        .relations = modules.root.relation_modules,
-    };
-    _ = try modules.root.module.typesView().interfaceCapabilities(views.resolver());
-    for (modules.imports) |imported| _ = try imported.checked_types.interfaceCapabilities(views.resolver());
-    for (modules.root.relation_modules) |relation| _ = try relation.checked_types.interfaceCapabilities(views.resolver());
+    _ = try modules.root.module.typesView().interfaceCapabilities();
+    for (modules.imports) |imported| _ = try imported.checked_types.interfaceCapabilities();
+    for (modules.root.relation_modules) |relation| _ = try relation.checked_types.interfaceCapabilities();
 }
 
 /// Dense id of one checked module inside a single lowering's module set; see

@@ -196,12 +196,12 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer artifacts_by_key.deinit();
     const builtin_artifact = &build_env.builtin_modules.checked_artifact;
     try artifacts_by_key.put(builtin_artifact.key.digest(), builtin_artifact);
-    _ = try builtin_artifact.typesView().interfaceCapabilities(build_env.moduleResolver());
+    _ = try builtin_artifact.typesView().interfaceCapabilities();
     for (modules) |mod| {
         const artifact = mod.semantic.checked_artifact orelse continue;
         try artifacts_by_key.put(artifact.key.digest(), artifact);
         // Glue reads every module's nominal representations.
-        _ = try artifact.typesView().interfaceCapabilities(build_env.moduleResolver());
+        _ = try artifact.typesView().interfaceCapabilities();
     }
 
     var type_table = TypeTable.init(gpa, &artifacts_by_key);
@@ -3216,17 +3216,7 @@ const TypeTable = struct {
             },
             .local_box_payload_capability => |capability_ref| blk: {
                 const capability = artifact.typesView().demandedInterfaceCapabilities().boxPayloadCapability(capability_ref.capability);
-                const declaration = artifact.typeStore().nominalDeclaration(capability.nominal) orelse
-                    glueInvariant("boxed payload capability referenced a nominal declaration that is not in the owner artifact", .{});
-                break :blk .{ .artifact = artifact, .declaration = declaration };
-            },
-            .imported_box_payload_capability => |capability_ref| blk: {
-                const owner = self.artifacts_by_key.get(CheckedArtifact.importedBoxPayloadCapabilityModuleId(capability_ref)) orelse
-                    glueInvariant("imported boxed payload capability referenced an artifact that glue did not load", .{});
-                const capability = owner.typesView().demandedInterfaceCapabilities().boxPayloadCapability(capability_ref.capability);
-                const declaration = owner.typeStore().nominalDeclaration(capability.nominal) orelse
-                    glueInvariant("imported boxed payload capability referenced a nominal declaration that is not in the owner artifact", .{});
-                break :blk .{ .artifact = owner, .declaration = declaration };
+                break :blk .{ .artifact = artifact, .declaration = artifact.typeStore().nominalDeclarationById(capability.declaration) };
             },
             .builtin => |builtin_nominal| blk: {
                 if (!CheckedArtifact.builtinNominalHasDeclarationBacking(builtin_nominal)) break :blk null;
