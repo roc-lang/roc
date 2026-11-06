@@ -5611,6 +5611,9 @@ fn addLlvmPrivateRuntimeBitcode(b: *std.Build, runtime_target: roc_target.RocTar
         .strip = true,
         .pic = true,
         .single_threaded = true,
+        // As in Zig's own compiler-rt build. Without it, LLVM turns the loop in
+        // `memcpy` into a call to `memcpy`, which overflows the stack on large copies.
+        .no_builtin = true,
     });
     const obj = b.addObject(.{
         .name = b.fmt("roc_llvm_private_runtime_{s}", .{@tagName(runtime_target)}),
@@ -5621,6 +5624,7 @@ fn addLlvmPrivateRuntimeBitcode(b: *std.Build, runtime_target: roc_target.RocTar
             .strip = true,
             .pic = true,
             .single_threaded = true,
+            .no_builtin = true,
             .imports = &.{.{ .name = "compiler_rt", .module = compiler_rt_module }},
         }),
     });
