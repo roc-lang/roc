@@ -2585,6 +2585,14 @@ pub const BuildEnv = struct {
         try digests.adoptExports(&objects.digests, artifact);
     }
 
+    /// Transfer the calling contracts of objects already prepared by CTFE
+    /// before the consumer compiles its own units against those objects.
+    pub fn boxyAdoptInterfaces(self: *BuildEnv, interfaces: *eval.CompileTimeFinalization.ExportInterfaces) Allocator.Error!void {
+        const coordinator = self.coordinator orelse return;
+        const objects = &(coordinator.boxy_objects orelse return);
+        try interfaces.copyFrom(objects.interfaces);
+    }
+
     pub const BoxyKnownObject = struct {
         /// The object's pieces, when it was recorded with them: on a host
         /// that loads pieces for compile-time evaluation, or for a link

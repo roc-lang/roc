@@ -23,6 +23,18 @@ const ImportedView = check.CheckedArtifact.ImportedModuleView;
 const ExportInterfaces = eval.CompileTimeFinalization.ExportInterfaces;
 const dev_diagnostics = base.dev_diagnostics;
 
+/// A library unit needs test instrumentation only if its producer recorded
+/// expect nodes or explicit test roots. Imported workers belong to their own
+/// units and select their own mode. Paired root units must keep their explicit
+/// test mode, since they also lower the paired platform modules' bodies.
+pub fn requiresTestUnit(artifact: *const Artifact) bool {
+    if (artifact.checked_bodies.has_expects) return true;
+    for (artifact.root_requests.requests) |root| {
+        if (root.kind == .test_expect) return true;
+    }
+    return false;
+}
+
 /// Everything one unit's object is built from.
 pub const Unit = struct {
     gpa: Allocator,

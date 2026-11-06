@@ -598,18 +598,24 @@ pub fn encodeMetadata(retained: *Retained, result: *LirProgram.Result, compiled:
     }
     const count_at = encoder.bytes.items.len;
     try encoder.word(0);
+    var emitted: std.AutoHashMapUnmanaged(LIR.ProcIdentity, u32) = .empty;
+    defer emitted.deinit(allocator);
+    for (compiled) |function| try emitted.put(allocator, function.identity, function.symbol);
     var count: u32 = 0;
-    for (compiled) |function| {
-        const identity = function.identity;
-        const id = retained.workers.get(identity) orelse invariant("an emitted Boxy procedure has no lowering worker");
-        const record = program.worker(id).*;
+    // Lowering declares which workers can be function values. ARC may emit
+    // additional direct-call ownership variants; those have no capture recipe
+    // and do not belong in this table. Dead workers have no emitted symbol.
+    for (program.workers.items, 0..) |record, index| {
         switch (record.key) {
             .template, .default, .root, .static_data, .convert => continue,
             .lambda, .adapter, .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .codec => {},
         }
+        const identity = program.result.store.getProcSpec(record.proc).identity;
+        const symbol = emitted.get(identity) orelse continue;
+        const id: WorkerId = @fromBackingInt(@intCast(index));
         const shape = captureShape(program, id);
         try encoder.bytes.appendSlice(allocator, &identity.bytes);
-        try encoder.word(function.symbol);
+        try encoder.word(symbol);
         try encoder.typeSpan(shape.values);
         try encoder.word(shape.descs);
         try encoder.word(shape.dicts);

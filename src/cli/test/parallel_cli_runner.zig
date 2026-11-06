@@ -673,6 +673,7 @@ const CustomCase = enum {
     issue_11678_recursive_callback_cache,
     issue_11678_dev_cache_boxy_tables,
     boxy_caches_nothing_after_checking,
+    boxy_tests_reuse_primed_builtins,
     boxy_build_and_run_cache_what_check_caches,
     boxy_compile_time_objects,
     boxy_module_object_cache,
@@ -3686,6 +3687,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12595/12616: lambda solving preserves test observations across cache states and workers", .backend = .dev, .body = .{ .custom = .issue_12595_lambda_solved } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: dev builds whose code reaches the Boxy runtime are identical whatever the dev cache holds, including another app's packs", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_dev_cache_boxy_tables } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy tests reuse the primed builtins object", .skip = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) .never else .{ .always = "native unit-image tests require Linux x86_64" }, .body = .{ .custom = .boxy_tests_reuse_primed_builtins } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no caches nothing after checking", .timeout_ms = 600_000, .body = .{ .custom = .boxy_caches_nothing_after_checking } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no compile-time evaluation links cached module objects", .timeout_ms = 600_000, .body = .{ .custom = .boxy_compile_time_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build and run leave the cache check leaves", .timeout_ms = 600_000, .body = .{ .custom = .boxy_build_and_run_cache_what_check_caches } },
@@ -6233,6 +6235,7 @@ fn runCustomCase(
         .issue_12595_lambda_solved => customIssue12595LambdaSolved(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_dev_cache_boxy_tables => customIssue11678DevCacheBoxyTables(io, allocator, &env, &timer, timeout_ms),
+        .boxy_tests_reuse_primed_builtins => customBoxyTestsReusePrimedBuiltins(io, allocator, &env, &timer, timeout_ms),
         .boxy_caches_nothing_after_checking => customBoxyCachesNothingAfterChecking(io, allocator, &env, &timer, timeout_ms),
         .boxy_build_and_run_cache_what_check_caches => customBoxyBuildAndRunCacheWhatCheckCaches(io, allocator, &env, &timer, timeout_ms),
         .boxy_compile_time_objects => customBoxyCompileTimeObjects(io, allocator, &env, &timer, timeout_ms),
@@ -10459,6 +10462,72 @@ fn customBoxyTestOutcomes(io: std.Io, allocator: Allocator, env: *const CaseEnv,
     };
     for (cases) |case| {
         if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--specialize=no" }, .roc_file = case.roc_file, .exit = case.exit, .contains = case.contains })) |failure| return failure;
+    }
+    return null;
+}
+
+/// Building Hello World primes the builtins. Testing a module with no imports
+/// must add only that module's native unit, never another copy of the builtins.
+/// Its constant also loads the ordinary builtins during CTFE, so tests must
+/// handle both disk reuse and an object already prepared in the same process.
+fn customBoxyTestsReusePrimedBuiltins(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "primed_builtin_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "cache path allocation failed: {}", .{err});
+    var isolated: CaseEnv = .{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "environment clone failed: {}", .{err}),
+    };
+    defer isolated.env_map.deinit();
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "cache environment setup failed: {}", .{err});
+    }
+    const exe = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "hello" }) catch |err|
+        return customInfraFailure(allocator, timer, "executable path allocation failed: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "output argument allocation failed: {}", .{err});
+    if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=dev", "--specialize=no", out_arg },
+        .roc_file = "test/fx/hello_world.roc",
+    })) |failure| return failure;
+    const before = cacheInventory(io, allocator, cache_root) catch |err|
+        return customInfraFailure(allocator, timer, "initial inventory failed: {}", .{err});
+    const tiny = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "Tiny.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "test path allocation failed: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = tiny, .data = "seed = [1, 2, 3].map(|n| n + 1)\nexpect seed == [2, 3, 4]\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "test source write failed: {}", .{err});
+    if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+        .args = &.{ "test", "--opt=dev", "--specialize=no" },
+        .roc_file = tiny,
+        .file_path_mode = .relative,
+        .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }},
+    })) |failure| return failure;
+    const after = cacheInventory(io, allocator, cache_root) catch |err|
+        return customInfraFailure(allocator, timer, "final inventory failed: {}", .{err});
+    var added: usize = 0;
+    for (after) |entry| {
+        if (entry.family != .boxy_object) continue;
+        const already_present = for (before) |earlier| {
+            if (earlier.eql(entry)) break true;
+        } else false;
+        if (!already_present) added += 1;
+    }
+    if (added != 1) return customFailure(allocator, timer, "testing one new module added {d} native objects; expected only its own unit after priming the builtins", .{added});
+    // These exercise reused builtins with deferred calls and function-value
+    // metadata whose producer also emits ARC ownership variants.
+    for ([_][]const u8{ "test/cli/BoxyOptionalRecordFields.roc", "test/cli/BoxyRestoredClosureTry.roc" }) |fixture| {
+        if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = &.{ "test", "--opt=dev", "--specialize=no", "--jobs=1" },
+            .roc_file = fixture,
+            .contains = &.{.{ .stream = .stdout, .text = "tests passed" }},
+        })) |failure| return failure;
     }
     return null;
 }

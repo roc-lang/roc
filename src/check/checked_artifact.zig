@@ -11650,6 +11650,9 @@ fn storePool(pool_owner: anytype, comptime T: type) []const T {
 /// stored form. The live slices stay owned by the caller.
 fn commitBodyData(store: *CheckedBodyStore, allocator: Allocator, live: anytype) Allocator.Error!StoredBodyData(@TypeOf(live)) {
     const Live = @TypeOf(live);
+    if (comptime Live == CheckedExprData or Live == CheckedStatementData) {
+        if (live == .expect) store.has_expects = true;
+    }
     const Stored = StoredBodyData(Live);
     const info = @typeInfo(Live);
     if (comptime Stored == Live) {
@@ -12990,6 +12993,10 @@ const CheckedReassignmentPublisher = struct {
 
 /// Public `CheckedBodyStore` declaration.
 pub const CheckedBodyStore = struct {
+    /// Recorded while committing bodies, including synthesized expressions.
+    /// With no expect nodes and no test roots, test instrumentation cannot
+    /// change this module's unit. Consumers never scan bodies to recover this.
+    has_expects: bool = false,
     bodies: std.ArrayList(CheckedBody) = .empty,
     stored_exprs: std.ArrayList(StoredCheckedExpr) = .empty,
     stored_patterns: std.ArrayList(StoredCheckedPattern) = .empty,
@@ -14000,11 +14007,12 @@ pub const CheckedBodyStore = struct {
         self.source_node_map.discard(allocator);
     }
 
-    /// Relocatable serialized form. Every field is a `SerializedSlice` of POD
+    /// Relocatable serialized form. Pools are `SerializedSlice`s of POD
     /// elements, so the store relocates with a fixed number of base-pointer
     /// fixups independent of stored data size. `source_node_map` is a build-time
     /// lookup table (discarded before serialization) and has no serialized form.
     pub const Serialized = extern struct {
+        has_expects: artifact_serialize.SerializedScalar(bool, false) = .{},
         bodies: SerializedSlice(CheckedBody) = .{},
         stored_exprs: SerializedSlice(StoredCheckedExpr) = .{},
         stored_patterns: SerializedSlice(StoredCheckedPattern) = .{},
@@ -41736,6 +41744,40 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
 /// Convert an intentional fixture-table position while preserving enum inference.
 fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
+}
+
+test "checked body expect presence survives serialization for expressions statements and synthetic bodies" {
+    const gpa = std.testing.allocator;
+    const ExpectForm = enum { none, expression, statement, synthetic };
+    for (std.enums.values(ExpectForm)) |form| {
+        var store = CheckedBodyStore{};
+        defer store.deinit(gpa);
+        const zero: CheckedExprId = @fromBackingInt(@as(u32, 0));
+        const ty: CheckedTypeId = @fromBackingInt(@as(u32, 0));
+        const region = base.Region.from_raw_offsets(0, 0);
+        try store.commitExprs(gpa, &.{.{ .id = zero, .ty = ty, .source_region = region, .data = .empty_record }});
+        try std.testing.expect(!store.has_expects);
+        switch (form) {
+            .none => {},
+            .expression => try store.commitExprs(gpa, &.{.{ .id = @fromBackingInt(@as(u32, 1)), .ty = ty, .source_region = region, .data = .{ .expect = zero } }}),
+            .statement => try store.commitStatements(gpa, &.{.{ .id = @fromBackingInt(@as(u32, 0)), .source_region = region, .data = .{ .expect = zero } }}),
+            .synthetic => _ = try store.appendSyntheticExpr(gpa, ty, region, .{ .expect = zero }),
+        }
+        try std.testing.expectEqual(form != .none, store.has_expects);
+
+        var arena = base.SingleThreadArena.init(gpa);
+        defer arena.deinit();
+        var writer = CompactWriter.init();
+        const header = try writer.appendAlloc(arena.allocator(), CheckedBodyStore.Serialized);
+        try header.serialize(&store, arena.allocator(), &writer);
+        const bytes = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+        defer gpa.free(bytes);
+        _ = try writer.writeToBuffer(bytes);
+        const serialized: *const CheckedBodyStore.Serialized = @ptrCast(@alignCast(bytes.ptr));
+        var restored = serialized.deserialize(@intFromPtr(bytes.ptr));
+        defer restored.deinit(gpa);
+        try std.testing.expectEqual(form != .none, restored.has_expects);
+    }
 }
 
 test "loop mutation and state merge plans preserve expect mode, dispatch operands, nesting, condition loops and serialization" {

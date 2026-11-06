@@ -14672,6 +14672,10 @@ merely being visible to the evaluator does not demand such an artifact.
 A compiler-only unit records the callable workers its code emits, their capture
 shapes and worker recipes, their exact native image symbol indices, and the
 semantic types named by its descriptor notes.
+Lowering's explicit callable-worker inventory is intersected with the backend's
+emitted procedure inventory: dead workers have no symbol, and direct-call
+ownership variants introduced by ARC have no function-value capture recipe.
+An emitted procedure is not necessarily a lowering worker.
 The records share a module-name table and a type table. Module references use the
 link's explicit module names, not checked-artifact keys from the producing build.
 A reader binds those names against its current checked module graph. It reads
@@ -23321,14 +23325,29 @@ top-level `expect` of its module, in the `(ret_ptr, args_ptr)` convention,
 under a name made of its module's package-qualified-name digest and the
 root's index among the module's test roots. Both are functions of the
 module's sources alone, never of the execution subset or the reporting
-plan, so a module has at most two cache entries: its build unit and its test
-unit (`boxy_object_cache.KeyInput.expect_sites`). Every unit of a test
-program is a test unit, dependencies included, because the shared program
-counts every inline expect any reached code holds. Beside the image, the
+plan. A library module with expect nodes or test roots has separate ordinary
+and test units (`boxy_object_cache.KeyInput.expect_sites`). A module with
+neither uses its ordinary unit in tests too, including the builtins: test
+instrumentation cannot change code containing no expects. Checked-body
+publication records the presence of expect expressions and statements while
+committing their existing data, including synthesized expressions, and stores
+that scalar in the checked artifact. Unit selection consumes this fact and
+the explicit root requests; it never scans bodies, hashes emitted bytes or
+special-cases a module name. Both cache keying and lowering use the selected
+unit mode. Each imported module selects its own mode, so an expect-free caller
+can call a test unit whose inline expects are observed. Paired platform root
+units retain their explicit test mode because they also lower the paired
+modules' bodies. Reusing an object already prepared by compile-time evaluation
+also transfers its exported calling contracts into the consumer's interface
+table before lowering importers: ownership conditions and `may_leave_pending`
+must match the reused machine code. Consumers already sharing the producer's
+table need no copy. A test unit records its own replacement contracts before
+its importers start. Beside the image, the
 entry files the unit's expect-site table (each site's module digest and
 source region, by site id) and its test-root table (each wrapper's module
 digest, root index and image symbol). A table that does not read makes the
-entry a miss. Compile-time evaluation and builds never load a test unit.
+entry a miss. Compile-time evaluation and builds never load an instrumented
+test unit; the ordinary units shared with tests contain no test instrumentation.
 
 Each site immediate is a relocatable field (`abs32s`, the field's bytes
 holding the unit-local id as its addend) against one import,

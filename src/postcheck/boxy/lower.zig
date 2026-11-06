@@ -152,6 +152,27 @@ pub const ExportInterfaces = struct {
         _ = self.arena.reset(.retain_capacity);
     }
 
+    /// Adopt the producer's calling contracts before compiling against its
+    /// existing objects. A build may already share the producer's table;
+    /// tests instead own a separate table which their instrumented units fill.
+    pub fn copyFrom(self: *ExportInterfaces, source: *ExportInterfaces) Allocator.Error!void {
+        if (self == source) return;
+        // A fixed lock order also permits independent consumers to take
+        // snapshots without introducing opposing lock acquisition orders.
+        const first = if (@intFromPtr(self) < @intFromPtr(source)) self else source;
+        const second = if (first == self) source else self;
+        first.mutex.lockUncancelable(first.io);
+        defer first.mutex.unlock(first.io);
+        second.mutex.lockUncancelable(second.io);
+        defer second.mutex.unlock(second.io);
+        var entries = source.map.iterator();
+        while (entries.next()) |entry| {
+            var owned = entry.value_ptr.*;
+            owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, owned.rc_ret_conditions);
+            try self.map.put(self.allocator, entry.key_ptr.*, owned);
+        }
+    }
+
     /// Record `interface` for `identity`, copying its condition rows.
     pub fn put(self: *ExportInterfaces, identity: LIR.ProcIdentity, interface: ExportInterface) Allocator.Error!void {
         self.mutex.lockUncancelable(self.io);
@@ -190,6 +211,32 @@ pub const ExportInterfaces = struct {
         return self.map.get(identity);
     }
 };
+
+test "export interface snapshot owns the complete calling contract" {
+    const allocator = std.testing.allocator;
+    var producer = ExportInterfaces.init(allocator, std.testing.io);
+    defer producer.deinit();
+    var consumer = ExportInterfaces.init(allocator, std.testing.io);
+    defer consumer.deinit();
+    const identity = LIR.ProcIdentity.forTest(1);
+    const expected: ExportInterface = .{
+        .rc_borrowed_params = 3,
+        .rc_ret_borrowed = true,
+        .rc_ret_lenders = 2,
+        .rc_read_only_params = 1,
+        .rc_ret_unique = true,
+        .rc_ret_unique_fields = 4,
+        .rc_ret_conditions = &.{ 7, 8, 9 },
+        .may_leave_pending = true,
+    };
+    try producer.put(identity, expected);
+    try consumer.copyFrom(&producer);
+    producer.clear();
+    try producer.put(identity, .{ .rc_ret_conditions = &.{ 10, 11, 12 } });
+    try std.testing.expectEqualDeep(expected, consumer.get(identity).?);
+    try consumer.copyFrom(&consumer);
+    try std.testing.expectEqualDeep(expected, consumer.get(identity).?);
+}
 
 /// The lowered program and the static data it carries.
 pub const Output = struct {

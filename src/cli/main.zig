@@ -10342,6 +10342,9 @@ fn buildBoxyLibraryObjects(
     phase_name: []const u8,
 ) CliMainError!BoxyLibraryObjects {
     reporter.begin(phase_name);
+    // Reusing CTFE's code also requires its ownership and pending-call ABI.
+    // Instrumented units replace their own contracts before importers start.
+    try build_env.boxyAdoptInterfaces(interfaces);
     const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
     const visible = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
     defer ctx.gpa.free(visible);
@@ -10437,10 +10440,15 @@ fn buildBoxyLibraryObjects(
         ctx.gpa.free(tasks);
     }
     for (tasks, units.items) |*task, artifact| {
+        var unit_policy = policy;
+        unit_policy.test_units = policy.test_units and compile.boxy_unit.requiresTestUnit(artifact);
+        if (policy.test_units and !unit_policy.test_units and dev_diagnostics.isSet(.trace_boxy_work)) {
+            std.debug.print("boxy-work: ordinary unit serves tests for {s} (no expect nodes or test roots)\n", .{artifact.moduleEnvConst().module_name});
+        }
         task.* = .{
             .gpa = ctx.gpa,
             .io = ctx.io.std_io,
-            .policy = policy,
+            .policy = unit_policy,
             .artifact = artifact,
             .platform = boxyUnitPlatform(artifact, platform),
             .views = try build_env.collectImportedArtifactViews(ctx.gpa, artifact),
@@ -10497,13 +10505,19 @@ fn buildBoxyLibraryObjects(
             try ready.append(ctx.gpa, index);
             continue;
         };
-        // Compile-time evaluation never builds a test unit.
-        std.debug.assert(!policy.test_units);
+        // Compile-time evaluation never builds an instrumented test unit.
+        // Its ordinary objects can also serve expect-free test dependencies.
+        std.debug.assert(!task.policy.test_units);
         try build_env.boxyAdoptExports(digests, task.artifact);
         if (known.restored) restored += 1 else built += 1;
         if (want_images) {
             const image = known.image orelse base.invariant("roc build invariant violated: a fast dev link unit has no image", .{});
             images[index] = image.bytes;
+            if (policy.test_units) unit_tests[index] = .{
+                .expect_sites = &.{},
+                .test_roots = &.{},
+                .code_locations = image.code_locations,
+            };
         } else {
             objects[index] = known.pieces orelse base.invariant("roc build invariant violated: a unit compile-time evaluation recorded for a composing link has no pieces", .{});
         }
