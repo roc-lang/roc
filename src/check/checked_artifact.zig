@@ -223,6 +223,17 @@ pub fn forEachCheckedSourceTypeRoot(
     for (inputs.promoted_local_procedures) |promoted| {
         try visitor.visitScheme(ModuleEnv.varFrom(promoted.pattern));
     }
+
+    // An app's solution of a platform requirement names the solved
+    // requirement type and each requirement identity variable's solution.
+    for (module_env.platform_requirement_solutions.items.items) |solution| {
+        switch (solution.outcome) {
+            .checked_error => continue,
+            .success => {},
+        }
+        for (module_env.platformRequirementIdentityVars(solution)) |identity_var| try visitor.visit(identity_var);
+        try visitor.visit(solution.solved_var);
+    }
 }
 
 /// Public `ModuleEnvStorage` declaration.
@@ -20003,65 +20014,64 @@ pub const PlatformTypeInputs = struct {
     identities: []CheckedTypeId = &.{},
     aliases: []Alias = &.{},
 
-    fn fromModule(
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        names: *const canonical.CanonicalNameStore,
-        checked_types: *const CheckedTypePublication,
-        declarations: *const PlatformRequiredDeclarationTable,
-    ) Allocator.Error!PlatformTypeInputs {
-        const rows = try allocator.alloc(Requirement, declarations.declarations.len);
-        errdefer allocator.free(rows);
-        var identities = std.ArrayList(CheckedTypeId).empty;
-        errdefer identities.deinit(allocator);
-        var aliases = std.ArrayList(Alias).empty;
-        errdefer aliases.deinit(allocator);
-        const env = module.moduleEnvConst();
-        var orderer = CheckedIdentityOrderer.init(allocator, names, &checked_types.store);
-        defer orderer.deinit();
-        for (declarations.declarations, rows) |declaration, *row| {
-            const root = platformRequiredPayloadForDeclaration(module, checked_types, declaration);
-            const formals = try orderer.identityRoots(root);
-            const identity_start: u32 = @intCast(identities.items.len);
-            try identities.appendSlice(allocator, formals);
-            const alias_start: u32 = @intCast(aliases.items.len);
-            const required_type = env.requires_types.items.items[declaration.requires_idx];
-            for (env.for_clause_aliases.sliceRange(required_type.type_aliases)) |alias| {
-                const anno = env.store.getStatement(alias.alias_stmt_idx).s_alias_decl.anno;
-                const identity = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(anno)) orelse
-                    checkedArtifactInvariant("platform alias identity has no checked root", .{});
-                const alias_root = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias.alias_stmt_idx)) orelse
-                    checkedArtifactInvariant("platform alias has no checked root", .{});
-                const payload = checked_types.store.payload(alias_root);
-                try aliases.append(allocator, .{
-                    .root = alias_root,
-                    .backing = if (payload == .alias) payload.alias.backing else alias_root,
-                    .identity = identity,
-                });
-            }
-            row.* = .{
-                .declaration = declaration.id,
-                .root = root,
-                .identities = .{ .start = identity_start, .len = @intCast(formals.len) },
-                .aliases = .{ .start = alias_start, .len = @intCast(aliases.items.len - alias_start) },
-            };
-        }
-        const owned_identities = try identities.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_identities);
-        return .{ .requirements = rows, .identities = owned_identities, .aliases = try aliases.toOwnedSlice(allocator) };
+    pub fn deinit(self: *PlatformTypeInputs, allocator: Allocator) void {
+        allocator.free(self.requirements);
+        allocator.free(self.identities);
+        allocator.free(self.aliases);
+        self.* = .{};
     }
-
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-
-    pub const Serialized = extern struct {
-        requirements: SerializedSlice(Requirement) = .{},
-        identities: SerializedSlice(CheckedTypeId) = .{},
-        aliases: SerializedSlice(Alias) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(PlatformTypeInputs, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
 };
+
+/// The requirement identity variables of `owner`, a platform: for each
+/// requirement in `requires` order, its checked type root, the identity
+/// variables that root reaches in key order, and its for-clause aliases.
+pub fn computePlatformTypeInputs(allocator: Allocator, owner: ImportedModuleView) Allocator.Error!*PlatformTypeInputs {
+    const env = owner.module_env;
+    const required_types = env.requires_types.items.items;
+    const rows = try allocator.alloc(PlatformTypeInputs.Requirement, required_types.len);
+    errdefer allocator.free(rows);
+    var identities = std.ArrayList(CheckedTypeId).empty;
+    errdefer identities.deinit(allocator);
+    var aliases = std.ArrayList(PlatformTypeInputs.Alias).empty;
+    errdefer aliases.deinit(allocator);
+    const store = owner.checked_types.store orelse checkedArtifactInvariant("a platform's type inputs were read from a view without a type store", .{});
+    var orderer = CheckedIdentityOrderer.init(allocator, owner.canonical_names, store);
+    defer orderer.deinit();
+    for (required_types, rows, 0..) |required_type, *row, requires_idx| {
+        const root = try reachedSourceRoot(owner, ModuleEnv.varFrom(required_type.type_anno)) orelse
+            checkedArtifactInvariant("a platform requirement has no checked type", .{});
+        const formals = try orderer.identityRoots(root);
+        const identity_start: u32 = @intCast(identities.items.len);
+        try identities.appendSlice(allocator, formals);
+        const alias_start: u32 = @intCast(aliases.items.len);
+        for (env.for_clause_aliases.sliceRange(required_type.type_aliases)) |alias| {
+            const anno = env.store.getStatement(alias.alias_stmt_idx).s_alias_decl.anno;
+            const identity = try reachedSourceRoot(owner, ModuleEnv.varFrom(anno)) orelse
+                checkedArtifactInvariant("platform alias identity has no checked root", .{});
+            const alias_root = try reachedSourceRoot(owner, ModuleEnv.varFrom(alias.alias_stmt_idx)) orelse
+                checkedArtifactInvariant("platform alias has no checked root", .{});
+            const payload = store.payload(alias_root);
+            try aliases.append(allocator, .{
+                .root = alias_root,
+                .backing = if (payload == .alias) payload.alias.backing else alias_root,
+                .identity = identity,
+            });
+        }
+        row.* = .{
+            .declaration = @fromBackingInt(@intCast(requires_idx)),
+            .root = root,
+            .identities = .{ .start = identity_start, .len = @intCast(formals.len) },
+            .aliases = .{ .start = alias_start, .len = @intCast(aliases.items.len - alias_start) },
+        };
+    }
+    const owned_identities = try identities.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_identities);
+    const owned_aliases = try aliases.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_aliases);
+    const result = try allocator.create(PlatformTypeInputs);
+    result.* = .{ .requirements = rows, .identities = owned_identities, .aliases = owned_aliases };
+    return result;
+}
 
 /// The types of a platform read under one platform/app pairing (design.md
 /// "Platform/App Composition"). Each requirement identity formal of the
@@ -20108,7 +20118,7 @@ pub const PairingOverlay = struct {
         const store: *CheckedTypeStore = @constCast(&platform.checked_types);
         const names: *canonical.CanonicalNameStore = @constCast(&platform.canonical_names);
         try validatePlatformAppRelationForModule(platform.module_identity, names, platform.typesView(), &platform.platform_required_declarations, relation);
-        const type_inputs = &platform.platform_type_inputs;
+        const type_inputs = try platform.platformTypeInputs();
         var identity_formals = std.ArrayList(CheckedTypeId).empty;
         defer identity_formals.deinit(allocator);
         var identity_actuals = std.ArrayList(CheckedTypeId).empty;
@@ -20514,14 +20524,6 @@ pub const PlatformRequirementSolutionTable = struct {
     /// solution row (`identity_start`/`identity_len` ranges).
     identity_solutions: []CheckedTypeId = &.{},
 
-    pub const Serialized = extern struct {
-        solutions: SerializedSlice(PlatformRequirementSolution) = .{},
-        identity_solutions: SerializedSlice(CheckedTypeId) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(PlatformRequirementSolutionTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
     pub fn lookupByRequiredIndex(
         self: *const PlatformRequirementSolutionTable,
         requires_idx: u32,
@@ -20539,37 +20541,31 @@ pub const PlatformRequirementSolutionTable = struct {
         return self.identity_solutions[solution.identity_start .. solution.identity_start + solution.identity_len];
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub fn deinit(self: *PlatformRequirementSolutionTable, allocator: Allocator) void {
+        allocator.free(self.solutions);
+        allocator.free(self.identity_solutions);
+        self.* = .{};
+    }
 };
 
-/// Materialize the checker-recorded successful requirement solutions into
-/// checked type roots in the app's store. A row whose types contain an error
-/// is omitted here; platform/app relation construction converts that exact
-/// absent requires index into an explicit checked-error requirement outcome.
-fn platformRequirementSolutionTableFromInputs(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    checked_types: *CheckedTypeStore,
-    top_level_values: *const TopLevelValueTable,
-    inputs: []const ModuleEnv.PlatformRequirementSolution,
-) Allocator.Error!PlatformRequirementSolutionTable {
-    if (inputs.len == 0) return .{};
-
-    var active = try CheckedSourceTypeRoots.init(allocator, module);
-    defer active.deinit();
-
+/// The checker-recorded successful requirement solutions of `owner`, an app,
+/// at their checked types. A row whose types contain an error is omitted;
+/// platform/app relation construction converts that exact absent requires
+/// index into an explicit checked-error requirement outcome.
+pub fn computePlatformRequirementSolutions(allocator: Allocator, owner: ImportedModuleView) Allocator.Error!*PlatformRequirementSolutionTable {
+    const env = owner.module_env;
     var solutions = std.ArrayList(PlatformRequirementSolution).empty;
     errdefer solutions.deinit(allocator);
     var identity_solutions = std.ArrayList(CheckedTypeId).empty;
     errdefer identity_solutions.deinit(allocator);
 
-    for (inputs, 0..) |input, source_solution| {
+    for (env.platform_requirement_solutions.items.items, 0..) |input, source_solution| {
         switch (input.outcome) {
             .checked_error => continue,
             .success => {},
         }
 
-        const top_level = top_level_values.lookupByDef(input.def) orelse {
+        const top_level = owner.top_level_values.lookupByDef(input.def) orelse {
             checkedArtifactInvariant("platform requirement solution references a def with no published top-level value", .{});
         };
         const value_kind: PlatformRequiredValueKind = if (input.is_function) .procedure_value else .const_value;
@@ -20580,18 +20576,19 @@ fn platformRequirementSolutionTableFromInputs(
         if (!kind_matches) {
             checkedArtifactInvariant("platform requirement solution value kind disagrees with the published app value", .{});
         }
+
         const identity_start: u32 = @intCast(identity_solutions.items.len);
-        const identity_vars = module.moduleEnvConst().platformRequirementIdentityVars(input);
+        const identity_vars = env.platformRequirementIdentityVars(input);
         for (identity_vars) |identity_var| {
-            const identity_root = try appendCheckedTypeRoot(allocator, module, checked_types, &active, identity_var);
-            try identity_solutions.append(allocator, identity_root);
+            try identity_solutions.append(allocator, try reachedSourceRoot(owner, identity_var) orelse
+                checkedArtifactInvariant("a requirement identity solution has no checked type", .{}));
         }
-        const solved_root = try appendCheckedTypeRoot(allocator, module, checked_types, &active, input.solved_var);
         try solutions.append(allocator, .{
             .requires_idx = input.requires_idx,
             .def = input.def,
             .pattern = top_level.pattern,
-            .solved_root = solved_root,
+            .solved_root = try reachedSourceRoot(owner, input.solved_var) orelse
+                checkedArtifactInvariant("a requirement solution has no checked type", .{}),
             .source_solution = @intCast(source_solution),
             .value_kind = value_kind,
             .identity_start = identity_start,
@@ -20599,10 +20596,13 @@ fn platformRequirementSolutionTableFromInputs(
         });
     }
 
-    return .{
-        .solutions = try solutions.toOwnedSlice(allocator),
-        .identity_solutions = try identity_solutions.toOwnedSlice(allocator),
-    };
+    const owned_solutions = try solutions.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_solutions);
+    const owned_identities = try identity_solutions.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_identities);
+    const result = try allocator.create(PlatformRequirementSolutionTable);
+    result.* = .{ .solutions = owned_solutions, .identity_solutions = owned_identities };
+    return result;
 }
 
 /// Public `PlatformRequiredBinding` declaration.
@@ -23628,7 +23628,7 @@ fn buildPlatformAppRelationFromDeclarations(
         // The checker records successful solutions as exact app value/type
         // facts. A missing row is recorded explicitly as a checked-error
         // requirement so publication stays total without inventing a binding.
-        const solution = app_artifact.platform_requirement_solutions.lookupByRequiredIndex(declaration.requires_idx) orelse {
+        const solution = (try app_artifact.platformRequirementSolutions()).lookupByRequiredIndex(declaration.requires_idx) orelse {
             try checked_error_requires.append(allocator, declaration.requires_idx);
             continue;
         };
@@ -23724,7 +23724,7 @@ fn buildPlatformAppRelationFromDeclarations(
         .relations = owned_relations,
         .bindings = owned_bindings,
         .checked_error_requires = owned_checked_errors,
-        .identity_solutions_app = app_artifact.platform_requirement_solutions.identity_solutions,
+        .identity_solutions_app = (try app_artifact.platformRequirementSolutions()).identity_solutions,
     };
 }
 
@@ -24008,8 +24008,6 @@ pub const PlatformPairing = struct {
                 "hosted_procs",
                 "hosted_bindings",
                 "platform_required_declarations",
-                "platform_type_inputs",
-                "platform_requirement_solutions",
                 "top_level_values",
                 "hoisted_constants",
                 // Recorded as `relation`; the rest is the platform's.
@@ -31041,9 +31039,7 @@ pub const CheckedModuleArtifact = struct {
     hosted_procs: HostedProcTable,
     hosted_bindings: HostedBindingTable = .{},
     platform_required_declarations: PlatformRequiredDeclarationTable,
-    platform_type_inputs: PlatformTypeInputs = .{},
     platform_requirement_relations: PlatformRequirementRelationTable = .{},
-    platform_requirement_solutions: PlatformRequirementSolutionTable = .{},
     platform_required_bindings: PlatformRequiredBindingTable,
     compile_time_roots: CompileTimeRootTable,
     top_level_values: TopLevelValueTable,
@@ -31116,6 +31112,22 @@ pub const CheckedModuleArtifact = struct {
     pub fn nameStore(self: *const CheckedModuleArtifact) *const canonical.CanonicalNameStore {
         if (self.pairing) |pairing| return &pairing.platform.canonical_names;
         return &self.canonical_names;
+    }
+
+    /// Whether the module is a platform that declares requirements.
+    pub fn hasPlatformRequirements(self: *const CheckedModuleArtifact) bool {
+        return self.moduleEnvConst().requires_types.items.items.len != 0;
+    }
+
+    /// A platform's requirement identity variables; a paired artifact's are
+    /// its platform's.
+    pub fn platformTypeInputs(self: *const CheckedModuleArtifact) Allocator.Error!*const PlatformTypeInputs {
+        return importedView(self).platformTypeInputs();
+    }
+
+    /// An app's solutions of its platform's requirement identity variables.
+    pub fn platformRequirementSolutions(self: *const CheckedModuleArtifact) Allocator.Error!*const PlatformRequirementSolutionTable {
+        return importedView(self).platformRequirementSolutions();
     }
 
     /// The module's export rows; a paired artifact's are its platform's.
@@ -31489,8 +31501,6 @@ pub const CheckedModuleArtifact = struct {
         hosted_procs: HostedProcTable.Serialized,
         hosted_bindings: HostedBindingTable.Serialized,
         platform_required_declarations: PlatformRequiredDeclarationTable.Serialized,
-        platform_type_inputs: PlatformTypeInputs.Serialized,
-        platform_requirement_solutions: PlatformRequirementSolutionTable.Serialized,
         compile_time_roots: CompileTimeRootTable.Serialized,
         top_level_values: TopLevelValueTable.Serialized,
         hoisted_constants: HoistedConstTable.Serialized,
@@ -31521,7 +31531,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 168);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 163);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -32422,12 +32432,6 @@ pub const ImportedModuleView = struct {
     platform_required_bindings: *const PlatformRequiredBindingTable,
     checking_context_identity: *const CheckingContextIdentity = &empty_checking_context_identity,
     top_level_values: *const TopLevelValueTable = &empty_top_level_values,
-    /// A platform's requirement identity variables (empty for any other
-    /// module).
-    platform_type_inputs: *const PlatformTypeInputs = &empty_platform_type_inputs,
-    /// An app's solutions of its platform's requirement identity variables
-    /// (empty for any other module).
-    platform_requirement_solutions: *const PlatformRequirementSolutionTable = &empty_platform_requirement_solutions,
     callable_eval_templates: CallableEvalTemplateTableView,
     hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
@@ -32451,6 +32455,23 @@ pub const ImportedModuleView = struct {
     pub fn dispatch(self: ImportedModuleView) CheckedDispatch {
         return self.checked_bodies.tables.dispatch orelse
             checkedArtifactInvariant("dispatch was read from a view without module analyses", .{});
+    }
+
+    /// Whether the module is a platform that declares requirements.
+    pub fn hasPlatformRequirements(self: ImportedModuleView) bool {
+        return self.module_env.requires_types.items.items.len != 0;
+    }
+
+    /// A platform's requirement identity variables (empty for any other
+    /// module).
+    pub fn platformTypeInputs(self: ImportedModuleView) Allocator.Error!*const PlatformTypeInputs {
+        return self.analyses().platformTypeInputs(self);
+    }
+
+    /// An app's solutions of its platform's requirement identity variables
+    /// (empty for any other module).
+    pub fn platformRequirementSolutions(self: ImportedModuleView) Allocator.Error!*const PlatformRequirementSolutionTable {
+        return self.analyses().platformRequirementSolutions(self);
     }
 
     /// The module's provided exports. A platform/app pairing's are its
@@ -32525,9 +32546,6 @@ pub const LoweringModuleView = struct {
     relation_modules: []const ImportedModuleView = &.{},
 };
 
-const empty_platform_type_inputs: PlatformTypeInputs = .{};
-const empty_platform_requirement_solutions: PlatformRequirementSolutionTable = .{};
-
 /// Public `importedView` function.
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
@@ -32554,8 +32572,6 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .platform_required_bindings = &artifact.platform_required_bindings,
         .checking_context_identity = &artifact.checking_context_identity,
         .top_level_values = &artifact.top_level_values,
-        .platform_type_inputs = &artifact.platform_type_inputs,
-        .platform_requirement_solutions = &artifact.platform_requirement_solutions,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
         .hoisted_constants = &artifact.hoisted_constants,
         .const_templates = &artifact.const_templates,
@@ -33798,7 +33814,6 @@ pub fn publishFromTypedModule(
     const owner_artifact = artifact_key.digest();
 
     const promoted_local_procedures = module_env.promoted_local_procedures.items.items;
-    const requirement_solutions = module_env.platform_requirement_solutions.items.items;
     const selected_hoisted_roots = module_env.selected_hoisted_roots.items.items;
     const analyses = try BodyAnalyses.create(allocator, inputs.io, module_env, promoted_local_procedures);
     var analyses_owned = true;
@@ -33828,8 +33843,6 @@ pub fn publishFromTypedModule(
     defer checked_type_publication.deinitIndex(allocator);
     errdefer if (!stores_moved) checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
-    var platform_type_inputs = try PlatformTypeInputs.fromModule(allocator, module, &canonical_names, &checked_type_publication, &platform_required_declarations);
-    errdefer platform_type_inputs.deinit(allocator);
 
     const default_exprs = try publicationDefaultExprs(allocator, module, &canonical_names, &checked_type_publication);
     defer allocator.free(default_exprs);
@@ -34020,15 +34033,6 @@ pub fn publishFromTypedModule(
     var inference = try inputs.inference.dupe(allocator);
     errdefer inference.deinit(allocator);
 
-    var platform_requirement_solutions = try platformRequirementSolutionTableFromInputs(
-        allocator,
-        module,
-        checked_types,
-        &top_level_values,
-        requirement_solutions,
-    );
-    errdefer platform_requirement_solutions.deinit(allocator);
-
     // All source-to-checked metadata has been consumed. Release its scratch
     // before compile-time evaluation can allocate specialization/backend data.
     checked_type_publication.deinitIndex(allocator);
@@ -34060,9 +34064,7 @@ pub fn publishFromTypedModule(
         .hosted_procs = hosted_procs,
         .hosted_bindings = hosted_bindings,
         .platform_required_declarations = platform_required_declarations,
-        .platform_type_inputs = platform_type_inputs,
         .platform_requirement_relations = .{},
-        .platform_requirement_solutions = platform_requirement_solutions,
         .platform_required_bindings = platform_required_bindings,
         .compile_time_roots = compile_time_roots,
         .top_level_values = top_level_values,
@@ -35033,7 +35035,7 @@ test "artifact views are read-only projections" {
     }
 
     const imported = importedView(&artifact);
-    try std.testing.expect((try imported.exportRows()).defs.ptr == (try artifact.exportRows()).defs.ptr);
+    try std.testing.expect(imported.checked_procedure_templates == &artifact.checked_procedure_templates);
 }
 
 // Round-trip tests for transform-A sub-stores (POD-element slices). Each store
@@ -35238,6 +35240,11 @@ test "lowering visibility follows recursive public API and type-owner dependenci
     root_requests.* = .{};
     std.debug.assert(analyses[0].root_requests.acquire(std.testing.io) == .claimed);
     analyses[0].root_requests.publish(std.testing.io, root_requests);
+    // The owner exports nothing.
+    const export_rows = try gpa.create(ExportRows);
+    export_rows.* = .{};
+    std.debug.assert(analyses[0].export_rows.acquire(std.testing.io) == .claimed);
+    analyses[0].export_rows.publish(std.testing.io, export_rows);
     const platform_required_bindings = PlatformRequiredBindingTable{};
     const direct_imports = [_]CheckedModuleArtifactKey{ key_d, key_a, key_a, key_builtin };
     var owner = testVisibilityImportedView(root_key, &env_root, analyses[0]);

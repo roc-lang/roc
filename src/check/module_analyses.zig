@@ -19,6 +19,8 @@ const ModuleResolver = checked_artifact.ModuleResolver;
 const ExportClosures = checked_artifact.ExportClosures;
 const ExportRows = checked_artifact.ExportRows;
 const ProvidedExportTable = checked_artifact.ProvidedExportTable;
+const PlatformTypeInputs = checked_artifact.PlatformTypeInputs;
+const PlatformRequirementSolutionTable = checked_artifact.PlatformRequirementSolutionTable;
 const PublicApiDependencies = checked_artifact.PublicApiDependencies;
 const LoweringVisibility = checked_artifact.LoweringVisibility;
 const ModuleInterfaceCapabilities = checked_artifact.ModuleInterfaceCapabilities;
@@ -202,6 +204,8 @@ pub const ModuleAnalyses = struct {
     platform: ?*const CheckedModuleArtifact,
     export_rows: collections.OnceSlot(*ExportRows, .module_export_rows) = .empty,
     provided_exports: collections.OnceSlot(*ProvidedExportTable, .module_provided_exports) = .empty,
+    platform_type_inputs: collections.OnceSlot(*PlatformTypeInputs, .module_platform_type_inputs) = .empty,
+    platform_requirement_solutions: collections.OnceSlot(*PlatformRequirementSolutionTable, .module_platform_requirement_solutions) = .empty,
     export_closures: collections.OnceSlot(*ExportClosures, .module_export_closures) = .empty,
     public_api_dependencies: collections.OnceSlot(*PublicApiDependencies, .module_public_api_dependencies) = .empty,
     lowering_visibility: collections.OnceSlot(*LoweringVisibility, .module_lowering_visibility) = .empty,
@@ -329,6 +333,14 @@ pub const ModuleAnalyses = struct {
             allocator.destroy(owned);
         }
         if (self.export_closures.peek()) |closures| closures.destroy(allocator);
+        if (self.platform_type_inputs.peek()) |inputs| {
+            inputs.deinit(allocator);
+            allocator.destroy(inputs);
+        }
+        if (self.platform_requirement_solutions.peek()) |solutions| {
+            solutions.deinit(allocator);
+            allocator.destroy(solutions);
+        }
         if (self.provided_exports.peek()) |table| {
             allocator.free(table.exports);
             allocator.destroy(table);
@@ -396,12 +408,36 @@ pub const ModuleAnalyses = struct {
         return self.provided_exports.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.providedExports);
     }
 
+    /// The requirement identity variables of `owner`, this module. A
+    /// platform/app pairing's are its platform's.
+    pub fn platformTypeInputs(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const PlatformTypeInputs {
+        self.assertPublished();
+        if (self.platform) |platform| return platformAnalyses(platform).platformTypeInputs(checked_artifact.importedView(platform));
+        return self.platform_type_inputs.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.platformTypeInputs);
+    }
+
+    /// The solutions of its platform's requirements `owner`, this module,
+    /// recorded. A platform/app pairing's are its platform's.
+    pub fn platformRequirementSolutions(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const PlatformRequirementSolutionTable {
+        self.assertPublished();
+        if (self.platform) |platform| return platformAnalyses(platform).platformRequirementSolutions(checked_artifact.importedView(platform));
+        return self.platform_requirement_solutions.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.platformRequirementSolutions);
+    }
+
     const ViewRequest = struct {
         analyses: *ModuleAnalyses,
         owner: ImportedModuleView,
 
         fn exportRows(request: ViewRequest) Allocator.Error!*ExportRows {
             return checked_artifact.computeExportRows(request.analyses.allocator, request.owner);
+        }
+
+        fn platformTypeInputs(request: ViewRequest) Allocator.Error!*PlatformTypeInputs {
+            return checked_artifact.computePlatformTypeInputs(request.analyses.allocator, request.owner);
+        }
+
+        fn platformRequirementSolutions(request: ViewRequest) Allocator.Error!*PlatformRequirementSolutionTable {
+            return checked_artifact.computePlatformRequirementSolutions(request.analyses.allocator, request.owner);
         }
 
         fn providedExports(request: ViewRequest) Allocator.Error!*ProvidedExportTable {

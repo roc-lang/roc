@@ -2035,7 +2035,7 @@ const ModuleEvaluation = struct {
 
     /// Whether the module's program runs against its imports' objects.
     fn links(self: *const ModuleEvaluation, shared: Shared) bool {
-        return shared.options.boxy_objects != null and self.artifact(shared).platform_type_inputs.requirements.len == 0;
+        return shared.options.boxy_objects != null and !self.artifact(shared).hasPlatformRequirements();
     }
 
     /// Whether the module's program can be lowered: its imports' objects

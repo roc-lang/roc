@@ -10374,7 +10374,7 @@ fn buildBoxyLibraryObjects(
     defer units.deinit(ctx.gpa);
     try units.append(ctx.gpa, &build_env.builtin_modules.checked_artifact);
     for (test_modules orelse visible) |artifact| {
-        if (artifact.platform_type_inputs.requirements.len != 0) continue;
+        if (artifact.hasPlatformRequirements()) continue;
         try units.append(ctx.gpa, artifact);
     }
     // A module's body calls imports its root never sees, and a unit is keyed
@@ -10394,7 +10394,7 @@ fn buildBoxyLibraryObjects(
         const importer = units.items[next_unit];
         for (importer.direct_import_module_keys) |key| {
             const imported = digests.artifacts.get(key.bytes) orelse continue;
-            if (imported.platform_type_inputs.requirements.len != 0) continue;
+            if (imported.hasPlatformRequirements()) continue;
             if ((try seen_units.getOrPut(key.bytes)).found_existing) continue;
             try units.append(ctx.gpa, imported);
         }
@@ -10639,7 +10639,7 @@ fn buildBoxyLibraryObjects(
         try root_modules.append(ctx.arena, view.key.bytes);
     }
     for (visible) |artifact| {
-        if (artifact.platform_type_inputs.requirements.len == 0) continue;
+        if (!artifact.hasPlatformRequirements()) continue;
         try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
         try root_modules.append(ctx.arena, artifact.key.bytes);
     }
@@ -15087,14 +15087,14 @@ fn prepareUnitImageTests(
     defer ctx.gpa.free(visible);
     var paired: std.ArrayList(*const Artifact) = .empty;
     defer paired.deinit(ctx.gpa);
-    if (unit_root.platform_type_inputs.requirements.len != 0) try paired.append(ctx.gpa, unit_root);
-    for (visible) |artifact| if (artifact.platform_type_inputs.requirements.len != 0) try paired.append(ctx.gpa, artifact);
+    if (unit_root.hasPlatformRequirements()) try paired.append(ctx.gpa, unit_root);
+    for (visible) |artifact| if (artifact.hasPlatformRequirements()) try paired.append(ctx.gpa, artifact);
     var test_modules: std.ArrayList(*const Artifact) = .empty;
     defer test_modules.deinit(ctx.gpa);
     // A root unit exists only to export the paired modules' wrappers.
     var paired_roots = false;
     for (test_plan.modules) |planned| {
-        if (planned.artifact.platform_type_inputs.requirements.len != 0) {
+        if (planned.artifact.hasPlatformRequirements()) {
             const is_paired = for (paired.items) |artifact| {
                 if (artifact == planned.artifact) break true;
             } else false;

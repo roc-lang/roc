@@ -1768,7 +1768,7 @@ const BoxyObjects = struct {
     /// own still to evaluate, or hosted functions no checked platform module
     /// binds while checking continues), or now.
     fn eligibility(self: *BoxyObjects, artifact: *const Artifact) Allocator.Error!enum { never, later, now } {
-        if (artifact.platform_type_inputs.requirements.len != 0) return .never;
+        if (artifact.hasPlatformRequirements()) return .never;
         if (try Coordinator.unevaluatedRequestCount(artifact, .boxy) != 0) return .later;
         if (artifact.hosted_procs.procs.len != 0 and self.platformOf(artifact) == null) {
             return if (self.coordinator.frontend_complete) .never else .later;
@@ -8980,7 +8980,7 @@ test "app artifact records platform requirement solutions from checking" {
     try std.testing.expect(!coord.hasUserErrors());
 
     const app_artifact = coord.appRootCheckedArtifact();
-    const table = &app_artifact.platform_requirement_solutions;
+    const table = try app_artifact.platformRequirementSolutions();
 
     // One requirement (`prog`), a record of functions, so a const value.
     try std.testing.expectEqual(@as(usize, 1), table.solutions.len);
@@ -9212,7 +9212,7 @@ test "erroneous function requirement publishes an explicit checked-error outcome
     try std.testing.expect(coord.hasUserErrors());
 
     const app_artifact = coord.appRootCheckedArtifact();
-    try std.testing.expectEqual(@as(usize, 0), app_artifact.platform_requirement_solutions.solutions.len);
+    try std.testing.expectEqual(@as(usize, 0), (try app_artifact.platformRequirementSolutions()).solutions.len);
 }
 
 fn writeAliasBackingRequirementFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
@@ -9480,7 +9480,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     // so the app's recorded solution references app-owned types only and the
     // platform root defers its publication like any other app build.
     const app_artifact = coord.appRootCheckedArtifact();
-    const table = &app_artifact.platform_requirement_solutions;
+    const table = try app_artifact.platformRequirementSolutions();
     try std.testing.expectEqual(@as(usize, 1), table.solutions.len);
     const solution = table.solutions[0];
     try std.testing.expectEqual(@as(u32, 1), solution.identity_len);

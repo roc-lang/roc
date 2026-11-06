@@ -591,7 +591,7 @@ pub const Program = struct {
             .module => |unit| unit,
         };
         if (index == self.modules.views.items[0].index) return true;
-        return unit.root and self.module(index).view.platform_type_inputs.requirements.len != 0;
+        return unit.root and self.module(index).view.hasPlatformRequirements();
     }
 
     /// The content identity of a module's worker (design.md "Per-Module
@@ -2862,14 +2862,15 @@ fn initHosted(program: *Program) Allocator.Error!void {
 /// the app provides for its requirements.
 fn solvePlatformIdentities(program: *Program) Allocator.Error!void {
     const platform = for (program.modules.views.items) |*view| {
-        if (view.view.platform_type_inputs.requirements.len != 0) break view;
+        if (view.view.hasPlatformRequirements()) break view;
     } else return;
     for (program.modules.views.items) |*app| {
-        const table = app.view.platform_requirement_solutions;
+        const table = try app.view.platformRequirementSolutions();
         for (table.solutions) |solution| {
-            if (solution.requires_idx >= platform.view.platform_type_inputs.requirements.len) invariant("an app solves a requirement its platform does not declare");
-            const requirement = platform.view.platform_type_inputs.requirements[solution.requires_idx];
-            const formals = platform.view.platform_type_inputs.identities[requirement.identities.start..][0..requirement.identities.len];
+            const type_inputs = try platform.view.platformTypeInputs();
+            if (solution.requires_idx >= type_inputs.requirements.len) invariant("an app solves a requirement its platform does not declare");
+            const requirement = type_inputs.requirements[solution.requires_idx];
+            const formals = type_inputs.identities[requirement.identities.start..][0..requirement.identities.len];
             const solved = table.identity_solutions[solution.identity_start..][0..solution.identity_len];
             if (formals.len != solved.len) invariant("an app's requirement solution differs from its requirement's identity variables");
             for (formals, solved) |formal, app_ty| {
