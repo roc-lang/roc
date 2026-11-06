@@ -27164,17 +27164,22 @@ const BodyContext = struct {
         return .{ .call = .{ .declared_order = try self.boxInstTask(InstDeclaredOrderTask, .{ .nominal = nominal, .args = task.args }) } };
     }
 
-    /// A nominal instance's declared field order. Its padding types
-    /// instantiate in the declaring view, with the declaration's formals bound
-    /// to this instance's argument nodes, exactly as its backing instantiates,
-    /// and terminate as it does: every padding type registers its placeholder
-    /// before any of them expands, so a recursive mention of this instance
-    /// finds them all. `padding_nodes` holds one node per padding type, and
-    /// `pending` the indices of those this task expands.
+    /// A nominal instance's declared field order. Its padding types are the
+    /// declaration's own, over its formals, whatever representation the
+    /// instance reads with: they instantiate in the declaring view, with the
+    /// formals bound to this instance's argument nodes, exactly as its backing
+    /// instantiates, and terminate as it does. An instance's capability holds
+    /// its padding types already instantiated at its argument types, which
+    /// name types of the instance's own scope that the formal bindings do not
+    /// reach. Every padding type registers its placeholder before any of them
+    /// expands, so a recursive mention of this instance finds them all.
+    /// `padding_nodes` holds one node per padding type, and `pending` the
+    /// indices of those this task expands.
     const InstDeclaredOrderTask = struct {
         nominal: checked.CheckedNominalType,
         args: []NodeId,
-        lookup: Builder.NominalDeclLookup = undefined,
+        source: NominalInstantiationSource = undefined,
+        padding_tys: []const checked.CheckedTypeId = &.{},
         padding_nodes: []NodeId = &.{},
         pending: []u32 = &.{},
         /// The view and instantiation context the declaring module replaced.
@@ -27187,16 +27192,17 @@ const BodyContext = struct {
 
     fn stepInstDeclaredOrder(self: *BodyContext, frame: *InstFrame, task: *InstDeclaredOrderTask, input: ?InstResult) Allocator.Error!InstStep {
         if (frame.cursor == 0) {
-            task.lookup = self.builder.nominalDeclarationFor(self.view, task.nominal) orelse {
+            task.source = self.nominalInstantiationSource(&task.nominal) orelse {
                 if (!nominalHasDeclarationBacking(task.nominal)) return .{ .ret = .{ .declared_order = &.{} } };
                 Common.invariant("declaration-backed nominal reached Monotype instantiation without declaration data");
             };
-            const fields = task.lookup.declaration.declaredRecordFields(task.lookup.view.types);
+            const fields = task.source.declaration.declaredRecordFields(task.source.view.types);
             if (fields.len == 0) return .{ .ret = .{ .declared_order = &.{} } };
-            if (task.lookup.padding_field_tys.len == 0) return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, &.{}) } };
-            const padding_tys = task.lookup.padding_field_tys;
-            const module_bytes = task.lookup.view.key.bytes;
-            const declaration_id: u32 = @backingInt(task.lookup.declaration.id);
+            task.padding_tys = task.source.declaration.paddingFieldTypes(task.source.view.types);
+            if (task.padding_tys.len == 0) return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, &.{}) } };
+            const padding_tys = task.padding_tys;
+            const module_bytes = task.source.view.key.bytes;
+            const declaration_id: u32 = @backingInt(task.source.declaration.id);
             task.padding_nodes = try self.graph.arena().alloc(NodeId, padding_tys.len);
             const pending = try self.graph.arena().alloc(u32, padding_tys.len);
             var pending_count: usize = 0;
@@ -27214,23 +27220,23 @@ const BodyContext = struct {
             if (pending_count == 0) return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, task.padding_nodes) } };
             task.pending = pending[0..pending_count];
             frame.cursor = 1;
-            try self.enterDeclScopes(task, task.lookup.view, task.lookup.declaration, task.args);
+            try self.enterDeclScopes(task, task.source.view, task.source.declaration, task.args);
             return instNodeStep(padding_tys[task.pending[0]]);
         }
         try self.graph.unify(task.padding_nodes[task.pending[frame.index]], input.?.get(.node));
         frame.index += 1;
-        if (frame.index < task.pending.len) return instNodeStep(task.lookup.padding_field_tys[task.pending[frame.index]]);
+        if (frame.index < task.pending.len) return instNodeStep(task.padding_tys[task.pending[frame.index]]);
         self.leaveDeclBackingScopes(task);
         return .{ .ret = .{ .declared_order = try self.instDeclaredOrderEntries(task, task.padding_nodes) } };
     }
 
     fn instDeclaredOrderEntries(self: *BodyContext, task: *InstDeclaredOrderTask, padding_nodes: []const NodeId) Allocator.Error![]InstDeclaredField {
-        const fields = task.lookup.declaration.declaredRecordFields(task.lookup.view.types);
+        const fields = task.source.declaration.declaredRecordFields(task.source.view.types);
         const entries = try self.graph.arena().alloc(InstDeclaredField, fields.len);
         var padding_cursor: usize = 0;
         for (fields, entries) |field, *entry| {
             switch (field) {
-                .named => |label| entry.* = .{ .named = try recordFieldName(self.nameStoreMut(), task.lookup.view, label) },
+                .named => |label| entry.* = .{ .named = try recordFieldName(self.nameStoreMut(), task.source.view, label) },
                 .padding => {
                     if (padding_cursor >= padding_nodes.len) {
                         Common.invariant("nominal declaration had more unnamed fields than recorded padding types");
