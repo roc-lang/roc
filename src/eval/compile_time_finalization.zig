@@ -6814,7 +6814,14 @@ fn appendCompileTimeExhaustivenessProblem(
                 => finalizationInvariant("compile-time exhaustiveness failure had an impossible site policy"),
             };
         }
-        const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(checked_site, site_record.requires_pairing);
+        // A site no root owns can be reached by every root that calls into
+        // it: the first failure reports it, and each later one finds it
+        // reported.
+        const shared_by_roots = switch (site_record.policy) {
+            .compile_time_only, .runtime_reachable => true,
+            .compile_time_replaced_by_root, .not_pending => false,
+        };
+        const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(checked_site, site_record.requires_pairing or shared_by_roots);
         if (!matched) {
             finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
         }
@@ -6840,9 +6847,9 @@ fn discardUnreachedRootComptimeSites(
             const site = try owner.module.exhaustivenessSite(checked_site);
             if (site.requires_pairing) continue;
             switch (site.policy) {
-                .compile_time_replaced_by_root,
+                .compile_time_replaced_by_root => problem_store.discardPendingStaticExhaustiveness(checked_site),
+                // Another root that calls into the site may still reach it.
                 .compile_time_only,
-                => problem_store.discardPendingStaticExhaustiveness(checked_site),
                 .runtime_reachable,
                 .not_pending,
                 => {},

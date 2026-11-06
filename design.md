@@ -6131,7 +6131,10 @@ that has a compile-time root request owns the sites its evaluation reaches. A
 selected root whose checked type is not context-free has no request: it never
 evaluates on its own, and every reader evaluates its body in place, so each
 site in that body is classified by the procedure template that contains it, as
-if no root had been selected there. Validation uses
+if no root had been selected there. A site no root owns can be reached by
+every root that calls into it: the first root that fails there reports it,
+later ones find it reported, and a root that fails elsewhere first leaves it
+for the others to decide. Validation uses
 the checked pattern compiler and compile-time evaluator; it never reinterprets
 source patterns separately.
 
