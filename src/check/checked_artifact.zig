@@ -1247,7 +1247,7 @@ fn moduleRootRequests(allocator: Allocator, owner: ImportedModuleView) Allocator
         owner.top_level_values,
         owner.top_level_procedure_bindings,
         context.platform_app_relation,
-        owner.platform_required_declarations,
+        owner.platformRequiredDeclarations(),
         context.validation,
     );
 
@@ -1329,7 +1329,7 @@ fn moduleRootRequests(allocator: Allocator, owner: ImportedModuleView) Allocator
     const full_schedule = try collectCompileTimeRootRequests(
         allocator,
         all_requests,
-        owner.platform_required_declarations.declarations.len != 0,
+        owner.platformRequiredDeclarations().count() != 0,
         module_idx,
         owner.key,
         env.topLevelDemandDependencies(),
@@ -2453,11 +2453,11 @@ fn appendPublishedEntrypointRoots(
     top_level_values: *const TopLevelValueTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_app_relation: ?PlatformAppRelationKey,
-    platform_required_declarations: *const PlatformRequiredDeclarationTable,
+    platform_required_declarations: PlatformRequiredDeclarationTable,
     validation: can.Can.Validation,
 ) Allocator.Error!void {
     const provided_runtime_roots_ready = module_env.module_kind != .platform or
-        platform_required_declarations.declarations.len == 0 or
+        platform_required_declarations.count() == 0 or
         platform_app_relation != null;
     {
         for (provided_exports.exports, 0..) |provided, export_index| {
@@ -10476,7 +10476,6 @@ const TestImportViewTables = struct {
     hosted_procs: HostedProcTable = .{},
     hosted_bindings: HostedBindingTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable = .{},
-    platform_required_declarations: PlatformRequiredDeclarationTable = .{},
     platform_required_bindings: PlatformRequiredBindingTable = .{},
     callable_eval_templates: CallableEvalTemplateTable = .{},
     hoisted_constants: HoistedConstTable = .{},
@@ -10535,7 +10534,6 @@ const TestImportViewTables = struct {
             .hosted_procs = &self.hosted_procs,
             .hosted_bindings = &self.hosted_bindings,
             .top_level_procedure_bindings = &self.top_level_procedure_bindings,
-            .platform_required_declarations = &self.platform_required_declarations,
             .platform_required_bindings = &self.platform_required_bindings,
             .callable_eval_templates = self.callable_eval_templates.view(),
             .hoisted_constants = &self.hoisted_constants,
@@ -11852,7 +11850,7 @@ pub const ResolvedValueRefTable = struct {
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
         hosted_procs: *const HostedProcTable,
-        platform_required_declarations: *const PlatformRequiredDeclarationTable,
+        platform_required_declarations: PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         top_level_values: *const TopLevelValueTable,
         selected_hoisted_callables: *const SelectedHoistedCallableTable,
@@ -11982,7 +11980,7 @@ fn publishedValueRef(
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     hosted_procs: *const HostedProcTable,
-    platform_required_declarations: *const PlatformRequiredDeclarationTable,
+    platform_required_declarations: PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     top_level_values: *const TopLevelValueTable,
     selected_hoisted_callables: *const SelectedHoistedCallableTable,
@@ -12330,7 +12328,7 @@ fn publishImportForModule(imports: []const PublishImportArtifact, module_idx: u3
 
 fn categorizeRequiredValueRef(
     requires_idx: u32,
-    platform_required_declarations: *const PlatformRequiredDeclarationTable,
+    platform_required_declarations: PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
 ) ResolvedValueRef {
     const binding = platformBindingForRequiredIndex(platform_required_bindings, requires_idx) orelse {
@@ -19768,100 +19766,60 @@ pub const PlatformRequiredDeclaration = struct {
     id: PlatformRequiredDeclarationId,
     module_idx: u32,
     requires_idx: u32,
-    platform_name: canonical.ExportNameId,
     /// The declared type's annotation; its scheme key is computed when an
     /// identity needs it (`PlatformRequiredDeclarationTable.identityHash`).
     type_anno: CIR.TypeAnno.Idx,
-    for_clause_aliases_hash: [32]u8,
 };
 
-/// Public `PlatformRequiredDeclarationTable` declaration.
+/// The requirement declarations of a platform module, read from its
+/// `requires` clause: declaration `i` is requirement `i`. Empty for every
+/// other module.
 pub const PlatformRequiredDeclarationTable = struct {
-    declarations: []PlatformRequiredDeclaration = &.{},
+    env: ?*const ModuleEnv = null,
+    module_idx: u32 = 0,
 
-    pub const Serialized = extern struct {
-        declarations: SerializedSlice(PlatformRequiredDeclaration) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(PlatformRequiredDeclarationTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
-    pub fn fromModule(
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        names: *canonical.CanonicalNameStore,
-    ) Allocator.Error!PlatformRequiredDeclarationTable {
-        return fromEnv(allocator, module.moduleEnvConst(), names, module.moduleIndex());
+    pub fn count(self: PlatformRequiredDeclarationTable) usize {
+        const env = self.env orelse return 0;
+        return env.requires_types.items.items.len;
     }
 
-    /// Build the required declaration table from a platform module's checked
-    /// `ModuleEnv`. `fromModule` delegates here so the artifact-derived and
-    /// env-derived declaration hashes share a single implementation.
-    pub fn fromEnv(
-        allocator: Allocator,
-        module_env: *const ModuleEnv,
-        names: *canonical.CanonicalNameStore,
-        module_idx: u32,
-    ) Allocator.Error!PlatformRequiredDeclarationTable {
-        const required_types = module_env.requires_types.items.items;
-        const declarations = try allocator.alloc(PlatformRequiredDeclaration, required_types.len);
-        errdefer allocator.free(declarations);
-        for (required_types, 0..) |required_type, i| {
-            declarations[i] = .{
-                .id = @fromBackingInt(@intCast(@as(u32, @intCast(i)))),
-                .module_idx = module_idx,
-                .requires_idx = @intCast(i),
-                .platform_name = try names.internExportIdent(module_env.getIdentStoreConst(), required_type.ident),
-                .type_anno = required_type.type_anno,
-                .for_clause_aliases_hash = hashRequiredTypeForClauseAliases(module_env, required_type),
-            };
-        }
-
-        return .{ .declarations = declarations };
+    pub fn get(self: PlatformRequiredDeclarationTable, requires_idx: usize) PlatformRequiredDeclaration {
+        const env = self.env orelse checkedArtifactInvariant("a platform requirement declaration was read from a module with none", .{});
+        return .{
+            .id = @fromBackingInt(@intCast(requires_idx)),
+            .module_idx = self.module_idx,
+            .requires_idx = @intCast(requires_idx),
+            .type_anno = env.requires_types.items.items[requires_idx].type_anno,
+        };
     }
 
-    pub fn lookupByRequiredIndex(
-        self: *const PlatformRequiredDeclarationTable,
-        requires_idx: u32,
-    ) ?PlatformRequiredDeclaration {
-        for (self.declarations) |declaration| {
-            if (declaration.requires_idx == requires_idx) return declaration;
-        }
-        return null;
+    pub fn lookupByRequiredIndex(self: PlatformRequiredDeclarationTable, requires_idx: u32) ?PlatformRequiredDeclaration {
+        if (requires_idx >= self.count()) return null;
+        return self.get(requires_idx);
     }
 
-    pub fn lookupByDeclarationId(
-        self: *const PlatformRequiredDeclarationTable,
-        declaration_id: PlatformRequiredDeclarationId,
-    ) ?PlatformRequiredDeclaration {
-        const raw = @backingInt(declaration_id);
-        if (raw >= self.declarations.len) return null;
-        return self.declarations[raw];
+    pub fn lookupByDeclarationId(self: PlatformRequiredDeclarationTable, declaration_id: PlatformRequiredDeclarationId) ?PlatformRequiredDeclaration {
+        return self.lookupByRequiredIndex(@backingInt(declaration_id));
     }
 
     /// The declarations' identity: each one's name, the scheme key of its
     /// declared type in `types` (the platform's checked types), and its
     /// for-clause aliases.
-    pub fn identityHash(
-        self: *const PlatformRequiredDeclarationTable,
-        names: *const canonical.CanonicalNameStore,
-        type_view: CheckedTypeStoreView,
-    ) Allocator.Error![32]u8 {
+    pub fn identityHash(self: PlatformRequiredDeclarationTable, type_view: CheckedTypeStoreView) Allocator.Error![32]u8 {
         var hasher = base.Sha256.init(.{});
         hashByteSlice(&hasher, "platform_required_declarations");
-        hashU32(&hasher, @intCast(self.declarations.len));
-        for (self.declarations) |declaration| {
-            hashU32(&hasher, declaration.requires_idx);
-            hashByteSlice(&hasher, names.exportNameText(declaration.platform_name));
-            const declared = type_view.sourceTypeRoot(ModuleEnv.varFrom(declaration.type_anno)) orelse
+        hashU32(&hasher, @intCast(self.count()));
+        const env = self.env orelse return hasher.finalResult();
+        for (env.requires_types.items.items, 0..) |required_type, requires_idx| {
+            hashU32(&hasher, @intCast(requires_idx));
+            hashByteSlice(&hasher, env.getIdent(required_type.ident));
+            const declared = type_view.sourceTypeRoot(ModuleEnv.varFrom(required_type.type_anno)) orelse
                 checkedArtifactInvariant("a platform requirement's declared type was not published", .{});
             hasher.update(&canonical_type_keys.schemeKeyForType(try type_view.rootKey(declared)).bytes);
-            hasher.update(&declaration.for_clause_aliases_hash);
+            hasher.update(&hashRequiredTypeForClauseAliases(env, required_type));
         }
         return hasher.finalResult();
     }
-
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 fn hashRequiredTypeForClauseAliases(
@@ -20117,7 +20075,7 @@ pub const PairingOverlay = struct {
     ) Allocator.Error!void {
         const store: *CheckedTypeStore = @constCast(&platform.checked_types);
         const names: *canonical.CanonicalNameStore = @constCast(&platform.canonical_names);
-        try validatePlatformAppRelationForModule(platform.module_identity, names, platform.typesView(), &platform.platform_required_declarations, relation);
+        try validatePlatformAppRelationForModule(platform.module_identity, platform.typesView(), platform.platformRequiredDeclarations(), relation);
         const type_inputs = try platform.platformTypeInputs();
         var identity_formals = std.ArrayList(CheckedTypeId).empty;
         defer identity_formals.deinit(allocator);
@@ -20387,13 +20345,12 @@ pub const PlatformRequirementRelationTable = struct {
         module_identity: ModuleIdentity,
         names: *canonical.CanonicalNameStore,
         checked_types: *CheckedTypeStore,
-        declarations: *const PlatformRequiredDeclarationTable,
+        declarations: PlatformRequiredDeclarationTable,
         relation_artifacts: []const ImportedModuleView,
         active_relation: PlatformAppRelation,
     ) Allocator.Error!PlatformRequirementRelationTable {
         try validatePlatformAppRelationForModule(
             module_identity,
-            names,
             checked_types.view(),
             declarations,
             active_relation,
@@ -20407,7 +20364,7 @@ pub const PlatformRequirementRelationTable = struct {
 
         var seen_declarations: []bool = &.{};
         if (builtin.mode == .debug) {
-            seen_declarations = try allocator.alloc(bool, declarations.declarations.len);
+            seen_declarations = try allocator.alloc(bool, declarations.count());
             @memset(seen_declarations, false);
         }
         defer {
@@ -20626,28 +20583,26 @@ pub const PlatformRequiredBindingTable = struct {
     pub fn fromRelation(
         allocator: Allocator,
         module_identity: ModuleIdentity,
-        names: *const canonical.CanonicalNameStore,
         type_view: CheckedTypeStoreView,
-        declarations: *const PlatformRequiredDeclarationTable,
+        declarations: PlatformRequiredDeclarationTable,
         relations: *const PlatformRequirementRelationTable,
         active_relation: PlatformAppRelation,
     ) Allocator.Error!PlatformRequiredBindingTable {
         try validatePlatformAppRelationForModule(
             module_identity,
-            names,
             type_view,
             declarations,
             active_relation,
         );
-        if (active_relation.bindings.len + active_relation.checked_error_requires.len != declarations.declarations.len) {
+        if (active_relation.bindings.len + active_relation.checked_error_requires.len != declarations.count()) {
             base.invariant(
                 "checked artifact invariant violated: platform/app relation has {d} bindings and {d} checked errors for {d} platform requirements",
-                .{ active_relation.bindings.len, active_relation.checked_error_requires.len, declarations.declarations.len },
+                .{ active_relation.bindings.len, active_relation.checked_error_requires.len, declarations.count() },
             );
         }
         var seen_declarations: []bool = &.{};
         if (builtin.mode == .debug) {
-            seen_declarations = try allocator.alloc(bool, declarations.declarations.len);
+            seen_declarations = try allocator.alloc(bool, declarations.count());
             @memset(seen_declarations, false);
         }
         defer {
@@ -20793,9 +20748,8 @@ pub const PlatformRequiredBindingTable = struct {
 
 fn validatePlatformAppRelationForModule(
     module_identity: ModuleIdentity,
-    names: *const canonical.CanonicalNameStore,
     type_view: CheckedTypeStoreView,
-    declarations: *const PlatformRequiredDeclarationTable,
+    declarations: PlatformRequiredDeclarationTable,
     active_relation: PlatformAppRelation,
 ) Allocator.Error!void {
     if (active_relation.platform_module_idx != module_identity.module_idx) {
@@ -20808,7 +20762,7 @@ fn validatePlatformAppRelationForModule(
     if (builtin.mode == .debug) {
         const expected_requirement_context = PlatformRequirementContextKey.compute(
             module_identity,
-            try declarations.identityHash(names, type_view),
+            try declarations.identityHash(type_view),
         );
         if (!std.meta.eql(active_relation.requirement_context.bytes, expected_requirement_context.bytes)) {
             base.invariant(
@@ -23597,7 +23551,7 @@ fn copyPlatformRequiredValueUse(
 pub fn platformRequirementContextKey(artifact: *const CheckedModuleArtifact) Allocator.Error!PlatformRequirementContextKey {
     return PlatformRequirementContextKey.compute(
         artifact.module_identity,
-        try artifact.platform_required_declarations.identityHash(&artifact.canonical_names, artifact.typesView()),
+        try artifact.platformRequiredDeclarations().identityHash(artifact.typesView()),
     );
 }
 
@@ -23605,7 +23559,7 @@ fn buildPlatformAppRelationFromDeclarations(
     allocator: Allocator,
     module_idx: u32,
     requirement_context: PlatformRequirementContextKey,
-    declarations: []const PlatformRequiredDeclaration,
+    declarations: PlatformRequiredDeclarationTable,
     app_artifact: *const CheckedModuleArtifact,
     resolver: ModuleResolver,
 ) Allocator.Error!PlatformAppRelation {
@@ -23624,7 +23578,8 @@ fn buildPlatformAppRelationFromDeclarations(
 
     const relation_key = PlatformAppRelationKey.compute(app_artifact.key.digest(), requirement_context);
 
-    for (declarations) |declaration| {
+    for (0..declarations.count()) |requires_idx| {
+        const declaration = declarations.get(requires_idx);
         // The checker records successful solutions as exact app value/type
         // facts. A missing row is recorded explicitly as a checked-error
         // requirement so publication stays total without inventing a binding.
@@ -23852,7 +23807,7 @@ pub const PlatformPairing = struct {
             platform.module_identity,
             @constCast(&platform.canonical_names),
             @constCast(&platform.checked_types),
-            &platform.platform_required_declarations,
+            platform.platformRequiredDeclarations(),
             &self.app_views,
             self.relation,
         );
@@ -23862,9 +23817,8 @@ pub const PlatformPairing = struct {
             .bindings = try PlatformRequiredBindingTable.fromRelation(
                 allocator,
                 platform.module_identity,
-                &platform.canonical_names,
                 platform.typesView(),
-                &platform.platform_required_declarations,
+                platform.platformRequiredDeclarations(),
                 &relations,
                 self.relation,
             ),
@@ -23892,8 +23846,8 @@ pub const PlatformPairing = struct {
         errdefer allocator.free(records);
         for (records) |*record| {
             if (record.ref == .platform_required_declaration) {
-                const required = platform.platform_required_declarations.lookupByDeclarationId(record.ref.platform_required_declaration).?;
-                record.ref = categorizeRequiredValueRef(required.requires_idx, &platform.platform_required_declarations, bindings);
+                const required = platform.platformRequiredDeclarations().lookupByDeclarationId(record.ref.platform_required_declaration).?;
+                record.ref = categorizeRequiredValueRef(required.requires_idx, platform.platformRequiredDeclarations(), bindings);
             }
         }
         table.records = records;
@@ -24007,7 +23961,6 @@ pub const PlatformPairing = struct {
                 "callable_eval_templates",
                 "hosted_procs",
                 "hosted_bindings",
-                "platform_required_declarations",
                 "top_level_values",
                 "hoisted_constants",
                 // Recorded as `relation`; the rest is the platform's.
@@ -24089,7 +24042,7 @@ pub fn pairCheckedPlatform(
     const session = arena.allocator();
     const app_views = [_]ImportedModuleView{importedView(app)};
     const pairing_views = CheckedImportViews{ .current_owner = platform.key.digest(), .direct = &.{}, .available = available_artifacts, .relations = &app_views };
-    const relation = try buildPlatformAppRelationFromDeclarations(session, platform.module_identity.module_idx, try platform.platformRequirementContextKey(), platform.platform_required_declarations.declarations, app, pairing_views.resolver());
+    const relation = try buildPlatformAppRelationFromDeclarations(session, platform.module_identity.module_idx, try platform.platformRequirementContextKey(), platform.platformRequiredDeclarations(), app, pairing_views.resolver());
 
     const pairing = try thread_safe.create(PlatformPairing);
     var pairing_initialized = false;
@@ -28892,7 +28845,9 @@ pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleV
         }
     }
 
-    for (owner.platform_required_declarations.declarations) |declaration| {
+    const declarations = owner.platformRequiredDeclarations();
+    for (0..declarations.count()) |requires_idx| {
+        const declaration = declarations.get(requires_idx);
         if (declaration.requires_idx >= module_env.requires_types.items.items.len) {
             checkedArtifactInvariant("platform requirement declaration has an out-of-range required index", .{});
         }
@@ -31038,7 +30993,6 @@ pub const CheckedModuleArtifact = struct {
     callable_eval_templates: CallableEvalTemplateTable = .{},
     hosted_procs: HostedProcTable,
     hosted_bindings: HostedBindingTable = .{},
-    platform_required_declarations: PlatformRequiredDeclarationTable,
     platform_requirement_relations: PlatformRequirementRelationTable = .{},
     platform_required_bindings: PlatformRequiredBindingTable,
     compile_time_roots: CompileTimeRootTable,
@@ -31112,6 +31066,11 @@ pub const CheckedModuleArtifact = struct {
     pub fn nameStore(self: *const CheckedModuleArtifact) *const canonical.CanonicalNameStore {
         if (self.pairing) |pairing| return &pairing.platform.canonical_names;
         return &self.canonical_names;
+    }
+
+    /// The module's platform requirement declarations.
+    pub fn platformRequiredDeclarations(self: *const CheckedModuleArtifact) PlatformRequiredDeclarationTable {
+        return .{ .env = self.moduleEnvConst(), .module_idx = self.module_identity.module_idx };
     }
 
     /// Whether the module is a platform that declares requirements.
@@ -31275,7 +31234,7 @@ pub const CheckedModuleArtifact = struct {
     pub fn platformRequirementContextKey(self: *const CheckedModuleArtifact) Allocator.Error!PlatformRequirementContextKey {
         return PlatformRequirementContextKey.compute(
             self.module_identity,
-            try self.platform_required_declarations.identityHash(self.nameStore(), self.typesView()),
+            try self.platformRequiredDeclarations().identityHash(self.typesView()),
         );
     }
 
@@ -31300,7 +31259,7 @@ pub const CheckedModuleArtifact = struct {
     /// after checking has published its exact app relation.
     pub fn hasUnboundPlatformRequirements(self: *const CheckedModuleArtifact) bool {
         return self.module_identity.kind == .platform and
-            self.platform_required_declarations.declarations.len > 0 and
+            self.platformRequiredDeclarations().count() > 0 and
             self.checking_context_identity.platform_app_relation == null;
     }
 
@@ -31500,7 +31459,6 @@ pub const CheckedModuleArtifact = struct {
         callable_eval_templates: CallableEvalTemplateTable.Serialized,
         hosted_procs: HostedProcTable.Serialized,
         hosted_bindings: HostedBindingTable.Serialized,
-        platform_required_declarations: PlatformRequiredDeclarationTable.Serialized,
         compile_time_roots: CompileTimeRootTable.Serialized,
         top_level_values: TopLevelValueTable.Serialized,
         hoisted_constants: HoistedConstTable.Serialized,
@@ -31531,7 +31489,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 163);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 162);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -32177,16 +32135,10 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        for (self.platform_required_declarations.declarations, 0..) |declaration, i| {
-            std.debug.assert(@backingInt(declaration.id) == i);
-            std.debug.assert(declaration.requires_idx == i);
-            std.debug.assert(declaration.module_idx == self.module_identity.module_idx);
-        }
-
         for (self.platform_requirement_relations.relations, 0..) |relation, i| {
             std.debug.assert(@backingInt(relation.id) == i);
             std.debug.assert(relation.module_idx == self.module_identity.module_idx);
-            const declaration = self.platform_required_declarations.lookupByDeclarationId(relation.declaration) orelse {
+            const declaration = self.platformRequiredDeclarations().lookupByDeclarationId(relation.declaration) orelse {
                 base.invariant(
                     "checked artifact invariant violated: platform requirement relation {d} has no declaration",
                     .{i},
@@ -32207,7 +32159,7 @@ pub const CheckedModuleArtifact = struct {
         for (self.platform_required_bindings.bindings, 0..) |binding, i| {
             std.debug.assert(@backingInt(binding.id) == i);
             std.debug.assert(binding.module_idx == self.module_identity.module_idx);
-            _ = self.platform_required_declarations.lookupByRequiredIndex(binding.requires_idx) orelse {
+            _ = self.platformRequiredDeclarations().lookupByRequiredIndex(binding.requires_idx) orelse {
                 base.invariant(
                     "checked artifact invariant violated: platform required binding {d} has no declaration",
                     .{i},
@@ -32223,7 +32175,7 @@ pub const CheckedModuleArtifact = struct {
             verifyPlatformRequiredValueUse(self, binding);
         }
         for (self.platform_required_bindings.checked_error_requires) |requires_idx| {
-            _ = self.platform_required_declarations.lookupByRequiredIndex(requires_idx) orelse {
+            _ = self.platformRequiredDeclarations().lookupByRequiredIndex(requires_idx) orelse {
                 base.invariant(
                     "checked artifact invariant violated: platform checked-error requirement {d} has no declaration",
                     .{requires_idx},
@@ -32428,7 +32380,6 @@ pub const ImportedModuleView = struct {
     hosted_procs: *const HostedProcTable,
     hosted_bindings: *const HostedBindingTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
-    platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     checking_context_identity: *const CheckingContextIdentity = &empty_checking_context_identity,
     top_level_values: *const TopLevelValueTable = &empty_top_level_values,
@@ -32455,6 +32406,11 @@ pub const ImportedModuleView = struct {
     pub fn dispatch(self: ImportedModuleView) CheckedDispatch {
         return self.checked_bodies.tables.dispatch orelse
             checkedArtifactInvariant("dispatch was read from a view without module analyses", .{});
+    }
+
+    /// The module's platform requirement declarations.
+    pub fn platformRequiredDeclarations(self: ImportedModuleView) PlatformRequiredDeclarationTable {
+        return .{ .env = self.module_env, .module_idx = self.module_identity.module_idx };
     }
 
     /// Whether the module is a platform that declares requirements.
@@ -32568,7 +32524,6 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .hosted_procs = &artifact.hosted_procs,
         .hosted_bindings = &artifact.hosted_bindings,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
-        .platform_required_declarations = &artifact.platform_required_declarations,
         .platform_required_bindings = &artifact.platform_required_bindings,
         .checking_context_identity = &artifact.checking_context_identity,
         .top_level_values = &artifact.top_level_values,
@@ -33787,8 +33742,7 @@ pub fn publishFromTypedModule(
     _ = try canonical_names.internTagLabel("#Missing");
     _ = try canonical_names.internTagLabel("#Present");
 
-    var platform_required_declarations = try PlatformRequiredDeclarationTable.fromModule(allocator, module, &canonical_names);
-    errdefer platform_required_declarations.deinit(allocator);
+    const platform_required_declarations = PlatformRequiredDeclarationTable{ .env = module_env, .module_idx = module_idx };
 
     var checking_context_identity = try CheckingContextIdentity.fromModule(
         allocator,
@@ -33986,7 +33940,7 @@ pub fn publishFromTypedModule(
         inputs.imports,
         inputs.available_artifacts,
         &hosted_procs,
-        &platform_required_declarations,
+        platform_required_declarations,
         &platform_required_bindings,
         &top_level_values,
         &selected_hoisted_callables,
@@ -34063,7 +34017,6 @@ pub fn publishFromTypedModule(
         .callable_eval_templates = callable_eval_templates,
         .hosted_procs = hosted_procs,
         .hosted_bindings = hosted_bindings,
-        .platform_required_declarations = platform_required_declarations,
         .platform_requirement_relations = .{},
         .platform_required_bindings = platform_required_bindings,
         .compile_time_roots = compile_time_roots,
@@ -34300,7 +34253,6 @@ test "checked module owns post-check inputs at the checked boundary" {
     try std.testing.expect(!@hasField(CheckedModuleArtifact, "root_requests"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "hosted_procs"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "hosted_bindings"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_declarations"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "compile_time_roots"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_values"));
@@ -34770,7 +34722,6 @@ test "relation projection preserves anonymous row identity and provenance" {
         .intrinsic_wrappers = .{},
         .top_level_procedure_bindings = .{},
         .hosted_procs = .{},
-        .platform_required_declarations = .{},
         .platform_required_bindings = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
@@ -35018,7 +34969,6 @@ test "artifact views are read-only projections" {
         .intrinsic_wrappers = .{},
         .top_level_procedure_bindings = .{},
         .hosted_procs = .{},
-        .platform_required_declarations = .{},
         .platform_required_bindings = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
@@ -35104,7 +35054,6 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
     try expectAllSliceStoreRoundTrips(ResolvedValueRefTable);
     try expectAllSliceStoreRoundTrips(RootRequestTable);
     try expectAllSliceStoreRoundTrips(TopLevelProcedureBindingTable);
-    try expectAllSliceStoreRoundTrips(PlatformRequiredDeclarationTable);
     try expectAllSliceStoreRoundTrips(PlatformRequirementRelationTable);
     try expectAllSliceStoreRoundTrips(TopLevelValueTable);
     try expectAllSliceStoreRoundTrips(CheckedProcedureTemplateTable);
@@ -35170,7 +35119,6 @@ fn testVisibilityImportedView(
         .hosted_procs = undefined,
         .hosted_bindings = undefined,
         .top_level_procedure_bindings = undefined,
-        .platform_required_declarations = undefined,
         .platform_required_bindings = undefined,
         .callable_eval_templates = undefined,
         .hoisted_constants = undefined,
@@ -35600,7 +35548,6 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .checked_procedure_templates = .{},
         .top_level_procedure_bindings = .{},
         .hosted_procs = .{},
-        .platform_required_declarations = .{},
         .platform_required_bindings = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},

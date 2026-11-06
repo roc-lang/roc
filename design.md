@@ -5333,11 +5333,13 @@ needs a key (`CheckedTypeStoreView.schemeKey`).
 
 ### Platform/App Composition
 
-Platform requirement declarations record their checked type roots, the
-producer-assigned order of requirement identity variables, and each for-clause
+A platform's requirement declarations are its `requires` clause: declaration
+`i` is requirement `i`, and nothing copies them into a table. Its requirement
+type inputs (`ModuleAnalyses.platformTypeInputs`) give each requirement's
+checked type root, the order of its identity variables, and each for-clause
 alias's checked identity and backing roots. Pairing consumes these exact rows
-and the app's recorded solution rows; it never revisits source annotations or
-rebuilds identity order. The exhaustiveness checks a pairing decides are
+and the app's recorded solution rows (`ModuleAnalyses.platformRequirementSolutions`);
+it never revisits source annotations or rebuilds identity order. The exhaustiveness checks a pairing decides are
 the platform's deferred checks in its inference output whose sites need the
 pairing, less those whose empirical failure the platform's own evaluation
 reported (its evaluation output records those sites); the inference output
@@ -5527,6 +5529,19 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   root requests are its own slot over its platform's.
 - Per-module slots of `check.ModuleAnalyses`
   (`src/check/module_analyses.zig`), which every checked module owns:
+  the module's export rows (`exportRows`: the definitions it exports, in
+  export order, and the procedure templates, procedure bindings and
+  constant templates those definitions and the binders of its exposed
+  top-level destructures name, which export closures and platform
+  relations index by position), its provided exports (`providedExports`:
+  one row per `provides` entry naming a local definition, at the
+  definition's checked type; a platform/app pairing's are the pairing's
+  own slot over its platform's), a platform's requirement type inputs
+  (`platformTypeInputs`: each requirement's checked root, the identity
+  variables it reaches in key order, and its for-clause aliases) and an
+  app's requirement solutions (`platformRequirementSolutions`: each
+  successful solution checking recorded, at its checked types), each
+  read by a platform/app pairing from its platform's slot,
   the template closures of the module's export rows (`exportClosures`),
   the modules a consumer of its public API reads
   (`publicApiDependencies`: the owners of the types its exports,
