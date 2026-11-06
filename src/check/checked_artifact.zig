@@ -25852,8 +25852,8 @@ pub const CompileTimeRootTable = struct {
         // conversion root after dispatch evidence is finalized.
         const module_env = module.moduleEnvConst();
 
-        for (module_env.compile_time_executable_roots.items.items) |executable_root| {
-            const expr_idx = executable_root.body;
+        for (module_env.requested_compile_time_roots.items.items) |requested_root| {
+            const expr_idx = requested_root.body;
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .repl_expr,
@@ -36679,8 +36679,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x57, 0xB2, 0xE9, 0x6F, 0x77, 0xD5, 0x1F, 0x5C, 0x03, 0x77, 0x85, 0x86, 0xD4, 0xAE, 0x6C, 0xD2,
-        0x93, 0x8B, 0xEC, 0x14, 0x82, 0x88, 0xE0, 0x52, 0x5C, 0x41, 0xFB, 0x6C, 0x07, 0x59, 0xEE, 0xA4,
+        0x8C, 0xED, 0x4A, 0x0C, 0xD5, 0x7F, 0x92, 0x46, 0x37, 0x65, 0xE7, 0x6F, 0xD6, 0x0B, 0x3B, 0x6F,
+        0x24, 0x9D, 0x5C, 0x84, 0x3F, 0xB5, 0xE6, 0xF4, 0x0C, 0xAE, 0xAF, 0xB8, 0x90, 0xDD, 0x28, 0xF3,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

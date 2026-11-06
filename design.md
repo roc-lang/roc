@@ -23658,7 +23658,7 @@ An interactive REPL expression is a `.repl_expr` compile-time root whose
 checked body returns `Str.inspect(expression)`. The evaluation helper that
 generated the zero-argument wrapper tells checking which definition it is;
 checking records that definition's body
-(`ModuleEnv.compile_time_executable_roots`) unless it rejected the
+(`ModuleEnv.requested_compile_time_roots`) unless it rejected the
 definition, and the module's root table holds one `.repl_expr` root per
 recorded body, whose request carries that exact expression identity;
 `CompileTimeFinalization` consumes the identity directly. Checking retains the zero-argument

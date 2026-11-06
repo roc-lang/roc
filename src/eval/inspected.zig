@@ -1378,7 +1378,7 @@ pub fn parseProgram(
             explicit_roots = explicit_root_storage[0..];
         },
         // A compile-time REPL root is a candidate checking recorded
-        // (`ModuleEnv.compile_time_executable_roots`).
+        // (`ModuleEnv.requested_compile_time_roots`).
         .comptime_repl, .published_only => {},
     }
 

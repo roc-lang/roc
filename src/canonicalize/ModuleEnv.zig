@@ -859,9 +859,9 @@ pub const SelectedHoistedRoot = HoistRoots.SelectedHoistedRoot;
 /// (`promoted_local_procedures`).
 pub const PromotedLocalProcedure = HoistRoots.PromotedLocalProcedure;
 
-/// A zero-argument executable root definition whose body checking was told
-/// to treat as a compile-time root (`compile_time_executable_roots`).
-pub const CompileTimeExecutableRoot = struct {
+/// A zero-argument root definition whose body checking was told to treat
+/// as a compile-time root (`requested_compile_time_roots`).
+pub const RequestedCompileTimeRoot = struct {
     def: CIR.Def.Idx,
     /// The body of the definition's zero-argument lambda.
     body: CIR.Expr.Idx,
@@ -1179,9 +1179,9 @@ erroneous_nodes: ErroneousNode.SafeList,
 selected_hoisted_roots: collections.SafeList(SelectedHoistedRoot),
 /// Local function bindings checking promoted to procedures of their own.
 promoted_local_procedures: collections.SafeList(PromotedLocalProcedure),
-/// The executable roots checking was told to evaluate at compile time, in
+/// The root definitions checking was told to evaluate at compile time, in
 /// the order checking received them.
-compile_time_executable_roots: collections.SafeList(CompileTimeExecutableRoot),
+requested_compile_time_roots: collections.SafeList(RequestedCompileTimeRoot),
 /// For an app checked against its platform's requirements: one solution per
 /// requirement checking finalized, in requires-clause order.
 platform_requirement_solutions: PlatformRequirementSolution.SafeList,
@@ -1608,7 +1608,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .erroneous_nodes = try ErroneousNode.SafeList.initCapacity(gpa, 0),
         .selected_hoisted_roots = try collections.SafeList(SelectedHoistedRoot).initCapacity(gpa, 0),
         .promoted_local_procedures = try collections.SafeList(PromotedLocalProcedure).initCapacity(gpa, 0),
-        .compile_time_executable_roots = try collections.SafeList(CompileTimeExecutableRoot).initCapacity(gpa, 0),
+        .requested_compile_time_roots = try collections.SafeList(RequestedCompileTimeRoot).initCapacity(gpa, 0),
         .platform_requirement_solutions = try PlatformRequirementSolution.SafeList.initCapacity(gpa, 0),
         .platform_requirement_identity_vars = try collections.SafeList(types_mod.Var).initCapacity(gpa, 0),
         .exhaustiveness_obligations = try ExhaustivenessObligation.SafeList.initCapacity(gpa, 0),
@@ -1654,7 +1654,7 @@ pub fn deinit(self: *Self) void {
     self.erroneous_nodes.deinit(self.gpa);
     self.selected_hoisted_roots.deinit(self.gpa);
     self.promoted_local_procedures.deinit(self.gpa);
-    self.compile_time_executable_roots.deinit(self.gpa);
+    self.requested_compile_time_roots.deinit(self.gpa);
     self.platform_requirement_solutions.deinit(self.gpa);
     self.platform_requirement_identity_vars.deinit(self.gpa);
     self.exhaustiveness_obligations.deinit(self.gpa);
@@ -1818,7 +1818,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.erroneous_nodes.deinit(self.gpa);
     self.selected_hoisted_roots.deinit(self.gpa);
     self.promoted_local_procedures.deinit(self.gpa);
-    self.compile_time_executable_roots.deinit(self.gpa);
+    self.requested_compile_time_roots.deinit(self.gpa);
     self.platform_requirement_solutions.deinit(self.gpa);
     self.platform_requirement_identity_vars.deinit(self.gpa);
     self.exhaustiveness_obligations.deinit(self.gpa);
@@ -4115,7 +4115,7 @@ pub const Serialized = extern struct {
     erroneous_nodes: ErroneousNode.SafeList.Serialized,
     selected_hoisted_roots: collections.SafeList(SelectedHoistedRoot).Serialized,
     promoted_local_procedures: collections.SafeList(PromotedLocalProcedure).Serialized,
-    compile_time_executable_roots: collections.SafeList(CompileTimeExecutableRoot).Serialized,
+    requested_compile_time_roots: collections.SafeList(RequestedCompileTimeRoot).Serialized,
     platform_requirement_solutions: PlatformRequirementSolution.SafeList.Serialized,
     platform_requirement_identity_vars: collections.SafeList(types_mod.Var).Serialized,
     exhaustiveness_obligations: ExhaustivenessObligation.SafeList.Serialized,
@@ -4246,7 +4246,7 @@ pub const Serialized = extern struct {
         try self.erroneous_nodes.serialize(&env.erroneous_nodes, allocator, writer);
         try self.selected_hoisted_roots.serialize(&env.selected_hoisted_roots, allocator, writer);
         try self.promoted_local_procedures.serialize(&env.promoted_local_procedures, allocator, writer);
-        try self.compile_time_executable_roots.serialize(&env.compile_time_executable_roots, allocator, writer);
+        try self.requested_compile_time_roots.serialize(&env.requested_compile_time_roots, allocator, writer);
         try self.platform_requirement_solutions.serialize(&env.platform_requirement_solutions, allocator, writer);
         try self.platform_requirement_identity_vars.serialize(&env.platform_requirement_identity_vars, allocator, writer);
         try self.exhaustiveness_obligations.serialize(&env.exhaustiveness_obligations, allocator, writer);
@@ -4332,7 +4332,7 @@ pub const Serialized = extern struct {
             .erroneous_nodes = self.erroneous_nodes.deserializeInto(base_addr),
             .selected_hoisted_roots = self.selected_hoisted_roots.deserializeInto(base_addr),
             .promoted_local_procedures = self.promoted_local_procedures.deserializeInto(base_addr),
-            .compile_time_executable_roots = self.compile_time_executable_roots.deserializeInto(base_addr),
+            .requested_compile_time_roots = self.requested_compile_time_roots.deserializeInto(base_addr),
             .platform_requirement_solutions = self.platform_requirement_solutions.deserializeInto(base_addr),
             .platform_requirement_identity_vars = self.platform_requirement_identity_vars.deserializeInto(base_addr),
             .exhaustiveness_obligations = self.exhaustiveness_obligations.deserializeInto(base_addr),
@@ -4422,7 +4422,7 @@ pub const Serialized = extern struct {
             .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
             .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
             .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
-            .compile_time_executable_roots = try self.compile_time_executable_roots.deserializeWithCopy(base_addr, gpa),
+            .requested_compile_time_roots = try self.requested_compile_time_roots.deserializeWithCopy(base_addr, gpa),
             .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
             .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
             .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
@@ -4527,7 +4527,7 @@ pub const Serialized = extern struct {
             .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
             .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
             .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
-            .compile_time_executable_roots = try self.compile_time_executable_roots.deserializeWithCopy(base_addr, gpa),
+            .requested_compile_time_roots = try self.requested_compile_time_roots.deserializeWithCopy(base_addr, gpa),
             .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
             .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
             .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
