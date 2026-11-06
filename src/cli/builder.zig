@@ -345,6 +345,41 @@ fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void
     };
 }
 
+/// The linked builtins pinned with `alwaysinline`. Each is a forwarding
+/// wrapper: its body packs its arguments and hands them to one out-of-line
+/// builtin routine, and any choice among forms of that routine tests only
+/// arguments that are constants at every call site. Inlining one therefore
+/// replaces a call with a call. No caller grows, whatever its size and
+/// however many sites it has, so the pin needs no account of code growth.
+const pinned_forwarding_builtins = [_][]const u8{
+    "roc_builtins_list_append_unsafe",
+    "roc_builtins_list_append_range_within_unsafe",
+    "roc_builtins_list_slack_unique",
+    "roc_builtins_list_replace",
+    "roc_builtins_list_owned_unique",
+};
+
+/// Whether the linked builtin `name` is pinned with `alwaysinline`.
+///
+/// A builtin that does work of its own inline is never pinned, however small
+/// that work is once optimized. The str concat wrapper is the case to keep in
+/// mind: it builds a small-into-small result in the wrapper and calls its
+/// out-of-line half for everything else, so every inlined copy adds that path
+/// to its caller on top of the call. LLVM's mandatory inliner also runs before
+/// the inlining pipeline has simplified any callee, so it copies a pinned body
+/// as linked: for the concat wrapper, unoptimized bitcode several times its
+/// simplified size, with a stack slot for every temporary. A procedure that
+/// formats many strings holds tens of thousands of concat sites, and nothing
+/// bounds what the copies add to it. Such a builtin carries `inlinehint` like
+/// every other linked builtin, and the inliner's cost model decides each site
+/// on the simplified body. See design.md.
+fn isPinnedForwardingBuiltin(name: []const u8) bool {
+    for (pinned_forwarding_builtins) |suffix| {
+        if (std.mem.endsWith(u8, name, suffix)) return true;
+    }
+    return false;
+}
+
 /// The payload defining the 64-bit builtin bitcode's SHA-256 compression for
 /// `rounds`. The 32-bit payload carries its portable rounds inline, since no
 /// 32-bit target has SHA-256 instructions Roc uses.
@@ -723,25 +758,12 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             // declines these helpers once a caller crosses its size budget --
             // at which point a hot loop's straight-line appends degrade into
             // out-of-line calls exactly where staying inline matters most.
-            // The unchecked leaf helpers behind that failure are pinned with
-            // alwaysinline in every mode: they are tiny and non-recursive, so
-            // inlining them is right at any caller size.
-            // The str concat wrapper is pinned for the same reason: its small-into-
-            // small path is a few word operations that only pay off in registers
-            // at the call site, and every other case is already a call to its
-            // noinline out-of-line half.
+            // The forwarding wrappers behind that failure are pinned with
+            // alwaysinline in every mode (`isPinnedForwardingBuiltin`).
             const inlinehint_kind = externs.LLVMGetEnumAttributeKindForName("inlinehint", "inlinehint".len);
             const inlinehint_attr = externs.LLVMCreateEnumAttribute(externs.LLVMGetModuleContext(builtins_module), inlinehint_kind, 0);
             const alwaysinline_kind = externs.LLVMGetEnumAttributeKindForName("alwaysinline", "alwaysinline".len);
             const alwaysinline_attr = externs.LLVMCreateEnumAttribute(externs.LLVMGetModuleContext(builtins_module), alwaysinline_kind, 0);
-            const pinned_inline_suffixes = [_][]const u8{
-                "roc_builtins_list_append_unsafe",
-                "roc_builtins_list_append_range_within_unsafe",
-                "roc_builtins_list_slack_unique",
-                "roc_builtins_list_replace",
-                "roc_builtins_list_owned_unique",
-                "roc_builtins_str_concat",
-            };
             var builtin_func = externs.LLVMGetFirstFunction(builtins_module);
             while (builtin_func) |fv| : (builtin_func = externs.LLVMGetNextFunction(fv)) {
                 if (externs.LLVMIsDeclaration(fv) != 0) continue;
@@ -751,14 +773,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 var name_len: usize = 0;
                 const name_ptr = externs.LLVMGetValueName2(fv, &name_len);
                 const name = name_ptr[0..name_len];
-                var pinned = false;
-                for (pinned_inline_suffixes) |suffix| {
-                    if (std.mem.endsWith(u8, name, suffix)) {
-                        pinned = true;
-                        break;
-                    }
-                }
-                if (pinned) {
+                if (isPinnedForwardingBuiltin(name)) {
                     externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, alwaysinline_attr);
                 } else if (config.optimization != .size) {
                     externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, inlinehint_attr);
@@ -972,6 +987,25 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
 
     std.log.debug("Successfully compiled bitcode to object file: {s}", .{config.output_path});
     return true;
+}
+
+test "only forwarding wrappers among the linked builtins are pinned for inlining" {
+    // Forwarding wrappers, under the module-qualified names the linked
+    // bitcode gives them.
+    try std.testing.expect(isPinnedForwardingBuiltin("dev_wrappers.roc_builtins_list_append_unsafe"));
+    try std.testing.expect(isPinnedForwardingBuiltin("dev_wrappers.roc_builtins_list_append_range_within_unsafe"));
+    try std.testing.expect(isPinnedForwardingBuiltin("dev_wrappers.roc_builtins_list_slack_unique"));
+    try std.testing.expect(isPinnedForwardingBuiltin("dev_wrappers.roc_builtins_list_replace"));
+    try std.testing.expect(isPinnedForwardingBuiltin("dev_wrappers.roc_builtins_list_owned_unique"));
+
+    // The str concat wrapper computes its small-into-small result inline, so
+    // the inliner's cost model decides its sites.
+    try std.testing.expect(!isPinnedForwardingBuiltin("dev_wrappers.roc_builtins_str_concat"));
+    try std.testing.expect(!isPinnedForwardingBuiltin("dev_wrappers.strConcatOutOfLine"));
+    // The checked form of a pinned wrapper, and an operation that does its
+    // own work, stay with the cost model too.
+    try std.testing.expect(!isPinnedForwardingBuiltin("dev_wrappers.roc_builtins_list_append_range_within"));
+    try std.testing.expect(!isPinnedForwardingBuiltin("dev_wrappers.roc_builtins_list_concat"));
 }
 
 test "LLVM optimization option mapping" {
