@@ -293,6 +293,19 @@ const Publication = struct {
         try self.value(self.env.defInvokes(id));
         try self.value(self.env.callableAllowsStoredConst(id));
         try self.value(self.env.diagnosticHostedReturn(id));
+        try self.bindingResolution(def.pattern);
+    }
+
+    /// What an importer's value-reference resolution reads of a binding
+    /// (`value_resolution`): the kind of value it evaluates to and whether a
+    /// call through it forwards to a procedure.
+    fn bindingResolution(self: *Publication, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+        const resolution = self.env.bindingResolution(pattern);
+        try self.value(resolution != null);
+        if (resolution) |recorded| {
+            try self.bytes(@tagName(recorded.body));
+            try self.value(recorded.forwarded_lookup != null);
+        }
     }
 
     fn declaration(self: *Publication, id: CIR.Statement.Idx) Allocator.Error!void {
@@ -449,6 +462,7 @@ const Publication = struct {
                         try self.definition(@fromBackingInt(entry.value.node_idx), classify);
                     } else {
                         try self.scheme(node_id);
+                        try self.bindingResolution(@fromBackingInt(entry.value.node_idx));
                         const owner = try binding_owner(env, node_id);
                         try self.value(owner != null);
                         if (owner) |def| try self.definition(def, classify);

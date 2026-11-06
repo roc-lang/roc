@@ -10713,17 +10713,25 @@ test "a module's inference entry does not depend on the command or on modules it
         \\import A
         \\import B
         \\
-        \\limit = A.scale(B.base)
+        \\scaled : U64 -> U64
+        \\scaled = A.triple
+        \\
+        \\limit = scaled(A.scale(B.base))
         \\
         \\main! = |_args| {
         \\    Echo.line!(Str.inspect(limit))
         \\    Ok({})
         \\}
     ;
+    // `A.triple` is an alias of a procedure, so its importer's alias and
+    // calls through both forward across the module boundary to `A.scale`.
     const a_source =
         \\A := {}.{
         \\    scale : U64 -> U64
         \\    scale = |value| value * 3
+        \\
+        \\    triple : U64 -> U64
+        \\    triple = scale
         \\}
     ;
     for ([_][]const u8{ "first", "second" }) |workspace| {

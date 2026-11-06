@@ -1395,10 +1395,6 @@ pub fn parseProgram(
             .imports = publish_imports,
             .available_artifacts = available_artifacts,
             .explicit_roots = explicit_roots,
-            .hoisted_roots = switch (options.roots) {
-                .eval, .inspected, .comptime_repl => .top_level,
-                .published_only => .selected,
-            },
             .compile_time_finalizer = if (options.ctfe_options) |ctfe_options|
                 CompileTimeFinalization.finalizerWithOptions(ctfe_options)
             else
@@ -1910,7 +1906,6 @@ fn publishImportArtifacts(
             1,
             .{
                 .module_env_storage = .{ .static_builtin = builtin_module.?.env },
-                .hoisted_roots = .none,
                 .io = io,
                 .compile_time_finalizer = CompileTimeFinalization.finalizer(),
                 .inference = check.CheckedArtifact.CheckedModuleArtifact.bakedInference(compiled_builtins.builtin_artifact_bin[0..]) catch return error.CorruptEmbeddedBuiltins,
@@ -1959,7 +1954,6 @@ fn publishImportArtifacts(
                     .io = io,
                     .imports = published_keys.items,
                     .available_artifacts = available_artifacts,
-                    .hoisted_roots = .none,
                     .compile_time_finalizer = CompileTimeFinalization.finalizer(),
                     .problem_store = switch (problem_reporting) {
                         .ignore_comptime_problems => null,

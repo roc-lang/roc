@@ -29,6 +29,7 @@ const hoist_roots = @import("can").HoistRoots;
 const output_type_roots = @import("output_type_roots.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
+const value_resolution = @import("value_resolution.zig");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -13235,19 +13236,15 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 }
 
 /// Record the selected compile-time roots, the promoted local procedures,
-/// the requested compile-time roots, the platform requirement solutions and
-/// the pending exhaustiveness checks
-/// into the module's checked outputs. A pending exhaustiveness check's index
+/// the requested compile-time roots, the platform requirement solutions, the
+/// value-reference resolution (`value_resolution.record`) and the pending
+/// exhaustiveness checks into the module's checked outputs. A pending exhaustiveness check's index
 /// in `ModuleEnv.exhaustiveness_obligations` is its checked site id.
 fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
     const env = self.cir;
     try env.selected_hoisted_roots.items.ensureTotalCapacity(env.gpa, self.selected_hoisted_roots.items.len);
     env.selected_hoisted_roots.items.clearRetainingCapacity();
-    for (self.selected_hoisted_roots.items) |root| {
-        var recorded = root;
-        recorded.top_level = self.selectedHoistedRootIsTopLevel(root);
-        env.selected_hoisted_roots.items.appendAssumeCapacity(recorded);
-    }
+    env.selected_hoisted_roots.items.appendSliceAssumeCapacity(self.selected_hoisted_roots.items);
     env.promoted_local_procedures.items.clearRetainingCapacity();
     try env.promoted_local_procedures.items.appendSlice(env.gpa, self.promoted_local_procedures.items);
     env.requested_compile_time_roots.items.clearRetainingCapacity();
@@ -13280,6 +13277,12 @@ fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
         });
     }
 
+    try value_resolution.record(self.gpa, env, .{
+        .imported_modules = self.imported_modules,
+        .context = self,
+        .owner_env = valueResolutionOwnerEnv,
+    });
+
     const pending = self.problems.pending_static_exhaustiveness.items;
     env.exhaustiveness_obligations.items.clearRetainingCapacity();
     try env.exhaustiveness_obligations.items.ensureTotalCapacity(env.gpa, pending.len);
@@ -13291,6 +13294,11 @@ fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
             .region = obligation.region,
         });
     }
+}
+
+fn valueResolutionOwnerEnv(context: *const anyopaque, owner: base.ModuleIdentity.Idx) *const ModuleEnv {
+    const self: *const Self = @ptrCast(@alignCast(context));
+    return self.moduleEnvForIdentity(self.cir, owner).env;
 }
 
 /// Record every node whose own checked state is erroneous

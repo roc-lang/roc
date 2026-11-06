@@ -867,6 +867,96 @@ pub const RequestedCompileTimeRoot = struct {
     body: CIR.Expr.Idx,
 };
 
+/// What one reached value reference resolves to, recorded by checking
+/// (`value_references`).
+pub const ValueReference = struct {
+    /// The lookup expression.
+    expr: CIR.Expr.Idx,
+    target: ValueReferenceTarget,
+};
+
+/// The binding a value reference names, in checker-native ids.
+pub const ValueReferenceTarget = union(enum(u8)) {
+    /// A lambda parameter.
+    local_param: CIR.Pattern.Idx,
+    /// A block-local value binding.
+    local_value: CIR.Pattern.Idx,
+    /// A version of a mutable local.
+    local_mutable_version: CIR.Pattern.Idx,
+    /// A binder of a destructuring or match pattern.
+    pattern_binder: CIR.Pattern.Idx,
+    /// A block-local function binding.
+    local_procedure: LocalProcedureReference,
+    /// A top-level definition of this module.
+    top_level: CIR.Def.Idx,
+    /// A function-valued selected hoisted root, by its binding pattern.
+    hoisted_procedure: CIR.Pattern.Idx,
+    /// A promoted local procedure, by its binding pattern.
+    promoted_procedure: CIR.Pattern.Idx,
+    /// A data-valued selected hoisted root, by its binding pattern.
+    hoisted_constant: CIR.Pattern.Idx,
+    /// A definition (or exposed destructure binder) of a directly imported
+    /// module, by that module's own node id.
+    imported: ImportedValueReference,
+    /// A definition of the module that declares a type an associated lookup
+    /// names, by that module's own definition id.
+    associated: AssociatedValueReference,
+    /// A platform requirement, by its index in the requires clause.
+    required: u32,
+};
+
+/// A block-local function binding a value reference names.
+pub const LocalProcedureReference = struct {
+    binder: CIR.Pattern.Idx,
+    /// The binding's right-hand side.
+    expr: CIR.Expr.Idx,
+    /// For an exact procedure alias, the lookup the alias chain ends at: the
+    /// first lookup along it that is not itself an alias.
+    alias_target: ?CIR.Expr.Idx,
+};
+
+/// A value reference into a directly imported module.
+pub const ImportedValueReference = struct {
+    import: CIR.Import.Idx,
+    /// The definition node, or the binder node of an exposed destructure.
+    node: u32,
+};
+
+/// A value reference into the module that declares a type.
+pub const AssociatedValueReference = struct {
+    owner: base.ModuleIdentity.Idx,
+    def: CIR.Def.Idx,
+};
+
+/// What evaluating one top-level binding of this module produces, recorded by
+/// checking for every top-level value definition and every bound selected
+/// hoisted root (`binding_resolutions`). Importers read it for the bindings
+/// they reference.
+pub const BindingResolution = struct {
+    pattern: CIR.Pattern.Idx,
+    body: BindingResolutionBody,
+    /// For a binding evaluated at compile time whose root is a lookup of a
+    /// directly callable procedure: that lookup. A call through the binding
+    /// forwards to it.
+    forwarded_lookup: ?CIR.Expr.Idx,
+};
+
+/// The body of a recorded top-level binding (`BindingResolution`).
+pub const BindingResolutionBody = union(enum(u8)) {
+    /// A data value.
+    constant,
+    /// A procedure: a lambda, closure, hosted or annotation-only function,
+    /// or a promoted local procedure.
+    procedure,
+    /// A function value compile-time evaluation produces from its root
+    /// expression; null when the root evaluates a destructure of its
+    /// expression rather than the expression itself.
+    evaluated: ?CIR.Expr.Idx,
+    /// A function value whose evaluation is a terminal checked error, at the
+    /// expression that is the error.
+    checked_error: CIR.Expr.Idx,
+};
+
 /// The app definition checking solved one platform requirement with
 /// (`platform_requirement_solutions`).
 pub const PlatformRequirementSolution = struct {
@@ -1182,6 +1272,18 @@ promoted_local_procedures: collections.SafeList(PromotedLocalProcedure),
 /// The root definitions checking was told to evaluate at compile time, in
 /// the order checking received them.
 requested_compile_time_roots: collections.SafeList(RequestedCompileTimeRoot),
+/// What every reached value reference resolves to, ascending by lookup
+/// expression. Recorded once checking is complete.
+value_references: collections.SafeList(ValueReference),
+/// Expressions lowering evaluates as runtime errors because reference
+/// resolution rejected them: uses of rejected bindings, calls of a callee
+/// that is a runtime error, and the uses and calls those rejections
+/// propagate to through callable bindings. Ascending.
+retired_exprs: collections.SafeList(CIR.Expr.Idx),
+/// Calls whose callee is a directly callable procedure, ascending.
+direct_procedure_calls: collections.SafeList(CIR.Expr.Idx),
+/// What each top-level binding evaluates to, ascending by pattern.
+binding_resolutions: collections.SafeList(BindingResolution),
 /// For an app checked against its platform's requirements: one solution per
 /// requirement checking finalized, in requires-clause order.
 platform_requirement_solutions: PlatformRequirementSolution.SafeList,
@@ -1609,6 +1711,10 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .selected_hoisted_roots = try collections.SafeList(SelectedHoistedRoot).initCapacity(gpa, 0),
         .promoted_local_procedures = try collections.SafeList(PromotedLocalProcedure).initCapacity(gpa, 0),
         .requested_compile_time_roots = try collections.SafeList(RequestedCompileTimeRoot).initCapacity(gpa, 0),
+        .value_references = try collections.SafeList(ValueReference).initCapacity(gpa, 0),
+        .retired_exprs = try collections.SafeList(CIR.Expr.Idx).initCapacity(gpa, 0),
+        .direct_procedure_calls = try collections.SafeList(CIR.Expr.Idx).initCapacity(gpa, 0),
+        .binding_resolutions = try collections.SafeList(BindingResolution).initCapacity(gpa, 0),
         .platform_requirement_solutions = try PlatformRequirementSolution.SafeList.initCapacity(gpa, 0),
         .platform_requirement_identity_vars = try collections.SafeList(types_mod.Var).initCapacity(gpa, 0),
         .exhaustiveness_obligations = try ExhaustivenessObligation.SafeList.initCapacity(gpa, 0),
@@ -1655,6 +1761,10 @@ pub fn deinit(self: *Self) void {
     self.selected_hoisted_roots.deinit(self.gpa);
     self.promoted_local_procedures.deinit(self.gpa);
     self.requested_compile_time_roots.deinit(self.gpa);
+    self.value_references.deinit(self.gpa);
+    self.retired_exprs.deinit(self.gpa);
+    self.direct_procedure_calls.deinit(self.gpa);
+    self.binding_resolutions.deinit(self.gpa);
     self.platform_requirement_solutions.deinit(self.gpa);
     self.platform_requirement_identity_vars.deinit(self.gpa);
     self.exhaustiveness_obligations.deinit(self.gpa);
@@ -1819,6 +1929,10 @@ pub fn deinitCachedModule(self: *Self) void {
     self.selected_hoisted_roots.deinit(self.gpa);
     self.promoted_local_procedures.deinit(self.gpa);
     self.requested_compile_time_roots.deinit(self.gpa);
+    self.value_references.deinit(self.gpa);
+    self.retired_exprs.deinit(self.gpa);
+    self.direct_procedure_calls.deinit(self.gpa);
+    self.binding_resolutions.deinit(self.gpa);
     self.platform_requirement_solutions.deinit(self.gpa);
     self.platform_requirement_identity_vars.deinit(self.gpa);
     self.exhaustiveness_obligations.deinit(self.gpa);
@@ -4116,6 +4230,10 @@ pub const Serialized = extern struct {
     selected_hoisted_roots: collections.SafeList(SelectedHoistedRoot).Serialized,
     promoted_local_procedures: collections.SafeList(PromotedLocalProcedure).Serialized,
     requested_compile_time_roots: collections.SafeList(RequestedCompileTimeRoot).Serialized,
+    value_references: collections.SafeList(ValueReference).Serialized,
+    retired_exprs: collections.SafeList(CIR.Expr.Idx).Serialized,
+    direct_procedure_calls: collections.SafeList(CIR.Expr.Idx).Serialized,
+    binding_resolutions: collections.SafeList(BindingResolution).Serialized,
     platform_requirement_solutions: PlatformRequirementSolution.SafeList.Serialized,
     platform_requirement_identity_vars: collections.SafeList(types_mod.Var).Serialized,
     exhaustiveness_obligations: ExhaustivenessObligation.SafeList.Serialized,
@@ -4247,6 +4365,10 @@ pub const Serialized = extern struct {
         try self.selected_hoisted_roots.serialize(&env.selected_hoisted_roots, allocator, writer);
         try self.promoted_local_procedures.serialize(&env.promoted_local_procedures, allocator, writer);
         try self.requested_compile_time_roots.serialize(&env.requested_compile_time_roots, allocator, writer);
+        try self.value_references.serialize(&env.value_references, allocator, writer);
+        try self.retired_exprs.serialize(&env.retired_exprs, allocator, writer);
+        try self.direct_procedure_calls.serialize(&env.direct_procedure_calls, allocator, writer);
+        try self.binding_resolutions.serialize(&env.binding_resolutions, allocator, writer);
         try self.platform_requirement_solutions.serialize(&env.platform_requirement_solutions, allocator, writer);
         try self.platform_requirement_identity_vars.serialize(&env.platform_requirement_identity_vars, allocator, writer);
         try self.exhaustiveness_obligations.serialize(&env.exhaustiveness_obligations, allocator, writer);
@@ -4333,6 +4455,10 @@ pub const Serialized = extern struct {
             .selected_hoisted_roots = self.selected_hoisted_roots.deserializeInto(base_addr),
             .promoted_local_procedures = self.promoted_local_procedures.deserializeInto(base_addr),
             .requested_compile_time_roots = self.requested_compile_time_roots.deserializeInto(base_addr),
+            .value_references = self.value_references.deserializeInto(base_addr),
+            .retired_exprs = self.retired_exprs.deserializeInto(base_addr),
+            .direct_procedure_calls = self.direct_procedure_calls.deserializeInto(base_addr),
+            .binding_resolutions = self.binding_resolutions.deserializeInto(base_addr),
             .platform_requirement_solutions = self.platform_requirement_solutions.deserializeInto(base_addr),
             .platform_requirement_identity_vars = self.platform_requirement_identity_vars.deserializeInto(base_addr),
             .exhaustiveness_obligations = self.exhaustiveness_obligations.deserializeInto(base_addr),
@@ -4423,6 +4549,10 @@ pub const Serialized = extern struct {
             .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
             .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
             .requested_compile_time_roots = try self.requested_compile_time_roots.deserializeWithCopy(base_addr, gpa),
+            .value_references = try self.value_references.deserializeWithCopy(base_addr, gpa),
+            .retired_exprs = try self.retired_exprs.deserializeWithCopy(base_addr, gpa),
+            .direct_procedure_calls = try self.direct_procedure_calls.deserializeWithCopy(base_addr, gpa),
+            .binding_resolutions = try self.binding_resolutions.deserializeWithCopy(base_addr, gpa),
             .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
             .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
             .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
@@ -4528,6 +4658,10 @@ pub const Serialized = extern struct {
             .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
             .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
             .requested_compile_time_roots = try self.requested_compile_time_roots.deserializeWithCopy(base_addr, gpa),
+            .value_references = try self.value_references.deserializeWithCopy(base_addr, gpa),
+            .retired_exprs = try self.retired_exprs.deserializeWithCopy(base_addr, gpa),
+            .direct_procedure_calls = try self.direct_procedure_calls.deserializeWithCopy(base_addr, gpa),
+            .binding_resolutions = try self.binding_resolutions.deserializeWithCopy(base_addr, gpa),
             .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
             .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
             .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
@@ -4727,6 +4861,39 @@ pub fn recordBindingScheme(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Er
         self.gpa,
         .{ .node_idx = @backingInt(node_idx) },
     );
+}
+
+/// What a reached lookup expression resolves to (`value_references`).
+pub fn valueReference(self: *const Self, expr: CIR.Expr.Idx) ?ValueReferenceTarget {
+    const items = self.value_references.items.items;
+    const index = std.sort.binarySearch(ValueReference, items, expr, struct {
+        fn order(key: CIR.Expr.Idx, item: ValueReference) std.math.Order {
+            return std.math.order(@backingInt(key), @backingInt(item.expr));
+        }
+    }.order) orelse return null;
+    return items[index].target;
+}
+
+/// What the top-level binding `pattern` evaluates to (`binding_resolutions`).
+pub fn bindingResolution(self: *const Self, pattern: CIR.Pattern.Idx) ?BindingResolution {
+    const items = self.binding_resolutions.items.items;
+    const index = std.sort.binarySearch(BindingResolution, items, pattern, struct {
+        fn order(key: CIR.Pattern.Idx, item: BindingResolution) std.math.Order {
+            return std.math.order(@backingInt(key), @backingInt(item.pattern));
+        }
+    }.order) orelse return null;
+    return items[index];
+}
+
+/// What the top-level binding an importer reaches through `node` evaluates
+/// to: the node is a definition, or the binder of an exposed destructure.
+pub fn bindingResolutionForNode(self: *const Self, node: u32) ?BindingResolution {
+    const node_idx: Node.Idx = @fromBackingInt(node);
+    const pattern: CIR.Pattern.Idx = if (self.store.nodes.get(node_idx).tag == .def)
+        self.store.getDef(@fromBackingInt(node)).pattern
+    else
+        @fromBackingInt(node);
+    return self.bindingResolution(pattern);
 }
 
 /// Whether checking classified `node_idx` as a rank-1 polymorphic value

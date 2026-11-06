@@ -1000,7 +1000,6 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         1,
         .{
             .module_env_storage = .{ .static_builtin = builtin_module.env },
-            .hoisted_roots = .none,
             .io = @as(std.Io, undefined),
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
             .inference = check.CheckedArtifact.CheckedModuleArtifact.bakedInference(compiled_builtins.builtin_artifact_bin[0..]) catch return error.CorruptEmbeddedBuiltins,
@@ -1030,7 +1029,6 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         0,
         .{
             .module_env_storage = .{ .checked_source = checked_module.module_env },
-            .hoisted_roots = .none,
             .io = @as(std.Io, undefined),
             .inference = try check.InferenceOutput.fromChecker(inference_arena.allocator(), &checked_module.solver.?, null),
             .imports = &publish_imports,

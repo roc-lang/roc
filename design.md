@@ -5194,6 +5194,52 @@ after checking, are on-demand analyses of the sealed module
 There is no propagation pass over finished bodies during checking or
 checked module assembly, and no analysis result is serialized.
 
+### Value-Reference Resolution
+
+What every value reference resolves to is recorded by checking, at the end of
+checking (`Check.recordCheckingOutputs`, `check/value_resolution.zig`), in
+checker-native ids, as part of the module's `ModuleEnv` and its cache
+entries:
+
+- `value_references`: for each reached lookup expression, the binding it
+  names: a lambda parameter, block-local value, mutable version, pattern
+  binder or block-local function (an exact procedure alias carries the
+  lookup its alias chain ends at), a top-level definition, a bound selected
+  hoisted root (function- or data-valued), a promoted local procedure, a
+  directly imported module's definition or exposed destructure binder (by
+  import and that module's own node id), the definition of the module that
+  declares a type an associated lookup names (by owner identity and that
+  module's own definition id), or a platform requirement;
+- `binding_resolutions`: for every top-level binding (each top-level value
+  definition, each bound selected hoisted root, each promoted local
+  procedure), whether it is a constant, a procedure, a function value
+  compile-time evaluation produces from its root expression, or a checked
+  error, and, for an evaluated binding whose root is a lookup of a directly
+  callable procedure, that lookup (`forwarded_lookup`, see "Procedure
+  Aliases"; computed to a fixed point over alias chains);
+- `retired_exprs`: the expressions lowering evaluates as runtime errors
+  because resolution rejected them: uses of a binding resolved to a checked
+  error, calls whose callee is a runtime error, and what those rejections
+  propagate to through call-to-callee edges and through each evaluated
+  binding's root; an evaluated binding whose root is retired resolves to a
+  checked error;
+- `direct_procedure_calls`: the calls whose callee is a directly callable
+  procedure (an ordinary or hosted procedure, a block-local function, or a
+  forwarding alias).
+
+A reference into another module reads that module's own recorded
+`binding_resolutions`: the module is a direct import, or the module that
+declares a type reached through the imports, and it is checked first. Its
+binding resolutions are part of its checking interface (what an importer's
+inference cache entry is keyed by), so the recorded resolution is a function
+of the module and of what its imports fix, and of nothing a command, a
+workspace or a module it does not import decides. Lowering reads the
+resolution through the module's resolved value references, the callable-eval
+templates' `forwarded_lookup` and the checked-error procedure bindings, which
+only restate the recorded resolution in the module's procedure-binding and
+constant ids; a platform pairing extends them with the requirement bindings
+the app supplies.
+
 ### Synthesized Types
 
 Some types lowering needs have no solver variable:
@@ -5964,7 +6010,10 @@ and keep temporary binding data in the active lexical scope, but it must not add
 permanent hoistability summaries to every checked expression. The checked module
 stores only selected hoisted roots plus sparse lookup indexes needed by later
 lowering, such as checked-expression id to hoisted-root id and selected
-local-binding id to hoisted-root id.
+local-binding id to hoisted-root id. Every selected hoisted root is a
+compile-time root of its module under every command and every embedder (the
+builtin compiler, the playground, test harnesses and the build coordinator
+alike); nothing chooses a subset of them.
 
 The hoistability decision must use explicit checked data, not source-name scans
 or canonicalization guesses. Allowed dependencies include literals, already
