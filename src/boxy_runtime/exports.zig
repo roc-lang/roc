@@ -13,6 +13,7 @@
 //! under their own names, and the dev backend calls them by address when it
 //! runs code in the compiler's own process.
 
+const std = @import("std");
 const builtins = @import("builtins");
 const desc_mod = @import("desc.zig");
 const compose = @import("compose.zig");
@@ -277,11 +278,13 @@ pub fn roc_desc_slot_store(desc: *const TypeDesc, slot: *const usize, value: ?[*
 }
 
 /// The C-ABI form of `compiled.noteDesc`.
-pub fn roc_desc_note(desc: *const TypeDesc, ty: u32, count: u32, vars: ?[*]const *const TypeDesc) callconv(.c) *const TypeDesc {
+pub fn roc_desc_note(desc: *const TypeDesc, ty: u32, owner0: u64, owner1: u64, owner2: u64, owner3: u64, count: u32, vars: ?[*]const *const TypeDesc) callconv(.c) *const TypeDesc {
     if (comptime builtins.host_abi.host_role == .platform) {
         compose.invariant(ops(), "a compile-time descriptor note reached a program");
     } else {
-        compiled.noteDesc(desc, ty, items(*const TypeDesc, count, vars));
+        var owner: [32]u8 = undefined;
+        inline for (.{ owner0, owner1, owner2, owner3 }, 0..) |word, index| std.mem.writeInt(u64, owner[index * 8 ..][0..8], word, .little);
+        compiled.noteDesc(desc, owner, ty, items(*const TypeDesc, count, vars));
         return desc;
     }
 }

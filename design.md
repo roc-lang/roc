@@ -14728,6 +14728,34 @@ through linked code do not require their private body indexes. Allocation
 failure propagates, and the index is marked complete only after publication of
 all its records succeeds.
 
+#### Cached Function-Value Evaluation Units
+
+An evaluation that stores function-containing constants may demand imported
+compiler-only units. These remain per-module content-addressed artifacts, under
+a distinct variant of the ordinary object key. Ordinary runtime units emit no
+function-storage tables or descriptor notes. A module unit is demanded by the
+code references of the evaluation and the transitive references of those units;
+merely being visible to the evaluator does not demand such an artifact.
+
+A compiler-only unit records the callable workers its code emits, their capture
+shapes and worker recipes, their exact native image symbol indices, and the
+semantic types named by its descriptor notes.
+The records share a module-name table and a type table. Module references use the
+link's explicit module names, not checked-artifact keys from the producing build.
+A reader binds those names against its current checked module graph. It reads
+captured values by the recorded shapes and types; it does not reconstruct types
+from runtime layout, lower source bodies to rediscover metadata, or execute code
+to reconstruct an already stored constant. Captured dictionaries and recursive
+captures follow the same immutable constant-graph rules as uncached evaluation.
+
+Each descriptor note explicitly names its producing unit's content key and its
+unit-local type id. A noncached root program has its own evaluation-local domain.
+The runtime remembers this producer identity with the descriptor's actual type
+arguments. Unit-local ids from different units never share a namespace. Cache
+admission validates metadata before consumers may read it; corrupt metadata is
+a cache miss. Compilation-local addresses are used only after loading, to bind a
+callable's code pointer to the producer's recorded procedure identity.
+
 #### Stored Function Values
 
 A `.boxy` function value is an erased callable: a worker's code and what the

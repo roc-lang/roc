@@ -112,6 +112,7 @@ pub const Options = struct {
     boxy_objects: ?BoxyObjectSource = null,
     /// The loaded objects a native program links against.
     boxy_linked_images: ?*BoxyLinkedImages = null,
+    boxy_function_objects: ?FunctionObjectSource = null,
     /// A program of `ModuleEvaluation.startFunctions`: a root reading a value not yet
     /// complete stays pending for its next program.
     function_roots: bool = false,
@@ -1288,6 +1289,8 @@ pub const boxy_object_code: BoxyObjectCode = if (builtin.os.tag == .linux and bu
 
 /// One imported module's object, loaded into the compiler's process.
 pub const BoxyObject = struct {
+    function_owner: ?[32]u8 = null,
+    function_metadata: []const u8 = &.{},
     /// The module's checked key.
     module: [32]u8,
     /// The module's code, in the form this host loads (`boxy_object_code`):
@@ -1316,6 +1319,14 @@ pub const BoxyObjectSet = struct {
     views: []const checked.ImportedModuleView,
 };
 
+/// An immutable producer snapshot. A worker requests exactly the module
+/// objects its emitted native references demand, before linking its program.
+pub const FunctionObjectSource = struct {
+    context: *anyopaque,
+    views: []const checked.ImportedModuleView,
+    prepare: *const fn (*anyopaque, Allocator, []const []const u8) FinalizeError![]const BoxyObject,
+};
+
 /// Where a `.boxy` evaluation gets the objects of a module's imports, and
 /// the executor session it builds the modules' compile-time programs on,
 /// alongside the objects' units. Every function runs on the evaluating
@@ -1330,6 +1341,7 @@ pub const BoxyObjectSource = struct {
     /// known. Null when an import has no object of its own: a platform
     /// module with requirements belongs to its app's program.
     objects: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!?BoxyObjectSet,
+    functions: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!?FunctionObjectSource,
     /// Every compile-time root of `module` is complete, so its object can
     /// be built: the evaluation of a module importing it may need it.
     completed: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!void,
@@ -1385,9 +1397,14 @@ const BoxyLinkedImages = struct {
     candidates: std.ArrayList(Candidate) = .empty,
     providers: std.StringHashMapUnmanaged(usize) = .empty,
     dirty: std.ArrayList(bool) = .empty,
+    function_metadata: std.AutoHashMapUnmanaged([32]u8, []const u8) = .empty,
+    function_addresses: std.AutoHashMapUnmanaged(usize, FunctionOrigin) = .empty,
+
+    const FunctionOrigin = struct { owner: [32]u8, identity: lir.LIR.ProcIdentity };
 
     const Candidate = struct {
         object: BoxyImage,
+        function_owner: ?[32]u8 = null,
         view: backend.dev.UnitImage.View,
         dependencies: []const usize,
         loaded_index: ?usize = null,
@@ -1432,6 +1449,8 @@ const BoxyLinkedImages = struct {
         self.candidates.deinit(self.allocator);
         self.providers.deinit(self.allocator);
         self.dirty.deinit(self.allocator);
+        self.function_metadata.deinit(self.allocator);
+        self.function_addresses.deinit(self.allocator);
     }
 
     /// Return reachable reused objects' mutable data to its loaded state. An
@@ -1483,10 +1502,11 @@ const BoxyLinkedImages = struct {
                 }
             }
             const owned_dependencies = try self.allocator.dupe(usize, dependencies.keys());
-            self.candidates.append(self.allocator, .{ .object = object.code.image, .view = view, .dependencies = owned_dependencies }) catch |err| {
+            self.candidates.append(self.allocator, .{ .object = object.code.image, .view = view, .dependencies = owned_dependencies, .function_owner = object.function_owner }) catch |err| {
                 self.allocator.free(owned_dependencies);
                 return err;
             };
+            if (object.function_owner) |owner| try self.function_metadata.put(self.allocator, owner, object.function_metadata);
             const index = self.candidates.items.len - 1;
             const symbols = view.symbols();
             for (view.exports()) |export_index| {
@@ -1584,6 +1604,17 @@ const BoxyLinkedImages = struct {
         (backend.dev.CodeLocations{ .bytes = object.code_locations }).dumpAllocationMap(@intFromPtr(image.text().ptr));
         const symbols = view.symbols();
         try self.exports.ensureUnusedCapacity(self.allocator, @intCast(view.exports().len));
+        if (candidate.function_owner) |owner| {
+            const metadata = lir.CheckedPipeline.BoxyFunctionMetadata.MetadataView.init(self.function_metadata.get(owner).?) catch unreachable;
+            // Cache admission checked these indices against the image. Reserve
+            // before publishing any addresses so allocation failure leaves no
+            // pointers into an image that is about to be unloaded.
+            try self.function_addresses.ensureUnusedCapacity(self.allocator, metadata.function_count);
+            var functions = metadata.functions();
+            while (functions.next()) |function| {
+                self.function_addresses.putAssumeCapacity(image.symbolAddress(symbols[function.symbol]), .{ .owner = owner, .identity = function.identity });
+            }
+        }
         for (view.exports()) |index| {
             const symbol = symbols[index];
             if (self.providers.get(view.name(symbol.name)).? != provider) continue;
@@ -1595,6 +1626,19 @@ const BoxyLinkedImages = struct {
         self.code.appendAssumeCapacity(image.text());
         self.locations.appendAssumeCapacity(.{ .bytes = object.code_locations });
         if (timing) |active| active.finishUnitStep(load_started_ns, &active.unit_load_ns);
+    }
+
+    fn metadataFor(raw: *anyopaque, owner: [32]u8) []const u8 {
+        const self: *BoxyLinkedImages = @ptrCast(@alignCast(raw));
+        self.lock();
+        defer self.mutex.unlock();
+        return self.function_metadata.get(owner) orelse finalizationInvariant("a loaded function unit has no producer metadata");
+    }
+
+    fn functionAt(self: *BoxyLinkedImages, address: usize) ?FunctionOrigin {
+        self.lock();
+        defer self.mutex.unlock();
+        return self.function_addresses.get(address);
     }
 
     /// Compose a unit's pieces into an object and load it. The object holds
@@ -1884,6 +1928,8 @@ fn evaluateRootsBoxy(
     };
     var images = BoxyLinkedImages{ .allocator = allocator };
     defer images.deinit();
+    var function_images = BoxyLinkedImages{ .allocator = allocator };
+    defer function_images.deinit();
     var evaluations = try ModuleEvaluations.init(allocator, modules, roots, &graph);
     defer evaluations.deinit();
     const source = options.boxy_objects;
@@ -1897,6 +1943,7 @@ fn evaluateRootsBoxy(
         .specialized = specialized,
         .options = evaluation_options,
         .images = &images,
+        .function_images = &function_images,
     };
     evaluations.run(shared) catch |err| {
         if (source) |objects| objects.abort(objects.context, err);
@@ -2053,6 +2100,7 @@ const ModuleEvaluation = struct {
         specialized: []const bool,
         options: Options,
         images: *BoxyLinkedImages,
+        function_images: *BoxyLinkedImages,
     };
 
     fn deinit(self: *ModuleEvaluation, allocator: Allocator) void {
@@ -2187,10 +2235,24 @@ const ModuleEvaluation = struct {
             if (ready.items.len == 0) try ready.appendSlice(allocator, remaining);
         }
         var target = boxyCompileTimeTarget(shared.options);
-        target.boxy_stored_functions = true;
         var options = shared.options;
         options.function_roots = self.phase == .functions;
-        try self.submit(shared, evaluations, ready.items, shared.lowering_modules, target, options, false);
+        var modules = shared.lowering_modules;
+        var linked = false;
+        if (comptime !compilerHostMustUseInterpreterForCtfe() and boxy_object_code == .image) {
+            if (self.links(shared)) {
+                const source = shared.options.boxy_objects.?;
+                if (try source.functions(source.context, self.artifact(shared))) |objects| {
+                    options.boxy_function_objects = objects;
+                    options.boxy_linked_images = shared.function_images;
+                    modules = .{ .root = checked.loweringViewWithRelations(self.artifact(shared), &.{}), .imports = objects.views };
+                    target = boxyLinkedCompileTimeTarget(source, shared.options);
+                    linked = true;
+                }
+            }
+        }
+        target.boxy_stored_functions = true;
+        try self.submit(shared, evaluations, ready.items, modules, target, options, linked);
     }
 
     /// Every kind of preparation uses the same scheduler. In particular,
@@ -2275,7 +2337,7 @@ const ModuleEvaluation = struct {
         // Every object's composition sites publish entries of the composing
         // program's state, which died with the earlier programs.
         if (comptime !compilerHostMustUseInterpreterForCtfe()) {
-            if (build.linked) shared.images.resetMutableData(build.program.?.ptr().image_selection);
+            if (build.linked) build.build_options.boxy_linked_images.?.resetMutableData(build.program.?.ptr().image_selection);
         }
         const roots = shared.roots;
         const states = shared.states;
@@ -5889,6 +5951,11 @@ const DevProgram = struct {
         if (options.boxy_linked_images) |images| {
             const references = try splice.externalReferences(&codegen, materialized);
             defer allocator.free(references);
+            if (options.boxy_function_objects) |source| {
+                const objects = try source.prepare(source.context, allocator, references);
+                defer allocator.free(objects);
+                try images.prepare(objects, options.timing);
+            }
             image_selection = try images.select(allocator, references, options.timing);
         }
         try splice.generateHostedStubs(&codegen);
@@ -6259,6 +6326,7 @@ fn evalDevProgramRoots(
         store: *const lir.LirStore,
         executable: *const backend.ExecutableMemory,
         capture_prefix: u32,
+        images: ?*BoxyLinkedImages,
 
         fn resolve(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!ConstStoreWriter.ErasedCallableResolution {
             const self: *@This() = @ptrCast(@alignCast(raw.?));
@@ -6277,6 +6345,10 @@ fn evalDevProgramRoots(
                     };
                 }
             }
+            if (self.images) |images| if (images.functionAt(runtime_addr)) |origin| return .{
+                .external = .{ .owner = origin.owner, .identity = origin.identity },
+                .capture_ptr = builtins.erased_callable.capturePtr(data_ptr) + self.capture_prefix,
+            };
             finalizationInvariant("dev backend erased callable result did not map to a compiled proc");
         }
     };
@@ -6286,6 +6358,7 @@ fn evalDevProgramRoots(
         .store = &lowered.lir_result.store,
         .executable = &native.executable,
         .capture_prefix = lowered.lir_result.erased_capture_prefix,
+        .images = native.linked_images,
     };
 
     const store_results_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -6295,7 +6368,10 @@ fn evalDevProgramRoots(
         .context = @ptrCast(&resolver),
         .resolve = DevResolver.resolve,
     });
-    if (lowered.boxy_functions) |retained| writer.setBoxyFunctions(.{ .retained = retained, .result = &lowered.lir_result, .composition = native.composition.? });
+    if (lowered.boxy_functions) |retained| {
+        if (native.linked_images) |images| retained.metadata = .{ .context = images, .get = BoxyLinkedImages.metadataFor };
+        writer.setBoxyFunctions(.{ .retained = retained, .result = &lowered.lir_result, .composition = native.composition.? });
+    }
 
     var had_problem = false;
     for (jobs[0..jobs_len]) |*job| {

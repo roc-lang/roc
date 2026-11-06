@@ -67,6 +67,8 @@ pub const Input = struct {
     /// each descriptor came from (`LIR.DynOp.desc_note`), and the lowering
     /// keeps the program for reading those values (`Output.retained`).
     stored_functions: bool = false,
+    /// Only a demanded compiler-only unit has persistent capture/type metadata.
+    function_unit: ?[32]u8 = null,
     /// The consumer reads composition sites, so each composition statement
     /// gets a slot (design.md "Runtime").
     composition_sites: bool = true,
@@ -563,6 +565,8 @@ pub const Program = struct {
     /// Body metadata is indexed only when a consumer asks about that module.
     /// Imported code called only by symbol needs no local body lookup tables.
     body_indexed: []bool = &.{},
+    /// Types explicitly named by emitted compile-time descriptor notes.
+    noted_types: collections.DenseMapUnmanaged(TypeId, void) = .{},
     /// The generalized-local scope a lambda or closure expression owns.
     local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
     /// The lambda and closure expressions local procedures bind.
@@ -895,6 +899,7 @@ pub const Program = struct {
         self.wrapper_by_root.deinit(self.allocator);
         self.hosted.deinit(self.allocator);
         self.allocator.free(self.body_indexed);
+        self.noted_types.deinit(self.allocator);
         self.local_scopes.deinit(self.allocator);
         self.local_procs.deinit(self.allocator);
         self.by_identity.deinit(self.allocator);

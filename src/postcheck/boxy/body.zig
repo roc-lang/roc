@@ -977,10 +977,12 @@ pub const Builder = struct {
         if (self.noted_descs.get(root)) |noted| return noted;
         const noted = try self.closedLocal(.opaque_ptr);
         const vars = try self.notedVariables(root);
+        if (self.program.input.function_unit != null) try self.program.noted_types.put(self.allocator, root, {});
         defer self.allocator.free(vars);
         try self.emitEntry(.{ .dyn = .{ .target = noted, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_note = .{
             .desc = local,
             .ty = @backingInt(root),
+            .owner = self.program.input.function_unit orelse @splat(0),
             .vars = try self.store.addLocalSpan(vars),
         } }), .next = undefined } });
         try self.noted_descs.put(self.allocator, root, noted);

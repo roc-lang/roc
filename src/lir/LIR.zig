@@ -1381,7 +1381,7 @@ pub const DynOp = union(enum) {
     /// name the type of a descriptor a stored function value captured
     /// (design.md "Stored Function Values"). Only a compile-time program
     /// that stores function values has one. Target: `desc`'s value.
-    desc_note: struct { desc: LocalId, ty: u32, vars: LocalSpan },
+    desc_note: struct { desc: LocalId, ty: u32, vars: LocalSpan, owner: [32]u8 = @splat(0) },
 
     // -- Dictionaries (targets: `opaque_ptr`, except `dict_method`) --
 

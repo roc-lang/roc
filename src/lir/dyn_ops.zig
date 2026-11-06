@@ -386,7 +386,7 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
             .key = try Remap.one(context, desc.key),
             .vars = try Remap.span(store, context, desc.vars),
         } },
-        .desc_note => |desc| .{ .desc_note = .{ .desc = try Remap.one(context, desc.desc), .ty = desc.ty, .vars = try Remap.span(store, context, desc.vars) } },
+        .desc_note => |desc| .{ .desc_note = .{ .desc = try Remap.one(context, desc.desc), .ty = desc.ty, .owner = desc.owner, .vars = try Remap.span(store, context, desc.vars) } },
         .dict_compose => |dict| .{ .dict_compose = .{ .worker = dict.worker, .captures = try Remap.span(store, context, dict.captures) } },
         .dict_patch => |patch| .{ .dict_patch = .{ .dict = try Remap.one(context, patch.dict), .index = patch.index, .value = try Remap.one(context, patch.value) } },
         .dict_record => |dict| .{ .dict_record = .{ .methods = try Remap.span(store, context, dict.methods) } },

@@ -1480,6 +1480,8 @@ pub const BoxyObjectLowering = struct {
 /// objects this compilation built or restored without restoring them again.
 const BoxyObjects = struct {
     coordinator: *Coordinator,
+    function_cache: @import("boxy_function_units.zig").Cache,
+    function_plans: std.AutoHashMapUnmanaged([32]u8, *@import("boxy_function_units.zig").Plan) = .empty,
     lowering: BoxyObjectLowering,
     manager: *CacheManager,
     digests: boxy_interface.Digests,
@@ -1552,6 +1554,7 @@ const BoxyObjects = struct {
         unit_lowering.config.timing = &coordinator.ctfe_timing.lowering;
         var self: BoxyObjects = .{
             .coordinator = coordinator,
+            .function_cache = .{ .allocator = coordinator.gpa, .io = coordinator.roc_ctx.std_io },
             .lowering = unit_lowering,
             .manager = manager,
             .digests = .{ .gpa = coordinator.gpa, .names = .{} },
@@ -1571,6 +1574,10 @@ const BoxyObjects = struct {
 
     fn deinit(self: *BoxyObjects) void {
         const gpa = self.coordinator.gpa;
+        self.function_cache.deinit();
+        var function_plans = self.function_plans.valueIterator();
+        while (function_plans.next()) |plan| plan.*.deinit(gpa);
+        self.function_plans.deinit(gpa);
         // A session that still has tasks out is torn down with the
         // coordinator, whose workers have stopped.
         if (self.session.outstanding == 0) self.session.end();
@@ -1609,6 +1616,7 @@ const BoxyObjects = struct {
             .context = self,
             .ready = objectsReady,
             .objects = objectSet,
+            .functions = functionObjects,
             .completed = moduleCompleted,
             .submit = submitProgram,
             .takeCompletion = takeProgramCompletion,
@@ -1674,6 +1682,34 @@ const BoxyObjects = struct {
         };
         try self.object_sets.put(self.coordinator.gpa, module.key.bytes, result);
         return result;
+    }
+
+    /// Snapshot units before worker preparation. The program's emitted imports
+    /// subsequently select which snapshots actually become compiler-only units.
+    fn functionObjects(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.FunctionObjectSource {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        if (self.function_plans.get(module.key.bytes)) |plan| return plan.source();
+        const objects = (try objectSet(context, module)) orelse return null;
+        const gpa = self.coordinator.gpa;
+        const arena = self.arena.allocator();
+        const Plan = @import("boxy_function_units.zig").Plan;
+        const plan = try arena.create(Plan);
+        const units = try arena.alloc(boxy_unit.Unit, objects.objects.len);
+        var prepared: usize = 0;
+        errdefer for (units[0..prepared]) |unit| gpa.free(unit.views);
+        for (objects.objects, units) |object, *unit| {
+            const artifact = self.coordinator.checkedArtifactByKey(.{ .bytes = object.module }) orelse unreachable;
+            unit.* = (try self.prepare(artifact)).unit;
+            prepared += 1;
+            const ordinary = self.records.get(object.module).?;
+            unit.key = boxy_object_cache.functionUnitKey(ordinary.key);
+            unit.config.boxy_stored_functions = true;
+            unit.config.boxy_function_unit = unit.key.bytes;
+            unit.want_pieces = false;
+        }
+        plan.* = .{ .cache = &self.function_cache, .units = units, .objects = objects.objects, .views = objects.views };
+        try self.function_plans.put(gpa, module.key.bytes, plan);
+        return plan.source();
     }
 
     /// `module`'s roots are complete: its object can be built, and its
@@ -1991,6 +2027,11 @@ const BoxyObjects = struct {
         self.records.clearRetainingCapacity();
         self.closures_known.clearRetainingCapacity();
         self.object_sets.clearRetainingCapacity();
+        var plans = self.function_plans.valueIterator();
+        while (plans.next()) |plan| plan.*.deinit(gpa);
+        self.function_plans.clearRetainingCapacity();
+        self.function_cache.deinit();
+        self.function_cache = .{ .allocator = gpa, .io = self.coordinator.roc_ctx.std_io };
         self.interfaces.clear();
     }
 

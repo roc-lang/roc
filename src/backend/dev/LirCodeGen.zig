@@ -17808,6 +17808,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const vars = try self.emitLocalArray(d.vars, .words);
                     try self.addWordArg(&builder, d.desc);
                     try builder.addImmArg(@intCast(d.ty));
+                    inline for (0..4) |word| try builder.addImmArg(@bitCast(std.mem.readInt(u64, d.owner[word * 8 ..][0..8], .little)));
                     try builder.addImmArg(@intCast(self.store.getLocalSpan(d.vars).len));
                     try builder.addLeaArg(frame_ptr, vars);
                     try self.callBoxyRuntime(&builder, "roc_desc_note");

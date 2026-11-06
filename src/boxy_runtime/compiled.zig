@@ -808,8 +808,8 @@ fn dictionaryCache() *compose.Cache {
 /// after the program. Threads running the program's code at once share it.
 /// Record where `desc` came from in the compile-time program composing it
 /// (`LIR.DynOp.desc_note`).
-pub fn noteDesc(desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) void {
-    InProcessState.current().note(desc, ty, vars);
+pub fn noteDesc(desc: *const TypeDesc, owner: [32]u8, ty: u32, vars: []const *const TypeDesc) void {
+    InProcessState.current().note(desc, owner, ty, vars);
 }
 
 /// The compositions of one compile-time program running in this process.
@@ -830,9 +830,10 @@ pub const InProcessState = struct {
 
     /// The program type a descriptor describes, and the descriptors of that
     /// type's variables. Types with one descriptor are the same to the code
-    /// reading it, so the lowest id stands for them all, whichever thread
-    /// noted it first.
+    /// reading it, so the lexicographically lowest (producer, id) pair stands
+    /// for them all, whichever thread noted it first.
     pub const DescOrigin = struct {
+        owner: [32]u8,
         ty: u32,
         vars: []const *const TypeDesc,
     };
@@ -862,13 +863,16 @@ pub const InProcessState = struct {
         return self;
     }
 
-    fn note(self: *InProcessState, desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) void {
+    fn note(self: *InProcessState, desc: *const TypeDesc, owner: [32]u8, ty: u32, vars: []const *const TypeDesc) void {
         while (!self.lock.tryLock()) std.atomic.spinLoopHint();
         defer self.lock.unlock();
         const entry = self.origins.getOrPut(self.allocator, desc) catch crashOutOfMemory(self);
-        if (entry.found_existing and entry.value_ptr.ty <= ty) return;
+        if (entry.found_existing) {
+            const order = std.mem.order(u8, &entry.value_ptr.owner, &owner);
+            if (order == .lt or (order == .eq and entry.value_ptr.ty <= ty)) return;
+        }
         const owned = self.arena.allocator().dupe(*const TypeDesc, vars) catch crashOutOfMemory(self);
-        entry.value_ptr.* = .{ .ty = ty, .vars = owned };
+        entry.value_ptr.* = .{ .owner = owner, .ty = ty, .vars = owned };
     }
 
     fn crashOutOfMemory(self: *InProcessState) noreturn {

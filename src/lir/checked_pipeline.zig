@@ -89,6 +89,7 @@ pub const BoxyExportInterfaces = postcheck.Boxy.Lower.ExportInterfaces;
 pub const boxyTemplateWorkerIdentity = postcheck.Boxy.Lower.templateWorkerIdentity;
 /// What reading a `.boxy` program's function values takes after lowering.
 pub const BoxyStoredFunctions = postcheck.Boxy.StoredFn.Retained;
+pub const BoxyFunctionMetadata = postcheck.Boxy.StoredFn;
 /// The names the modules of one link give their workers and nominal types.
 pub const BoxyModuleNames = postcheck.Boxy.Types.ModuleNames;
 
@@ -190,6 +191,8 @@ pub const TargetConfig = struct {
     /// With `boxy_compile_time`, the roots hold function values
     /// (`postcheck.Boxy.Lower.Input.stored_functions`).
     boxy_stored_functions: bool = false,
+    /// Content identity of a compiler-only module unit's function/type metadata.
+    boxy_function_unit: ?[32]u8 = null,
     /// The consumer reads composition sites
     /// (`postcheck.Boxy.Lower.Input.composition_sites`).
     boxy_composition_sites: bool = true,
@@ -2001,6 +2004,7 @@ pub const PreparedBoxy = struct {
             .host_boundary_digests = target.host_boundary_digests,
             .compile_time = target.boxy_compile_time,
             .stored_functions = target.boxy_stored_functions,
+            .function_unit = target.boxy_function_unit,
             .composition_sites = target.boxy_composition_sites,
             .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
         });

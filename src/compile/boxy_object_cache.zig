@@ -21,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 12;
+pub const format_version: u32 = 13;
 
 const magic = "RBXO";
 
@@ -172,6 +172,8 @@ pub const Entry = struct {
     /// Module names are semantic; module identities bind locations to the
     /// current compilation's source environments, independent of checkout.
     code_locations: []const u8 = &.{},
+    /// Only compiler-only function-value units carry this table.
+    function_metadata: []const u8 = &.{},
     /// The module's unit image: a `UnitImage` for a Linux x86_64 target, a
     /// `WasmUnitImage` for a wasm target, and empty for any other target.
     image: []const u8 = &.{},
@@ -221,12 +223,24 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     try bytes.appendSlice(allocator, entry.pieces);
     try appendU64(&bytes, allocator, entry.code_locations.len);
     try bytes.appendSlice(allocator, entry.code_locations);
+    try appendU64(&bytes, allocator, entry.function_metadata.len);
+    try bytes.appendSlice(allocator, entry.function_metadata);
     try appendU64(&bytes, allocator, entry.image.len);
     if (entry.image.len != 0) {
         try bytes.appendNTimes(allocator, 0, std.mem.alignForward(usize, bytes.items.len, image_alignment) - bytes.items.len);
         try bytes.appendSlice(allocator, entry.image);
     }
     return try bytes.toOwnedSlice(allocator);
+}
+
+/// A compiler-only variant of precisely the ordinary unit's declared inputs.
+/// Its ABI differs only in explicit descriptor-origin observations; no runtime
+/// object or final executable uses this variant.
+pub fn functionUnitKey(ordinary: Key) Key {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc-boxy-function-unit-v1");
+    hasher.update(&ordinary.bytes);
+    return .{ .bytes = hasher.finalResult() };
 }
 
 /// The bytes of an export record with no return conditions: its identity,
@@ -251,11 +265,14 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     errdefer allocator.free(pieces);
     const code_locations = try allocator.dupe(u8, view.code_locations);
     errdefer allocator.free(code_locations);
+    const function_metadata = try allocator.dupe(u8, view.function_metadata);
+    errdefer allocator.free(function_metadata);
     const image = try allocator.alignedAlloc(u8, .@"16", view.image.len);
     @memcpy(image, view.image);
     var entry = view;
     entry.pieces = pieces;
     entry.code_locations = code_locations;
+    entry.function_metadata = function_metadata;
     entry.image = image;
     return entry;
 }
@@ -330,6 +347,9 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     const code_locations_len = try reader.word64();
     if (code_locations_len > std.math.maxInt(usize)) return error.InvalidEntry;
     const code_locations = try reader.take(@intCast(code_locations_len));
+    const metadata_len = try reader.word64();
+    if (metadata_len > std.math.maxInt(usize)) return error.InvalidEntry;
+    const function_metadata = try reader.take(@intCast(metadata_len));
     const image_len = try reader.word64();
     if (image_len > std.math.maxInt(usize)) return error.InvalidEntry;
     if (image_len != 0) _ = try reader.take(std.mem.alignForward(usize, reader.at, image_alignment) - reader.at);
@@ -345,6 +365,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         .test_roots = test_roots,
         .pieces = pieces,
         .code_locations = code_locations,
+        .function_metadata = function_metadata,
         .image = image,
     };
 }
@@ -373,6 +394,7 @@ fn freeSymbols(allocator: Allocator, symbols: []const []const u8) void {
 pub fn deinitEntry(allocator: Allocator, entry: Entry) void {
     allocator.free(entry.pieces);
     allocator.free(entry.code_locations);
+    allocator.free(entry.function_metadata);
     const image: []align(16) const u8 = @alignCast(entry.image);
     allocator.free(image);
     deinitEntryView(allocator, entry);
@@ -510,6 +532,7 @@ test "a Boxy object entry round-trips through its bytes" {
         .expect_sites = &.{ .{ .module = @splat(4), .region_start = 10, .region_end = 30 }, .{ .module = @splat(5), .region_start = 2, .region_end = 3 } },
         .test_roots = &.{.{ .module = @splat(4), .root_index = 1, .symbol = 17 }},
         .pieces = "not really pieces",
+        .function_metadata = "portable function descriptions",
         .code_locations = "where the code came from",
         .image = "an image",
     };
@@ -525,6 +548,7 @@ test "a Boxy object entry round-trips through its bytes" {
     try std.testing.expectEqualDeep(entry.expect_sites, decoded.expect_sites);
     try std.testing.expectEqualDeep(entry.test_roots, decoded.test_roots);
     try std.testing.expectEqualStrings(entry.pieces, decoded.pieces);
+    try std.testing.expectEqualStrings(entry.function_metadata, decoded.function_metadata);
     try std.testing.expectEqualStrings(entry.code_locations, decoded.code_locations);
     try std.testing.expectEqualStrings(entry.image, decoded.image);
     try std.testing.expectEqual(@as(usize, 0), (bytes.len - entry.image.len) % image_alignment);
@@ -564,4 +588,12 @@ test "a count larger than the bytes behind it is a miss, not an allocation" {
         std.mem.writeInt(u32, damaged[offset..][0..4], std.math.maxInt(u32), .little);
         try std.testing.expectError(error.InvalidEntry, decode(gpa, damaged));
     }
+}
+
+test "function unit variants preserve content addressing and separate ordinary objects" {
+    const first = Key{ .bytes = @splat(3) };
+    const second = Key{ .bytes = @splat(4) };
+    try std.testing.expectEqual(functionUnitKey(first), functionUnitKey(first));
+    try std.testing.expect(!std.mem.eql(u8, &first.bytes, &functionUnitKey(first).bytes));
+    try std.testing.expect(!std.mem.eql(u8, &functionUnitKey(first).bytes, &functionUnitKey(second).bytes));
 }

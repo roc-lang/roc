@@ -33,7 +33,8 @@ const RuntimeValueAddress = struct {
 
 /// Runtime erased-callable identity decoded into the LIR proc and capture data.
 pub const ErasedCallableResolution = struct {
-    proc: lir.LIR.LirProcSpecId,
+    proc: lir.LIR.LirProcSpecId = undefined,
+    external: ?struct { owner: [32]u8, identity: lir.LIR.ProcIdentity } = null,
     capture_ptr: [*]u8,
 };
 
@@ -152,7 +153,10 @@ pub const Writer = struct {
         const functions = self.boxy_functions orelse writerInvariant("a function value reached a program that stores none");
         const data_ptr = self.readErasedCallablePointer(value);
         const resolved = try self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
-        const described = try functions.retained.describe(self.allocator, functions.result, resolved.proc, resolved.capture_ptr, functions.composition);
+        const described = if (resolved.external) |external|
+            try functions.retained.describeImported(self.allocator, functions.result, external.owner, external.identity, resolved.capture_ptr, functions.composition)
+        else
+            try functions.retained.describe(self.allocator, functions.result, resolved.proc, resolved.capture_ptr, functions.composition);
         defer self.allocator.free(described.captures);
         const requests_start = self.store_requests.items.len;
         for (described.captures) |capture| {
