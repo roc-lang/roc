@@ -699,6 +699,20 @@ pub fn CodeGen(comptime target: RocTarget) type {
             return self.branch_sites.items[index].veneer;
         }
 
+        /// The veneer the call at `loc`, patched to `target_loc`, branches
+        /// through, or null when it branches straight to its target: the
+        /// choice `patchBranchSite` made.
+        pub fn callVeneerTaken(self: *const Self, loc: usize, target_loc: usize) ?usize {
+            if (self.directReachable(loc, target_loc)) return null;
+            return self.callVeneer(loc).?;
+        }
+
+        /// Whether the direct call at `loc` is a `BL`, rather than the
+        /// PC-relative address sequence `patchDirectCall` also patches.
+        pub fn directCallBranches(self: *const Self, loc: usize) bool {
+            return isBlInst(std.mem.readInt(u32, self.emit.buf.items[loc..][0..4], .little));
+        }
+
         /// Appended regions have no instruction-boundary callbacks. Reserve
         /// reachable islands before crossing that gap, using the real append
         /// length and the existing branch reach contract.

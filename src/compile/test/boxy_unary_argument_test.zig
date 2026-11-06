@@ -6,6 +6,47 @@ const lir = @import("lir");
 const layout = @import("layout");
 const harness = @import("lower_to_lir_harness.zig");
 
+test "boxy declared primitives lower directly at closed and open call sites" {
+    for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
+        try harness.expectLirInspectionWithOptions(
+            \\rotate : U32, U8 -> U32
+            \\rotate = |value, bits| value.shr_wrap(bits).bitwise_or(value.shl_wrap(32 - bits))
+            \\length : List(a) -> U64
+            \\length = |items| items.len()
+            \\main! = |args| {
+            \\    echo!(Str.inspect(rotate(args.len().to_u32_wrap(), 3)))
+            \\    echo!(Str.inspect(length(args)))
+            \\    Ok({})
+            \\}
+        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, struct {
+            fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
+                var found: [2]bool = @splat(false);
+                for (store.getProcSpecs(), 0..) |proc, index| {
+                    const name = store.procDebugName(@fromBackingInt(@intCast(index))) orelse continue;
+                    const which: usize = if (std.mem.eql(u8, name, "rotate") or std.mem.endsWith(u8, name, ".rotate")) 0 else if (std.mem.eql(u8, name, "length") or std.mem.endsWith(u8, name, ".length")) 1 else continue;
+                    found[which] = true;
+                    var pending: std.ArrayList(lir.LIR.CFStmtId) = .empty;
+                    defer pending.deinit(std.testing.allocator);
+                    var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
+                    defer visited.deinit();
+                    try pending.append(std.testing.allocator, proc.body.?);
+                    var operations: usize = 0;
+                    while (pending.pop()) |id| {
+                        if ((try visited.getOrPut(id)).found_existing) continue;
+                        const stmt = store.getCFStmt(id);
+                        // Neither helper should call an ordinary wrapper.
+                        try std.testing.expect(stmt != .assign_call);
+                        if (stmt == .assign_low_level) operations += 1;
+                        try lir.BodyClone.appendSuccessors(store, &pending, id, std.testing.allocator);
+                    }
+                    try std.testing.expect(operations >= (if (which == 0) @as(usize, 3) else 1));
+                }
+                for (found) |present| try std.testing.expect(present);
+            }
+        }.inspect);
+    }
+}
+
 test "boxy caller supplies the composite parameter and result descriptor once" {
     for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
         try harness.expectLirInspectionWithOptions(
@@ -165,4 +206,44 @@ fn inspectEntries(store: *const lir.LirStore, _: *const layout.Store) harness.Lo
     }
     try std.testing.expect(shared and ordered);
     try std.testing.expect(direct_forwarders != 0);
+}
+
+test "boxy caller supplies dynamic nominal backing descriptors" {
+    for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
+        try harness.expectLirInspectionWithOptions(
+            \\wrap : a -> Try(a, {})
+            \\wrap = |value| Ok(value)
+            \\main! = |args| {
+            \\    echo!(Str.inspect(wrap(args)))
+            \\    echo!(Str.inspect(wrap(12.U32)))
+            \\    Ok({})
+            \\}
+        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, struct {
+            fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
+                var found = false;
+                for (store.getProcSpecs(), 0..) |proc, index| {
+                    const name = store.procDebugName(@fromBackingInt(@intCast(index))) orelse continue;
+                    if (!std.mem.eql(u8, name, "wrap") and !std.mem.endsWith(u8, name, ".wrap")) continue;
+                    found = true;
+                    // value, a's descriptor, Try(a, {}) and its backing union.
+                    try std.testing.expectEqual(@as(usize, 4), store.getLocalSpan(proc.args).len);
+                    var pending: std.ArrayList(lir.LIR.CFStmtId) = .empty;
+                    defer pending.deinit(std.testing.allocator);
+                    var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
+                    defer visited.deinit();
+                    try pending.append(std.testing.allocator, proc.body.?);
+                    while (pending.pop()) |id| {
+                        if ((try visited.getOrPut(id)).found_existing) continue;
+                        const stmt = store.getCFStmt(id);
+                        if (stmt == .dyn) {
+                            const op = store.stmtRow(stmt.dyn.data);
+                            try std.testing.expect(op != .desc_nominal and op != .desc_tag_union);
+                        }
+                        try lir.BodyClone.appendSuccessors(store, &pending, id, std.testing.allocator);
+                    }
+                }
+                try std.testing.expect(found);
+            }
+        }.inspect);
+    }
 }

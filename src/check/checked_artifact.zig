@@ -13540,6 +13540,42 @@ pub const CheckedDispatch = struct {
         return self.analyses().templateDemands(self, template);
     }
 };
+
+/// The traversal scratch of an evidence pass: the visited sets and work
+/// lists its walks over the module's solver store keep between walks. A
+/// visited set's storage spans the range of solver variables its walks
+/// reach, which can be most of the store, and a module runs an evidence pass
+/// per template schema and per template resolution, so the module's passes
+/// share their traversals instead of each growing its own: a pass borrows
+/// one from its module for its lifetime
+/// (`ModuleAnalyses.borrowEvidenceTraversal`) and returns it, and a pass
+/// that starts while another is running borrows another. Every walk clears
+/// what it reads before it starts, so no result depends on which traversal
+/// a pass borrowed.
+pub const EvidenceTraversal = struct {
+    enum_scratch: dispatch_evidence.Scratch = .{},
+    /// Reuse traversal capacity while giving each schema fresh identity slots.
+    identity_writer: canonical_type_keys.TypeWriter,
+    /// Traversal scratch for `schemeExtendsLabeledTagRow`.
+    labeled_row_visited: collections.DenseMapUnmanaged(Var, void) = .empty,
+    labeled_row_pending: std.ArrayList(Var) = .empty,
+
+    /// A traversal over the solver store of `env`.
+    pub fn create(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!*EvidenceTraversal {
+        const traversal = try allocator.create(EvidenceTraversal);
+        traversal.* = .{ .identity_writer = canonical_type_keys.TypeWriter.init(allocator, &env.types, env) };
+        return traversal;
+    }
+
+    pub fn destroy(self: *EvidenceTraversal, allocator: Allocator) void {
+        self.enum_scratch.deinit(allocator);
+        self.identity_writer.deinit();
+        self.labeled_row_visited.deinit(allocator);
+        self.labeled_row_pending.deinit(allocator);
+        allocator.destroy(self);
+    }
+};
+
 /// Resolve every static-dispatch plan and instantiation-site obligation to an
 /// explicit `direct` / `constraint(k)` / `structural` / `checked_error`
 /// resolution, and publish each template's evidence params.
@@ -13641,8 +13677,9 @@ const EvidencePass = struct {
 
     /// Schemas enumerated by this pass, by scheme owner.
     schemas_by_root: collections.DenseMap(Var, SchemeSchema),
-    /// Reuse traversal capacity while giving each schema fresh identity slots.
-    identity_writer: canonical_type_keys.TypeWriter,
+    /// The traversal scratch this pass borrows from its module for its
+    /// lifetime.
+    traversal: *EvidenceTraversal,
     /// Memoized evidence node per dispatch_target record.
     node_by_record: collections.DenseMap(u32, static_dispatch.EvidenceNodeId),
     /// Hash buckets and collision chains for structurally interned evidence
@@ -13673,14 +13710,10 @@ const EvidencePass = struct {
     /// Solver variables of the scheme whose params are being appended, in
     /// slot order, so each param resolves to its slot.
     scheme_var_scratch: std.ArrayListUnmanaged(Var) = .empty,
-    /// Traversal scratch for `schemeExtendsLabeledTagRow`.
-    labeled_row_visited: collections.DenseMapUnmanaged(Var, void) = .empty,
-    labeled_row_pending: std.ArrayList(Var) = .empty,
-
-    enum_scratch: dispatch_evidence.Scratch,
     /// Stable copies of enumerated semantic paths. Evidence resolution may
     /// recursively enumerate another scheme before finishing the current
-    /// vector, so consumers cannot retain aliases into `enum_scratch`.
+    /// vector, so consumers cannot retain aliases into the traversal's
+    /// `enum_scratch`.
     enumerated_path_arena: base.SingleThreadArena,
     /// Scratch backing for the chain currently being resolved against.
     chain_scratch: std.ArrayList(ChainLevel),
@@ -13729,6 +13762,8 @@ const EvidencePass = struct {
             .direct = &.{},
             .available = try source.analyses.dispatchImports(dispatch),
         };
+        const method_lookup_views = try methodLookupViews(allocator, import_views.available);
+        errdefer allocator.free(method_lookup_views);
         return .{
             .allocator = allocator,
             .module = module,
@@ -13737,7 +13772,7 @@ const EvidencePass = struct {
             .module_index = source.module_index,
             .local_method_registry = source.method_registry,
             .import_views = import_views,
-            .method_lookup_views = try methodLookupViews(allocator, import_views.available),
+            .method_lookup_views = method_lookup_views,
             .plan_table = source.plans,
             .templates = source.templates,
             .resolved_value_refs = source.refs,
@@ -13749,7 +13784,7 @@ const EvidencePass = struct {
             .index = index,
             .types = module.typeStoreConst(),
             .schemas_by_root = collections.DenseMap(Var, SchemeSchema).init(allocator),
-            .identity_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
+            .traversal = try source.analyses.borrowEvidenceTraversal(source.env),
             .node_by_record = collections.DenseMap(u32, static_dispatch.EvidenceNodeId).init(allocator),
             .evidence_node_buckets = std.AutoHashMap(u64, u32).init(allocator),
             .evidence_node_next = .empty,
@@ -13765,7 +13800,6 @@ const EvidencePass = struct {
             .evidence_param_callables = .empty,
             .scheme_vars_pool = .empty,
             .site_substitutions = .empty,
-            .enum_scratch = .{},
             .enumerated_path_arena = base.SingleThreadArena.init(allocator),
             .chain_scratch = .empty,
         };
@@ -13781,7 +13815,7 @@ const EvidencePass = struct {
         var schemas = self.schemas_by_root.valueIterator();
         while (schemas.next()) |schema| self.allocator.free(schema.identity_vars);
         self.schemas_by_root.deinit();
-        self.identity_writer.deinit();
+        self.dispatch.source.analyses.returnEvidenceTraversal(self.traversal);
         self.node_by_record.deinit();
         self.evidence_node_buckets.deinit();
         self.evidence_node_next.deinit(self.allocator);
@@ -13801,9 +13835,6 @@ const EvidencePass = struct {
         self.scheme_vars_pool.deinit(self.allocator);
         self.site_substitutions.deinit(self.allocator);
         self.scheme_var_scratch.deinit(self.allocator);
-        self.labeled_row_visited.deinit(self.allocator);
-        self.labeled_row_pending.deinit(self.allocator);
-        self.enum_scratch.deinit(self.allocator);
         self.enumerated_path_arena.deinit();
         self.chain_scratch.deinit(self.allocator);
     }
@@ -13855,7 +13886,7 @@ const EvidencePass = struct {
                 // Only a callable-derived schema consults whether its
                 // signature reaches every variable; every other schema
                 // already requires checked per-use evidence.
-                const signature_vars = try self.identity_writer.identityVarsFromVarIgnoringConstraints(scheme_var);
+                const signature_vars = try self.traversal.identity_writer.identityVarsFromVarIgnoringConstraints(scheme_var);
                 defer self.allocator.free(signature_vars);
                 callable_determines_scheme = signature_vars.len == schema.vars.len;
             }
@@ -14215,9 +14246,9 @@ const EvidencePass = struct {
     /// dispatch's normalized callable does not determine the variable's
     /// instantiation.
     fn schemeExtendsLabeledTagRow(self: *EvidencePass, scheme_var: Var) Allocator.Error!bool {
-        const visited = &self.labeled_row_visited;
+        const visited = &self.traversal.labeled_row_visited;
         visited.clearRetainingCapacity();
-        const pending = &self.labeled_row_pending;
+        const pending = &self.traversal.labeled_row_pending;
         pending.clearRetainingCapacity();
         try pending.append(self.allocator, scheme_var);
         while (pending.pop()) |raw| {
@@ -14710,12 +14741,12 @@ const EvidencePass = struct {
         }
         var params = std.ArrayListUnmanaged(EvidenceParam).empty;
         defer params.deinit(self.allocator);
-        try dispatch_evidence.enumerateEvidenceParamsWithRequirements(self.allocator, self.types, root, explicit.items, &self.enum_scratch, &params);
+        try dispatch_evidence.enumerateEvidenceParamsWithRequirements(self.allocator, self.types, root, explicit.items, &self.traversal.enum_scratch, &params);
         const arena = self.enumerated_path_arena.allocator();
         for (params.items) |*param| {
             param.callable_contracts = try arena.dupe(types.StaticDispatchConstraint, param.callable_contracts);
         }
-        const identity_vars = try self.identity_writer.identityVarsFromScheme(root, relation_roots.items);
+        const identity_vars = try self.traversal.identity_writer.identityVarsFromScheme(root, relation_roots.items);
         errdefer self.allocator.free(identity_vars);
         var dispatcher_row_count: usize = 0;
         for (params.items) |param| {
@@ -14735,7 +14766,7 @@ const EvidencePass = struct {
         const schema = SchemeSchema{
             .params = try arena.dupe(EvidenceParam, params.items),
             .by_dispatcher = .{ .rows = dispatcher_rows },
-            .path_nodes = try arena.dupe(static_dispatch.EvidencePathNode, self.enum_scratch.paramPathNodes()),
+            .path_nodes = try arena.dupe(static_dispatch.EvidencePathNode, self.traversal.enum_scratch.paramPathNodes()),
             .identity_vars = identity_vars,
         };
         try self.schemas_by_root.put(owner, schema);

@@ -24,8 +24,13 @@ pub const DataRelocationKind = enum {
     /// A 4-byte field holding the symbol's value plus the field's own
     /// little-endian contents (its addend), sign-extended by the instruction
     /// (x86_64 `R_X86_64_32S`). A test unit's expect-site immediates take
-    /// this form against `expect_site_base_symbol`.
+    /// this form against `expect_site_base_symbol` on x86_64.
     abs32s,
+    /// An 8-byte field holding the symbol's value plus the field's own
+    /// little-endian contents (its addend). A test unit's expect-site
+    /// literals take this form against `expect_site_base_symbol` on arm64,
+    /// which loads them from the instruction stream.
+    abs64_field,
 };
 
 /// The symbol a test unit's expect-site immediates are relative to: each
@@ -217,6 +222,12 @@ fn patchLinkedDataRelocation(
             const value = @as(i128, @intCast(target_addr)) + std.mem.readInt(i32, field, .little);
             if (value < std.math.minInt(i32) or value > std.math.maxInt(i32)) return error.BranchOutOfRange;
             std.mem.writeInt(i32, field, @intCast(value), .little);
+        },
+        .abs64_field => {
+            if (reloc_offset + 8 > code.len) return error.InvalidOffset;
+            const field = code[reloc_offset..][0..8];
+            const value = @as(i64, @intCast(target_addr)) +% std.mem.readInt(i64, field, .little);
+            std.mem.writeInt(i64, field, value, .little);
         },
     }
 }
