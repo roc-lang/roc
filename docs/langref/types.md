@@ -334,6 +334,26 @@ instead.
 [Structural tag unions](tag-unions#limitations) can't be recursive either, so all recursive types
 are nominal types.
 
+When a recursive type has type parameters, it has to pass them to itself unchanged. This is
+allowed, because `Tree(a)` only ever refers to `Tree(a)`:
+
+```roc
+Tree(a) := [Leaf(a), Node(Tree(a), Tree(a))]
+```
+
+However, these give errors at compile time:
+
+```roc
+Nest(a) := [Done(a), More(Nest(List(a)))] # ERROR! Wraps a in a List.
+
+Flip(a, b) := [End, Link(a, b, Flip(b, a))] # ERROR! Passes b for a and a for b.
+```
+
+A `Nest(Str)` would contain a `Nest(List(Str))`, which would contain a `Nest(List(List(Str)))`,
+and so on without end. Referring to itself with types that don't mention its type parameters,
+like `Chain(a) := [End, Link(a, Chain(Str))]`, is fine.
+[Recursive functions](functions#recursion-and-type-variables) follow the same rule.
+
 ## Mutually Recursive Types {#mutually-recursive}
 
 Nominal types can refer to each other in their definitions. For example, a syntax tree for a small
