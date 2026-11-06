@@ -268,7 +268,7 @@ const Extractor = struct {
     ) ExtractError!void {
         const input = self.inputs.items[input_index];
         const module_env = input.module_env;
-        const view = input.artifact.checked_types.view();
+        const view = input.artifact.typesView();
         const names = &input.artifact.canonical_names;
         self.current_input = input_index;
         self.current_module = input.exposed_name;
@@ -292,7 +292,7 @@ const Extractor = struct {
                 module_env,
                 ModuleEnv.varFrom(stmt_idx),
             );
-            const root = view.rootForKey(key) orelse
+            const root = (try view.rootForKey(key)) orelse
                 return self.fail(.unpublished_public_type, "exposed type declaration has no published checked root");
             const payload = view.payload(root);
             if (payload != .alias) continue;
@@ -379,7 +379,7 @@ const Extractor = struct {
         self.current_module = self.api.modules.items[module_index].name;
         self.current_item = "";
 
-        const view = input.artifact.checked_types.view();
+        const view = input.artifact.typesView();
         const names = &input.artifact.canonical_names;
 
         var exposed_names = try exposedNameSet(self.gpa, input);
@@ -416,7 +416,7 @@ const Extractor = struct {
                 module_env,
                 decl_var,
             );
-            const root = view.rootForKey(key) orelse
+            const root = (try view.rootForKey(key)) orelse
                 return self.fail(.unpublished_public_type, "exposed type declaration has no published checked root");
 
             const kind = try self.itemKindForTypeDecl(view, names, root);
@@ -441,18 +441,12 @@ const Extractor = struct {
             const gop = try seen_paths.getOrPut(self.gpa, path);
             if (gop.found_existing) continue;
 
-            const scheme_key = try canonical_type_keys.schemeFromVar(
-                self.gpa,
-                &module_env.types,
-                module_env,
-                ModuleEnv.varFrom(def_idx),
-            );
-            const scheme = view.schemeForKey(scheme_key) orelse
-                return self.fail(.unpublished_public_type, "public value has no published checked type scheme");
+            const root = view.sourceTypeRoot(ModuleEnv.varFrom(def_idx)) orelse
+                return self.fail(.unpublished_public_type, "public value has no published checked type");
 
             var memo = ConvertMemo.empty;
             defer memo.deinit(self.gpa);
-            const ty = try self.convertType(view, names, scheme.root, &memo);
+            const ty = try self.convertType(view, names, root, &memo);
             try self.api.addItem(module_index, .{ .path = path, .kind = .{ .value = ty } });
         }
     }
@@ -520,8 +514,9 @@ const Extractor = struct {
                 const display_name = if (variable.name) |name| try alloc.dupe(u8, name) else null;
                 const api_id = try self.api.addType(.{ .variable = .{ .display_name = display_name } });
                 try memo.put(self.gpa, id, api_id);
-                const constraints = try alloc.alloc(PackageApi.Constraint, variable.constraints.len);
-                for (variable.constraints, 0..) |constraint, i| {
+                const constraints = try alloc.alloc(PackageApi.Constraint, variable.constraints.len());
+                for (0..variable.constraints.len()) |i| {
+                    const constraint = variable.constraints.get(i);
                     constraints[i] = .{
                         .method = try alloc.dupe(u8, names.methodNameText(constraint.fn_name)),
                         .fn_ty = try self.convertType(view, names, constraint.fn_ty, memo),
@@ -563,8 +558,9 @@ const Extractor = struct {
                 return api_id;
             },
             .record => |record| {
-                const fields = try alloc.alloc(PackageApi.Field, record.fields.len);
-                for (record.fields, 0..) |field, i| {
+                const fields = try alloc.alloc(PackageApi.Field, record.fields.len());
+                for (0..record.fields.len()) |i| {
+                    const field = record.fields.get(i);
                     fields[i] = .{
                         .name = try alloc.dupe(u8, names.recordFieldLabelText(field.name)),
                         .ty = try self.convertType(view, names, field.ty, memo),
@@ -600,9 +596,10 @@ const Extractor = struct {
                 return api_id;
             },
             .tag_union => |tag_union| {
-                const tags = try alloc.alloc(PackageApi.Tag, tag_union.tags.len);
-                for (tag_union.tags, 0..) |tag, i| {
-                    const tag_args = tag.argsSlice(view);
+                const tags = try alloc.alloc(PackageApi.Tag, tag_union.tags.len());
+                for (0..tag_union.tags.len()) |i| {
+                    const tag = tag_union.tags.get(i);
+                    const tag_args = tag.args;
                     const api_args = try alloc.alloc(PackageApi.TypeId, tag_args.len);
                     for (tag_args, 0..) |arg, j| {
                         api_args[j] = try self.convertType(view, names, arg, memo);

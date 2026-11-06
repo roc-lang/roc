@@ -489,12 +489,24 @@ pub fn binarySearchByKey(
     key: Key,
     comptime order: fn (Elem, Key) std.math.Order,
 ) ?*const Elem {
+    const index = binarySearchIndexByKey(Elem, Key, sorted, key, order) orelse return null;
+    return &sorted[index];
+}
+
+/// The index of the element `binarySearchByKey` finds.
+pub fn binarySearchIndexByKey(
+    comptime Elem: type,
+    comptime Key: type,
+    sorted: []const Elem,
+    key: Key,
+    comptime order: fn (Elem, Key) std.math.Order,
+) ?usize {
     var lo: usize = 0;
     var hi: usize = sorted.len;
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
         switch (order(sorted[mid], key)) {
-            .eq => return &sorted[mid],
+            .eq => return mid,
             .lt => lo = mid + 1,
             .gt => hi = mid,
         }

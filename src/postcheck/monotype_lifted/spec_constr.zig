@@ -938,7 +938,7 @@ const FnPlan = struct {
 /// transparent alias at equivalent local sites. See `Builder.sameLocalIdentity`
 /// in monotype/lower.zig.
 const BinderIdentity = struct {
-    binder: check.CheckedModule.PatternBinderId,
+    binder: check.CheckedBodies.BinderId,
     digest: names.TypeDigest,
 };
 
@@ -5328,7 +5328,7 @@ const Subst = struct {
     loop_carried_binders: collections.DenseMap(BinderSlot, u32),
     /// The slot of each binder identity met so far: each binder heads a chain
     /// of the slots for the types it was met at, almost always one.
-    binder_heads: collections.DenseMap(check.CheckedModule.PatternBinderId, u32),
+    binder_heads: collections.DenseMap(check.CheckedBodies.BinderId, u32),
     binder_slots: std.ArrayList(SlotNode),
     changes: std.ArrayList(BindingChange),
     allocator: Allocator,
@@ -5342,7 +5342,7 @@ const Subst = struct {
             .binder_subst = collections.DenseMap(BinderSlot, Value).init(allocator),
             .binder_aliases = collections.DenseMap(BinderSlot, Value).init(allocator),
             .loop_carried_binders = collections.DenseMap(BinderSlot, u32).init(allocator),
-            .binder_heads = collections.DenseMap(check.CheckedModule.PatternBinderId, u32).init(allocator),
+            .binder_heads = collections.DenseMap(check.CheckedBodies.BinderId, u32).init(allocator),
             .binder_slots = .empty,
             .changes = .empty,
             .allocator = allocator,
@@ -16384,11 +16384,10 @@ fn structuralValueStripping(start: Value, strip_depth: usize) Value {
 /// representation. The type store is not interned: each specialization
 /// materializes its own ids, so structurally identical types reached from
 /// different specializations (a call site and the callee's own body) carry
-/// different ids and compare by digest. The representation digest ignores a
-/// named type's checked re-entry reference, which depends on the route that
-/// produced the id (an interface summary replay or an expansion), so that
-/// route never changes a SpecConstr decision. It still observes backings, so
-/// equal types with different representations stay distinct. Both sides
+/// different ids and compare by digest, so the route that produced an id (an
+/// interface summary replay or an expansion) never changes a SpecConstr
+/// decision. The representation digest observes backings, so equal types
+/// with different representations stay distinct. Both sides
 /// digest through the store's memoized construction, which is why this probe
 /// (and everything that reaches it) takes the program mutable.
 ///
@@ -16967,9 +16966,9 @@ test "compile-time root reads remain opaque through specialization and cloning" 
         .root = .{ .checked = @fromBackingInt(@intCast(1)) },
         .const_locator = .{
             .artifact = .{},
-            .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @fromBackingInt(@intCast(1)) } },
+            .owner = .{ .hoisted_root = .{ .module_idx = 0, .root = @fromBackingInt(@intCast(1)) } },
             .template = @fromBackingInt(@intCast(1)),
-            .source_scheme = .{},
+            .source_scheme = @fromBackingInt(@intCast(1)),
         },
     };
     const root_id = try program.addComptimeValueRoot(root);
@@ -17014,9 +17013,9 @@ test "a constant read counts as one expression in either form" {
         .root = .{ .checked = @fromBackingInt(@intCast(1)) },
         .const_locator = .{
             .artifact = .{},
-            .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @fromBackingInt(@intCast(1)) } },
+            .owner = .{ .hoisted_root = .{ .module_idx = 0, .root = @fromBackingInt(@intCast(1)) } },
             .template = @fromBackingInt(@intCast(1)),
-            .source_scheme = .{},
+            .source_scheme = @fromBackingInt(@intCast(1)),
         },
     });
     const read = try program.addExpr(.{ .ty = list_ty, .data = .{ .comptime_value = .{
@@ -17644,7 +17643,7 @@ test "SpecConstr accepts a transparent alias record update base" {
     const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try program.names.internTypeName("RecordAlias");
     const alias_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
@@ -17668,7 +17667,7 @@ test "SpecConstr accepts a transparent alias record update base" {
     try std.testing.expectEqual(record_ty, cloned.value.record.ty);
 }
 
-test "SpecConstr compares representations, not checked provenance" {
+test "SpecConstr compares separately stored named types by representation" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
@@ -17678,9 +17677,9 @@ test "SpecConstr compares representations, not checked provenance" {
     const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xCD))));
     const type_name = try program.names.internTypeName("Wrapper");
     const Nominal = struct {
-        fn add(p: *Ast.Program, module: names.ModuleIdentityId, name: names.TypeNameId, checked_ty: u32, backing: Type.TypeId) Allocator.Error!Type.TypeId {
+        fn add(p: *Ast.Program, module: names.ModuleIdentityId, name: names.TypeNameId, backing: Type.TypeId) Allocator.Error!Type.TypeId {
             return p.types.add(.{ .named = .{
-                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(checked_ty)), .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = .{ .module = module, .type_name = name, .source_decl = 7 },
                 .kind = .nominal,
                 .args = Type.Span.empty(),
@@ -17688,14 +17687,14 @@ test "SpecConstr compares representations, not checked provenance" {
             } });
         }
     };
-    const first = try Nominal.add(&program, module_identity, type_name, 1, u8_ty);
-    const other_occurrence = try Nominal.add(&program, module_identity, type_name, 2, u8_ty);
-    const other_backing = try Nominal.add(&program, module_identity, type_name, 1, u16_ty);
+    const first = try Nominal.add(&program, module_identity, type_name, u8_ty);
+    const second = try Nominal.add(&program, module_identity, type_name, u8_ty);
+    const other_backing = try Nominal.add(&program, module_identity, type_name, u16_ty);
 
     const first_full = program.types.typeDigestCached(&program.names, first, null);
-    const other_occurrence_full = program.types.typeDigestCached(&program.names, other_occurrence, null);
-    try std.testing.expect(!std.mem.eql(u8, &first_full.bytes, &other_occurrence_full.bytes));
-    try std.testing.expect(sameType(&program, first, other_occurrence));
+    const second_full = program.types.typeDigestCached(&program.names, second, null);
+    try std.testing.expectEqualSlices(u8, &first_full.bytes, &second_full.bytes);
+    try std.testing.expect(sameType(&program, first, second));
     try std.testing.expect(!sameType(&program, first, other_backing));
 }
 
@@ -19028,7 +19027,7 @@ test "issue 10168 SpecConstr clones every capture when nested cloning grows the 
     } });
     const fn_list_ty = try program.types.add(.{ .list = fn_ty });
     const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
-    const nested_binder: check.CheckedModule.PatternBinderId = @fromBackingInt(@intCast(1));
+    const nested_binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(1));
     const nested_capture_local = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), unit_ty, nested_binder);
     const nested_capture_slots = try program.addTypedLocalSpan(&.{.{
         .local = nested_capture_local,
@@ -19550,7 +19549,7 @@ test "whole-body normalization resolves binder-equivalent argument locals" {
     defer program.deinit();
 
     const ty = try program.types.add(.{ .primitive = .u8 });
-    const binder: check.CheckedModule.PatternBinderId = @fromBackingInt(@intCast(1));
+    const binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(1));
     const argument = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
     const equivalent = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), ty, binder);
     const equivalent_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = equivalent } });
@@ -19578,29 +19577,27 @@ test "whole-body normalization resolves binder-equivalent argument locals" {
 /// second, and returns the substituted expression.
 fn substituteNamedForTest(
     program: *Ast.Program,
-    first_checked_ty: u32,
     first_backing: Type.TypeId,
-    second_checked_ty: u32,
     second_backing: Type.TypeId,
 ) Common.LowerError!struct { cloned: Ast.ExprId, replacement: Ast.LocalId, second_ty: Type.TypeId } {
     const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try program.names.internTypeName("Nominal");
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const first_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(first_checked_ty)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
         .backing = .{ .ty = first_backing, .use = .inspectable },
     } });
     const second_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(second_checked_ty)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
         .backing = .{ .ty = second_backing, .use = .inspectable },
     } });
-    const binder: check.CheckedModule.PatternBinderId = @fromBackingInt(@intCast(1));
+    const binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(1));
     const first = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), first_ty, binder);
     const second = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), second_ty, binder);
     const replacement = try program.addLocal(@fromBackingInt(@intCast(3)), first_ty);
@@ -19621,18 +19618,18 @@ test "substitution keeps a typed boundary between named types with distinct repr
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
     const u16_ty = try program.types.add(.{ .primitive = .u16 });
 
-    const result = try substituteNamedForTest(&program, 1, u8_ty, 1, u16_ty);
+    const result = try substituteNamedForTest(&program, u8_ty, u16_ty);
     const boundary = program.getExpr(result.cloned).data.typed_boundary;
     try std.testing.expectEqual(result.second_ty, program.getExpr(result.cloned).ty);
     try std.testing.expectEqual(result.replacement, program.getExpr(boundary.value).data.local);
 }
 
-test "substitution resolves named types that differ only in checked provenance" {
+test "substitution resolves separately stored equal named types" {
     var program = emptyLiftedProgramForTest(std.testing.allocator);
     defer program.deinit();
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
 
-    const result = try substituteNamedForTest(&program, 1, u8_ty, 2, u8_ty);
+    const result = try substituteNamedForTest(&program, u8_ty, u8_ty);
     try std.testing.expectEqual(result.replacement, program.getExpr(result.cloned).data.local);
 }
 
@@ -20090,7 +20087,7 @@ test "SpecConstr operand sequencing preserves nested mutable versions" {
         defer program.deinit();
         const ty = try program.types.add(.{ .primitive = .u8 });
         const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ty}) });
-        const binder: check.CheckedModule.PatternBinderId = @fromBackingInt(@intCast(1));
+        const binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(1));
         const initial = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
         const version = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), ty, binder);
         const initial_pat = try program.addPat(.{ .ty = ty, .data = .{ .bind = initial } });

@@ -68,7 +68,7 @@ fn buildWithCacheAtTarget(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
     const roc_ctx = CoreCtx.os(gpa, gpa, std.testing.io);
     var cache_manager = CacheManager.init(gpa, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
     defer cache_manager.deinit();
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         gpa,
