@@ -7,6 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const CoreCtx = @import("ctx").CoreCtx;
+const TargetUsize = @import("base").target.TargetUsize;
 
 const Allocator = std.mem.Allocator;
 
@@ -435,12 +436,17 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ base_dir, version_dir });
     }
 
-    /// Logical checked-artifact scope within this compiler compatibility identity.
-    pub fn getCheckedArtifactCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+    /// Logical checked-artifact scope within this compiler compatibility
+    /// identity, for compilations whose compile-time evaluation runs in
+    /// `address_space`. A checked entry holds evaluated values, and evaluating
+    /// for a 32-bit program runs out of address space where a 64-bit one does
+    /// not, so the two never share an entry (design.md "Compile-Time
+    /// Constants").
+    pub fn getCheckedArtifactCacheDir(self: Self, allocator: Allocator, address_space: TargetUsize) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, addressSpaceScope(address_space, "mod") });
     }
 
     /// Inference capsules share the checked artifact compatibility domain.
@@ -450,11 +456,20 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &.{ version_dir, "inference" });
     }
 
-    /// Exact platform/app composition results, separate from reusable modules.
-    pub fn getPlatformPairingCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+    /// Exact platform/app composition results, separate from reusable
+    /// modules. Like checked entries, they hold evaluated values, so they are
+    /// scoped by the address space evaluation runs in.
+    pub fn getPlatformPairingCacheDir(self: Self, allocator: Allocator, address_space: TargetUsize) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
-        return std.fs.path.join(allocator, &.{ version_dir, "pair" });
+        return std.fs.path.join(allocator, &.{ version_dir, addressSpaceScope(address_space, "pair") });
+    }
+
+    fn addressSpaceScope(address_space: TargetUsize, comptime name: []const u8) []const u8 {
+        return switch (address_space) {
+            .u64 => name,
+            .u32 => name ++ "32",
+        };
     }
 
     /// Logical canonicalized-module scope.
