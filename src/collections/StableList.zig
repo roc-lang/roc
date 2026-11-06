@@ -41,7 +41,7 @@ pub fn StableList(comptime T: type) type {
         pub fn at(self: *const Self, index: usize) *T {
             std.debug.assert(index < self.published_len.load(.acquire));
             const place = shelfOf(index);
-            const shelf = self.shelves[place.shelf].load(.acquire) orelse unreachable;
+            const shelf = self.shelves[place.shelf].load(.acquire) orelse unreachable; // every index below the published length lies on an allocated shelf
             return &shelf[place.offset];
         }
 

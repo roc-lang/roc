@@ -8121,7 +8121,7 @@ pub const SynthesizedTypeKeys = struct {
         if (std.debug.runtime_safety) {
             const found_info = self.slots.at(type_ids.synthesizedIndex(found)).peek() orelse
                 checkedArtifactInvariant("a synthesized key index holds a root whose key was never computed", .{});
-            if (!std.mem.eql(u8, &found_info.key.bytes, &key.bytes)) checkedArtifactInvariant("a synthesized key index answered a key with a root of another key", .{});
+            if (!std.meta.eql(found_info.key.bytes, key.bytes)) checkedArtifactInvariant("a synthesized key index answered a key with a root of another key", .{});
         }
         return found;
     }
@@ -24622,7 +24622,7 @@ pub const PlatformPairing = struct {
         /// Whether the entry was stored for the relation `paired` has.
         pub fn matches(self: *const Serialized, paired: *const CheckedModuleArtifact) bool {
             const relation = paired.checking_context_identity.platform_app_relation orelse return false;
-            return std.mem.eql(u8, &self.relation, &relation.bytes);
+            return std.meta.eql(self.relation, relation.bytes);
         }
 
         /// Install the entry's evaluation output over `paired`, a pairing
