@@ -645,11 +645,7 @@ pub const ModuleState = struct {
     /// Work performed for this module during its current checking task.
     inference_runs: u32 = 0,
     checking_cache_hits: u32 = 0,
-    inference_cache_hits: u32 = 0,
     checking_interfaces_built: u32 = 0,
-    checking_owner_bindings: u32 = 0,
-    checking_reference_bindings: u32 = 0,
-    checking_diagnostics_replayed: u32 = 0,
     checked_artifacts_published: u32 = 0,
     /// Module name (e.g., "Main", "Foo")
     name: []const u8,
@@ -1176,7 +1172,6 @@ pub const PackageState = struct {
 /// failure and every probe of it a miss.
 const CacheEntryDirs = struct {
     checked: ?[]u8 = null,
-    inference: ?[]u8 = null,
     canonicalized: ?[]u8 = null,
     platform_pairing: ?[]u8 = null,
 
@@ -1186,10 +1181,6 @@ const CacheEntryDirs = struct {
         var dirs: CacheEntryDirs = .{};
         errdefer dirs.deinit(allocator);
         dirs.checked = manager.config.getCheckedArtifactCacheDir(allocator) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.NoHomeDirectory => null,
-        };
-        dirs.inference = manager.config.getInferenceCacheDir(allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoHomeDirectory => null,
         };
@@ -1206,7 +1197,6 @@ const CacheEntryDirs = struct {
 
     fn deinit(self: *CacheEntryDirs, allocator: Allocator) void {
         if (self.checked) |dir| allocator.free(dir);
-        if (self.inference) |dir| allocator.free(dir);
         if (self.canonicalized) |dir| allocator.free(dir);
         if (self.platform_pairing) |dir| allocator.free(dir);
         self.* = .{};
@@ -2374,11 +2364,7 @@ pub const Coordinator = struct {
     /// Modules this build parsed and canonicalized.
     canonicalized_cache_misses: u32 = 0,
     modules_compiled: u32,
-    inference_cache_hits: u32 = 0,
     checking_interfaces_built: u32 = 0,
-    checking_owner_bindings: u32 = 0,
-    checking_reference_bindings: u32 = 0,
-    checking_diagnostics_replayed: u32 = 0,
     /// Source publications of the parametric platform. Session composition
     /// consumes its checked output without publishing another module.
     platform_root_publish_count: u32 = 0,
@@ -5096,10 +5082,6 @@ pub const Coordinator = struct {
         defer if (source_owned) module_alloc.free(source);
 
         const serialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(env_buffer.ptr));
-        serialized_ptr.validate(env_buffer.len) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
         const cached_env = serialized_ptr.deserializeWithMutableTypes(
             @intFromPtr(env_buffer.ptr),
             module_alloc,
@@ -5126,13 +5108,8 @@ pub const Coordinator = struct {
         cached_env.qualified_module_name = mod.qualified_name;
 
         const artifact_serialized: *const check.CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
-        // L-10: bounds-check every relocatable marker against the body before any
-        // sub-store aliases it. A corrupt/truncated cache body is treated as a cache
-        // miss.
-        artifact_serialized.validate(artifact_buffer.len) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
+        // The envelope establishes completeness and layout compatibility.
+        // Payloads are trusted producer output; do not recursively validate them.
         if (!std.mem.eql(u8, &artifact_serialized.key.bytes, &cache_key.bytes)) {
             manager.stats.recordInvalidation();
             return false;
@@ -6090,7 +6067,6 @@ pub const Coordinator = struct {
                 .platform_requirements = platform_surface,
                 .explicit_roots = explicit_roots,
                 .validation = mod.validation,
-                .source_pin_validation = canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version),
             },
         });
     }
@@ -6224,24 +6200,11 @@ pub const Coordinator = struct {
 
         // Update compile stats
         mod.checked_artifacts_published += 1;
-        if (result.inference_reused) {
-            mod.checking_cache_hits += 1;
-            self.cache_hits += 1;
-            self.inference_cache_hits += 1;
-            mod.inference_cache_hits += 1;
-            self.checking_owner_bindings += result.owner_bindings;
-            mod.checking_owner_bindings += result.owner_bindings;
-            self.checking_reference_bindings += result.reference_bindings;
-            mod.checking_reference_bindings += result.reference_bindings;
-            self.checking_diagnostics_replayed += result.diagnostics_replayed;
-            mod.checking_diagnostics_replayed += result.diagnostics_replayed;
-        } else {
-            self.cache_misses += 1;
-            self.modules_compiled += 1;
-            mod.inference_runs += 1;
-            self.checking_interfaces_built += 1;
-            mod.checking_interfaces_built += 1;
-        }
+        self.cache_misses += 1;
+        self.modules_compiled += 1;
+        mod.inference_runs += 1;
+        self.checking_interfaces_built += 1;
+        mod.checking_interfaces_built += 1;
 
         try self.completeModuleSuccessfully(pkg, result.module_id);
 
@@ -6885,11 +6848,7 @@ pub const Coordinator = struct {
             else
                 0,
             .modules_compiled = self.modules_compiled,
-            .inference_cache_hits = self.inference_cache_hits,
             .checking_interfaces_built = self.checking_interfaces_built,
-            .checking_owner_bindings = self.checking_owner_bindings,
-            .checking_reference_bindings = self.checking_reference_bindings,
-            .checking_diagnostics_replayed = self.checking_diagnostics_replayed,
             .module_time_min_ns = self.module_time_min_ns,
             .module_time_max_ns = self.module_time_max_ns,
             .module_time_sum_ns = self.module_time_sum_ns,
@@ -7553,11 +7512,9 @@ pub const Coordinator = struct {
             if (task.platform_requirements) |surface| surface.context else null,
             task.explicit_roots,
             task.validation,
-            task.source_pin_validation,
             ctfe_options,
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
-            if (self.cache_entry_dirs.inference) |directory| .{ .manager = self.cache_manager.?, .directory = directory } else null,
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer
@@ -7628,10 +7585,6 @@ pub const Coordinator = struct {
                 .reports = reports,
                 .type_check_ns = type_check_ns,
                 .check_diagnostics_ns = diagnostics_ns,
-                .inference_reused = typecheck_output.inference_reused,
-                .owner_bindings = typecheck_output.owner_bindings,
-                .reference_bindings = typecheck_output.reference_bindings,
-                .diagnostics_replayed = typecheck_output.diagnostics_replayed,
             },
         };
     }
@@ -7880,11 +7833,7 @@ const CompiledBuildFacts = struct {
 const ModuleCheckingFacts = struct {
     name: []const u8,
     inference_runs: u32,
-    inference_hits: u32,
     interfaces_built: u32,
-    owner_bindings: u32,
-    reference_bindings: u32,
-    diagnostics_replayed: u32,
 };
 
 fn lessThanBytes(_: void, a: [32]u8, b: [32]u8) bool {
@@ -8021,11 +7970,7 @@ fn compileAppFactsWithWorkers(
             try checking.append(allocator, .{
                 .name = name,
                 .inference_runs = mod.inference_runs,
-                .inference_hits = mod.inference_cache_hits,
                 .interfaces_built = mod.checking_interfaces_built,
-                .owner_bindings = mod.checking_owner_bindings,
-                .reference_bindings = mod.checking_reference_bindings,
-                .diagnostics_replayed = mod.checking_diagnostics_replayed,
             });
         }
     }
@@ -10318,37 +10263,6 @@ fn truncateFilesUnderDir(allocator: Allocator, root: []const u8, scope: []const 
     return truncated;
 }
 
-fn corruptCheckedModuleEnvIdentBytesLens(allocator: Allocator, root: []const u8, checked_module_cache_dir: []const u8) CorruptCheckedModuleCacheError!usize {
-    const env_ident_bytes_len_offset =
-        checked_module_cache_header_len +
-        @offsetOf(ModuleEnv.Serialized, "common") +
-        @offsetOf(base.CommonEnv.Serialized, "idents") +
-        @offsetOf(base.Ident.Store.Serialized, "interner") +
-        @offsetOf(base.SmallStringInterner.Serialized, "bytes") +
-        @offsetOf(collections.SafeList(u8).Serialized, "len");
-
-    const io = std.testing.io;
-    const filesystem = CoreCtx.os(allocator, allocator, io);
-    const paths = try testCachePaths(allocator, root, checked_module_cache_dir, .checked);
-    defer {
-        for (paths) |path| allocator.free(path);
-        allocator.free(paths);
-    }
-    var corrupted: usize = 0;
-    for (paths) |path| {
-        const bytes = try filesystem.readFile(path, allocator);
-        defer allocator.free(bytes);
-        if (bytes.len < env_ident_bytes_len_offset + @sizeOf(u64)) continue;
-
-        std.mem.writeInt(u64, bytes[env_ident_bytes_len_offset..][0..8], std.math.maxInt(u64), .little);
-        try filesystem.writeFile(path, bytes);
-        corrupted += 1;
-    }
-
-    if (corrupted == 0) return error.FileNotFound;
-    return corrupted;
-}
-
 test "Coordinator checked cache key requires checked direct imports" {
     const allocator = std.testing.allocator;
 
@@ -10598,44 +10512,9 @@ test "Coordinator corrupt checked module cache entries compile from source" {
     defer allocator.free(checked_module_cache_dir);
     const overwritten = try overwriteFilesUnderDir(allocator, cache_dir, checked_module_cache_dir, .checked, "not a checked module cache entry");
     try std.testing.expect(overwritten > 0);
-    // Inference entries also restore checked environments; corrupting them as
-    // well leaves source as the only admissible input.
-    const inference_cache_dir = try config.getInferenceCacheDir(allocator);
-    defer allocator.free(inference_cache_dir);
-    const overwritten_inference = try overwriteFilesUnderDir(allocator, cache_dir, inference_cache_dir, .checked, "not an inference cache entry");
-    try std.testing.expect(overwritten_inference > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
     try std.testing.expectEqual(@as(u32, 0), second.build.cache_hits);
-    try std.testing.expect(second.build.modules_compiled > 0);
-    try std.testing.expect(second.cache.invalidations > 0);
-    try std.testing.expect(second.cache.inference_invalidations > 0);
-}
-
-test "Coordinator corrupt checked module cache env relocations compile from source" {
-    const allocator = std.testing.allocator;
-
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
-    defer allocator.free(cache_dir);
-
-    const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
-    try std.testing.expect(first.cache.stores > 0);
-
-    const config = CacheConfig{ .cache_dir = cache_dir };
-    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
-    defer allocator.free(checked_module_cache_dir);
-    const corrupted = try corruptCheckedModuleEnvIdentBytesLens(allocator, cache_dir, checked_module_cache_dir);
-    try std.testing.expect(corrupted > 0);
-    // Inference entries also restore checked environments; corrupting them as
-    // well leaves source as the only admissible input.
-    const inference_cache_dir = try config.getInferenceCacheDir(allocator);
-    defer allocator.free(inference_cache_dir);
-    const overwritten_inference = try overwriteFilesUnderDir(allocator, cache_dir, inference_cache_dir, .checked, "not an inference cache entry");
-    try std.testing.expect(overwritten_inference > 0);
-
-    const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
     try std.testing.expect(second.build.modules_compiled > 0);
     try std.testing.expect(second.cache.invalidations > 0);
 }
@@ -10929,7 +10808,7 @@ test "canonicalized module cache entry survives a change to an imported module" 
     try std.testing.expect(second.build.cache_misses > 0);
 }
 
-test "issue 12592: a dependency test edit preserves importer checking results" {
+test "checked cache dependency edits preserve fresh-build results" {
     const allocator = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -11026,31 +10905,21 @@ test "issue 12592: a dependency test edit preserves importer checking results" {
     }
     try std.testing.expect(changed_keys >= 4); // A, B, C, and the app.
 
-    // Establishing A's new checking interface may require inference. Its
-    // unchanged importers must reuse checking without losing the new keys.
-    try std.testing.expectEqual(@as(u32, 1), edited.build.modules_compiled);
-    try std.testing.expectEqual(warm.build.cache_hits - 1, edited.build.cache_hits);
+    // Full dependency identities invalidate A, B, C and the app together.
+    try std.testing.expectEqual(@as(u32, 4), edited.build.modules_compiled);
+    try std.testing.expectEqual(warm.build.cache_hits - 4, edited.build.cache_hits);
     try std.testing.expectEqualSlices([32]u8, uncached.artifact_digests, edited.artifact_digests);
-    try std.testing.expectEqual(@as(u32, 3), edited.build.inference_cache_hits); // B, C, app
-    try std.testing.expectEqual(@as(u32, 1), edited.build.checking_interfaces_built);
-    for (edited.checking) |module| {
-        if (!std.mem.eql(u8, module.name, "B") and !std.mem.eql(u8, module.name, "C")) continue;
-        try std.testing.expectEqual(@as(u32, 0), module.inference_runs);
-        try std.testing.expectEqual(@as(u32, 0), module.interfaces_built);
-        try std.testing.expectEqual(@as(u32, 1), module.inference_hits);
-        try std.testing.expect(module.owner_bindings > 0);
-    }
 
     // Same-signature implementations, a revert, an unused-argument warning,
     // and moved source locations must all agree with an independent build.
     // Byte equality covers current checked bodies, evaluated constants,
     // relations, and source/debug origins, not just the module keys.
-    const implementations = [_]struct { source: []const u8, reusable: bool }{
-        .{ .source = "A := {}.{ value : {} -> I64\n value = |_| 8\n}\nexpect A.value({}) == 8\n", .reusable = true },
-        .{ .source = "A := {}.{ value : {} -> I64\n value = |_| 9\n}\nexpect A.value({}) == 9\n", .reusable = true },
-        .{ .source = a_source ++ "\nexpect A.value({}) == 7\n", .reusable = true },
-        .{ .source = "A := {}.{ value : {} -> I64\n value = |unused| 8\n}\nexpect A.value({}) == 8\n", .reusable = false },
-        .{ .source = "\n\nA := {}.{ value : {} -> I64\n value = |_| 8\n}\nexpect A.value({}) == 8\n", .reusable = true },
+    const implementations = [_]struct { source: []const u8 }{
+        .{ .source = "A := {}.{ value : {} -> I64\n value = |_| 8\n}\nexpect A.value({}) == 8\n" },
+        .{ .source = "A := {}.{ value : {} -> I64\n value = |_| 9\n}\nexpect A.value({}) == 9\n" },
+        .{ .source = a_source ++ "\nexpect A.value({}) == 7\n" },
+        .{ .source = "A := {}.{ value : {} -> I64\n value = |unused| 8\n}\nexpect A.value({}) == 8\n" },
+        .{ .source = "\n\nA := {}.{ value : {} -> I64\n value = |_| 8\n}\nexpect A.value({}) == 8\n" },
     };
     for (implementations) |edit| {
         try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "checking_dependency/app/A.roc", .data = edit.source });
@@ -11061,17 +10930,8 @@ test "issue 12592: a dependency test edit preserves importer checking results" {
         try std.testing.expectEqualStrings(fresh.reports, cached.reports);
         try std.testing.expectEqualSlices([32]u8, fresh.artifact_keys, cached.artifact_keys);
         try std.testing.expectEqualSlices([32]u8, fresh.artifact_digests, cached.artifact_digests);
-        if (!edit.reusable) continue;
-        try std.testing.expect(cached.build.modules_compiled <= 1);
-        for (cached.checking) |module| {
-            if (std.mem.eql(u8, module.name, "B") or std.mem.eql(u8, module.name, "C")) {
-                try std.testing.expectEqual(@as(u32, 0), module.inference_runs);
-                try std.testing.expectEqual(@as(u32, 0), module.interfaces_built);
-            }
-        }
     }
-    // Platform requirement context also uses its checking surface, so a test
-    // edit in the platform republishes the app without repeating its inference.
+    // A platform source edit also invalidates its importing app.
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "checking_dependency/app/.roc_echo_platform/main.roc",
         .data = echo_platform_root_source ++ "\nexpect True\n",
@@ -11082,8 +10942,7 @@ test "issue 12592: a dependency test edit preserves importer checking results" {
     defer platform_fresh.deinit(allocator);
     try std.testing.expectEqualStrings(platform_fresh.reports, platform_edit.reports);
     try std.testing.expectEqualSlices([32]u8, platform_fresh.artifact_digests, platform_edit.artifact_digests);
-    try std.testing.expectEqual(@as(u32, 1), platform_edit.build.modules_compiled);
-    try std.testing.expectEqual(@as(u32, 1), platform_edit.build.inference_cache_hits);
+    try std.testing.expectEqual(@as(u32, 2), platform_edit.build.modules_compiled);
 
     // A changed result type, changed nominal representation, and a dependency
     // error change checking inputs. Inference must run in affected importers.
@@ -11107,29 +10966,9 @@ test "issue 12592: a dependency test edit preserves importer checking results" {
         try std.testing.expectEqualSlices([32]u8, fresh.artifact_digests, cached.artifact_digests);
         try std.testing.expect(cached.build.modules_compiled > 1);
     }
-
-    // A partially usable cache still has current source/full entries, but its
-    // inference capsules are corrupt. Reject those optional entries and obtain
-    // the same current output by checking again.
-    const config = CacheConfig{ .enabled = true, .cache_dir = cache_dir, .roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io) };
-    const inference_dir = try config.getInferenceCacheDir(allocator);
-    defer allocator.free(inference_dir);
-    try std.testing.expect(try overwriteFilesUnderDir(allocator, cache_dir, inference_dir, .checked, "truncated inference capsule") > 0);
-    try tmp_dir.dir.writeFile(std.testing.io, .{
-        .sub_path = "checking_dependency/app/A.roc",
-        .data = "A := {}.{ value : {} -> I64\n value = |_| 2\n}\nexpect A.value({}) == 2\n",
-    });
-    var repaired = try compileAppFacts(allocator, cache_dir, app_path);
-    defer repaired.deinit(allocator);
-    var fresh_repaired = try compileAppFacts(allocator, null, app_path);
-    defer fresh_repaired.deinit(allocator);
-    try std.testing.expect(repaired.cache.inference_invalidations > 0);
-    try std.testing.expectEqual(@as(u32, 4), repaired.build.modules_compiled);
-    try std.testing.expectEqualStrings(fresh_repaired.reports, repaired.reports);
-    try std.testing.expectEqualSlices([32]u8, fresh_repaired.artifact_digests, repaired.artifact_digests);
 }
 
-test "issue 12611: declaration slots and diagnostic outcomes survive dependency edits" {
+test "checked cache dependency edits preserve diagnostics and computed values" {
     const allocator = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -11161,11 +11000,9 @@ test "issue 12611: declaration slots and diagnostic outcomes survive dependency 
         .{ .source = "import A\nB := {}.{ value : {} -> I64\n value = |arg| A.value(arg)\n bad : A\n bad = \"changed error\"\n id : A -> A\n id = |item| item\n}\n", .reports = true },
         .{ .source = "import A\nB := {}.{ value : {} -> I64\n value = |arg| A.value(arg)\n id : A -> A\n id = |item| item\n}\n", .reports = false },
     };
-    var saw_reference_binding = false;
-    var saw_diagnostic_replay = false;
     for (outcomes) |outcome| {
         try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "inference_outcomes/app/B.roc", .data = outcome.source });
-        for (a_sources, 0..) |a_source, edit| {
+        for (a_sources) |a_source| {
             try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "inference_outcomes/app/A.roc", .data = a_source });
             var cached = try compileAppFacts(allocator, cache_dir, app_path);
             defer cached.deinit(allocator);
@@ -11177,26 +11014,11 @@ test "issue 12611: declaration slots and diagnostic outcomes survive dependency 
             try std.testing.expectEqual(fresh.has_errors, cached.has_errors);
             try std.testing.expectEqualSlices([32]u8, fresh.artifact_keys, cached.artifact_keys);
             try std.testing.expectEqualSlices([32]u8, fresh.artifact_digests, cached.artifact_digests);
-            if (edit == 0) continue;
-            for (cached.checking) |module| {
-                if (!std.mem.eql(u8, module.name, "B") and !std.mem.eql(u8, module.name, "C")) continue;
-                try std.testing.expectEqual(@as(u32, 0), module.inference_runs);
-                try std.testing.expectEqual(@as(u32, 0), module.interfaces_built);
-                if (module.inference_hits != 0 and std.mem.eql(u8, module.name, "B")) {
-                    try std.testing.expectEqual(@as(u32, 1), module.inference_hits);
-                    try std.testing.expect(module.reference_bindings > 0);
-                    saw_reference_binding = true;
-                    saw_diagnostic_replay = saw_diagnostic_replay or module.diagnostics_replayed > 0;
-                    try std.testing.expectEqual(outcome.reports, module.diagnostics_replayed > 0);
-                }
-            }
         }
     }
-    try std.testing.expect(saw_reference_binding);
-    try std.testing.expect(saw_diagnostic_replay);
 
-    // Dependency reports come from its current source, even when importer
-    // inference is reused. Shift a warning's snippet and then remove it.
+    // Dependency reports come from current source. Shift a warning's
+    // snippet and then remove it.
     const dependency_reports = [_][]const u8{
         "A := {}.{ value : {} -> I64\n value = |unused| 7\n}\n",
         "\n\nexpect True\nA := {}.{ value : {} -> I64\n value = |unused| 7\n}\n",
@@ -11211,13 +11033,10 @@ test "issue 12611: declaration slots and diagnostic outcomes survive dependency 
         try std.testing.expectEqual(index < 2, cached.reports.len != 0);
         try std.testing.expectEqualStrings(fresh.reports, cached.reports);
         try std.testing.expectEqual(fresh.has_errors, cached.has_errors);
-        for (cached.checking) |module| {
-            if (std.mem.eql(u8, module.name, "B") or std.mem.eql(u8, module.name, "C")) try std.testing.expectEqual(@as(u32, 0), module.inference_runs);
-        }
     }
 
-    // The same inference capsules must observe the current dependency bodies
-    // when evaluating a demanded compile-time constant.
+    // Cached compilation must observe current dependency bodies when
+    // evaluating a demanded compile-time constant.
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "inference_outcomes/app/main.roc",
         .data = "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\nimport C\nimport pf.Echo\nmessage = if C.value({}) == 7 \"ok\" else crash \"current implementation\"\nmain! = |_args| { Echo.line!(message)\n Ok({}) }\n",
@@ -11231,9 +11050,6 @@ test "issue 12611: declaration slots and diagnostic outcomes survive dependency 
         try std.testing.expectEqualStrings(fresh.reports, cached.reports);
         try std.testing.expectEqual(edit == 1 or edit == 2, cached.has_errors);
         try std.testing.expectEqual(fresh.has_errors, cached.has_errors);
-        for (cached.checking) |module| {
-            if (std.mem.eql(u8, module.name, "B") or std.mem.eql(u8, module.name, "C")) try std.testing.expectEqual(@as(u32, 0), module.inference_runs);
-        }
     }
 }
 

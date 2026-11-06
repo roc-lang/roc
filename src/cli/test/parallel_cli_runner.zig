@@ -13865,10 +13865,8 @@ fn writeGeneratedTypeModule(
 }
 
 /// Count published entries of the explicitly selected module-cache family.
-/// The committed entries of one module cache section (`mod` or `can`). Other
-/// caches share the checked family, such as inference capsules, so entries are
-/// selected by the section's own scope, as the compiler's cache manager files
-/// them.
+/// Count committed entries in one module cache section (`mod` or `can`),
+/// using the section's own scope as the cache manager files them.
 fn countModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8, section: []const u8) CliRunnerError!usize {
     const family: artifact_store.Family = if (std.mem.eql(u8, section, "mod")) .checked else .canonicalized;
     const scope = try std.fs.path.join(allocator, &.{ cache_path, "compat-" ++ build_options.compiler_compatibility_id, section });

@@ -4157,24 +4157,18 @@ consumes its stored outcomes and replays its recorded debug observations without
 evaluation.
 The canonicalized module cache is a separate, non-checked boundary; the rules
 below bind the checked module and composition caches.
-Checked module and inference cache entries are trusted compiler-produced cache
-entries, not adversarial inputs. Whole-payload integrity checksums on inference
-cache reads or writes are forbidden. Its file-integrity check compares the
-expected total length in the header with the loaded byte slice's length, without
-an additional file-length syscall. Do not add payload scans to defend against
-malicious input, arbitrary malformed payloads or bit flips. Inference admission
-checks the envelope identity, version and lengths and consumes trusted producer
-data without recursive serialized-root or payload validation passes. Declaration
-binding and current-dependency compatibility checks are semantic correctness
-requirements and remain mandatory. Publication stages complete entries and
-atomically renames them. Content hashes used to identify compilation inputs are
-separate from this rule. Cache reads validate only the cache header,
-entry-version hash, key, serialized layout, and ordinary binary decoding. They must
-not rerun checked validation, reselect hoisted roots, reconstruct checked data,
-or walk checked expressions to prove that cached checked data is still complete.
-Correctness belongs to the producer path that writes the cache entry, and
-invalidation belongs to the cache key and explicit cache/selection format
-versions.
+Checked module cache entries are trusted compiler-produced data, not adversarial
+inputs. Payload-integrity checksums and recursive payload-validation scans are
+forbidden. File completeness is checked by comparing the lengths recorded in the
+header against the loaded byte slice's length, without an additional file-length
+syscall. Do not scan payloads to defend against malicious input, arbitrary
+malformed data or bit flips. Header identity, version and lengths establish which
+producer data to consume. Publication stages complete files and atomically
+renames them. Content hashes identifying compilation inputs are separate from
+integrity verification. A cache hit never reruns checked validation, reselects
+hoisted roots, reconstructs checked data or walks expressions to prove cached
+output complete. Correctness belongs to the producer; invalidation belongs to
+the source/import key and explicit format versions.
 
 The coordinator captures each module's report count immediately before checked
 cache lookup, after parsing and canonicalization reports have been appended.
@@ -4244,97 +4238,25 @@ data emitter. The checked cache must not store native pointer-width padding,
 static refcount words, allocation headers, or any other runtime `RocStr` layout
 bytes.
 
-### Checking dependencies and inference reuse
+### Checked cache identity and native checking interfaces
 
-A checking dependency is distinct from a checked module's implementation
-identity. The latter continues to include the complete source and imported
-implementations. It names evaluated constants, procedure templates, lowering
-inputs and test results. Equality of checking dependencies authorizes reuse of
-inference only; it never authorizes reuse of those implementation results.
+There is one completed type-checking/evaluation cache entry per module and full
+implementation identity. Its key includes source inputs and imported module
+identities. The entry stores the typed source environment and finalized checked
+artifact together, once. There is no separate inference-result cache and no
+shared-environment file or history index. An imported implementation edit
+invalidates the importer's complete checked entry even when its types remain
+unchanged; a hit skips checking and restores evaluated constants together.
 
-Checking commits its import-facing inputs while the solved source store is
-still available. These inputs include exposed names and their value/type
-classification, declaration and method bindings, complete copied schemes
-(including descriptor flags and generated-codec requirements), nominal backing
-templates, declaration annotations and their argument-position meaning,
-generated-method and hosted-declaration classifications, invoking-callable
-results, diagnostic hosted origins, and the results that govern stored-constant
-eligibility. The ordered imports and type-owner bindings are part of
-the dependency; methods come from the type owner's declaring module alone. An implementation edit can change one of these results without
-changing a printed type signature.
-
-Module ownership is a parameter of reusable inference. A checking dependency
-records the ordered owner bindings and their equality relationships, separately
-from the current owners' deep content hashes. Two distinct current owners never
-become one owner merely because they commit equal checking interfaces.
-Recursive type graphs retain identity sharing and cycles. Import cycles remain
-the explicitly rejected edges described under Module Completion Boundary.
-
-The inference-result cache stores the solved source environment together with
-the checker-selected commit inputs, before evaluation. Its key includes
-the module's own source inputs, validation (including the source-pin
-validation input canonicalization reported against) and resolution context,
-and the checking dependencies it consumed. Serialized references retain their explicit
-owner and declaration bindings; admission must establish those bindings against
-the current dependency commits. Equality of a signature, a name or an
-incidental node index is never a license to substitute a declaration. Source
-regions that are retained as checking input participate in admission as well.
-
-The producer assigns declaration-reference slots while committing its checking
-interface. Slots are first-encounter ordinals in the interface's deterministic
-traversal: sorted exposures, declared types and methods, and their binding and
-annotation children. They are scoped to that complete interface, not global
-identities or a name-matching scheme. The commit carries a parallel table
-from slot to current CIR node. The digest encodes slots and their checking results,
-never the table's incidental CIR indices. Changed traversal structure or checking
-results changes the interface and invalidates importers. Builtin references remain
-fixed within the compiler compatibility domain.
-
-An inference capsule carries the old dependency reference tables and their owner
-parameters. Admission establishes equal interfaces and owner equality partitions
-before translating each retained foreign reference through old node -> committed
-slot -> current node. Translation covers CIR value, associated, nominal, pattern
-and annotation references, suffix and hosted targets, nominal
-and alias source declarations, record defaults, and their type-store indices.
-Dispatch evidence's type variables and relations are local to the stored solved
-graph and are preserved; only their foreign declaration locators change. A
-reference without a committed correspondence rejects the optional capsule. No
-name, printed signature or numerical coincidence supplies a missing mapping.
-This relocation changes no solved type relationship or dispatch decision.
-Admission indexes the old owner parameters once, preserving their first
-occurrence and equality partition, then binds each stored dense module identity
-to its current owner ordinal and builtin status. Every foreign reference reads
-that binding directly; it never rescans the owner list. An unavailable owner
-remains unavailable and rejects a reference exactly as a missing slot does.
-
-Diagnostic provenance has a separate admission contract. Stored outcomes retain
-checking problems and canonicalization diagnostics in order, together with all
-reporting data they require. Local source is already an exact cache-key input;
-foreign source-dependent diagnostics require explicit current-source validation
-and otherwise miss. Evaluation diagnostics and empirical exhaustiveness outcomes
-are produced after commit against current implementations. Restored checking
-errors follow ordinary reporting and rejection, including commit's erroneous
-code exclusions; a cache hit cannot turn an error into successful machine code.
-
-A hit binds the inference result to current owners and commits a new checked
-entry against current imported entries. Commit consumes the stored
-root selections and scheme evidence; it neither reruns
-inference nor reconstructs these results. No finalized entry with old imported
-keys is installed under a new key. Evaluation and ordinary checked-entry
-caching then use the new full implementation identity.
-
-Inference cache entries have their own versioned content-addressed admission
-contract in the existing cache infrastructure. Missing, incompatible or corrupt
-entries are cache misses. Dependency diagnostics are produced by each current
-dependency's ordinary compilation. An inference result with checking reports
-is not admitted unless those reports and their current provenance are explicitly
-part of the stored result. Checking outcomes include snapshots, their formatted
-text, checker regions, and pending static-exhaustiveness recipes. Platform-side
-source regions require an exact current-platform-source digest; otherwise the
-capsule misses. Evaluation diagnostics always come from current commit.
-Work counters distinguish inference, interface commit, owner and declaration
-reference binding, diagnostic replay and entry commit, so interface creation
-cannot hide a second checking pass.
+The native-code cache also consumes checking-interface fingerprints. These are
+still produced once by fresh checking and stored in the module environment.
+They describe exported schemes, declaration and method bindings, nominal backing
+templates, annotations, generated-codec requirements, hosted declarations,
+callable eligibility, and explicit owner/declaration correspondence. Importers
+combine existing fingerprints rather than rehashing dependency source graphs.
+They are native-code identity inputs, not a second serialized inference result
+or a payload-integrity checksum. Changing this independent native-code reuse
+contract requires its own correctness and performance evaluation.
 
 Stored-constant eligibility of a foreign callable is a producer result. Checking
 scans the own body of each module-global definition and of each method
@@ -12937,13 +12859,13 @@ site to any family below must classify it here.
 
 Other solved-graph mutations:
 
-- `Store.rebindSourceReferences`—mechanism: inference-cache declaration
-  relocation (Checking dependencies and inference reuse). Equal producer
-  interfaces establish the declaration correspondence before this store-owned
-  operation translates nominal/alias/default locators and the nominal lookup
-  index. It preserves every variable, equivalence class, descriptor flag,
-  structural edge, and dispatch decision. It also normalizes the private
-  import-facing type mapping to producer slots before hashing it.
+- `Store.rebindSourceReferences`—mechanism: checking-interface declaration
+  normalization (Checked cache identity and native checking interfaces). The
+  producer establishes declaration slots before this store-owned operation
+  normalizes nominal/alias/default locators and the nominal lookup index in
+  its private import-facing type mapping. It preserves every variable,
+  equivalence class, descriptor flag, structural edge, and dispatch decision.
+  The normalized mapping contributes to the native checking-interface digest.
 
 - `checkConcreteBuiltinNumeral`—mechanism: Concrete Builtin Numeral
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction

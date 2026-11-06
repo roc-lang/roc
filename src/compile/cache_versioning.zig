@@ -26,8 +26,6 @@ const PlatformPairing = check.CheckedArtifact.PlatformPairing;
 pub const Entry = enum {
     /// One fully checked module: an env body and an artifact body.
     checked_module,
-    /// Solved source and checker-owned publication inputs, before evaluation.
-    inference,
     /// One exact platform/app composition's changed columns, written in the
     /// checked-module envelope with an empty env body.
     platform_pairing,
@@ -50,11 +48,6 @@ const canonicalized_envelope_version: u32 = 3;
 /// The running compiler's admission hash for `entry`.
 pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
     return comptime switch (entry) {
-        .inference => compose(
-            "roc-inference-entry-v1",
-            &.{ 2, check.CheckingDependencies.format_version },
-            &.{ module_env_layout, check.rootLayoutVersionHash(check.InferenceOutput.Serialized, 1) },
-        ),
         .checked_module => compose(
             "roc-checked-module-entry-v1",
             &.{checked_envelope_version},
@@ -118,7 +111,6 @@ fn splitmix64(x: u64) u64 {
 test "every entry kind has a distinct admission hash" {
     const hashes = [_][32]u8{
         entryVersionHash(.checked_module),
-        entryVersionHash(.inference),
         entryVersionHash(.platform_pairing),
         entryVersionHash(.canonicalized_module),
     };
