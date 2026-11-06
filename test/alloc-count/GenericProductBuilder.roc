@@ -1,6 +1,6 @@
 GenericProductBuilder := {}.{
     Builder(a) : { items : List(a), depths : List(U64) }
-    
+
     push : Builder(a), a -> Try({ builder : Builder(a), id : U64 }, [Full])
     push = |builder, item| {
         { items, depths } = builder
