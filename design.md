@@ -1594,7 +1594,15 @@ formal-flow cycle—growth that never returns to its origin stays finite—or
 when a mention on a declaration cycle carries a variable that is no formal of
 the mentioning declaration, which every expansion would mint fresh. Rejected
 declarations report `invalid_nominal_decl_recursion` with the `growing_args`
-kind and are poisoned exactly like the recursion-shape kinds. Everything this
+kind and are poisoned exactly like the recursion-shape kinds. A declaration is
+also invalid when two of its own formals share a formal-flow component: a trip
+around that cycle brings one formal back as the other, as in
+`Flip(a, b) := [End, Link(a, b, Flip(b, a))]`. The set of instantiations is
+finite there, but the rule for every recursion, of types and of definitions
+alike, is that type parameters pass through unchanged (Polymorphic Recursion),
+and a function over such a type could only walk it by reordering its own type
+variables. These declarations report the `reordered_args` kind and are
+poisoned the same way. Everything this
 rule admits terminates in Monotype backing instantiation: formal arguments
 resolve to the enclosing instance's own cells, closed arguments memoize once
 per instantiation context, and growing edges descend the formal-flow
@@ -4692,8 +4700,10 @@ reference to an unannotated member unifies monomorphically with the member's
 in-flight type (call-site constraints flow into the inferred scheme), unannotated
 members' top-level lambdas stay in the frame instead of generalizing on their
 own, and the whole group generalizes at the frame's boundary. References to
-annotated members instantiate the pre-declared scheme, preserving sound
-polymorphic recursion for annotated defs. The same rule applies to
+annotated members instantiate the pre-declared scheme, so a recursive use is
+typed like any other use; which instantiations a recursion may make is decided
+once the module's types are settled (Polymorphic Recursion). The same rule
+applies to
 block-local `s_decl` functions: each local function decl is a binding group
 of one with its own rank frame, and annotated (type-var-free) locals
 pre-declare their scheme. An unannotated local's lambda stays in that frame
@@ -4804,6 +4814,73 @@ the scheme quantifies, solved to anything other than a variable, a closed
 row, or a row's extension, is an invariant violation, since the annotation's rigids and
 bounded rows admit nothing else, and a use still unrelated when the module
 finishes checking is one too.
+
+### Polymorphic Recursion
+
+A recursion must pass its own type variables along unchanged. A generic
+definition that reaches itself again, directly, through other definitions, or
+through a dispatch target, at types other than the ones it started with is
+rejected:
+
+```roc
+depth : U64, a -> U64
+depth = |n, x| if n == 0 0 else 1 + depth(n - 1, [x])
+
+swap : U64, a, b -> U64
+swap = |n, x, y| if n == 0 0 else 1 + swap(n - 1, y, x)
+```
+
+This is the rule nominal type declarations follow for their own recursion (a
+recursive use of a nominal type passes each type parameter through unchanged,
+or applies it to a type with no type variables), stated for definitions.
+
+`depth` at `Str` uses `depth` at `List(Str)`, which uses it at
+`List(List(Str))`, and how far that goes is a runtime value. Both lowering
+strategies need the set of instantiations a program makes to be finite and
+known when it is compiled: `.lss` lowers one specialization per instantiation,
+and `.boxy` emits one table of type facts per instantiation. `swap` makes only
+two instantiations, but the rule is stated on the recursion rather than on
+that count so that it stays simple to state and to check: around a recursion,
+every type variable comes back as itself.
+
+The rule is decided from data checking already records. Every use of a
+generic definition records the type it gave each of the definition's
+quantified variables (the scheme-use pairs). Inside another generic
+definition those types are written over that definition's own variables, so
+the records are a graph over type variables: variable `u` flows into variable
+`v` when some use gave `v` a type that mentions `u`. The flow *grows* when
+that type is more than `u` itself. A strongly connected component of the
+graph that contains a flow is a recursion, and it is rejected when
+
+- a flow inside it grows, or
+- it contains two variables of one definition.
+
+Nothing else is rejected. A use at a type that mentions none of the using
+definition's variables makes no flow, so a recursive use at a closed type
+(`restart(count - 1, 5.U64)` inside `restart : U64, a -> U64`) is accepted:
+it reaches one further instantiation and stays there. A use at a larger type
+outside any recursion (`List.len([x])` in a generic body) is an ordinary
+instantiation. Mutually recursive definitions whose variables correspond one
+to one, such as a walk over a tree and a walk over its list of children, are
+accepted, because each component then holds one variable per definition.
+
+The graph is over uses, not names, so it sees every way a definition reaches
+itself: a name reference, a function value, a method called with method
+syntax, and a method selected to discharge a requirement of some other use.
+The name-reference graph that orders binding groups cannot, since a dispatch
+target is only known once the receiver's type is.
+
+`Check.rejectPolymorphicRecursion` runs once per module on the settled state,
+after every use's types are final and before the erroneous-value sweep. The
+uses it rejects are the ones that make a growing flow inside a rejected
+component, or a flow between two variables of one definition; a component
+that joins two variables of one definition only by way of other definitions
+has no such single use, and its first recorded use stands for it. Each is
+reported as Polymorphic Recursion at the use and becomes a runtime error, as
+for any other rejected use; the definitions keep their schemes. Imported
+definitions take no part: a module's uses of an imported scheme give its
+variables types over the module's own variables, never the reverse, so no
+cycle passes through another module.
 
 ### Value Bindings Generalize By Expression
 
@@ -8543,8 +8620,9 @@ Only a checked recursive reference whose recorded substitution names the same
 live classes as the active specialization's substitution may join an
 in-progress specialization whose interface its fresh cells have not yet joined.
 Thus an annotated identity recursion joins its active specialization, while a
-legal polymorphically recursive call with a different substitution remains a
-fresh specialization. Every draft function and globally reserved root records
+recursive call with a different substitution that checking accepts (one at a
+closed type; Polymorphic Recursion rejects the rest) remains a fresh
+specialization. Every draft function and globally reserved root records
 the owner that created it, forming an explicit active ownership tree, and the
 reference names the in-progress specialization of the same procedure, with the
 same evidence, on that chain. Every other request—a non-recursive scheme
@@ -9010,7 +9088,11 @@ completed loops or continuations back through general normalization. Calls stay
 opaque; it cannot discover call patterns, emit workers, or reopen the
 specialization graph. Existing branch structure and shared continuations remain
 shared rather than being distributed into branch arms. Statement suffixes are
-borrowed source spans, not repeatedly copied sequences.
+borrowed source spans, not repeatedly copied sequences. An
+`uninitialized_payload` loop initializer is not a value and evaluates nothing,
+so no clone, this one included, names it with a strict binding: it stays a
+direct initial value of its own loop, naming that loop's emitted flag
+parameter, which is the only position LIR lowering reads it from.
 
 The rewrite is lexical: it carries the selected exit ABI while traversing the
 owning loop body and rewrites every owned `break`, including those in branch
@@ -11611,8 +11693,8 @@ requirements were already present in the declared annotation and need no
 replay. An annotated in-flight recursive reference remains an internal edge
 through the declared scheme; the enclosing body's own requirements cover that
 implementation cycle, so it is not replayed as a new external use. Together
-these rules cover forward and polymorphically recursive lookup paths without
-making an annotation erase requirements inferred from its body.
+these rules cover forward and recursive lookup paths without making an
+annotation erase requirements inferred from its body.
 
 Predeclared scheme uses are recorded against the binding's own scheme. The
 predeclared scheme is a disjoint copy of the annotation, and the body can
@@ -16031,6 +16113,17 @@ less the binders the site itself binds. A site's needs propagate to its lexical
 parent the same way, and the walk records which site binds each binder so the
 subtraction is exact. Recursive selections make this a least fixpoint, solved
 after the walk over the recorded selections.
+
+Monotype's capture identity for a nested procedure (lambda, closure, or local
+procedure) is the types, in the requesting frame, of the binders its site's
+runtime captures list, in ascending CaptureId order (the order of lifted
+capture slots). A lambda that captures nothing itself but calls a local
+procedure therefore differs between two enclosing instantiations whenever that
+procedure's captures do, and a local procedure does not differ on in-scope
+binders it never reads. Two binder kinds in the list contribute no frame
+value: a scheme alias, whose uses lower the callable it names, and a hoisted
+constant's binder, which is a frame local only while its own root lowers and
+is otherwise read through the ConstStore.
 Stored function evidence remains graph-free across root and cache boundaries.
 Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and
@@ -24399,13 +24492,23 @@ added `LirProcSpec.ret_desc`.
 
 A viewed layout store answers every read-only query the producing store
 answers, including `contentDigest`, which backends use to name refcount
-helpers. The image therefore carries `Store.recursive_layout_keys`, the
-recursive-graph key of every cyclic committed layout, as an ordinary array;
-the digest of a cyclic layout hashes that key. The view leaves the interning
-tables empty, since a view never commits layouts. A commit records a key only
-together with the layout it creates, so a layout has at most one key and a
-memoized digest never depends on a key recorded after it: digest memos live
-for their store's whole lifetime and take in newly recorded keys as they go.
+helpers. A content digest is a function of the committed layouts alone: the
+digest cache reduces every layout a query reaches through the shared
+recursive-type reduction (`base.recursive_digest`), so a cyclic layout
+digests as its position in its group's coarsest bisimulation, and layouts
+that unfold to the same runtime representation digest identically however
+they were committed. The image therefore carries no digest data. The view
+leaves the interning tables and the commit's recursive-graph keys empty,
+since a view never commits layouts. Those keys identify logical layout
+graphs, not layouts: a graph whose recursion box is explicit and one whose
+box the commit inserts have different keys and the same layout. Structural
+interning gives equal acyclic layouts one index, but a cyclic layout is
+built in raw slots of its own, so a commit that creates cyclic layouts looks
+each new layout's digest up among the layouts earlier such commits created
+and among its own, and commits again with every duplicate redirected to the
+existing layout. Each runtime representation therefore has one layout index,
+which is what lets refcount helper names and layout-keyed procedure
+identities treat equal digests as equal layouts.
 
 The producer of a copied LirImage states which of two byte contracts the image
 has. A *persisted* image is one whose bytes are written into a file that
