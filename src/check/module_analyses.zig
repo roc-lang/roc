@@ -43,9 +43,13 @@ const TemplateExhaustivenessSites = checked_artifact.TemplateExhaustivenessSites
 const CheckedExhaustivenessSiteTable = checked_artifact.CheckedExhaustivenessSiteTable;
 const CIR = @import("can").CIR;
 const TemplateDemandGraph = checked_artifact.TemplateDemandGraph;
+const TemplateDemandNode = checked_artifact.TemplateDemandNode;
 const TemplateDemandComponent = checked_artifact.TemplateDemandComponent;
 const SchemeVarDemand = checked_artifact.SchemeVarDemand;
 const LiteralGraph = checked_artifact.LiteralGraph;
+const LiteralNodeEdges = checked_artifact.LiteralNodeEdges;
+const LiteralPoolHolders = checked_artifact.LiteralPoolHolders;
+const LiteralComponentOrder = checked_artifact.LiteralComponentOrder;
 const LiteralComponent = checked_artifact.LiteralComponent;
 const LiteralArgumentDemand = checked_artifact.LiteralArgumentDemand;
 const UnitLiteralConversions = checked_artifact.UnitLiteralConversions;
@@ -704,63 +708,140 @@ pub const ModuleAnalyses = struct {
             checked_artifact.checkedArtifactInvariant("an iterator plan had no resolution", .{});
     }
 
-    /// The evidence of use site `site`: the first template in template order
-    /// that resolved it, otherwise the module's; null when no analysis
-    /// recorded evidence for it.
-    pub fn siteEvidence(self: *ModuleAnalyses, dispatch: CheckedDispatch, site: u32) Allocator.Error!?checked_artifact.SiteEvidenceLookup {
+    /// The template whose resolution resolves plan `plan` (`planResolution`),
+    /// or null when the module's does.
+    pub fn planResolver(self: *ModuleAnalyses, dispatch: CheckedDispatch, plan: static_dispatch.StaticDispatchPlanId) Allocator.Error!?u32 {
+        self.assertPublished();
+        const index = try self.dispatchIndex(dispatch);
+        for (index.planSites(plan)) |reach| {
+            const template = reach.template orelse continue;
+            if ((try self.templateDispatch(dispatch, @fromBackingInt(template))).plan(plan) != null) return template;
+        }
+        return null;
+    }
+
+    /// The template whose resolution holds use site `site`'s evidence
+    /// (`siteEvidence`), or null when no template's does.
+    pub fn siteResolver(self: *ModuleAnalyses, dispatch: CheckedDispatch, site: u32) Allocator.Error!?u32 {
         self.assertPublished();
         const index = try self.dispatchIndex(dispatch);
         for (index.siteTemplates(site)) |reach| {
-            const template: canonical.CheckedProcedureTemplateId = @fromBackingInt(reach.template);
-            if ((try self.templateDispatch(dispatch, template)).site(site)) |entry| return .{ .entry = entry.*, .owner = static_dispatch.EvidenceOwner.forTemplate(template) };
+            if ((try self.templateDispatch(dispatch, @fromBackingInt(reach.template))).site(site) != null) return reach.template;
         }
+        return null;
+    }
+
+    /// The evidence of use site `site`: the first template in template order
+    /// that resolved it, otherwise the module's; null when no analysis
+    /// recorded evidence for it. The module's resolution holds evidence only
+    /// for the defaulted-field expressions' sites and for the sites a
+    /// template's chain deferred, so a site of templates that deferred none
+    /// of it has none there.
+    pub fn siteEvidence(self: *ModuleAnalyses, dispatch: CheckedDispatch, site: u32) Allocator.Error!?checked_artifact.SiteEvidenceLookup {
+        self.assertPublished();
+        const index = try self.dispatchIndex(dispatch);
+        const reaches = index.siteTemplates(site);
+        var deferred = false;
+        for (reaches) |reach| {
+            const template: canonical.CheckedProcedureTemplateId = @fromBackingInt(reach.template);
+            const resolved = try self.templateDispatch(dispatch, template);
+            if (resolved.site(site)) |entry| return .{ .entry = entry.*, .owner = static_dispatch.EvidenceOwner.forTemplate(template) };
+            if (resolved.defersSite(site)) deferred = true;
+        }
+        if (reaches.len != 0 and !deferred and !index.isDefaultSite(site)) return null;
         if ((try self.moduleDispatch(dispatch)).site(site)) |entry| return .{ .entry = entry.*, .owner = .module };
         return null;
     }
 
-    /// The module's demand call graph: every template's own demand vector,
-    /// its demand edges and the strongly connected components they form.
+    /// The module's demand call graph: the slots of its templates' own
+    /// demand vectors and edges and of their components.
     pub fn templateDemandGraph(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*TemplateDemandGraph {
         self.assertPublished();
         if (self.template_demand_graph.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
         return self.template_demand_graph.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.demandGraph);
     }
 
+    /// Template `template`'s own demand vector, its edges and the local
+    /// templates they call.
+    fn templateDemandNode(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *TemplateDemandGraph, template: u32) Allocator.Error!*const TemplateDemandNode {
+        return graph.node_slots[template].getOrCompute(self.io, Allocator.Error, DemandNodeRequest{ .analyses = self, .dispatch = dispatch, .template = template }, DemandNodeRequest.compute);
+    }
+
+    const DemandNodeRequest = struct {
+        analyses: *ModuleAnalyses,
+        dispatch: CheckedDispatch,
+        template: u32,
+
+        fn compute(request: DemandNodeRequest) Allocator.Error!*TemplateDemandNode {
+            return checked_artifact.computeTemplateDemandNode(request.analyses.allocator, request.dispatch, request.template);
+        }
+    };
+
     /// The demand vector of procedure template `template`.
     pub fn templateDemands(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error![]const SchemeVarDemand {
         self.assertPublished();
         const raw = template.rowIndex() orelse return &.{};
         const graph = try self.templateDemandGraph(dispatch);
-        const component = try self.templateDemandComponent(dispatch, graph, graph.component_of[raw]);
-        return component.member(graph.member_index[raw]);
+        const component = try self.templateDemandComponent(dispatch, graph, raw);
+        const leader = graph.components.leaderOf(raw).?;
+        return component.member(graph.components.info(leader).memberIndex(raw));
     }
 
-    /// The demand vectors of component `component` of `graph`. Before it
+    /// The leader of template `template`'s demand component. Before
+    /// assigning the template, computes, holding no lock, the slot of every
+    /// unassigned template it reaches, so the assignment reads only finished
+    /// slots.
+    fn templateDemandLeader(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *TemplateDemandGraph, template: u32) Allocator.Error!u32 {
+        if (graph.components.leaderOf(template)) |leader| return leader;
+        const allocator = self.allocator;
+        var seen = std.AutoHashMapUnmanaged(u32, void).empty;
+        defer seen.deinit(allocator);
+        var pending: std.ArrayList(u32) = .empty;
+        defer pending.deinit(allocator);
+        try seen.put(allocator, template, {});
+        try pending.append(allocator, template);
+        while (pending.pop()) |next| {
+            if (graph.components.leaderOf(next) != null) continue;
+            for ((try self.templateDemandNode(dispatch, graph, next)).callees) |callee| {
+                if ((try seen.getOrPut(allocator, callee)).found_existing) continue;
+                try pending.append(allocator, callee);
+            }
+        }
+        graph.components.mutex.lockUncancelable(self.io);
+        defer graph.components.mutex.unlock(self.io);
+        collections.HeldLocks.acquired();
+        defer collections.HeldLocks.released();
+        try graph.components.assign(allocator, template, graph);
+        return graph.components.leaderOf(template).?;
+    }
+
+    /// The demand vectors of the component of template `template`. Before it
     /// claims a component, a consumer demands, holding no claim, every
     /// component it reaches through local edges (callees first) and every
     /// imported template those components call, so a component's
     /// computation only reads finished vectors and never waits on a slot of
     /// its own kind.
-    fn templateDemandComponent(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *TemplateDemandGraph, component: u32) Allocator.Error!*const TemplateDemandComponent {
+    fn templateDemandComponent(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *TemplateDemandGraph, template: u32) Allocator.Error!*const TemplateDemandComponent {
+        const component = try self.templateDemandLeader(dispatch, graph, template);
         if (graph.component_slots[component].peek()) |done| return done;
         const allocator = self.allocator;
-        var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, graph.component_slots.len);
+        var visited = std.AutoHashMapUnmanaged(u32, void).empty;
         defer visited.deinit(allocator);
         var order: std.ArrayList(u32) = .empty;
         defer order.deinit(allocator);
         const Frame = struct { component: u32, next_callee: u32 };
         var frames: std.ArrayList(Frame) = .empty;
         defer frames.deinit(allocator);
-        visited.set(component);
+        try visited.put(allocator, component, {});
         try frames.append(allocator, .{ .component = component, .next_callee = 0 });
         while (frames.items.len != 0) {
             const frame = &frames.items[frames.items.len - 1];
-            const callees = graph.componentCallees(frame.component);
+            const callees = graph.components.info(frame.component).callees;
             if (frame.next_callee < callees.len) {
                 const callee = callees[frame.next_callee];
                 frame.next_callee += 1;
-                if (visited.isSet(callee) or graph.component_slots[callee].peek() != null) continue;
-                visited.set(callee);
+                if (graph.component_slots[callee].peek() != null) continue;
+                if ((try visited.getOrPut(allocator, callee)).found_existing) continue;
                 try frames.append(allocator, .{ .component = callee, .next_callee = 0 });
                 continue;
             }
@@ -768,7 +849,7 @@ pub const ModuleAnalyses = struct {
             _ = frames.pop();
         }
         for (order.items) |next| {
-            for (graph.componentMembers(next)) |member| for (graph.templateEdges(member)) |edge| switch (edge.callee) {
+            for (graph.components.info(next).members) |member| for (graph.finishedNode(member).edges) |edge| switch (edge.callee) {
                 .imported => |callee| _ = try checked_artifact.importedTemplateDemands(dispatch, callee),
                 .local => {},
             };
@@ -777,44 +858,126 @@ pub const ModuleAnalyses = struct {
         return graph.component_slots[component].peek().?;
     }
 
-    /// The module's literal call graph: every edge its bodies hold, each
-    /// scheme's own open literals, and the strongly connected components of
-    /// the edges between templates.
+    /// The module's literal call graph (`LiteralGraph`): what of it needs no
+    /// dispatch resolution, and the slots of the rest.
     pub fn literalGraph(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*LiteralGraph {
         self.assertPublished();
         if (self.literal_graph.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
         return self.literal_graph.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.literalGraph);
     }
 
+    /// Node `node`'s edges, its own open literals and the local schemes its
+    /// edges instantiate.
+    pub fn literalNode(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph, node: u32) Allocator.Error!*const LiteralNodeEdges {
+        self.assertPublished();
+        return graph.node_slots[node].getOrCompute(self.io, Allocator.Error, LiteralNodeRequest{ .analyses = self, .dispatch = dispatch, .graph = graph, .node = node }, LiteralNodeRequest.compute);
+    }
+
+    const LiteralNodeRequest = struct {
+        analyses: *ModuleAnalyses,
+        dispatch: CheckedDispatch,
+        graph: *LiteralGraph,
+        node: u32,
+
+        fn compute(request: LiteralNodeRequest) Allocator.Error!*LiteralNodeEdges {
+            return checked_artifact.computeLiteralNodeEdges(request.analyses.allocator, request.dispatch, request.graph, request.node);
+        }
+
+        fn pool(request: LiteralNodeRequest) Allocator.Error!*LiteralPoolHolders {
+            return checked_artifact.computeLiteralPoolHolders(request.analyses.allocator, request.dispatch, request.graph, request.node);
+        }
+
+        fn modulePool(request: LiteralNodeRequest) Allocator.Error!*LiteralPoolHolders {
+            return checked_artifact.computeLiteralModulePoolHolders(request.analyses.allocator, request.dispatch, request.graph);
+        }
+
+        fn order(request: LiteralNodeRequest) Allocator.Error!*LiteralComponentOrder {
+            return checked_artifact.computeLiteralComponentOrder(request.analyses.allocator, request.dispatch, request.graph);
+        }
+    };
+
+    /// The first node, in node order, whose body reaches evidence node `id`;
+    /// null when no literal walk reaches it.
+    pub fn literalEvidenceHolder(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph, id: static_dispatch.EvidenceNodeId) Allocator.Error!?u32 {
+        self.assertPublished();
+        const holders = if (id.owner.template()) |template| blk: {
+            const raw = template.rowIndex() orelse return null;
+            break :blk try graph.pool_slots[raw].getOrCompute(self.io, Allocator.Error, LiteralNodeRequest{ .analyses = self, .dispatch = dispatch, .graph = graph, .node = raw }, LiteralNodeRequest.pool);
+        } else try graph.module_pool_slot.getOrCompute(self.io, Allocator.Error, LiteralNodeRequest{ .analyses = self, .dispatch = dispatch, .graph = graph, .node = graph.defaultsNode() }, LiteralNodeRequest.modulePool);
+        return holders.holder(id);
+    }
+
+    /// The node holding edge `edge`, or null when no body reaches it.
+    pub fn literalEdgeHolder(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph, edge: checked_artifact.LiteralEdge) Allocator.Error!?u32 {
+        return switch (edge) {
+            .node => |id| self.literalEvidenceHolder(dispatch, graph, id),
+            .use => |expr| checked_artifact.literalUseHolder(dispatch, graph, expr),
+            .literal => null,
+        };
+    }
+
+    /// Every component of the literal graph, by leader, callees first.
+    pub fn literalComponentOrder(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph) Allocator.Error!*const LiteralComponentOrder {
+        self.assertPublished();
+        return graph.order_slot.getOrCompute(self.io, Allocator.Error, LiteralNodeRequest{ .analyses = self, .dispatch = dispatch, .graph = graph, .node = graph.defaultsNode() }, LiteralNodeRequest.order);
+    }
+
+    /// The leader of node `node`'s component. Before assigning the node,
+    /// computes, holding no lock, the slot of every unassigned node it
+    /// reaches, so the assignment reads only finished slots.
+    fn literalLeader(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph, node: u32) Allocator.Error!u32 {
+        if (graph.leaderOf(node)) |leader| return leader;
+        const allocator = self.allocator;
+        var seen = std.AutoHashMapUnmanaged(u32, void).empty;
+        defer seen.deinit(allocator);
+        var pending: std.ArrayList(u32) = .empty;
+        defer pending.deinit(allocator);
+        try seen.put(allocator, node, {});
+        try pending.append(allocator, node);
+        while (pending.pop()) |next| {
+            if (graph.leaderOf(next) != null) continue;
+            for ((try self.literalNode(dispatch, graph, next)).callees) |callee| {
+                if ((try seen.getOrPut(allocator, callee)).found_existing) continue;
+                try pending.append(allocator, callee);
+            }
+        }
+        graph.components.mutex.lockUncancelable(self.io);
+        defer graph.components.mutex.unlock(self.io);
+        collections.HeldLocks.acquired();
+        defer collections.HeldLocks.released();
+        try graph.components.assign(allocator, node, graph);
+        return graph.leaderOf(node).?;
+    }
+
     /// The literal requirements, edge arguments and literal argument roots
-    /// of component `component` of `graph`. Before it claims a component, a
+    /// of the component of node `node`. Before it claims a component, a
     /// consumer demands, holding no claim, every component it reaches
     /// through local edges (callees first) and the literal requirements of
     /// every imported scheme those components instantiate, so a component's
     /// computation only reads finished requirements and never waits on a
     /// slot of its own kind.
-    pub fn literalComponent(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph, component: u32) Allocator.Error!*const LiteralComponent {
+    pub fn literalComponent(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph, node: u32) Allocator.Error!*const LiteralComponent {
         self.assertPublished();
+        const component = try self.literalLeader(dispatch, graph, node);
         if (graph.component_slots[component].peek()) |done| return done;
         const allocator = self.allocator;
-        const components = &graph.components;
-        var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, graph.component_slots.len);
+        var visited = std.AutoHashMapUnmanaged(u32, void).empty;
         defer visited.deinit(allocator);
         var order: std.ArrayList(u32) = .empty;
         defer order.deinit(allocator);
         const Frame = struct { component: u32, next_callee: u32 };
         var frames: std.ArrayList(Frame) = .empty;
         defer frames.deinit(allocator);
-        visited.set(component);
+        try visited.put(allocator, component, {});
         try frames.append(allocator, .{ .component = component, .next_callee = 0 });
         while (frames.items.len != 0) {
             const frame = &frames.items[frames.items.len - 1];
-            const callees = components.componentCallees(frame.component);
+            const callees = graph.componentInfo(frame.component).callees;
             if (frame.next_callee < callees.len) {
                 const callee = callees[frame.next_callee];
                 frame.next_callee += 1;
-                if (visited.isSet(callee) or graph.component_slots[callee].peek() != null) continue;
-                visited.set(callee);
+                if (graph.component_slots[callee].peek() != null) continue;
+                if ((try visited.getOrPut(allocator, callee)).found_existing) continue;
                 try frames.append(allocator, .{ .component = callee, .next_callee = 0 });
                 continue;
             }
@@ -823,7 +986,7 @@ pub const ModuleAnalyses = struct {
         }
         const owner = dispatch.source.key.digest();
         for (order.items) |next| {
-            for (components.componentMembers(next)) |member| for (graph.nodeEdges(member)) |edge| switch (edge.callee) {
+            for (graph.componentInfo(next).members) |member| for (graph.finishedNode(member).edges) |edge| switch (edge.callee) {
                 .template => |template| if (!template.artifact.eql(owner)) {
                     if (try dispatch.importedView(template.artifact)) |view| _ = try view.dispatch().templateLiteralRequirements(template.template);
                 },
@@ -847,13 +1010,13 @@ pub const ModuleAnalyses = struct {
 
     /// The literal argument roots procedure template `template`'s edges read,
     /// ascending. Demands, holding no claim, the component of every edge the
-    /// template holds before claiming.
+    /// template reaches before claiming.
     pub fn templateLiteralArgumentDemand(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: u32) Allocator.Error![]const checked_artifact.ComptimeRootKey {
         self.assertPublished();
         const graph = try self.literalGraph(dispatch);
         if (graph.demand_slots[template].peek()) |done| return done.roots;
-        for (graph.held[graph.held_starts[template]..graph.held_starts[template + 1]]) |edge| {
-            _ = try self.literalComponent(dispatch, graph, graph.components.component_of[graph.edges[edge].holder]);
+        for ((try self.literalNode(dispatch, graph, template)).reached) |reached| {
+            _ = try self.literalComponent(dispatch, graph, reached.holder);
         }
         return (try graph.demand_slots[template].getOrCompute(self.io, Allocator.Error, LiteralDemandRequest{ .allocator = self.allocator, .graph = graph, .template = template }, LiteralDemandRequest.compute)).roots;
     }

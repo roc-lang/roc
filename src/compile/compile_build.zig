@@ -940,7 +940,7 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.cancel_request = self.cancel_request;
-        coord.runtime_lowering = self.runtime_lowering;
+        if (self.runtime_lowering) |config| coord.setRuntimeLowering(config);
         coord.debug_observer = self.debug_observer;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.boxy_object_lowering = self.boxy_object_lowering;
@@ -958,7 +958,7 @@ pub const BuildEnv = struct {
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
         if (self.coordinator) |coordinator| {
             std.debug.assert(coordinator.program_session == null);
-            coordinator.runtime_lowering = config;
+            coordinator.setRuntimeLowering(config);
         }
         self.runtime_lowering = config;
     }

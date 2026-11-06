@@ -1167,20 +1167,30 @@ pub const PackageState = struct {
 /// configuration names no location for: every store into it records a store
 /// failure and every probe of it a miss.
 const CacheEntryDirs = struct {
-    checked: ?[]u8 = null,
+    /// Checked entries by the address space their compile-time evaluation
+    /// ran in, indexed by `TargetUsize`.
+    checked: [2]?[]u8 = @splat(null),
     inference: ?[]u8 = null,
     canonicalized: ?[]u8 = null,
-    platform_pairing: ?[]u8 = null,
+    /// Platform pairings by the address space their evaluation ran in,
+    /// indexed by `TargetUsize`.
+    platform_pairing: [2]?[]u8 = @splat(null),
 
     fn resolve(allocator: Allocator, cache_manager: ?*CacheManager) Allocator.Error!CacheEntryDirs {
         const manager = cache_manager orelse return .{};
         if (!manager.config.enabled) return .{};
         var dirs: CacheEntryDirs = .{};
         errdefer dirs.deinit(allocator);
-        dirs.checked = manager.config.getCheckedArtifactCacheDir(allocator) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.NoHomeDirectory => null,
-        };
+        for (base.target.TargetUsize.all()) |address_space| {
+            dirs.checked[@backingInt(address_space)] = manager.config.getCheckedArtifactCacheDir(allocator, address_space) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NoHomeDirectory => null,
+            };
+            dirs.platform_pairing[@backingInt(address_space)] = manager.config.getPlatformPairingCacheDir(allocator, address_space) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NoHomeDirectory => null,
+            };
+        }
         dirs.inference = manager.config.getInferenceCacheDir(allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoHomeDirectory => null,
@@ -1189,18 +1199,14 @@ const CacheEntryDirs = struct {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoHomeDirectory => null,
         };
-        dirs.platform_pairing = manager.config.getPlatformPairingCacheDir(allocator) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.NoHomeDirectory => null,
-        };
         return dirs;
     }
 
     fn deinit(self: *CacheEntryDirs, allocator: Allocator) void {
-        if (self.checked) |dir| allocator.free(dir);
+        for (self.checked) |maybe_dir| if (maybe_dir) |dir| allocator.free(dir);
         if (self.inference) |dir| allocator.free(dir);
         if (self.canonicalized) |dir| allocator.free(dir);
-        if (self.platform_pairing) |dir| allocator.free(dir);
+        for (self.platform_pairing) |maybe_dir| if (maybe_dir) |dir| allocator.free(dir);
         self.* = .{};
     }
 };
@@ -2200,6 +2206,10 @@ pub const Coordinator = struct {
     /// which requires a checked app root.
     checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
+    /// The pointer width of the runtime program this compilation lays its
+    /// compile-time values into, set with `runtime_lowering` and kept while
+    /// a platform evaluates without it.
+    program_address_space: base.target.TargetUsize = .u64,
     /// The strategy whose compile-time evaluator completes every module's
     /// compile-time roots: `.boxy` under `--specialize=no`, `.lss`
     /// otherwise (design.md "Caching Under `.boxy`"). It is part of each
@@ -3842,6 +3852,7 @@ pub const Coordinator = struct {
             if (self.checked_program) try objects.offerPending();
         }
         options.cancel_request = self.cancel_request;
+        options.address_space = self.compileTimeAddressSpace();
         options.keep_artifacts = self.keep_compile_time_artifacts;
         options.cached_debug_modules = cached_debug_modules.items;
         if (self.runtime_lowering) |config| {
@@ -3897,6 +3908,22 @@ pub const Coordinator = struct {
         for (entries.items) |entry| try self.commitPreparedModule(entry.mod, &stores);
         try self.writePendingStores(stores.items);
         try unfinalized.commit();
+    }
+
+    /// The address space this compilation's compile-time evaluation runs
+    /// in: the narrower of the compiler host's and the runtime program's.
+    /// Evaluating for a 32-bit program runs out of address space where that
+    /// program would (design.md "Compile-Time Constants").
+    fn compileTimeAddressSpace(self: *const Coordinator) base.target.TargetUsize {
+        if (base.target.TargetUsize.native == .u32) return .u32;
+        return self.program_address_space;
+    }
+
+    /// Configure the runtime program this compilation lowers, and with it
+    /// the address space its compile-time evaluation runs in.
+    pub fn setRuntimeLowering(self: *Coordinator, config: compile_build.RuntimeLoweringConfig) void {
+        self.runtime_lowering = config;
+        self.program_address_space = config.target.target_usize;
     }
 
     fn cacheEnabled(self: *const Coordinator) bool {
@@ -4731,7 +4758,7 @@ pub const Coordinator = struct {
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app).?;
         const app = app_root.mod.checkedArtifact().?;
         const key = cache_key_mod.platformPairingCacheKey(artifact.key, app.key);
-        const directory = self.cache_entry_dirs.platform_pairing orelse {
+        const directory = self.cache_entry_dirs.platform_pairing[@backingInt(self.compileTimeAddressSpace())] orelse {
             manager.recordStoreFailure();
             return;
         };
@@ -4762,7 +4789,7 @@ pub const Coordinator = struct {
     fn installCachedPlatformPairing(self: *Coordinator, paired: *CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) bool {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
-        const directory = self.cache_entry_dirs.platform_pairing orelse return false;
+        const directory = self.cache_entry_dirs.platform_pairing[@backingInt(self.compileTimeAddressSpace())] orelse return false;
         const key = cache_key_mod.platformPairingCacheKey(paired.key, app.key);
         const data = manager.loadFamilyMapped(manager.allocator, .checked, .pairing, key.bytes, directory) orelse return false;
         defer data.deinit(manager.allocator);
@@ -4797,7 +4824,7 @@ pub const Coordinator = struct {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
 
-        const entries_dir = self.cache_entry_dirs.checked orelse {
+        const entries_dir = self.cache_entry_dirs.checked[@backingInt(self.compileTimeAddressSpace())] orelse {
             manager.recordStoreFailure();
             return;
         };
@@ -4902,7 +4929,7 @@ pub const Coordinator = struct {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
 
-        const entries_dir = self.cache_entry_dirs.checked orelse {
+        const entries_dir = self.cache_entry_dirs.checked[@backingInt(self.compileTimeAddressSpace())] orelse {
             manager.stats.recordMiss();
             return false;
         };
@@ -7433,6 +7460,7 @@ pub const Coordinator = struct {
         const ctfe_timing = &local_ctfe_timing;
         var ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
         ctfe_options.strategy = self.specialization_strategy;
+        ctfe_options.address_space = self.compileTimeAddressSpace();
         // Import resolution runs inside the type-check task and records its
         // own diagnostics on the env, after the canonicalize task already
         // reported the ones canonicalization recorded.
@@ -8476,7 +8504,7 @@ test "issue 11389 invalid pairing cache recomposes from immutable modules" {
     defer cold.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 1), cold.platform_pairing_count);
     const config = CacheConfig{ .enabled = true, .cache_dir = cache };
-    const pair_directory = try config.getPlatformPairingCacheDir(allocator);
+    const pair_directory = try config.getPlatformPairingCacheDir(allocator, .u64);
     defer allocator.free(pair_directory);
     const corrupted = try overwriteFilesUnderDir(allocator, cache, pair_directory, .pairing, "invalid pairing");
     try std.testing.expectEqual(@as(usize, 1), corrupted);
@@ -10229,7 +10257,7 @@ test "Coordinator corrupt checked module cache entries compile from source" {
     try std.testing.expect(first.cache.stores > 0);
 
     const config = CacheConfig{ .cache_dir = cache_dir };
-    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
+    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator, .u64);
     defer allocator.free(checked_module_cache_dir);
     const overwritten = try overwriteFilesUnderDir(allocator, cache_dir, checked_module_cache_dir, .checked, "not a checked module cache entry");
     try std.testing.expect(overwritten > 0);
@@ -10259,7 +10287,7 @@ test "Coordinator corrupt checked module cache env relocations compile from sour
     try std.testing.expect(first.cache.stores > 0);
 
     const config = CacheConfig{ .cache_dir = cache_dir };
-    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
+    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator, .u64);
     defer allocator.free(checked_module_cache_dir);
     const corrupted = try corruptCheckedModuleEnvIdentBytesLens(allocator, cache_dir, checked_module_cache_dir);
     try std.testing.expect(corrupted > 0);
@@ -10391,7 +10419,7 @@ const lifted_const_lib_source =
 fn readCheckedModuleCacheEntry(allocator: Allocator, cache_dir: []const u8, key: [32]u8) (CorruptCheckedModuleCacheError || error{NoHomeDirectory})!?[]u8 {
     const io = std.testing.io;
     const config = CacheConfig{ .cache_dir = cache_dir };
-    const entries_dir = try config.getCheckedArtifactCacheDir(allocator);
+    const entries_dir = try config.getCheckedArtifactCacheDir(allocator, .u64);
     defer allocator.free(entries_dir);
     var store = try @import("artifact_store.zig").Store.init(allocator, io, cache_dir);
     defer store.deinit();
