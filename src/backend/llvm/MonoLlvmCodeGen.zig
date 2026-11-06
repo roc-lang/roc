@@ -16083,7 +16083,7 @@ test "a looping helper whose only callees are inlined everywhere is a leaf" {
         next_proc: u32 = 0,
 
         /// `|x| x`: a wrapper.
-        fn identity(self: *@This()) !LirProcSpecId {
+        fn identity(self: *@This()) Allocator.Error!LirProcSpecId {
             const arg = try self.store.addLocal(.{ .layout_idx = .i64 });
             const body = try self.store.addCFStmt(.{ .ret = .{ .value = arg } }, .test_fixture);
             return self.proc(arg, body, &.{});
@@ -16091,7 +16091,7 @@ test "a looping helper whose only callees are inlined everywhere is a leaf" {
 
         /// A loop calling `callee` on every pass, or calling itself when
         /// `callee` is null.
-        fn looping(self: *@This(), callee: ?LirProcSpecId) !LirProcSpecId {
+        fn looping(self: *@This(), callee: ?LirProcSpecId) Allocator.Error!LirProcSpecId {
             const arg = try self.store.addLocal(.{ .layout_idx = .i64 });
             const result = try self.store.addLocal(.{ .layout_idx = .i64 });
             const join: lir.LIR.JoinPointId = @fromBackingInt(self.next_join);
@@ -16114,7 +16114,7 @@ test "a looping helper whose only callees are inlined everywhere is a leaf" {
             return self.proc(arg, body, &.{result});
         }
 
-        fn proc(self: *@This(), arg: LocalId, body: CFStmtId, extra_locals: []const LocalId) !LirProcSpecId {
+        fn proc(self: *@This(), arg: LocalId, body: CFStmtId, extra_locals: []const LocalId) Allocator.Error!LirProcSpecId {
             var locals: [2]LocalId = undefined;
             locals[0] = arg;
             for (extra_locals, 1..) |local, i| locals[i] = local;
