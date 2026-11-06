@@ -4480,8 +4480,11 @@ emitted code, symbol names and compile-time values, so a compiler edit that chan
 them. Keeping different compiler builds' caches apart is the job of the cache
 directory alone: every cache lives under `compat-<id>`, which already names
 the build more finely than any key could. The checking context identity includes import-name
-hashes, resolved import ids, platform requirement context, and explicit root
-requests. A reusable platform module has no app relation in this identity.
+hashes, resolved import ids, platform requirement context, and validation
+mode. It names nothing a command chooses: the root requests a command makes
+of a module by name select among the module's checked compile-time root
+candidates when its root requests are read (`ModuleAnalyses.explicit_roots`),
+so `check`, `build`, `test` and a REPL share one checked entry. A reusable platform module has no app relation in this identity.
 Generated code has a separate identity that includes the exact platform/app
 relation; specialization keys use that identity while
 local checked references retain their immutable module owner. The checked
@@ -5466,8 +5469,10 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   nodes whose dispatch plan cannot run, diagnostic errors, single-source
   calls, the exhaustiveness check checking left at each match
   expression and destructuring pattern, by node, and the module's root
-  requests (`ModuleAnalyses.rootRequests`: its explicit roots and checking
-  mode, which its checking context records, its provided and exposed
+  requests (`ModuleAnalyses.rootRequests`: the explicit roots the
+  compilation reading it requests by name, which its analyses hold and
+  nothing caches, its checking mode, which its checking context records,
+  its provided and exposed
   entrypoints, its platform-required bindings, and its eligible
   compile-time roots: the root table's rows, then every unit's literal
   conversion roots, then every literal component's argument roots, with
@@ -23649,10 +23654,13 @@ checked CIR
   -> store eval result in ConstStore
 ```
 
-An interactive REPL expression is an explicit `.repl_expr` compile-time root
-whose checked body returns `Str.inspect(expression)`. The evaluation helper
-that generated the zero-argument wrapper resolves its asserted body once and
-puts that exact expression identity in the root request;
+An interactive REPL expression is a `.repl_expr` compile-time root whose
+checked body returns `Str.inspect(expression)`. The evaluation helper that
+generated the zero-argument wrapper tells checking which definition it is;
+checking records that definition's body
+(`ModuleEnv.compile_time_executable_roots`) unless it rejected the
+definition, and the module's root table holds one `.repl_expr` root per
+recorded body, whose request carries that exact expression identity;
 `CompileTimeFinalization` consumes the identity directly. Checking retains the zero-argument
 REPL-root context so inspecting an
 uncalled constrained polymorphic function does not force its body, but checking

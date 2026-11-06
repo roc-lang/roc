@@ -5211,12 +5211,6 @@ pub fn addCompileTimeExecutableRootDef(
     });
 }
 
-/// Return the exact body identity supplied for a compile-time executable root.
-pub fn compileTimeExecutableRootBody(self: *const Self, def_idx: CIR.Def.Idx) ?CIR.Expr.Idx {
-    const root_index = self.compile_time_executable_root_indices.get(def_idx) orelse return null;
-    return self.compile_time_executable_roots.items[root_index].body;
-}
-
 fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool, hoist_position: HoistPosition) Allocator.Error!HoistFrameGuard {
     try self.openHoistFrame(expr, binding_rhs, hoist_position);
     return .{
@@ -13241,7 +13235,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 }
 
 /// Record the selected compile-time roots, the promoted local procedures,
-/// the platform requirement solutions and the pending exhaustiveness checks
+/// the compile-time executable roots, the platform requirement solutions and
+/// the pending exhaustiveness checks
 /// into the module's checked outputs. A pending exhaustiveness check's index
 /// in `ModuleEnv.exhaustiveness_obligations` is its checked site id.
 fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
@@ -13255,6 +13250,14 @@ fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
     }
     env.promoted_local_procedures.items.clearRetainingCapacity();
     try env.promoted_local_procedures.items.appendSlice(env.gpa, self.promoted_local_procedures.items);
+    env.compile_time_executable_roots.items.clearRetainingCapacity();
+    try env.compile_time_executable_roots.items.ensureTotalCapacity(env.gpa, self.compile_time_executable_roots.items.len);
+    for (self.compile_time_executable_roots.items) |root| {
+        // A rejected root definition evaluates as the runtime error that
+        // replaced it, so its body is no compile-time root.
+        if (env.store.getExpr(env.store.getDef(root.def).expr) == .e_runtime_error) continue;
+        env.compile_time_executable_roots.items.appendAssumeCapacity(.{ .def = root.def, .body = root.body });
+    }
 
     env.platform_requirement_solutions.items.clearRetainingCapacity();
     env.platform_requirement_identity_vars.items.clearRetainingCapacity();

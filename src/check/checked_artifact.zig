@@ -458,7 +458,7 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
 
 /// The digest of the checking inputs of a module that its imports' and its
 /// app pairing's implementations do not reach: its imports' names, explicit
-/// root requests, validation mode and platform requirement context.
+/// validation mode and platform requirement context.
 pub fn checkingContextPolicyHash(identity: CheckingContextIdentity) [32]u8 {
     var hasher = base.Sha256.init(.{});
     hashCheckingContextPolicy(&hasher, identity, false);
@@ -491,37 +491,7 @@ fn hashCheckingContextPolicy(hasher: *base.Sha256, identity: CheckingContextIden
             hasher.update(&[_]u8{0});
         }
     }
-    hashU32(hasher, @intCast(identity.explicit_roots.len));
-    for (identity.explicit_roots) |root| {
-        hashExplicitRootRequestInput(hasher, root);
-    }
     hashByteSlice(hasher, @tagName(identity.validation));
-}
-
-fn hashExplicitRootRequestInput(
-    hasher: *base.Sha256,
-    root: ExplicitRootRequestInput,
-) void {
-    hashByteSlice(hasher, @tagName(root.kind));
-    hashRootSource(hasher, root.source);
-    hashByteSlice(hasher, @tagName(root.abi));
-    hashByteSlice(hasher, @tagName(root.exposure));
-}
-
-fn hashRootSource(hasher: *base.Sha256, source: RootSource) void {
-    hashByteSlice(hasher, @tagName(source));
-    switch (source) {
-        inline .def, .expr, .statement => |idx| hashU32(hasher, @backingInt(idx)),
-        .required_binding => |idx| hashU32(hasher, idx),
-        .hoisted => |hoisted| {
-            hashU32(hasher, hoisted.index);
-            hashU32(hasher, @backingInt(hoisted.expr));
-        },
-        .literal => |literal| {
-            hashByteSlice(hasher, @tagName(literal));
-            hashU32(hasher, literal.node());
-        },
-    }
 }
 
 fn hashDirectImportArtifactKeys(keys: []const CheckedModuleArtifactKey) [32]u8 {
@@ -565,7 +535,6 @@ pub const CheckingContextIdentity = struct {
     imports: []ImportIdentity = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
-    explicit_roots: []const ExplicitRootRequestInput = &.{},
     /// How the module's compile-time roots were established. An app root
     /// checked without its entrypoint contract reports no problem for a
     /// platform requirement it does not supply, so two compilations of the
@@ -575,7 +544,6 @@ pub const CheckingContextIdentity = struct {
 
     pub const Serialized = extern struct {
         imports: SerializedSlice(ImportIdentity) = .{},
-        explicit_roots: SerializedSlice(ExplicitRootRequestInput) = .{},
         platform_requirement_context: artifact_serialize.SerializedOptional(PlatformRequirementContextKey) = .{},
         platform_app_relation: artifact_serialize.SerializedOptional(PlatformAppRelationKey) = .{},
         validation: artifact_serialize.SerializedScalar(can.Can.Validation, .checking) = .{},
@@ -589,14 +557,11 @@ pub const CheckingContextIdentity = struct {
         module_env: *const ModuleEnv,
         publish_imports: []const PublishImportArtifact,
         platform_requirement_context: ?PlatformRequirementContextKey,
-        explicit_roots: []const ExplicitRootRequestInput,
         validation: can.Can.Validation,
     ) Allocator.Error!CheckingContextIdentity {
         const imported_names = module_env.imports.imports.items.items;
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
         errdefer allocator.free(imports);
-        const roots = try allocator.dupe(ExplicitRootRequestInput, explicit_roots);
-        errdefer allocator.free(roots);
 
         for (imported_names, 0..) |str_idx, i| {
             const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
@@ -613,7 +578,6 @@ pub const CheckingContextIdentity = struct {
         return .{
             .imports = imports,
             .platform_requirement_context = platform_requirement_context,
-            .explicit_roots = roots,
             .validation = validation,
         };
     }
@@ -1190,7 +1154,7 @@ fn moduleRootRequests(allocator: Allocator, owner: ImportedModuleView) Allocator
     var requests = std.ArrayList(RootRequest).empty;
     errdefer requests.deinit(allocator);
 
-    for (context.explicit_roots) |root| {
+    for (dispatch.source.analyses.explicit_roots) |root| {
         if (!explicitRootMatchesCheckedRootKind(procedure_templates, compile_time_roots, root)) continue;
         if (!explicitCompileTimeRootRequestIsEligible(compile_time_roots, root)) continue;
         const source_checked_type = try checkedTypeIdForRootSource(env, bodies, root.source);
@@ -9183,7 +9147,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     };
     _ = try names.internModuleIdentity(&module_identity.stable_hash);
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, &.{}, .checking);
+    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, .checking);
     defer checking_context_identity.deinit(allocator);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
@@ -25870,7 +25834,6 @@ pub const CompileTimeRootTable = struct {
         value_binding_defs: []const CIR.Def.Idx,
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
         selected_hoisted_indices: []const u32,
-        explicit_roots: []const ExplicitRootRequestInput,
         checked_types: *CheckedTypePublication,
         module_index: *const ModuleIndex,
         procedure_templates: *const CheckedProcedureTemplateTable,
@@ -25889,19 +25852,12 @@ pub const CompileTimeRootTable = struct {
         // conversion root after dispatch evidence is finalized.
         const module_env = module.moduleEnvConst();
 
-        for (explicit_roots) |explicit| {
-            if (explicit.kind != .repl_expr) continue;
-            const expr_idx = switch (explicit.source) {
-                .expr => |expr| expr,
-                .def, .statement, .required_binding, .hoisted, .literal => checkedArtifactInvariant(
-                    "compile-time REPL root did not name its checked expression body",
-                    .{},
-                ),
-            };
+        for (module_env.compile_time_executable_roots.items.items) |executable_root| {
+            const expr_idx = executable_root.body;
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .repl_expr,
-                .source = explicit.source,
+                .source = .{ .expr = expr_idx },
                 .pattern = null,
                 .expr = reachedRootExpr(module_index, expr_idx),
                 .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx)),
@@ -32392,7 +32348,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 176);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 175);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -32514,7 +32470,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 123;
+    const serialized_layout_version: u32 = 124;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -34506,7 +34462,6 @@ pub fn loweringViewWithRelations(
 pub const CheckedModuleKeyInputs = struct {
     imports: []const PublishImportArtifact = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
-    explicit_roots: []const ExplicitRootRequestInput = &.{},
     validation: can.Can.Validation = .checking,
 };
 
@@ -34524,7 +34479,6 @@ pub fn checkedModuleKeyFromModuleEnv(
         module_env,
         inputs.imports,
         inputs.platform_requirement_context,
-        inputs.explicit_roots,
         inputs.validation,
     );
     defer checking_context_identity.deinit(allocator);
@@ -34547,7 +34501,6 @@ pub fn inferenceKeyFromModuleEnv(
     module_env: *const ModuleEnv,
     scope_hash: [32]u8,
     platform_requirement_owner: ?u32,
-    explicit_roots: []const ExplicitRootRequestInput,
     validation: can.Can.Validation,
     source_pin_validation: [32]u8,
     missing_public_types: []const []const u8,
@@ -34565,8 +34518,6 @@ pub fn inferenceKeyFromModuleEnv(
     } else hasher.update(&.{0});
     hashByteSlice(&hasher, @tagName(validation));
     hasher.update(&source_pin_validation);
-    hashU32(&hasher, @intCast(explicit_roots.len));
-    for (explicit_roots) |root| hashExplicitRootRequestInput(&hasher, root);
     const imports = module_env.imports.imports.items.items;
     hashU32(&hasher, @intCast(imports.len));
     for (imports, 0..) |name, i| {
@@ -34680,7 +34631,6 @@ pub fn publishFromTypedModule(
         module_env,
         inputs.imports,
         inputs.platform_requirement_context,
-        inputs.explicit_roots,
         inputs.validation,
     );
     errdefer checking_context_identity.deinit(allocator);
@@ -34719,6 +34669,7 @@ pub fn publishFromTypedModule(
     const module_analyses = try ModuleAnalyses.create(allocator, inputs.io, null);
     var module_analyses_owned = true;
     errdefer if (module_analyses_owned) module_analyses.destroy();
+    try module_analyses.attachExplicitRoots(inputs.explicit_roots);
     // Publication reads the nominal representations of the types of every
     // module it imports or resolves against.
     for (inputs.imports) |import| _ = try import.view.checked_types.interfaceCapabilities();
@@ -34815,7 +34766,6 @@ pub fn publishFromTypedModule(
         value_binding_defs,
         selected_hoisted_roots,
         selected_hoisted_indices,
-        inputs.explicit_roots,
         &checked_type_publication,
         module_index,
         &checked_procedure_templates,
@@ -36277,11 +36227,6 @@ test "CheckingContextIdentity serialize/deserialize round-trip (slices + optiona
     defer gpa.free(imports);
     artifact_serialize.poisonSlice(ImportIdentity, imports, 0x5A);
     artifact_serialize.zeroSlicePadding(ImportIdentity, imports);
-    const roots = try gpa.alloc(ExplicitRootRequestInput, 3);
-    defer gpa.free(roots);
-    artifact_serialize.poisonSlice(ExplicitRootRequestInput, roots, 0x3C);
-    artifact_serialize.zeroSlicePadding(ExplicitRootRequestInput, roots);
-
     var prc: PlatformRequirementContextKey = undefined;
     @memset(std.mem.asBytes(&prc), 0x77);
     // Canonicalize padding to match the deterministic serializer.
@@ -36289,7 +36234,6 @@ test "CheckingContextIdentity serialize/deserialize round-trip (slices + optiona
 
     const ident = CheckingContextIdentity{
         .imports = imports,
-        .explicit_roots = roots,
         .platform_requirement_context = prc, // present
         .platform_app_relation = null, // absent
     };
@@ -36297,7 +36241,6 @@ test "CheckingContextIdentity serialize/deserialize round-trip (slices + optiona
     const rt = try artifact_serialize.roundTripForTest(gpa, CheckingContextIdentity, &ident);
     defer gpa.free(rt.buffer);
     try artifact_serialize.expectSlicesByteEqual(ImportIdentity, ident.imports, rt.loaded.imports);
-    try artifact_serialize.expectSlicesByteEqual(ExplicitRootRequestInput, ident.explicit_roots, rt.loaded.explicit_roots);
     try std.testing.expect(rt.loaded.platform_requirement_context != null);
     try std.testing.expectEqualSlices(u8, std.mem.asBytes(&prc), std.mem.asBytes(&rt.loaded.platform_requirement_context.?));
     try std.testing.expectEqual(@as(?PlatformAppRelationKey, null), rt.loaded.platform_app_relation);

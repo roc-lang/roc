@@ -4596,7 +4596,6 @@ pub const Coordinator = struct {
         env: *const ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
-        explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
         validation: can.Can.Validation,
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
         return check.CheckedArtifact.checkedModuleKeyFromModuleEnv(
@@ -4605,7 +4604,6 @@ pub const Coordinator = struct {
             .{
                 .imports = imported_artifacts,
                 .platform_requirement_context = platform_requirement_context,
-                .explicit_roots = explicit_roots,
                 .validation = validation,
             },
         );
@@ -4876,12 +4874,12 @@ pub const Coordinator = struct {
         // source-input identity is complete and the key below is exact.
         std.debug.assert(current_env.fileDependenciesSettled());
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
-        const cache_key = self.checkedModuleCacheKey(current_env, imported_artifacts, platform_requirement_context, explicit_roots, mod.validation) catch {
+        const cache_key = self.checkedModuleCacheKey(current_env, imported_artifacts, platform_requirement_context, mod.validation) catch {
             manager.stats.recordMiss();
             return false;
         };
 
-        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env);
+        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env, explicit_roots);
     }
 
     /// True when `mod` is the registered platform's root module.
@@ -4899,6 +4897,7 @@ pub const Coordinator = struct {
         mod: *ModuleState,
         cache_key: check.CheckedArtifact.CheckedModuleArtifactKey,
         current_env: *ModuleEnv,
+        explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
     ) bool {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
@@ -5041,6 +5040,10 @@ pub const Coordinator = struct {
         };
         var module_analyses_owned = true;
         defer if (module_analyses_owned) module_analyses.destroy();
+        module_analyses.attachExplicitRoots(explicit_roots) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
 
         // Transform E: the artifact's sub-stores alias `artifact_buffer` and the
         // freshly relocated env is injected as its storage. Cross-artifact
@@ -10559,6 +10562,221 @@ test "canonicalized module cache entry survives a change to an imported module" 
     // The changed module's checked entry misses, and so does its importer's,
     // because a checked key folds in its imports' checked keys.
     try std.testing.expect(second.build.cache_misses > 0);
+}
+
+/// What a compilation asks of the modules it checked, beyond checking them.
+const CheckingCommand = enum {
+    /// `roc check`: checking alone.
+    check,
+    /// `roc build`: checking, then the executable's compile-time and runtime
+    /// roots.
+    build,
+    /// A build that also requests one of the app's constants by name, as a
+    /// target configuration or a REPL does.
+    build_with_explicit_root,
+};
+
+/// One inference cache entry: its file name, which its key names, and its
+/// bytes.
+const InferenceEntry = struct {
+    name: []u8,
+    bytes: []u8,
+
+    fn lessThan(_: void, a: InferenceEntry, b: InferenceEntry) bool {
+        return std.mem.lessThan(u8, a.name, b.name);
+    }
+};
+
+fn freeInferenceEntries(allocator: Allocator, entries: []InferenceEntry) void {
+    for (entries) |entry| {
+        allocator.free(entry.name);
+        allocator.free(entry.bytes);
+    }
+    allocator.free(entries);
+}
+
+/// Check the app at `app_path` into `cache_dir` under `command`, and return
+/// every inference entry the cache then holds, sorted by name.
+fn inferenceEntriesAfter(
+    allocator: Allocator,
+    cache_dir: []const u8,
+    app_path: []const u8,
+    command: CheckingCommand,
+) (CheckedModuleCacheRunError || OverwriteFilesUnderDirError || CoreCtx.ReadError || error{NoHomeDirectory})![]InferenceEntry {
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
+    defer cache_manager.deinit();
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_compatibility_id,
+        &cache_manager,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
+    switch (command) {
+        .check, .build => {},
+        .build_with_explicit_root => {
+            var packages = coord.packages.iterator();
+            while (packages.next()) |entry| {
+                const pkg = entry.value_ptr.*;
+                const root = pkg.root_module_id orelse continue;
+                if (!std.mem.eql(u8, pkg.modules.items[root].name, "main")) continue;
+                const names = try allocator.alloc([]const u8, 1);
+                names[0] = try allocator.dupe(u8, "limit");
+                pkg.modules.items[root].explicit_root_ident_names = names;
+            }
+        },
+    }
+    try coord.coordinatorLoop();
+    if (coord.hasUserErrors()) return reportCheckingErrors(&coord);
+    switch (command) {
+        .check => {},
+        .build, .build_with_explicit_root => {
+            try coord.finishCheckedProgram(.executable_artifacts);
+            if (coord.hasUserErrors()) return reportCheckingErrors(&coord);
+        },
+    }
+
+    const config = CacheConfig{ .cache_dir = cache_dir };
+    const inference_cache_dir = try config.getInferenceCacheDir(allocator);
+    defer allocator.free(inference_cache_dir);
+    const paths = try testCachePaths(allocator, cache_dir, inference_cache_dir, .checked);
+    defer {
+        for (paths) |path| allocator.free(path);
+        allocator.free(paths);
+    }
+    var entries = std.ArrayList(InferenceEntry).empty;
+    errdefer {
+        for (entries.items) |entry| {
+            allocator.free(entry.name);
+            allocator.free(entry.bytes);
+        }
+        entries.deinit(allocator);
+    }
+    for (paths) |path| {
+        const bytes = try roc_ctx.readFile(path, allocator);
+        errdefer allocator.free(bytes);
+        const name = try allocator.dupe(u8, std.fs.path.basename(path));
+        try entries.append(allocator, .{ .name = name, .bytes = bytes });
+    }
+    const sorted = try entries.toOwnedSlice(allocator);
+    std.mem.sort(InferenceEntry, sorted, {}, InferenceEntry.lessThan);
+    return sorted;
+}
+
+fn reportCheckingErrors(coord: *Coordinator) error{TestUnexpectedResult} {
+    var reports = coord.iterReports();
+    while (reports.next()) |entry| {
+        if (entry.report.severity.isError()) std.debug.print("unexpected report: {s}\n", .{entry.report.title});
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn expectSameInferenceEntries(expected: []const InferenceEntry, actual: []const InferenceEntry) error{TestExpectedEqual}!void {
+    try std.testing.expectEqual(expected.len, actual.len);
+    for (expected, actual) |want, got| {
+        try std.testing.expectEqualStrings(want.name, got.name);
+        try std.testing.expectEqualSlices(u8, want.bytes, got.bytes);
+    }
+}
+
+/// The number of entries of `a` that `b` holds with the same bytes.
+fn sharedInferenceEntryCount(a: []const InferenceEntry, b: []const InferenceEntry) usize {
+    var shared: usize = 0;
+    for (a) |entry| {
+        for (b) |other| {
+            if (!std.mem.eql(u8, entry.name, other.name)) continue;
+            if (std.mem.eql(u8, entry.bytes, other.bytes)) shared += 1;
+        }
+    }
+    return shared;
+}
+
+test "a module's inference entry does not depend on the command or on modules it does not import" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const app_source =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\import A
+        \\import B
+        \\
+        \\limit = A.scale(B.base)
+        \\
+        \\main! = |_args| {
+        \\    Echo.line!(Str.inspect(limit))
+        \\    Ok({})
+        \\}
+    ;
+    const a_source =
+        \\A := {}.{
+        \\    scale : U64 -> U64
+        \\    scale = |value| value * 3
+        \\}
+    ;
+    for ([_][]const u8{ "first", "second" }) |workspace| {
+        try writeFileImportFixture(&tmp_dir, workspace, app_source);
+        var a_path: [64]u8 = undefined;
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = try std.fmt.bufPrint(&a_path, "{s}/app/A.roc", .{workspace}), .data = a_source });
+        var b_path: [64]u8 = undefined;
+        try tmp_dir.dir.writeFile(std.testing.io, .{
+            .sub_path = try std.fmt.bufPrint(&b_path, "{s}/app/B.roc", .{workspace}),
+            .data = if (std.mem.eql(u8, workspace, "first"))
+                \\B := {}.{
+                \\    base : U64
+                \\    base = 7
+                \\}
+            else
+                \\B := {}.{
+                \\    base : U64
+                \\    base = 7 + 1
+                \\}
+            ,
+        });
+    }
+    for ([_][]const u8{ "check", "build", "explicit", "other" }) |dir| try tmp_dir.dir.createDirPath(std.testing.io, dir);
+    const first_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "first/app/main.roc", allocator);
+    defer allocator.free(first_app);
+    const second_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "second/app/main.roc", allocator);
+    defer allocator.free(second_app);
+    var cache_dirs: [4][:0]u8 = undefined;
+    for (&cache_dirs, [_][]const u8{ "check", "build", "explicit", "other" }) |*cache_dir, dir| {
+        cache_dir.* = try tmp_dir.dir.realPathFileAlloc(std.testing.io, dir, allocator);
+    }
+    defer for (cache_dirs) |cache_dir| allocator.free(cache_dir);
+
+    // The same workspace under each command: every module's inference entry
+    // is the same file with the same bytes.
+    const checked = try inferenceEntriesAfter(allocator, cache_dirs[0], first_app, .check);
+    defer freeInferenceEntries(allocator, checked);
+    const built = try inferenceEntriesAfter(allocator, cache_dirs[1], first_app, .build);
+    defer freeInferenceEntries(allocator, built);
+    const explicit = try inferenceEntriesAfter(allocator, cache_dirs[2], first_app, .build_with_explicit_root);
+    defer freeInferenceEntries(allocator, explicit);
+    try std.testing.expect(checked.len >= 5); // The app, A, B, the platform root and Echo.
+    try expectSameInferenceEntries(checked, built);
+    try expectSameInferenceEntries(checked, explicit);
+
+    // A workspace whose B differs: B's entry changes, and so may its
+    // importer's; every other module's entry is the same.
+    const other = try inferenceEntriesAfter(allocator, cache_dirs[3], second_app, .build);
+    defer freeInferenceEntries(allocator, other);
+    try std.testing.expectEqual(checked.len, other.len);
+    const shared = sharedInferenceEntryCount(checked, other);
+    try std.testing.expect(shared < checked.len);
+    try std.testing.expect(shared >= checked.len - 2);
 }
 
 test "issue 12592: a dependency test edit preserves importer checking results" {
