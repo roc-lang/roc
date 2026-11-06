@@ -283,10 +283,10 @@ pub fn roc_builtins_str_to_utf8(out: *RocList, str_bytes: ?[*]u8, str_len: usize
 pub fn roc_builtins_str_concat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, update_mode: utils.UpdateMode) callconv(.c) void {
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
-    // Two small strings into a small one: small enough here to inline at
-    // every call site where this bitcode is merged into the app's module, so
-    // a chain of them stays in registers. Everything else out of line, its
-    // fields passed in registers.
+    // Two small strings into a small one, built here so that a call site
+    // which inlines this wrapper, where this bitcode is merged into the app's
+    // module, keeps a chain of them in registers. Everything else out of
+    // line, its fields passed in registers.
     if (a.isSmallStr() and b.isSmallStr()) {
         const combined_length = a.len() + b.len();
         if (combined_length < @sizeOf(RocStr)) {
