@@ -2604,31 +2604,12 @@ fn callBoolRoot(
     defer crash_boundary.deinit();
     const entered = builtins.in_process_host.enter(runtime_env.get_ops(), RuntimeHostEnv.rocExpectObserved);
     defer builtins.in_process_host.leave(entered);
-    if (crash_boundary.set() == 0) {
-        switch (target) {
-            .llvm => |entry| {
-                entry(
-                    ret_buf.ptr,
-                    if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-                );
-            },
-            .dev => |entry| {
-                // Dev-JIT code records the `?` region through the in-process
-                // host's `roc_expect_err_region`; clear any stale value first.
-                _ = builtins.in_process_host.takeExpectErrRegion();
-                entry.executable.callRocABIAt(
-                    entry.entry_offset,
-                    @ptrCast(ret_buf.ptr),
-                    if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
-                );
-            },
-            .unit_image => |entry| {
-                // Unit-image code records the `?` region like Dev-JIT code.
-                _ = builtins.in_process_host.takeExpectErrRegion();
-                entry(ret_buf.ptr, if (arg_buffer) |buf| @ptrCast(buf.ptr) else null);
-            },
-        }
-    }
+    var root_call: BoolRootEntryCall = .{
+        .target = target,
+        .ret = ret_buf.ptr,
+        .args = if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+    };
+    _ = try crash_boundary.run(BoolRootEntryCall, &root_call, BoolRootEntryCall.call);
 
     const outcome: BoolRootEvalOutcome = switch (runtime_env.crashState()) {
         .did_not_crash => .{ .passed = ret_buf[0] != 0 },
@@ -2676,6 +2657,30 @@ const BoolRootCallTarget = union(enum) {
     /// A test root's wrapper exported by a test unit's image loaded
     /// in-process (`UnitImageBoolRoot`).
     unit_image: UnitImageBoolRootEntryFn,
+};
+
+/// One test root's entry, called on the evaluation stack.
+const BoolRootEntryCall = struct {
+    target: BoolRootCallTarget,
+    ret: [*]u8,
+    args: ?*anyopaque,
+
+    fn call(self: *BoolRootEntryCall) void {
+        switch (self.target) {
+            .llvm => |entry| entry(self.ret, self.args),
+            .dev => |entry| {
+                // Dev-JIT code records the `?` region through the in-process
+                // host's `roc_expect_err_region`; clear any stale value first.
+                _ = builtins.in_process_host.takeExpectErrRegion();
+                entry.executable.callRocABIAt(entry.entry_offset, @ptrCast(self.ret), self.args);
+            },
+            .unit_image => |entry| {
+                // Unit-image code records the `?` region like Dev-JIT code.
+                _ = builtins.in_process_host.takeExpectErrRegion();
+                entry(self.ret, self.args);
+            },
+        }
+    }
 };
 
 /// What sizes a root's argument and result buffers.

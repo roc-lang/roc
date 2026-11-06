@@ -13867,6 +13867,16 @@ never recovers a substitution by matching types, never searches a type graph
 for where a descriptor could be read from, and never derives one hidden value
 from another by structural inspection of a representation.
 
+A direct call whose checked template carries `provided_low_level` emits that
+operation at the call's checked instantiation instead of calling its wrapper.
+The producer's explicit operation identity is authoritative: lowering does not
+inspect the wrapper's body or recognize a name. Operand evaluation, parameter
+adaptation and result adaptation keep their ordinary call order. Open list and
+box operations use the same descriptor operands as a `run_low_level` expression;
+closed operations use their committed layouts. Function values and erased calls
+retain the wrapper and its ordinary calling convention. This is direct lowering
+of a declared primitive, not general body inlining or specialization.
+
 #### Type Descriptors
 
 A type descriptor (`TypeDesc`) is an immutable, immortal runtime value that
@@ -14021,8 +14031,12 @@ values through descriptors, never on descriptors.
 #### Dynamic Values In LIR
 
 Template workers receive an additional hidden descriptor argument for each
-unique dynamic composite type in their parameters and result, in signature
-order (parameters, then result). Bare type variables already receive hidden
+unique dynamic composite type in their parameters and result and in those
+types' descriptor components. Roots follow signature order (parameters, then
+result); components follow breadth-first order, deduplicated by checked type.
+The graph is exactly the graph descriptor composition consumes, including
+nominal backings and open row extensions, and a visited set terminates recursive
+types. The lowerer memoizes this immutable requirement list per worker. Bare type variables already receive hidden
 descriptors, and representation-closed types need no additional argument.
 The caller substitutes the checked call edge's type arguments into these
 formal types and prepares the descriptors in its entry chain. The callee
@@ -20194,7 +20208,13 @@ generates constraints per statement:
   as the source; the copy transfers nothing by itself, and the `incref` ARC
   emits beside it is the source's.
 - `assign_low_level`: constraints come from the op's `RcEffect`. Args in
-  `consume_args` are owned occurrences. Args outside `consume_args` and
+  `consume_args` are owned occurrences. Every consumed position must receive
+  an ownership unit: transfer an available unit, or retain the operand before
+  the operation if it has none. This applies to all consuming operations,
+  including dynamic field views that must remain borrowed to keep their
+  backing storage alive. Consuming a view's contents does not consume its
+  container's stored unit. Repeated consuming positions each need a unit.
+  Args outside `consume_args` and
   `representationArgs` are borrowed occurrences whose lender must be live at
   the call. Representation-only operands require a bound descriptor. Args in
   `retain_args` are stored by the op, so the stored value's storage
@@ -23440,6 +23460,31 @@ caught by the guard-page handler, which records the faulting program counter,
 frame pointer, and stack pointer before escaping; the host records the counter
 when it is in generated code and walks the chain from the frame pointer.
 
+Compile-time code runs on a dedicated fixed stack, the evaluation stack
+(`base.eval_stack`), never on the stack of whichever worker picked the root up.
+So does every other compiled code the compiler runs in its own process: test
+roots, REPL evaluation and glue specs. Each thread maps one evaluation stack of
+`stack_budget.roc_stack_size` bytes the first time it runs compiled code,
+committed only as it is used, and reuses it for every later root until the
+thread exits. On Linux and macOS it is one anonymous mapping whose lowest
+pages are an inaccessible guard, entered by switching the stack pointer to
+its page-aligned top. On Windows it is a fiber with that reserve: the
+kernel's guard-page growth, its stack-overflow exception, `_resetstkoflw` and
+the system unwinder all read a stack's extent from the thread's TEB, and
+`SwitchToFiber` is the documented operation that switches those fields with
+the stack pointer, together with the fiber-local storage the C runtime keeps
+its per-thread state in. Every root starts at the same top, the same distance
+above the guard, with no compiler frames beneath the generated entry, so how
+deep a program recurses before it overflows, and the instruction that
+overflows, are a function of the program and the compiler build alone, and an
+overflow's reported position is reproducible. The crash boundary is set on the
+evaluation stack (`CrashBoundary.run`), so the escape from a crash or an
+overflow lands there and the root returns to the thread's own stack through
+the switch it entered by. While a root runs there, the fault handler
+classifies the thread's faults against the evaluation stack's bounds, and the
+frame-pointer walk ends at the generated code's entry frame on it. The
+interpreter and compiled runtime programs keep their own stack handling.
+
 The evaluating program resolves the point: the meaning of the innermost call,
 and the source position of the innermost statement with a region among the
 faulting instruction's and the enclosing generated calls'. A return address
@@ -24470,7 +24515,9 @@ The Linux default-platform runtime is the only default-platform runtime that
 installs fatal-signal handlers. It decides whether a `SIGSEGV` is a stack
 overflow with `classifyFault` in `src/base/memory_fault.zig`, the same
 dependency-free function the compiler's own crash handler calls, so the two
-never disagree about what a stack overflow is. The runtime passes the fault
+never disagree about what a stack overflow is. The compiler's handler passes
+the faulting thread's stack bounds, which are the evaluation stack's while
+compiled code runs on it. The runtime passes the fault
 address and the interrupted stack pointer from the signal context and no stack
 bounds, because a process without libc has no exact stack range to report: a
 fault within `stack_overflow_proximity` of the stack pointer is reported as

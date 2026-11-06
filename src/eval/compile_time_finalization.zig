@@ -4727,16 +4727,15 @@ fn evalDevLiteralRoot(
     host.timing_io = if (options.timing) |timing| timing.std_io else null;
 
     host.resetForRun();
-    host.entry_frame = @frameAddress();
+    var root_call: DevRootCall = .{ .host = &host, .executable = &native.executable, .entry_offset = entry_offset, .ret = ret_buf.ptr };
     var crash_boundary = host.enterCrashBoundary();
     const entered = builtins.in_process_host.enter(host.ops(), null);
     const composition = native.enterComposition();
-    if (crash_boundary.set() == 0) {
-        native.executable.callRocABIAt(entry_offset, @ptrCast(ret_buf.ptr), null);
-    }
+    const ran = crash_boundary.run(DevRootCall, &root_call, DevRootCall.call);
     DevProgram.leaveComposition(composition);
     builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
+    _ = try ran;
 
     const producer: lir.LIR.ComptimeProducer = .{ .literal = plan.id };
     const failure: ?LiteralRootFailure = switch (host.termination) {
@@ -6293,6 +6292,21 @@ fn evalDevProgramRoots(
     return had_problem;
 }
 
+/// One compile-time root's entry wrapper, called on the evaluation stack.
+const DevRootCall = struct {
+    host: *CompileTimeHost,
+    executable: *const backend.ExecutableMemory,
+    entry_offset: usize,
+    ret: [*]u8,
+
+    fn call(self: *DevRootCall) void {
+        // Failure points are walked from the failing frame up to this one,
+        // which is the generated code's entry on the evaluation stack.
+        self.host.entry_frame = @frameAddress();
+        self.executable.callRocABIAt(self.entry_offset, @ptrCast(self.ret), null);
+    }
+};
+
 fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     base.dev_diagnostics.countTestWork(.ctfe_execution, 1);
     const job = &context.jobs[item_id];
@@ -6302,25 +6316,24 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     job.progress.store(@backingInt(DevRootProgressState.running), .release);
     if (context.progress_reporter) |progress| progress.rootStarted();
 
-    job.host.entry_frame = @frameAddress();
+    var root_call: DevRootCall = .{ .host = &job.host, .executable = &context.program.executable, .entry_offset = job.entry_offset, .ret = job.ret_buf.ptr };
     var crash_boundary = job.host.enterCrashBoundary();
     const entered = builtins.in_process_host.enter(job.host.ops(), null);
     const composition = context.program.enterComposition();
-    if (crash_boundary.set() == 0) {
-        context.program.executable.callRocABIAt(
-            job.entry_offset,
-            @ptrCast(job.ret_buf.ptr),
-            null,
-        );
-    }
+    const ran = crash_boundary.run(DevRootCall, &root_call, DevRootCall.call);
     DevProgram.leaveComposition(composition);
     builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
 
-    job.result = switch (job.host.termination) {
+    job.result = if (ran) |_| switch (job.host.termination) {
         .returned => .success,
         .crashed => .crashed,
         .host_oom => blk: {
+            context.had_oom.store(true, .release);
+            break :blk .host_oom;
+        },
+    } else |err| switch (err) {
+        error.OutOfMemory => blk: {
             context.had_oom.store(true, .release);
             break :blk .host_oom;
         },

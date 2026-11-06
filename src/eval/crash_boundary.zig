@@ -67,6 +67,29 @@ pub fn CrashBoundary(comptime Env: type, comptime catches_stack_overflow: bool) 
             return sj;
         }
 
+        /// Run `call(context)` inside this boundary on the calling thread's
+        /// evaluation stack (`base.eval_stack`) and return what `set` returned
+        /// there: 0 when `call` returned, otherwise the value the boundary was
+        /// escaped with. The boundary is set on the evaluation stack, so an
+        /// escape from a crash or a stack overflow lands there and the run
+        /// returns to the caller's stack through the switch it entered by.
+        pub fn run(self: *Self, comptime Context: type, context: *Context, comptime call: fn (*Context) void) base.eval_stack.Error!c_int {
+            const Guarded = struct {
+                boundary: *Self,
+                context: *Context,
+                jumped: c_int = 0,
+
+                fn body(guarded: *@This()) void {
+                    const jumped = guarded.boundary.set();
+                    guarded.jumped = jumped;
+                    if (jumped == 0) call(guarded.context);
+                }
+            };
+            var guarded: Guarded = .{ .boundary = self, .context = context };
+            try base.eval_stack.run(Guarded, &guarded, Guarded.body);
+            return guarded.jumped;
+        }
+
         fn escapeStackOverflow(context: *anyopaque) noreturn {
             const env: *Env = @ptrCast(@alignCast(context));
             if (sljmp.supported) {
