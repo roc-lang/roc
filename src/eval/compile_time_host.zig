@@ -56,6 +56,14 @@ pub fn maxAllocationBytes(address_space: base.target.TargetUsize) usize {
     };
 }
 
+/// Whether an allocation request of `length` bytes is more than a 32-bit
+/// `roc_alloc` can be asked for. An evaluation that granted one holds a value
+/// only a 64-bit address space produces, which its module's evaluation output
+/// records (design.md "Compile-Time Constants").
+pub fn exceedsU32AddressSpace(length: usize) bool {
+    return length > maxAllocationBytes(.u32);
+}
+
 /// The crash message of a compile-time allocation that was refused.
 const out_of_memory_message = "ran out of memory";
 
@@ -168,6 +176,10 @@ active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
 /// The largest allocation request Roc code is granted (`maxAllocationBytes`).
 max_allocation_bytes: usize,
+/// Whether the current run asked for an allocation larger than a 32-bit
+/// `roc_alloc` can be asked for, which only a 64-bit program's evaluation
+/// grants (`exceedsU32AddressSpace`).
+asked_past_u32_address_space: bool = false,
 
 /// A host for evaluating the roots of a program whose pointers are
 /// `address_space` wide.
@@ -215,6 +227,7 @@ pub fn resetForRun(self: *CompileTimeHost) void {
     _ = self.arena.reset(.free_all);
     self.termination = .returned;
     self.active_jmp_buf = null;
+    self.asked_past_u32_address_space = false;
 }
 
 /// setjmp/longjmp boundary for catching root-local crashes.
@@ -419,6 +432,7 @@ fn allocateRocBytes(self: *CompileTimeHost, length: usize, alignment: usize) [*]
         base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"});
     }
     if (length > self.max_allocation_bytes) self.rocOutOfMemory();
+    if (exceedsU32AddressSpace(length)) self.asked_past_u32_address_space = true;
     const size = @max(length, 1);
     const header: *AllocationHeader = if (size <= max_small_payload)
         self.allocateSmallBlock(smallClass(size))
@@ -476,7 +490,9 @@ fn freeLargeBlock(self: *CompileTimeHost, links: *LargeLinks, size: usize) void 
     if (links.prev) |prev| prev.next = links.next else self.large_blocks = links.next;
     if (links.next) |next| next.prev = links.prev;
     const block: [*]align(allocation_header_bytes) u8 = @ptrCast(@alignCast(links));
-    self.arena.child_allocator.free(block[0 .. large_block_overhead + size]);
+    // Returned without overwriting its bytes, so freeing a block Roc code
+    // reserved but never wrote touches none of its pages.
+    self.arena.child_allocator.rawFree(block[0 .. large_block_overhead + size], .fromByteUnits(allocation_header_bytes), @returnAddress());
 }
 
 fn freeLargeBlocks(self: *CompileTimeHost) void {

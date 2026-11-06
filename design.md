@@ -23849,13 +23849,20 @@ Running out of address space is decided where a value is computed, not where
 it is laid into a 32-bit image: by then the compiler would already have
 allocated, on the target's behalf, memory the target does not have. Because
 a checked module's cache entry holds its completed values, a 32-bit program
-must also never read one that only a 64-bit address space could produce, so
-the cache keeps checked-module and platform-pairing
-entries apart by the address space their evaluation ran in (the `mod` and
-`mod32` directories, and `pair` and `pair32`): a wasm32 build reads and writes
-only entries evaluated in a 32-bit address space, whatever a native build of
-the same modules stored. A module whose evaluation reported a crash is not
-cached at all.
+must also never read one that only a 64-bit address space could produce.
+Every compilation shares one checked-module cache and one platform-pairing
+cache, whatever address space it evaluates in, and each evaluation output
+records which address spaces it serves (`EvaluationOutput.address_space`):
+`u64_only` once evaluating any of its roots asked for an allocation larger
+than a 32-bit `roc_alloc` can be asked for, which only a 64-bit evaluation
+grants, and `any` otherwise. Both evaluators' hosts note such a request
+(`compile_time_host.exceedsU32AddressSpace`); a literal root's request marks
+every module its finalization completes, since any of their roots can read
+the literal's value. A 32-bit compilation treats a `u64_only` entry as a miss
+and compiles the module again, running out of memory where its program
+would; every other entry serves both address spaces, because evaluation
+results differ between them only in running out of memory. A module whose
+evaluation reported a crash is not cached at all.
 
 Diagnostic behavior must be identical between the dev-backend evaluator and the
 host-restricted LIR interpreter. A mismatch in crashes, expect failures,

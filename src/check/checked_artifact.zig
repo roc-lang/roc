@@ -31529,6 +31529,32 @@ pub const CompileTimeRootReadTable = struct {
     }
 };
 
+/// The address spaces whose compilations an evaluation output serves
+/// (design.md "Compile-Time Constants").
+pub const EvaluatedAddressSpace = enum(u8) {
+    /// Every allocation request the evaluation made fit a 32-bit
+    /// `roc_alloc`, so the output is what any address space's evaluation
+    /// produces.
+    any = 0,
+    /// The evaluation asked for an allocation larger than a 32-bit
+    /// `roc_alloc` can be asked for, which only a 64-bit program's
+    /// evaluation grants; a 32-bit program's evaluation runs out of memory
+    /// there instead.
+    u64_only = 1,
+
+    /// Whether a compilation whose compile-time evaluation runs in
+    /// `address_space` reads an output of this kind as its own.
+    pub fn serves(self: EvaluatedAddressSpace, address_space: base.target.TargetUsize) bool {
+        return switch (self) {
+            .any => true,
+            .u64_only => switch (address_space) {
+                .u64 => true,
+                .u32 => false,
+            },
+        };
+    }
+};
+
 /// Whether compile-time evaluation still has to finish a module's evaluation
 /// output. Process-local: a cache entry holds a finished output.
 pub const EvaluationState = enum { prepared, finalized };
@@ -31570,6 +31596,8 @@ pub const EvaluationOutput = struct {
     /// to decide whose empirical failure evaluation already reported. A
     /// pairing does not decide it again.
     reported_sites: []CheckedExhaustivenessSiteId = &.{},
+    /// Which address spaces' compilations this output serves.
+    address_space: EvaluatedAddressSpace = .any,
     state: EvaluationState = .finalized,
 
     pub const serde_transient_fields = [_][]const u8{"state"};
@@ -31581,6 +31609,7 @@ pub const EvaluationOutput = struct {
         debug: CompileTimeDebugStore.Serialized = .{},
         root_reads: CompileTimeRootReadTable.Serialized = .{},
         reported_sites: SerializedSlice(CheckedExhaustivenessSiteId) = .{},
+        address_space: artifact_serialize.SerializedScalar(EvaluatedAddressSpace, .any) = .{},
 
         pub const root_contract: collections.serde_validation.RootContract = .{
             .Owner = EvaluationOutput,
@@ -31596,6 +31625,8 @@ pub const EvaluationOutput = struct {
         /// Check every range the output's tables hold against themselves,
         /// once the buffer at `base_addr` that holds them is validated.
         pub fn validateContents(self: *const Serialized, base_addr: usize) error{CorruptArtifact}!void {
+            const address_space: *const u8 = @ptrCast(&self.address_space.value);
+            _ = std.enums.fromInt(EvaluatedAddressSpace, address_space.*) orelse return error.CorruptArtifact;
             try self.debug.deserialize(base_addr).validate();
             try self.root_reads.deserialize(base_addr).validate();
             const roots = self.roots.deserialize(base_addr);
@@ -31740,6 +31771,12 @@ pub const EvaluationOutput = struct {
             }
         }.lessThan);
         self.consts = consts;
+    }
+
+    /// Record that evaluating one of this output's roots asked for an
+    /// allocation only a 64-bit program's evaluation grants.
+    pub fn recordU64OnlyEvaluation(self: *EvaluationOutput) void {
+        self.address_space = .u64_only;
     }
 
     /// Make every root no compilation evaluated await evaluation again.
@@ -36573,8 +36610,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x8C, 0xED, 0x4A, 0x0C, 0xD5, 0x7F, 0x92, 0x46, 0x37, 0x65, 0xE7, 0x6F, 0xD6, 0x0B, 0x3B, 0x6F,
-        0x24, 0x9D, 0x5C, 0x84, 0x3F, 0xB5, 0xE6, 0xF4, 0x0C, 0xAE, 0xAF, 0xB8, 0x90, 0xDD, 0x28, 0xF3,
+        0x53, 0xAB, 0x12, 0x00, 0xDB, 0x2E, 0xA6, 0xA5, 0xD0, 0xC3, 0x3C, 0xCB, 0xAF, 0x71, 0x79, 0x10,
+        0x16, 0x2D, 0x9B, 0xDA, 0x2D, 0x10, 0x25, 0x1F, 0x62, 0x68, 0xEE, 0x24, 0x32, 0x10, 0xAB, 0xED,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

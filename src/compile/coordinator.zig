@@ -1167,30 +1167,20 @@ pub const PackageState = struct {
 /// configuration names no location for: every store into it records a store
 /// failure and every probe of it a miss.
 const CacheEntryDirs = struct {
-    /// Checked entries by the address space their compile-time evaluation
-    /// ran in, indexed by `TargetUsize`.
-    checked: [2]?[]u8 = @splat(null),
+    checked: ?[]u8 = null,
     inference: ?[]u8 = null,
     canonicalized: ?[]u8 = null,
-    /// Platform pairings by the address space their evaluation ran in,
-    /// indexed by `TargetUsize`.
-    platform_pairing: [2]?[]u8 = @splat(null),
+    platform_pairing: ?[]u8 = null,
 
     fn resolve(allocator: Allocator, cache_manager: ?*CacheManager) Allocator.Error!CacheEntryDirs {
         const manager = cache_manager orelse return .{};
         if (!manager.config.enabled) return .{};
         var dirs: CacheEntryDirs = .{};
         errdefer dirs.deinit(allocator);
-        for (base.target.TargetUsize.all()) |address_space| {
-            dirs.checked[@backingInt(address_space)] = manager.config.getCheckedArtifactCacheDir(allocator, address_space) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.NoHomeDirectory => null,
-            };
-            dirs.platform_pairing[@backingInt(address_space)] = manager.config.getPlatformPairingCacheDir(allocator, address_space) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.NoHomeDirectory => null,
-            };
-        }
+        dirs.checked = manager.config.getCheckedArtifactCacheDir(allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoHomeDirectory => null,
+        };
         dirs.inference = manager.config.getInferenceCacheDir(allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoHomeDirectory => null,
@@ -1199,14 +1189,18 @@ const CacheEntryDirs = struct {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoHomeDirectory => null,
         };
+        dirs.platform_pairing = manager.config.getPlatformPairingCacheDir(allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoHomeDirectory => null,
+        };
         return dirs;
     }
 
     fn deinit(self: *CacheEntryDirs, allocator: Allocator) void {
-        for (self.checked) |maybe_dir| if (maybe_dir) |dir| allocator.free(dir);
+        if (self.checked) |dir| allocator.free(dir);
         if (self.inference) |dir| allocator.free(dir);
         if (self.canonicalized) |dir| allocator.free(dir);
-        for (self.platform_pairing) |maybe_dir| if (maybe_dir) |dir| allocator.free(dir);
+        if (self.platform_pairing) |dir| allocator.free(dir);
         self.* = .{};
     }
 };
@@ -4758,7 +4752,7 @@ pub const Coordinator = struct {
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app).?;
         const app = app_root.mod.checkedArtifact().?;
         const key = cache_key_mod.platformPairingCacheKey(artifact.key, app.key);
-        const directory = self.cache_entry_dirs.platform_pairing[@backingInt(self.compileTimeAddressSpace())] orelse {
+        const directory = self.cache_entry_dirs.platform_pairing orelse {
             manager.recordStoreFailure();
             return;
         };
@@ -4789,7 +4783,7 @@ pub const Coordinator = struct {
     fn installCachedPlatformPairing(self: *Coordinator, paired: *CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) bool {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
-        const directory = self.cache_entry_dirs.platform_pairing[@backingInt(self.compileTimeAddressSpace())] orelse return false;
+        const directory = self.cache_entry_dirs.platform_pairing orelse return false;
         const key = cache_key_mod.platformPairingCacheKey(paired.key, app.key);
         const data = manager.loadFamilyMapped(manager.allocator, .checked, .pairing, key.bytes, directory) orelse return false;
         defer data.deinit(manager.allocator);
@@ -4814,6 +4808,10 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return false;
         }
+        if (!header.evaluation.address_space.value.serves(self.compileTimeAddressSpace())) {
+            manager.stats.recordMiss();
+            return false;
+        }
         header.install(paired);
         return true;
     }
@@ -4824,7 +4822,7 @@ pub const Coordinator = struct {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
 
-        const entries_dir = self.cache_entry_dirs.checked[@backingInt(self.compileTimeAddressSpace())] orelse {
+        const entries_dir = self.cache_entry_dirs.checked orelse {
             manager.recordStoreFailure();
             return;
         };
@@ -4929,7 +4927,7 @@ pub const Coordinator = struct {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
 
-        const entries_dir = self.cache_entry_dirs.checked[@backingInt(self.compileTimeAddressSpace())] orelse {
+        const entries_dir = self.cache_entry_dirs.checked orelse {
             manager.stats.recordMiss();
             return false;
         };
@@ -5015,6 +5013,12 @@ pub const Coordinator = struct {
         };
         if (!std.mem.eql(u8, &artifact_serialized.key.bytes, &cache_key.bytes)) {
             manager.stats.recordInvalidation();
+            return false;
+        }
+        // An output only a 64-bit address space produces is no output of a
+        // 32-bit compilation's evaluation, which evaluates the module again.
+        if (!artifact_serialized.evaluation.address_space.value.serves(self.compileTimeAddressSpace())) {
+            manager.stats.recordMiss();
             return false;
         }
 
@@ -8504,7 +8508,7 @@ test "issue 11389 invalid pairing cache recomposes from immutable modules" {
     defer cold.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 1), cold.platform_pairing_count);
     const config = CacheConfig{ .enabled = true, .cache_dir = cache };
-    const pair_directory = try config.getPlatformPairingCacheDir(allocator, .u64);
+    const pair_directory = try config.getPlatformPairingCacheDir(allocator);
     defer allocator.free(pair_directory);
     const corrupted = try overwriteFilesUnderDir(allocator, cache, pair_directory, .pairing, "invalid pairing");
     try std.testing.expectEqual(@as(usize, 1), corrupted);
@@ -8734,6 +8738,168 @@ fn writeReuseFixture(tmp: *std.testing.TmpDir, app: []const u8) (std.Io.Dir.Crea
     try tmp.dir.createDirPath(std.testing.io, "cache");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data = reuse_platform });
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = app });
+}
+
+/// What one compilation of an app, evaluating in one address space, read
+/// from the checked cache and reported.
+const AddressSpaceRun = struct {
+    /// Every report the compilation produced, rendered.
+    reports: []u8,
+    has_errors: bool,
+    /// Whether the app module, `Seed.roc` and the platform were installed
+    /// from cache entries.
+    app_cached: bool,
+    seed_cached: bool,
+    platform_cached: bool,
+    /// Pairings the compilation evaluated rather than read from the cache.
+    platform_pairing_count: u32,
+
+    fn deinit(self: *AddressSpaceRun, allocator: Allocator) void {
+        allocator.free(self.reports);
+        self.* = undefined;
+    }
+};
+
+fn compileInAddressSpace(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, address_space: base.target.TargetUsize) CheckedModuleCacheRunError!AddressSpaceRun {
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
+    defer cache_manager.deinit();
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_compatibility_id,
+        &cache_manager,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    // The pointer width of the program this compilation is for, as
+    // `setRuntimeLowering` records it for a wasm32 or a native build.
+    coord.program_address_space = address_space;
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    if (!coord.hasUserErrors()) try coord.finishCheckedProgram(.executable_artifacts);
+
+    var reports = std.Io.Writer.Allocating.init(arena);
+    var report_it = coord.iterReports();
+    while (report_it.next()) |entry| {
+        reporting.renderReport(entry.report, &reports.writer, .markdown) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.WriteFailed => return error.OutOfMemory,
+        };
+    }
+    var app_cached = false;
+    var seed_cached = false;
+    var pkg_it = coord.packages.iterator();
+    while (pkg_it.next()) |pkg_entry| {
+        for (pkg_entry.value_ptr.*.modules.items) |*mod| {
+            const artifact = mod.checkedArtifact() orelse continue;
+            const cached = artifact.serialized_backing != null;
+            if (std.mem.eql(u8, mod.name, "Seed")) seed_cached = cached;
+            if (std.mem.eql(u8, mod.name, "app")) app_cached = cached;
+        }
+    }
+    return .{
+        .reports = try allocator.dupe(u8, reports.written()),
+        .has_errors = coord.hasUserErrors(),
+        .app_cached = app_cached,
+        .seed_cached = seed_cached,
+        .platform_cached = coord.platform_root_publish_count == 0,
+        .platform_pairing_count = coord.platform_pairing_count,
+    };
+}
+
+/// An app whose constant asks for more bytes than a 32-bit `roc_alloc` can
+/// be asked for: a 64-bit evaluation reserves them, a 32-bit one runs out of
+/// memory.
+const oversized_constant_app =
+    \\app [answer] { pf: platform "./platform.roc" }
+    \\import Seed
+    \\big : List(U8)
+    \\big = List.with_capacity(4294967296)
+    \\answer = Seed.seed + List.len(big).to_i64_wrap()
+    \\
+;
+
+const address_space_seed_module =
+    \\Seed := [].{
+    \\    seed : I64
+    \\    seed = 41
+    \\}
+    \\
+;
+
+fn writeAddressSpaceFixture(tmp: *std.testing.TmpDir, app: []const u8) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
+    try writeReuseFixture(tmp, app);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Seed.roc", .data = address_space_seed_module });
+}
+
+test "a wasm32 build after a native build re-evaluates only the module whose evaluation only a 64-bit address space completes" {
+    if (@sizeOf(usize) < 8) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeAddressSpaceFixture(&tmp, oversized_constant_app);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var native = try compileInAddressSpace(allocator, cache, app, .u64);
+    defer native.deinit(allocator);
+    try std.testing.expect(!native.has_errors);
+    try std.testing.expect(!native.app_cached and !native.seed_cached and !native.platform_cached);
+
+    var wasm32 = try compileInAddressSpace(allocator, cache, app, .u32);
+    defer wasm32.deinit(allocator);
+    try std.testing.expect(wasm32.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, wasm32.reports, "ran out of memory") != null);
+    try std.testing.expect(!wasm32.app_cached);
+    try std.testing.expect(wasm32.seed_cached and wasm32.platform_cached);
+
+    // The native entry still serves a native build.
+    var native_again = try compileInAddressSpace(allocator, cache, app, .u64);
+    defer native_again.deinit(allocator);
+    try std.testing.expect(!native_again.has_errors);
+    try std.testing.expect(native_again.app_cached and native_again.seed_cached and native_again.platform_cached);
+    try std.testing.expectEqual(@as(u32, 0), native_again.platform_pairing_count);
+}
+
+test "a native build after a wasm32 build reads every entry the wasm32 build stored" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeAddressSpaceFixture(&tmp,
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Seed
+        \\small : List(U8)
+        \\small = List.with_capacity(16)
+        \\answer = Seed.seed + List.len(small).to_i64_wrap()
+        \\
+    );
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var wasm32 = try compileInAddressSpace(allocator, cache, app, .u32);
+    defer wasm32.deinit(allocator);
+    try std.testing.expect(!wasm32.has_errors);
+    try std.testing.expect(!wasm32.app_cached and !wasm32.seed_cached and !wasm32.platform_cached);
+    try std.testing.expectEqual(@as(u32, 1), wasm32.platform_pairing_count);
+
+    var native = try compileInAddressSpace(allocator, cache, app, .u64);
+    defer native.deinit(allocator);
+    try std.testing.expect(!native.has_errors);
+    try std.testing.expect(native.app_cached and native.seed_cached and native.platform_cached);
+    try std.testing.expectEqual(@as(u32, 0), native.platform_pairing_count);
 }
 
 test "imported edits recompute nominal literal results and changed conversions" {
@@ -10257,7 +10423,7 @@ test "Coordinator corrupt checked module cache entries compile from source" {
     try std.testing.expect(first.cache.stores > 0);
 
     const config = CacheConfig{ .cache_dir = cache_dir };
-    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator, .u64);
+    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
     defer allocator.free(checked_module_cache_dir);
     const overwritten = try overwriteFilesUnderDir(allocator, cache_dir, checked_module_cache_dir, .checked, "not a checked module cache entry");
     try std.testing.expect(overwritten > 0);
@@ -10287,7 +10453,7 @@ test "Coordinator corrupt checked module cache env relocations compile from sour
     try std.testing.expect(first.cache.stores > 0);
 
     const config = CacheConfig{ .cache_dir = cache_dir };
-    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator, .u64);
+    const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
     defer allocator.free(checked_module_cache_dir);
     const corrupted = try corruptCheckedModuleEnvIdentBytesLens(allocator, cache_dir, checked_module_cache_dir);
     try std.testing.expect(corrupted > 0);
@@ -10419,7 +10585,7 @@ const lifted_const_lib_source =
 fn readCheckedModuleCacheEntry(allocator: Allocator, cache_dir: []const u8, key: [32]u8) (CorruptCheckedModuleCacheError || error{NoHomeDirectory})!?[]u8 {
     const io = std.testing.io;
     const config = CacheConfig{ .cache_dir = cache_dir };
-    const entries_dir = try config.getCheckedArtifactCacheDir(allocator, .u64);
+    const entries_dir = try config.getCheckedArtifactCacheDir(allocator);
     defer allocator.free(entries_dir);
     var store = try @import("artifact_store.zig").Store.init(allocator, io, cache_dir);
     defer store.deinit();
