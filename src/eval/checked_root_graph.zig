@@ -569,27 +569,6 @@ pub fn rootHoldsFunction(
     return false;
 }
 
-/// The modules of one program, resolved by key.
-const ProgramModules = struct {
-    modules: []const *const checked.CheckedModuleArtifact,
-    imports: []const checked.ImportedModuleView,
-
-    fn resolver(self: *const ProgramModules) checked.ModuleResolver {
-        return .{ .context = self, .resolve_fn = resolve };
-    }
-
-    fn resolve(context: *const anyopaque, key: canonical.CheckedModuleDigest) ?checked.ImportedModuleView {
-        const self: *const ProgramModules = @ptrCast(@alignCast(context));
-        for (self.modules) |module| {
-            if (module.key.digest().eql(key)) return checked.importedView(module);
-        }
-        for (self.imports) |import| {
-            if (import.key.digest().eql(key)) return import;
-        }
-        return null;
-    }
-};
-
 fn typesOf(modules: []const *const checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?checked.CheckedTypeStoreView {
     for (modules) |module| {
         if (module.key.digest().eql(key)) return module.typesView();

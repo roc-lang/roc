@@ -16,7 +16,6 @@ const Allocator = std.mem.Allocator;
 const CheckedModuleArtifact = checked_artifact.CheckedModuleArtifact;
 const ImportedModuleView = checked_artifact.ImportedModuleView;
 const ModuleResolver = checked_artifact.ModuleResolver;
-const ModuleId = checked_artifact.ModuleId;
 const ExportClosures = checked_artifact.ExportClosures;
 const PublicApiDependencies = checked_artifact.PublicApiDependencies;
 const LoweringVisibility = checked_artifact.LoweringVisibility;

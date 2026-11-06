@@ -5433,7 +5433,7 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   (`interfaceCapabilities`: one per instance, a declaration of the module
   at one list of argument types, with its instantiated backing and padding
   types, which the computation creates; computed for every local nominal type
-  the module held when it was published, and grown for the types each
+  its cache entry holds, and grown for the types each
   later creation makes before that creation ends, "Nominal
   Representations" below), and the module's dispatch
   resolution, which the module's dispatch reader (`CheckedDispatch`)
@@ -5495,7 +5495,7 @@ module, its declaration and its argument types, the same for every type
 entry naming that type whoever created it and whenever, cold or warm. A
 builtin is represented by its builtin. A nominal type another module
 declares is represented by that declaration in every store that holds it,
-including every projection of an imported type: an importer's arguments
+including every copy of an imported type: an importer's arguments
 are its own types, which the declaring module's capabilities cannot name.
 A nominal type a module declares is held by its store as its declaration
 (a creation that copies one read with its capability stores the
@@ -5510,9 +5510,9 @@ variables occur and another over any other variables, and every other type
 is compared by its structure, a nominal by its declaration and arguments
 alone (`CheckedNominalEquality.declaration_args`). Every instance has
 exactly one capability. The capabilities are computed on first demand for
-every type the store holds then, which is exactly the set it held when it
-was published, because every slot demands its module's capabilities before
-it creates a type there; the published synthesized types are settled in id
+every type the store holds then, which is exactly the set its cache entry
+holds, because every slot demands its module's capabilities before it
+creates a type there; those synthesized types are settled in id
 order, then the source types checking reached, in variable order, then the
 types the capabilities created. A type created later is settled by the
 creation that made it before the creation releases the store's creation
@@ -5526,7 +5526,7 @@ types and declarations, and waits on no slot. A creation that fails ends without
 next creation to finish settles what it left.
 
 Capability ids follow the order instances are first met, which for the
-instances first met after publication is the order creations end, so it
+instances first met in later creations is the order they end, so it
 depends on demand order. An id is a table index and an equality identity
 only: nothing compares ids by order, sorts by them, hashes them into a
 digest or key, or prints them, and the types a capability creates are
