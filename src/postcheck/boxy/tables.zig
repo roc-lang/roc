@@ -21,7 +21,8 @@ const lir_core = @import("lir_core");
 
 const types = @import("types.zig");
 const lower = @import("lower.zig");
-const StaticDescs = @import("static_descs.zig").StaticDescs;
+const static_descs_file = @import("static_descs.zig");
+const StaticDescs = static_descs_file.StaticDescs;
 
 const Allocator = std.mem.Allocator;
 const LIR = lir_core.LIR;
@@ -47,8 +48,9 @@ pub const Recipe = union(enum) {
     /// can build (`ScopedOverride`).
     desc: struct { ty: TypeId, scoped: []const ScopedOverride = &.{} },
     /// The descriptor of an erased call's packed argument record: `leading`
-    /// pointer-sized words, then values of `elems`, in declared order.
-    args_desc: struct { leading: u32, elems: []const TypeId },
+    /// pointer-sized words, then values of the types whose descriptors
+    /// `elems` are, in declared order.
+    args_desc: struct { leading: u32, elems: []const Operand },
     /// An immortal erased callable of worker `entry` capturing `captures`.
     callable: struct { entry: WorkerId, captures: []const Operand },
     /// The table of `worker` at the inputs `inputs`.
@@ -71,6 +73,9 @@ pub const ScopedOverride = struct { nominal: TypeId, methods: [3]?Operand };
 pub const Needs = struct {
     /// How many inputs lead the table.
     input_count: u32,
+    /// How many of the inputs are the descriptors of the worker's type
+    /// variables, the leading ones, in variable order.
+    desc_count: u32,
     /// The worker's recipes, which `slots` and one another name.
     recipes: []const Recipe,
     /// The recipe of table word `input_count + index`.
@@ -90,16 +95,24 @@ pub const Needs = struct {
     }
 };
 
-/// The recipes one worker's lowering builds. An acyclic recipe is interned
-/// by its content, so a recipe built twice is one recipe. A recipe that may
-/// lead back to itself (a dictionary whose requirements capture it, or the
-/// descriptor of a nominal type whose override captures that descriptor)
-/// is reserved first, named by the recipes it reaches, and set afterwards;
-/// a reserved recipe is never interned.
+/// The recipes one worker's lowering builds, one recipe per content: a
+/// recipe built twice is one recipe. A recipe that may lead back to itself
+/// (a dictionary whose requirements capture it, or the descriptor of a
+/// nominal type whose override captures that descriptor) is reserved first,
+/// named by the recipes it reaches, and given its content afterwards; a
+/// reserved recipe given a content another recipe already has is that
+/// recipe (`resolve`).
 pub const Recipes = struct {
     arena: std.heap.ArenaAllocator,
-    items: std.ArrayList(?Recipe) = .empty,
+    items: std.ArrayList(Entry) = .empty,
     interned: std.HashMapUnmanaged(Recipe, RecipeId, Context, std.hash_map.default_max_load_percentage) = .empty,
+
+    const Entry = union(enum) {
+        reserved,
+        content: Recipe,
+        /// The recipe is the recipe it names.
+        same: RecipeId,
+    };
 
     pub fn init(allocator: Allocator) Recipes {
         return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
@@ -118,46 +131,136 @@ pub const Recipes = struct {
         if (self.interned.get(recipe)) |existing| return existing;
         const owned = try self.own(recipe);
         const id: RecipeId = @fromBackingInt(@intCast(self.items.items.len));
-        try self.items.append(allocator, owned);
+        try self.items.append(allocator, .{ .content = owned });
         try self.interned.put(allocator, owned, id);
         return id;
     }
 
-    /// A recipe whose content `set` gives once the recipes it reaches exist.
+    /// A recipe whose content `set` (or `setSame`) gives once the recipes
+    /// it reaches exist.
     pub fn reserve(self: *Recipes) Allocator.Error!RecipeId {
         const id: RecipeId = @fromBackingInt(@intCast(self.items.items.len));
-        try self.items.append(self.arena.child_allocator, null);
+        try self.items.append(self.arena.child_allocator, .reserved);
         return id;
     }
 
     /// Give reserved recipe `id` its content: a callable, a table, or a
-    /// descriptor, the kinds that can lead back to themselves.
+    /// descriptor, the kinds that can lead back to themselves. Where a
+    /// recipe already has that content, `id` is that recipe.
     pub fn set(self: *Recipes, id: RecipeId, recipe: Recipe) Allocator.Error!void {
-        const slot = &self.items.items[@backingInt(id)];
-        std.debug.assert(slot.* == null);
+        std.debug.assert(self.items.items[@backingInt(id)] == .reserved);
         switch (recipe) {
             .callable, .table, .desc => {},
             .input, .args_desc => invariant("a reserved recipe is not a callable, a table, or a descriptor"),
         }
-        slot.* = try self.own(recipe);
+        if (self.interned.get(recipe)) |existing| {
+            self.items.items[@backingInt(id)] = .{ .same = existing };
+            return;
+        }
+        const owned = try self.own(recipe);
+        self.items.items[@backingInt(id)] = .{ .content = owned };
+        try self.interned.put(self.arena.child_allocator, owned, id);
+    }
+
+    /// Make reserved recipe `id` the recipe `target`.
+    pub fn setSame(self: *Recipes, id: RecipeId, target: RecipeId) void {
+        std.debug.assert(self.items.items[@backingInt(id)] == .reserved);
+        const resolved = self.resolve(target);
+        if (resolved == id) invariant("a reserved recipe was made itself");
+        self.items.items[@backingInt(id)] = .{ .same = resolved };
+    }
+
+    /// The recipe `id` is: itself, or the recipe whose content it was given.
+    pub fn resolve(self: *const Recipes, id: RecipeId) RecipeId {
+        var current = id;
+        while (true) switch (self.items.items[@backingInt(current)]) {
+            .same => |next| current = next,
+            .reserved, .content => return current,
+        };
     }
 
     /// Recipe `id`'s content, or null while it is reserved and not yet set.
     pub fn peek(self: *const Recipes, id: RecipeId) ?Recipe {
-        return self.items.items[@backingInt(id)];
+        return switch (self.items.items[@backingInt(self.resolve(id))]) {
+            .content => |recipe| recipe,
+            .reserved => null,
+            .same => unreachable,
+        };
     }
 
     pub fn get(self: *const Recipes, id: RecipeId) Recipe {
-        return self.items.items[@backingInt(id)] orelse invariant("a reserved recipe was read before it was set");
+        return self.peek(id) orelse invariant("a reserved recipe was read before it was set");
     }
 
-    /// The needs list of a worker with `input_count` inputs whose table's
-    /// remaining words are `slots`. Every reserved recipe has been set.
-    pub fn needs(self: *Recipes, input_count: u32, slots: []const RecipeId) Allocator.Error!Needs {
-        const arena = self.arena.allocator();
-        const recipes = try arena.alloc(Recipe, self.items.items.len);
-        for (recipes, self.items.items) |*recipe, item| recipe.* = item orelse invariant("a reserved recipe was never set");
-        return .{ .input_count = input_count, .recipes = recipes, .slots = try arena.dupe(RecipeId, slots) };
+    /// The needs list of a worker with `input_count` inputs, the first
+    /// `desc_count` its variables' descriptors, whose table's remaining words
+    /// are `slots`, allocated in `allocator`: the recipes the slots reach,
+    /// numbered in the order a walk from the slots first reaches them, so
+    /// equal lists are equal data.
+    pub fn needs(self: *const Recipes, allocator: Allocator, scratch: Allocator, input_count: u32, desc_count: u32, slots: []const RecipeId) Allocator.Error!Needs {
+        const unnumbered = std.math.maxInt(u32);
+        const numbers = try scratch.alloc(u32, self.items.items.len);
+        defer scratch.free(numbers);
+        @memset(numbers, unnumbered);
+        var order: std.ArrayList(RecipeId) = .empty;
+        defer order.deinit(scratch);
+        var pending: std.ArrayList(RecipeId) = .empty;
+        defer pending.deinit(scratch);
+        var operands: std.ArrayList(Operand) = .empty;
+        defer operands.deinit(scratch);
+        // Each slot's walk, depth first and in operand order.
+        for (slots) |slot| {
+            try pending.append(scratch, self.resolve(slot));
+            while (pending.pop()) |id| {
+                if (numbers[@backingInt(id)] != unnumbered) continue;
+                numbers[@backingInt(id)] = @intCast(order.items.len);
+                try order.append(scratch, id);
+                operands.clearRetainingCapacity();
+                try appendOperands(scratch, &operands, self.get(id));
+                var index = operands.items.len;
+                while (index > 0) {
+                    index -= 1;
+                    switch (operands.items[index]) {
+                        .recipe => |next| {
+                            const resolved = self.resolve(next);
+                            if (numbers[@backingInt(resolved)] == unnumbered) try pending.append(scratch, resolved);
+                        },
+                        .static => {},
+                    }
+                }
+            }
+        }
+        const renumber = struct {
+            fn operand(recipes: *const Recipes, numbered: []const u32, value: Operand) Operand {
+                return switch (value) {
+                    .recipe => |id| .{ .recipe = @fromBackingInt(numbered[@backingInt(recipes.resolve(id))]) },
+                    .static => value,
+                };
+            }
+            fn all(alloc: Allocator, recipes: *const Recipes, numbered: []const u32, values: []const Operand) Allocator.Error![]const Operand {
+                const out = try alloc.alloc(Operand, values.len);
+                for (out, values) |*slot, value| slot.* = operand(recipes, numbered, value);
+                return out;
+            }
+        };
+        const recipes = try allocator.alloc(Recipe, order.items.len);
+        for (recipes, order.items) |*recipe, id| recipe.* = switch (self.get(id)) {
+            .input => |index| .{ .input = index },
+            .desc => |desc| blk: {
+                const scoped = try allocator.alloc(ScopedOverride, desc.scoped.len);
+                for (scoped, desc.scoped) |*out, override| {
+                    out.* = .{ .nominal = override.nominal, .methods = undefined };
+                    for (&out.methods, override.methods) |*method, maybe| method.* = if (maybe) |value| renumber.operand(self, numbers, value) else null;
+                }
+                break :blk .{ .desc = .{ .ty = desc.ty, .scoped = scoped } };
+            },
+            .args_desc => |args| .{ .args_desc = .{ .leading = args.leading, .elems = try renumber.all(allocator, self, numbers, args.elems) } },
+            .callable => |callable| .{ .callable = .{ .entry = callable.entry, .captures = try renumber.all(allocator, self, numbers, callable.captures) } },
+            .table => |table| .{ .table = .{ .worker = table.worker, .inputs = try renumber.all(allocator, self, numbers, table.inputs) } },
+        };
+        const numbered_slots = try allocator.alloc(RecipeId, slots.len);
+        for (numbered_slots, slots) |*out, slot| out.* = @fromBackingInt(numbers[@backingInt(self.resolve(slot))]);
+        return .{ .input_count = input_count, .desc_count = desc_count, .recipes = recipes, .slots = numbered_slots };
     }
 
     /// `recipe` with its slices copied into the arena.
@@ -166,7 +269,7 @@ pub const Recipes = struct {
         return switch (recipe) {
             .input => recipe,
             .desc => |desc| .{ .desc = .{ .ty = desc.ty, .scoped = try arena.dupe(ScopedOverride, desc.scoped) } },
-            .args_desc => |args| .{ .args_desc = .{ .leading = args.leading, .elems = try arena.dupe(TypeId, args.elems) } },
+            .args_desc => |args| .{ .args_desc = .{ .leading = args.leading, .elems = try arena.dupe(Operand, args.elems) } },
             .callable => |callable| .{ .callable = .{ .entry = callable.entry, .captures = try arena.dupe(Operand, callable.captures) } },
             .table => |table| .{ .table = .{ .worker = table.worker, .inputs = try arena.dupe(Operand, table.inputs) } },
         };
@@ -184,6 +287,19 @@ pub const Recipes = struct {
         }
     };
 };
+
+/// Append the operands `recipe` reads, in order.
+pub fn appendOperands(allocator: Allocator, out: *std.ArrayList(Operand), recipe: Recipe) Allocator.Error!void {
+    switch (recipe) {
+        .input => {},
+        .desc => |desc| for (desc.scoped) |override| {
+            for (override.methods) |method| if (method) |operand| try out.append(allocator, operand);
+        },
+        .args_desc => |args| try out.appendSlice(allocator, args.elems),
+        .callable => |callable| try out.appendSlice(allocator, callable.captures),
+        .table => |table| try out.appendSlice(allocator, table.inputs),
+    }
+}
 
 fn hashWord(hasher: *std.hash.Wyhash, value: u32) void {
     hasher.update(std.mem.asBytes(&value));
@@ -205,8 +321,7 @@ fn hashRecipe(hasher: *std.hash.Wyhash, recipe: Recipe) void {
         },
         .args_desc => |args| {
             hashWord(hasher, args.leading);
-            hashWord(hasher, @intCast(args.elems.len));
-            for (args.elems) |ty| hashWord(hasher, @backingInt(ty));
+            hashOperands(hasher, args.elems);
         },
         .callable => |callable| {
             hashWord(hasher, @backingInt(callable.entry));
@@ -242,7 +357,7 @@ fn recipesEqual(a: Recipe, b: Recipe) bool {
     return switch (a) {
         .input => |index| index == b.input,
         .desc => |desc| desc.ty == b.desc.ty and scopedEqual(desc.scoped, b.desc.scoped),
-        .args_desc => |args| args.leading == b.args_desc.leading and std.mem.eql(TypeId, args.elems, b.args_desc.elems),
+        .args_desc => |args| args.leading == b.args_desc.leading and operandsEqual(args.elems, b.args_desc.elems),
         .callable => |callable| callable.entry == b.callable.entry and operandsEqual(callable.captures, b.callable.captures),
         .table => |table| table.worker == b.table.worker and operandsEqual(table.inputs, b.table.inputs),
     };
@@ -273,7 +388,7 @@ fn operandEqual(a: Operand, b: Operand) bool {
     };
 }
 
-test "recipes are interned by content and reserved recipes stay distinct" {
+test "recipes are interned by content, reserved ones included" {
     var recipes = Recipes.init(std.testing.allocator);
     defer recipes.deinit();
     const ty: TypeId = @fromBackingInt(7);
@@ -292,7 +407,13 @@ test "recipes are interned by content and reserved recipes stay distinct" {
     try recipes.set(head, .{ .callable = .{ .entry = worker, .captures = &.{ .{ .recipe = inner }, .{ .static = .zero } } } });
     const other = try recipes.reserve();
     try recipes.set(other, .{ .callable = .{ .entry = worker, .captures = &.{ .{ .recipe = inner }, .{ .static = .zero } } } });
-    try std.testing.expect(head != other);
+    // A reserved recipe given another's content is that recipe.
+    try std.testing.expectEqual(head, recipes.resolve(other));
+    try std.testing.expectEqual(head, recipes.resolve(head));
+    const alias = try recipes.reserve();
+    recipes.setSame(alias, other);
+    try std.testing.expectEqual(head, recipes.resolve(alias));
+    try std.testing.expectEqual(inner, recipes.get(alias).callable.captures[0].recipe);
 
     // A descriptor whose override captures it: reserved, then set.
     const nominal = try recipes.reserve();
@@ -301,11 +422,20 @@ test "recipes are interned by content and reserved recipes stay distinct" {
     try recipes.set(nominal, .{ .desc = .{ .ty = ty, .scoped = &.{.{ .nominal = ty, .methods = .{ null, null, .{ .recipe = method } } }} } });
     try std.testing.expectEqual(method, recipes.get(nominal).desc.scoped[0].methods[2].?.recipe);
 
-    const needs = try recipes.needs(2, &.{ table, head });
+    // The needs list holds what the slots reach, numbered by a walk from
+    // them: the table, its input and descriptor, then the dictionary and
+    // the callable it captures.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const needs = try recipes.needs(arena.allocator(), std.testing.allocator, 2, 1, &.{ table, alias });
     try std.testing.expectEqual(@as(u32, 4), needs.wordCount());
+    try std.testing.expectEqual(@as(usize, 5), needs.recipes.len);
     try std.testing.expectEqual(@as(?RecipeId, null), needs.slotRecipe(1));
-    try std.testing.expectEqual(@as(?RecipeId, head), needs.slotRecipe(3));
-    try std.testing.expectEqual(head, needs.recipes[@backingInt(inner)].callable.captures[0].recipe);
+    try std.testing.expectEqual(@as(?RecipeId, @fromBackingInt(0)), needs.slotRecipe(2));
+    try std.testing.expectEqual(@as(?RecipeId, @fromBackingInt(3)), needs.slotRecipe(3));
+    try std.testing.expectEqual(@as(u32, 0), needs.recipes[1].input);
+    try std.testing.expectEqual(@as(RecipeId, @fromBackingInt(3)), needs.recipes[4].callable.captures[0].recipe);
+    try std.testing.expectEqual(@as(RecipeId, @fromBackingInt(4)), needs.recipes[3].callable.captures[0].recipe);
 }
 
 test "table words sit at consecutive pointer-sized offsets" {

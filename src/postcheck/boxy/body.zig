@@ -1502,22 +1502,22 @@ pub const Builder = struct {
         try self.override_words.put(self.allocator, ty, words);
         for (overrides, reserved) |maybe, id| {
             const override = maybe orelse continue;
-            const recipe: Tables.Recipe = switch (override) {
-                .procedure => |procedure| blk: {
+            switch (override) {
+                .procedure => |procedure| {
                     const literal_count = self.program.worker(procedure.target).literal_params;
                     const hidden = try self.program.arena.allocator().alloc(Word, procedure.bound.len + procedure.dicts.len + literal_count);
                     for (procedure.bound, hidden[0..procedure.bound.len]) |bound_ty, *desc| desc.* = try self.descWord(bound_ty);
                     for (procedure.dicts, hidden[procedure.bound.len..][0..procedure.dicts.len]) |requirement, *dict| dict.* = try self.dictionaryFromType(requirement);
                     for (hidden[procedure.bound.len + procedure.dicts.len ..], 0..) |*literal, index| literal.* = try self.derivedLiteralArg(procedure.target, procedure.bound, @intCast(index));
-                    break :blk .{ .callable = .{ .entry = procedure.entry, .captures = hidden } };
+                    try self.recipes.set(id.?, .{ .callable = .{ .entry = procedure.entry, .captures = hidden } });
                 },
-                .local => |local| blk: {
+                // The local procedure's immortal callable is the override.
+                .local => |local| {
                     if (local.module != self.module) invariant("a local-procedure override's descriptor is composed outside its declaring module");
                     const closure = (try self.localProcClosureAt(local.binding, local.interface, null, null, &.{})) orelse try self.localProcClosure(local.binding);
-                    break :blk try self.immortalRecipe(closure);
+                    self.recipes.setSame(id.?, try self.immortalRecipe(closure));
                 },
-            };
-            try self.recipes.set(id.?, recipe);
+            }
         }
         return words;
     }
@@ -1570,7 +1570,8 @@ pub const Builder = struct {
                 },
                 .scoped_desc, .table, .node => invariant("a body materialized a type table word"),
             },
-            .recipe => |id| blk: {
+            .recipe => |named| blk: {
+                const id = self.recipes.resolve(named);
                 if (self.recipe_locals.get(id)) |known| return known;
                 switch (self.recipes.get(id)) {
                     .input => |index| return self.inputLocal(index),
@@ -1583,7 +1584,7 @@ pub const Builder = struct {
                         const descs = try self.allocator.alloc(LocalId, args.leading + args.elems.len);
                         defer self.allocator.free(descs);
                         @memset(descs[0..args.leading], word_desc);
-                        for (descs[args.leading..], args.elems) |*desc, ty| desc.* = try self.descOf(ty);
+                        for (descs[args.leading..], args.elems) |*desc, elem| desc.* = try self.materialize(elem);
                         break :blk try self.composedArgsDesc(descs);
                     },
                     .callable => break :blk try self.materializeCallable(id),
@@ -1655,7 +1656,10 @@ pub const Builder = struct {
                     const slot = frame.next;
                     frame.next += 1;
                     const id = switch (captures[slot]) {
-                        .recipe => |id| if (self.recipes.get(id) == .callable and !self.recipe_locals.contains(id)) id else null,
+                        .recipe => |named| resolved: {
+                            const id = self.recipes.resolve(named);
+                            break :resolved if (self.recipes.get(id) == .callable and !self.recipe_locals.contains(id)) id else null;
+                        },
                         .static => null,
                     } orelse {
                         frame.captures[slot] = try self.materialize(captures[slot]);
@@ -1686,7 +1690,7 @@ pub const Builder = struct {
             if (frame.next < frame.deferred.items.len) {
                 const slot = frame.deferred.items[frame.next];
                 frame.next += 1;
-                const id = captures[slot].recipe;
+                const id = self.recipes.resolve(captures[slot].recipe);
                 if (self.recipe_locals.get(id) orelse composedFrame(frames.items, id)) |known| {
                     delivered = known;
                     continue;
@@ -1750,14 +1754,16 @@ pub const Builder = struct {
         var pending: std.ArrayList(Tables.RecipeId) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, start);
-        while (pending.pop()) |id| {
+        while (pending.pop()) |named| {
+            const id = self.recipes.resolve(named);
             if ((try seen.getOrPut(self.allocator, id)).found_existing) continue;
             if (self.recipe_locals.contains(id)) continue;
             if (std.mem.findScalar(Tables.RecipeId, self.composing.items, id) != null) return true;
             const operands = switch (self.recipes.get(id)) {
                 .callable => |callable| callable.captures,
                 .table => |table| table.inputs,
-                .input, .desc, .args_desc => continue,
+                .args_desc => |args| args.elems,
+                .input, .desc => continue,
             };
             for (operands) |operand| switch (operand) {
                 .recipe => |next| try pending.append(self.allocator, next),
@@ -4948,19 +4954,19 @@ pub const Builder = struct {
     /// dictionary holds it. `localProcInstanceValue` gives its arguments.
     pub fn localProcWord(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId) Allocator.Error!Word {
         const closure = (try self.localProcClosureAt(local, use_ty, evidence, edge, subst)) orelse try self.localProcClosure(local);
-        return .{ .recipe = try self.recipes.intern(try self.immortalRecipe(closure)) };
+        return .{ .recipe = try self.immortalRecipe(closure) };
     }
 
     /// The immortal callable recipe of `closure`, adapted to its use's type.
-    fn immortalRecipe(self: *Builder, closure: LocalProcClosure) Allocator.Error!Tables.Recipe {
+    fn immortalRecipe(self: *Builder, closure: LocalProcClosure) Allocator.Error!Tables.RecipeId {
         if (closure.values.len != 0) invariant("an immortal function value captures a value, which methods never do");
         const captures = try std.mem.concat(self.program.arena.allocator(), Word, &.{ closure.descs, closure.words });
-        const callable: Tables.Recipe = .{ .callable = .{ .entry = closure.callee, .captures = captures } };
+        const callable = try self.recipes.intern(.{ .callable = .{ .entry = closure.callee, .captures = captures } });
         const adapt = closure.adapt orelse return callable;
-        switch (try self.adaptDictionary(.{ .recipe = try self.recipes.intern(callable) }, adapt.own_ty, adapt.use_ty)) {
-            .recipe => |id| return self.recipes.get(id),
+        return switch (try self.adaptDictionary(.{ .recipe = callable }, adapt.own_ty, adapt.use_ty)) {
+            .recipe => |id| id,
             .static => invariant("an adapted recipe became static"),
-        }
+        };
     }
 
     /// `localProcInstanceValue`'s closure for a generalized local procedure
