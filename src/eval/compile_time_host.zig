@@ -43,14 +43,18 @@ const max_payload_skew = if (std.debug.runtime_safety) max_allocation_alignment 
 /// no compile-time allocation produced, or hands back twice, is caught.
 const allocation_header_stamp: u64 = 0x5f6d_6f63_7074_696d;
 
-/// The largest allocation compile-time evaluation grants Roc code: the most
-/// a 32-bit target's `roc_alloc` can be asked for. A completed value belongs to
-/// every target and to every compiler host, including the 32-bit hosts whose
-/// compile-time interpreter cannot address more, so evaluation runs in that
-/// address space wherever the compiler runs (design.md "Compile-Time
-/// Constants"). A request past it, like one the host cannot satisfy, is the
-/// root's out-of-memory crash.
-pub const max_roc_allocation_bytes: usize = std.math.maxInt(u32);
+/// The largest allocation request compile-time evaluation for a program of
+/// `address_space` grants Roc code. A 32-bit program's `roc_alloc` cannot be
+/// asked for more bytes than its `usize` holds, so evaluating for one runs out
+/// of address space past them; a 64-bit program's evaluation is refused only
+/// what the compiler's memory cannot satisfy (design.md "Compile-Time
+/// Constants").
+pub fn maxAllocationBytes(address_space: base.target.TargetUsize) usize {
+    return switch (address_space) {
+        .u32 => std.math.maxInt(u32),
+        .u64 => std.math.maxInt(usize),
+    };
+}
 
 /// The crash message of a compile-time allocation that was refused.
 const out_of_memory_message = "ran out of memory";
@@ -162,12 +166,17 @@ timing_io: ?std.Io = null,
 jmp_buf: JmpBuf = undefined,
 active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
+/// The largest allocation request Roc code is granted (`maxAllocationBytes`).
+max_allocation_bytes: usize,
 
-pub fn init(allocator: Allocator) CompileTimeHost {
+/// A host for evaluating the roots of a program whose pointers are
+/// `address_space` wide.
+pub fn init(allocator: Allocator, address_space: base.target.TargetUsize) CompileTimeHost {
     const backing_allocator = hostBytesAllocator(allocator);
     return .{
         .arena = base.SingleThreadArena.init(backing_allocator),
         .host_arena = base.SingleThreadArena.init(backing_allocator),
+        .max_allocation_bytes = maxAllocationBytes(address_space),
     };
 }
 
@@ -409,7 +418,7 @@ fn allocateRocBytes(self: *CompileTimeHost, length: usize, alignment: usize) [*]
     if (alignment > max_allocation_alignment or !std.math.isPowerOfTwo(alignment)) {
         base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"});
     }
-    if (length > max_roc_allocation_bytes) self.rocOutOfMemory();
+    if (length > self.max_allocation_bytes) self.rocOutOfMemory();
     const size = @max(length, 1);
     const header: *AllocationHeader = if (size <= max_small_payload)
         self.allocateSmallBlock(smallClass(size))
@@ -567,7 +576,7 @@ fn hostBytesAllocator(allocator: Allocator) Allocator {
 }
 
 test "compile-time allocations honor alignment, keep their bytes across reallocation, and churn in constant time" {
-    var host = CompileTimeHost.init(std.testing.allocator);
+    var host = CompileTimeHost.init(std.testing.allocator, .u64);
     defer host.deinit();
     const roc_ops = host.ops();
 
@@ -606,7 +615,7 @@ test "compile-time allocations honor alignment, keep their bytes across realloca
 }
 
 test "memory a compile-time root frees is reused or returned to the backing allocator" {
-    var host = CompileTimeHost.init(std.testing.allocator);
+    var host = CompileTimeHost.init(std.testing.allocator, .u64);
     defer host.deinit();
     const roc_ops = host.ops();
 
@@ -652,6 +661,73 @@ test "memory a compile-time root frees is reused or returned to the backing allo
     _ = roc_ops.roc_alloc(roc_ops, 3 * 1024 * 1024, 1);
     host.resetForRun();
     try std.testing.expect(host.large_blocks == null);
+}
+
+/// A backing allocator that refuses every request past `limit` bytes and
+/// records whether one reached it, so a test can tell an allocation the host
+/// asked for from one it refused itself without holding the memory.
+pub const RefusingAllocator = struct {
+    child: Allocator,
+    limit: usize,
+    refused: bool = false,
+
+    pub fn allocator(self: *RefusingAllocator) Allocator {
+        return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *RefusingAllocator = @ptrCast(@alignCast(ctx));
+        if (len > self.limit) {
+            self.refused = true;
+            return null;
+        }
+        return self.child.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *RefusingAllocator = @ptrCast(@alignCast(ctx));
+        return new_len <= self.limit and self.child.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *RefusingAllocator = @ptrCast(@alignCast(ctx));
+        if (new_len > self.limit) return null;
+        return self.child.rawRemap(memory, alignment, new_len, ret_addr);
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *RefusingAllocator = @ptrCast(@alignCast(ctx));
+        self.child.rawFree(memory, alignment, ret_addr);
+    }
+};
+
+test "a 64-bit program's evaluation asks the compiler for any allocation, and a 32-bit one's runs out of address space past a 32-bit roc_alloc" {
+    if (@sizeOf(usize) < 8) return error.SkipZigTest;
+    const past_32_bits = @as(usize, std.math.maxInt(u32)) + 1;
+    inline for (.{ base.target.TargetUsize.u64, base.target.TargetUsize.u32 }) |address_space| {
+        var backing = RefusingAllocator{ .child = std.testing.allocator, .limit = 1 << 20 };
+        var host = CompileTimeHost.init(backing.allocator(), address_space);
+        defer host.deinit();
+        const Request = struct {
+            roc_ops: *RocOps,
+            length: usize,
+
+            fn call(self: *@This()) void {
+                _ = self.roc_ops.roc_alloc(self.roc_ops, self.length, 8);
+            }
+        };
+        var request = Request{ .roc_ops = host.ops(), .length = past_32_bits };
+        host.resetForRun();
+        var boundary = host.enterCrashBoundary();
+        defer boundary.deinit();
+        _ = try boundary.run(Request, &request, Request.call);
+
+        // Either way the root crashes where it asked, as it would on a
+        // target out of memory; only a 64-bit program's evaluation asks.
+        try std.testing.expectEqual(Termination.crashed, host.termination);
+        try std.testing.expectEqualStrings(out_of_memory_message, host.crashMessage().?);
+        try std.testing.expectEqual(address_space == .u64, backing.refused);
+    }
 }
 
 test "compile-time host declarations are referenced" {

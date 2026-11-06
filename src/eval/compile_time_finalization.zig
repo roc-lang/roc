@@ -130,6 +130,11 @@ pub const Options = struct {
     /// it between its phases and between evaluation levels, and fails with
     /// `error.Canceled` once it is set.
     cancel_request: ?*const std.atomic.Value(bool) = null,
+    /// The pointer width of the program the evaluated values are laid into.
+    /// Evaluating for a 32-bit program runs out of address space where that
+    /// program's `roc_alloc` would, so its hosts refuse what a 32-bit
+    /// `roc_alloc` cannot be asked for (design.md "Compile-Time Constants").
+    address_space: base.target.TargetUsize = .u64,
 
     fn checkCancelRequest(self: Options) error{Canceled}!void {
         const request = self.cancel_request orelse return;
@@ -4707,7 +4712,7 @@ fn evalDevLiteralRoot(
     const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(size_align.size, 1));
     defer allocator.free(ret_buf);
     @memset(ret_buf, 0);
-    var host = CompileTimeHost.init(host_allocator);
+    var host = CompileTimeHost.init(host_allocator, options.address_space);
     defer host.deinit();
     host.setGeneratedCode(native.executable.generatedCode(), native.linkedCode());
     host.timing_io = if (options.timing) |timing| timing.std_io else null;
@@ -5149,6 +5154,7 @@ const InterpreterProgram = struct {
         self.slots = try StaticSlotEnvironment.init(allocator, modules, lowered, roc_target.RocTarget.detectNative(), interpreter_static_data.image_options);
         errdefer self.slots.deinit();
         self.host = CompilerHost.init(allocator);
+        self.host.max_allocation_bytes = CompileTimeHost.maxAllocationBytes(options.address_space);
         errdefer self.host.deinit();
         self.static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
         errdefer self.static_strings.deinit();
@@ -5188,6 +5194,7 @@ const InterpreterProgram = struct {
             .static_strings = undefined,
             .interpreter = undefined,
         };
+        child.host.max_allocation_bytes = self.host.max_allocation_bytes;
         errdefer child.host.deinit();
         child.interpreter = try Interpreter.init(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, self.interpreter.static_strings, child.host.ops());
         errdefer child.interpreter.deinit();
@@ -6094,7 +6101,7 @@ fn evalDevProgramRoots(
                 .compile_time_root = compile_time_root,
                 .entry_offset = entry_offset,
                 .ret_buf = ret_buf,
-                .host = CompileTimeHost.init(host_allocator),
+                .host = CompileTimeHost.init(host_allocator, options.address_space),
                 .label = label,
             };
             jobs[i].host.setGeneratedCode(native.executable.generatedCode(), native.linkedCode());

@@ -23787,20 +23787,41 @@ either width; one too large for its destination's widths (a 32-bit target's
 lengths, or the ConstStore's) is `error.OutOfMemory`, as it would be on that
 target at runtime.
 
-Compile-time evaluation runs in a 32-bit address space on every compiler
-host. Its result belongs to every target and must be the same whichever
-host computed it, and a 32-bit compiler host's interpreter can address no
-more, so both evaluators' hosts grant Roc code at most what a 32-bit
-target's `roc_alloc` can be asked for. An allocation request past that, or
-one the compiler's own memory cannot satisfy, is an out-of-memory crash of
-the root at the operation that asked for it, never an error of the
-compilation: it is reported, or for a guarded root deferred to runtime,
-exactly like any other compile-time crash. A target that would refuse the
-same request at runtime crashes there too, so a hoisted expression that
-exceeds a 32-bit target's address space fails the same way at compile time
-as it would in that target's program, and never asks the compiler's host
-for memory no 32-bit target has. Only the host's own bookkeeping running out
-of memory fails the compilation.
+Compile-time evaluation gives the same result on every compiler host and for
+every target, except when it runs out of memory: heap exhaustion, stack
+overflow, or exhaustion of the virtual address space it runs in. Running out
+of memory is an out-of-memory crash of the root at the operation that asked,
+never an error of the compilation: it is reported, or for a guarded root
+deferred to runtime, exactly like any other compile-time crash. Only the
+host's own bookkeeping running out of memory fails the compilation.
+
+Evaluation runs in the address space of the program it completes values
+for, which a compilation names explicitly
+(`CompileTimeFinalization.Options.address_space`): the narrower of the
+compiler host's and its runtime program's, and a 64-bit one when it has no
+runtime program, as in `roc check`. Evaluating for a 32-bit program, such as
+a wasm32 build, is that program running out of address space where it
+would: both evaluators' hosts refuse an allocation request larger than a
+32-bit `roc_alloc` can be asked for, without asking the compiler's memory
+for it, and the root crashes there. A 64-bit program's evaluation is refused
+only what the compiler's memory cannot satisfy. Nothing else about
+evaluation depends on the target: values are computed at the compiler
+host's pointer width and laid into each program at its own layouts, as
+above. A host-width representation is never smaller than a 32-bit one, so a
+request the host refuses can stand for a smaller one on the target; that is
+a difference only in running out of memory.
+
+Running out of address space is decided where a value is computed, not where
+it is laid into a 32-bit image: by then the compiler would already have
+allocated, on the target's behalf, memory the target does not have. Because
+a checked module's cache entry holds its completed values, a 32-bit program
+must also never read one that only a 64-bit address space could produce, so
+the cache keeps checked-module and platform-pairing
+entries apart by the address space their evaluation ran in (the `mod` and
+`mod32` directories, and `pair` and `pair32`): a wasm32 build reads and writes
+only entries evaluated in a 32-bit address space, whatever a native build of
+the same modules stored. A module whose evaluation reported a crash is not
+cached at all.
 
 Diagnostic behavior must be identical between the dev-backend evaluator and the
 host-restricted LIR interpreter. A mismatch in crashes, expect failures,
