@@ -4157,8 +4157,18 @@ consumes its stored outcomes and replays its recorded debug observations without
 evaluation.
 The canonicalized module cache is a separate, non-checked boundary; the rules
 below bind the checked module and composition caches.
-Checked module cache entries are trusted compiler-produced cache entries, not
-adversarial inputs. Cache reads validate only the cache header,
+Checked module and inference cache entries are trusted compiler-produced cache
+entries, not adversarial inputs. Whole-payload integrity checksums on inference
+cache reads or writes are forbidden. Its file-integrity check compares the
+expected total length in the header with the loaded byte slice's length, without
+an additional file-length syscall. Do not add payload scans to defend against
+malicious input, arbitrary malformed payloads or bit flips. Inference admission
+checks the envelope identity, version and lengths and consumes trusted producer
+data without recursive serialized-root or payload validation passes. Declaration
+binding and current-dependency compatibility checks are semantic correctness
+requirements and remain mandatory. Publication stages complete entries and
+atomically renames them. Content hashes used to identify compilation inputs are
+separate from this rule. Cache reads validate only the cache header,
 entry-version hash, key, serialized layout, and ordinary binary decoding. They must
 not rerun checked validation, reselect hoisted roots, reconstruct checked data,
 or walk checked expressions to prove that cached checked data is still complete.

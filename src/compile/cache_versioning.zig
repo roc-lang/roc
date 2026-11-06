@@ -52,7 +52,7 @@ pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
     return comptime switch (entry) {
         .inference => compose(
             "roc-inference-entry-v1",
-            &.{ 1, check.CheckingDependencies.format_version },
+            &.{ 2, check.CheckingDependencies.format_version },
             &.{ module_env_layout, check.rootLayoutVersionHash(check.InferenceOutput.Serialized, 1) },
         ),
         .checked_module => compose(

@@ -13,8 +13,11 @@ const versioning = @import("cache_versioning.zig");
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CompactWriter = collections.CompactWriter;
-const header_len = 128;
-const magic = "ROCINFR1";
+// Inference uses the ordinary trusted local-cache admission contract. Do not
+// checksum serialized payloads on read or write: validate identity, version,
+// expected loaded length, then consume the trusted producer data.
+const header_len = 96;
+const magic = "ROCINFR2";
 
 /// An inference namespace in the coordinator's existing content-addressed cache.
 pub const Cache = struct {
@@ -96,13 +99,11 @@ fn encode(allocator: Allocator, key: [32]u8, env: *const ModuleEnv, output: *con
     @memcpy(buffer[0..8], magic);
     @memcpy(buffer[8..40], &versioning.entryVersionHash(.inference));
     @memcpy(buffer[40..72], &key);
-    std.mem.writeInt(u64, buffer[104..112], env_writer.total_bytes, .little);
-    std.mem.writeInt(u64, buffer[112..120], output_writer.total_bytes, .little);
+    std.mem.writeInt(u64, buffer[72..80], env_writer.total_bytes, .little);
+    std.mem.writeInt(u64, buffer[80..88], output_writer.total_bytes, .little);
+    std.mem.writeInt(u64, buffer[88..96], buffer.len, .little);
     _ = env_writer.writeToBuffer(buffer[header_len..][0..env_writer.total_bytes]) catch unreachable; // exact writer-sized slice
     _ = output_writer.writeToBuffer(buffer[output_start..]) catch unreachable; // exact writer-sized slice
-    var hash = base.Sha256.init(.{});
-    hash.update(buffer[104..]);
-    @memcpy(buffer[72..104], &hash.finalResult());
     return buffer;
 }
 
@@ -112,27 +113,21 @@ fn decode(key: [32]u8, bytes: []const u8) error{CorruptArtifact}!Bodies {
     if (@intFromPtr(bytes.ptr) % CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits() != 0) return error.CorruptArtifact;
     if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..8], magic) or
         !std.mem.eql(u8, bytes[8..40], &versioning.entryVersionHash(.inference)) or
-        !std.mem.eql(u8, bytes[40..72], &key)) return error.CorruptArtifact;
-    var hash = base.Sha256.init(.{});
-    hash.update(bytes[104..]);
-    if (!std.mem.eql(u8, bytes[72..104], &hash.finalResult())) return error.CorruptArtifact;
-    const env_len = std.math.cast(usize, std.mem.readInt(u64, bytes[104..112], .little)) orelse return error.CorruptArtifact;
-    const output_len = std.math.cast(usize, std.mem.readInt(u64, bytes[112..120], .little)) orelse return error.CorruptArtifact;
+        !std.mem.eql(u8, bytes[40..72], &key) or
+        std.mem.readInt(u64, bytes[88..96], .little) != bytes.len) return error.CorruptArtifact;
+    const env_len = std.math.cast(usize, std.mem.readInt(u64, bytes[72..80], .little)) orelse return error.CorruptArtifact;
+    const output_len = std.math.cast(usize, std.mem.readInt(u64, bytes[80..88], .little)) orelse return error.CorruptArtifact;
     if (env_len > bytes.len - header_len or env_len < @sizeOf(ModuleEnv.Serialized)) return error.CorruptArtifact;
     const output_start = header_len + std.mem.alignForward(usize, env_len, 16);
     if (output_start > bytes.len or output_len != bytes.len - output_start or output_len < @sizeOf(check.InferenceOutput.Serialized))
         return error.CorruptArtifact;
     const env = bytes[header_len..][0..env_len];
-    const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(env.ptr));
-    try serialized.validate(env.len);
     const output: *const check.InferenceOutput.Serialized = @ptrCast(@alignCast(bytes[output_start..].ptr));
-    try check.validateSerialized(check.InferenceOutput.Serialized, output, output_len);
     const metadata = output.deserialize(@intFromPtr(output));
-    try metadata.validate();
     return .{ .env = env, .metadata = metadata };
 }
 
-test "inference capsule rejects truncation corruption incompatible versions and wrong keys" {
+test "inference capsule admits trusted payloads by identity and loaded length" {
     const allocator = std.testing.allocator;
     var env = try ModuleEnv.init(allocator, "");
     defer env.deinit();
@@ -146,7 +141,7 @@ test "inference capsule rejects truncation corruption incompatible versions and 
     try std.testing.expectError(error.CorruptArtifact, decode(@splat(8), bytes));
     for ([_]usize{ 0, header_len - 1, header_len, bytes.len - 1 }) |len|
         try std.testing.expectError(error.CorruptArtifact, decode(key, bytes[0..len]));
-    for ([_]usize{ 0, 8, 40, 72, 104, 112, header_len, bytes.len - 1 }) |offset| {
+    for ([_]usize{ 0, 8, 40, 72, 80, 88 }) |offset| {
         bytes[offset] ^= 1;
         try std.testing.expectError(error.CorruptArtifact, decode(key, bytes));
         bytes[offset] ^= 1;
