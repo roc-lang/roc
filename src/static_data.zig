@@ -1480,7 +1480,7 @@ pub fn buildStaticDataForWidth(
 ) MaterializationError![]StaticDataExport {
     @import("base").dev_diagnostics.countTestWork(.static_data, 1);
     const root = modules.root orelse {
-        if (hasProvidedData(modules)) staticDataInvariant("provided data exports require a root checked module");
+        if (try hasProvidedData(modules)) staticDataInvariant("provided data exports require a root checked module");
         if (lowered) |lowered_program| {
             if (lowered_program.lir_result.static_data_values.items.len != 0) {
                 staticDataInvariant("internal static data values require a root checked module");
@@ -1489,7 +1489,7 @@ pub fn buildStaticDataForWidth(
         return try allocator.alloc(StaticDataExport, 0);
     };
     const lowered_program = lowered orelse {
-        if (moduleHasProvidedData(root.module)) staticDataInvariant("static data exports require LIR layout output");
+        if (try moduleHasProvidedData(root.module)) staticDataInvariant("static data exports require LIR layout output");
         return try allocator.alloc(StaticDataExport, 0);
     };
 
@@ -1900,7 +1900,7 @@ const StaticDataBuilder = struct {
     }
 
     fn buildProvidedExports(self: *StaticDataBuilder) MaterializationError!void {
-        for (self.root.module.provided_exports.exports, 0..) |provided, provided_index| {
+        for ((try self.root.module.providedExports()).exports, 0..) |provided, provided_index| {
             const data = switch (provided) {
                 .data => |data| data,
                 .procedure, .checked_error => continue,
@@ -2246,8 +2246,8 @@ const StaticDataBuilder = struct {
     }
 };
 
-fn moduleHasProvidedData(module: *const Checked.CheckedModuleArtifact) bool {
-    for (module.provided_exports.exports) |provided| {
+fn moduleHasProvidedData(module: *const Checked.CheckedModuleArtifact) Allocator.Error!bool {
+    for ((try module.providedExports()).exports) |provided| {
         switch (provided) {
             .data => return true,
             .procedure, .checked_error => {},
@@ -2256,9 +2256,9 @@ fn moduleHasProvidedData(module: *const Checked.CheckedModuleArtifact) bool {
     return false;
 }
 
-fn hasProvidedData(modules: ModuleViews) bool {
+fn hasProvidedData(modules: ModuleViews) Allocator.Error!bool {
     if (modules.root) |root| {
-        if (moduleHasProvidedData(root.module)) return true;
+        if (try moduleHasProvidedData(root.module)) return true;
     }
     return false;
 }

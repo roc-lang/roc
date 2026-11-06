@@ -640,6 +640,10 @@ pub const CanonicalNameStore = struct {
         return lookupId(ExportNameId, &self.export_names, idents.getText(ident));
     }
 
+    pub fn lookupExternalSymbolName(self: *const CanonicalNameStore, text: []const u8) ?ExternalSymbolNameId {
+        return lookupId(ExternalSymbolNameId, &self.external_symbol_names, text);
+    }
+
     pub fn lookupExternalSymbolIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?ExternalSymbolNameId {
         return lookupId(ExternalSymbolNameId, &self.external_symbol_names, idents.getText(ident));
     }

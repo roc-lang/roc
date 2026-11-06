@@ -5329,7 +5329,7 @@ fn checkedArtifactForBuild(
     }
     // A `provides` entry whose type is erroneous declares no host ABI, so no
     // program exists to link; the error was rendered with the diagnostics.
-    if (artifact.hasProvidedExportWithoutAbi()) return error.TypeCheckingFailed;
+    if (try artifact.hasProvidedExportWithoutAbi()) return error.TypeCheckingFailed;
     return artifact;
 }
 
@@ -6765,7 +6765,7 @@ fn lowerRunUnits(
     const root_artifact = try build_env.executableRootCheckedArtifact();
     // A `provides` entry whose type is erroneous declares no host ABI, so no
     // program exists to run; the error was rendered with the diagnostics.
-    if (root_artifact.hasProvidedExportWithoutAbi()) {
+    if (try root_artifact.hasProvidedExportWithoutAbi()) {
         reporter.fail();
         return error.TypeCheckingFailed;
     }
@@ -6784,7 +6784,7 @@ fn lowerRunUnits(
     const selected_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, (try root_artifact.rootRequests()).runtime_requests);
     defer ctx.gpa.free(selected_roots);
     const entrypoint_names = try ctx.arena.alloc([]const u8, selected_roots.len);
-    for (selected_roots, entrypoint_names) |root, *name| name.* = try ctx.arena.dupe(u8, nativeEntrypointSymbolName(root_artifact, root));
+    for (selected_roots, entrypoint_names) |root, *name| name.* = try ctx.arena.dupe(u8, try nativeEntrypointSymbolName(root_artifact, root));
 
     var root_program: ?lir.CheckedPipeline.LoweredProgram = null;
     errdefer if (root_program) |*program| program.deinit();
@@ -8396,7 +8396,7 @@ fn nativeBuildEntrypoints(
         }
 
         entrypoint.* = .{
-            .symbol_name = nativeEntrypointSymbolName(root_artifact, root),
+            .symbol_name = try nativeEntrypointSymbolName(root_artifact, root),
             .proc = root_proc,
             .arg_layouts = arg_layouts,
             .ret_layout = proc_spec.ret_layout,
@@ -8409,8 +8409,8 @@ fn nativeBuildEntrypoints(
 fn nativeEntrypointSymbolName(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     root: check.CheckedArtifact.RootRequest,
-) []const u8 {
-    const entrypoint_name = root_artifact.providedEntrypointName(root) orelse {
+) Allocator.Error![]const u8 {
+    const entrypoint_name = (try root_artifact.providedEntrypointName(root)) orelse {
         base.invariant(
             "platform entrypoint invariant violated: exported platform root has no published FFI symbol",
             .{},

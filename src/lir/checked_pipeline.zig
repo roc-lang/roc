@@ -1314,7 +1314,7 @@ pub const LoweredProgram = struct {
             std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
             const root = (try root_module.lookupRootRequestByOrder(metadata.order)) orelse
                 checkedPipelineInvariant("platform entrypoint root metadata has no checked root request");
-            const symbol = root_module.providedEntrypointName(root) orelse
+            const symbol = (try root_module.providedEntrypointName(root)) orelse
                 checkedPipelineInvariant("platform entrypoint root metadata has no checked export declaration");
             name.* = try allocator.dupe(u8, symbol);
             initialized += 1;
@@ -2064,7 +2064,7 @@ fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Alloca
     if (builtin.mode != .debug) return;
     switch (target.checked_module_state) {
         .complete => try modules.root.module.verifyComplete(),
-        .checking_finalization => modules.root.module.verifyReadyForCompileTimeLowering(),
+        .checking_finalization => try modules.root.module.verifyReadyForCompileTimeLowering(),
     }
 }
 

@@ -1347,7 +1347,6 @@ fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.
         },
         .checking_context_identity = .{},
         .module_env = .{ .checked_source = module_env },
-        .provides_requires = .{},
         .method_registry = .{},
         .static_dispatch_plans = .{},
         .resolved_value_refs = .{},

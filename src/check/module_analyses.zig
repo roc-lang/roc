@@ -18,6 +18,7 @@ const ImportedModuleView = checked_artifact.ImportedModuleView;
 const ModuleResolver = checked_artifact.ModuleResolver;
 const ExportClosures = checked_artifact.ExportClosures;
 const ExportRows = checked_artifact.ExportRows;
+const ProvidedExportTable = checked_artifact.ProvidedExportTable;
 const PublicApiDependencies = checked_artifact.PublicApiDependencies;
 const LoweringVisibility = checked_artifact.LoweringVisibility;
 const ModuleInterfaceCapabilities = checked_artifact.ModuleInterfaceCapabilities;
@@ -200,6 +201,7 @@ pub const ModuleAnalyses = struct {
     /// closures and public API dependencies are its platform's.
     platform: ?*const CheckedModuleArtifact,
     export_rows: collections.OnceSlot(*ExportRows, .module_export_rows) = .empty,
+    provided_exports: collections.OnceSlot(*ProvidedExportTable, .module_provided_exports) = .empty,
     export_closures: collections.OnceSlot(*ExportClosures, .module_export_closures) = .empty,
     public_api_dependencies: collections.OnceSlot(*PublicApiDependencies, .module_public_api_dependencies) = .empty,
     lowering_visibility: collections.OnceSlot(*LoweringVisibility, .module_lowering_visibility) = .empty,
@@ -327,6 +329,10 @@ pub const ModuleAnalyses = struct {
             allocator.destroy(owned);
         }
         if (self.export_closures.peek()) |closures| closures.destroy(allocator);
+        if (self.provided_exports.peek()) |table| {
+            allocator.free(table.exports);
+            allocator.destroy(table);
+        }
         if (self.export_rows.peek()) |rows| {
             rows.deinit(allocator);
             allocator.destroy(rows);
@@ -382,12 +388,24 @@ pub const ModuleAnalyses = struct {
         return self.export_rows.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.exportRows);
     }
 
+    /// The provided exports of `owner`, this module. A platform/app pairing's
+    /// are its pairing's own slot, read at their types under the pairing.
+    pub fn providedExports(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const ProvidedExportTable {
+        self.assertPublished();
+        if (self.platform != null) checked_artifact.checkedArtifactInvariant("a pairing's provided exports were read from its module analyses", .{});
+        return self.provided_exports.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.providedExports);
+    }
+
     const ViewRequest = struct {
         analyses: *ModuleAnalyses,
         owner: ImportedModuleView,
 
         fn exportRows(request: ViewRequest) Allocator.Error!*ExportRows {
             return checked_artifact.computeExportRows(request.analyses.allocator, request.owner);
+        }
+
+        fn providedExports(request: ViewRequest) Allocator.Error!*ProvidedExportTable {
+            return checked_artifact.computeModuleProvidedExports(request.analyses.allocator, request.owner);
         }
     };
 

@@ -1009,7 +1009,7 @@ fn selectGlueSpecRootProc(
         std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
         const root = (try root_artifact.lookupRootRequestByOrder(metadata.order)) orelse
             glueInvariant("missing root request order {d}", .{metadata.order});
-        const ffi_symbol = root_artifact.providedEntrypointName(root) orelse
+        const ffi_symbol = (try root_artifact.providedEntrypointName(root)) orelse
             glueInvariant("provided export root has no published FFI symbol", .{});
         if (std.mem.eql(u8, ffi_symbol, expected_ffi_symbol)) return root_proc;
     }

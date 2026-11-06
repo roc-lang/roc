@@ -938,36 +938,6 @@ fn sourceSchemeOfVar(env: *const ModuleEnv, var_: Var) CheckedTypeSchemeId {
     return @fromBackingInt(@backingInt(type_ids.fromVar(env.types.resolveVar(var_).var_)));
 }
 
-/// Public `ProvidesEntry` declaration.
-pub const ProvidesEntry = struct {
-    source_name: canonical.ExportNameId,
-    ffi_symbol: canonical.ExternalSymbolNameId,
-    /// The platform-local top-level definition selected by canonicalization.
-    def: CIR.Def.Idx,
-};
-
-/// Public `RequiresEntry` declaration.
-pub const RequiresEntry = struct {
-    platform_name: canonical.ExportNameId,
-    declared_source_ty: CheckedTypeSchemeId,
-};
-
-/// Public `ProvidesRequiresMetadata` declaration.
-pub const ProvidesRequiresMetadata = struct {
-    provides: []ProvidesEntry = &.{},
-    requires: []RequiresEntry = &.{},
-
-    pub const Serialized = extern struct {
-        provides: SerializedSlice(ProvidesEntry) = .{},
-        requires: SerializedSlice(RequiresEntry) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(ProvidesRequiresMetadata, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-};
-
 /// Public `ProvidedProcedureExport` declaration.
 pub const ProvidedProcedureExport = struct {
     source_name: canonical.ExportNameId,
@@ -1018,70 +988,79 @@ pub const ProvidedExportId = enum(u32) { _ };
 pub const ProvidedExportTable = struct {
     exports: []ProvidedExport = &.{},
 
-    pub const Serialized = extern struct {
-        exports: SerializedSlice(ProvidedExport) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(ProvidedExportTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
-    pub fn fromModule(
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        checked_types: *CheckedTypePublication,
-        top_level_values: *const TopLevelValueTable,
-        published_provides: []const ProvidesEntry,
-    ) Allocator.Error!ProvidedExportTable {
-        var exports = std.ArrayList(ProvidedExport).empty;
-        errdefer exports.deinit(allocator);
-
-        for (published_provides) |published| {
-            const def_idx = published.def;
-            const top_level = top_level_values.lookupByDef(def_idx) orelse
-                checkedArtifactInvariant("provided entry has no top-level value", .{});
-            const checked_type = try checkedTypeIdForVar(allocator, module, checked_types, module.defType(def_idx));
-            // The host ABI is derived from the published type, so an entry
-            // whose type contains an error (an undeclared type in its
-            // annotation, for instance) declares no ABI, whatever value kind
-            // it binds. Checking recorded the definition's pattern as
-            // erroneous exactly when the definition's type reaches erroneous
-            // content (`ModuleEnv.erroneous_nodes`).
-            if (module.moduleEnvConst().nodeIsErroneous(ModuleEnv.nodeIdxFrom(top_level.pattern))) {
-                try exports.append(allocator, .{ .checked_error = .{
-                    .source_name = published.source_name,
-                    .ffi_symbol = published.ffi_symbol,
-                    .def = def_idx,
-                    .pattern = top_level.pattern,
-                } });
-                continue;
-            }
-            switch (top_level.value) {
-                .procedure_binding => |binding| try exports.append(allocator, .{ .procedure = .{
-                    .source_name = published.source_name,
-                    .ffi_symbol = published.ffi_symbol,
-                    .def = def_idx,
-                    .pattern = top_level.pattern,
-                    .checked_type = checked_type,
-                    .source_scheme = top_level.source_scheme,
-                    .binding = binding,
-                } }),
-                .const_ref => |const_ref| try exports.append(allocator, .{ .data = .{
-                    .source_name = published.source_name,
-                    .ffi_symbol = published.ffi_symbol,
-                    .def = def_idx,
-                    .pattern = top_level.pattern,
-                    .checked_type = checked_type,
-                    .source_scheme = top_level.source_scheme,
-                    .const_ref = const_ref,
-                } }),
-            }
-        }
-
-        return .{ .exports = try exports.toOwnedSlice(allocator) };
-    }
-
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
+
+/// The provided exports of `owner`: one row per `provides` entry naming a
+/// local definition, in `provides` order, at the definition's own type.
+pub fn computeModuleProvidedExports(allocator: Allocator, owner: ImportedModuleView) Allocator.Error!*ProvidedExportTable {
+    const env = owner.module_env;
+    const idents = env.getIdentStoreConst();
+    const names = owner.canonical_names;
+    var exports = std.ArrayList(ProvidedExport).empty;
+    errdefer exports.deinit(allocator);
+
+    for (env.provides_entries.items.items) |entry| {
+        const def_idx = entry.local_def orelse continue;
+        const source_name = names.lookupExportIdent(idents, entry.ident) orelse
+            checkedArtifactInvariant("a provided export's name was never interned", .{});
+        const ffi_symbol = names.lookupExternalSymbolName(env.getString(entry.ffi_symbol)) orelse
+            checkedArtifactInvariant("a provided export's symbol was never interned", .{});
+        const top_level = owner.top_level_values.lookupByDef(def_idx) orelse
+            checkedArtifactInvariant("provided entry has no top-level value", .{});
+        // The host ABI is derived from the checked type, so an entry whose
+        // type contains an error (an undeclared type in its annotation, for
+        // instance) declares no ABI, whatever value kind it binds. Checking
+        // recorded the definition's pattern as erroneous exactly when the
+        // definition's type reaches erroneous content
+        // (`ModuleEnv.erroneous_nodes`).
+        if (env.nodeIsErroneous(ModuleEnv.nodeIdxFrom(top_level.pattern))) {
+            try exports.append(allocator, .{ .checked_error = .{
+                .source_name = source_name,
+                .ffi_symbol = ffi_symbol,
+                .def = def_idx,
+                .pattern = top_level.pattern,
+            } });
+            continue;
+        }
+        const checked_type = try reachedSourceRoot(owner, ModuleEnv.varFrom(def_idx)) orelse
+            checkedArtifactInvariant("a provided export's type was not published", .{});
+        switch (top_level.value) {
+            .procedure_binding => |binding| try exports.append(allocator, .{ .procedure = .{
+                .source_name = source_name,
+                .ffi_symbol = ffi_symbol,
+                .def = def_idx,
+                .pattern = top_level.pattern,
+                .checked_type = checked_type,
+                .source_scheme = top_level.source_scheme,
+                .binding = binding,
+            } }),
+            .const_ref => |const_ref| try exports.append(allocator, .{ .data = .{
+                .source_name = source_name,
+                .ffi_symbol = ffi_symbol,
+                .def = def_idx,
+                .pattern = top_level.pattern,
+                .checked_type = checked_type,
+                .source_scheme = top_level.source_scheme,
+                .const_ref = const_ref,
+            } }),
+        }
+    }
+
+    const result = try allocator.create(ProvidedExportTable);
+    result.* = .{ .exports = try exports.toOwnedSlice(allocator) };
+    return result;
+}
+
+/// Intern the names a module's provided exports read: each `provides`
+/// entry's exported name and host symbol.
+fn internProvidedExportNames(env: *const ModuleEnv, names: *canonical.CanonicalNameStore) Allocator.Error!void {
+    for (env.provides_entries.items.items) |entry| {
+        if (entry.local_def == null) continue;
+        _ = try names.internExportIdent(env.getIdentStoreConst(), entry.ident);
+        _ = try names.internExternalSymbolName(env.getString(entry.ffi_symbol));
+    }
+}
 
 /// Public `RootRequestKind` declaration.
 pub const RootRequestKind = enum(u8) {
@@ -1253,7 +1232,7 @@ fn moduleRootRequests(allocator: Allocator, owner: ImportedModuleView) Allocator
         module_idx,
         env,
         bodies,
-        owner.provided_exports,
+        try owner.providedExports(),
         owner.top_level_values,
         owner.top_level_procedure_bindings,
         context.platform_app_relation,
@@ -10485,7 +10464,6 @@ const TestImportViewTables = struct {
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable = .{},
     hosted_procs: HostedProcTable = .{},
     hosted_bindings: HostedBindingTable = .{},
-    provided_exports: ProvidedExportTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable = .{},
     platform_required_declarations: PlatformRequiredDeclarationTable = .{},
     platform_required_bindings: PlatformRequiredBindingTable = .{},
@@ -10545,7 +10523,6 @@ const TestImportViewTables = struct {
             .static_dispatch_plans = &self.static_dispatch_plans,
             .hosted_procs = &self.hosted_procs,
             .hosted_bindings = &self.hosted_bindings,
-            .provided_exports = &self.provided_exports,
             .top_level_procedure_bindings = &self.top_level_procedure_bindings,
             .platform_required_declarations = &self.platform_required_declarations,
             .platform_required_bindings = &self.platform_required_bindings,
@@ -23983,7 +23960,7 @@ pub const PlatformPairing = struct {
         const allocator = self.allocator;
         const table = try allocator.create(ProvidedExportTable);
         errdefer allocator.destroy(table);
-        const exports = try allocator.dupe(ProvidedExport, self.platform.provided_exports.exports);
+        const exports = try allocator.dupe(ProvidedExport, (try self.platform.providedExports()).exports);
         errdefer allocator.free(exports);
         for (exports) |*provided| switch (provided.*) {
             inline .procedure, .data => |*value| value.checked_type = try self.overlay.image(value.checked_type),
@@ -24021,8 +23998,6 @@ pub const PlatformPairing = struct {
                 "checked_const_bodies",
                 "compile_time_roots",
                 "const_templates",
-                "provides_requires",
-                "provided_exports",
                 "method_registry",
                 "static_dispatch_plans",
                 "checked_procedure_templates",
@@ -24452,48 +24427,6 @@ fn topLevelDefSourceName(
 
 fn topLevelDefSourceIdent(def: TypedCIR.Def) ?base.Ident.Idx {
     return if (def.pattern.data == .assign) def.pattern.data.assign.ident else null;
-}
-
-fn publishProvidesMetadata(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-) Allocator.Error![]ProvidesEntry {
-    const module_env = module.moduleEnvConst();
-    const source = module_env.provides_entries.items.items;
-    var provides = std.ArrayList(ProvidesEntry).empty;
-    errdefer provides.deinit(allocator);
-
-    for (source) |entry| {
-        const def = entry.local_def orelse continue;
-        try provides.append(allocator, .{
-            .source_name = try names.internExportIdent(module_env.getIdentStoreConst(), entry.ident),
-            .ffi_symbol = try names.internExternalSymbolName(module_env.getString(entry.ffi_symbol)),
-            .def = def,
-        });
-    }
-
-    return provides.toOwnedSlice(allocator);
-}
-
-fn publishRequiresMetadata(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    publication: *const CheckedTypePublication,
-) Allocator.Error![]RequiresEntry {
-    const source = module.requiresTypes();
-    const requires = try allocator.alloc(RequiresEntry, source.len);
-    errdefer allocator.free(requires);
-
-    for (source, 0..) |entry, i| {
-        requires[i] = .{
-            .platform_name = try names.internExportIdent(module.identStoreConst(), entry.ident),
-            .declared_source_ty = publication.schemeForSourceVar(module, ModuleEnv.varFrom(entry.type_anno)),
-        };
-    }
-
-    return requires;
 }
 
 /// Public `BoxPayloadCapabilityId` declaration.
@@ -31097,8 +31030,6 @@ pub const CheckedModuleArtifact = struct {
     /// included.
     inference: InferenceOutput = .{},
     checked_const_bodies: CheckedConstBodyTable = .{},
-    provides_requires: ProvidesRequiresMetadata,
-    provided_exports: ProvidedExportTable = .{},
     method_registry: static_dispatch.MethodRegistry,
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable,
     resolved_value_refs: ResolvedValueRefTable,
@@ -31197,7 +31128,7 @@ pub const CheckedModuleArtifact = struct {
     /// own types; these are read under its pairing.
     pub fn providedExports(self: *const CheckedModuleArtifact) Allocator.Error!*const ProvidedExportTable {
         if (self.pairing) |pairing| return try pairing.providedExports();
-        return &self.provided_exports;
+        return importedView(self).providedExports();
     }
 
     /// Give a deserialized artifact its module's sealed source types and fresh
@@ -31471,11 +31402,11 @@ pub const CheckedModuleArtifact = struct {
     }
 
     /// Borrow a provided procedure root's exact published FFI symbol.
-    pub fn providedEntrypointName(self: *const CheckedModuleArtifact, root: RootRequest) ?[]const u8 {
+    pub fn providedEntrypointName(self: *const CheckedModuleArtifact, root: RootRequest) Allocator.Error!?[]const u8 {
         if (root.kind != .provided_export) return null;
         const export_id = root.provided_export.get() orelse
             checkedArtifactInvariant("provided root has no export declaration identity", .{});
-        const provided = self.provided_exports.exports[@backingInt(export_id)];
+        const provided = (try self.providedExports()).exports[@backingInt(export_id)];
         const procedure = switch (provided) {
             .procedure => |procedure| procedure,
             .data, .checked_error => checkedArtifactInvariant("provided procedure root names an export that is not a procedure", .{}),
@@ -31487,8 +31418,8 @@ pub const CheckedModuleArtifact = struct {
     /// (`ProvidedCheckedErrorExport`), in which case no program with this
     /// module's host boundary exists and a runtime command stops at the
     /// diagnostics already reported.
-    pub fn hasProvidedExportWithoutAbi(self: *const CheckedModuleArtifact) bool {
-        for (self.provided_exports.exports) |provided| {
+    pub fn hasProvidedExportWithoutAbi(self: *const CheckedModuleArtifact) Allocator.Error!bool {
+        for ((try self.providedExports()).exports) |provided| {
             if (provided == .checked_error) return true;
         }
         return false;
@@ -31547,8 +31478,6 @@ pub const CheckedModuleArtifact = struct {
         checked_types: CheckedTypeStore.Serialized,
         checked_const_bodies: CheckedConstBodyTable.Serialized,
         inference: InferenceOutput.Serialized,
-        provides_requires: ProvidesRequiresMetadata.Serialized,
-        provided_exports: ProvidedExportTable.Serialized,
         method_registry: static_dispatch.MethodRegistry.Serialized,
         static_dispatch_plans: static_dispatch.StaticDispatchPlanTable.Serialized,
         resolved_value_refs: ResolvedValueRefTable.Serialized,
@@ -31592,7 +31521,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 171);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 168);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -31857,7 +31786,7 @@ pub const CheckedModuleArtifact = struct {
         }
     }
 
-    pub fn verifyReadyForCompileTimeLowering(self: *const CheckedModuleArtifact) void {
+    pub fn verifyReadyForCompileTimeLowering(self: *const CheckedModuleArtifact) Allocator.Error!void {
         if (builtin.mode != .debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
@@ -31903,7 +31832,7 @@ pub const CheckedModuleArtifact = struct {
             if (request.kind == .provided_export) {
                 const export_id = request.provided_export.get() orelse
                     checkedArtifactInvariant("provided root has no export declaration identity", .{});
-                const provided = self.provided_exports.exports[@backingInt(export_id)];
+                const provided = (try self.providedExports()).exports[@backingInt(export_id)];
                 std.debug.assert(provided == .procedure);
                 std.debug.assert(request.source == .def);
                 std.debug.assert(request.source.def == provided.procedure.def);
@@ -32351,20 +32280,9 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        for (self.provides_requires.requires) |entry| {
-            _ = self.nameStore().exportNameText(entry.platform_name);
-            _ = self.typeStore().scheme(entry.declared_source_ty);
-        }
-
-        if (self.provided_exports.exports.len != self.provides_requires.provides.len) {
-            base.invariant("checked artifact invariant violated: provided export table does not match provides metadata", .{});
-        }
-        for (self.provided_exports.exports, self.provides_requires.provides) |provided, metadata| {
+        for ((try self.providedExports()).exports) |provided| {
             switch (provided) {
                 .checked_error => |export_| {
-                    std.debug.assert(export_.source_name == metadata.source_name);
-                    std.debug.assert(export_.ffi_symbol == metadata.ffi_symbol);
-                    std.debug.assert(export_.def == metadata.def);
                     const top_level = self.top_level_values.lookupByDef(export_.def) orelse {
                         base.invariant("checked artifact invariant violated: provided checked-error export references missing top-level value", .{});
                     };
@@ -32372,9 +32290,6 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(top_level.source_name == export_.source_name);
                 },
                 .procedure => |procedure| {
-                    std.debug.assert(procedure.source_name == metadata.source_name);
-                    std.debug.assert(procedure.ffi_symbol == metadata.ffi_symbol);
-                    std.debug.assert(procedure.def == metadata.def);
                     std.debug.assert(self.typesView().containsId(procedure.checked_type));
                     const top_level = self.top_level_values.lookupByDef(procedure.def) orelse {
                         base.invariant("checked artifact invariant violated: provided procedure export references missing top-level value", .{});
@@ -32388,9 +32303,6 @@ pub const CheckedModuleArtifact = struct {
                     }
                 },
                 .data => |data| {
-                    std.debug.assert(data.source_name == metadata.source_name);
-                    std.debug.assert(data.ffi_symbol == metadata.ffi_symbol);
-                    std.debug.assert(data.def == metadata.def);
                     std.debug.assert(self.typesView().containsId(data.checked_type));
                     const top_level = self.top_level_values.lookupByDef(data.def) orelse {
                         base.invariant("checked artifact invariant violated: provided data export references missing top-level value", .{});
@@ -32505,7 +32417,6 @@ pub const ImportedModuleView = struct {
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     hosted_procs: *const HostedProcTable,
     hosted_bindings: *const HostedBindingTable,
-    provided_exports: *const ProvidedExportTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -32540,6 +32451,12 @@ pub const ImportedModuleView = struct {
     pub fn dispatch(self: ImportedModuleView) CheckedDispatch {
         return self.checked_bodies.tables.dispatch orelse
             checkedArtifactInvariant("dispatch was read from a view without module analyses", .{});
+    }
+
+    /// The module's provided exports. A platform/app pairing's are its
+    /// pairing's (`CheckedModuleArtifact.providedExports`).
+    pub fn providedExports(self: ImportedModuleView) Allocator.Error!*const ProvidedExportTable {
+        return self.analyses().providedExports(self);
     }
 
     /// The module's export rows.
@@ -32632,7 +32549,6 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .static_dispatch_plans = &artifact.static_dispatch_plans,
         .hosted_procs = &artifact.hosted_procs,
         .hosted_bindings = &artifact.hosted_bindings,
-        .provided_exports = &artifact.provided_exports,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .platform_required_declarations = &artifact.platform_required_declarations,
         .platform_required_bindings = &artifact.platform_required_bindings,
@@ -33877,8 +33793,7 @@ pub fn publishFromTypedModule(
         direct_import_module_keys,
     );
 
-    const provides = try publishProvidesMetadata(allocator, module, &canonical_names);
-    errdefer allocator.free(provides);
+    try internProvidedExportNames(module_env, &canonical_names);
 
     const owner_artifact = artifact_key.digest();
 
@@ -33913,8 +33828,6 @@ pub fn publishFromTypedModule(
     defer checked_type_publication.deinitIndex(allocator);
     errdefer if (!stores_moved) checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
-    const requires = try publishRequiresMetadata(allocator, module, &canonical_names, &checked_type_publication);
-    errdefer allocator.free(requires);
     var platform_type_inputs = try PlatformTypeInputs.fromModule(allocator, module, &canonical_names, &checked_type_publication, &platform_required_declarations);
     errdefer platform_type_inputs.deinit(allocator);
 
@@ -34094,15 +34007,6 @@ pub fn publishFromTypedModule(
         &resolved_value_refs,
     );
 
-    var provided_exports = try ProvidedExportTable.fromModule(
-        allocator,
-        module,
-        &checked_type_publication,
-        &top_level_values,
-        provides,
-    );
-    errdefer provided_exports.deinit(allocator);
-
     sealConstEvalTemplatesForRoots(
         &const_templates,
         &compile_time_roots,
@@ -34145,11 +34049,6 @@ pub fn publishFromTypedModule(
         .checked_types = checked_types.*,
         .inference = inference,
         .checked_const_bodies = checked_const_bodies,
-        .provides_requires = .{
-            .provides = provides,
-            .requires = requires,
-        },
-        .provided_exports = provided_exports,
         .method_registry = method_registry,
         .static_dispatch_plans = static_dispatch_plans,
         .resolved_value_refs = resolved_value_refs,
@@ -34314,7 +34213,7 @@ fn expectProvidedExportKind(
 
     var provided_data_exports: usize = 0;
     var provided_procedure_exports: usize = 0;
-    for (artifact.provided_exports.exports) |provided| {
+    for ((try artifact.providedExports()).exports) |provided| {
         switch (provided) {
             .data => provided_data_exports += 1,
             .procedure => provided_procedure_exports += 1,
@@ -34862,7 +34761,6 @@ test "relation projection preserves anonymous row identity and provenance" {
         },
         .checking_context_identity = .{},
         .module_env = .{ .checked_source = &module_env },
-        .provides_requires = .{},
         .method_registry = .{},
         .static_dispatch_plans = .{},
         .resolved_value_refs = .{},
@@ -35111,7 +35009,6 @@ test "artifact views are read-only projections" {
         },
         .checking_context_identity = .{},
         .module_env = .{ .checked_source = &module_env },
-        .provides_requires = .{},
         .method_registry = .{},
         .static_dispatch_plans = .{},
         .resolved_value_refs = .{},
@@ -35207,9 +35104,7 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
     try expectAllSliceStoreRoundTrips(TopLevelProcedureBindingTable);
     try expectAllSliceStoreRoundTrips(PlatformRequiredDeclarationTable);
     try expectAllSliceStoreRoundTrips(PlatformRequirementRelationTable);
-    try expectAllSliceStoreRoundTrips(ProvidedExportTable);
     try expectAllSliceStoreRoundTrips(TopLevelValueTable);
-    try expectAllSliceStoreRoundTrips(ProvidesRequiresMetadata);
     try expectAllSliceStoreRoundTrips(CheckedProcedureTemplateTable);
     try expectAllSliceStoreRoundTrips(static_dispatch.MethodRegistry);
     // Total-dispatch plans: resolutions, evidence nodes/refs, site evidence,
@@ -35272,7 +35167,6 @@ fn testVisibilityImportedView(
         .static_dispatch_plans = undefined,
         .hosted_procs = undefined,
         .hosted_bindings = undefined,
-        .provided_exports = undefined,
         .top_level_procedure_bindings = undefined,
         .platform_required_declarations = undefined,
         .platform_required_bindings = undefined,
@@ -35693,7 +35587,6 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .module_identity = identity,
         .checking_context_identity = .{},
         .module_env = undefined, // transform E: env is never serialized
-        .provides_requires = .{},
         .method_registry = .{},
         .static_dispatch_plans = .{},
         .resolved_value_refs = .{},

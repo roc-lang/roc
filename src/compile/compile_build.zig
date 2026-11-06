@@ -3437,7 +3437,7 @@ pub const BuildEnv = struct {
             if (platform.checked_artifact) |artifact| {
                 if (artifact.checking_context_identity.platform_app_relation != null or
                     (try artifact.rootRequests()).requests.len > 0 or
-                    artifact.provided_exports.exports.len > 0)
+                    (try artifact.providedExports()).exports.len > 0)
                 {
                     return platform;
                 }

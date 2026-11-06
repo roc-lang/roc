@@ -3256,7 +3256,7 @@ pub const Coordinator = struct {
             if (platform_root.mod.checkedArtifact()) |artifact| {
                 if (artifact.checking_context_identity.platform_app_relation != null or
                     (try artifact.rootRequests()).requests.len > 0 or
-                    artifact.provided_exports.exports.len > 0)
+                    (try artifact.providedExports()).exports.len > 0)
                 {
                     return artifact;
                 }

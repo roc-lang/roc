@@ -3740,9 +3740,11 @@ fn snapshotProvidedEntrypointName(
         base.invariant("snapshot invariant violated: exported platform root has no published top-level value", .{});
     };
 
-    for (root_artifact.provides_requires.provides) |entry| {
-        if (entry.source_name == top_level.source_name) {
-            return root_artifact.nameStore().externalSymbolNameText(entry.ffi_symbol);
+    for ((try root_artifact.providedExports()).exports) |provided| {
+        switch (provided) {
+            inline .procedure, .data, .checked_error => |entry| if (entry.source_name == top_level.source_name) {
+                return root_artifact.nameStore().externalSymbolNameText(entry.ffi_symbol);
+            },
         }
     }
 
@@ -3812,7 +3814,7 @@ fn snapshotNativeEntrypoints(
 fn snapshotHasProvidedProcedureExports(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) bool {
-    for (root_artifact.provided_exports.exports) |provided| {
+    for ((try root_artifact.providedExports()).exports) |provided| {
         switch (provided) {
             .procedure => return true,
             .data, .checked_error => {},
@@ -3824,7 +3826,7 @@ fn snapshotHasProvidedProcedureExports(
 fn snapshotHasProvidedDataExports(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) bool {
-    for (root_artifact.provided_exports.exports) |provided| {
+    for ((try root_artifact.providedExports()).exports) |provided| {
         switch (provided) {
             .data => return true,
             .procedure, .checked_error => {},
