@@ -422,14 +422,17 @@ pub const Builder = struct {
     store: *LirStore,
     frame_locals: std.ArrayList(LocalId) = .empty,
     binders: collections.DenseMapUnmanaged(BinderId, LocalId) = .empty,
-    /// The descriptor local of each scope variable (its hidden parameter).
-    var_descs: []LocalId = &.{},
-    /// The dictionaries in scope (`Worker.scope_dictionary_indices` order).
-    dict_locals: []LocalId = &.{},
+    /// The descriptor local of each scope variable, read from the worker's
+    /// type table on first use (`inputLocal`).
+    var_descs: []?LocalId = &.{},
+    /// The dictionaries in scope (`Worker.scope_dictionary_indices` order),
+    /// read from the type table on first use.
+    dict_locals: []?LocalId = &.{},
     /// The literal arguments in scope (`Worker.literal_scopes` order): an
     /// immortal callable per literal requirement producing the literal's converted
-    /// value (design.md "Literal Arguments").
-    literal_locals: []LocalId = &.{},
+    /// value (design.md "Literal Arguments"), read from the type table on
+    /// first use.
+    literal_locals: []?LocalId = &.{},
     /// The thunk composed for each `literal_argument` root this body reads.
     /// Set while `enterEdge` builds a frame's call instance, whose
     /// dictionaries the frame composes as it reads them, and whose
@@ -1083,7 +1086,7 @@ pub const Builder = struct {
         const store = &self.program.store;
         if (try self.closed(ty) and !try self.program.composedInBody(ty)) return try self.staticDesc(ty);
         return switch (store.get(ty)) {
-            .variable => |index| self.var_descs[index],
+            .variable => |index| try self.varDesc(index),
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => null,
         };
     }
@@ -1428,7 +1431,7 @@ pub const Builder = struct {
         const id = self.recipes.resolve(named);
         if (self.recipe_locals.get(id)) |known| return known;
         const local = switch (self.recipes.get(id)) {
-            .input => |index| return self.inputLocal(index),
+            .input => |index| return try self.inputLocal(index),
             .desc, .args_desc, .callable, .table => if (try self.readsInputs(id))
                 try self.slotLocal(id)
             else
@@ -1527,28 +1530,21 @@ pub const Builder = struct {
         return local;
     }
 
-    /// Read this worker's inputs from its type table `table`, its one
+    /// Take this worker's inputs from its type table `table`, its one
     /// hidden argument (`tables.zig`): the descriptors of its variables,
-    /// its dictionaries, then its literal arguments.
+    /// its dictionaries, then its literal arguments, each read in the entry
+    /// chain on first use (`inputLocal`).
     pub fn beginTable(self: *Builder, table: LocalId, dict_count: usize) Allocator.Error!void {
         const arena = self.program.arena.allocator();
         const input_count = self.program.inputCount(self.worker_id);
         const desc_count = self.program.descCount(self.worker_id);
         self.table_local = table;
-        self.var_descs = try arena.alloc(LocalId, desc_count);
-        self.dict_locals = try arena.alloc(LocalId, dict_count);
-        self.literal_locals = try arena.alloc(LocalId, input_count - desc_count - dict_count);
-        for (0..input_count) |index| {
-            const local = try self.closedLocal(if (index < desc_count) .opaque_ptr else try self.erasedLayout());
-            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .table_entry = .{ .table = table, .index = @intCast(index) } }), .next = undefined } });
-            if (index < desc_count) {
-                self.var_descs[index] = local;
-            } else if (index < desc_count + dict_count) {
-                self.dict_locals[index - desc_count] = local;
-            } else {
-                self.literal_locals[index - desc_count - dict_count] = local;
-            }
-        }
+        self.var_descs = try arena.alloc(?LocalId, desc_count);
+        self.dict_locals = try arena.alloc(?LocalId, dict_count);
+        self.literal_locals = try arena.alloc(?LocalId, input_count - desc_count - dict_count);
+        @memset(self.var_descs, null);
+        @memset(self.dict_locals, null);
+        @memset(self.literal_locals, null);
     }
 
     /// The needs list of this worker's tables, once its body is lowered.
@@ -1561,14 +1557,31 @@ pub const Builder = struct {
         return try self.recipes.needs(self.program.arena.allocator(), self.allocator, input_count, self.program.descCount(self.worker_id), self.slots.items);
     }
 
-    /// The local holding input `index` (`inputWord`).
-    fn inputLocal(self: *const Builder, index: u32) LocalId {
-        if (index < self.var_descs.len) return self.var_descs[index];
-        const dict = index - self.var_descs.len;
-        if (dict < self.dict_locals.len) return self.dict_locals[dict];
-        const literal = dict - self.dict_locals.len;
-        if (literal < self.literal_locals.len) return self.literal_locals[literal];
-        invariant("an input word names an input its worker does not take");
+    /// The local holding input `index` (`inputWord`), read from this
+    /// worker's type table in the entry chain on first use.
+    fn inputLocal(self: *Builder, index: u32) Allocator.Error!LocalId {
+        const dict = index -% @as(u32, @intCast(self.var_descs.len));
+        const literal = dict -% @as(u32, @intCast(self.dict_locals.len));
+        const known = if (index < self.var_descs.len)
+            &self.var_descs[index]
+        else if (dict < self.dict_locals.len)
+            &self.dict_locals[dict]
+        else if (literal < self.literal_locals.len)
+            &self.literal_locals[literal]
+        else
+            invariant("an input word names an input its worker does not take");
+        if (known.*) |local| return local;
+        const table = self.table_local orelse invariant("a worker without a type table read an input");
+        const local = try self.closedLocal(if (index < self.var_descs.len) .opaque_ptr else try self.erasedLayout());
+        try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .table_entry = .{ .table = table, .index = index } }), .next = undefined } });
+        known.* = local;
+        return local;
+    }
+
+    /// The local holding the descriptor of scope variable `index`.
+    pub fn varDesc(self: *Builder, index: usize) Allocator.Error!LocalId {
+        if (index >= self.var_descs.len) invariant("a scope variable's descriptor is not among its worker's inputs");
+        return try self.inputLocal(@intCast(index));
     }
 
     /// The immortal callable of `entry` over the capture locals `captures`,
@@ -2581,8 +2594,8 @@ pub const Builder = struct {
     /// worker's result of type `output_ty`.
     fn structuralMapBranches(self: *Builder, map: lower.StructuralMap, input: LocalId, transform: LocalId, input_ty: TypeId, output_ty: TypeId) Allocator.Error!void {
         const store = &self.program.store;
-        const input_desc = self.var_descs[0];
-        const output_desc = self.var_descs[1];
+        const input_desc = try self.varDesc(0);
+        const output_desc = try self.varDesc(1);
         const name = try self.nameDesc(map.name);
         const discriminant = try self.closedLocal(.u32);
         try self.emitDyn(discriminant, .{ .tag_discriminant = .{ .base = input, .desc = input_desc } });
@@ -2600,7 +2613,7 @@ pub const Builder = struct {
             const view = try self.localOf(payload_ty, .view);
             try self.emitDyn(view, .{ .tag_payload_addr = .{ .base = input, .desc = input_desc, .payload_index = @intCast(index) } });
             const copy = try self.localOf(payload_ty, .frame);
-            try self.emitDyn(copy, .{ .copy = .{ .src = view, .desc = self.var_descs[2 + index] } });
+            try self.emitDyn(copy, .{ .copy = .{ .src = view, .desc = try self.varDesc(2 + index) } });
             payload.* = copy;
         }
         const transform_ty = try store.intern(.{ .function = .{
@@ -2685,9 +2698,9 @@ pub const Builder = struct {
             .structural => |method| blk: {
                 const target = try self.localOf(ret, .frame);
                 switch (method) {
-                    .is_eq => try self.emitDyn(target, .{ .eq = .{ .lhs = values[0], .rhs = values[1], .desc = self.var_descs[0] } }),
-                    .to_hash => try self.emitDyn(target, .{ .hash = .{ .hasher = values[1], .value = values[0], .desc = self.var_descs[0] } }),
-                    .to_inspect => try self.emitDyn(target, .{ .inspect = .{ .value = values[0], .desc = self.var_descs[0] } }),
+                    .is_eq => try self.emitDyn(target, .{ .eq = .{ .lhs = values[0], .rhs = values[1], .desc = try self.varDesc(0) } }),
+                    .to_hash => try self.emitDyn(target, .{ .hash = .{ .hasher = values[1], .value = values[0], .desc = try self.varDesc(0) } }),
+                    .to_inspect => try self.emitDyn(target, .{ .inspect = .{ .value = values[0], .desc = try self.varDesc(0) } }),
                 }
                 break :blk target;
             },
