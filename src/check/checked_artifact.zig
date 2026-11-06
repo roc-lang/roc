@@ -33391,7 +33391,6 @@ fn publicationDefaultExprs(
     return defaults.toOwnedSlice(allocator);
 }
 
-/// Public `publishFromTypedModule` function.
 /// Resolves a method bound by reference (`method = f`) for
 /// `MethodRegistry.fromModule`, from the resolved value references and
 /// procedure bindings publication already holds: the method's value is
@@ -33571,6 +33570,7 @@ const MethodBindingTargets = struct {
     }
 };
 
+/// Public `publishFromTypedModule` function.
 pub fn publishFromTypedModule(
     allocator: Allocator,
     modules: *const TypedCIR.Modules,
