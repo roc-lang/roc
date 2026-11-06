@@ -4781,41 +4781,50 @@ Builtin :: [].{
 		drop_if : List(a), (a -> Bool) -> List(a)
 		drop_if = |list, predicate| List.keep_if(list, |item| !predicate(item))
 
-		## Run the given function on each item and keep every item
-		## until the function returns `Bool.True`.
+		## Return the items before the first one for which the given function
+		## returns `Bool.True`, or the whole list if it never does.
+		##
+		## The function isn't called on any item after that one, so those items are
+		## dropped even if it would have returned `Bool.False` for them. Use
+		## [List.drop_if] to test every item instead.
 		## ```roc
-		## expect [1, 2, 3].keep_until(|item| item == 2) |> List.is_eq([1])
-		## expect [1, 2, 3].keep_until(|item| item > 2) |> List.is_eq([1, 2])
-		## expect [1, 2, 3].keep_until(|item| item > 0) |> List.is_empty()
+		## expect [1, 2, 3].keep_until(|item| item == 2) == [1]
+		## expect [1, 5, 2].keep_until(|item| item > 3) == [1]
+		## expect [1, 2, 3].keep_until(|item| item > 3) == [1, 2, 3]
+		## expect [1, 2, 3].keep_until(|item| item > 0) == []
 		## ```
+		## ## Performance Details
+		##
+		## The result is a prefix of the original list, so no items are copied and
+		## no new list is allocated. Because the result uses the original list's
+		## memory, that memory stays allocated for as long as the result is alive,
+		## even if the result is much shorter.
 		keep_until : List(item), (item -> Bool) -> List(item)
 		keep_until = |items, predicate| {
-			var $result = List.reserve([], items.len())
-			for item in items {
-				if predicate(item) == False {
-					$result = list_append_unsafe($result, item)
-				} else return $result
+			match List.find_first_index(items, predicate) {
+				Ok(index) => List.take_first(items, index)
+				Err(NotFound) => items
 			}
-			$result
 		}
 
-		## Run the given function on each item and keep every item
-		## until the function returns `Bool.False`.
+		## Return the items before the first one for which the given function
+		## returns `Bool.False`, or the whole list if it never does.
+		##
+		## The function isn't called on any item after that one, so those items are
+		## dropped even if it would have returned `Bool.True` for them. Use
+		## [List.keep_if] to test every item instead.
 		## ```roc
-		## expect [1, 2, 3].keep_while(|item| item == 1) |> List.is_eq([1])
-		## expect [1, 2, 3].keep_while(|item| item < 3) |> List.is_eq([1, 2])
-		## expect [1, 2, 3].keep_while(|item| item < 1) |> List.is_empty()
+		## expect [1, 2, 3].keep_while(|item| item == 1) == [1]
+		## expect [1, 5, 2].keep_while(|item| item < 3) == [1]
+		## expect [1, 2, 3].keep_while(|item| item < 4) == [1, 2, 3]
+		## expect [1, 2, 3].keep_while(|item| item < 1) == []
 		## ```
+		## ## Performance Details
+		##
+		## `List.keep_while` has the same performance characteristics as [List.keep_until].
+		## See its documentation for details on those characteristics!
 		keep_while : List(item), (item -> Bool) -> List(item)
-		keep_while = |items, predicate| {
-			var $result = List.reserve([], items.len())
-			for item in items {
-				if predicate(item) {
-					$result = list_append_unsafe($result, item)
-				} else return $result
-			}
-			$result
-		}
+		keep_while = |items, predicate| List.keep_until(items, |item| !predicate(item))
 
 		## Run the given function on each item of a list, and return a list of
 		## the values it wrapped in `Ok`. Items the function maps to `Err` are
