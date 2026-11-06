@@ -516,6 +516,7 @@ pub const HostedEntry = struct { symbol: []const u8, dispatch_index: ?u32 };
 
 /// One `.boxy` lowering: its workers, types, layouts, and output.
 pub const Program = struct {
+    pub const StoredValueKey = struct { module: ModuleIndex, node: checked.ConstNodeId, ty: TypeId };
     allocator: Allocator,
     input: Input,
     modules: types.Modules,
@@ -542,6 +543,7 @@ pub const Program = struct {
     /// The compile-time value slot a compile-time program reads a root it
     /// evaluates later from (`rootValueSlot`), by root.
     root_value_slots: std.AutoHashMapUnmanaged(RootSlotKey, LIR.StaticDataId) = .empty,
+    stored_value_slots: std.AutoHashMapUnmanaged(StoredValueKey, LIR.StaticDataId) = .empty,
     /// The compile-time roots this program evaluates (`Input.roots`), by
     /// module and root (`evaluatesRoot`).
     requested_roots: std.AutoHashMapUnmanaged(RootSlotKey, void) = .empty,
@@ -805,6 +807,7 @@ pub const Program = struct {
         self.callable_eval_by_pattern.deinit(self.allocator);
         self.platform_identities.deinit(self.allocator);
         self.root_value_slots.deinit(self.allocator);
+        self.stored_value_slots.deinit(self.allocator);
         self.requested_roots.deinit(self.allocator);
         self.const_schema.deinit(self.allocator);
         self.wrapper_by_root.deinit(self.allocator);
@@ -2008,7 +2011,7 @@ pub const Program = struct {
             .key = key,
             .proc = proc,
             .module = outer_worker.module,
-            .scheme_vars = outer_worker.scheme_vars,
+            .scheme_vars = if (self.store.isVariableFree(from) and self.store.isVariableFree(to)) &.{} else outer_worker.scheme_vars,
             .dictionary_params = &.{},
             .params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args)),
             .ret = signature.ret,

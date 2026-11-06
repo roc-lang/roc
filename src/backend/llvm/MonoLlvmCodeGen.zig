@@ -4141,7 +4141,6 @@ pub const MonoLlvmCodeGen = struct {
                     .assign_call => |call| try succs.append(arena, @backingInt(call.proc)),
                     .assign_packed_erased_fn => |packed_fn| needs[@backingInt(self.store.stmtRow(packed_fn.data).proc)] = true,
                     .assign_literal => |literal| {
-                        if (self.store.literalExtra(literal.value).fresh_alternative) |proc_id| needs[@backingInt(proc_id)] = true;
                         switch (literal.value) {
                             .proc_ref => |proc_id| needs[@backingInt(proc_id)] = true,
                             .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .static_data => {},

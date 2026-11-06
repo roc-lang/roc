@@ -243,15 +243,7 @@ const Builder = struct {
         const list_value = job.source.read(builtins.list.RocList);
         try self.graph.writeWord(job.dest.offsetBy(word_size), list_value.len());
         try self.graph.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(list_value.len()));
-        if (list_value.len() == 0) {
-            // The descriptor cannot carry the capacity the value was
-            // evaluated with; keep it on the root so the runtime can
-            // construct the list as the `with_capacity` it came from.
-            if (@backingInt(job.dest.symbol) == 0 and physical.tag == .list and list_value.getCapacity() != 0) {
-                try self.graph.nodes.items[0].empty_list_capacities.append(self.graph.allocator, .{ .offset = job.dest.offset, .capacity = list_value.getCapacity() });
-            }
-            return;
-        }
+        if (list_value.len() == 0) return;
         if (physical.tag == .list_of_zst) return;
         const ptr = list_value.bytes orelse invariant("nonempty native list had a null pointer");
         const element_layout = physical.getIdx();
@@ -399,7 +391,7 @@ fn testRoot(plan: Program.ConstPlanId, ret_layout: layout.Idx) Program.ConstRoot
     };
 }
 
-test "native root export keeps an empty list root's evaluated capacity" {
+test "native root export stores an empty list without allocation or capacity reconstruction" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
@@ -418,9 +410,6 @@ test "native root export keeps an empty list root's evaluated capacity" {
     const exports = try freezeRoot(allocator, &program, slot, testRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&list_value) }, .{});
     defer static_data.deinitStaticData(allocator, exports);
     try std.testing.expectEqual(@as(usize, 1), exports.len);
-    try std.testing.expectEqual(@as(usize, 1), exports[0].empty_list_capacities.len);
-    try std.testing.expectEqual(@as(u64, 0), exports[0].empty_list_capacities[0].offset);
-    try std.testing.expectEqual(@as(u64, 16), exports[0].empty_list_capacities[0].capacity);
     try std.testing.expectEqual(@as(usize, 0), exports[0].relocations.len);
 }
 

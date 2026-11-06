@@ -297,9 +297,6 @@ pub const Options = struct {
     /// Whether inline expects should be lowered at all. Optimized runtime builds
     /// omit them before their conditions can affect control-flow decisions.
     inline_expects: InlineExpectMode = .run,
-    /// Restore stored constants as readonly static-data candidates when their
-    /// ConstStore shape may require runtime storage.
-    static_data_literals: bool = false,
     /// Produce immutable selected-root reads for a shared evaluation/runtime session.
     comptime_value_reads: bool = false,
     /// With `comptime_value_reads`, lower a compile-time root's body only
@@ -4957,7 +4954,6 @@ const SpecJobWorkerInputs = struct {
     collect_counters: bool,
     collect_diagnostics: bool,
     inline_expects: InlineExpectMode,
-    static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
     replay_interface_summaries: base.TestSwitch(true),
@@ -5448,7 +5444,6 @@ const Builder = struct {
     /// committing. Scheduler diagnostics continue to target `diagnostics`.
     active_spec_job_diagnostics: ?*SpecJobDiagnostics = null,
     inline_expects: InlineExpectMode,
-    static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
     /// Reflexive import closures of the lowering input's modules by module
@@ -5732,15 +5727,6 @@ const Builder = struct {
     const ConstFieldExpr = Ast.FieldExpr;
     const ConstFieldExprSpan = Ast.Span(Ast.FieldExpr);
 
-    /// An empty compile-time list restores as the `with_capacity` it was
-    /// evaluated with, so the first append at runtime goes in place; one
-    /// evaluated with no capacity is the empty literal.
-    fn constEmptyListData(self: *Builder, capacity: u64) Allocator.Error!ConstExprData {
-        if (capacity == 0) return .{ .list = try self.program.addExprSpan(&[0]Ast.ExprId{}) };
-        const requested = try self.program.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(Ast.ExprData, .{ .u64 = capacity }) });
-        return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.program.addExprSpan(&.{requested}) } };
-    }
-
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         const counters = options.specialization_counters orelse
             if (options.diagnostics) |diagnostics| &diagnostics.specialization else null;
@@ -5762,7 +5748,6 @@ const Builder = struct {
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
             .inline_expects = options.inline_expects,
-            .static_data_literals = options.static_data_literals,
             .comptime_value_reads = options.comptime_value_reads,
             .literal_roots = options.literal_roots,
             .replay_interface_summaries = options.replay_interface_summaries,
@@ -5922,7 +5907,6 @@ const Builder = struct {
             .specialization_counters = if (inputs.collect_counters) &worker.counters else null,
             .diagnostics = if (inputs.collect_diagnostics) &worker.diagnostics else null,
             .inline_expects = inputs.inline_expects,
-            .static_data_literals = inputs.static_data_literals,
             .comptime_value_reads = inputs.comptime_value_reads,
             .literal_roots = inputs.literal_roots,
             .replay_interface_summaries = inputs.replay_interface_summaries,
@@ -6931,7 +6915,6 @@ const Builder = struct {
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
-            .static_data_literals = self.static_data_literals,
             .comptime_value_reads = self.comptime_value_reads,
             .literal_roots = self.literal_roots,
             .declared_comptime_roots = self.borrowed_comptime_roots orelse &self.declared_comptime_roots,
@@ -7143,7 +7126,6 @@ const Builder = struct {
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
-            .static_data_literals = self.static_data_literals,
             .comptime_value_reads = self.comptime_value_reads,
             .literal_roots = self.literal_roots,
             .replay_interface_summaries = self.replay_interface_summaries,
@@ -9322,7 +9304,6 @@ const Builder = struct {
                             .collect_counters = self.counters != null,
                             .collect_diagnostics = self.diagnostics != null,
                             .inline_expects = self.inline_expects,
-                            .static_data_literals = self.static_data_literals,
                             .comptime_value_reads = self.comptime_value_reads,
                             .literal_roots = self.literal_roots,
                             .replay_interface_summaries = self.replay_interface_summaries,
@@ -12170,13 +12151,8 @@ const Builder = struct {
         return id;
     }
 
-    const BareFnCandidate = enum {
-        disallow,
-        allow,
-    };
-
-    fn constNodeMayUseStaticDataCandidate(self: *Builder, view: ModuleView, node: checked.ConstNodeId, bare_fn: BareFnCandidate) bool {
-        return self.constValueMayUseStaticDataCandidate(view, view.const_store.get(node), bare_fn);
+    fn constNodeMayUseStaticDataCandidate(self: *Builder, view: ModuleView, node: checked.ConstNodeId) bool {
+        return self.constValueMayUseStaticDataCandidate(view, view.const_store.get(node));
     }
 
     /// Whether a ConstStore node and everything it contains has a stable
@@ -12288,11 +12264,9 @@ const Builder = struct {
     };
 
     /// What a stored list static data freezes straight from its node
-    /// (`Ast.StoredStaticList`): how many items it has, and the one stored
-    /// item a list of one repeated value repeats.
+    /// (`Ast.StoredStaticList`): how many items it has.
     const StoredListShape = struct {
         item_count: u32,
-        uniform_item: ?checked.ConstNodeId,
     };
 
     /// The shape of `node`'s value when it is a non-empty list whose items
@@ -12309,7 +12283,7 @@ const Builder = struct {
         };
         if (items.len == 0) return null;
         if (!try self.constNodeIsStoredData(view, node)) return null;
-        return .{ .item_count = @intCast(items.len), .uniform_item = try self.uniformStoredItem(view, items) };
+        return .{ .item_count = @intCast(items.len) };
     }
 
     /// Whether everything `node`'s value reaches is data: no function value,
@@ -12323,94 +12297,8 @@ const Builder = struct {
         return try ConstNodeProperty.Eval.run(self.allocator, &walk, node);
     }
 
-    /// The item a stored list repeats: its first item, when that item's value
-    /// could be a construction (scalars, the empty string, the empty list, and
-    /// records, tuples, tags, and nominals of those) and every other item
-    /// stores the same value. Lowering then decides from the restored item
-    /// whether it is one, as it does for each item of a restored list
-    /// literal.
-    fn uniformStoredItem(self: *Builder, view: ModuleView, items: []const checked.ConstNodeId) Allocator.Error!?checked.ConstNodeId {
-        const first = items[0];
-        if (!try self.constNodeMayBeConstruction(view, first)) return null;
-        for (items[1..]) |item| {
-            if (item != first and !try self.constNodesStoreSameValue(view, first, item)) return null;
-        }
-        return first;
-    }
-
-    fn constNodeMayBeConstruction(self: *Builder, view: ModuleView, root: checked.ConstNodeId) Allocator.Error!bool {
-        var pending: std.ArrayList(checked.ConstNodeId) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, root);
-        while (pending.pop()) |node| switch (view.const_store.get(node)) {
-            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-            .pending => Common.invariant("pending ConstStore node reached stored list selection"),
-            .zst, .scalar => {},
-            .str => |str| if (str.len != 0) return false,
-            .list => |list| switch (list) {
-                .empty => {},
-                .nodes => |children| if (children.len != 0) return false,
-                .packed_bytes => |packed_list| if (packed_list.len != 0) return false,
-            },
-            .tuple, .record => |children| try pending.appendSlice(self.allocator, children),
-            .tag => |tag| try pending.appendSlice(self.allocator, tag.payloads),
-            .nominal => |nominal| try pending.append(self.allocator, nominal.backing),
-            .box, .crash, .checked_error, .fn_value => return false,
-        };
-        return true;
-    }
-
-    /// Whether two stored values of one type are the same value. Only values
-    /// `constNodeMayBeConstruction` admits are compared.
-    fn constNodesStoreSameValue(self: *Builder, view: ModuleView, left_root: checked.ConstNodeId, right_root: checked.ConstNodeId) Allocator.Error!bool {
-        const Pair = struct { left: checked.ConstNodeId, right: checked.ConstNodeId };
-        var pending: std.ArrayList(Pair) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .left = left_root, .right = right_root });
-        while (pending.pop()) |pair| {
-            if (pair.left == pair.right) continue;
-            const left = view.const_store.get(pair.left);
-            const right = view.const_store.get(pair.right);
-            if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
-            switch (left) {
-                .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-                .pending => Common.invariant("pending ConstStore node reached stored list selection"),
-                .zst => {},
-                .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
-                .str => |str| if (!std.mem.eql(u8, view.const_store.strBytes(str), view.const_store.strBytes(right.str))) return false,
-                .list => |list| {
-                    // Admitted lists are empty; an evaluated capacity is part
-                    // of the value.
-                    if (std.meta.activeTag(list) != std.meta.activeTag(right.list)) return false;
-                    switch (list) {
-                        .empty => |capacity| if (capacity != right.list.empty) return false,
-                        .nodes => |children| if (children.len != 0 or right.list.nodes.len != 0) return false,
-                        .packed_bytes => |packed_list| if (packed_list.len != 0 or right.list.packed_bytes.len != 0) return false,
-                    }
-                },
-                .tuple, .record => |children| {
-                    const others = switch (right) {
-                        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-                        .tuple, .record => |items| items,
-                        .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error, .tag, .nominal, .fn_value => unreachable, // the active tags matched above
-                    };
-                    if (children.len != others.len) return false;
-                    for (children, others) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
-                },
-                .tag => |tag| {
-                    if (!std.mem.eql(u8, tag.tag_name, right.tag.tag_name) or tag.payloads.len != right.tag.payloads.len) return false;
-                    for (tag.payloads, right.tag.payloads) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
-                },
-                .nominal => |nominal| try pending.append(self.allocator, .{ .left = nominal.backing, .right = right.nominal.backing }),
-                .box, .crash, .checked_error, .fn_value => return false,
-            }
-        }
-        return true;
-    }
-
-    fn constValueMayUseStaticDataCandidate(_: *Builder, view: ModuleView, value_in: checked.ConstValue, bare_fn_in: BareFnCandidate) bool {
+    fn constValueMayUseStaticDataCandidate(_: *Builder, view: ModuleView, value_in: checked.ConstValue) bool {
         var value = value_in;
-        var bare_fn = bare_fn_in;
         while (true) switch (value) {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .pending => Common.invariant("pending ConstStore node reached static data selection"),
@@ -12420,13 +12308,8 @@ const Builder = struct {
             .checked_error,
             => return false,
             .str => |str| return constStringBackingLength(view, str) != 0,
-            .fn_value => return bare_fn == .allow,
-            .list => |list| return switch (list) {
-                .nodes => |items| items.len != 0,
-                .packed_bytes => |packed_list| packed_list.len != 0,
-                // Rebuilt as the `with_capacity` it was evaluated with.
-                .empty => false,
-            },
+            .fn_value => return true,
+            .list => return true,
             .box => return true,
             .tuple,
             .record,
@@ -12434,7 +12317,6 @@ const Builder = struct {
             => return true,
             .nominal => |nominal| {
                 value = view.const_store.get(nominal.backing);
-                bare_fn = .allow;
             },
         };
     }
@@ -15721,11 +15603,11 @@ const Builder = struct {
             const checked_type = checkedBinderType(fn_view, capture.id.binder());
             out_capture.value = if (out_capture.node) |node|
                 if (static_data_const_locator) |const_locator|
-                    try fn_ctx.restoredStaticDataCandidateNodeAtNode(store_view, fn_view, capture.value, node, const_locator, checked_type, .allow)
+                    try fn_ctx.restoredStaticDataCandidateNodeAtNode(store_view, fn_view, capture.value, node, const_locator, checked_type)
                 else
                     try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, capture.value, node)
             else if (static_data_const_locator) |const_locator|
-                try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, capture.value, out_capture.ty, const_locator, checked_type, .allow)
+                try fn_ctx.restoredStaticDataCandidateNode(store_view, fn_view, capture.value, out_capture.ty, const_locator, checked_type)
             else
                 try runConstRestore(fn_ctx, store_view, fn_view, capture.value, out_capture.ty, null);
             out_index += 1;
@@ -16723,7 +16605,7 @@ const DraftStaticDataCandidateValue = union(enum) {
     fn subexpression(self: DraftStaticDataCandidateValue) ?DraftExprId {
         return switch (self) {
             .runtime => |expr| expr,
-            .stored => |stored| stored.uniform_item,
+            .stored => null,
         };
     }
 };
@@ -16731,7 +16613,6 @@ const DraftStaticDataCandidateValue = union(enum) {
 /// A draft `Ast.StoredStaticList`.
 const DraftStoredStaticList = struct {
     item_count: u32,
-    uniform_item: ?DraftExprId,
 };
 
 const DraftFieldAccessSegment = struct {
@@ -20840,7 +20721,6 @@ const BodyDraftStore = struct {
                         .runtime => |runtime| .{ .runtime = ids.expr(runtime) },
                         .stored => |stored| .{ .stored = .{
                             .item_count = stored.item_count,
-                            .uniform_item = if (stored.uniform_item) |item| ids.expr(item) else null,
                         } },
                     },
                 } };
@@ -22503,15 +22383,6 @@ const BodyContext = struct {
     const ConstExprSpan = DraftSpan(DraftExprId);
     const ConstFieldExpr = DraftFieldExpr;
     const ConstFieldExprSpan = DraftSpan(DraftFieldExpr);
-
-    /// An empty compile-time list restores as the `with_capacity` it was
-    /// evaluated with, so the first append at runtime goes in place; one
-    /// evaluated with no capacity is the empty literal.
-    fn constEmptyListData(self: *BodyContext, capacity: u64) Allocator.Error!ConstExprData {
-        if (capacity == 0) return .{ .list = try self.addExprSpan(&[0]DraftExprId{}) };
-        const requested = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(BodyExprData, .{ .u64 = capacity }) });
-        return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.addExprSpan(&.{requested}) } };
-    }
 
     fn parserPlanKey(self: *BodyContext, shape_ty: Type.TypeId) names.TypeDigest {
         var hasher = TypeDigestHasher.init();
@@ -37003,7 +36874,6 @@ const BodyContext = struct {
                     stored_ty,
                     entry.const_ref,
                     entry.checked_type,
-                    .disallow,
                 );
                 try self.draft.recordRestoredRootRead(restored, self.view.key, stored.root);
                 break :blk restored;
@@ -37041,7 +36911,6 @@ const BodyContext = struct {
                     stored_node,
                     entry.const_ref,
                     entry.checked_type,
-                    .disallow,
                 );
                 try self.draft.recordRestoredRootRead(restored, self.view.key, stored.root);
                 break :blk restored;
@@ -46741,7 +46610,6 @@ const BodyContext = struct {
                     stored_ty,
                     const_use.const_ref,
                     requested_ty,
-                    .disallow,
                 );
                 try self.draft.recordRestoredRootRead(restored, store_view.key, stored.root);
                 if (has_active_const_binding) break :blk try self.finishActiveConstBinding(active_const_scope.active, restored);
@@ -46802,7 +46670,6 @@ const BodyContext = struct {
                     stored_node,
                     const_use.const_ref,
                     requested_ty,
-                    .disallow,
                 );
                 try self.draft.recordRestoredRootRead(restored, store_view.key, stored.root);
                 if (has_active_const_binding) break :blk try self.finishActiveConstBinding(active_const_scope.active, restored);
@@ -47083,15 +46950,13 @@ const BodyContext = struct {
         ty: Type.TypeId,
         const_locator: checked.ConstLocator,
         checked_type: checked.CheckedTypeId,
-        bare_fn: Builder.BareFnCandidate,
     ) Allocator.Error!DraftExprId {
         if (!moduleBytesEqual(checked.constModuleId(const_locator).bytes, store_view.key.bytes)) {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
         if (self.constRestorationIsClosed() and
-            self.builder.static_data_literals and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
-            self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
+            self.builder.constNodeMayUseStaticDataCandidate(store_view, node))
         {
             const id = try self.draftStaticDataRequest(
                 const_locator,
@@ -47107,7 +46972,7 @@ const BodyContext = struct {
             if (self.draft.static_data_candidate_exprs.get(address)) |existing| return existing;
 
             const value: DraftStaticDataCandidateValue = if (try self.builder.storedListShape(store_view, node)) |shape|
-                .{ .stored = try self.storedStaticList(store_view, type_view, shape, .{ .sealed = listElemType(self.typeStore(), ty) }, const_locator) }
+                .{ .stored = .{ .item_count = shape.item_count } }
             else runtime: {
                 const previous_part_root = self.static_data_part_root;
                 self.static_data_part_root = staticDataPartRootFor(store_view, node, const_locator, checked_type, type_view.key);
@@ -47133,18 +46998,16 @@ const BodyContext = struct {
         request_node: NodeId,
         const_locator: checked.ConstLocator,
         checked_type: checked.CheckedTypeId,
-        bare_fn: Builder.BareFnCandidate,
     ) Allocator.Error!DraftExprId {
         if (!moduleBytesEqual(checked.constModuleId(const_locator).bytes, store_view.key.bytes)) {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
         const candidate = self.constRestorationIsClosed() and
-            self.builder.static_data_literals and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
-            self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn);
+            self.builder.constNodeMayUseStaticDataCandidate(store_view, node);
         const stored_shape = if (candidate) try self.builder.storedListShape(store_view, node) else null;
         const value: DraftStaticDataCandidateValue = if (stored_shape) |shape|
-            .{ .stored = try self.storedStaticList(store_view, type_view, shape, .{ .graph = try self.graph.listElementNode(request_node) }, const_locator) }
+            .{ .stored = .{ .item_count = shape.item_count } }
         else runtime: {
             const previous_part_root = self.static_data_part_root;
             self.static_data_part_root = if (candidate) staticDataPartRootFor(store_view, node, const_locator, checked_type, type_view.key) else null;
@@ -47241,7 +47104,7 @@ const BodyContext = struct {
         self.static_data_part_root = null;
         defer self.static_data_part_root = root;
         const value: DraftStaticDataCandidateValue = if (try self.builder.storedListShape(store_view, node)) |shape|
-            .{ .stored = try self.storedStaticList(store_view, type_view, shape, .{ .sealed = listElemType(self.typeStore(), ty) }, root.const_locator) }
+            .{ .stored = .{ .item_count = shape.item_count } }
         else
             .{ .runtime = try runConstRestore(self, store_view, type_view, node, ty, root.const_locator) };
         const candidate_expr = try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
@@ -47265,7 +47128,7 @@ const BodyContext = struct {
             self.static_data_part_root = null;
             defer self.static_data_part_root = root;
             if (try self.builder.storedListShape(store_view, node)) |shape| {
-                break :value .{ .stored = try self.storedStaticList(store_view, store_view, shape, .{ .graph = try self.graph.listElementNode(request_node) }, root.const_locator) };
+                break :value .{ .stored = .{ .item_count = shape.item_count } };
             }
             break :value .{ .runtime = try self.restoreConstNodeAtNodeWithStaticRoot(store_view, store_view, node, request_node, root.const_locator) };
         };
@@ -47276,39 +47139,6 @@ const BodyContext = struct {
             .storage = constStaticDataStorage(store_view, node),
             .value = value,
         } });
-    }
-
-    /// Where a stored list's repeated item restores: at its element type, or
-    /// at its element's graph node.
-    const StoredItemTarget = union(enum) {
-        sealed: Type.TypeId,
-        graph: NodeId,
-    };
-
-    /// The stored list a candidate freezes from (`Ast.StoredStaticList`), with
-    /// its repeated item, when it has one, restored at `item_target`. The
-    /// item is not a part of any candidate.
-    fn storedStaticList(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        shape: Builder.StoredListShape,
-        item_target: StoredItemTarget,
-        const_locator: checked.ConstLocator,
-    ) Allocator.Error!DraftStoredStaticList {
-        const uniform_item: ?DraftExprId = if (shape.uniform_item) |item| item: {
-            const part_root = self.static_data_part_root;
-            self.static_data_part_root = null;
-            defer self.static_data_part_root = part_root;
-            break :item switch (item_target) {
-                .sealed => |item_ty| try runConstRestore(self, store_view, type_view, item, item_ty, const_locator),
-                .graph => |item_node| try self.restoreConstNodeAtNodeWithStaticRoot(store_view, type_view, item, item_node, const_locator),
-            };
-        } else null;
-        return .{
-            .item_count = shape.item_count,
-            .uniform_item = uniform_item,
-        };
     }
 
     fn restoreConstNodeAtNode(
@@ -47550,7 +47380,7 @@ const BodyContext = struct {
                     ) },
                     .list => |list| switch (list) {
                         .nodes => .{ .list = try self.addExprSpan(lowered_children) },
-                        .empty => |capacity| try self.constEmptyListData(capacity),
+                        .empty => .{ .list = try self.addExprSpan(&.{}) },
                         .packed_bytes => |packed_list| .{ .bytes_lit = .{
                             .literal = try self.addConstBlobView(
                                 store_view.key.bytes,
@@ -69038,7 +68868,7 @@ fn moduleViewIdentityMatches(view: ModuleView, origin_hash: *const [32]u8) bool 
 // `ConstExprId`, and `ConstFieldExpr`, and the stores its type ids and labels
 // belong to through `constTypeStore()` and `constNameStore()`, which the
 // shared type-shape queries read. How an empty list is rebuilt
-// (`constEmptyListData`) and how a node starts and finishes, including reuse
+// and how a node starts and finishes, including reuse
 // and caching (`startConstRestore`, `finishConstRestoreLayer`,
 // `finishConstRestoreData`), genuinely differ between the two scopes.
 
@@ -69228,7 +69058,7 @@ fn constRestoreData(
         } },
         .list => |list| switch (list) {
             .nodes => .{ .list = try emit.addExprSpan(lowered) },
-            .empty => |capacity| try restorer.constEmptyListData(capacity),
+            .empty => .{ .list = try emit.addExprSpan(&.{}) },
             .packed_bytes => |packed_list| .{ .bytes_lit = .{
                 .literal = try emit.addConstBlobView(
                     store_view.key.bytes,

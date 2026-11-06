@@ -340,6 +340,8 @@ pub const Store = struct {
     /// variable: no `variable` node is reachable from it except through a
     /// function type, whose values are erased callables.
     closed_flags: std.ArrayList(bool) = .empty,
+    /// Unlike representation closure, includes function arguments and results.
+    variable_free_flags: std.ArrayList(bool) = .empty,
     /// The payload of each presence-slot type (design.md "Field Kinds"),
     /// recorded as `intern` meets its reserved labels, which no source type
     /// can spell, however the type came to be interned.
@@ -431,6 +433,7 @@ pub const Store = struct {
         self.presence_payloads.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
         self.closed_flags.deinit(self.allocator);
+        self.variable_free_flags.deinit(self.allocator);
         self.type_ids.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.tags.deinit(self.allocator);
@@ -538,6 +541,60 @@ pub const Store = struct {
 
     pub fn isClosed(self: *const Store, id: TypeId) bool {
         return self.closed_flags.items[@backingInt(id)];
+    }
+
+    pub fn isVariableFree(self: *const Store, id: TypeId) bool {
+        return self.variable_free_flags.items[@backingInt(id)];
+    }
+
+    /// Computed once from interned children; adapters need signature variables
+    /// even though an erased callable itself always has a closed layout.
+    fn inputVariableFree(self: *const Store, node: NodeInput) bool {
+        switch (node) {
+            .primitive, .empty_record => {},
+            .variable => return false,
+            .list, .box => |child| return self.isVariableFree(child),
+            .record => |record| {
+                for (record.fields) |field| {
+                    if (field.kind == .variable_slot or !self.isVariableFree(field.ty)) return false;
+                }
+                if (record.ext) |ext| {
+                    if (!self.isVariableFree(ext)) return false;
+                }
+                if (record.declared) |declared| {
+                    for (declared.padding) |child| {
+                        if (!self.isVariableFree(child)) return false;
+                    }
+                }
+            },
+            .tuple => |items| {
+                for (items) |child| {
+                    if (!self.isVariableFree(child)) return false;
+                }
+            },
+            .tag_union => |tags| {
+                for (tags.tags) |tag| {
+                    for (tag.payloads) |child| {
+                        if (!self.isVariableFree(child)) return false;
+                    }
+                }
+                if (tags.ext) |ext| {
+                    if (!self.isVariableFree(ext)) return false;
+                }
+            },
+            .nominal => |nominal| {
+                for (nominal.args) |child| {
+                    if (!self.isVariableFree(child)) return false;
+                }
+            },
+            .function => |function| {
+                for (function.args) |child| {
+                    if (!self.isVariableFree(child)) return false;
+                }
+                return self.isVariableFree(function.ret);
+            },
+        }
+        return true;
     }
 
     pub fn span(self: *const Store, value: Span) []const TypeId {
@@ -706,6 +763,7 @@ pub const Store = struct {
         };
         try self.nodes.append(self.allocator, stored);
         try self.closed_flags.append(self.allocator, closed);
+        try self.variable_free_flags.append(self.allocator, self.inputVariableFree(node));
         switch (node) {
             .tag_union => |tag_union| if (tag_union.ext == null and tag_union.tags.len == 2 and
                 std.mem.eql(u8, self.nameText(tag_union.tags[0].name), missing_label) and
@@ -1968,4 +2026,19 @@ pub fn compatible(allocator: Allocator, store: *const Store, a: TypeId, b: TypeI
         }
     }
     return true;
+}
+
+test "adapter signatures retain variables behind erased callable layouts" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    const number = try store.primitive(.u64);
+    const variable = try store.variable(0);
+    const generic = try store.intern(.{ .function = .{ .args = &.{variable}, .ret = variable, .effectful = false } });
+    const concrete = try store.intern(.{ .function = .{ .args = &.{number}, .ret = number, .effectful = false } });
+    const nested = try store.intern(.{ .function = .{ .args = &.{generic}, .ret = number, .effectful = false } });
+    try std.testing.expect(store.isClosed(generic));
+    try std.testing.expect(!store.isVariableFree(generic));
+    try std.testing.expect(!store.isVariableFree(nested));
+    try std.testing.expect(store.isVariableFree(concrete));
+    try std.testing.expect(!store.isVariableFree(try store.intern(.{ .list = generic })));
 }

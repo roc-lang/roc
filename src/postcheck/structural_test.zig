@@ -2029,7 +2029,6 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
         "constEmit",
         "constNameStore",
         "constTypeStore",
-        "constEmptyListData",
         "finishConstRestoreLayer",
         "finishConstRestoreData",
         // Each scope's emission primitives into its own expression store

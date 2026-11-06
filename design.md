@@ -1680,10 +1680,17 @@ fills the slot at that layout. The proof call is not an
 expression to execute at the read. Lifting and lambda solving preserve that witness. Value
 folding must treat the read as opaque. LIR interns storage slots only after
 exact concrete representation equality and committed layout equality, and
-records the checked root identity beside each slot. Evaluation initializes the
-slots in checked dependency order; runtime static-data materialization consumes
-the completed root payloads. Neither consumer executes the initializer at a
-slot read or reconstructs a callable identity from its layout.
+records the checked root identity beside each slot. Each producer has one
+canonical source slot. A use requiring a different physical representation
+(such as a recursive box or a nominal boundary) has an explicit
+`representation_of` edge to that slot and shares its failure status. The data
+writer publishes or transcodes the completed value into that representation
+once; the read contains no boxing or conversion instructions. Source lookup
+indexes only canonical slots, and reachability preserves each representation's
+canonical source. Evaluation initializes the slots in checked dependency order;
+runtime static-data materialization consumes the completed root payloads.
+Neither consumer executes the initializer at a slot read or reconstructs a
+callable identity from its layout.
 
 A provided static export requested during shared preparation aliases that same
 declared slot. Its const locator's checked owner identifies the root, and the
@@ -1711,11 +1718,12 @@ When checking finalization lowers a root that refers to an already-stored,
 representation-stable `ConstStore` value, it must preserve that sharing by
 emitting an explicit LIR static-data value. It must not recursively rebuild that
 value as runtime list, record, tuple, tag, box, string, or callable construction.
-Callable-containing const graphs are not representation-stable at this boundary:
-post-check specialization may replace callable identities and capture graphs, so
-they remain explicit reconstructions. Eligibility is computed by a memoized walk
-over explicit `ConstStore` edges, never inferred from runtime bytes or layout
-coincidence.
+Callable-containing const graphs carry explicit procedure identities and capture
+edges through specialization. Target-data materialization connects the final
+code and immutable capture data; reading a completed callable never packs its
+captures again. Recursive dictionary captures likewise become a graph of static
+references, reserved before those references are connected. No runtime
+constructor or patching procedure is generated for a completed value.
 
 The explicit static-root locator is recursive context. Restoration propagates
 it through every transparent and nominal construction layer and into tag,
@@ -1796,62 +1804,23 @@ as the scalar literal rather than a slot read, so range proving, loop
 versioning, and overflow elision see the constant they would have seen from
 a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
-record, or guard exists for the root. The decoded value is a construction
-tree, and a root whose every leaf is a scalar, the empty string, or an
-empty list lowers as that tree rather than as bytes, because static data
-is the wrong home for it: records,
-tuples, and tag payloads of such parts rebuild field by field, so an
-empty `Dict` or `Set`, which is a record of empty lists, never reaches the
-image either. An empty list lowers to the `with_capacity` it was evaluated
-with: a frozen descriptor's capacity word is its length, so the freezer
-keeps each empty list's evaluated capacity on the root's export, keyed by
-its byte offset within the image, and the runtime rebuilds the request so
-the first append goes in place. A list with items keeps its slot however
-uniform its contents, so the constructions are the scalars, the empty
-string, the empty list, and records, tuples and tags of those. A completed
-string shorter than three target words, the threshold below which a
-restored string needs no target storage, lowers as its literal, as a read
-restoring the stored string does, so a procedure's code is the same whether
-it reads the string completed or restored. A restored string is its own
-bytes, never a view into a longer stored backing, so whether it needs
-target storage depends on the string alone. A list of
-copies of one construction—what `List.repeat` and a constant fill loop
-complete to—additionally names, on each read, the argument-free procedure
-that builds the same list fresh (`assign_literal.fresh_alternative`), and
-ARC chooses one form per read (see "Fresh forms of static lists" under ARC
-Borrow Inference): a read whose value only ever gets read keeps the static
-datum and allocates nothing, while a read whose value an in-place operation
-would otherwise copy on first write is born fresh, so the write is proven
-unique and the copy never happens. Neither form is visible after ARC. A non-empty
-list with spare capacity freezes to its items alone; only the capacity of
-an empty list survives. Identical nodes of one frozen image are one symbol:
-two evaluations of the same constant expression, such as two `List.repeat`
-calls with the same arguments, freeze to separate allocations with the same
-contents, and both the evaluation's image and the runtime program's
-transcoded image merge such nodes to a fixed point (`mergeIdenticalNodes`),
-so a program's static data does not depend on whether its values were
-completed by this compilation or restored from the constant store, which
-already names one value once. Each merge pass compares a node only with the
-earlier kept nodes of the same content hash, relocation targets included,
-and transcoding resolves a source pointer through a per-symbol index of its
-relocations, as linking the evaluation image resolves a data name through an
-index of its items; a frozen list of a million string pointers therefore
-costs work proportional to the image at every one of these steps, never a
-scan per pointer. A build that restores its compile-time values from a checked
-module's const store rather than from a completed host program, as every
-build after the first does, reaches the same constructions: the const
-store keeps an empty list's evaluated capacity and restores it as the
-`with_capacity` call, and a restored value whose parts are all
-constructions lowers as them rather than as a static-data candidate.
-A construction is the value's shape and leaves alone and names no list,
-field or payload layout: the compile-time consumer that decoded it and the
-runtime consumer that emits it lower separately and intern layouts in their
-own order, so a layout index from one program is not a name in the other.
-A read matches a construction by checked root identity; a scalar literal is
-checked against the read's scalar layout, which is the same fixed index in
-every store, and an aggregate is checked shape by shape as it is emitted,
-with the reading site's own layout supplying the item, field and
-payload layouts the emitted code needs.
+record, or guard exists for the root. Small strings may likewise use their
+immediate representation. All aggregate values, including empty lists,
+records, tuples, tags, boxes, and captured functions, read immutable stored
+data. There is no construction tree, runtime constructor, or fresh alternative
+for a completed value. Mutation uses the normal copy-on-write operation.
+Allocation capacity is not part of the frozen value; empty lists require no
+backing storage, and nonempty lists store their elements without spare capacity.
+The same rule applies when restoring values from the checked module cache.
+
+Static data can refer directly to a ConstStore node with its type plan, or
+contain explicit typed data edges (`StaticDataParts`) to child constants.
+Callable data names its procedure and its immutable captures. The target data
+encoder resolves these edges into bytes and relocations at compilation time;
+it never emits runtime initialization code. Static reachability and compaction
+retain and remap both child slots and referenced procedures. Identical frozen
+nodes can share storage by their contents and relocations.
+
 After the passes, which compact the slot table, the remaining
 aggregate slots are transcoded into the target's frozen image. The LLVM
 backend then defines each slot whose image is a link-time constant—bytes with
@@ -14714,9 +14683,9 @@ worker captured, which is values, the descriptors of its scope's type
 variables, and dictionaries, themselves erased callables. Compile-time
 evaluation under `.boxy` stores exactly that (`ConstValue.boxy_fn`): a recipe
 naming the worker and the type each captured descriptor describes, with the
-captured values and dictionaries as nodes of the constant store. Restoring
-the value rebuilds the worker from the recipe and packs the same captures, so
-nothing is inferred about the value and no checked evidence is consulted.
+captured values and dictionaries as nodes of the constant store. On restoration,
+the compiler recreates the worker from the recipe and embeds its stored captures
+as immutable data, so nothing is inferred about the value and no checked evidence is consulted.
 
 The recipe begins with the table of the modules it names, by checked key, each
 once, which the constant store reads to name a stored function in an identity
@@ -19738,51 +19707,6 @@ solver outputs the least one. There is no failure path and no recovery path.
 An occurrence the solver leaves owned is emitted as a move or an `incref`,
 exactly as all-owned insertion would emit it.
 
-### Fresh forms of static lists
-
-A read of a compile-time list of copies lowers as its static-data slot and
-also names the argument-free procedure that would build the list fresh. The
-static datum has the static count, so it is never born unique: a mutating
-consumer copies it on first write, at the one allocation a fresh build would
-have spent, plus the copy. The fresh build reserves the count plus the range
-copy's scratch, appends the one item, and fills the rest with the unchecked
-range-within append, whose periodic copy runs at word-store pace; it allocates
-on every execution of the read, which a read whose value is only ever read has
-no use for. Which form a
-read takes is therefore a question of where its value reaches, and the
-uniqueness analysis answers it.
-
-The fresh procedure's identity is the list's layout and content (the count
-and the item's construction) and nothing a program numbers, so reads of equal
-lists share one procedure.
-
-Every such read is a candidate birth. Alongside the born bit and its parameter
-conditions, the settlement carries each local's *origins*: the candidates its
-born value derives from, flowing over the same pure aliases, join edges,
-field stores and takes, and call edges the birth flows over; a container
-carries origins per stored field, alongside the field's condition, and a
-callee's conditional-return row carries the caller's argument origins into
-the part of the result it names, so a table handed to a helper and re-bound
-from its returned record keeps its origin around the loop. Origins do not
-leave the procedure that read the value: a returned value or field that
-derives from a candidate is not a unique return, since a callee never learns
-of a candidate and the caller cannot see which form the read takes. A candidate is *needed*
-when a value derived from it meets a runtime uniqueness check its birth
-answers—an argument position an operation may check, or an argument passed to
-a callee position the callee's seed mask names, which a variant would seed—
-while born with no other holder. A procedure's seed mask names the parameters
-whose seed a check in its body would answer, and also those carried into a
-callee position the callee's mask names, so seeds compose through direct calls
-whether or not the callee is inlined; a mask change is a signature change and
-re-analyzes callers. Needed candidates take the fresh form, every
-other candidate stays the static datum, and a local whose origins include a
-candidate that stays static is not unique, whatever its born bit says
-(`unique_origins_ok`). Emission materializes a needed read as a call to the
-fresh procedure and any other as the static literal; no `fresh_alternative`
-survives ARC, which the certifier checks, and the fresh procedures no read
-chose leave with the reachability pass that follows ARC. Callee seed-mask
-changes re-analyze callers, since a caller's decisions read them.
-
 ### Vocabulary
 
 - `Resource`: one refcounted position of one local—the top-level value, or
@@ -21894,8 +21818,7 @@ edges the solver already walks:
   visible value makes the container visible, and anything read out of a
   visible container is visible
 - direct-call argument-to-parameter and return-to-result relations, and the
-  return-to-result relation of a read's fresh form, which that read may become
-  (see "Fresh forms of static lists")
+  ordinary return-to-result relations
 - low-level ops, from explicit `RcEffect` data
 
 Bidirectional containment keeps every reachable-value tree uniformly
@@ -24089,6 +24012,19 @@ completed literal roots only from the Solved program that evaluated them,
 continuing that program rather than preparing its own.
 
 ### Runtime Programs Read Stored Values
+
+A completed compile-time value is final data. Reading it must never execute
+allocation, construction, or re-evaluation of that value, under either
+specialization strategy or any backend. This is a compiler invariant, not an
+optimization preference. There is no fresh-construction alternative, including
+for a consumer that may later update a list. Required runtime operations retain
+their ordinary semantics, but cannot change a constant read into reconstruction.
+All nested storage and callable captures are emitted as immutable target data
+with explicit relocations. Scalars may be immediate literals. Target-data
+encoding happens in the compiler and emits no runtime initializer.
+A product whose committed layout is zero-sized has no physical field offsets.
+Lowering represents its field projections as zero-sized value aliases, including
+when the product comes from an immutable slot.
 
 A build's executable binary is a function of its source, its command line, and its
 optimization state; whether the checked module cache already held a

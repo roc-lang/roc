@@ -67,8 +67,7 @@ pub const InsertOptions = struct {
     /// else emits only atomic count updates and skips the analysis.
     thread_confined_rc: bool = false,
     /// Prove values unique so a mutation can skip its runtime refcount check,
-    /// and a read of static data can take its fresh form. Optimized builds
-    /// and the tests of the analysis enable this; off, every mutation keeps
+    /// preserving static values as immutable. Off, every mutation keeps
     /// its check, which answers the same question at runtime.
     prove_uniqueness: bool = true,
     /// Select consuming Box.unbox when its lender is dead. Compiled backends
@@ -2257,32 +2256,11 @@ const Inserter = struct {
                     .next = next,
                 } }, origin);
             },
-            // A read with a fresh form settles here: the reads whose birth
-            // some uniqueness verdict rests on call the fresh procedure, and
-            // every other one keeps the static datum, its fresh procedure
-            // leaving with the next reachability pass.
-            .assign_literal => |assign| if (self.store.literalExtra(assign.value).fresh_alternative != null and self.solution.fresh_reads.isSet(@backingInt(at)))
-                try self.store.addCFStmt(.{ .assign_call = .{
-                    .target = assign.target,
-                    .proc = self.store.literalExtra(assign.value).fresh_alternative.?,
-                    .args = LIR.LocalSpan.empty(),
-                    .next = next,
-                } }, origin)
-            else blk: {
-                var value = assign.value;
-                if (value == .static_data) {
-                    var copies = self.store.stmtRowOrDefault(value.static_data.copies);
-                    if (copies.fresh_alternative != null) {
-                        copies.fresh_alternative = null;
-                        value.static_data.copies = try self.store.addOptionalStmtRow(LIR.LiteralExtra, copies);
-                    }
-                }
-                break :blk try self.store.addCFStmt(.{ .assign_literal = .{
-                    .target = assign.target,
-                    .value = value,
-                    .next = next,
-                } }, origin);
-            },
+            .assign_literal => |assign| try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = assign.target,
+                .value = assign.value,
+                .next = next,
+            } }, origin),
             .assign_call => |assign| blk: {
                 if (step.retain_call_result) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .borrowed_call_result }, next);
                 if (step.replaces_frame) {

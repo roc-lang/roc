@@ -626,6 +626,7 @@ pub const CompletedStages = struct {
         }
         try self.stage_symbols.append(self.allocator, symbols);
         for (stage.lir_result.static_data_values.items, 0..) |entry, ordinal| {
+            if (entry.representation_of != null) continue;
             const root = entry.compile_time_root orelse continue;
             if (!self.pending.contains(.{ .module = root.module, .root = root.root })) continue;
             const gop = try self.sources.getOrPut(self.allocator, .{ .module = root.module, .root = root.root, .role = std.meta.activeTag(root.role) });
@@ -710,6 +711,7 @@ const ProgramSlots = struct {
         var result = ProgramSlots{ .program = program, .symbols = symbols };
         errdefer result.slots.deinit(allocator);
         for (program.lir_result.static_data_values.items, 0..) |entry, ordinal| {
+            if (entry.representation_of != null) continue;
             const root = entry.compile_time_root orelse continue;
             const gop = try result.slots.getOrPut(allocator, .{ .module = root.module, .root = root.root, .role = std.meta.activeTag(root.role) });
             if (gop.found_existing) finalizationInvariant("checked root has ambiguous source value slots");
@@ -5548,13 +5550,21 @@ const StaticSlotEnvironment = struct {
             // unboxed. Both describe the same value, and the freezer emits the
             // payload as its own node with a relocation into the slot.
             const destination_layout = entry.layout_idx;
-            if (destination_layout != plan.ret_layout) {
-                const destination = lowered.lir_result.layouts.getLayout(destination_layout);
-                if (destination.tag != .box or destination.getIdx() != plan.ret_layout) {
-                    finalizationInvariant("evaluated root requires its explicit instance conversion");
-                }
-            }
-            const exports = try NativeRootExport.freezeRootIntoSlot(self.allocator, &lowered.lir_result, slot, plan, value, callables, destination_layout);
+            const exports = if (root.role.value.plan == plan.plan)
+                try NativeRootExport.freezeRootIntoSlot(self.allocator, &lowered.lir_result, slot, plan, value, callables, destination_layout)
+            else converted: {
+                // This slot's checked use requires a different representation.
+                // Convert the completed data by its explicit pair of plans;
+                // no Roc instructions rerun its construction at the read.
+                if (entry.representation_of == null) finalizationInvariant("a root's alternate representation has no canonical source");
+                const source = try NativeRootExport.freezeRootIntoSlot(self.allocator, &lowered.lir_result, slot, plan, value, callables, plan.ret_layout);
+                defer static_data_exports.deinitStaticData(self.allocator, source);
+                var source_entry = entry;
+                source_entry.layout_idx = plan.ret_layout;
+                source_entry.representation_of = null;
+                source_entry.compile_time_root.?.role.value.plan = plan.plan;
+                break :converted try FrozenRootTranscode.transcodeValueSlot(self.allocator, &lowered.lir_result, source_entry, source, @fromBackingInt(0), &lowered.lir_result, slot);
+            };
             try self.installExports(lowered, slot, exports, functions);
             try lir.ComptimeValueGuards.completeSuccessfulSlot(&lowered.lir_result, slot);
         }

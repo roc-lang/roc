@@ -7,7 +7,7 @@
 //! function records exactly that: a recipe naming the worker, the types the
 //! descriptors describe, and the captured values and dictionaries as nodes
 //! of the constant store. Restoring it rebuilds the worker from the recipe
-//! and packs the same captures, so nothing is inferred about the value.
+//! and embeds the captures as immutable data. No runtime constructor is emitted.
 //!
 //! The recipe is bytes the constant store keeps opaque but for its first
 //! table: the modules it names, by checked key, each once, which the store
@@ -172,14 +172,14 @@ pub const Retained = struct {
         try recipe.worker(worker_id);
         try recipe.typeSpan(bound);
         // The dictionaries of a method whose scheme requires itself capture
-        // one another. The types determine them, so they are composed again
-        // from the types rather than stored as a cycle.
-        const rebuilt = switch (program.worker(worker_id).key) {
+        // one another. Record their closed types so restoration can reserve
+        // the complete immutable graph before connecting its references.
+        const recursive_dictionary = switch (program.worker(worker_id).key) {
             .method_entry => |target| try program.dictionaryCapturesItself(target, bound),
             .lambda, .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .codec, .template, .default, .root, .static_data, .convert => false,
         };
-        try recipe.bytes.append(allocator, @intFromBool(rebuilt));
-        if (rebuilt) return .{ .recipe = try recipe.finish(), .captures = &.{} };
+        try recipe.bytes.append(allocator, @intFromBool(recursive_dictionary));
+        if (recursive_dictionary) return .{ .recipe = try recipe.finish(), .captures = &.{} };
 
         const captures = try allocator.alloc(Capture, shape.values.len + shape.dicts);
         errdefer allocator.free(captures);
@@ -779,7 +779,7 @@ pub const Decoded = struct {
     worker: WorkerId,
     bound: []const TypeId,
     /// A dictionary composed again from `bound`, with no stored captures.
-    rebuilt: bool,
+    recursive_dictionary: bool,
 };
 
 /// Read a stored function's recipe.
@@ -790,5 +790,5 @@ pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
     defer b.allocator.free(decoder.table);
     const worker = try decoder.worker();
     const bound = try decoder.typeSpan();
-    return .{ .worker = worker, .bound = bound, .rebuilt = decoder.byte() != 0 };
+    return .{ .worker = worker, .bound = bound, .recursive_dictionary = decoder.byte() != 0 };
 }

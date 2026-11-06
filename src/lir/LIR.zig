@@ -1227,14 +1227,7 @@ pub const max_cf_stmt_count: u32 = std.math.maxInt(u32) - 1;
 /// The fields of a `LiteralValue.static_data` read set only for a
 /// compile-time list of copies of one value, stored out of line.
 pub const LiteralExtra = struct {
-    /// The argument-free procedure that builds the same list fresh. ARC
-    /// chooses one form per read—the static datum when nothing the value
-    /// reaches needs it unique, the fresh build when its birth lets ARC
-    /// prove a mutating consumer's argument unique—and clears this, so no
-    /// consumer after ARC sees it set.
-    fresh_alternative: ?LirProcSpecId = null,
-    /// The list's item count, which the read's value has in either form ARC
-    /// chooses. Range proving binds it as the list's length.
+    /// The statically known list length, for range proofs.
     list_len: ?u64 = null,
 };
 

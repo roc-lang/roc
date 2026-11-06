@@ -152,7 +152,9 @@ pub const Task = union(enum) {
     finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const LocalId, dicts: []const LocalId, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
-    finish_restore_list: struct { ty: TypeId, count: u32 },
+    finish_static_list: struct { ty: TypeId, count: u32 },
+    finish_static_box: TypeId,
+    remember_static_value: lower.Program.StoredValueKey,
     /// Push a value of `ty` for an expression whose evaluation diverged.
     unreachable_value: TypeId,
     /// Push the `{}` value of a construct whose value nothing reads.
@@ -405,6 +407,7 @@ pub const Builder = struct {
     /// What each local holding static data holds, for a dictionary that
     /// captures it.
     static_words: collections.DenseMapUnmanaged(LocalId, StaticDescs.CaptureWord) = .empty,
+    constant_slots: collections.DenseMapUnmanaged(LocalId, LIR.StaticDataId) = .empty,
     /// Each type's descriptor once noted (`Input.stored_functions`).
     noted_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
     /// The locals the entry chain defines, which every statement of the
@@ -537,6 +540,7 @@ pub const Builder = struct {
         self.args_descs.deinit(self.allocator);
         self.noted_descs.deinit(self.allocator);
         self.static_words.deinit(self.allocator);
+        self.constant_slots.deinit(self.allocator);
         self.entry_locals.deinit(self.allocator);
         self.opened_components.deinit(self.allocator);
         self.open_members.deinit(self.allocator);
@@ -980,6 +984,7 @@ pub const Builder = struct {
             .vars = try self.store.addLocalSpan(vars),
         } }), .next = undefined } });
         try self.noted_descs.put(self.allocator, root, noted);
+        if (self.static_words.get(local)) |word| try self.static_words.put(self.allocator, noted, word);
         return noted;
     }
 
@@ -2033,7 +2038,15 @@ pub const Builder = struct {
             },
             .function => {
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                return try self.packClosure(adapter, &.{value}, &.{from}, self.var_descs, &.{});
+                const descs = if (self.program.worker(adapter).scheme_vars.len == 0) &.{} else self.var_descs;
+                // A runtime type application creates a new adapter around the
+                // stored callable. Only fully static captures describe a
+                // completed adapter that can itself be emitted as data.
+                const static_descs = for (descs) |desc| {
+                    if (!self.static_words.contains(desc) and !self.constant_slots.contains(desc)) break false;
+                } else true;
+                if (static_descs and (self.constant_slots.contains(value) or self.static_words.contains(value))) return self.staticClosure(adapter, &.{value}, &.{from}, descs, &.{}, false);
+                return try self.packClosure(adapter, &.{value}, &.{from}, descs, &.{});
             },
         }
     }
@@ -2909,39 +2922,37 @@ pub const Builder = struct {
             .finish_stored_fn => |stored| {
                 const captured = try self.popValues(@intCast(stored.shape.values.len + stored.shape.dicts));
                 defer self.allocator.free(captured);
-                const values = captured[0..stored.shape.values.len];
-                const dicts = captured[stored.shape.values.len..];
-                if (stored.shape.composed) {
-                    const all = try std.mem.concat(self.allocator, LocalId, &.{ values, stored.descs, dicts });
-                    defer self.allocator.free(all);
-                    try self.pushValue(try self.composeDictionary(stored.worker, all));
-                } else if (try self.allClosed(stored.shape.values)) {
-                    try self.pushValue(try self.packClosure(stored.worker, values, stored.shape.values, stored.descs, dicts));
-                } else {
-                    try self.pushValue(try self.packDynamicClosure(stored.worker, values, stored.capture_types, stored.descs, dicts));
-                }
+                try self.pushValue(try self.staticClosure(stored.worker, captured[0..stored.shape.values.len], stored.capture_types, stored.descs, captured[stored.shape.values.len..], !stored.shape.composed and !try self.allClosed(stored.shape.values)));
             },
             .finish_restore_closure => |closure| {
                 const values = try self.popValues(closure.count);
                 defer self.allocator.free(values);
                 const worker = self.program.worker(closure.worker).*;
-                const packed_closure = if (try self.allClosed(worker.capture_types))
-                    try self.packClosure(closure.worker, values, worker.capture_types, closure.descs, closure.dicts)
-                else
-                    try self.packDynamicClosure(closure.worker, values, closure.capture_types, closure.descs, closure.dicts);
-                try self.pushValue(try self.adaptValue(packed_closure, closure.worker_ty, closure.ty));
+                const callable = try self.staticClosure(closure.worker, values, closure.capture_types, closure.descs, closure.dicts, !try self.allClosed(worker.capture_types));
+                try self.pushValue(try self.adaptValue(callable, closure.worker_ty, closure.ty));
             },
             .finish_restore_struct => |restore| {
                 const values = try self.popValues(restore.count);
                 defer self.allocator.free(values);
-                try self.pushValue(try self.buildStruct(try self.structuralType(restore.ty), values));
+                try self.pushValue(try self.staticPartsLocal(try self.program.layouts.layoutOf(restore.ty), .product, values));
             },
             .finish_restore_tag => |restore| {
                 const values = try self.popValues(restore.count);
                 defer self.allocator.free(values);
-                try self.pushValue(try self.buildTag(restore.ty, restore.name, values));
+                const structural = try self.structuralType(restore.ty);
+                const tags = self.program.store.tagSpan(self.program.store.get(structural).tag_union.tags);
+                const variant = for (tags, 0..) |tag, index| {
+                    if (tag.name == restore.name) break index;
+                } else invariant("a stored tag has no declared variant");
+                try self.pushValue(try self.staticPartsLocal(try self.program.layouts.layoutOf(restore.ty), .{ .tag = @intCast(variant) }, values));
             },
-            .finish_restore_list => |restore| try self.finishRestoreList(restore.ty, restore.count),
+            .finish_static_list => |value| try self.finishStaticParts(value.ty, value.count, .list),
+            .finish_static_box => |ty| try self.finishStaticParts(ty, 1, .box),
+            .remember_static_value => |key| {
+                const value = self.popValue();
+                try self.program.stored_value_slots.put(self.allocator, key, try self.constantSlot(value));
+                try self.pushValue(value);
+            },
             .finish_field_access => |expr| try self.finishFieldAccess(expr),
             .finish_discriminant_eq => |eq| try self.finishDiscriminantEq(eq.value_ty, eq.tag, eq.negated),
             .finish_tuple_access => |expr| {
@@ -4911,7 +4922,7 @@ pub const Builder = struct {
         };
     }
 
-    /// A read of a stored constant: its value's construction at `ty`
+    /// A read of a stored constant: its immutable representation at `ty`
     /// (design.md "Compile-Time Evaluation Strategy").
     /// Restore stored constant `stored` read at `ty`: at `ty` when it is
     /// closed, and otherwise at the value's own stored type, re-tagged to
@@ -4976,13 +4987,12 @@ pub const Builder = struct {
         // closed type's components are closed.
         if (!store.isClosed(raw_ty)) invariant("a stored value is restored at an open type");
         const ty = try self.structuralType(raw_ty);
-        switch (const_store.get(node)) {
+        const key: lower.Program.StoredValueKey = .{ .module = source.module, .node = node, .ty = raw_ty };
+        const data = const_store.get(node);
+        if (data != .scalar) if (self.program.stored_value_slots.get(key)) |slot| return self.pushValue(try self.staticRead(slot));
+        if (data != .crash and data != .checked_error) try self.push(.{ .remember_static_value = key });
+        switch (data) {
             .pending => invariant("a stored constant was never filled"),
-            .zst => {
-                const local = try self.localOf(raw_ty, .frame);
-                try self.emitLinear(.{ .assign_struct = .{ .target = local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
-                try self.pushValue(local);
-            },
             .scalar => |scalar| {
                 const local = try self.localOf(raw_ty, .frame);
                 const value: LIR.LiteralValue = switch (scalar) {
@@ -4995,9 +5005,11 @@ pub const Builder = struct {
                     .dec_bits => |bits| .{ .dec_literal = bits },
                 };
                 try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = value, .next = undefined } });
+                const slot = try self.storedDataSlot(source, node, raw_ty);
+                try self.constant_slots.put(self.allocator, local, slot);
                 try self.pushValue(local);
             },
-            .str => |str| try self.pushValue(try self.strLiteral(const_store.strBytes(str))),
+            .zst, .str => try self.pushValue(try self.storedDataLocal(source, node, raw_ty)),
             .crash => |message| {
                 if (root) |failed| {
                     // The value is a root's whose evaluation failed and was
@@ -5027,7 +5039,7 @@ pub const Builder = struct {
                     .box => |payload| payload,
                     .primitive, .empty_record, .record, .tuple, .tag_union, .list, .nominal, .function, .variable => invariant("a stored box restored at a non-Box type"),
                 };
-                try self.push(.{ .finish_low_level = .{ .op = .box_box, .arg_count = 1, .result = raw_ty } });
+                try self.push(.{ .finish_static_box = raw_ty });
                 try self.push(.{ .restore = .{ .source = source, .node = child, .ty = payload } });
             },
             .tuple, .record => |children| {
@@ -5077,37 +5089,14 @@ pub const Builder = struct {
                 };
                 switch (list) {
                     .nodes => |nodes| {
-                        try self.push(.{ .finish_restore_list = .{ .ty = raw_ty, .count = @intCast(nodes.len) } });
+                        try self.push(.{ .finish_static_list = .{ .ty = raw_ty, .count = @intCast(nodes.len) } });
                         var index = nodes.len;
                         while (index > 0) {
                             index -= 1;
                             try self.push(.{ .restore = .{ .source = source, .node = nodes[index], .ty = elem } });
                         }
                     },
-                    .empty => try self.finishRestoreList(raw_ty, 0),
-                    .packed_bytes => |packed_list| {
-                        const local = try self.localOf(raw_ty, .frame);
-                        var bytes = const_store.blobBytes(packed_list.bytes);
-                        // A product's items are its scalar leaves in field
-                        // order, laid out here as its layout stores them.
-                        var decoded: ?[]u8 = null;
-                        defer if (decoded) |owned| self.allocator.free(owned);
-                        if (packed_list.element == null) {
-                            var plan = try lir_core.PackedData.Plan.init(self.allocator, &self.program.result.layouts, try self.program.layouts.layoutOf(elem));
-                            defer plan.deinit();
-                            if (plan.packed_width != packed_list.product_width) invariant("a stored packed list's items differ from their type's fields");
-                            const memory = try self.allocator.alloc(u8, @as(usize, packed_list.len) * plan.memory_width);
-                            decoded = memory;
-                            plan.decode(memory, bytes, packed_list.len);
-                            bytes = memory;
-                        }
-                        const backing = try self.store.insertStringAligned(bytes, 16);
-                        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .bytes_literal = .{
-                            .bytes = .{ .backing = backing, .offset = 0, .len = @intCast(bytes.len) },
-                            .len = packed_list.len,
-                        } }, .next = undefined } });
-                        try self.pushValue(local);
-                    },
+                    .empty, .packed_bytes => try self.pushValue(try self.storedDataLocal(source, node, raw_ty)),
                 }
             },
             .fn_value => |fn_id| try self.restoreFn(source, fn_id, raw_ty),
@@ -5138,7 +5127,7 @@ pub const Builder = struct {
                 for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
                 @memcpy(hidden[bound.len..], dicts);
                 const entry = try self.program.methodEntryWorker(target);
-                try self.pushValue(try self.composeDictionary(entry, hidden));
+                try self.pushValue(try self.staticClosure(entry, &.{}, &.{}, hidden, &.{}, false));
             },
             .nested => |nested| {
                 // A closure of a defaulted field's expression belongs to the
@@ -5311,17 +5300,19 @@ pub const Builder = struct {
         }
     }
 
-    /// Restore a function value a `.boxy` evaluation stored: its worker,
-    /// packing what it captured.
+    /// Restore a completed function as immutable code and capture references.
     pub fn restoreStoredFn(self: *Builder, source: lower.ConstSource, recipe: []const u8, captures: []const checked.ConstNodeId) Allocator.Error!void {
         const decoded = try StoredFn.decode(self, recipe);
-        if (decoded.rebuilt) {
+        if (decoded.recursive_dictionary) {
             const target = switch (self.program.worker(decoded.worker).key) {
                 .method_entry => |target| target,
-                .template, .adapter, .default, .lambda, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a rebuilt stored dictionary is not a method entry's"),
+                .template, .adapter, .default, .lambda, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a recursive stored dictionary is not a method entry's"),
             };
             const instance = try self.program.targetRequirements(target, decoded.bound);
-            return try self.pushValue(try self.dictionaryOfTree(.{ .target = .{ .target = target, .instance = instance } }));
+            const data = try self.program.static_descs.closedDictionary(decoded.worker, target, decoded.bound, instance.requirements);
+            const value = try self.staticRead(data.slot);
+            try self.static_words.put(self.allocator, value, .{ .callable = data.node });
+            return try self.pushValue(value);
         }
         const shape = StoredFn.captureShape(self.program, decoded.worker);
         const arena = self.program.arena.allocator();
@@ -5613,12 +5604,61 @@ pub const Builder = struct {
         return try self.composeDictionary(try self.program.structuralWorker(self.module, method), &.{try self.descOf(dispatcher)});
     }
 
-    pub fn finishRestoreList(self: *Builder, ty: TypeId, count: u32) Allocator.Error!void {
+    /// A read of immutable target data. No runtime constructor exists.
+    pub fn staticRead(self: *Builder, slot: LIR.StaticDataId) Allocator.Error!LocalId {
+        const local = try self.closedLocal(self.program.result.static_data_values.items[@backingInt(slot)].layout_idx);
+        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
+        try self.constant_slots.put(self.allocator, local, slot);
+        return local;
+    }
+
+    fn storedDataLocal(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId) Allocator.Error!LocalId {
+        return self.staticRead(try self.storedDataSlot(source, node, ty));
+    }
+
+    fn storedDataSlot(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId) Allocator.Error!LIR.StaticDataId {
+        if (self.program.stored_value_slots.get(.{ .module = source.module, .node = node, .ty = ty })) |slot| return slot;
+        const value_layout = try self.program.layouts.layoutOf(ty);
+        const plan = try @import("const_schema.zig").constPlanOf(self.program, ty);
+        const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.program.result.static_data_values.items.len));
+        try self.program.result.static_data_values.append(self.allocator, .{
+            .initializer = null,
+            .layout_idx = value_layout,
+            .stored = .{ .module = self.program.module(source.module).key, .node = node, .plan = plan },
+        });
+        return slot;
+    }
+
+    pub fn constantSlot(self: *Builder, value: LocalId) Allocator.Error!LIR.StaticDataId {
+        if (self.constant_slots.get(value)) |slot| return slot;
+        if (self.static_words.get(value)) |word| return self.program.static_descs.slotForWord(word);
+        invariant("a completed compile-time value has no immutable data slot");
+    }
+
+    pub fn staticPartsLocal(self: *Builder, value_layout: layout.Idx, kind: @FieldType(lir_core.Program.StaticDataParts, "kind"), values: []const LocalId) Allocator.Error!LocalId {
+        const children = try self.allocator.alloc(LIR.StaticDataId, values.len);
+        errdefer self.allocator.free(children);
+        for (values, children) |value, *child| child.* = try self.constantSlot(value);
+        const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.program.result.static_data_values.items.len));
+        try self.program.result.static_data_values.append(self.allocator, .{
+            .initializer = null,
+            .layout_idx = value_layout,
+            .parts = .{ .kind = kind, .children = children },
+        });
+        return self.staticRead(slot);
+    }
+
+    fn finishStaticParts(self: *Builder, ty: TypeId, count: u32, kind: @FieldType(lir_core.Program.StaticDataParts, "kind")) Allocator.Error!void {
         const values = try self.popValues(count);
         defer self.allocator.free(values);
-        const target = try self.localOf(ty, .frame);
-        try self.emitLinear(.{ .assign_list = .{ .target = target, .elems = try self.store.addLocalSpan(values), .next = undefined } });
-        try self.pushValue(target);
+        const value_layout = try self.program.layouts.layoutOf(ty);
+        // Box(function) has the callable's own representation, with no
+        // second allocation or pointer around it.
+        if (kind == .box and self.program.result.layouts.getLayout(value_layout).tag == .erased_callable) {
+            try self.pushValue(values[0]);
+            return;
+        }
+        try self.pushValue(try self.staticPartsLocal(value_layout, kind, values));
     }
 
     /// What a procedure use calls: a template's worker, the worker an exact
@@ -6901,10 +6941,9 @@ pub const Builder = struct {
     }
 
     /// The dictionary of `entry` as static data, when all of `captures` are
-    /// themselves static. A compile-time program reads its function values'
-    /// types back from what its compositions noted, so it composes them.
+    /// themselves static. Descriptor notes record the type information
+    /// needed to store functions without constructing the dictionary.
     fn staticDictionary(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!?LocalId {
-        if (self.program.input.stored_functions) return null;
         const words = try self.allocator.alloc(StaticDescs.CaptureWord, captures.len);
         defer self.allocator.free(words);
         for (captures, words) |capture, *word| word.* = self.static_words.get(capture) orelse return null;
@@ -7847,6 +7886,43 @@ pub const Builder = struct {
             .next = undefined,
         } });
         return target;
+    }
+
+    /// Encode a completed callable and its captures as immutable target data.
+    /// The layout follows the worker's declared ABI; no closure packing executes
+    /// when the constant is read.
+    fn staticClosure(self: *Builder, worker: WorkerId, captured: []const LocalId, capture_types: []const TypeId, descs: []const LocalId, dicts: []const LocalId, dynamic: bool) Allocator.Error!LocalId {
+        var fields: std.ArrayList(LocalId) = .empty;
+        defer fields.deinit(self.allocator);
+        var record_layout: layout.Idx = .zst;
+        if (dynamic) {
+            const count = capture_record_leading_words + descs.len + dicts.len + captured.len;
+            const layouts = try self.allocator.alloc(layout.StructField, count);
+            defer self.allocator.free(layouts);
+            const descriptors = try self.allocator.alloc(LIR.StaticDataId, count);
+            defer self.allocator.free(descriptors);
+            const words = capture_record_leading_words + descs.len + dicts.len;
+            for (layouts, descriptors, 0..) |*field, *descriptor, i| {
+                field.* = .{ .index = @intCast(i), .layout = if (i < words) .opaque_ptr else try self.program.layouts.layoutOf(capture_types[i - words]) };
+                descriptor.* = if (i < words) try self.program.static_descs.opaqueWordSlot() else try self.program.static_descs.descriptorSlot(capture_types[i - words]);
+            }
+            record_layout = try self.program.result.layouts.putNominalStructFields(layouts);
+            const record_desc = try self.staticRead(try self.program.static_descs.argumentRecordSlot(record_layout, descriptors));
+            const capacity = try self.staticPartsLocal(.opaque_ptr, .{ .word = self.program.result.layouts.layoutSize(self.program.result.layouts.getLayout(record_layout)) }, &.{});
+            try fields.appendSlice(self.allocator, &.{ record_desc, capacity });
+            try fields.appendSlice(self.allocator, descs);
+            try fields.appendSlice(self.allocator, dicts);
+            try fields.appendSlice(self.allocator, captured);
+        } else {
+            record_layout = try self.captureLayout(capture_types, descs.len, dicts.len);
+            try fields.appendSlice(self.allocator, captured);
+            try fields.appendSlice(self.allocator, descs);
+            try fields.appendSlice(self.allocator, dicts);
+        }
+        const proc = self.program.worker(worker).proc;
+        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = proc }, &.{});
+        const record = try self.staticPartsLocal(record_layout, .product, fields.items);
+        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = proc }, &.{record});
     }
 
     /// Pop a function value's arguments and the function value, and call it
@@ -8814,6 +8890,13 @@ pub const Builder = struct {
     pub fn readFieldInto(self: *Builder, target: LocalId, ty: TypeId, base_local: LocalId, field_index: u32, field_ty: TypeId) Allocator.Error!void {
         if (try self.closed(ty)) {
             const base_layout = self.store.getLocal(base_local).layout_idx;
+            if (base_layout == .zst) {
+                // A zero-sized product has no physical fields. Its field is
+                // the same zero-bit value, independent of how the base was
+                // produced (including an immutable constant read).
+                if (self.store.getLocal(target).layout_idx != .zst) invariant("a zero-sized record has a field with storage");
+                return self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.local(base_local), .next = undefined } });
+            }
             if (self.program.result.layouts.getLayout(base_layout).tag != .struct_) {
                 try self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.field(base_local, field_index), .next = undefined } });
                 return;

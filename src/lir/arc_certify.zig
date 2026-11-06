@@ -548,12 +548,6 @@ fn certifyUniqueArgs(
 
         for (proc_stmts.items) |current| {
             const stmt = store.getCFStmtImmediate(current);
-            if (stmt.* == .assign_literal and store.literalExtra(stmt.assign_literal.value).fresh_alternative != null) {
-                diag.context_proc = proc_id;
-                diag.context_stmt = current;
-                diag.set("stmt={d}: a read still names a fresh form after ARC chose", .{@backingInt(current)});
-                return error.Certification;
-            }
             if (stmt.* != .assign_low_level) continue;
             const assign = stmt.assign_low_level;
             const unique_args = store.stmtRowOrDefault(assign.extra).unique_args;

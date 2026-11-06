@@ -44,17 +44,6 @@ pub const StaticDataExport = struct {
     is_mutable: bool = false,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
-    /// The capacities the empty lists inside this value were evaluated
-    /// with, by byte offset of each list's descriptor in `bytes`. A frozen
-    /// list's capacity word is its length, so the requests would otherwise
-    /// be lost; a runtime consumer rebuilding the value uses them.
-    empty_list_capacities: []const EmptyListCapacity = &.{},
-};
-
-/// The evaluated capacity of one empty list inside a frozen value.
-pub const EmptyListCapacity = struct {
-    offset: u64,
-    capacity: u64,
 };
 
 /// One explicit pointer relocation inside a readonly static-data symbol.
@@ -106,7 +95,6 @@ pub const FrozenStaticData = struct {
                 if (relocation.owns_target_symbol_name) self.allocator.free(relocation.target_symbol_name);
             }
             self.allocator.free(item.relocations);
-            self.allocator.free(item.empty_list_capacities);
         }
         self.allocator.free(self.exports);
         self.* = undefined;
@@ -330,9 +318,15 @@ pub const StaticDataValue = struct {
     /// directly.
     initializer: ?LIR.LirProcSpecId,
     layout_idx: layout.Idx,
-    /// The stored list this value is frozen from, when it has no initializer
-    /// (`Mono.StoredStaticList`).
+    /// The completed ConstStore node frozen directly at its explicit layout
+    /// and storage plan, without an initializer procedure.
     stored: ?StoredStaticValue = null,
+    /// Final constant data assembled by the compiler, never runtime LIR.
+    parts: ?StaticDataParts = null,
+    /// Another physical representation of this canonical completed root.
+    /// It shares the producer and failure status, and is filled by the data
+    /// writer, never by runtime conversion or allocation instructions.
+    representation_of: ?struct { slot: LIR.StaticDataId, storage: CaptureSlotStorage } = null,
     /// An evaluated root owns this slot. Its initializer is representation
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {
@@ -349,6 +343,21 @@ pub const StaticDataValue = struct {
             },
         },
     } = null,
+};
+
+/// Explicit edges and representation of a completed constant. Children name
+/// immutable data slots; the target-data writer connects their bytes and
+/// relocations without generating a procedure that constructs the value.
+pub const StaticDataParts = struct {
+    kind: union(enum) {
+        word: u64,
+        product,
+        list,
+        box,
+        tag: u32,
+        callable: LIR.LirProcSpecId,
+    },
+    children: []LIR.StaticDataId,
 };
 
 /// A list stored in a checked module's `ConstStore`, which static data
@@ -460,6 +469,7 @@ pub const Result = struct {
         self.lowering_modules.deinit(allocator);
         self.expect_site_ids.deinit(allocator);
         self.expect_sites.deinit(allocator);
+        for (self.static_data_values.items) |value| if (value.parts) |parts| allocator.free(parts.children);
         self.static_data_values.deinit(allocator);
         self.comptime_value_guards.deinit(allocator);
         deinitConstPlans(allocator, self.const_plans.items);

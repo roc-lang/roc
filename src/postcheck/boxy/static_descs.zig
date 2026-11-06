@@ -176,6 +176,18 @@ pub const StaticDescs = struct {
         return reserved;
     }
 
+    /// Encode a closed recursive dictionary as immutable nodes. Reserve the
+    /// entire graph before connecting its references; no runtime patching is
+    /// needed when restoring a completed function value.
+    pub fn closedDictionary(self: *StaticDescs, entry: WorkerId, target: WorkerId, bound: []const TypeId, dicts: []const lower.DictRequirement) Allocator.Error!Reserved {
+        const slot = try self.addSlot();
+        const slot_export = try self.addExport(try LirProgram.staticDataSymbolName(self.allocator, slot), self.ptrSize(), self.ptrSize(), slot);
+        const node = try self.staticCallable(@backingInt(slot), 1, .{ .entry = entry, .target = target, .bound = bound, .dicts = dicts });
+        try self.setRelocations(slot_export, &.{.{ .offset = 0, .target = node, .addend = static_callable_header }});
+        try self.drain();
+        return .{ .slot = slot, .node = node };
+    }
+
     /// The static-data slot holding a null pointer.
     pub fn nullWordSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
         if (self.null_word) |slot| return slot;
@@ -188,6 +200,74 @@ pub const StaticDescs = struct {
     /// The static-data slot holding the `Name` of `name`.
     pub fn nameSlot(self: *StaticDescs, name: NameId) Allocator.Error!LIR.StaticDataId {
         return (try self.reserveName(name)).slot;
+    }
+
+    /// A closed declared-order capture record's descriptor, emitted directly
+    /// as target data. Each child is an explicit descriptor pointer slot.
+    pub fn argumentRecordSlot(self: *StaticDescs, record_layout: layout.Idx, children: []const LIR.StaticDataId) Allocator.Error!LIR.StaticDataId {
+        const dl = desc_format.TypeDesc.layout(self.width);
+        const fl = desc_format.Field.layout(self.width);
+        const reserved = try self.addSlotWithNode(dl.size, dl.alignment);
+        const layouts = self.layouts.layouts;
+        const committed = layouts.getLayout(record_layout);
+        const record = committed.getStruct().idx;
+        var refcounted: u32 = 0;
+        for (children, 0..) |_, i| {
+            const field = layouts.getStructFieldLayoutByOriginalIndex(record, @intCast(i));
+            if (layouts.layoutContainsRefcounted(layouts.getLayout(field))) refcounted += 1;
+        }
+        const count: u32 = @intCast(children.len);
+        const fields_size = fl.size * count;
+        const entries = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, @backingInt(reserved.slot), 2), fields_size + if (refcounted == 0) @as(u32, 0) else 4 * (refcounted + 1), fl.alignment, null);
+        var pointers: std.ArrayList(Pointer) = .empty;
+        defer pointers.deinit(self.allocator);
+        const bytes = @constCast(self.exports.items[entries].bytes);
+        var rc_index: u32 = 0;
+        for (children, 0..) |child, raw| {
+            const i: u32 = @intCast(raw);
+            const field = layouts.getStructFieldLayoutByOriginalIndex(record, i);
+            writeU32(bytes, i * fl.size + fl.of(.offset), layouts.getStructFieldOffsetByOriginalIndex(record, i));
+            writeU32(bytes, i * fl.size + fl.of(.field_index), i);
+            writeU32(bytes, i * fl.size + fl.of(.field_slot), i);
+            try pointers.append(self.allocator, .{ .offset = i * fl.size + fl.of(.desc), .target = self.nodeOfSlot(child) });
+            if (layouts.layoutContainsRefcounted(layouts.getLayout(field))) {
+                writeU32(bytes, fields_size + 4 * (rc_index + 1), i);
+                rc_index += 1;
+            }
+        }
+        if (refcounted != 0) writeU32(bytes, fields_size, refcounted);
+        try self.setRelocations(entries, pointers.items);
+        const header = @constCast(self.exports.items[reserved.node].bytes);
+        writeU32(header, dl.of(.size), layouts.layoutSize(committed));
+        writeU32(header, dl.of(.alignment), @intCast(committed.alignment(layouts.targetUsize()).toByteUnits()));
+        writeU32(header, dl.of(.count), count);
+        header[dl.of(.kind)] = @backingInt(desc_format.Kind.tuple);
+        header[dl.of(.sort_key)] = @backingInt(committed.sortKey());
+        header[dl.of(.flags)] = @bitCast(desc_format.Flags{ .declared_order = true, .contains_refcounted = refcounted != 0 });
+        try self.setRelocations(reserved.node, &.{.{ .offset = dl.of(.entries), .target = entries }});
+        return reserved.slot;
+    }
+
+    fn nodeOfSlot(self: *const StaticDescs, slot: LIR.StaticDataId) ExportIndex {
+        for (self.exports.items) |item| if (item.value_id == slot) {
+            std.debug.assert(item.relocations.len == 1);
+            return @backingInt(item.relocations[0].target.data_symbol);
+        };
+        types.invariant("a static descriptor slot has no descriptor node");
+    }
+
+    /// A static word's immutable value slot, also usable by stored captures.
+    pub fn slotForWord(self: *StaticDescs, word: CaptureWord) Allocator.Error!LIR.StaticDataId {
+        return switch (word) {
+            .desc => |ty| try self.descriptorSlot(ty),
+            .zero => try self.nullWordSlot(),
+            .callable => |node| blk: {
+                const slot = try self.addSlot();
+                const exported = try self.addExport(try LirProgram.staticDataSymbolName(self.allocator, slot), self.ptrSize(), self.ptrSize(), slot);
+                try self.setRelocations(exported, &.{.{ .offset = 0, .target = node, .addend = static_callable_header }});
+                break :blk slot;
+            },
+        };
     }
 
     fn ptrSize(self: *const StaticDescs) u32 {

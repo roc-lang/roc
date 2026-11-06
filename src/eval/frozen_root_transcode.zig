@@ -14,7 +14,7 @@ const Allocator = std.mem.Allocator;
 const Program = lir.Program;
 const SymbolId = static_data.StaticDataSymbolId;
 
-const PlanView = struct { plan: Program.ConstPlanId, layout_idx: layout.Idx };
+const PlanView = struct { plan: Program.ConstPlanId, layout_idx: layout.Idx, storage: Program.CaptureSlotStorage = .value };
 
 /// Re-encode a frozen graph from explicit source and destination root plans.
 pub fn transcodeRoot(allocator: Allocator, source_program: *const Program.Result, source_root: Program.ConstRootPlan, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_root: Program.ConstRootPlan, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
@@ -27,7 +27,7 @@ pub fn transcodeValueSlot(allocator: Allocator, source_program: *const Program.R
     const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
     const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
     if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
-    return transcodePlans(allocator, source_program, .{ .plan = source_slot.compile_time_root.?.role.value.plan, .layout_idx = source_slot.layout_idx }, source_exports, source_symbol, target_program, .{ .plan = target.compile_time_root.?.role.value.plan, .layout_idx = target.layout_idx }, target_slot);
+    return transcodePlans(allocator, source_program, .{ .plan = source_slot.compile_time_root.?.role.value.plan, .layout_idx = source_slot.layout_idx, .storage = if (source_slot.representation_of) |view| view.storage else .value }, source_exports, source_symbol, target_program, .{ .plan = target.compile_time_root.?.role.value.plan, .layout_idx = target.layout_idx, .storage = if (target.representation_of) |view| view.storage else .value }, target_slot);
 }
 
 fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, source_root: PlanView, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_root: PlanView, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
@@ -36,7 +36,7 @@ fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, s
     var builder = Builder{ .graph = .{ .allocator = arena.allocator(), .output = allocator, .program = target_program, .slot = target_slot }, .source_program = source_program, .source_exports = source_exports };
     defer builder.graph.deinit();
     const symbol = try builder.graph.addNode(try Program.staticDataSymbolName(allocator, target_slot), builder.graph.size(target_root.layout_idx), builder.graph.alignment(target_root.layout_idx));
-    try builder.enqueue(source_root.plan, source_root.layout_idx, target_root.plan, target_root.layout_idx, .{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset }, .{ .symbol = symbol }, .value, .value);
+    try builder.enqueue(source_root.plan, source_root.layout_idx, target_root.plan, target_root.layout_idx, .{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset }, .{ .symbol = symbol }, source_root.storage, target_root.storage);
     var index: usize = 0;
     while (index < builder.jobs.items.len) : (index += 1) try builder.visit(builder.jobs.items[index]);
     return builder.graph.finish();
@@ -143,6 +143,14 @@ const Builder = struct {
         const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         const source_plan = self.source_program.const_plans.items[@backingInt(job.source_plan)];
         const plan = self.graph.program.const_plans.items[@backingInt(job.plan)];
+        if (source_plan == .named) {
+            try self.enqueue(source_plan.named.backing, job.source_layout, job.plan, job.layout_idx, job.source, job.dest, job.source_storage, job.storage);
+            return;
+        }
+        if (plan == .named) {
+            try self.enqueue(job.source_plan, job.source_layout, plan.named.backing, job.layout_idx, job.source, job.dest, job.source_storage, job.storage);
+            return;
+        }
         if (std.meta.activeTag(source_plan) != std.meta.activeTag(plan)) invariant("paired canonical const plan shapes differ");
         const source_boxed = job.source_storage == .recursive_box or (source_physical.tag == .box and recursionBoxSite(source_plan));
         const target_boxed = job.storage == .recursive_box or (physical.tag == .box and recursionBoxSite(plan));
@@ -160,7 +168,7 @@ const Builder = struct {
             },
             .str => try self.string(job),
             .list => |element| try self.list(job, source_plan.list, element),
-            .named => |named| try self.enqueue(source_plan.named.backing, job.source_layout, named.backing, job.layout_idx, job.source, job.dest, .value, .value),
+            .named => unreachable, // Explicit nominal wrappers were consumed above.
             .box => |element| switch (physical.tag) {
                 .box_of_zst => try self.graph.writeWord(job.dest, 0),
                 .box => try self.boxed(job, source_plan.box, source_physical.getIdx(), element, physical.getIdx()),
@@ -179,9 +187,9 @@ const Builder = struct {
                     if (variant.discriminant == disc) break variant;
                 } else invariant("source tag absent from plan");
                 for (variants) |variant| {
-                    if (variant.discriminant != disc) continue;
-                    self.writeDiscriminant(job.layout_idx, job.dest, disc);
-                    try self.children(source_variant.payloads, self.payload(self.source_program, job.source_layout, disc), variant.payloads, self.payload(self.graph.program, job.layout_idx, disc), job.source, job.dest, true);
+                    if (!std.mem.eql(u8, variant.name, source_variant.name)) continue;
+                    self.writeDiscriminant(job.layout_idx, job.dest, variant.discriminant);
+                    try self.children(source_variant.payloads, self.payload(self.source_program, job.source_layout, disc), variant.payloads, self.payload(self.graph.program, job.layout_idx, variant.discriminant), job.source, job.dest, true);
                     return;
                 }
                 invariant("target tag absent from plan");

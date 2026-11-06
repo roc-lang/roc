@@ -1461,7 +1461,6 @@ pub fn prepareCheckedModulesMonotype(
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
                 .post_check_executor = target.post_check_executor,
-                .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
                 .validate_all_comptime_roots = target.validate_all_comptime_roots,
@@ -1928,8 +1927,7 @@ fn finishLoweredOutput(
 
     try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items});
 
-    // ARC settled every read that named a fresh form, so a fresh-form
-    // procedure no read chose is now unreferenced.
+    // Retain only procedures and data referenced after ARC.
     if (frozen.*) |*data| {
         try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
     } else {
@@ -2378,7 +2376,6 @@ test "adopting completed compile-time values drops their initializers and identi
         .bytes = try allocator.alloc(u8, 0),
         .alignment = 1,
         .relocations = try allocator.alloc(LirProgram.StaticDataRelocation, 0),
-        .empty_list_capacities = try allocator.alloc(LirProgram.EmptyListCapacity, 0),
     };
     lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
 
