@@ -9070,18 +9070,27 @@ Any other call qualifies only when a known value crosses the call's boundary
 and meets a consumer that gains from it on the other side:
 
 - a known part of an argument or capture reaches a `match` on a known tag, a
-  call of a known callable, or a loop entered with a known constructor, inside
-  the callee's extent, or through the callee's result in the caller's
+  call of a known callable, or a loop entered with a known tag or callable,
+  inside the callee's extent, or through the callee's result in the caller's
   continuation;
 - a part of the result that the callee constructs on every path that returns
   (or passes through from an argument or capture the clone knows) reaches a
-  `match`, a call, a loop entry, or a field or item read in the caller's
-  continuation. A projected result is read without building the aggregate. A
-  projected argument gains nothing from inlining, since the call-pattern
-  worker already takes a known argument apart. Returning a result, or storing
-  it in a constructor, is not such a use: the callee already builds it where
-  the caller receives it, and a result the caller returns is read by whatever
-  reads the caller's result.
+  `match`, a call, a loop entry with a tag or callable, or a field or item
+  read in the caller's continuation. A projected result is read without
+  building the aggregate. A projected argument gains nothing from inlining,
+  since the call-pattern worker already takes a known argument apart.
+  Returning a result, or storing it in a constructor, is not such a use: the
+  callee already builds it where the caller receives it, and a result the
+  caller returns is read by whatever reads the caller's result.
+
+A known record or tuple entering a loop is not such a use by itself. Join
+scalarization (`scalarize_joins.zig`) splits a record- or tuple-typed join
+parameter of up to 64 fields that is only read field by field into one
+parameter per field in every mode, whatever its initializer is, so the copied
+body would carry the same scalar state the residual call does; a loop that
+uses its state whole keeps the aggregate in the copy too. The walk follows the record's fields through the loop variable, so a
+known tag or callable in a field still counts where a `match` or call inside
+the loop reads it.
 
 A known argument is one the clone holds as a constructor, callable, or known
 local at the consumed path, or a nested direct call whose callee constructs

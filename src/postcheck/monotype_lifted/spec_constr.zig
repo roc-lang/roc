@@ -12992,7 +12992,8 @@ const Cloner = struct {
 
     /// Whether this clone knows the part of `source_expr` at `source_steps`
     /// well enough for one of `consumers` to simplify on it: a tag for a
-    /// `match`, a callable for a call, or a constructor for a loop entry. A
+    /// `match`, a callable for a call, a tag or callable for a loop entry,
+    /// or a record or tuple for a read of one of its parts. A
     /// direct call is known at a part its callee constructs on every path
     /// that returns, and at a part it always passes through from a known
     /// argument or capture.
@@ -13010,9 +13011,9 @@ const Cloner = struct {
         const program = self.pass.program;
         const session = self.crossingSession();
         const arena = self.arena.allocator();
-        const known_constructor = consumers.contains(.loop);
-        const known_tag = consumers.contains(.match) or known_constructor;
-        const known_callable = consumers.contains(.call);
+        const known_tag = consumers.contains(.match) or consumers.contains(.loop);
+        const known_callable = consumers.contains(.call) or consumers.contains(.loop);
+        const known_constructor = consumers.contains(.project);
         var work: std.ArrayList(Item) = .empty;
         defer work.deinit(self.pass.allocator);
         try work.append(self.pass.allocator, .{ .expr = .{ .id = source_expr, .steps = source_steps } });
@@ -18776,6 +18777,138 @@ test "a callable worker's body is a root context for inline productivity" {
     cloner.result_boundary = cloner.inline_stack.items.len;
     cloner.crossing_root_fn = middle;
     try std.testing.expect(!try cloner.crossingIsProductive(make_call, make, make_call_data));
+}
+
+test "a known record entering a loop is productive only through the parts the loop consumes" {
+    // `run(state)` is `loop (s = state) { body }`. Calls pass the record
+    // `{ mode: A }`, directly or as the result of `make()`. Join
+    // scalarization splits record-typed loop state whatever its fields
+    // hold, so the record alone gains nothing from crossing into the loop;
+    // a `match` on its `mode` inside the loop does.
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.zst);
+    const tag_a = try program.names.internTagLabel("A");
+    const mode = try program.names.internRecordFieldLabel("mode");
+    var next_symbol: u32 = 0;
+
+    const Build = struct {
+        program: *Ast.Program,
+        ty: Type.TypeId,
+        tag_a: names.TagNameId,
+        mode: names.RecordFieldNameId,
+        next_symbol: *u32,
+
+        fn symbol(self: @This()) Common.Symbol {
+            self.next_symbol.* += 1;
+            return @fromBackingInt(self.next_symbol.*);
+        }
+
+        fn unit(self: @This()) Allocator.Error!Ast.ExprId {
+            return self.program.addExpr(.{ .ty = self.ty, .data = .unit });
+        }
+
+        fn known(self: @This()) Allocator.Error!Ast.ExprId {
+            const a = try self.program.addExpr(.{ .ty = self.ty, .data = .{ .tag = .{ .name = self.tag_a, .payloads = .empty() } } });
+            return self.program.addExpr(.{ .ty = self.ty, .data = .{ .record = try self.program.addFieldExprSpan(&.{.{ .name = self.mode, .value = a }}) } });
+        }
+
+        fn function(self: @This(), args: []const Ast.LocalId, body: Ast.ExprId) Allocator.Error!Ast.FnId {
+            var typed: [1]Ast.TypedLocal = undefined;
+            for (args, 0..) |arg, i| typed[i] = .{ .local = arg, .ty = self.ty };
+            return self.program.addFn(.{
+                .shapes = self.program.finishFnShapes(.{}),
+                .symbol = self.symbol(),
+                .args = try self.program.addTypedLocalSpan(typed[0..args.len]),
+                .captures = .empty(),
+                .body = .{ .roc = body },
+                .ret = self.ty,
+            });
+        }
+
+        /// `loop (s = initial) { match s.mode { A => {}, _ => {} } }`, or
+        /// `loop (s = initial) {}` when the loop reads nothing.
+        fn loop(self: @This(), initial: Ast.ExprId, reads_mode: bool) Allocator.Error!Ast.ExprId {
+            const s = try self.program.addLocal(self.symbol(), self.ty);
+            const body = if (reads_mode) body: {
+                const s_ref = try self.program.addExpr(.{ .ty = self.ty, .data = .{ .local = s } });
+                const read = try self.program.addExpr(.{ .ty = self.ty, .data = .{ .field_access = .{
+                    .receiver = s_ref,
+                    .segments = try self.program.addFieldAccessSegmentSpan(&.{.{ .field = self.mode }}),
+                } } });
+                const a_pat = try self.program.addPat(.{ .ty = self.ty, .data = .{ .tag = .{ .name = self.tag_a, .payloads = .empty() } } });
+                const other = try self.program.addPat(.{ .ty = self.ty, .data = .wildcard });
+                break :body try self.program.addExpr(.{ .ty = self.ty, .data = .{ .match_ = .{
+                    .scrutinee = read,
+                    .branches = try self.program.addBranchSpan(&.{
+                        .{ .pat = a_pat, .body = try self.unit() },
+                        .{ .pat = other, .body = try self.unit() },
+                    }),
+                } } });
+            } else try self.unit();
+            return self.program.addExpr(.{ .ty = self.ty, .data = .{ .loop_ = .{
+                .params = try self.program.addTypedLocalSpan(&.{.{ .local = s, .ty = self.ty }}),
+                .initial_values = try self.program.addExprSpan(&.{initial}),
+                .body = body,
+            } } });
+        }
+    };
+    const b: Build = .{ .program = &program, .ty = ty, .tag_a = tag_a, .mode = mode, .next_symbol = &next_symbol };
+
+    // A statement before each body keeps it from being a wrapper.
+    const Guard = struct {
+        fn around(build: Build, final: Ast.ExprId) Allocator.Error!Ast.ExprId {
+            return build.program.addExpr(.{ .ty = build.ty, .data = .{ .block = .{
+                .statements = try build.program.addStmtSpan(&.{try build.program.addStmt(.{ .expr = try build.unit() })}),
+                .final_expr = final,
+            } } });
+        }
+    };
+
+    const state = try program.addLocal(b.symbol(), ty);
+    const state_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = state } });
+    const run_ignoring = try b.function(&.{state}, try Guard.around(b, try b.loop(state_ref, false)));
+    const state_read = try program.addLocal(b.symbol(), ty);
+    const state_read_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = state_read } });
+    const run_reading = try b.function(&.{state_read}, try Guard.around(b, try b.loop(state_read_ref, true)));
+    const make = try b.function(&.{}, try Guard.around(b, try b.known()));
+
+    const ignoring_call = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = run_ignoring }, .args = try program.addExprSpan(&.{try b.known()}) } } });
+    const ignoring_caller = try b.function(&.{}, ignoring_call);
+    const reading_call = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = run_reading }, .args = try program.addExprSpan(&.{try b.known()}) } } });
+    const reading_caller = try b.function(&.{}, reading_call);
+
+    const make_ignored = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = make }, .args = .empty() } } });
+    const looping_ignoring = try b.function(&.{}, try b.loop(make_ignored, false));
+    const make_read = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = make }, .args = .empty() } } });
+    const looping_reading = try b.function(&.{}, try b.loop(make_read, true));
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    const index = try pass.buildCrossingIndex();
+    defer index.deinit();
+    var session = try InlineCrossing.Session.init(allocator, index, &program);
+    defer session.deinit();
+    pass.crossing_index = index;
+    pass.crossing_session = &session;
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    cloner.inline_direct_requires_productivity = true;
+
+    // A known record argument entering a loop that never takes it apart.
+    cloner.crossing_root_fn = ignoring_caller;
+    try std.testing.expect(!try cloner.crossingIsProductive(ignoring_call, run_ignoring, program.getExpr(ignoring_call).data.call_proc));
+    // A known tag in a field of that record, matched inside the loop.
+    cloner.crossing_root_fn = reading_caller;
+    try std.testing.expect(try cloner.crossingIsProductive(reading_call, run_reading, program.getExpr(reading_call).data.call_proc));
+
+    // The same two sides for a record the callee builds and the caller
+    // carries into its own loop.
+    cloner.crossing_root_fn = looping_ignoring;
+    try std.testing.expect(!try cloner.crossingIsProductive(make_ignored, make, program.getExpr(make_ignored).data.call_proc));
+    cloner.crossing_root_fn = looping_reading;
+    try std.testing.expect(try cloner.crossingIsProductive(make_read, make, program.getExpr(make_read).data.call_proc));
 }
 
 test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {

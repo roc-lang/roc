@@ -35,6 +35,11 @@ const GuardedList = collections.GuardedList;
 pub const Consumer = enum {
     match,
     call,
+    /// A loop's initial value. The loop clone specializes its fixed point
+    /// on a known tag or callable state. Join scalarization splits record-
+    /// and tuple-typed loop state into its fields whatever they hold, so a
+    /// known record or tuple gains nothing here; the walk follows its
+    /// fields through the loop variable to the consumers that read them.
     loop,
     /// A field or item read, or a record or tuple pattern. A call-pattern
     /// worker already takes a known record or tuple argument apart without
@@ -51,6 +56,10 @@ pub const argument_consumers: Consumers = .initMany(&.{ .match, .call, .loop });
 
 /// The consumers a part of a call's result can meet.
 pub const result_consumers: Consumers = .initMany(&.{ .match, .call, .loop, .project });
+
+/// Every consumer. A part some consumer gains from is known structure, which
+/// a walk follows into and through.
+pub const known_parts: Consumers = .full;
 
 /// One step from a value into a part of it. Field and tag labels are
 /// interned, so equal labels have equal ids, and a read meets the part it
@@ -926,7 +935,7 @@ pub const Session = struct {
                 return .{};
             },
             .record => |span| {
-                const step = first orelse return .{ .kinds = .initMany(&.{ .loop, .project }) };
+                const step = first orelse return .{ .kinds = .initOne(.project) };
                 const fs = p.fieldExprSpan(span);
                 for (0..fs.len) |i| {
                     const fe = GuardedList.at(fs, i);
@@ -935,7 +944,7 @@ pub const Session = struct {
                 return .{};
             },
             .record_update => |u| {
-                const step = first orelse return .{ .kinds = .initMany(&.{ .loop, .project }) };
+                const step = first orelse return .{ .kinds = .initOne(.project) };
                 const fs = p.fieldExprSpan(u.fields);
                 for (0..fs.len) |i| {
                     const fe = GuardedList.at(fs, i);
@@ -946,14 +955,14 @@ pub const Session = struct {
                 return .{};
             },
             .tuple => |span| {
-                const step = first orelse return .{ .kinds = .initMany(&.{ .loop, .project }) };
+                const step = first orelse return .{ .kinds = .initOne(.project) };
                 const is = p.exprSpan(span);
                 for (0..is.len) |i| {
                     if (step.isItem(@intCast(i))) return self.child(exprKey(GuardedList.at(is, i), try self.suffix(path)), missing) orelse .{};
                 }
                 return .{};
             },
-            .fn_ref => return if (first == null) .{ .kinds = .initOne(.call) } else .{},
+            .fn_ref => return if (first == null) .{ .kinds = .initMany(&.{ .call, .loop }) } else .{},
             .call_proc => |call| {
                 const callee = Ast.localDirectCallee(call) orelse return .{};
                 if (!self.index.isOriginal(callee)) return .{};
@@ -986,7 +995,7 @@ pub const Session = struct {
     /// Whether a known part of the value passed at `slot` meets an argument
     /// consumer inside `callee`'s extent.
     pub fn calleeConsumes(self: *Session, oracle: Oracle, callee: Ast.FnId, slot: Slot) Allocator.Error!bool {
-        if (!try oracle.known(oracle.ctx, &.{}, argument_consumers)) return false;
+        if (!try oracle.known(oracle.ctx, &.{}, known_parts)) return false;
         try self.walk.begin(self, oracle, argument_consumers, callee, &.{});
         defer self.walk.end();
         try self.walk.enterCall(null, callee, slot, .root, 0);
@@ -999,7 +1008,7 @@ pub const Session = struct {
     /// continuation up through `frames`, the inline frames the call sits in,
     /// innermost last, above the body of `root_fn`.
     pub fn argumentCrosses(self: *Session, oracle: Oracle, root_fn: ?Ast.FnId, frames: []const RootFrame, call_expr: Ast.ExprId, callee: Ast.FnId, slot: Slot) Allocator.Error!bool {
-        if (!try oracle.known(oracle.ctx, &.{}, argument_consumers)) return false;
+        if (!try oracle.known(oracle.ctx, &.{}, known_parts)) return false;
         try self.walk.begin(self, oracle, argument_consumers, root_fn, frames);
         defer self.walk.end();
         const root = try self.walk.rootEntry(frames.len);
@@ -1014,7 +1023,7 @@ pub const Session = struct {
     /// result consumer in the caller's continuation up through `frames`, as
     /// for `argumentCrosses`.
     pub fn resultCrosses(self: *Session, oracle: Oracle, root_fn: ?Ast.FnId, frames: []const RootFrame, call_expr: Ast.ExprId) Allocator.Error!bool {
-        if (!try oracle.known(oracle.ctx, &.{}, .initMany(&.{ .match, .loop, .call }))) return false;
+        if (!try oracle.known(oracle.ctx, &.{}, known_parts)) return false;
         try self.walk.begin(self, oracle, result_consumers, root_fn, frames);
         defer self.walk.end();
         const root = try self.walk.rootEntry(frames.len);
@@ -1339,7 +1348,7 @@ const Walk = struct {
             const next = try self.session.paths.push(self.session.gpa, path, part);
             // A known part has known ancestors, so a walk never follows a
             // part the seed does not know.
-            if (!try self.known(next, .initMany(&.{ .match, .loop, .call }))) return;
+            if (!try self.known(next, known_parts)) return;
             try self.addConfig(entry, target, next, 0);
             return;
         }
@@ -1730,7 +1739,7 @@ const TestSeed = struct {
 };
 
 const tag_kinds: Consumers = .initMany(&.{ .match, .loop });
-const record_kinds: Consumers = .initMany(&.{ .loop, .project });
+const record_kinds: Consumers = .initOne(.project);
 
 /// Whether the seed meets an argument consumer in `callee`'s extent, asked
 /// of a freshly indexed `t`.
