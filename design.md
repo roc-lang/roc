@@ -2486,7 +2486,7 @@ Zig module built for minimum size. The pinned forwarding builtins keep
 A linked builtin is pinned with `alwaysinline` only when it is a forwarding
 wrapper: its body packs its arguments and hands them to one out-of-line builtin
 routine, and any choice among forms of that routine tests only arguments that
-are constants at every call site (an update mode, or whether items are
+are constants at every call site (an update mode, or whether elements are
 reference-counted). Inlining such a body replaces a call with a call, so no
 caller grows, whatever its size and however many sites it has, and the pin
 needs no account of code growth. `builder.zig` names the pinned set
@@ -9371,38 +9371,6 @@ and meets a consumer that gains from it on the other side:
   callee already builds it where the caller receives it, and a result the
   caller returns is read by whatever reads the caller's result.
 
-A productive crossing needs a copy only for a consumer beyond the callee's
-extent, which is the callee's body together with every body the known value
-enters from it alone. A consumer in the caller's continuation, or in a body
-the continuation enters, can be simplified only where the caller's code and
-the callee's meet, so the body is copied. A consumer inside the extent is
-simplified just as well by a call-pattern worker: the callee cloned once for
-the known value, called from every site that supplies the same pattern. So
-when every productive crossing of a call is a known argument whose consumers
-all lie inside the extent, the call binds the worker for its exact call
-pattern and the body is not copied:
-
-- the call's result does not cross, no capture crosses, and for each argument
-  that crosses, `argumentCrossesBeyond` finds no consumer beyond the extent;
-- the pattern of the argument values the clone holds has a worker, already
-  recorded or admitted now by the one worker admission rule;
-- that worker serves each such argument: no consumer inside the extent
-  meets a part the clone knows and the pattern's shape lacks
-  (`calleeConsumes` over the difference of the two), so the worker's body
-  simplifies every consumer the copy would. A pattern knows less than the
-  clone when the known part is one the clone reads through a nested call,
-  which a pattern holds as an opaque leaf.
-
-A call with capture operands is copied as before: a worker takes a pattern's
-arguments, not captures. When any condition fails the body is copied exactly
-as it would be without this rule, so the rule never gives up a
-simplification; it only removes copies. Each copy it removes also returns its
-charge to the clone's cumulative growth budget. The size side of the rule is
-therefore structural: one worker body per distinct pattern, shared by its
-call sites, in place of one body per site, and a worker that ends with a
-single call is substituted there by the solved inline plan, so a pattern used
-once costs what the copy did.
-
 A known record or tuple entering a loop is not such a use by itself. Join
 scalarization (`scalarize_joins.zig`) splits a record- or tuple-typed join
 parameter of up to 64 fields that is only read field by field into one
@@ -9465,16 +9433,6 @@ re-enters its own pattern only unwrapped: a structure that grows on every pass
 is no loop fixed point. Within a cycle of the call graph, a call does not carry
 a part wrapped in a frame that a function of the cycle pushed: the clone never
 inlines a recursive call whose argument grows.
-
-`argumentCrossesBeyond` is the same walk with one more fact per call entry:
-whether the walk reaches it from beyond the seed call's extent. A root body
-is beyond it, and so is an entry a beyond entry enters, or one a function
-value that escaped is called in; the entry of the seed call itself is not,
-whatever its caller. A consumer counts only in a beyond entry. The fact only
-grows: an entry first reached from inside the extent and later from beyond
-it turns beyond then, together with the entries it entered, and a consumer
-any of them met earlier counts at that point. Each entry turns once and each
-enter edge is followed once, so the query keeps the bound below.
 
 A callable worker's body is a root context. The inline frames active where the
 worker is created belong to that context, not to the worker, whose own callers

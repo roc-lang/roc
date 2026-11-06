@@ -10,10 +10,7 @@
 //! consumer on the other side: a known part of an argument or capture meets
 //! one inside the callee's extent (or, through the callee's result, in the
 //! caller's continuation), or a part the callee builds on every path that
-//! returns meets one in the caller's continuation. A known argument that
-//! meets consumers only inside the callee's extent needs no copy: a
-//! call-pattern worker simplifies them, and `argumentCrossesBeyond` tells
-//! the two apart.
+//! returns meets one in the caller's continuation.
 //!
 //! Nothing is summarized for the whole program. `Index` is built once per
 //! SpecConstr run, in time linear in the program: the call graph's strongly
@@ -705,9 +702,7 @@ pub const Built = struct {
 };
 
 /// Whether a query's seed is known at a path well enough for one of a set of
-/// consumers. A walk asks with `known_parts` to decide whether to follow a
-/// part, and with the one consumer it has reached to decide whether that
-/// consumer counts.
+/// consumers.
 pub const Oracle = struct {
     ctx: *anyopaque,
     known: *const fn (ctx: *anyopaque, path: []const Step, kinds: Consumers) Allocator.Error!bool,
@@ -1024,25 +1019,6 @@ pub const Session = struct {
         return self.walk.run();
     }
 
-    /// Whether a known part of the value passed at `slot` meets an argument
-    /// consumer beyond `callee`'s extent: in the caller's continuation up
-    /// through `frames`, or in a body the walk enters from there. A consumer
-    /// inside the extent (the callee's body and the bodies the walk enters
-    /// only from it) does not count: a worker cloned from the callee for the
-    /// known value simplifies it without copying the callee into the caller.
-    pub fn argumentCrossesBeyond(self: *Session, oracle: Oracle, root_fn: ?Ast.FnId, frames: []const RootFrame, call_expr: Ast.ExprId, callee: Ast.FnId, slot: Slot) Allocator.Error!bool {
-        if (!try oracle.known(oracle.ctx, &.{}, known_parts)) return false;
-        try self.walk.begin(self, oracle, argument_consumers, root_fn, frames);
-        defer self.walk.end();
-        self.walk.beyond_extent = true;
-        const root = try self.walk.rootEntry(frames.len);
-        if (std.debug.runtime_safety and !self.index.bodyHolds(self.walk.entries.items[root].fn_id, call_expr)) {
-            Common.invariant("a crossing query's call lies outside the body its inline frames name");
-        }
-        try self.walk.enterExtent(.{ .entry = root, .call = call_expr }, callee, slot);
-        return self.walk.run();
-    }
-
     /// Whether a part of `call_expr`'s result that the oracle knows meets a
     /// result consumer in the caller's continuation up through `frames`, as
     /// for `argumentCrosses`.
@@ -1160,10 +1136,6 @@ const Walk = struct {
     /// The body beneath every inline frame, when the walk may climb that far.
     root_fn: ?Ast.FnId = null,
     hit: bool = false,
-    /// Count a consumer only in an entry beyond the seed callee's extent.
-    beyond_extent: bool = false,
-    /// Entries newly known to lie beyond the extent, whose callees follow.
-    beyond_work: std.ArrayList(u32) = .empty,
 
     nodes: std.ArrayList(Node) = .empty,
     node_map: std.AutoHashMapUnmanaged(NodeKey, u32) = .empty,
@@ -1198,16 +1170,7 @@ const Walk = struct {
         /// For a root entry, the number of inline frames beneath its body.
         depth: u32,
         is_root: bool,
-        /// Whether the walk reaches this entry from beyond the seed callee's
-        /// extent: a root body, or a body entered from one that is beyond.
-        /// It only grows, and `beyond_extent` walks read it.
-        beyond: bool = false,
-        /// A counted consumer met a known part here while the entry was not
-        /// yet known to lie beyond the extent.
-        consumed: bool = false,
         callers: std.ArrayList(Caller) = .empty,
-        /// The entries this one enters, for a `beyond_extent` walk.
-        callees: std.ArrayList(u32) = .empty,
         exits: std.ArrayList(Exit) = .empty,
     };
 
@@ -1248,8 +1211,6 @@ const Walk = struct {
         self.counted = counted;
         self.frames = frames;
         self.hit = false;
-        self.beyond_extent = false;
-        self.beyond_work = .empty;
         self.nodes = .empty;
         self.node_map = .empty;
         self.below_set = .empty;
@@ -1278,28 +1239,7 @@ const Walk = struct {
     fn consume(self: *Walk, config: Config, kind: Consumer) Allocator.Error!void {
         if (config.node != 0) return;
         if (!self.counted.contains(kind)) return;
-        if (!try self.known(config.path, .initOne(kind))) return;
-        if (self.beyond_extent) {
-            const entry = &self.entries.items[config.entry];
-            if (!entry.beyond) {
-                entry.consumed = true;
-                return;
-            }
-        }
-        self.hit = true;
-    }
-
-    /// Record that `entry` lies beyond the seed callee's extent, along with
-    /// every entry it enters: a consumer one of them already met counts.
-    fn markBeyond(self: *Walk, entry: u32) Allocator.Error!void {
-        try self.beyond_work.append(self.alloc(), entry);
-        while (self.beyond_work.pop()) |next| {
-            const e = &self.entries.items[next];
-            if (e.beyond) continue;
-            e.beyond = true;
-            if (e.consumed) self.hit = true;
-            try self.beyond_work.appendSlice(self.alloc(), e.callees.items);
-        }
+        if (try self.known(config.path, .initOne(kind))) self.hit = true;
     }
 
     fn addConfig(self: *Walk, entry: u32, item: Item, path: PathId, node: u32) Allocator.Error!void {
@@ -1319,7 +1259,7 @@ const Walk = struct {
         const gop = try self.entry_map.getOrPut(self.alloc(), key);
         if (!gop.found_existing) {
             gop.value_ptr.* = @intCast(self.entries.items.len);
-            try self.entries.append(self.alloc(), .{ .fn_id = fn_id, .depth = @intCast(depth), .is_root = true, .beyond = true });
+            try self.entries.append(self.alloc(), .{ .fn_id = fn_id, .depth = @intCast(depth), .is_root = true });
         }
         return gop.value_ptr.*;
     }
@@ -1349,20 +1289,9 @@ const Walk = struct {
         }
     }
 
-    /// Enter `callee` at `slot` with the whole seed, as the call whose extent
-    /// a `beyond_extent` walk sets apart: the entry is not beyond the extent
-    /// merely because its caller is.
-    fn enterExtent(self: *Walk, caller: Caller, callee: Ast.FnId, slot: Slot) Allocator.Error!void {
-        return self.enter(caller, callee, slot, .root, 0, true);
-    }
-
     /// Enter `callee` at `slot` with the known part at `path` under `node`.
     /// A caller, when there is one, receives the callee's exits.
     fn enterCall(self: *Walk, caller: ?Caller, callee: Ast.FnId, slot: Slot, path: PathId, node: u32) Allocator.Error!void {
-        return self.enter(caller, callee, slot, path, node, false);
-    }
-
-    fn enter(self: *Walk, caller: ?Caller, callee: Ast.FnId, slot: Slot, path: PathId, node: u32, extent_seed: bool) Allocator.Error!void {
         const index = self.session.index;
         if (!index.isOriginal(callee)) return;
         if (index.bodies[@backingInt(callee)] == null) return;
@@ -1387,16 +1316,6 @@ const Walk = struct {
             try self.addConfig(id, Item.local(local), path, node);
             break :blk id;
         };
-        if (self.beyond_extent and !extent_seed) {
-            // A function value that escaped has no caller here: anything may
-            // call it, so its body lies beyond the extent.
-            const c = caller orelse return self.markBeyond(entry);
-            if (self.entries.items[c.entry].beyond) {
-                try self.markBeyond(entry);
-            } else {
-                try self.entries.items[c.entry].callees.append(self.alloc(), entry);
-            }
-        }
         const c = caller orelse return;
         for (self.entries.items[entry].callers.items) |existing| {
             if (existing.entry == c.entry and existing.call == c.call) return;
@@ -1617,8 +1536,7 @@ const Walk = struct {
 };
 
 const Type = @import("../monotype/type.zig");
-const check = @import("check");
-const checked = check.CheckedModule;
+const checked = @import("check").CheckedModule;
 
 /// Builds small lifted programs whose every value has one zero-sized type:
 /// the walk reads only expression shape and labels, never types.
@@ -1695,7 +1613,7 @@ const TestProgram = struct {
 
     fn captureLocal(self: *TestProgram) Allocator.Error!Ast.LocalId {
         self.next_binder += 1;
-        const binder: check.CheckedBodies.BinderId = @fromBackingInt(self.next_binder);
+        const binder: checked.PatternBinderId = @fromBackingInt(self.next_binder);
         const key = checked.CaptureId.fromBinder(binder);
         return self.program.addLocalWithCaptureIdentity(self.symbol(), self.ty, binder, key, key, .lexical);
     }
@@ -1989,94 +1907,6 @@ test "an argument the callee returns meets the caller's match" {
     var seed: TestSeed = .{ .known_paths = &.{.{ .steps = &.{}, .kinds = tag_kinds }} };
     try std.testing.expect(!try session.calleeConsumes(seed.oracle(), identity, .{ .kind = .arg, .index = 0 }));
     try std.testing.expect(try session.argumentCrosses(seed.oracle(), caller, &.{}, call, identity, .{ .kind = .arg, .index = 0 }));
-}
-
-/// Whether the seed, passed as `callee`'s first argument at `call` in
-/// `caller`'s body, meets an argument consumer anywhere, and whether it meets
-/// one beyond `callee`'s extent, asked of a freshly indexed `t`.
-fn testCrossings(t: *TestProgram, seed: *TestSeed, caller: Ast.FnId, call: Ast.ExprId, callee: Ast.FnId) Allocator.Error!struct { anywhere: bool, beyond: bool } {
-    const gpa = std.testing.allocator;
-    const bodies = try t.bodies(gpa);
-    defer gpa.free(bodies);
-    const index = try Index.build(gpa, &t.program, bodies);
-    defer index.deinit();
-    var session = try Session.init(gpa, index, &t.program);
-    defer session.deinit();
-    const slot: Slot = .{ .kind = .arg, .index = 0 };
-    return .{
-        .anywhere = try session.argumentCrosses(seed.oracle(), caller, &.{}, call, callee, slot),
-        .beyond = try session.argumentCrossesBeyond(seed.oracle(), caller, &.{}, call, callee, slot),
-    };
-}
-
-test "a known argument only the callee's extent consumes crosses nowhere beyond it" {
-    var t = try TestProgram.init(std.testing.allocator);
-    defer t.deinit();
-    // `inner` matches its argument, `outer` hands its argument to `inner`,
-    // and the caller only returns what `outer` returns.
-    const y = try t.local();
-    const inner = try t.function(&.{y}, &.{}, try t.matchOne(try t.ref(y), try t.tagPat("A", &.{}), try t.unit()));
-    const x = try t.local();
-    const outer = try t.function(&.{x}, &.{}, try t.call(inner, &.{try t.ref(x)}));
-    const call = try t.call(outer, &.{try t.tag("A", &.{})});
-    const caller = try t.function(&.{}, &.{}, call);
-    var seed: TestSeed = .{ .known_paths = &.{.{ .steps = &.{}, .kinds = tag_kinds }} };
-    const crossings = try testCrossings(&t, &seed, caller, call, outer);
-    try std.testing.expect(crossings.anywhere);
-    try std.testing.expect(!crossings.beyond);
-}
-
-test "a known argument the callee returns to a caller that matches it crosses beyond the extent" {
-    var t = try TestProgram.init(std.testing.allocator);
-    defer t.deinit();
-    // The callee matches its argument and returns it, and the caller matches
-    // the result: one consumer inside the extent, one beyond it.
-    const x = try t.local();
-    const callee = try t.function(&.{x}, &.{}, try t.matchOne(try t.ref(x), try t.tagPat("A", &.{}), try t.ref(x)));
-    const r = try t.local();
-    const call = try t.call(callee, &.{try t.tag("A", &.{})});
-    const caller = try t.function(&.{}, &.{}, try t.let(r, call, try t.matchOne(try t.ref(r), try t.tagPat("A", &.{}), try t.unit())));
-    var seed: TestSeed = .{ .known_paths = &.{.{ .steps = &.{}, .kinds = tag_kinds }} };
-    const crossings = try testCrossings(&t, &seed, caller, call, callee);
-    try std.testing.expect(crossings.anywhere);
-    try std.testing.expect(crossings.beyond);
-}
-
-test "a body the caller enters with the callee's result lies beyond the extent" {
-    var t = try TestProgram.init(std.testing.allocator);
-    defer t.deinit();
-    // The callee only returns its argument. The caller passes that result to
-    // `eat`, which matches it: `eat` is entered from the caller's
-    // continuation, so its match lies beyond the callee's extent.
-    const y = try t.local();
-    const eat = try t.function(&.{y}, &.{}, try t.matchOne(try t.ref(y), try t.tagPat("A", &.{}), try t.unit()));
-    const x = try t.local();
-    const identity = try t.function(&.{x}, &.{}, try t.ref(x));
-    const call = try t.call(identity, &.{try t.tag("A", &.{})});
-    const caller = try t.function(&.{}, &.{}, try t.call(eat, &.{call}));
-    var seed: TestSeed = .{ .known_paths = &.{.{ .steps = &.{}, .kinds = tag_kinds }} };
-    const crossings = try testCrossings(&t, &seed, caller, call, identity);
-    try std.testing.expect(crossings.anywhere);
-    try std.testing.expect(crossings.beyond);
-}
-
-test "a body entered from the extent first and from the caller later counts once it is beyond" {
-    var t = try TestProgram.init(std.testing.allocator);
-    defer t.deinit();
-    // The callee hands its argument to `eat` and returns it, and the caller
-    // hands the result to `eat` too. `eat` is entered with the same known
-    // part from inside the extent and from the caller's continuation.
-    const y = try t.local();
-    const eat = try t.function(&.{y}, &.{}, try t.matchOne(try t.ref(y), try t.tagPat("A", &.{}), try t.unit()));
-    const x = try t.local();
-    const ignored = try t.local();
-    const callee = try t.function(&.{x}, &.{}, try t.let(ignored, try t.call(eat, &.{try t.ref(x)}), try t.ref(x)));
-    const call = try t.call(callee, &.{try t.tag("A", &.{})});
-    const caller = try t.function(&.{}, &.{}, try t.call(eat, &.{call}));
-    var seed: TestSeed = .{ .known_paths = &.{.{ .steps = &.{}, .kinds = tag_kinds }} };
-    const crossings = try testCrossings(&t, &seed, caller, call, callee);
-    try std.testing.expect(crossings.anywhere);
-    try std.testing.expect(crossings.beyond);
 }
 
 test "a deep recursive walk over a wide recursive type follows only known structure" {
