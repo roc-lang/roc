@@ -418,6 +418,140 @@ pub const Store = struct {
         self.sealed = true;
     }
 
+    /// Canonicalize the solved store (`canonicalizeForSeal`), then seal it.
+    /// Checking calls this once, when it finishes a module.
+    pub fn canonicalizeAndSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
+        try self.canonicalizeForSeal(idents);
+        self.seal();
+    }
+
+    /// The last write to a solved store. Every slot comes to name its
+    /// class's storage root directly; every variable a descriptor, a type
+    /// argument or field pool, or a nominal declaration holds becomes its
+    /// class's checked representative; and every record and tag union row
+    /// absorbs the rows its extension chain reaches, so a row's extension is
+    /// never itself a row. A reader of the sealed store therefore receives
+    /// representatives as children and reads each row in one piece. A
+    /// static-dispatch constraint keeps its own function variable: checking
+    /// recorded that variable at the dispatch site, so it identifies the
+    /// constraint, and a reader resolves it (one slot read).
+    fn canonicalizeForSeal(self: *Self, idents: *const base.Ident.Store) Allocator.Error!void {
+        self.debugAssertUnsealed();
+        if (std.debug.runtime_safety and self.savepoint_active) base.invariant("a type store was canonicalized with a savepoint open", .{});
+
+        const slot_count: usize = @intCast(self.slots.len());
+        var live_descs = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, self.descs.backing.len());
+        defer live_descs.deinit(self.gpa);
+        for (0..slot_count) |index| {
+            const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(index));
+            const storage = self.resolveStorageRoot(slotIdxToVar(slot_idx));
+            if (storage.storage_var != slotIdxToVar(slot_idx)) self.slots.set(slot_idx, .{ .redirect = storage.storage_var });
+            live_descs.set(@backingInt(storage.desc_idx));
+        }
+
+        for (self.vars.items.items) |*var_| var_.* = self.representativeVar(var_.*);
+        for (0..self.record_fields.items.len) |index| {
+            var field = self.record_fields.items.get(index);
+            field.presence.var_ = self.representativeVar(field.presence.var_);
+            if (field.presence.presenceVar()) |presence| field.presence.presence_var = self.representativeVar(presence);
+            self.record_fields.items.set(index, field);
+        }
+        for (self.nominal_decls.items.items) |*decl| decl.backing = self.representativeVar(decl.backing);
+
+        var live = live_descs.iterator(.{});
+        while (live.next()) |index| {
+            const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
+            var desc = self.descs.get(desc_idx);
+            switch (desc.content) {
+                .flex, .rigid, .alias, .field_presence, .err => continue,
+                .structure => |*flat| switch (flat.*) {
+                    .tuple, .nominal_type, .empty_record, .empty_tag_union => continue,
+                    .fn_pure, .fn_effectful, .fn_unbound => |*func| func.ret = self.representativeVar(func.ret),
+                    .record => |*record| record.ext = self.representativeVar(record.ext),
+                    .tag_union => |*tag_union| tag_union.ext = self.representativeVar(tag_union.ext),
+                },
+            }
+            self.descs.set(desc_idx, desc);
+        }
+
+        var row_fields: std.ArrayListUnmanaged(RecordField) = .empty;
+        defer row_fields.deinit(self.gpa);
+        var row_tags: std.ArrayListUnmanaged(Tag) = .empty;
+        defer row_tags.deinit(self.gpa);
+        live = live_descs.iterator(.{});
+        while (live.next()) |index| {
+            const desc_idx: DescStore.Idx = @fromBackingInt(@intCast(index));
+            var desc = self.descs.get(desc_idx);
+            const flat = switch (desc.content) {
+                .structure => |*flat| flat,
+                .flex, .rigid, .alias, .field_presence, .err => continue,
+            };
+            switch (flat.*) {
+                .record => |*record| {
+                    if (self.extensionRecord(record.ext) == null) continue;
+                    row_fields.clearRetainingCapacity();
+                    var segment = record.*;
+                    var guard = debug.IterationGuard.init("canonicalizeForSeal.record");
+                    while (true) {
+                        guard.tick();
+                        var fields = self.record_fields.iterRange(segment.fields);
+                        while (fields.next()) |field| try row_fields.append(self.gpa, field);
+                        segment = self.extensionRecord(segment.ext) orelse break;
+                    }
+                    std.mem.sort(RecordField, row_fields.items, idents, RecordField.sortByNameAsc);
+                    record.* = .{ .fields = try self.record_fields.appendSlice(self.gpa, row_fields.items), .ext = segment.ext };
+                },
+                .tag_union => |*tag_union| {
+                    if (self.extensionTagUnion(tag_union.ext) == null) continue;
+                    row_tags.clearRetainingCapacity();
+                    var segment = tag_union.*;
+                    var guard = debug.IterationGuard.init("canonicalizeForSeal.tag_union");
+                    while (true) {
+                        guard.tick();
+                        var tags = self.tags.iterRange(segment.tags);
+                        while (tags.next()) |tag| try row_tags.append(self.gpa, tag);
+                        segment = self.extensionTagUnion(segment.ext) orelse break;
+                    }
+                    std.mem.sort(Tag, row_tags.items, idents, Tag.sortByNameAsc);
+                    tag_union.* = .{ .tags = try self.tags.appendSlice(self.gpa, row_tags.items), .ext = segment.ext };
+                },
+                .tuple, .nominal_type, .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound => continue,
+            }
+            self.descs.set(desc_idx, desc);
+        }
+    }
+
+    /// The checked representative of `var_`'s class.
+    fn representativeVar(self: *const Self, var_: Var) Var {
+        const representative = self.resolveVar(var_).var_;
+        if (std.debug.runtime_safety and @backingInt(representative) >= (@as(u32, 1) << 31)) {
+            base.invariant("type variable {d} does not fit below the checked synthesized-type bit", .{@backingInt(representative)});
+        }
+        return representative;
+    }
+
+    /// The record `ext` resolves to, when it is one.
+    fn extensionRecord(self: *const Self, ext: Var) ?types.Record {
+        return switch (self.resolveVar(ext).desc.content) {
+            .structure => |flat| switch (flat) {
+                .record => |record| record,
+                .tuple, .nominal_type, .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .tag_union => null,
+            },
+            .flex, .rigid, .alias, .field_presence, .err => null,
+        };
+    }
+
+    /// The tag union `ext` resolves to, when it is one.
+    fn extensionTagUnion(self: *const Self, ext: Var) ?TagUnion {
+        return switch (self.resolveVar(ext).desc.content) {
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| tag_union,
+                .tuple, .nominal_type, .empty_record, .empty_tag_union, .fn_pure, .fn_effectful, .fn_unbound, .record => null,
+            },
+            .flex, .rigid, .alias, .field_presence, .err => null,
+        };
+    }
+
     /// Whether checking has solved and sealed this store (see `seal`).
     pub fn isSealed(self: *const Self) bool {
         return self.sealed;
@@ -2933,6 +3067,59 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex" {
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
+}
+
+test "canonicalizing for seal gives children representatives and flattens rows" {
+    const gpa = std.testing.allocator;
+    var idents = try base.Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+    const a_name = try idents.insert(gpa, base.Ident.for_text("a"));
+    const b_name = try idents.insert(gpa, base.Ident.for_text("b"));
+    const ok_name = try idents.insert(gpa, base.Ident.for_text("Ok"));
+    const err_name = try idents.insert(gpa, base.Ident.for_text("Err"));
+
+    var store = try Store.init(gpa);
+    defer store.deinit();
+    const elem = try store.fresh();
+    const elem_alias = try store.freshRedirect(elem);
+    const tail = try store.fresh();
+    const inner = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{.{ .name = a_name, .presence = .required(elem_alias) }}),
+        .ext = tail,
+    } } });
+    const inner_alias = try store.freshRedirect(inner);
+    const outer = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{.{ .name = b_name, .presence = .required(elem_alias) }}),
+        .ext = inner_alias,
+    } } });
+    const tag_tail = try store.fresh();
+    const inner_tags = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = ok_name, .args = try store.appendVars(&.{elem_alias}) }}),
+        .ext = tag_tail,
+    } } });
+    const outer_tags = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = err_name, .args = Var.SafeList.Range.empty() }}),
+        .ext = inner_tags,
+    } } });
+
+    try store.canonicalizeAndSeal(&idents);
+    try std.testing.expect(store.isSealed());
+
+    const record = store.resolveVar(outer).desc.content.structure.record;
+    try std.testing.expectEqual(tail, record.ext);
+    const fields = store.getRecordFieldsSlice(record.fields);
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+    try std.testing.expectEqual(a_name, fields.items(.name)[0]);
+    try std.testing.expectEqual(b_name, fields.items(.name)[1]);
+    for (fields.items(.presence)) |presence| try std.testing.expectEqual(elem, presence.var_);
+
+    const tag_union = store.resolveVar(outer_tags).desc.content.structure.tag_union;
+    try std.testing.expectEqual(tag_tail, tag_union.ext);
+    const tags = store.getTagsSlice(tag_union.tags);
+    try std.testing.expectEqual(@as(usize, 2), tags.len);
+    try std.testing.expectEqual(err_name, tags.items(.name)[0]);
+    try std.testing.expectEqual(ok_name, tags.items(.name)[1]);
+    try std.testing.expectEqualSlices(Var, &.{elem}, store.sliceVars(tags.items(.args)[1]));
 }
 
 /// A sealed store holding `a`, a redirect to the flex `b`, for the sealing

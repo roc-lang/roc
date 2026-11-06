@@ -119,7 +119,7 @@ fn checkApp(allocator: std.mem.Allocator, app: []const u8, extra: []const Source
 
     const builtin_modules = try allocator.create(eval.BuiltinModules);
     errdefer allocator.destroy(builtin_modules);
-    builtin_modules.* = try eval.BuiltinModules.init(allocator);
+    builtin_modules.* = try eval.BuiltinModules.init(allocator, std.testing.io);
     errdefer builtin_modules.deinit();
     const coord = try allocator.create(Coordinator);
     errdefer allocator.destroy(coord);

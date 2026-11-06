@@ -81,7 +81,7 @@ pub fn encode(allocator: Allocator, input: Input) Allocator.Error![]u8 {
     for (input.sites) |site| {
         const row: struct { tag: u32, module: [32]u8, first: u32, second: u32 } = switch (site.meaning) {
             .checked_error => .{ .tag = 0, .module = @splat(0), .first = 0, .second = 0 },
-            .literal_rejection => |literal| .{ .tag = 1, .module = literal.module, .first = literal.checked_expr, .second = @backingInt(literal.kind) },
+            .literal_rejection => |literal| .{ .tag = 1, .module = literal.module, .first = literal.node, .second = @backingInt(literal.kind) },
             .exhaustiveness => |exhaustiveness| .{
                 .tag = 2,
                 .module = exhaustiveness.module,
@@ -183,7 +183,7 @@ pub fn failureMeaningAt(self: Self, return_offset: u32) ?FailureMeaning {
         0 => .checked_error,
         1 => .{ .literal_rejection = .{
             .module = module,
-            .checked_expr = first,
+            .node = first,
             .kind = std.enums.fromInt(lir.LIR.LiteralRejectionKind, second).?,
         } },
         2 => .{ .exhaustiveness = .{

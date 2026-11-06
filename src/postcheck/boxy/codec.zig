@@ -30,6 +30,7 @@ const layouts_mod = @import("layouts.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
+const ExprId = check.CheckedBodies.ExprId;
 const static_dispatch = check.StaticDispatchRegistry;
 const LIR = lir_core.LIR;
 const LocalId = LIR.LocalId;
@@ -232,7 +233,10 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
             .flex, .rigid => if (shape_done and !store.payload(ty).variableSealsToRowDefault()) try vars.append(allocator, ty),
             .alias => |alias| try pending.append(allocator, alias.backing),
             .record => |record| {
-                for (record.fields) |field| try pending.append(allocator, field.ty);
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try pending.append(allocator, field.ty);
+                }
                 try pending.append(allocator, record.ext);
             },
             .tuple => |items| try pending.appendSlice(allocator, items),
@@ -242,7 +246,10 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
                 try pending.append(allocator, function.ret);
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(store));
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try pending.appendSlice(allocator, tag.args);
+                }
                 try pending.append(allocator, tag_union.ext);
             },
             .empty_record, .empty_tag_union => {},
@@ -802,7 +809,7 @@ pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore
     while (next < pending.items.len) : (next += 1) {
         const module = pending.items[next];
         const view = b.program.module(module);
-        if (edgeIn(view, codec)) |found| return .{ .module = module, .callable_ty = found.callable_ty, .id = found.id };
+        if (try edgeIn(view, codec)) |found| return .{ .module = module, .callable_ty = found.callable_ty, .id = found.id };
         for (view.view.direct_import_module_keys) |imported| {
             if ((try reached.getOrPut(b.allocator, imported.bytes)).found_existing) continue;
             try pending.append(b.allocator, b.program.modules.by_key.get(imported.bytes) orelse continue);
@@ -811,9 +818,9 @@ pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore
     invariant("a stored codec edge's contract was not held by its storing module's import closure");
 }
 
-fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge) ?struct { callable_ty: checked.CheckedTypeId, id: DerivationId } {
-    _ = view.types().rootForKey(codec.dispatcher_key) orelse return null;
-    const callable_ty = view.types().rootForKey(codec.callable_key) orelse return null;
+fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge) Allocator.Error!?struct { callable_ty: checked.CheckedTypeId, id: DerivationId } {
+    _ = (try view.types().rootForKey(codec.dispatcher_key)) orelse return null;
+    const callable_ty = (try view.types().rootForKey(codec.callable_key)) orelse return null;
     for (view.view.static_dispatch_plans.generated_codec_derivations, 0..) |contract, index| {
         if (std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) return .{ .callable_ty = callable_ty, .id = @fromBackingInt(@intCast(index)) };
     }
@@ -823,13 +830,13 @@ fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge
 /// Restore a stored generated runtime: its family's runtime callable over
 /// the stored encoding and renamed names. Compile-time evaluation numbered
 /// those captures in the family's name order after the encoding.
-pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.ConstStore.ConstFnId, owner: check.CheckedNames.ProcTemplate, expr: checked.CheckedExprId, fn_ty: TypeId) Allocator.Error!void {
+pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.ConstStore.ConstFnId, owner: check.CheckedNames.ProcTemplate, expr: ExprId, fn_ty: TypeId) Allocator.Error!void {
     const program = b.program;
     const stored = program.constStore(source).getFn(fn_id);
     const owner_view = program.moduleByKey(.{ .bytes = owner.artifact.bytes });
-    const plan_id = switch (owner_view.bodies().expr(expr).data) {
-        .dispatch_call, .type_dispatch_call => |maybe| maybe orelse invariant("a stored generated codec runtime's dispatch has no plan"),
-        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a stored generated codec runtime does not name a dispatch"),
+    const plan_id = switch (owner_view.bodies().exprData(expr)) {
+        .dispatch_call, .type_dispatch_call => owner_view.bodies().dispatchPlan(@backingInt(expr)) orelse invariant("a stored generated codec runtime's dispatch has no plan"),
+        .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored generated codec runtime does not name a dispatch"),
     };
     const plan = owner_view.view.static_dispatch_plans.plans[@backingInt(plan_id)];
     // A dispatch on a constrained variable reaches its derivation through

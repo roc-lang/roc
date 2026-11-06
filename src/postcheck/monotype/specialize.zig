@@ -797,7 +797,7 @@ test "monotype spec builder reuses exact specialization identities" {
     builder.validateLookupIntegrity();
 }
 
-test "monotype spec builder shares equal nominal requests while preserving checked provenance" {
+test "monotype spec builder shares equal nominal requests" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
     var types = Type.Store.init(std.testing.allocator);
@@ -805,26 +805,26 @@ test "monotype spec builder shares equal nominal requests while preserving check
     const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const name = try name_store.internTypeName("Value");
     const first = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 7 },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const second = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 7 },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const distinct = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 8 },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const first_stored = types.typeDigest(&name_store, first);
     const second_stored = types.typeDigest(&name_store, second);
-    try std.testing.expect(!digestEql(first_stored, second_stored));
+    try std.testing.expect(digestEql(first_stored, second_stored));
 
     var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
     defer records.deinit(std.testing.allocator);
@@ -840,9 +840,6 @@ test "monotype spec builder shares equal nominal requests while preserving check
     try std.testing.expectEqual(reserved.spec, reused.spec);
     try std.testing.expect(separate.created);
     try std.testing.expectEqual(@as(usize, 2), records.len());
-    // Sharing code never overwrites either checked-store re-entry reference.
-    try std.testing.expectEqual(@as(u32, 1), @backingInt(types.get(first).named.named_type.ty));
-    try std.testing.expectEqual(@as(u32, 2), @backingInt(types.get(second).named.named_type.ty));
     try std.testing.expectEqual(first_stored, types.typeDigest(&name_store, first));
     try std.testing.expectEqual(second_stored, types.typeDigest(&name_store, second));
     builder.validateLookupIntegrity();
@@ -1029,14 +1026,14 @@ test "monotype spec builder uses exact type equality after digest match" {
     const second_name = try name_store.internTypeName("Second");
 
     const first_ty = try type_store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = null,
     } });
     const second_ty = try type_store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .args = Type.Span.empty(),

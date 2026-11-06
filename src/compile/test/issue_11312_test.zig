@@ -62,9 +62,11 @@ fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr
     var found_blocked = false;
     var found_good = false;
     var found_fine = false;
+    const store = &artifact.moduleEnvConst().store;
     for (artifact.compile_time_roots.roots) |root| {
-        const expr = artifact.checked_bodies.expr(root.expr);
-        const expr_source = module_source[expr.source_region.start.offset..expr.source_region.end.offset];
+        const root_node = if (root.literalNode()) |literal| literal.node() else @backingInt(root.rootExpr());
+        const region = store.getNodeRegion(@fromBackingInt(root_node));
+        const expr_source = module_source[region.start.offset..region.end.offset];
         if (std.mem.eql(u8, expr_source, blocked_expr)) {
             if (root.kind != .expect) {
                 try std.testing.expect(root.payload == .const_node);

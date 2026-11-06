@@ -33,6 +33,7 @@ const body = @import("body.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
+const ExprId = check.CheckedBodies.ExprId;
 const LIR = lir_core.LIR;
 const LirProgram = lir_core.Program;
 const TypeDesc = boxy_runtime.desc.TypeDesc;
@@ -696,7 +697,7 @@ const Decoder = struct {
                 return try program.templateWorker(module_index, @fromBackingInt(self.word()));
             },
             .lambda => {
-                const expr: checked.CheckedExprId = @fromBackingInt(self.word());
+                const expr: ExprId = @fromBackingInt(self.word());
                 const captured_scheme = self.word() != 0;
                 return try b.storedLambdaWorker(try self.worker(), expr, captured_scheme);
             },

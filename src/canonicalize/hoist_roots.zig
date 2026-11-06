@@ -1,9 +1,7 @@
 //! Shared checked-stage data for top-level-equivalent compile-time roots.
 
 const std = @import("std");
-const can = @import("can");
-
-const CIR = can.CIR;
+const CIR = @import("CIR.zig");
 const Allocator = std.mem.Allocator;
 
 /// Body metadata for a root that extracts a value from a pattern match.
@@ -77,6 +75,9 @@ pub const SelectedHoistedRoot = struct {
     /// loop body, or expect body. A guarded root whose evaluation crashes is
     /// not a diagnostic: the original expression stays in runtime lowering.
     guarded: bool = false,
+    /// Whether the root materializes a top-level binding. Checking records it
+    /// with the root in `ModuleEnv.selected_hoisted_roots`.
+    top_level: bool = false,
 };
 
 /// A local function binding the checker promoted to a procedure of its own.

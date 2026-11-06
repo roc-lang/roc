@@ -1208,7 +1208,7 @@ var shared_builtins: ?eval.BuiltinModules = null;
 
 fn sharedPrePublishedBuiltin(allocator: Allocator) SweepError!helpers.PrePublishedBuiltin {
     if (shared_builtins == null) {
-        shared_builtins = try eval.BuiltinModules.init(allocator);
+        shared_builtins = try eval.BuiltinModules.init(allocator, std.testing.io);
     }
     return .{
         .env = shared_builtins.?.builtin_module.env,

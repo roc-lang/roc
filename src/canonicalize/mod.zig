@@ -33,6 +33,8 @@ pub const BuiltinStatic = @import("BuiltinStatic.zig");
 pub const RocEmitter = @import("RocEmitter.zig");
 /// Shared syntactic refutability rules for Roc patterns.
 pub const PatternRefutability = @import("pattern_refutability.zig");
+/// Compile-time roots and promoted procedures checking selects
+pub const HoistRoots = @import("hoist_roots.zig");
 /// Node storage for CIR nodes (used internally by ModuleEnv)
 pub const NodeStore = @import("NodeStore.zig");
 
@@ -106,6 +108,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("Expression.zig"));
     std.testing.refAllDecls(@import("ExternalDecl.zig"));
     std.testing.refAllDecls(@import("ModuleEnv.zig"));
+    std.testing.refAllDecls(@import("hoist_roots.zig"));
     std.testing.refAllDecls(@import("Node.zig"));
     std.testing.refAllDecls(@import("NodeStore.zig"));
     std.testing.refAllDecls(@import("Pattern.zig"));
