@@ -47,6 +47,8 @@ const LiteralArgumentDemand = checked_artifact.LiteralArgumentDemand;
 const UnitLiteralConversions = checked_artifact.UnitLiteralConversions;
 const RootRequestTable = checked_artifact.RootRequestTable;
 const UnitId = @import("body_analyses.zig").UnitId;
+const EvidenceTraversal = checked_artifact.EvidenceTraversal;
+const ModuleEnv = @import("can").ModuleEnv;
 
 const TemplateSchemaSlot = collections.OnceSlot(*SchemeAnalysis, .module_template_schema);
 const ScopeSchemaSlot = collections.OnceSlot(*SchemeAnalysis, .module_scope_schema);
@@ -221,6 +223,14 @@ pub const ModuleAnalyses = struct {
     literal_graph: collections.OnceSlot(*LiteralGraph, .module_literal_graph) = .empty,
     unit_conversion_slots: collections.OnceSlot(*UnitConversionSlots, .module_unit_conversion_slots) = .empty,
     root_requests: collections.OnceSlot(*RootRequestTable, .module_root_requests) = .empty,
+    /// The traversals no evidence pass of the module has borrowed
+    /// (`borrowEvidenceTraversal`). Its capacity covers every traversal the
+    /// module has created, so a return never allocates.
+    idle_evidence_traversals: std.ArrayListUnmanaged(*EvidenceTraversal) = .empty,
+    evidence_traversal_count: usize = 0,
+    /// Guards `idle_evidence_traversals` and `evidence_traversal_count`; held
+    /// around a borrow's or a return's list update only.
+    evidence_traversal_mutex: std.Io.Mutex = .init,
     /// Set once the module is published (`CheckedModuleArtifact.openToAnalyses`):
     /// no slot of the module runs before it.
     published: std.atomic.Value(bool) = .init(false),
@@ -313,7 +323,35 @@ pub const ModuleAnalyses = struct {
             capabilities.deinit(allocator);
             allocator.destroy(capabilities);
         }
+        std.debug.assert(self.idle_evidence_traversals.items.len == self.evidence_traversal_count);
+        for (self.idle_evidence_traversals.items) |traversal| traversal.destroy(allocator);
+        self.idle_evidence_traversals.deinit(allocator);
         allocator.destroy(self);
+    }
+
+    /// A traversal over the module's solver store (`env`'s) for one evidence
+    /// pass to use until it returns it (`returnEvidenceTraversal`): an idle
+    /// one, or a new one when every traversal the module has is borrowed.
+    pub fn borrowEvidenceTraversal(self: *ModuleAnalyses, env: *const ModuleEnv) Allocator.Error!*EvidenceTraversal {
+        {
+            self.evidence_traversal_mutex.lockUncancelable(self.io);
+            defer self.evidence_traversal_mutex.unlock(self.io);
+            if (self.idle_evidence_traversals.pop()) |traversal| return traversal;
+        }
+        const traversal = try EvidenceTraversal.create(self.allocator, env);
+        errdefer traversal.destroy(self.allocator);
+        self.evidence_traversal_mutex.lockUncancelable(self.io);
+        defer self.evidence_traversal_mutex.unlock(self.io);
+        try self.idle_evidence_traversals.ensureTotalCapacity(self.allocator, self.evidence_traversal_count + 1);
+        self.evidence_traversal_count += 1;
+        return traversal;
+    }
+
+    /// Give back a traversal `borrowEvidenceTraversal` lent.
+    pub fn returnEvidenceTraversal(self: *ModuleAnalyses, traversal: *EvidenceTraversal) void {
+        self.evidence_traversal_mutex.lockUncancelable(self.io);
+        defer self.evidence_traversal_mutex.unlock(self.io);
+        self.idle_evidence_traversals.appendAssumeCapacity(traversal);
     }
 
     /// The template closure of every row of `owner`'s export tables.
