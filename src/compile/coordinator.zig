@@ -8405,8 +8405,8 @@ test "prepared checked imports finalize after frontend and release abandoned dia
         try std.testing.expect((try artifact.rootRequests()).compile_time_requests.len > 0);
         try std.testing.expectEqual(@as(usize, 0), artifact.evaluation.const_store.values.items.len);
         const imported = CheckedArtifact.importedView(artifact);
-        try std.testing.expect(imported.exported_const_templates.templates.len > 0);
-        try std.testing.expect(imported.exported_const_templates.templates[0].template.state == .eval_template);
+        try std.testing.expect((try imported.exportRows()).const_templates.len > 0);
+        try std.testing.expect((try imported.exportRows()).const_templates[0].template.state == .eval_template);
         const key = artifact.key;
 
         if (finish) {

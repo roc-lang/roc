@@ -2521,7 +2521,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
     for (program.modules.views.items) |view| {
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
-        for (view.view.exported_procedure_bindings.bindings) |*binding| {
+        for ((try view.view.exportRows()).procedure_bindings) |*binding| {
             try program.exported_bindings.put(allocator, .{ .module = view.index, .def = binding.binding.def, .pattern = binding.binding.pattern }, binding);
         }
         for (view.view.callable_eval_templates.templates) |template| {

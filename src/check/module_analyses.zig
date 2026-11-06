@@ -17,6 +17,7 @@ const CheckedModuleArtifact = checked_artifact.CheckedModuleArtifact;
 const ImportedModuleView = checked_artifact.ImportedModuleView;
 const ModuleResolver = checked_artifact.ModuleResolver;
 const ExportClosures = checked_artifact.ExportClosures;
+const ExportRows = checked_artifact.ExportRows;
 const PublicApiDependencies = checked_artifact.PublicApiDependencies;
 const LoweringVisibility = checked_artifact.LoweringVisibility;
 const ModuleInterfaceCapabilities = checked_artifact.ModuleInterfaceCapabilities;
@@ -198,6 +199,7 @@ pub const ModuleAnalyses = struct {
     /// The platform a platform/app pairing reads: the pairing's export
     /// closures and public API dependencies are its platform's.
     platform: ?*const CheckedModuleArtifact,
+    export_rows: collections.OnceSlot(*ExportRows, .module_export_rows) = .empty,
     export_closures: collections.OnceSlot(*ExportClosures, .module_export_closures) = .empty,
     public_api_dependencies: collections.OnceSlot(*PublicApiDependencies, .module_public_api_dependencies) = .empty,
     lowering_visibility: collections.OnceSlot(*LoweringVisibility, .module_lowering_visibility) = .empty,
@@ -325,6 +327,10 @@ pub const ModuleAnalyses = struct {
             allocator.destroy(owned);
         }
         if (self.export_closures.peek()) |closures| closures.destroy(allocator);
+        if (self.export_rows.peek()) |rows| {
+            rows.deinit(allocator);
+            allocator.destroy(rows);
+        }
         if (self.public_api_dependencies.peek()) |dependencies| {
             dependencies.deinit(allocator);
             allocator.destroy(dependencies);
@@ -368,7 +374,24 @@ pub const ModuleAnalyses = struct {
         self.idle_evidence_traversals.appendAssumeCapacity(traversal);
     }
 
-    /// The template closure of every row of `owner`'s export tables.
+    /// The export rows of `owner`, this module. A platform/app pairing's are
+    /// its platform's.
+    pub fn exportRows(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const ExportRows {
+        self.assertPublished();
+        if (self.platform) |platform| return platformAnalyses(platform).exportRows(checked_artifact.importedView(platform));
+        return self.export_rows.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.exportRows);
+    }
+
+    const ViewRequest = struct {
+        analyses: *ModuleAnalyses,
+        owner: ImportedModuleView,
+
+        fn exportRows(request: ViewRequest) Allocator.Error!*ExportRows {
+            return checked_artifact.computeExportRows(request.analyses.allocator, request.owner);
+        }
+    };
+
+    /// The template closure of every row of `owner`'s export rows.
     pub fn exportClosures(self: *ModuleAnalyses, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!*const ExportClosures {
         self.assertPublished();
         if (self.platform) |platform| return platformAnalyses(platform).exportClosures(checked_artifact.importedView(platform), resolver);

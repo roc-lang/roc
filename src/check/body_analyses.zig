@@ -2563,7 +2563,9 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
     // neither exposed nor methods.
     var public_defs = collections.DenseMap(CIR.Def.Idx, void).init(allocator);
     defer public_defs.deinit();
-    for (tables.exported_defs) |def| try public_defs.put(def, {});
+    const exported_defs = try checked_artifact.collectPublishedExportDefs(allocator, env);
+    defer allocator.free(exported_defs);
+    for (exported_defs) |def| try public_defs.put(def, {});
     for (env.method_defs.entries.items) |entry| try public_defs.put(entry.value.def_idx, {});
     for (templates.by_def) |entry| {
         const id = local.template(entry.template) orelse continue;

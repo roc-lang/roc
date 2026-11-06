@@ -428,7 +428,6 @@ pub const Tables = struct {
     /// The module's analyses, which hold its nested procedure sites and
     /// exhaustiveness sites.
     module_analyses: ?*checked_artifact.ModuleAnalyses = null,
-    exported_defs: []const CIR.Def.Idx = &.{},
     /// The reader over the module's dispatch resolution.
     dispatch: ?checked_artifact.CheckedDispatch = null,
 };

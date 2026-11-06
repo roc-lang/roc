@@ -1480,8 +1480,9 @@ const ModuleViewData = struct {
     method_registry: *const static_dispatch.MethodRegistry,
     direct_import_module_keys: []const checked.CheckedModuleArtifactKey,
     resolved_refs: *const checked.ResolvedValueTable,
-    exported_procedure_bindings: checked.ExportedProcedureBindingView,
-    exported_const_templates: checked.ExportedConstTemplateView,
+    /// The checked module the view reads, whose slots answer what the view
+    /// holds no table for.
+    checked_view: checked.ImportedModuleView,
     top_level_procedure_bindings: *const checked.TopLevelProcedureBindingTable,
     platform_required_bindings: *const checked.PlatformRequiredBindingTable,
     callable_eval_templates: checked.CallableEvalTemplateTableView,
@@ -8054,7 +8055,7 @@ const Builder = struct {
         self.active_spec_job_diagnostics = shard_diagnostics;
         defer self.active_spec_job_diagnostics = null;
         const view = self.moduleForId(source_module);
-        const callable_eval = self.callableEvalForProcedureUse(procedure);
+        const callable_eval = try self.callableEvalForProcedureUse(procedure);
         const template_ref = if (callable_eval) |use| blk: {
             const raw = @backingInt(use.template);
             if (raw >= use.view.callable_eval_templates.templates.len) {
@@ -8064,7 +8065,7 @@ const Builder = struct {
             const wrapper = use.view.entry_wrappers.lookupByRoot(template.root) orelse
                 Common.invariant("callable eval procedure use root had no checked entry wrapper");
             break :blk wrapper.template;
-        } else self.templateRefForProcedureUse(procedure);
+        } else try self.templateRefForProcedureUse(procedure);
         var graph_setup_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
         defer graph_setup_timing_scope.end();
         const graph = try self.acquireSpecJobGraph(worker);
@@ -8384,13 +8385,13 @@ const Builder = struct {
 
     /// The callable-eval binding behind a procedure use when that binding is
     /// an exact procedure alias, which calls forward through.
-    fn forwardingCallableEvalForProcedureUse(self: *Builder, proc: checked.ProcedureUseTemplate) ?CallableEvalUse {
-        const callable_eval = self.callableEvalForProcedureUse(proc) orelse return null;
+    fn forwardingCallableEvalForProcedureUse(self: *Builder, proc: checked.ProcedureUseTemplate) Allocator.Error!?CallableEvalUse {
+        const callable_eval = try self.callableEvalForProcedureUse(proc) orelse return null;
         const template = callable_eval.view.callable_eval_templates.templates[@backingInt(callable_eval.template)];
         return if (template.forwarded_lookup != null) callable_eval else null;
     }
 
-    fn callableEvalForProcedureUse(self: *Builder, proc: checked.ProcedureUseTemplate) ?CallableEvalUse {
+    fn callableEvalForProcedureUse(self: *Builder, proc: checked.ProcedureUseTemplate) Allocator.Error!?CallableEvalUse {
         return switch (proc.binding) {
             .top_level => |top_level| blk: {
                 const view = self.moduleForId(checked.topLevelProcedureModuleId(top_level));
@@ -8403,7 +8404,7 @@ const Builder = struct {
             },
             .imported => |imported| blk: {
                 const view = self.moduleForId(checked.importedProcedureModuleId(imported));
-                for (view.exported_procedure_bindings.bindings) |binding| {
+                for ((try view.checked_view.exportRows()).procedure_bindings) |binding| {
                     if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
                     break :blk switch (binding.body) {
                         .direct_template => null,
@@ -13134,7 +13135,7 @@ const Builder = struct {
     fn templateRefForProcedureUse(
         self: *Builder,
         proc: checked.ProcedureUseTemplate,
-    ) names.ProcTemplate {
+    ) Allocator.Error!names.ProcTemplate {
         return switch (proc.binding) {
             .top_level => |top_level| blk: {
                 const view = self.moduleForId(checked.topLevelProcedureModuleId(top_level));
@@ -13151,7 +13152,7 @@ const Builder = struct {
             },
             .imported => |imported| blk: {
                 const view = self.moduleForId(checked.importedProcedureModuleId(imported));
-                for (view.exported_procedure_bindings.bindings) |binding| {
+                for ((try view.checked_view.exportRows()).procedure_bindings) |binding| {
                     if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
                         break :blk switch (binding.body) {
                             .direct_template => |direct| switch (direct.template) {
@@ -28334,8 +28335,8 @@ const BodyContext = struct {
         };
         // A call through an exact procedure alias forwards when it is drafted,
         // and that forwarded specialization applies its own relations.
-        if (self.builder.forwardingCallableEvalForProcedureUse(procedure) != null) return null;
-        const template_ref = self.builder.templateRefForProcedureUse(procedure);
+        if (try self.builder.forwardingCallableEvalForProcedureUse(procedure) != null) return null;
+        const template_ref = try self.builder.templateRefForProcedureUse(procedure);
         const callee_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = (try callee_view.template(template_ref.template));
         const partial_edge = try self.evidenceForProcedureUseAtNode(procedure, record.expr, root_evidence, request_fn_node, .interface_summary_input);
@@ -31451,7 +31452,7 @@ const BodyContext = struct {
         const call = task.call;
         if (frame.cursor == 1) {
             var fn_node = input.?.nodeValue();
-            if (self.iteratorProcedureForResolvedTarget(call.directTarget(self.view).?)) |procedure| {
+            if (try self.iteratorProcedureForResolvedTarget(call.directTarget(self.view).?)) |procedure| {
                 const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
                 const optional_args = try self.optionalCheckedArgs(call.args);
                 defer self.allocator.free(optional_args);
@@ -31478,7 +31479,7 @@ const BodyContext = struct {
             .checked_args = call.args,
             .expected_ret_node = task.expected_ret_node,
             .capture_constructor_argument_evidence = try self.iteratorCallNeedsConstructorArgumentEvidence(
-                self.iteratorProcedureForResolvedTarget(call.directTarget(self.view).?),
+                try self.iteratorProcedureForResolvedTarget(call.directTarget(self.view).?),
                 call.args,
             ),
         } });
@@ -31797,7 +31798,7 @@ const BodyContext = struct {
                     if (request.completed) |completed| return .{ .ret = .{ .node = (try self.graph.functionNodes(completed.fn_node)).ret } };
                 }
             }
-            if (self.callsiteIntrinsicForResolvedTarget(target)) |intrinsic| {
+            if (try self.callsiteIntrinsicForResolvedTarget(target)) |intrinsic| {
                 const callable_node = try self.callsiteIntrinsicRequestNode(intrinsic, fn_node);
                 return .{ .ret = .{ .node = (try self.graph.functionNodes(callable_node)).ret } };
             }
@@ -31818,12 +31819,12 @@ const BodyContext = struct {
         for (fn_nodes.args) |arg_node| {
             if (try self.nodeIsProvenUninhabited(arg_node)) return .{ .ret = .{ .node = fn_nodes.ret } };
         }
-        if (self.iteratorProcedureForResolvedTarget(target)) |procedure| {
+        if (try self.iteratorProcedureForResolvedTarget(target)) |procedure| {
             if (procedure == .next and fn_nodes.args.len == 1 and (try self.isGeneratedIteratorEvidenceNode(fn_nodes.args[0]))) {
                 return .{ .ret = .{ .node = fn_nodes.ret } };
             }
         }
-        if (self.resolvedTargetIsStrInspect(target)) return .{ .ret = .{ .node = fn_nodes.ret } };
+        if (try self.resolvedTargetIsStrInspect(target)) return .{ .ret = .{ .node = fn_nodes.ret } };
         const completed = try self.completedDirectCalleeAtNode(checked_expr, target, task.source_fn_ty, fn_node);
         return .{ .ret = .{ .node = (try self.graph.functionNodes(completed.fn_node)).ret } };
     }
@@ -32040,7 +32041,7 @@ const BodyContext = struct {
             .expected_ret_node = null,
             .capture_constructor_argument_evidence = if (call.directTarget(self.view)) |target|
                 try self.iteratorCallNeedsConstructorArgumentEvidence(
-                    self.iteratorProcedureForResolvedTarget(target),
+                    try self.iteratorProcedureForResolvedTarget(target),
                     call.args,
                 )
             else
@@ -35628,7 +35629,7 @@ const BodyContext = struct {
                 expr.ty,
                 call,
                 ty,
-                self.inspectCallDemand(call),
+                try self.inspectCallDemand(call),
             )) |step| {
                 frame.cursor = 3;
                 return step;
@@ -35725,7 +35726,7 @@ const BodyContext = struct {
                 expr.ty,
                 call,
                 try self.primitiveType(.str),
-                self.inspectCallDemand(call),
+                try self.inspectCallDemand(call),
             )) |step| switch (step) {
                 .ret => |result| return self.exprInnerDone(task, result.exprValue()),
                 .call => {
@@ -37080,7 +37081,7 @@ const BodyContext = struct {
 
                 if (call.directTarget(self.view)) |target| {
                     const source_fn_ty = self.directCallInstantiationSourceFnType(target, try call.sourceFnTy(self.view));
-                    task.iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
+                    task.iterator_procedure = try self.iteratorProcedureForResolvedTarget(target);
                     const fn_node = try self.directCallRequestNode(
                         checked_expr,
                         target,
@@ -37155,7 +37156,7 @@ const BodyContext = struct {
                     }
                 }
                 const source_fn_ty = self.directCallInstantiationSourceFnType(target, try call.sourceFnTy(self.view));
-                if (self.resolvedTargetIsStrInspect(target)) {
+                if (try self.resolvedTargetIsStrInspect(target)) {
                     frame.cursor = 2;
                     return requestLowerTask(self, .{ .prepared_span = .{ .exprs = call.args, .nodes = fn_nodes.args } });
                 }
@@ -37258,7 +37259,7 @@ const BodyContext = struct {
             expr.ty,
             call,
             try self.primitiveType(.str),
-            self.inspectCallDemand(call),
+            try self.inspectCallDemand(call),
         )) |step| switch (step) {
             .ret => |result| return loweredExprStep(try self.finishCallExprAtNode(expected_node, result.exprValue())),
             .call => {
@@ -37835,7 +37836,7 @@ const BodyContext = struct {
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?LowerTask {
         const target = call.directTarget(self.view) orelse return null;
-        const intrinsic = self.callsiteIntrinsicForResolvedTarget(target) orelse return null;
+        const intrinsic = try self.callsiteIntrinsicForResolvedTarget(target) orelse return null;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, try call.sourceFnTy(self.view));
         return .{ .callsite_intrinsic = .{
             .intrinsic = intrinsic,
@@ -38637,13 +38638,13 @@ const BodyContext = struct {
         } } }));
     }
 
-    fn inspectCallDemand(self: *BodyContext, call: anytype) LoweringDemand {
+    fn inspectCallDemand(self: *BodyContext, call: anytype) Allocator.Error!LoweringDemand {
         const target = call.directTarget(self.view) orelse return .runtime_value;
-        return if (self.resolvedTargetIsStrInspect(target)) .inspect_only else .runtime_value;
+        return if (try self.resolvedTargetIsStrInspect(target)) .inspect_only else .runtime_value;
     }
 
-    fn resolvedTargetIsStrInspect(self: *BodyContext, target: checked.ResolvedValueId) bool {
-        return switch (self.finalDirectTarget(target).record.ref) {
+    fn resolvedTargetIsStrInspect(self: *BodyContext, target: checked.ResolvedValueId) Allocator.Error!bool {
+        return switch ((try self.finalDirectTarget(target)).record.ref) {
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -38657,8 +38658,8 @@ const BodyContext = struct {
     fn iteratorProcedureForResolvedTarget(
         self: *BodyContext,
         target: checked.ResolvedValueId,
-    ) ?checked.IteratorProcedureId {
-        return switch (self.finalDirectTarget(target).record.ref) {
+    ) Allocator.Error!?checked.IteratorProcedureId {
+        return switch ((try self.finalDirectTarget(target)).record.ref) {
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -38705,8 +38706,8 @@ const BodyContext = struct {
         };
     }
 
-    fn callsiteIntrinsicForResolvedTarget(self: *BodyContext, target: checked.ResolvedValueId) ?checked.IntrinsicId {
-        const intrinsic = switch (self.finalDirectTarget(target).record.ref) {
+    fn callsiteIntrinsicForResolvedTarget(self: *BodyContext, target: checked.ResolvedValueId) Allocator.Error!?checked.IntrinsicId {
+        const intrinsic = switch ((try self.finalDirectTarget(target)).record.ref) {
             .top_level_proc,
             .imported_proc,
             .hosted_proc,
@@ -45533,7 +45534,7 @@ const BodyContext = struct {
         target: checked.ResolvedValueId,
         expected_ret_node: ?NodeId,
     ) Allocator.Error!bool {
-        if (self.iteratorProcedureForResolvedTarget(target) != null) return false;
+        if (try self.iteratorProcedureForResolvedTarget(target) != null) return false;
         if (expected_ret_node) |expected| {
             if (try self.graph.containsGeneratedPrivate(expected)) return false;
         }
@@ -45611,7 +45612,7 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| if (self.builder.forwardingCallableEvalForProcedureUse(proc)) |alias|
+            => |proc| if (try self.builder.forwardingCallableEvalForProcedureUse(proc)) |alias|
                 try self.forwardedCallableEvalCalleeAtNode(alias, record.expr, request_fn_node)
             else
                 try self.draftFnSlotForProcedureUseAtNode(
@@ -45621,7 +45622,7 @@ const BodyContext = struct {
                     try self.evidenceForProcedureUseAtNode(proc, record.expr, null, request_fn_node, .body_lowering),
                     record.recursive_reference,
                 ),
-            .platform_required_proc => |proc| if (self.builder.forwardingCallableEvalForProcedureUse(proc.procedure)) |alias|
+            .platform_required_proc => |proc| if (try self.builder.forwardingCallableEvalForProcedureUse(proc.procedure)) |alias|
                 try self.forwardedCallableEvalCalleeAtNode(alias, record.expr, request_fn_node)
             else
                 try self.draftFnSlotForProcedureUseAtNode(
@@ -45742,7 +45743,7 @@ const BodyContext = struct {
         record: checked.ResolvedValueRefRecord,
     };
 
-    fn finalDirectTarget(self: *BodyContext, target: checked.ResolvedValueId) FinalDirectTarget {
+    fn finalDirectTarget(self: *BodyContext, target: checked.ResolvedValueId) Allocator.Error!FinalDirectTarget {
         const raw = @backingInt(target);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked direct call target is outside resolved value table");
@@ -45761,7 +45762,7 @@ const BodyContext = struct {
                 .imported_proc,
                 .hosted_proc,
                 .promoted_top_level_proc,
-                => |proc| if (self.builder.forwardingCallableEvalForProcedureUse(proc)) |alias| {
+                => |proc| if (try self.builder.forwardingCallableEvalForProcedureUse(proc)) |alias| {
                     view = alias.view;
                     const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
                     const lookup = view.resolved_refs.lookupIdByExpr(template.forwarded_lookup.?) orelse
@@ -45769,7 +45770,7 @@ const BodyContext = struct {
                     record = view.resolved_refs.records[@backingInt(lookup)];
                     continue;
                 },
-                .platform_required_proc => |required| if (self.builder.forwardingCallableEvalForProcedureUse(required.procedure)) |alias| {
+                .platform_required_proc => |required| if (try self.builder.forwardingCallableEvalForProcedureUse(required.procedure)) |alias| {
                     view = alias.view;
                     const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
                     const lookup = view.resolved_refs.lookupIdByExpr(template.forwarded_lookup.?) orelse
@@ -45791,7 +45792,7 @@ const BodyContext = struct {
         edge: EdgeEvidence,
         recursive_reference: bool,
     ) Allocator.Error!DraftFnSlot {
-        const template_ref = self.builder.templateRefForProcedureUse(proc);
+        const template_ref = try self.builder.templateRefForProcedureUse(proc);
         return try self.builder.lowerDraftTemplateFromContext(
             self,
             template_ref,
@@ -45995,7 +45996,7 @@ const BodyContext = struct {
     }
 
     fn directCallCaptureSpan(self: *BodyContext, target: checked.ResolvedValueId) Allocator.Error!DraftSpan(DraftExprId) {
-        const final = self.finalDirectTarget(target);
+        const final = try self.finalDirectTarget(target);
         return switch (final.record.ref) {
             .local_proc => |local| if (!moduleBytesEqual(final.view.key.bytes, self.view.key.bytes))
                 Common.invariant("forwarded direct call reached a local procedure of another module")
@@ -46861,7 +46862,7 @@ const BodyContext = struct {
         root_evidence: ?checked.CheckedEvidenceSpan,
         recursive_reference: bool,
     ) Allocator.Error!DraftExprId {
-        if (self.builder.callableEvalForProcedureUse(proc)) |callable_eval| {
+        if (try self.builder.callableEvalForProcedureUse(proc)) |callable_eval| {
             const edge = try self.evidenceForUseSiteAtNode(site_expr, request_fn_node);
             return try self.lowerCallableEvalBindingValueAtNode(
                 callable_eval.view,
@@ -52624,7 +52625,7 @@ const BodyContext = struct {
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!EdgeEvidence {
         if (root_evidence) |evidence| {
-            return try self.checkedProcedureEdgeAtRequest(self.builder.templateRefForProcedureUse(proc), evidence, request_fn_node, purpose);
+            return try self.checkedProcedureEdgeAtRequest(try self.builder.templateRefForProcedureUse(proc), evidence, request_fn_node, purpose);
         }
         return try self.evidenceForUseSiteForPurposeAtNode(expr, purpose, request_fn_node);
     }
@@ -52894,7 +52895,7 @@ const BodyContext = struct {
     }
 
     fn procedureUseSchema(self: *BodyContext, proc: checked.ProcedureUseTemplate) Allocator.Error!SchemeRequirements {
-        if (self.builder.callableEvalForProcedureUse(proc)) |callable_eval| {
+        if (try self.builder.callableEvalForProcedureUse(proc)) |callable_eval| {
             // A callable-eval binding lowers through its root's entry wrapper,
             // whose scheme is the binding's own.
             const raw_template = @backingInt(callable_eval.template);
@@ -52906,7 +52907,7 @@ const BodyContext = struct {
                 Common.invariant("callable eval template root had no checked entry wrapper");
             return try self.templateSchema(wrapper.template);
         }
-        return try self.templateSchema(self.builder.templateRefForProcedureUse(proc));
+        return try self.templateSchema(try self.builder.templateRefForProcedureUse(proc));
     }
 
     fn templateSchema(self: *BodyContext, template_ref: names.ProcTemplate) Allocator.Error!SchemeRequirements {
@@ -54516,10 +54517,10 @@ const BodyContext = struct {
                 else
                     return done,
                 .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| .{
-                    .callable_eval = self.builder.forwardingCallableEvalForProcedureUse(proc) orelse return done,
+                    .callable_eval = try self.builder.forwardingCallableEvalForProcedureUse(proc) orelse return done,
                 },
                 .platform_required_proc => |required| .{
-                    .callable_eval = self.builder.forwardingCallableEvalForProcedureUse(required.procedure) orelse return done,
+                    .callable_eval = try self.builder.forwardingCallableEvalForProcedureUse(required.procedure) orelse return done,
                 },
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("forwarded procedure alias lookup did not name a procedure"),
             };
@@ -69419,8 +69420,7 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .method_registry = view.method_registry,
         .direct_import_module_keys = view.direct_import_module_keys,
         .resolved_refs = view.resolved_value_refs,
-        .exported_procedure_bindings = view.exported_procedure_bindings,
-        .exported_const_templates = view.exported_const_templates,
+        .checked_view = view,
         .top_level_procedure_bindings = view.top_level_procedure_bindings,
         .platform_required_bindings = view.platform_required_bindings,
         .callable_eval_templates = view.callable_eval_templates,
