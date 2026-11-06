@@ -227,6 +227,11 @@ pub const ModuleAnalyses = struct {
     literal_graph: collections.OnceSlot(*LiteralGraph, .module_literal_graph) = .empty,
     unit_conversion_slots: collections.OnceSlot(*UnitConversionSlots, .module_unit_conversion_slots) = .empty,
     root_requests: collections.OnceSlot(*RootRequestTable, .module_root_requests) = .empty,
+    /// The root requests the compilation reading the module makes of it by
+    /// name, beyond its checked candidates. They select among the module's
+    /// candidates when its root requests are read; nothing records them
+    /// with the module.
+    explicit_roots: []const checked_artifact.ExplicitRootRequestInput = &.{},
     /// The traversals no evidence pass of the module has borrowed
     /// (`borrowEvidenceTraversal`). Its capacity covers every traversal the
     /// module has created, so a return never allocates.
@@ -243,6 +248,14 @@ pub const ModuleAnalyses = struct {
         const analyses = try allocator.create(ModuleAnalyses);
         analyses.* = .{ .allocator = allocator, .io = io, .platform = platform };
         return analyses;
+    }
+
+    /// Give the analyses the explicit root requests of the compilation that
+    /// reads the module. They must be given before any root request is read.
+    pub fn attachExplicitRoots(self: *ModuleAnalyses, roots: []const checked_artifact.ExplicitRootRequestInput) Allocator.Error!void {
+        std.debug.assert(self.explicit_roots.len == 0 and self.root_requests.peek() == null);
+        if (roots.len == 0) return;
+        self.explicit_roots = try self.allocator.dupe(checked_artifact.ExplicitRootRequestInput, roots);
     }
 
     /// Give the analyses the resolver they find other modules through. It
@@ -305,6 +318,7 @@ pub const ModuleAnalyses = struct {
             requests.deinit(allocator);
             allocator.destroy(requests);
         }
+        allocator.free(self.explicit_roots);
         if (self.dispatch_imports.peek()) |imports| {
             allocator.free(imports.views);
             allocator.destroy(imports);

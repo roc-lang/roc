@@ -4237,14 +4237,14 @@ fn evalInterpreterProgramRoots(
                         error.RuntimeError, error.DivisionByZero => {
                             const message = interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed";
                             failed_message = message;
-                            break :blk try unreportedFailedRootPayload(module, compile_time_root, message, .crash);
+                            break :blk try failedRootPayload(module, compile_time_root, message, .crash);
                         },
                         error.Crash => {
                             const message = interpreter.getCrashMessage();
                             const meaning = interpreterFailedAt(&lowered.lir_result, interpreter, program.slotEnvironment()).meaning;
                             if (options.retry) |retry| if (retry.holds(meaning)) continue;
                             failed_message = message;
-                            break :blk try unreportedFailedRootPayload(module, compile_time_root, message, RootFailure.of(meaning));
+                            break :blk try failedRootPayload(module, compile_time_root, message, RootFailure.of(meaning));
                         },
                         error.UnsupportedHostedFunction => finalizationInvariant("compile-time constant reached an unsupported hosted function"),
                         error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time constant reached an invalid hosted function signature"),
@@ -6452,7 +6452,7 @@ fn devComptimeExhaustivenessRootPayload(
     had_problem: *bool,
 ) FinalizeError!checked.CompileTimeRootPayload {
     if (request.kind == .compile_time_constant and problem_store == null) {
-        return try unreportedFailedRootPayload(module, root, message, .crash);
+        return try failedRootPayload(module, root, message, .crash);
     }
 
     _ = problem_store orelse {
@@ -6485,7 +6485,7 @@ fn devCrashedRootPayload(
     }
     if (root.guarded) return try failedRootPayload(module, root, message, RootFailure.of(failed_at.meaning));
     if (request.kind == .compile_time_constant and problem_store == null) {
-        return try unreportedFailedRootPayload(module, root, message, .crash);
+        return try failedRootPayload(module, root, message, .crash);
     }
     const store = problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
@@ -6640,16 +6640,6 @@ fn literalRejectionReported(store: *const check.problem.Store, kind: lir.LIR.Lit
 }
 
 /// The payload of a failed root in an evaluation that collects no diagnostics.
-fn unreportedFailedRootPayload(
-    module: *checked.CheckedModuleArtifact,
-    root: checked.CompileTimeRoot,
-    message: []const u8,
-    failure: RootFailure,
-) Allocator.Error!checked.CompileTimeRootPayload {
-    if (root.guarded) return .runtime;
-    return .{ .const_node = try appendFailureConst(module, message, failure) };
-}
-
 fn appendCrashConst(
     module: *checked.CheckedModuleArtifact,
     message: []const u8,
@@ -6824,7 +6814,14 @@ fn appendCompileTimeExhaustivenessProblem(
                 => finalizationInvariant("compile-time exhaustiveness failure had an impossible site policy"),
             };
         }
-        const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(checked_site, site_record.requires_pairing);
+        // A site no root owns can be reached by every root that calls into
+        // it: the first failure reports it, and each later one finds it
+        // reported.
+        const shared_by_roots = switch (site_record.policy) {
+            .compile_time_only, .runtime_reachable => true,
+            .compile_time_replaced_by_root, .not_pending => false,
+        };
+        const matched = try problem_store.appendEmpiricalExhaustivenessFailureRetaining(checked_site, site_record.requires_pairing or shared_by_roots);
         if (!matched) {
             finalizationInvariant("empirical exhaustiveness failure had no pending static diagnostic");
         }
@@ -6850,9 +6847,9 @@ fn discardUnreachedRootComptimeSites(
             const site = try owner.module.exhaustivenessSite(checked_site);
             if (site.requires_pairing) continue;
             switch (site.policy) {
-                .compile_time_replaced_by_root,
+                .compile_time_replaced_by_root => problem_store.discardPendingStaticExhaustiveness(checked_site),
+                // Another root that calls into the site may still reach it.
                 .compile_time_only,
-                => problem_store.discardPendingStaticExhaustiveness(checked_site),
                 .runtime_reachable,
                 .not_pending,
                 => {},

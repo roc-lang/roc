@@ -4,6 +4,7 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const interpreter = @import("interpreter.zig");
+const compile_time_host = @import("compile_time_host.zig");
 
 const RocOps = builtins.host_abi.RocOps;
 
@@ -144,6 +145,7 @@ fn allocateBlock(self: *CompilerHost, size: usize, alignment: usize) ?*Header {
         1, 2, 4, 8, 16 => {},
         else => base.invariant("{s}", .{"unsupported compiler RocOps allocation alignment"}),
     }
+    if (size > compile_time_host.max_roc_allocation_bytes) return null;
     const block = self.allocator.alignedAlloc(u8, Header.block_alignment, Header.payload_offset + size) catch return null;
     const header: *Header = @ptrCast(@alignCast(block.ptr));
     header.* = .{ .prev = null, .next = self.live_blocks, .size = size, .alignment = alignment };

@@ -75,9 +75,6 @@ pub const SelectedHoistedRoot = struct {
     /// loop body, or expect body. A guarded root whose evaluation crashes is
     /// not a diagnostic: the original expression stays in runtime lowering.
     guarded: bool = false,
-    /// Whether the root materializes a top-level binding. Checking records it
-    /// with the root in `ModuleEnv.selected_hoisted_roots`.
-    top_level: bool = false,
 };
 
 /// A local function binding the checker promoted to a procedure of its own.

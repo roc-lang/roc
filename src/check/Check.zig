@@ -29,6 +29,7 @@ const hoist_roots = @import("can").HoistRoots;
 const output_type_roots = @import("output_type_roots.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
+const value_resolution = @import("value_resolution.zig");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
@@ -5211,12 +5212,6 @@ pub fn addCompileTimeExecutableRootDef(
     });
 }
 
-/// Return the exact body identity supplied for a compile-time executable root.
-pub fn compileTimeExecutableRootBody(self: *const Self, def_idx: CIR.Def.Idx) ?CIR.Expr.Idx {
-    const root_index = self.compile_time_executable_root_indices.get(def_idx) orelse return null;
-    return self.compile_time_executable_roots.items[root_index].body;
-}
-
 fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool, hoist_position: HoistPosition) Allocator.Error!HoistFrameGuard {
     try self.openHoistFrame(expr, binding_rhs, hoist_position);
     return .{
@@ -7057,6 +7052,53 @@ fn computeMethodCallPreservesIteratorSourceInput(self: *Self, expr: CIR.Expr.Idx
     // conversion itself as a static-data root would bake that closure instead
     // of the receiver collection it reads.
     return self.varIsIteratorNominal(ModuleEnv.varFrom(expr));
+}
+
+/// Whether a method call selects a Builtin procedure that only requests
+/// capacity (`LowLevel.requestsCapacity`). Only a Builtin nominal's methods
+/// can, so any other receiver skips the method lookup.
+fn methodCallRequestsCapacity(self: *Self, call: anytype) bool {
+    const nominal = self.types.resolveThroughAliases(ModuleEnv.varFrom(call.receiver)).desc.content.unwrapNominalType() orelse return false;
+    const owner_env = self.getNominalOriginEnv(nominal);
+    if (owner_env.module_role != .builtin) return false;
+    const method = self.lookupStaticDispatchMethodBinding(
+        owner_env,
+        nominal.sourceDeclOptional(),
+        self.cir,
+        call.method_name,
+    ) orelse return false;
+    return builtinDefRequestsCapacity(method.env, method.binding.def_idx);
+}
+
+/// Whether a direct call's callee is a Builtin procedure that only requests
+/// capacity (`LowLevel.requestsCapacity`).
+fn callRequestsCapacity(self: *Self, callee: CIR.Expr.Idx) bool {
+    const callee_expr = self.cir.store.getExpr(callee);
+    if (callee_expr == .e_lookup_associated_resolved) {
+        const resolved = callee_expr.e_lookup_associated_resolved;
+        const target = self.moduleEnvForIdentity(self.cir, resolved.module_identity);
+        return builtinDefRequestsCapacity(target.env, resolved.target_def_idx);
+    }
+    if (callee_expr == .e_lookup_external) {
+        const external = callee_expr.e_lookup_external;
+        const module = self.hoistedImportedModule(self.cir, external.module_idx) orelse return false;
+        // An imported procedure is exposed by its definition's node.
+        const node: CIR.Node.Idx = @fromBackingInt(@intCast(external.target_node_idx));
+        if (module.store.nodes.get(node).tag != .def) return false;
+        return builtinDefRequestsCapacity(module, @fromBackingInt(@intCast(external.target_node_idx)));
+    }
+    return false;
+}
+
+/// Whether `def_idx` is a Builtin procedure whose body is exactly a
+/// capacity-requesting low-level operation.
+fn builtinDefRequestsCapacity(env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
+    if (env.module_role != .builtin) return false;
+    const def_expr = env.store.getExpr(env.store.getDef(def_idx).expr);
+    if (def_expr != .e_lambda) return false;
+    const body = env.store.getExpr(def_expr.e_lambda.body);
+    if (body != .e_run_low_level) return false;
+    return body.e_run_low_level.op.requestsCapacity();
 }
 
 fn methodNameIsHoistPreservingCandidate(method_text: []const u8) bool {
@@ -13241,20 +13283,25 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 }
 
 /// Record the selected compile-time roots, the promoted local procedures,
-/// the platform requirement solutions and the pending exhaustiveness checks
-/// into the module's checked outputs. A pending exhaustiveness check's index
+/// the requested compile-time roots, the platform requirement solutions, the
+/// value-reference resolution (`value_resolution.record`) and the pending
+/// exhaustiveness checks into the module's checked outputs. A pending exhaustiveness check's index
 /// in `ModuleEnv.exhaustiveness_obligations` is its checked site id.
 fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
     const env = self.cir;
     try env.selected_hoisted_roots.items.ensureTotalCapacity(env.gpa, self.selected_hoisted_roots.items.len);
     env.selected_hoisted_roots.items.clearRetainingCapacity();
-    for (self.selected_hoisted_roots.items) |root| {
-        var recorded = root;
-        recorded.top_level = self.selectedHoistedRootIsTopLevel(root);
-        env.selected_hoisted_roots.items.appendAssumeCapacity(recorded);
-    }
+    env.selected_hoisted_roots.items.appendSliceAssumeCapacity(self.selected_hoisted_roots.items);
     env.promoted_local_procedures.items.clearRetainingCapacity();
     try env.promoted_local_procedures.items.appendSlice(env.gpa, self.promoted_local_procedures.items);
+    env.requested_compile_time_roots.items.clearRetainingCapacity();
+    try env.requested_compile_time_roots.items.ensureTotalCapacity(env.gpa, self.compile_time_executable_roots.items.len);
+    for (self.compile_time_executable_roots.items) |root| {
+        // A rejected root definition evaluates as the runtime error that
+        // replaced it, so its body is no compile-time root.
+        if (env.store.getExpr(env.store.getDef(root.def).expr) == .e_runtime_error) continue;
+        env.requested_compile_time_roots.items.appendAssumeCapacity(.{ .def = root.def, .body = root.body });
+    }
 
     env.platform_requirement_solutions.items.clearRetainingCapacity();
     env.platform_requirement_identity_vars.items.clearRetainingCapacity();
@@ -13277,6 +13324,12 @@ fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
         });
     }
 
+    try value_resolution.record(self.gpa, env, .{
+        .imported_modules = self.imported_modules,
+        .context = self,
+        .owner_env = valueResolutionOwnerEnv,
+    });
+
     const pending = self.problems.pending_static_exhaustiveness.items;
     env.exhaustiveness_obligations.items.clearRetainingCapacity();
     try env.exhaustiveness_obligations.items.ensureTotalCapacity(env.gpa, pending.len);
@@ -13288,6 +13341,11 @@ fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
             .region = obligation.region,
         });
     }
+}
+
+fn valueResolutionOwnerEnv(context: *const anyopaque, owner: base.ModuleIdentity.Idx) *const ModuleEnv {
+    const self: *const Self = @ptrCast(@alignCast(context));
+    return self.moduleEnvForIdentity(self.cir, owner).env;
 }
 
 /// Record every node whose own checked state is erroneous
@@ -13955,7 +14013,20 @@ fn hoistedRootIsIntrinsicallyKept(
     root.value_kind = .data_constant;
     if (self.cir.store.getExpr(root.expr) == .e_runtime_error) return true;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
+    if (root.body == .expr and !self.selectedHoistedRootIsTopLevel(root.*) and self.exprRequestsCapacity(root.expr)) return false;
     return try self.varIsConcreteHoistedConstType(type_var);
+}
+
+/// Whether `expr` calls a Builtin procedure that only requests capacity
+/// (`LowLevel.requestsCapacity`), which no hoisted root stands for (design.md
+/// "Compile-Time Constants and Hoisted Roots"). Read after solving, so the
+/// receiver of a method call has its type.
+fn exprRequestsCapacity(self: *Self, expr: CIR.Expr.Idx) bool {
+    const data = self.cir.store.getExpr(expr);
+    if (data == .e_call) return self.callRequestsCapacity(data.e_call.func);
+    if (data == .e_dispatch_call) return self.methodCallRequestsCapacity(data.e_dispatch_call);
+    if (data == .e_method_call) return self.methodCallRequestsCapacity(data.e_method_call);
+    return false;
 }
 
 fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {

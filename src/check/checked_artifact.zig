@@ -458,7 +458,7 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
 
 /// The digest of the checking inputs of a module that its imports' and its
 /// app pairing's implementations do not reach: its imports' names, explicit
-/// root requests, validation mode and platform requirement context.
+/// validation mode and platform requirement context.
 pub fn checkingContextPolicyHash(identity: CheckingContextIdentity) [32]u8 {
     var hasher = base.Sha256.init(.{});
     hashCheckingContextPolicy(&hasher, identity, false);
@@ -491,37 +491,7 @@ fn hashCheckingContextPolicy(hasher: *base.Sha256, identity: CheckingContextIden
             hasher.update(&[_]u8{0});
         }
     }
-    hashU32(hasher, @intCast(identity.explicit_roots.len));
-    for (identity.explicit_roots) |root| {
-        hashExplicitRootRequestInput(hasher, root);
-    }
     hashByteSlice(hasher, @tagName(identity.validation));
-}
-
-fn hashExplicitRootRequestInput(
-    hasher: *base.Sha256,
-    root: ExplicitRootRequestInput,
-) void {
-    hashByteSlice(hasher, @tagName(root.kind));
-    hashRootSource(hasher, root.source);
-    hashByteSlice(hasher, @tagName(root.abi));
-    hashByteSlice(hasher, @tagName(root.exposure));
-}
-
-fn hashRootSource(hasher: *base.Sha256, source: RootSource) void {
-    hashByteSlice(hasher, @tagName(source));
-    switch (source) {
-        inline .def, .expr, .statement => |idx| hashU32(hasher, @backingInt(idx)),
-        .required_binding => |idx| hashU32(hasher, idx),
-        .hoisted => |hoisted| {
-            hashU32(hasher, hoisted.index);
-            hashU32(hasher, @backingInt(hoisted.expr));
-        },
-        .literal => |literal| {
-            hashByteSlice(hasher, @tagName(literal));
-            hashU32(hasher, literal.node());
-        },
-    }
 }
 
 fn hashDirectImportArtifactKeys(keys: []const CheckedModuleArtifactKey) [32]u8 {
@@ -565,7 +535,6 @@ pub const CheckingContextIdentity = struct {
     imports: []ImportIdentity = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
-    explicit_roots: []const ExplicitRootRequestInput = &.{},
     /// How the module's compile-time roots were established. An app root
     /// checked without its entrypoint contract reports no problem for a
     /// platform requirement it does not supply, so two compilations of the
@@ -575,7 +544,6 @@ pub const CheckingContextIdentity = struct {
 
     pub const Serialized = extern struct {
         imports: SerializedSlice(ImportIdentity) = .{},
-        explicit_roots: SerializedSlice(ExplicitRootRequestInput) = .{},
         platform_requirement_context: artifact_serialize.SerializedOptional(PlatformRequirementContextKey) = .{},
         platform_app_relation: artifact_serialize.SerializedOptional(PlatformAppRelationKey) = .{},
         validation: artifact_serialize.SerializedScalar(can.Can.Validation, .checking) = .{},
@@ -589,14 +557,11 @@ pub const CheckingContextIdentity = struct {
         module_env: *const ModuleEnv,
         publish_imports: []const PublishImportArtifact,
         platform_requirement_context: ?PlatformRequirementContextKey,
-        explicit_roots: []const ExplicitRootRequestInput,
         validation: can.Can.Validation,
     ) Allocator.Error!CheckingContextIdentity {
         const imported_names = module_env.imports.imports.items.items;
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
         errdefer allocator.free(imports);
-        const roots = try allocator.dupe(ExplicitRootRequestInput, explicit_roots);
-        errdefer allocator.free(roots);
 
         for (imported_names, 0..) |str_idx, i| {
             const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
@@ -613,7 +578,6 @@ pub const CheckingContextIdentity = struct {
         return .{
             .imports = imports,
             .platform_requirement_context = platform_requirement_context,
-            .explicit_roots = roots,
             .validation = validation,
         };
     }
@@ -764,9 +728,6 @@ pub const PublishInputs = struct {
     available_artifacts: []const ImportedModuleView = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
-    /// Which of the compile-time roots checking selected
-    /// (`ModuleEnv.selected_hoisted_roots`) the artifact evaluates.
-    hoisted_roots: HoistedRootSelection = .selected,
     compile_time_finalizer: CompileTimeFinalizer,
     /// Prepared metadata may serve frontend imports; evaluation and cache publication wait.
     evaluation_phase: enum { immediate, post_frontend } = .immediate,
@@ -776,39 +737,6 @@ pub const PublishInputs = struct {
     /// keeps a copy.
     inference: InferenceOutput,
 };
-
-/// Which of a module's checker-selected compile-time roots its artifact
-/// evaluates.
-pub const HoistedRootSelection = enum {
-    /// Every root checking selected.
-    selected,
-    /// Only the roots that materialize a top-level binding.
-    top_level,
-    none,
-};
-
-/// The positions in `ModuleEnv.selected_hoisted_roots` of the
-/// checker-selected compile-time roots `selection` keeps, ascending. A kept
-/// root's position is its identity (`ComptimeRootKey`). The caller owns the
-/// returned slice.
-fn selectHoistedRootIndices(
-    allocator: Allocator,
-    module_env: *const ModuleEnv,
-    selection: HoistedRootSelection,
-) Allocator.Error![]u32 {
-    const selected = module_env.selected_hoisted_roots.items.items;
-    var kept = try std.ArrayList(u32).initCapacity(allocator, selected.len);
-    errdefer kept.deinit(allocator);
-    for (selected, 0..) |root, index| {
-        const keep = switch (selection) {
-            .selected => true,
-            .top_level => root.top_level,
-            .none => false,
-        };
-        if (keep) kept.appendAssumeCapacity(@intCast(index));
-    }
-    return try kept.toOwnedSlice(allocator);
-}
 
 /// Public `CompileTimeFinalizer` declaration.
 pub const CompileTimeFinalizer = struct {
@@ -1190,7 +1118,7 @@ fn moduleRootRequests(allocator: Allocator, owner: ImportedModuleView) Allocator
     var requests = std.ArrayList(RootRequest).empty;
     errdefer requests.deinit(allocator);
 
-    for (context.explicit_roots) |root| {
+    for (dispatch.source.analyses.explicit_roots) |root| {
         if (!explicitRootMatchesCheckedRootKind(procedure_templates, compile_time_roots, root)) continue;
         if (!explicitCompileTimeRootRequestIsEligible(compile_time_roots, root)) continue;
         const source_checked_type = try checkedTypeIdForRootSource(env, bodies, root.source);
@@ -9183,7 +9111,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     };
     _ = try names.internModuleIdentity(&module_identity.stable_hash);
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, &.{}, .checking);
+    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, .checking);
     defer checking_context_identity.deinit(allocator);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
@@ -11156,74 +11084,6 @@ fn procedureUseBody(
     return .{ .view = view.*, .body = view.top_level_procedure_bindings.get(top_level.binding).body };
 }
 
-fn procedureUseKind(
-    proc: ProcedureUseTemplate,
-    local_module: CheckedModuleArtifactKey,
-    local_procedure_bindings: *const TopLevelProcedureBindingTable,
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
-) std.meta.Tag(ProcedureBindingBody) {
-    return switch (proc.binding) {
-        .top_level => |top_level| topLevelProcedureKind(
-            top_level,
-            local_module,
-            local_procedure_bindings,
-            imports,
-            available_modules,
-            relation_modules,
-        ),
-        .imported => |imported| importedProcedureKind(imported, imports, available_modules, relation_modules),
-        .hosted => .direct_template,
-        .platform_required => |required| topLevelProcedureKind(
-            .{ .artifact = required.artifact, .binding = required.procedure_binding },
-            local_module,
-            local_procedure_bindings,
-            imports,
-            available_modules,
-            relation_modules,
-        ),
-    };
-}
-
-fn topLevelProcedureKind(
-    top_level: ArtifactTopLevelProcedureBindingRef,
-    local_module: CheckedModuleArtifactKey,
-    local_procedure_bindings: *const TopLevelProcedureBindingTable,
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
-) std.meta.Tag(ProcedureBindingBody) {
-    const body = if (top_level.artifact.eql(local_module.digest()))
-        local_procedure_bindings.get(top_level.binding).body
-    else blk: {
-        const view = dependencyViewByKey(top_level.artifact, imports, available_modules, relation_modules) orelse
-            checkedArtifactInvariant("direct-call target referenced an unavailable checked module", .{});
-        break :blk view.top_level_procedure_bindings.get(top_level.binding).body;
-    };
-    return std.meta.activeTag(body);
-}
-
-fn importedProcedureKind(
-    imported: ImportedProcedureBindingRef,
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
-) std.meta.Tag(ProcedureBindingBody) {
-    const view = dependencyViewByKey(imported.artifact, imports, available_modules, relation_modules) orelse
-        checkedArtifactInvariant("imported direct-call target referenced an unavailable checked module", .{});
-    for (view.exported_procedure_bindings.bindings) |binding| {
-        if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-            return switch (binding.body) {
-                .direct_template => .direct_template,
-                .callable_eval_template => .callable_eval_template,
-                .checked_error => .checked_error,
-            };
-        }
-    }
-    checkedArtifactInvariant("imported direct-call target was not exported by its checked module", .{});
-}
-
 /// The alias-chased builtin nominal of a literal's target type, treating a
 /// still-open flex/rigid variable as not builtin: an open variable's
 /// instantiations are not known yet.
@@ -11608,44 +11468,28 @@ pub const CallableEvalTemplateTable = struct {
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
-/// Record every callable-eval binding that is an exact procedure alias of a
-/// directly callable procedure. Its root is a lookup that resolves to such a
-/// procedure, so calls through it forward to that lookup instead of calling
-/// an evaluated function value. An alias of another alias forwards once that
-/// alias does, so this runs to a fixed point over alias chains.
-fn publishCallableEvalForwarding(
+/// Give each callable-eval template the lookup checking found it forwards to
+/// (`ModuleEnv.BindingResolution.forwarded_lookup`), and make each
+/// callable-eval binding checking resolved to a checked error one.
+fn publishBindingResolutions(
+    env: *const ModuleEnv,
     templates: *CallableEvalTemplateTable,
-    bodies: CheckedBodies,
-    resolved_value_refs: *const ResolvedValueRefTable,
-    roots: *const CompileTimeRootTable,
-    local_module: CheckedModuleArtifactKey,
-    local_procedure_bindings: *const TopLevelProcedureBindingTable,
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
+    bindings: *TopLevelProcedureBindingTable,
 ) void {
-    for (templates.templates.items) |*template| template.forwarded_lookup = null;
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (templates.templates.items) |*template| {
-            if (template.forwarded_lookup != null) continue;
-            const root = roots.root(template.root);
-            if (!compileTimeCallableRootIsProcedureReference(bodies, resolved_value_refs, root)) continue;
-            const ref_id = resolved_value_refs.lookupIdByExpr(root.rootExpr()) orelse
-                checkedArtifactInvariant("checked callable lookup root had no resolved value reference", .{});
-            if (!resolvedValueCanBeCalledDirectly(
-                resolved_value_refs,
-                resolved_value_refs.records[@backingInt(ref_id)].ref,
-                local_module,
-                local_procedure_bindings,
-                templates,
-                imports,
-                available_modules,
-                relation_modules,
-            )) continue;
-            template.forwarded_lookup = root.expr;
-            changed = true;
+    for (templates.templates.items) |*template| {
+        const resolution = env.bindingResolution(template.pattern) orelse
+            checkedArtifactInvariant("a callable-eval binding has no recorded resolution", .{});
+        template.forwarded_lookup = resolution.forwarded_lookup;
+    }
+    for (bindings.bindings.items) |*binding| {
+        const template = switch (binding.body) {
+            .callable_eval_template => |template| templates.get(template),
+            .direct_template, .checked_error => continue,
+        };
+        switch (env.bindingResolution(template.pattern).?.body) {
+            .checked_error => |expr| binding.body = .{ .checked_error = expr },
+            .evaluated => {},
+            .constant, .procedure => checkedArtifactInvariant("a callable-eval binding resolved to no evaluated value", .{}),
         }
     }
 }
@@ -11904,14 +11748,16 @@ pub const ResolvedValueRefTable = struct {
         pub const deserialize = Serde.deserialize;
     };
 
+    /// The module's resolved value references in published ids, translated
+    /// from the value-reference resolution checking recorded
+    /// (`ModuleEnv.value_references`, `retired_exprs` and
+    /// `direct_procedure_calls`).
     pub fn fromModule(
         allocator: Allocator,
-        modules: *const TypedCIR.Modules,
-        module_idx: u32,
+        module: TypedCIR.Module,
         artifact_key: CheckedModuleArtifactKey,
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
-        templates: *const CheckedProcedureTemplateTable,
         hosted_procs: *const HostedProcTable,
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -11919,74 +11765,66 @@ pub const ResolvedValueRefTable = struct {
         selected_hoisted_callables: *const SelectedHoistedCallableTable,
         hoisted_constants: *const HoistedConstTable,
         checked_types: *const CheckedTypePublication,
-        module_index: *const ModuleIndex,
     ) Allocator.Error!ResolvedValueRefTable {
-        const module = modules.module(module_idx);
-        var records = std.ArrayList(ResolvedValueRefRecord).empty;
-        errdefer records.deinit(allocator);
-        var callable_aliases = std.ArrayList(ResolvedValueRefId).empty;
-        defer callable_aliases.deinit(allocator);
-
-        var local_pattern_roles = try LocalPatternRoleIndex.init(allocator, module, module_index);
-        defer local_pattern_roles.deinit(allocator);
+        const env = module.moduleEnvConst();
+        const references = env.value_references.items.items;
 
         var recursive_reference_nodes = collections.DenseMap(u32, void).init(allocator);
         defer recursive_reference_nodes.deinit();
-        for (module.moduleEnvConst().scheme_uses.items.items) |record| {
+        for (env.scheme_uses.items.items) |record| {
             if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_reference)) continue;
             try recursive_reference_nodes.put(record.node_idx, {});
         }
 
-        var node_idx: u32 = 0;
-        while (node_idx < module.nodeCount()) : (node_idx += 1) {
-            const tag = module.nodeTag(@fromBackingInt(@intCast(node_idx)));
-            // Unreached source nodes can still contain unresolved lookups
-            // and need no value reference.
-            if (tag != .expr_var and
-                tag != .expr_external_lookup and
-                tag != .expr_associated_lookup_resolved and
-                tag != .expr_required_lookup) continue;
-
-            const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            if (!module_index.reachesExpr(expr_idx)) continue;
-            var resolved_ref = try categorizeValueRef(
-                allocator,
+        const records = try allocator.alloc(ResolvedValueRefRecord, references.len);
+        var table = ResolvedValueRefTable{ .records = records };
+        errdefer table.deinit(allocator);
+        for (references, records) |reference, *record| {
+            var resolved_ref = publishedValueRef(
                 module,
                 artifact_key,
-                expr_idx,
+                reference,
                 imports,
                 available_artifacts,
-                templates,
                 hosted_procs,
                 platform_required_declarations,
                 platform_required_bindings,
                 top_level_values,
                 selected_hoisted_callables,
                 hoisted_constants,
-                &local_pattern_roles,
             );
-            const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
+            const checked_ty = checked_types.rootForSourceVar(module, module.exprType(reference.expr)) orelse {
                 base.invariant("checked artifact invariant violated: resolved value ref type root was not published", .{});
             };
             try attachUseTypePayload(&resolved_ref, checked_ty);
-
-            const id: ResolvedValueRefId = @fromBackingInt(@intCast(@as(u32, @intCast(records.items.len))));
-            try records.append(allocator, .{
-                .expr = expr_idx,
+            record.* = .{
+                .expr = reference.expr,
                 .ref = resolved_ref,
                 .checked_ty = checked_ty,
                 .scope_depth = 0,
-                .recursive_reference = recursive_reference_nodes.contains(node_idx),
-            });
-            if (resolved_ref == .local_proc and resolved_ref.local_proc.is_alias) {
-                try callable_aliases.append(allocator, id);
-            }
+                .recursive_reference = recursive_reference_nodes.contains(@backingInt(reference.expr)),
+            };
+        }
+        for (references, records) |reference, *record| {
+            if (reference.target != .local_procedure) continue;
+            const alias_target = reference.target.local_procedure.alias_target orelse continue;
+            record.ref.local_proc.alias_target = table.lookupIdByExpr(alias_target) orelse
+                checkedArtifactInvariant("a callable alias target has no resolved lookup", .{});
         }
 
-        var table = ResolvedValueRefTable{ .records = try records.toOwnedSlice(allocator) };
-        errdefer table.deinit(allocator);
         table.retired_exprs = try retiredWords(allocator, module.nodeCount());
-        try publishCallableAliasTargets(allocator, &table, callable_aliases.items);
+        for (env.retired_exprs.items.items) |expr| setRetired(table.retired_exprs, expr);
+
+        const direct_calls = env.direct_procedure_calls.items.items;
+        table.call_direct_targets = try allocator.alloc(CallDirectTarget, direct_calls.len);
+        for (direct_calls, table.call_direct_targets) |call, *target| {
+            const callee = env.store.getExpr(call).e_call.func;
+            target.* = .{
+                .call = call,
+                .target = table.lookupIdByExpr(callee) orelse
+                    checkedArtifactInvariant("a direct procedure call's callee has no resolved lookup", .{}),
+            };
+        }
         return table;
     }
 
@@ -12043,316 +11881,73 @@ pub const ResolvedValueRefTable = struct {
 /// Short name for the resolved checked value table.
 pub const ResolvedValueTable = ResolvedValueRefTable;
 
-fn publishCallableAliasTargets(
-    allocator: Allocator,
-    table: *ResolvedValueRefTable,
-    aliases: []const ResolvedValueRefId,
-) Allocator.Error!void {
-    const records = table.records;
-    var path = std.ArrayList(ResolvedValueRefId).empty;
-    defer path.deinit(allocator);
-    for (aliases) |alias| {
-        if (records[@backingInt(alias)].ref.local_proc.alias_target != null) continue;
-        path.clearRetainingCapacity();
-        var target = alias;
-        while (true) {
-            const ref = records[@backingInt(target)].ref;
-            if (ref != .local_proc or !ref.local_proc.is_alias) break;
-            if (ref.local_proc.alias_target) |completed| {
-                target = completed;
-                break;
-            }
-            if (path.items.len == aliases.len) checkedArtifactInvariant("cyclic callable alias declarations", .{});
-            try path.append(allocator, target);
-            target = table.lookupIdByExpr(ref.local_proc.expr) orelse
-                checkedArtifactInvariant("callable alias RHS has no resolved lookup", .{});
-        }
-        for (path.items) |id| records[@backingInt(id)].ref.local_proc.alias_target = target;
-    }
-}
-
-/// Decide which expressions lowering evaluates as runtime errors because
-/// reference resolution rejected them, and each remaining call's direct
-/// procedure target (`ResolvedValueRefTable.retired_exprs`,
-/// `call_direct_targets`). A use of a rejected binding is retired, and so is
-/// a call whose callee lowering evaluates as a runtime error; a rejection
-/// then propagates through call-to-callee edges and through each callable
-/// binding's root, and a callable binding whose root is retired becomes a
-/// checked error.
-fn publishRetiredExprs(
-    allocator: Allocator,
-    env: *const ModuleEnv,
-    module_index: *const ModuleIndex,
-    refs: *ResolvedValueRefTable,
-    local_module: CheckedModuleArtifactKey,
-    bindings: *TopLevelProcedureBindingTable,
-    templates: *const CallableEvalTemplateTable,
-    roots: *const CompileTimeRootTable,
-    imports: []const PublishImportArtifact,
-    available_modules: []const ImportedModuleView,
-    relation_modules: []const ImportedModuleView,
-) Allocator.Error!void {
-    const store = &env.store;
-    var retired = try std.DynamicBitSetUnmanaged.initEmpty(allocator, module_index.node_kinds.len);
-    defer retired.deinit(allocator);
-    const Runtime = struct {
-        fn isError(node_store: *const can.NodeStore, set: *const std.DynamicBitSetUnmanaged, expr: CIR.Expr.Idx) bool {
-            return set.isSet(@backingInt(expr)) or node_store.getExpr(expr) == .e_runtime_error;
-        }
-    };
-
-    var rejected_binding = false;
-    for (refs.records) |record| {
-        if (record.ref == .platform_required_checked_error) {
-            retired.set(@backingInt(record.expr));
-            rejected_binding = true;
-            continue;
-        }
-        const procedure: ?ProcedureUseTemplate = switch (record.ref) {
-            .top_level_proc, .imported_proc, .promoted_top_level_proc => |proc| proc,
-            .platform_required_proc => |required| required.procedure,
-            .local_param,
-            .local_value,
-            .local_mutable_version,
-            .pattern_binder,
-            .local_proc,
-            .selected_hoisted_const,
-            .top_level_const,
-            .imported_const,
-            .hosted_proc,
-            .platform_required_declaration,
-            .platform_required_checked_error,
-            .platform_required_const,
-            => null,
-        };
-        if (procedure) |proc| {
-            if (procedureUseKind(proc, local_module, bindings, imports, available_modules, relation_modules) == .checked_error) {
-                // The type remains available for diagnostics. Evaluating this
-                // exact value use has no callable target or type relation.
-                retired.set(@backingInt(record.expr));
-                rejected_binding = true;
-            }
-        }
-    }
-
-    var direct_targets = std.ArrayList(CallDirectTarget).empty;
-    defer direct_targets.deinit(allocator);
-    for (module_index.node_kinds, 0..) |kind, raw| {
-        if (kind != .expr) continue;
-        const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
-        const data = store.getExpr(expr);
-        if (data != .e_call) continue;
-        // Evaluating the callee happens before any argument. A checked
-        // error produces neither a callable nor a result type relation.
-        if (Runtime.isError(store, &retired, data.e_call.func)) {
-            retired.set(raw);
-            rejected_binding = true;
-            continue;
-        }
-        const target = directProcedureTargetForCall(refs, data.e_call.func, local_module, bindings, templates, imports, available_modules, relation_modules) orelse continue;
-        try direct_targets.append(allocator, .{ .call = expr, .target = target });
-    }
-
-    if (rejected_binding) {
-        // Propagate terminal callee errors and callable-binding aliases
-        // through explicit edges. Each node becomes an error at most once.
-        var dependents = collections.DenseMap(u32, std.ArrayList(CIR.Expr.Idx)).init(allocator);
-        defer {
-            var lists = dependents.valueIterator();
-            while (lists.next()) |list| list.deinit(allocator);
-            dependents.deinit();
-        }
-        var work = std.ArrayList(CIR.Expr.Idx).empty;
-        defer work.deinit(allocator);
-        for (module_index.node_kinds, 0..) |kind, raw| {
-            if (kind != .expr) continue;
-            const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
-            if (Runtime.isError(store, &retired, expr)) {
-                try work.append(allocator, expr);
-                continue;
-            }
-            const data = store.getExpr(expr);
-            if (data == .e_call) {
-                const entry = try dependents.getOrPut(@backingInt(data.e_call.func));
-                if (!entry.found_existing) entry.value_ptr.* = .empty;
-                try entry.value_ptr.append(allocator, expr);
-            }
-        }
-        for (refs.records) |record| {
-            const procedure = switch (record.ref) {
-                .top_level_proc, .promoted_top_level_proc => |proc| proc,
-                .local_param,
-                .local_value,
-                .local_mutable_version,
-                .pattern_binder,
-                .local_proc,
-                .selected_hoisted_const,
-                .top_level_const,
-                .imported_const,
-                .imported_proc,
-                .hosted_proc,
-                .platform_required_declaration,
-                .platform_required_checked_error,
-                .platform_required_const,
-                .platform_required_proc,
-                => continue,
-            };
-            const target = switch (procedure.binding) {
-                .top_level => |target| target,
-                .imported, .hosted, .platform_required => continue,
-            };
-            if (!target.artifact.eql(local_module.digest())) continue;
-            const binding = bindings.get(target.binding);
-            if (binding.body != .callable_eval_template) continue;
-            const root = roots.root(templates.get(binding.body.callable_eval_template).root);
-            const evaluated = root.evaluatedExpr() orelse continue;
-            const entry = try dependents.getOrPut(@backingInt(evaluated));
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.append(allocator, record.expr);
-        }
-        while (work.pop()) |failed| {
-            const waiting = dependents.get(@backingInt(failed)) orelse continue;
-            for (waiting.items) |dependent| {
-                if (Runtime.isError(store, &retired, dependent)) continue;
-                retired.set(@backingInt(dependent));
-                try work.append(allocator, dependent);
-            }
-        }
-        for (bindings.bindings.items) |*binding| {
-            if (binding.body != .callable_eval_template) continue;
-            const root = roots.root(templates.get(binding.body.callable_eval_template).root);
-            const evaluated = root.evaluatedExpr() orelse continue;
-            if (Runtime.isError(store, &retired, evaluated)) {
-                binding.body = .{ .checked_error = evaluated };
-            }
-        }
-    }
-
-    const retired_exprs = try ResolvedValueRefTable.retiredWords(allocator, module_index.node_kinds.len);
-    errdefer allocator.free(retired_exprs);
-    var retired_iterator = retired.iterator(.{});
-    while (retired_iterator.next()) |raw| ResolvedValueRefTable.setRetired(retired_exprs, @fromBackingInt(@intCast(raw)));
-    var kept_targets = std.ArrayList(CallDirectTarget).empty;
-    errdefer kept_targets.deinit(allocator);
-    for (direct_targets.items) |entry| {
-        if (!retired.isSet(@backingInt(entry.call))) try kept_targets.append(allocator, entry);
-    }
-    const call_direct_targets = try kept_targets.toOwnedSlice(allocator);
-    allocator.free(refs.retired_exprs);
-    refs.retired_exprs = retired_exprs;
-    allocator.free(refs.call_direct_targets);
-    refs.call_direct_targets = call_direct_targets;
-}
-
-fn categorizeValueRef(
-    _: Allocator,
+/// A recorded value reference's target in published ids.
+fn publishedValueRef(
     module: TypedCIR.Module,
     artifact_key: CheckedModuleArtifactKey,
-    expr_idx: CIR.Expr.Idx,
+    reference: ModuleEnv.ValueReference,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    _: *const CheckedProcedureTemplateTable,
     hosted_procs: *const HostedProcTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     top_level_values: *const TopLevelValueTable,
     selected_hoisted_callables: *const SelectedHoistedCallableTable,
     hoisted_constants: *const HoistedConstTable,
-    local_pattern_roles: *const LocalPatternRoleIndex,
-) Allocator.Error!ResolvedValueRef {
-    const expr = module.expr(expr_idx);
-    return switch (expr.data) {
-        .e_lookup_local => |local| categorizeLocalValueRef(
+) ResolvedValueRef {
+    return switch (reference.target) {
+        .local_param => |binder| .{ .local_param = .{ .binder = binder } },
+        .local_value => |binder| .{ .local_value = .{ .binder = binder } },
+        .local_mutable_version => |binder| .{ .local_mutable_version = .{ .binder = binder } },
+        .pattern_binder => |binder| .{ .pattern_binder = .{ .binder = binder } },
+        .local_procedure => |procedure| .{ .local_proc = .{
+            .binder = procedure.binder,
+            .expr = procedure.expr,
+            .is_alias = procedure.alias_target != null,
+        } },
+        .top_level => |def| categorizeTopLevelValueRef(
             module,
             artifact_key,
-            local.pattern_idx,
+            top_level_values.lookupByDef(def) orelse checkedArtifactInvariant("a top-level lookup target is not a top-level value", .{}),
             hosted_procs,
-            top_level_values,
-            selected_hoisted_callables,
-            hoisted_constants,
-            local_pattern_roles,
         ),
-        .e_lookup_external => |external| categorizeImportedValueRef(
-            module,
-            external.module_idx,
-            external.target_node_idx,
-            imports,
+        .hoisted_procedure => |pattern| .{ .top_level_proc = .{
+            .binding = .{ .top_level = .{
+                .artifact = artifact_key.digest(),
+                .binding = selected_hoisted_callables.lookupByPattern(pattern) orelse
+                    checkedArtifactInvariant("a hoisted procedure lookup has no published binding", .{}),
+            } },
+            .runtime_result_provenance = null,
+        } },
+        .promoted_procedure => |pattern| .{ .promoted_top_level_proc = .{
+            .binding = .{ .top_level = .{
+                .artifact = artifact_key.digest(),
+                .binding = selected_hoisted_callables.lookupPromotedByPattern(pattern) orelse
+                    checkedArtifactInvariant("a promoted procedure lookup has no published binding", .{}),
+            } },
+            .runtime_result_provenance = null,
+        } },
+        .hoisted_constant => |pattern| selectedHoistedConstUse(
+            hoisted_constants.lookupByPattern(pattern) orelse
+                checkedArtifactInvariant("a hoisted constant lookup has no published constant", .{}),
+            .{ .binder = pattern },
         ),
-        .e_lookup_associated_resolved => |resolved| categorizeResolvedAssociatedValueRef(
+        .imported => blk: {
+            const imported = module.expr(reference.expr).data.e_lookup_external;
+            break :blk categorizeImportedValueRef(module, imported.module_idx, imported.target_node_idx, imports);
+        },
+        .associated => categorizeResolvedAssociatedValueRef(
             module,
-            artifact_key,
-            resolved.module_identity,
-            resolved.target_def_idx,
+            module.expr(reference.expr).data.e_lookup_associated_resolved.module_identity,
+            module.expr(reference.expr).data.e_lookup_associated_resolved.target_def_idx,
             imports,
             available_artifacts,
-            hosted_procs,
-            top_level_values,
         ),
-        .e_lookup_associated_local, .e_lookup_associated => checkedArtifactInvariant("unresolved associated lookup reached value-ref categorization", .{}),
-        .e_lookup_required => |required| categorizeRequiredValueRef(
-            required.requires_idx.toU32(),
+        .required => |requires_idx| categorizeRequiredValueRef(
+            requires_idx,
             platform_required_declarations,
             platform_required_bindings,
         ),
-        .e_num,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_num_from_numeral,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_str_segment,
-        .e_str,
-        .e_bytes_literal,
-        .e_list,
-        .e_empty_list,
-        .e_tuple,
-        .e_match,
-        .e_if,
-        .e_call,
-        .e_record,
-        .e_empty_record,
-        .e_block,
-        .e_tag,
-        .e_nominal,
-        .e_nominal_external,
-        .e_zero_argument_tag,
-        .e_closure,
-        .e_lambda,
-        .e_binop,
-        .e_unary_minus,
-        .e_field_access,
-        .e_method_call,
-        .e_dispatch_call,
-        .e_interpolation,
-        .e_structural_eq,
-        .e_structural_hash,
-        .e_method_eq,
-        .e_type_method_call,
-        .e_type_dispatch_call,
-        .e_tuple_access,
-        .e_runtime_error,
-        .e_crash,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_ellipsis,
-        .e_anno_only,
-        .e_derived_method,
-        .e_break,
-        .e_return,
-        .e_for,
-        .e_hosted_lambda,
-        .e_run_low_level,
-        => {
-            base.invariant(
-                "checked artifact invariant violated: expression {d} is not a value reference",
-                .{@backingInt(expr_idx)},
-            );
-        },
-        .e_deferred_import_ref => checkedArtifactInvariant("deferred import reference reached checked artifact publication", .{}),
     };
 }
 
@@ -12392,82 +11987,6 @@ fn attachUseTypePayload(
         .platform_required_checked_error,
         => {},
     }
-}
-
-fn categorizeLocalValueRef(
-    module: TypedCIR.Module,
-    artifact_key: CheckedModuleArtifactKey,
-    pattern: CIR.Pattern.Idx,
-    hosted_procs: *const HostedProcTable,
-    top_level_values: *const TopLevelValueTable,
-    selected_hoisted_callables: *const SelectedHoistedCallableTable,
-    hoisted_constants: *const HoistedConstTable,
-    local_pattern_roles: *const LocalPatternRoleIndex,
-) ResolvedValueRef {
-    if (!local_pattern_roles.module_index.reachesPattern(pattern)) {
-        base.invariant(
-            "checked artifact invariant violated: local lookup pattern {d} is not reached by the checked bodies",
-            .{@backingInt(pattern)},
-        );
-    }
-
-    if (top_level_values.lookupByPattern(pattern)) |entry| {
-        if (entry.pattern != pattern) {
-            base.invariant(
-                "checked artifact invariant violated: top-level pattern index {d} resolved to mismatched entry",
-                .{@backingInt(pattern)},
-            );
-        }
-
-        return categorizeTopLevelValueRef(module, artifact_key, entry, hosted_procs);
-    }
-
-    const binder = pattern;
-
-    if (selected_hoisted_callables.lookupByPattern(pattern)) |binding| {
-        return .{ .top_level_proc = .{
-            .binding = .{ .top_level = .{
-                .artifact = artifact_key.digest(),
-                .binding = binding,
-            } },
-            .runtime_result_provenance = null,
-        } };
-    }
-
-    if (selected_hoisted_callables.lookupPromotedByPattern(pattern)) |binding| {
-        return .{ .promoted_top_level_proc = .{
-            .binding = .{ .top_level = .{
-                .artifact = artifact_key.digest(),
-                .binding = binding,
-            } },
-            .runtime_result_provenance = null,
-        } };
-    }
-
-    if (hoisted_constants.lookupByPattern(pattern)) |hoisted| {
-        return selectedHoistedConstUse(hoisted, .{ .binder = binder });
-    }
-
-    if (local_pattern_roles.isLambdaArg(pattern)) {
-        return .{ .local_param = .{ .binder = binder } };
-    }
-
-    if (local_pattern_roles.statementRole(pattern)) |role| {
-        switch (role) {
-            .mutable_version => return .{ .local_mutable_version = .{ .binder = binder } },
-            .local_proc => |proc| return .{ .local_proc = .{ .binder = binder, .expr = proc.expr, .is_alias = proc.is_alias } },
-            .local_value => return .{ .local_value = .{ .binder = binder } },
-        }
-    }
-
-    if (patternIsBinder(module, pattern)) {
-        return .{ .pattern_binder = .{ .binder = binder } };
-    }
-
-    base.invariant(
-        "checked artifact invariant violated: local lookup pattern {d} has no categorized binding",
-        .{@backingInt(pattern)},
-    );
 }
 
 fn categorizeTopLevelValueRef(
@@ -12560,20 +12079,11 @@ fn categorizeImportedValueRef(
 
 fn categorizeResolvedAssociatedValueRef(
     module: TypedCIR.Module,
-    artifact_key: CheckedModuleArtifactKey,
     module_identity: base.ModuleIdentity.Idx,
     target_def: CIR.Def.Idx,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    hosted_procs: *const HostedProcTable,
-    top_level_values: *const TopLevelValueTable,
 ) ResolvedValueRef {
-    if (module_identity == module.moduleEnvConst().selfModuleIdentity()) {
-        const entry = top_level_values.lookupByDef(target_def) orelse
-            return checkedArtifactInvariant("resolved local associated lookup target is not a top-level value", .{});
-        return categorizeTopLevelValueRef(module, artifact_key, entry, hosted_procs);
-    }
-
     const origin_hash = module.moduleEnvConst().moduleIdentityHash(module_identity);
     const target_view = importedViewForOriginHash(imports, available_artifacts, origin_hash) orelse
         checkedArtifactInvariant("resolved associated lookup target has no available checked artifact", .{});
@@ -12769,180 +12279,12 @@ fn platformBindingForRequiredIndex(table: *const PlatformRequiredBindingTable, r
     return table.lookupByRequiredIndex(requires_idx);
 }
 
-const LocalPatternStatementRole = union(enum) {
-    mutable_version,
-    local_proc: struct { expr: CIR.Expr.Idx, is_alias: bool },
-    local_value,
-};
-
-const LocalPatternRoleIndex = struct {
-    module_index: *const ModuleIndex,
-    lambda_args: []bool = &.{},
-    statement_roles: []?LocalPatternStatementRole = &.{},
-
-    fn init(
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        module_index: *const ModuleIndex,
-    ) Allocator.Error!LocalPatternRoleIndex {
-        const node_count = module.nodeCount();
-        const lambda_args = try allocator.alloc(bool, node_count);
-        errdefer allocator.free(lambda_args);
-        const statement_roles = try allocator.alloc(?LocalPatternStatementRole, node_count);
-        errdefer allocator.free(statement_roles);
-        @memset(lambda_args, false);
-        @memset(statement_roles, null);
-
-        var node_idx: u32 = 0;
-        while (node_idx < node_count) : (node_idx += 1) {
-            const node: CIR.Node.Idx = @fromBackingInt(@intCast(node_idx));
-            const node_tag = module.nodeTag(node);
-            if (node_tag == .statement_decl) {
-                const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(node_idx));
-                if (!module_index.reachesStatement(statement)) continue;
-                const statement_data = module.getStatement(statement);
-                if (statement_data != .s_decl) unreachable; // getStatement decodes a statement_decl node as s_decl
-                const decl = statement_data.s_decl;
-                const is_alias = module_index.isSchemeAlias(decl.pattern);
-                const role: LocalPatternStatementRole = if (is_alias or isLocalProcExpr(module, decl.expr))
-                    .{ .local_proc = .{
-                        .expr = decl.expr,
-                        .is_alias = is_alias,
-                    } }
-                else
-                    .local_value;
-                putStatementRole(statement_roles, node_count, decl.pattern, role);
-            } else if (node_tag == .statement_var) {
-                const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(node_idx));
-                if (!module_index.reachesStatement(statement)) continue;
-                const statement_data = module.getStatement(statement);
-                if (statement_data != .s_var) unreachable; // getStatement decodes a statement_var node as s_var
-                putStatementRole(statement_roles, node_count, statement_data.s_var.pattern_idx, .mutable_version);
-            } else if (node_tag == .statement_var_uninitialized) {
-                const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(node_idx));
-                if (!module_index.reachesStatement(statement)) continue;
-                const statement_data = module.getStatement(statement);
-                if (statement_data != .s_var_uninitialized) unreachable; // getStatement decodes a statement_var_uninitialized node as s_var_uninitialized
-                putStatementRole(statement_roles, node_count, statement_data.s_var_uninitialized.pattern_idx, .mutable_version);
-            } else if (node_tag == .expr_lambda) {
-                const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-                if (!module_index.reachesExpr(expr_idx)) continue;
-                const expr = module.expr(@fromBackingInt(@intCast(node_idx)));
-                if (expr.data != .e_lambda) unreachable; // module.expr decodes an expr_lambda node as e_lambda
-                for (module.slicePatterns(expr.data.e_lambda.args)) |arg| {
-                    const raw_pattern = @backingInt(arg);
-                    if (raw_pattern >= node_count) {
-                        checkedArtifactInvariant("checked artifact invariant violated: lambda argument pattern is out of range", .{});
-                    }
-                    lambda_args[raw_pattern] = true;
-                }
-            }
-        }
-
-        verifyLocalPatternRoles(lambda_args, statement_roles);
-
-        return .{
-            .module_index = module_index,
-            .lambda_args = lambda_args,
-            .statement_roles = statement_roles,
-        };
-    }
-
-    fn putStatementRole(
-        statement_roles: []?LocalPatternStatementRole,
-        node_count: usize,
-        pattern: CIR.Pattern.Idx,
-        role: LocalPatternStatementRole,
-    ) void {
-        const raw_pattern = @backingInt(pattern);
-        if (raw_pattern >= node_count) {
-            checkedArtifactInvariant("checked artifact invariant violated: local statement pattern is out of range", .{});
-        }
-        if (statement_roles[raw_pattern]) |existing| {
-            if (!localPatternStatementRoleEql(existing, role)) {
-                checkedArtifactInvariant("checked artifact invariant violated: local statement pattern has conflicting roles", .{});
-            }
-            return;
-        }
-        statement_roles[raw_pattern] = role;
-    }
-
-    fn localPatternStatementRoleEql(a: LocalPatternStatementRole, b: LocalPatternStatementRole) bool {
-        if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
-        return switch (a) {
-            .mutable_version,
-            .local_value,
-            => true,
-            .local_proc => |a_proc| std.meta.eql(a_proc, b.local_proc),
-        };
-    }
-
-    fn verifyLocalPatternRoles(
-        lambda_args: []const bool,
-        statement_roles: []const ?LocalPatternStatementRole,
-    ) void {
-        if (builtin.mode != .debug) return;
-
-        for (lambda_args, statement_roles, 0..) |is_lambda_arg, maybe_statement_role, raw_pattern| {
-            if (is_lambda_arg and maybe_statement_role != null) {
-                base.invariant(
-                    "checked artifact invariant violated: local pattern {d} is both a lambda argument and statement binding",
-                    .{raw_pattern},
-                );
-            }
-        }
-    }
-
-    fn isLambdaArg(self: *const LocalPatternRoleIndex, pattern: CIR.Pattern.Idx) bool {
-        const raw = @backingInt(pattern);
-        if (raw >= self.lambda_args.len) {
-            checkedArtifactInvariant("checked artifact invariant violated: lambda argument lookup pattern is out of range", .{});
-        }
-        return self.lambda_args[raw];
-    }
-
-    fn statementRole(self: *const LocalPatternRoleIndex, pattern: CIR.Pattern.Idx) ?LocalPatternStatementRole {
-        const raw = @backingInt(pattern);
-        if (raw >= self.statement_roles.len) {
-            checkedArtifactInvariant("checked artifact invariant violated: local statement lookup pattern is out of range", .{});
-        }
-        return self.statement_roles[raw];
-    }
-
-    fn deinit(self: *LocalPatternRoleIndex, allocator: Allocator) void {
-        allocator.free(self.statement_roles);
-        allocator.free(self.lambda_args);
-    }
-};
-
-fn patternIsBinder(module: TypedCIR.Module, pattern: CIR.Pattern.Idx) bool {
-    const raw = @backingInt(pattern);
-    if (raw >= module.nodeCount()) {
-        checkedArtifactInvariant("checked artifact invariant violated: binder lookup pattern is out of range", .{});
-    }
-    const tag = module.nodeTag(@fromBackingInt(@intCast(raw)));
-    return tag == .pattern_identifier or
-        tag == .pattern_var_identifier or
-        tag == .pattern_as or
-        tag == .pattern_applied_tag or
-        tag == .pattern_nominal or
-        tag == .pattern_nominal_external or
-        tag == .pattern_record_destructure or
-        tag == .pattern_list or
-        tag == .pattern_tuple;
-}
-
 /// Whether a pattern introduces a name: an assign, var-assign, or as pattern.
 fn patternBindsName(env: *const ModuleEnv, pattern: CIR.Pattern.Idx) bool {
     return switch (env.store.getPattern(pattern)) {
         .assign, .var_assign, .as => true,
         .applied_tag, .nominal, .nominal_external, .record_destructure, .list, .tuple, .num_literal, .num_from_numeral_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .str_interpolation, .underscore, .runtime_error, .deferred_import_ref => false,
     };
-}
-
-fn isLocalProcExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
-    const expr = module.expr(expr_idx);
-    return expr.data == .e_lambda or expr.data == .e_closure;
 }
 
 /// A generalized local function scope collected while walking template
@@ -26470,9 +25812,6 @@ pub const CompileTimeRootTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         value_binding_defs: []const CIR.Def.Idx,
-        selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
-        selected_hoisted_indices: []const u32,
-        explicit_roots: []const ExplicitRootRequestInput,
         checked_types: *CheckedTypePublication,
         module_index: *const ModuleIndex,
         procedure_templates: *const CheckedProcedureTemplateTable,
@@ -26491,19 +25830,12 @@ pub const CompileTimeRootTable = struct {
         // conversion root after dispatch evidence is finalized.
         const module_env = module.moduleEnvConst();
 
-        for (explicit_roots) |explicit| {
-            if (explicit.kind != .repl_expr) continue;
-            const expr_idx = switch (explicit.source) {
-                .expr => |expr| expr,
-                .def, .statement, .required_binding, .hoisted, .literal => checkedArtifactInvariant(
-                    "compile-time REPL root did not name its checked expression body",
-                    .{},
-                ),
-            };
+        for (module_env.requested_compile_time_roots.items.items) |requested_root| {
+            const expr_idx = requested_root.body;
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .repl_expr,
-                .source = explicit.source,
+                .source = .{ .expr = expr_idx },
                 .pattern = null,
                 .expr = reachedRootExpr(module_index, expr_idx),
                 .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx)),
@@ -26544,7 +25876,7 @@ pub const CompileTimeRootTable = struct {
             }
         }
 
-        for (selected_hoisted_roots, selected_hoisted_indices) |selected, selected_index| {
+        for (module_env.selected_hoisted_roots.items.items, 0..) |selected, selected_index| {
             const source_ty = if (selected.pattern) |pattern|
                 ModuleEnv.varFrom(pattern)
             else
@@ -26567,7 +25899,7 @@ pub const CompileTimeRootTable = struct {
                 .module_idx = module.moduleIndex(),
                 .kind = kind,
                 .source = .{ .hoisted = .{
-                    .index = selected_index,
+                    .index = @intCast(selected_index),
                     .expr = selected.expr,
                 } },
                 .source_pattern = selected.pattern,
@@ -28642,14 +27974,32 @@ fn moduleExhaustivenessSites(
         }
     }
 
-    // The first compile-time root, in root order, whose evaluation replaces
-    // each check's source.
+    // The request of each root of the table that has one. A root with no
+    // request (its checked type is not context-free) is never evaluated on
+    // its own: every reader evaluates its body in place, so it replaces no
+    // check's source.
+    const root_table = owner.compile_time_roots.roots;
+    const root_requests_by_position = try allocator.alloc(?RootRequest, root_table.len);
+    defer allocator.free(root_requests_by_position);
+    @memset(root_requests_by_position, null);
+    for (root_requests.requests) |request| {
+        if (request.abi != .compile_time) continue;
+        const root_id = request.compile_time_root orelse continue;
+        const position = owner.compile_time_roots.position(root_id) orelse continue;
+        root_requests_by_position[position] = request;
+    }
+
+    // The first requested compile-time root, in root order, whose evaluation
+    // replaces each check's source.
     const replacing_roots = try allocator.alloc(?CompileTimeRoot, obligations.len);
     defer allocator.free(replacing_roots);
     @memset(replacing_roots, null);
+    const replacing_requests = try allocator.alloc(RootRequest, obligations.len);
+    defer allocator.free(replacing_requests);
     var found = std.ArrayList(CheckedExhaustivenessSiteId).empty;
     defer found.deinit(allocator);
-    for (owner.compile_time_roots.roots) |root| {
+    for (root_table, root_requests_by_position) |root, maybe_request| {
+        const request = maybe_request orelse continue;
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
         // A literal conversion converts literal data and contains no site.
         if (root.literalConversionKind() != null) continue;
@@ -28673,12 +28023,15 @@ fn moduleExhaustivenessSites(
         } else try collectExhaustivenessSites(allocator, bodies, root.rootExpr(), &found);
         for (found.items) |site| {
             const slot = &replacing_roots[@backingInt(site)];
-            if (slot.* == null) slot.* = root;
+            if (slot.* == null) {
+                slot.* = root;
+                replacing_requests[@backingInt(site)] = request;
+            }
         }
     }
 
     const owner_artifact = owner.key.digest();
-    for (obligations, sites, owner_templates, replacing_roots, 0..) |obligation, *site, owner_template_id, replacing_root, index| {
+    for (obligations, sites, owner_templates, replacing_roots, replacing_requests, 0..) |obligation, *site, owner_template_id, replacing_root, replacing_request, index| {
         const id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(index));
         const kind: CheckedComptimeSiteKind = switch (obligation.source) {
             .match_expr => .match,
@@ -28732,12 +28085,9 @@ fn moduleExhaustivenessSites(
             .empirical => .compile_time_only,
             .static => .runtime_reachable,
         };
-        const requires_pairing = if (replacing_root) |root| blk: {
-            for (root_requests.requests) |request| {
-                if (request.compile_time_root == root.id) break :blk request.requires_pairing;
-            }
-            break :blk false;
-        } else if (owner_template) |template| blk: {
+        const requires_pairing = if (replacing_root != null)
+            replacing_request.requires_pairing
+        else if (owner_template) |template| blk: {
             const template_index = reachability.localTemplateIndex(template).?;
             break :blk reachability.pairing_templates[template_index] and !reachability.runtime_templates[template_index];
         } else false;
@@ -32934,7 +32284,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 176);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 175);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -33056,7 +32406,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 123;
+    const serialized_layout_version: u32 = 124;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -33108,15 +32458,6 @@ pub const CheckedModuleArtifact = struct {
             return error.BuiltinArtifactVersionMismatch;
         }
         return blob[0..serialized_len];
-    }
-
-    /// The inference output a baked artifact blob (`builtin_compiler`'s)
-    /// holds, aliasing the blob.
-    pub fn bakedInference(blob: []const u8) error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch, CorruptArtifact }!InferenceOutput {
-        const serialized_bytes = try splitVersionTrailer(blob);
-        const serialized: *const Serialized = @ptrCast(@alignCast(serialized_bytes.ptr));
-        try serialized.validate(serialized_bytes.len);
-        return serialized.inference.deserialize(@intFromPtr(serialized));
     }
 
     pub fn deinit(self: *CheckedModuleArtifact, allocator: Allocator) void {
@@ -35048,7 +34389,6 @@ pub fn loweringViewWithRelations(
 pub const CheckedModuleKeyInputs = struct {
     imports: []const PublishImportArtifact = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
-    explicit_roots: []const ExplicitRootRequestInput = &.{},
     validation: can.Can.Validation = .checking,
 };
 
@@ -35066,7 +34406,6 @@ pub fn checkedModuleKeyFromModuleEnv(
         module_env,
         inputs.imports,
         inputs.platform_requirement_context,
-        inputs.explicit_roots,
         inputs.validation,
     );
     defer checking_context_identity.deinit(allocator);
@@ -35089,7 +34428,6 @@ pub fn inferenceKeyFromModuleEnv(
     module_env: *const ModuleEnv,
     scope_hash: [32]u8,
     platform_requirement_owner: ?u32,
-    explicit_roots: []const ExplicitRootRequestInput,
     validation: can.Can.Validation,
     source_pin_validation: [32]u8,
     missing_public_types: []const []const u8,
@@ -35107,8 +34445,6 @@ pub fn inferenceKeyFromModuleEnv(
     } else hasher.update(&.{0});
     hashByteSlice(&hasher, @tagName(validation));
     hasher.update(&source_pin_validation);
-    hashU32(&hasher, @intCast(explicit_roots.len));
-    for (explicit_roots) |root| hashExplicitRootRequestInput(&hasher, root);
     const imports = module_env.imports.imports.items.items;
     hashU32(&hasher, @intCast(imports.len));
     for (imports, 0..) |name, i| {
@@ -35222,7 +34558,6 @@ pub fn publishFromTypedModule(
         module_env,
         inputs.imports,
         inputs.platform_requirement_context,
-        inputs.explicit_roots,
         inputs.validation,
     );
     errdefer checking_context_identity.deinit(allocator);
@@ -35249,11 +34584,7 @@ pub fn publishFromTypedModule(
 
     const promoted_local_procedures = module_env.promoted_local_procedures.items.items;
     const requirement_solutions = module_env.platform_requirement_solutions.items.items;
-    const selected_hoisted_indices = try selectHoistedRootIndices(allocator, module_env, inputs.hoisted_roots);
-    defer allocator.free(selected_hoisted_indices);
-    const selected_hoisted_roots = try allocator.alloc(hoist_roots.SelectedHoistedRoot, selected_hoisted_indices.len);
-    defer allocator.free(selected_hoisted_roots);
-    for (selected_hoisted_roots, selected_hoisted_indices) |*root, index| root.* = module_env.selected_hoisted_roots.items.items[index];
+    const selected_hoisted_roots = module_env.selected_hoisted_roots.items.items;
     const analyses = try BodyAnalyses.create(allocator, inputs.io, module_env, promoted_local_procedures);
     var analyses_owned = true;
     errdefer if (analyses_owned) analyses.destroy();
@@ -35261,6 +34592,7 @@ pub fn publishFromTypedModule(
     const module_analyses = try ModuleAnalyses.create(allocator, inputs.io, null);
     var module_analyses_owned = true;
     errdefer if (module_analyses_owned) module_analyses.destroy();
+    try module_analyses.attachExplicitRoots(inputs.explicit_roots);
     // Publication reads the nominal representations of the types of every
     // module it imports or resolves against.
     for (inputs.imports) |import| _ = try import.view.checked_types.interfaceCapabilities();
@@ -35355,9 +34687,6 @@ pub fn publishFromTypedModule(
         allocator,
         module,
         value_binding_defs,
-        selected_hoisted_roots,
-        selected_hoisted_indices,
-        inputs.explicit_roots,
         &checked_type_publication,
         module_index,
         &checked_procedure_templates,
@@ -35426,12 +34755,10 @@ pub fn publishFromTypedModule(
 
     var resolved_value_refs = try ResolvedValueRefTable.fromModule(
         allocator,
-        modules,
-        module_idx,
+        module,
         artifact_key,
         inputs.imports,
         inputs.available_artifacts,
-        &checked_procedure_templates,
         &hosted_procs,
         &platform_required_declarations,
         &platform_required_bindings,
@@ -35439,35 +34766,11 @@ pub fn publishFromTypedModule(
         &selected_hoisted_callables,
         &hoisted_constants,
         &checked_type_publication,
-        module_index,
     );
     errdefer resolved_value_refs.deinit(allocator);
+    publishBindingResolutions(module_env, &callable_eval_templates, &top_level_procedure_bindings);
     var resolved_tables = body_tables;
     resolved_tables.refs = &resolved_value_refs;
-    publishCallableEvalForwarding(
-        &callable_eval_templates,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
-        &resolved_value_refs,
-        &compile_time_roots,
-        artifact_key,
-        &top_level_procedure_bindings,
-        inputs.imports,
-        inputs.available_artifacts,
-        &.{},
-    );
-    try publishRetiredExprs(
-        allocator,
-        module_env,
-        module_index,
-        &resolved_value_refs,
-        artifact_key,
-        &top_level_procedure_bindings,
-        &callable_eval_templates,
-        &compile_time_roots,
-        inputs.imports,
-        inputs.available_artifacts,
-        &.{},
-    );
     resolved_tables.plans = &static_dispatch_plans;
     var ordinary_diagnostics = try body_analyses.diagnosticErrors(
         allocator,
@@ -35733,7 +35036,6 @@ fn expectProvidedExportKind(
     var artifact = try publishFromTypedModule(allocator, &modules, 1, .{
         .io = std.testing.io,
         .module_env_storage = .{ .checked_source = test_env.module_env },
-        .hoisted_roots = .none,
         .imports = &imports,
         .compile_time_finalizer = .{ .finalize = &NoFinalization.finalize },
         .evaluation_phase = .post_frontend,
@@ -36819,11 +36121,6 @@ test "CheckingContextIdentity serialize/deserialize round-trip (slices + optiona
     defer gpa.free(imports);
     artifact_serialize.poisonSlice(ImportIdentity, imports, 0x5A);
     artifact_serialize.zeroSlicePadding(ImportIdentity, imports);
-    const roots = try gpa.alloc(ExplicitRootRequestInput, 3);
-    defer gpa.free(roots);
-    artifact_serialize.poisonSlice(ExplicitRootRequestInput, roots, 0x3C);
-    artifact_serialize.zeroSlicePadding(ExplicitRootRequestInput, roots);
-
     var prc: PlatformRequirementContextKey = undefined;
     @memset(std.mem.asBytes(&prc), 0x77);
     // Canonicalize padding to match the deterministic serializer.
@@ -36831,7 +36128,6 @@ test "CheckingContextIdentity serialize/deserialize round-trip (slices + optiona
 
     const ident = CheckingContextIdentity{
         .imports = imports,
-        .explicit_roots = roots,
         .platform_requirement_context = prc, // present
         .platform_app_relation = null, // absent
     };
@@ -36839,7 +36135,6 @@ test "CheckingContextIdentity serialize/deserialize round-trip (slices + optiona
     const rt = try artifact_serialize.roundTripForTest(gpa, CheckingContextIdentity, &ident);
     defer gpa.free(rt.buffer);
     try artifact_serialize.expectSlicesByteEqual(ImportIdentity, ident.imports, rt.loaded.imports);
-    try artifact_serialize.expectSlicesByteEqual(ExplicitRootRequestInput, ident.explicit_roots, rt.loaded.explicit_roots);
     try std.testing.expect(rt.loaded.platform_requirement_context != null);
     try std.testing.expectEqualSlices(u8, std.mem.asBytes(&prc), std.mem.asBytes(&rt.loaded.platform_requirement_context.?));
     try std.testing.expectEqual(@as(?PlatformAppRelationKey, null), rt.loaded.platform_app_relation);
@@ -37278,8 +36573,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x57, 0xB2, 0xE9, 0x6F, 0x77, 0xD5, 0x1F, 0x5C, 0x03, 0x77, 0x85, 0x86, 0xD4, 0xAE, 0x6C, 0xD2,
-        0x93, 0x8B, 0xEC, 0x14, 0x82, 0x88, 0xE0, 0x52, 0x5C, 0x41, 0xFB, 0x6C, 0x07, 0x59, 0xEE, 0xA4,
+        0x8C, 0xED, 0x4A, 0x0C, 0xD5, 0x7F, 0x92, 0x46, 0x37, 0x65, 0xE7, 0x6F, 0xD6, 0x0B, 0x3B, 0x6F,
+        0x24, 0x9D, 0x5C, 0x84, 0x3F, 0xB5, 0xE6, 0xF4, 0x0C, 0xAE, 0xAF, 0xB8, 0x90, 0xDD, 0x28, 0xF3,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -37411,7 +36706,6 @@ test "publishing a module releases each resource exactly once under allocation f
             var artifact = try publishFromTypedModule(failing, typed_modules, 1, .{
                 .io = std.testing.io,
                 .module_env_storage = .{ .checked_source = module_env },
-                .hoisted_roots = .none,
                 .imports = direct,
                 .available_artifacts = views,
                 .compile_time_finalizer = finalize,

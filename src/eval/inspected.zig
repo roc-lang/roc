@@ -17,6 +17,7 @@ const reporting = @import("reporting");
 
 const builtin_static = can.BuiltinStatic;
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
+const BuiltinModules = @import("BuiltinModules.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const RuntimeHostEnv = @import("runtime_host.zig");
@@ -1377,22 +1378,9 @@ pub fn parseProgram(
             };
             explicit_roots = explicit_root_storage[0..];
         },
-        .comptime_repl => {
-            const root_name = evalRootName(source_kind, false);
-            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse base.invariant("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
-            const root_def = main_checked.module_env.store.getDef(root_def_idx);
-            if (main_checked.module_env.store.getExpr(root_def.expr) != .e_runtime_error) {
-                const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse base.invariant("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
-                explicit_root_storage[0] = .{
-                    .kind = .repl_expr,
-                    .source = .{ .expr = body_expr },
-                    .abi = .compile_time,
-                    .exposure = .private,
-                };
-                explicit_roots = explicit_root_storage[0..];
-            }
-        },
-        .published_only => {},
+        // A compile-time REPL root is a candidate checking recorded
+        // (`ModuleEnv.requested_compile_time_roots`).
+        .comptime_repl, .published_only => {},
     }
 
     var inference_arena = base.SingleThreadArena.init(allocator);
@@ -1408,10 +1396,6 @@ pub fn parseProgram(
             .imports = publish_imports,
             .available_artifacts = available_artifacts,
             .explicit_roots = explicit_roots,
-            .hoisted_roots = switch (options.roots) {
-                .eval, .inspected, .comptime_repl => .top_level,
-                .published_only => .selected,
-            },
             .compile_time_finalizer = if (options.ctfe_options) |ctfe_options|
                 CompileTimeFinalization.finalizerWithOptions(ctfe_options)
             else
@@ -1917,18 +1901,10 @@ fn publishImportArtifacts(
             .view = check.CheckedArtifact.importedView(ppb.artifact),
         });
     } else {
-        const builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
-            allocator,
-            typed_cir_modules,
-            1,
-            .{
-                .module_env_storage = .{ .static_builtin = builtin_module.?.env },
-                .hoisted_roots = .none,
-                .io = io,
-                .compile_time_finalizer = CompileTimeFinalization.finalizer(),
-                .inference = check.CheckedArtifact.CheckedModuleArtifact.bakedInference(compiled_builtins.builtin_artifact_bin[0..]) catch return error.CorruptEmbeddedBuiltins,
-            },
-        );
+        const builtin_artifact = BuiltinModules.bakedArtifact(allocator, io, builtin_module.?.env) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.CorruptBuiltinArtifact, error.BuiltinArtifactVersionMismatch, error.CorruptArtifact => return error.CorruptEmbeddedBuiltins,
+        };
         builtin_module_owned_by_artifact.* = true;
         // Move into stable storage first, then build the view from that pointer.
         // On failure the artifact is owned by `artifacts` and freed by errdefer.
@@ -1972,7 +1948,6 @@ fn publishImportArtifacts(
                     .io = io,
                     .imports = published_keys.items,
                     .available_artifacts = available_artifacts,
-                    .hoisted_roots = .none,
                     .compile_time_finalizer = CompileTimeFinalization.finalizer(),
                     .problem_store = switch (problem_reporting) {
                         .ignore_comptime_problems => null,
@@ -2052,8 +2027,12 @@ fn publishImportKeysWithBuiltin(
         };
     }
     for (artifacts, 0..) |artifact, i| {
+        // The loaded builtin artifact (`publishImportArtifacts` puts it first)
+        // is the baked one, whose own module index is the builtin compiler's;
+        // in this program Builtin is module 1, as a borrowed one is.
+        const loaded_builtin = pre_published_builtin == null and i == 0;
         imports[i + borrowed_builtin_count] = .{
-            .module_idx = artifact.module_identity.module_idx,
+            .module_idx = if (loaded_builtin) 1 else artifact.module_identity.module_idx,
             .key = artifact.key,
             .view = check.CheckedArtifact.importedView(&artifacts[i]),
         };

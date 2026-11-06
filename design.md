@@ -4480,8 +4480,11 @@ emitted code, symbol names and compile-time values, so a compiler edit that chan
 them. Keeping different compiler builds' caches apart is the job of the cache
 directory alone: every cache lives under `compat-<id>`, which already names
 the build more finely than any key could. The checking context identity includes import-name
-hashes, resolved import ids, platform requirement context, and explicit root
-requests. A reusable platform module has no app relation in this identity.
+hashes, resolved import ids, platform requirement context, and validation
+mode. It names nothing a command chooses: the root requests a command makes
+of a module by name select among the module's checked compile-time root
+candidates when its root requests are read (`ModuleAnalyses.explicit_roots`),
+so `check`, `build`, `test` and a REPL share one checked entry. A reusable platform module has no app relation in this identity.
 Generated code has a separate identity that includes the exact platform/app
 relation; specialization keys use that identity while
 local checked references retain their immutable module owner. The checked
@@ -5197,6 +5200,53 @@ after checking, are on-demand analyses of the sealed module
 There is no propagation pass over finished bodies during checking or
 checked module assembly, and no analysis result is serialized.
 
+### Value-Reference Resolution
+
+What every value reference resolves to is recorded by checking, at the end of
+checking (`Check.recordCheckingOutputs`, `check/value_resolution.zig`), in
+checker-native ids, as part of the module's `ModuleEnv` and its cache
+entries:
+
+- `value_references`: for each reached lookup expression, the binding it
+  names: a lambda parameter, block-local value, mutable version, pattern
+  binder or block-local function (an exact procedure alias carries the
+  lookup its alias chain ends at), a top-level definition, a bound selected
+  hoisted root (function- or data-valued), a promoted local procedure, a
+  directly imported module's definition or exposed destructure binder, the
+  definition of the module that declares a type an associated lookup names,
+  or a platform requirement. A foreign target is the one the lookup
+  expression itself names, so the record holds no id of another module and
+  stays valid when a cache entry's foreign references are rebound;
+- `binding_resolutions`: for every top-level binding (each top-level value
+  definition, each bound selected hoisted root, each promoted local
+  procedure), whether it is a constant, a procedure, a function value
+  compile-time evaluation produces from its root expression, or a checked
+  error, and, for an evaluated binding whose root is a lookup of a directly
+  callable procedure, that lookup (`forwarded_lookup`, see "Procedure
+  Aliases"; computed to a fixed point over alias chains);
+- `retired_exprs`: the expressions lowering evaluates as runtime errors
+  because resolution rejected them: uses of a binding resolved to a checked
+  error, calls whose callee is a runtime error, and what those rejections
+  propagate to through call-to-callee edges and through each evaluated
+  binding's root; an evaluated binding whose root is retired resolves to a
+  checked error;
+- `direct_procedure_calls`: the calls whose callee is a directly callable
+  procedure (an ordinary or hosted procedure, a block-local function, or a
+  forwarding alias).
+
+A reference into another module reads that module's own recorded
+`binding_resolutions`: the module is a direct import, or the module that
+declares a type reached through the imports, and it is checked first. Its
+binding resolutions are part of its checking interface (what an importer's
+inference cache entry is keyed by), so the recorded resolution is a function
+of the module and of what its imports fix, and of nothing a command, a
+workspace or a module it does not import decides. Lowering reads the
+resolution through the module's resolved value references, the callable-eval
+templates' `forwarded_lookup` and the checked-error procedure bindings, which
+only restate the recorded resolution in the module's procedure-binding and
+constant ids; a platform pairing extends them with the requirement bindings
+the app supplies.
+
 ### Synthesized Types
 
 Some types lowering needs have no solver variable:
@@ -5491,8 +5541,10 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   diagnostic errors, single-source calls, the exhaustiveness check
   checking left at each match
   expression and destructuring pattern, by node, and the module's root
-  requests (`ModuleAnalyses.rootRequests`: its explicit roots and checking
-  mode, which its checking context records, its provided and exposed
+  requests (`ModuleAnalyses.rootRequests`: the explicit roots the
+  compilation reading it requests by name, which its analyses hold and
+  nothing caches, its checking mode, which its checking context records,
+  its provided and exposed
   entrypoints, its platform-required bindings, and its eligible
   compile-time roots: the root table's rows, then every unit's literal
   conversion roots, then every literal component's argument roots, with
@@ -5992,7 +6044,10 @@ and keep temporary binding data in the active lexical scope, but it must not add
 permanent hoistability summaries to every checked expression. The checked module
 stores only selected hoisted roots plus sparse lookup indexes needed by later
 lowering, such as checked-expression id to hoisted-root id and selected
-local-binding id to hoisted-root id.
+local-binding id to hoisted-root id. Every selected hoisted root is a
+compile-time root of its module under every command and every embedder (the
+builtin compiler, the playground, test harnesses and the build coordinator
+alike); nothing chooses a subset of them.
 
 The hoistability decision must use explicit checked data, not source-name scans
 or canonicalization guesses. Allowed dependencies include literals, already
@@ -6006,6 +6061,20 @@ checked plan does not identify a pure compile-time-evaluable operation.
 Low-level operations may participate only through explicit checked purity and
 totality metadata; they must never be allowed by whitelist, name, or backend
 knowledge.
+
+A call to a Builtin procedure whose body is a capacity request
+(`LowLevel.requestsCapacity`: `Str.with_capacity`, `Str.reserve`,
+`List.with_capacity`, `List.reserve` and the append reservation) is never a
+hoisted root of its own, as an expression or as a binding's right-hand side:
+post-solve pruning drops such a root, and the call evaluates at runtime.
+Its result differs from its input only in capacity, which a stored constant
+does not hold beyond its contents, so evaluating it ahead of time would drop
+the request and leave the runtime to grow the value again on its first
+append, while removing no work: the request is an allocation either way. Its
+operands may still be roots, and an enclosing expression that is a root
+evaluates the request as part of its own value. The checker decides this
+after solving, from the procedure the call selects, through the same method
+lookup dispatch uses.
 
 Checking errors are dependency-local for hoistability. A malformed expression,
 unresolved static-dispatch call, type error, or other checker-owned diagnostic
@@ -6090,7 +6159,15 @@ archived as a unit constant. A binder-free source declaration may then be erased
 from runtime lowering. The pending exhaustiveness site is explicitly classified
 for empirical compile-time validation when the eligible candidate is recorded.
 No candidate is recorded inside an ordinary top-level constant, because that
-enclosing root already evaluates and owns the destructure site. Validation uses
+enclosing root already evaluates and owns the destructure site. Only a root
+that has a compile-time root request owns the sites its evaluation reaches. A
+selected root whose checked type is not context-free has no request: it never
+evaluates on its own, and every reader evaluates its body in place, so each
+site in that body is classified by the procedure template that contains it, as
+if no root had been selected there. A site no root owns can be reached by
+every root that calls into it: the first root that fails there reports it,
+later ones find it reported, and a root that fails elsewhere first leaves it
+for the others to decide. Validation uses
 the checked pattern compiler and compile-time evaluator; it never reinterprets
 source patterns separately.
 
@@ -23705,10 +23782,13 @@ checked CIR
   -> store eval result in ConstStore
 ```
 
-An interactive REPL expression is an explicit `.repl_expr` compile-time root
-whose checked body returns `Str.inspect(expression)`. The evaluation helper
-that generated the zero-argument wrapper resolves its asserted body once and
-puts that exact expression identity in the root request;
+An interactive REPL expression is a `.repl_expr` compile-time root whose
+checked body returns `Str.inspect(expression)`. The evaluation helper that
+generated the zero-argument wrapper tells checking which definition it is;
+checking records that definition's body
+(`ModuleEnv.requested_compile_time_roots`) unless it rejected the
+definition, and the module's root table holds one `.repl_expr` root per
+recorded body, whose request carries that exact expression identity;
 `CompileTimeFinalization` consumes the identity directly. Checking retains the zero-argument
 REPL-root context so inspecting an
 uncalled constrained polymorphic function does not force its body, but checking
@@ -23740,6 +23820,21 @@ re-encoded at its own layouts, exactly as a 64-bit host's values reach a
 either width; one too large for its destination's widths (a 32-bit target's
 lengths, or the ConstStore's) is `error.OutOfMemory`, as it would be on that
 target at runtime.
+
+Compile-time evaluation runs in a 32-bit address space on every compiler
+host. Its result belongs to every target and must be the same whichever
+host computed it, and a 32-bit compiler host's interpreter can address no
+more, so both evaluators' hosts grant Roc code at most what a 32-bit
+target's `roc_alloc` can be asked for. An allocation request past that, or
+one the compiler's own memory cannot satisfy, is an out-of-memory crash of
+the root at the operation that asked for it, never an error of the
+compilation: it is reported, or for a guarded root deferred to runtime,
+exactly like any other compile-time crash. A target that would refuse the
+same request at runtime crashes there too, so a hoisted expression that
+exceeds a 32-bit target's address space fails the same way at compile time
+as it would in that target's program, and never asks the compiler's host
+for memory no 32-bit target has. Only the host's own bookkeeping running out
+of memory fails the compilation.
 
 Diagnostic behavior must be identical between the dev-backend evaluator and the
 host-restricted LIR interpreter. A mismatch in crashes, expect failures,
@@ -25312,9 +25407,10 @@ The contract is carried by types rather than prose: the Zig ABI declarations
 return a non-optional pointer, generated Rust glue returns `NonNull<c_void>`,
 generated C glue declares both symbols `returns_nonnull`, and the LLVM backend
 marks their declarations' return values `nonnull` in the linked module.
-Compiler-internal hosts follow the same contract: the compile-time evaluator's
-host turns allocation failure into a Roc crash by unwinding the interpreter it
-serves, rather than signaling it with null.
+Compiler-internal hosts follow the same contract: both compile-time
+evaluators' hosts turn allocation failure into a Roc crash, unwinding the
+interpreter they serve or the generated code they called, rather than
+signaling it with null (see "Compile-Time Constants").
 
 `roc_crashed` never returns to Roc. A platform host ends the process; a host
 that keeps running, like the compiler's own hosts, longjmps to a crash

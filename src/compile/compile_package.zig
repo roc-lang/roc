@@ -547,7 +547,7 @@ pub fn typeCheckModule(
         checking_scope.ordinal(requirements.env.contentIdentityHash().?.*)
     else
         null;
-    const inference_key = CheckedArtifact.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, explicit_roots, validation, source_pin_validation, missing_public_types);
+    const inference_key = CheckedArtifact.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, validation, source_pin_validation, missing_public_types);
     const loaded = if (inference_cache) |cache| try cache.load(inference_key, env, &checking_scope) else null;
     defer if (loaded) |capsule| capsule.deinit();
 

@@ -994,18 +994,10 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     var typed_cir_modules = try check.TypedCIR.Modules.init(allocator, &source_modules);
     defer typed_cir_modules.deinit();
 
-    var builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
-        allocator,
-        &typed_cir_modules,
-        1,
-        .{
-            .module_env_storage = .{ .static_builtin = builtin_module.env },
-            .hoisted_roots = .none,
-            .io = @as(std.Io, undefined),
-            .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
-            .inference = check.CheckedArtifact.CheckedModuleArtifact.bakedInference(compiled_builtins.builtin_artifact_bin[0..]) catch return error.CorruptEmbeddedBuiltins,
-        },
-    );
+    var builtin_artifact = eval.bakedBuiltinArtifact(allocator, @as(std.Io, undefined), builtin_module.env) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.CorruptBuiltinArtifact, error.BuiltinArtifactVersionMismatch, error.CorruptArtifact => return error.CorruptEmbeddedBuiltins,
+    };
     errdefer builtin_artifact.deinitRetainingModuleEnv(allocator);
 
     var publish_imports = [_]check.CheckedArtifact.PublishImportArtifact{.{
@@ -1030,7 +1022,6 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         0,
         .{
             .module_env_storage = .{ .checked_source = checked_module.module_env },
-            .hoisted_roots = .none,
             .io = @as(std.Io, undefined),
             .inference = try check.InferenceOutput.fromChecker(inference_arena.allocator(), &checked_module.solver.?, null),
             .imports = &publish_imports,
