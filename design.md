@@ -1252,7 +1252,10 @@ checker recovery. The recovery rules:
   still belongs to the relation that grounded the literal, so it is withdrawn
   with that relation when the relation is void. Only a copy that
   instantiation made of a literal conversion belongs to the use that copied
-  it.
+  it. A class that a default decided was grounded by no relation, so once a
+  requirement rejects its default every literal it holds has no type: the
+  class's rejection retires all of them (`(3, x) = ("a", 1)` retires both
+  the pattern's `3`, rejecting the destructure, and the `"a"`).
 - An effectful top-level value's right-hand side is erroneous.
 - A value binding whose annotation is rejected for introducing a type
   variable the binding cannot quantify is checked without the annotation, and

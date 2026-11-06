@@ -16084,9 +16084,18 @@ fn literalConversionWasCopied(self: *const Self, fn_var: Var) bool {
 /// unification that grounded the literal's type, and the entry that queued
 /// it as a consequence, do not own the literal's conversion. A copy that
 /// instantiation made belongs to the use that copied it instead, and so does
-/// what derives from it. Returns whether the requirement belongs to source
-/// literals. This runs only on the failure path.
-fn poisonSourceLiteralConversionFailure(self: *Self, constraint: StaticDispatchConstraint) Allocator.Error!bool {
+/// what derives from it. A class a default decided is not grounded by any
+/// relation: its literals have no type once the default is rejected, so the
+/// class's own rejection retires every literal it holds
+/// (`poisonLiteralFailureOwners`), not only those of the failing conversion.
+/// Returns whether the requirement belongs to source literals. This runs only
+/// on the failure path.
+fn poisonSourceLiteralConversionFailure(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+) Allocator.Error!bool {
+    if (self.types.varDefaultDecided(dispatcher_var)) return false;
     var fn_var = constraint.fn_var;
     var plan_kind: ?LiteralDispatchPlan.Kind = if (constraint.origin.literalKind()) |kind| literalPlanKind(kind) else null;
     var guard = types_mod.debug.IterationGuard.init("poisonSourceLiteralConversionFailure");
@@ -16427,7 +16436,7 @@ fn poisonConstraintFailure(
     // literal, whichever queued entry carries it: an explicit owner here is
     // the entry's, inherited from the dispatch whose resolution grounded the
     // literal's type.
-    if (try self.poisonSourceLiteralConversionFailure(constraint)) return;
+    if (try self.poisonSourceLiteralConversionFailure(dispatcher_var, constraint)) return;
     if (explicit_expr) |expr_idx| {
         return self.poisonConstraintFailureSource(dispatcher_var, constraint, expr_idx);
     }
