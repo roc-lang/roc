@@ -5233,34 +5233,82 @@ pub const MonoLlvmCodeGen = struct {
         try self.prepareLocalWrite(target);
         const field_locals = self.store.getLocalSpan(fields);
         try self.materializeLocalSpanIfDeferred(field_locals);
-        const allocated = try self.allocAggregateTarget(target);
-        const base_layout = self.layoutValue(allocated.layout_idx);
-        if (base_layout.tag != .struct_) return;
+        const storage = try self.allocAggregateStorage(target);
+        const base_layout = self.layoutValue(storage.layout_idx);
+        if (base_layout.tag != .struct_) return self.zeroBytes(storage.ptr, storage.size);
+        const written = try self.allocator.alloc(ByteRange, field_locals.len);
+        defer self.allocator.free(written);
+        var written_len: usize = 0;
         for (0..field_locals.len) |i| {
             const field_local = GuardedList.at(field_locals, i);
             const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
             const field_size = self.layoutDataSize(field_layout);
             if (field_size == 0) continue;
             const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
-            const dst = try self.offsetPtr(allocated.ptr, offset);
+            const dst = try self.offsetPtr(storage.ptr, offset);
             try self.storeLocalToMemory(dst, field_local, field_size, self.alignmentForLayout(field_layout));
+            written[written_len] = .{ .start = offset, .end = offset + field_size };
+            written_len += 1;
         }
+        try self.zeroUnwritten(storage, written[0..written_len]);
     }
 
     fn emitTagLiteral(self: *MonoLlvmCodeGen, target: LocalId, discriminant: u32, payload: ?LocalId) Error!void {
         try self.prepareLocalWrite(target);
         if (payload) |payload_local| try self.materializeLocalIfDeferred(payload_local);
-        const allocated = try self.allocAggregateTarget(target);
-        if (self.layoutByteSize(allocated.layout_idx) > 0) {
-            try self.writeTagDiscriminant(allocated.ptr, allocated.layout_idx, discriminant);
-        }
+        const storage = try self.allocAggregateStorage(target);
+        var written: [2]ByteRange = undefined;
+        var written_len: usize = 0;
         if (payload) |payload_local| {
-            const payload_layout = self.tagPayloadLayout(allocated.layout_idx, discriminant);
+            const payload_layout = self.tagPayloadLayout(storage.layout_idx, discriminant);
             const payload_size = self.layoutByteSize(payload_layout);
             if (payload_size > 0) {
-                try self.storeLocalToMemory(allocated.ptr, payload_local, payload_size, self.alignmentForLayout(payload_layout));
+                try self.storeLocalToMemory(storage.ptr, payload_local, payload_size, self.alignmentForLayout(payload_layout));
+                written[written_len] = .{ .start = 0, .end = payload_size };
+                written_len += 1;
             }
         }
+        const layout_val = self.layoutValue(storage.layout_idx);
+        if (layout_val.tag == .tag_union and self.layoutByteSize(storage.layout_idx) > 0) {
+            const data = self.layouts().getTagUnionData(layout_val.getTagUnion().idx);
+            if (data.discriminant_size != 0) {
+                try self.writeTagDiscriminant(storage.ptr, storage.layout_idx, discriminant);
+                const offset = data.discriminant_offset.get(self.layouts().targetUsize());
+                written[written_len] = .{ .start = offset, .end = offset + data.discriminant_size };
+                written_len += 1;
+            }
+        }
+        try self.zeroUnwritten(storage, written[0..written_len]);
+    }
+
+    /// A byte range `[start, end)` of an aggregate a constructor writes.
+    const ByteRange = struct { start: u32, end: u32 };
+
+    /// Zero the bytes of `storage` that no range of `written` covers. A
+    /// constructor writes each byte of its storage exactly once: its fields,
+    /// payload, and discriminant, then zeroes only what is left. Zeroing the
+    /// whole storage first puts an `llvm.memset` on every byte the fields
+    /// then overwrite. SROA rewrites a memset that lands on a part of a slot
+    /// it promotes as a vector by loading that part's old value first, and
+    /// the load makes the slot live into the block, so every join inside a
+    /// loop around the construction gets a phi of the slot's previous
+    /// iteration that nothing reads (design.md "LLVM Value Representation").
+    fn zeroUnwritten(self: *MonoLlvmCodeGen, storage: AggregateStorage, written: []ByteRange) Error!void {
+        const size = storage.size;
+        std.mem.sortUnstable(ByteRange, written, {}, struct {
+            fn lessThan(_: void, a: ByteRange, b: ByteRange) bool {
+                return a.start < b.start;
+            }
+        }.lessThan);
+        var cursor: u32 = 0;
+        for (written) |range| {
+            if (builtin.mode == .debug and (range.start < cursor or range.end > size)) {
+                invariant("LLVM codegen invariant violated: aggregate write [{d}, {d}) overlaps another or leaves its {d}-byte storage", .{ range.start, range.end, size });
+            }
+            if (range.start > cursor) try self.zeroBytes(try self.offsetPtr(storage.ptr, cursor), range.start - cursor);
+            cursor = range.end;
+        }
+        if (size > cursor) try self.zeroBytes(try self.offsetPtr(storage.ptr, cursor), size - cursor);
     }
 
     fn emitStoreStruct(self: *MonoLlvmCodeGen, dest: LocalId, struct_layout: layout.Idx, fields: LocalSpan) Error!void {
@@ -5301,7 +5349,16 @@ pub const MonoLlvmCodeGen = struct {
         try self.writeTagDiscriminant(dst, tag_layout, discriminant);
     }
 
-    fn allocAggregateTarget(self: *MonoLlvmCodeGen, target: LocalId) Error!ResolvedBase {
+    /// Where an aggregate target's bytes go, and how many there are: a fresh
+    /// heap cell for a box, the target's own slot otherwise.
+    const AggregateStorage = struct {
+        ptr: LlvmBuilder.Value,
+        layout_idx: layout.Idx,
+        size: u32,
+    };
+
+    /// Allocate an aggregate target's storage without writing it.
+    fn allocAggregateStorage(self: *MonoLlvmCodeGen, target: LocalId) Error!AggregateStorage {
         const builder = self.builder orelse return error.CompilationFailed;
         const target_layout = self.localLayout(target);
         const layout_val = self.layoutValue(target_layout);
@@ -5318,16 +5375,22 @@ pub const MonoLlvmCodeGen = struct {
                     builder.intValue(.i1, @intFromBool(abi.contains_refcounted)) catch return error.OutOfMemory,
                 },
             );
-            try self.zeroBytes(data_ptr, abi.elem_size);
             try self.storePointer(target_ptr, data_ptr);
-            return .{ .ptr = data_ptr, .layout_idx = abi.elem_layout_idx orelse .zst };
+            return .{ .ptr = data_ptr, .layout_idx = abi.elem_layout_idx orelse .zst, .size = @intCast(abi.elem_size) };
         } else if (layout_val.tag == .box_of_zst) {
             try self.storePointer(target_ptr, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory);
-            return .{ .ptr = target_ptr, .layout_idx = .zst };
+            return .{ .ptr = target_ptr, .layout_idx = .zst, .size = 0 };
         } else {
-            if (self.slot(target).size > 0) try self.zeroBytes(target_ptr, self.slot(target).size);
-            return .{ .ptr = target_ptr, .layout_idx = target_layout };
+            return .{ .ptr = target_ptr, .layout_idx = target_layout, .size = self.slot(target).size };
         }
+    }
+
+    /// Allocate an aggregate target's storage and zero it, for a builtin or
+    /// conversion that writes only some of its bytes.
+    fn allocAggregateTarget(self: *MonoLlvmCodeGen, target: LocalId) Error!ResolvedBase {
+        const storage = try self.allocAggregateStorage(target);
+        try self.zeroBytes(storage.ptr, storage.size);
+        return .{ .ptr = storage.ptr, .layout_idx = storage.layout_idx };
     }
 
     fn emitLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, unique_args: u64, interchangeable: layout.WidthValues(bool), simd_concat_count: ?u5) Error!void {
@@ -15661,6 +15724,67 @@ test "issue 12819: RC helper arguments have bounded slot lifetimes" {
         try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "call void @llvm.lifetime.start"));
         try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "call void @llvm.lifetime.end"));
     }
+}
+
+test "aggregate constructors write each byte of their slot once" {
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    // A Str payload, its discriminant at byte 24, and a 7-byte tail.
+    const union_layout = try layouts.putTagUnion(&.{ .zst, .str });
+    // A U64 at byte 0, a U8 at byte 8, and 7 bytes of padding.
+    const record_layout = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .u64 } });
+    const text = try store.addLocal(.{ .layout_idx = .str });
+    const small = try store.addLocal(.{ .layout_idx = .u8 });
+    const wide = try store.addLocal(.{ .layout_idx = .u64 });
+    const tagged = try store.addLocal(.{ .layout_idx = union_layout });
+    const record = try store.addLocal(.{ .layout_idx = record_layout });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = wide } }, .test_fixture);
+    const release = try store.addCFStmt(.{ .decref = .{
+        .value = tagged,
+        .rc = try store.addRcHelperRef(.{ .concrete = .{ .op = .decref, .layout_idx = union_layout } }),
+        .next = ret,
+    } }, .test_fixture);
+    const build_record = try store.addCFStmt(.{ .assign_struct = .{
+        .target = record,
+        .fields = try store.addLocalSpan(&.{ small, wide }),
+        .next = release,
+    } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_tag = .{
+        .target = tagged,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = text,
+        .next = build_record,
+    } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = .fromRaw(1),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{ text, small, wide }),
+        .frame_locals = try store.addLocalSpan(&.{ tagged, record }),
+        .body = body,
+        .ret_layout = .u64,
+    }, .none);
+    var codegen = MonoLlvmCodeGen.init(gpa, &store);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    try std.testing.expectEqual(@as(u32, 32), codegen.layoutByteSize(union_layout));
+    try std.testing.expectEqual(@as(u32, 16), codegen.layoutByteSize(record_layout));
+    var builder = try codegen.createBuilder("aggregate_write_once");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    var ir: std.Io.Writer.Allocating = .init(gpa);
+    defer ir.deinit();
+    try builder.print(&ir.writer);
+    const function = printedFunction(ir.written(), "roc_proc_0.fast") orelse return error.TestUnexpectedResult;
+    // Each constructor zeroes only the 7 bytes its fields, payload, and
+    // discriminant leave unwritten, never its whole slot.
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, function, "call void @llvm.memset"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, function, "i8 0, i64 7, i1 false)"));
 }
 
 test "issue 12819: large join parameter reads share storage" {
