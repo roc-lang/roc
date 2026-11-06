@@ -139,6 +139,9 @@ pub const Digests = struct {
             hasher.update(&[_]u8{ @intFromBool(record.rc_ret_borrowed), @intFromBool(record.rc_ret_unique), @intFromBool(record.may_leave_pending) });
             hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.rc_ret_conditions.len))));
             hasher.update(std.mem.sliceAsBytes(record.rc_ret_conditions));
+            // An importer fills the worker's tables from its needs.
+            hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.table_needs.len))));
+            hasher.update(record.table_needs);
         }
         self.hashImportedExports(&hasher, artifact);
         try self.exports.put(self.gpa, artifact.key.bytes, hasher.finalResult());

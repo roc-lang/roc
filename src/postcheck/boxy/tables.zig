@@ -301,6 +301,407 @@ pub fn appendOperands(allocator: Allocator, out: *std.ArrayList(Operand), recipe
     }
 }
 
+/// Where an evaluation reads a worker's recipes: the recipes its lowering
+/// is building, or its needs list.
+pub const Source = union(enum) {
+    building: *const Recipes,
+    needs: *const Needs,
+
+    fn get(self: Source, id: RecipeId) Recipe {
+        return switch (self) {
+            .building => |recipes| recipes.get(id),
+            .needs => |needs| needs.recipes[@backingInt(id)],
+        };
+    }
+
+    fn resolve(self: Source, id: RecipeId) RecipeId {
+        return switch (self) {
+            .building => |recipes| recipes.resolve(id),
+            .needs => id,
+        };
+    }
+
+    fn count(self: Source) usize {
+        return switch (self) {
+            .building => |recipes| recipes.items.items.len,
+            .needs => |needs| needs.recipes.len,
+        };
+    }
+};
+
+/// The words a worker's recipes are at one instantiation, whose inputs are
+/// static words: each recipe evaluated once, a group of recipes that lead
+/// back to one another (`Recipes`) evaluated together. A cyclic group is
+/// interned by its content program-wide, so equal groups are the same
+/// static data wherever they are evaluated, and the tables keyed by their
+/// words are too.
+pub const Evaluation = struct {
+    program: *lower.Program,
+    allocator: Allocator,
+    source: Source,
+    inputs: []const StaticDescs.CaptureWord,
+    /// How many leading inputs are the worker's variables' descriptors.
+    desc_count: u32,
+    words: std.ArrayList(?StaticDescs.CaptureWord) = .empty,
+    /// The search's order of visit and low link of each recipe it visited,
+    /// and whether it is on the search's stack.
+    visit: std.ArrayList(u32) = .empty,
+    low: std.ArrayList(u32) = .empty,
+    on_stack: std.ArrayList(bool) = .empty,
+    stack: std.ArrayList(RecipeId) = .empty,
+    visited: u32 = 0,
+
+    const unvisited = std.math.maxInt(u32);
+
+    pub fn init(program: *lower.Program, source: Source, inputs: []const StaticDescs.CaptureWord, desc_count: u32) Evaluation {
+        return .{ .program = program, .allocator = program.allocator, .source = source, .inputs = inputs, .desc_count = desc_count };
+    }
+
+    pub fn deinit(self: *Evaluation) void {
+        self.words.deinit(self.allocator);
+        self.visit.deinit(self.allocator);
+        self.low.deinit(self.allocator);
+        self.on_stack.deinit(self.allocator);
+        self.stack.deinit(self.allocator);
+    }
+
+    /// The word of recipe `named` at this instantiation.
+    pub fn word(self: *Evaluation, named: RecipeId) Allocator.Error!StaticDescs.CaptureWord {
+        const id = self.source.resolve(named);
+        try self.grow();
+        if (self.words.items[@backingInt(id)]) |known| return known;
+        try self.search(id);
+        return self.words.items[@backingInt(id)] orelse invariant("a table recipe was searched but not evaluated");
+    }
+
+    /// The word of `operand`, whose recipe has been evaluated.
+    fn operandWord(self: *const Evaluation, operand: Operand) StaticDescs.CaptureWord {
+        return switch (operand) {
+            .static => |static| static,
+            .recipe => |id| self.words.items[@backingInt(self.source.resolve(id))] orelse invariant("a table recipe reads a recipe evaluated after it"),
+        };
+    }
+
+    fn grow(self: *Evaluation) Allocator.Error!void {
+        const count = self.source.count();
+        const old = self.words.items.len;
+        if (count == old) return;
+        try self.words.resize(self.allocator, count);
+        try self.visit.resize(self.allocator, count);
+        try self.low.resize(self.allocator, count);
+        try self.on_stack.resize(self.allocator, count);
+        @memset(self.words.items[old..], null);
+        @memset(self.visit.items[old..], unvisited);
+        @memset(self.on_stack.items[old..], false);
+    }
+
+    const Frame = struct { id: RecipeId, operands: []const Operand, next: usize };
+
+    /// Evaluate every recipe `root` reaches that has no word yet, a strongly
+    /// connected group at a time, each after the groups it reads (Tarjan's
+    /// search, with an explicit stack).
+    fn search(self: *Evaluation, root: RecipeId) Allocator.Error!void {
+        var frames: std.ArrayList(Frame) = .empty;
+        defer {
+            for (frames.items) |frame| self.allocator.free(frame.operands);
+            frames.deinit(self.allocator);
+        }
+        try self.enter(&frames, root);
+        while (frames.items.len != 0) {
+            const top = &frames.items[frames.items.len - 1];
+            if (top.next < top.operands.len) {
+                const operand = top.operands[top.next];
+                top.next += 1;
+                const next = switch (operand) {
+                    .recipe => |id| self.source.resolve(id),
+                    .static => continue,
+                };
+                if (self.words.items[@backingInt(next)] != null) continue;
+                if (self.visit.items[@backingInt(next)] == unvisited) {
+                    try self.enter(&frames, next);
+                } else if (self.on_stack.items[@backingInt(next)]) {
+                    const from = @backingInt(top.id);
+                    self.low.items[from] = @min(self.low.items[from], self.visit.items[@backingInt(next)]);
+                }
+                continue;
+            }
+            const done = frames.pop().?;
+            self.allocator.free(done.operands);
+            const id = @backingInt(done.id);
+            if (frames.items.len != 0) {
+                const parent = @backingInt(frames.items[frames.items.len - 1].id);
+                self.low.items[parent] = @min(self.low.items[parent], self.low.items[id]);
+            }
+            if (self.low.items[id] != self.visit.items[id]) continue;
+            // `done` heads a group: the stack's recipes from it on.
+            const start = std.mem.findScalarLast(RecipeId, self.stack.items, done.id) orelse invariant("a searched recipe left the search's stack");
+            const members = try self.allocator.dupe(RecipeId, self.stack.items[start..]);
+            defer self.allocator.free(members);
+            self.stack.shrinkRetainingCapacity(start);
+            for (members) |member| self.on_stack.items[@backingInt(member)] = false;
+            try self.evaluateGroup(members);
+        }
+    }
+
+    fn enter(self: *Evaluation, frames: *std.ArrayList(Frame), id: RecipeId) Allocator.Error!void {
+        var operands: std.ArrayList(Operand) = .empty;
+        errdefer operands.deinit(self.allocator);
+        try appendOperands(self.allocator, &operands, self.source.get(id));
+        self.visit.items[@backingInt(id)] = self.visited;
+        self.low.items[@backingInt(id)] = self.visited;
+        self.visited += 1;
+        self.on_stack.items[@backingInt(id)] = true;
+        try self.stack.append(self.allocator, id);
+        const owned = try operands.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned);
+        try frames.append(self.allocator, .{ .id = id, .operands = owned, .next = 0 });
+    }
+
+    /// Evaluate the group `members`, whose first member is its head.
+    fn evaluateGroup(self: *Evaluation, members: []const RecipeId) Allocator.Error!void {
+        if (members.len == 1 and !try self.readsItself(members[0])) {
+            self.words.items[@backingInt(members[0])] = try self.evaluateOne(self.source.get(members[0]));
+            return;
+        }
+        try self.evaluateCycle(members);
+    }
+
+    fn readsItself(self: *Evaluation, id: RecipeId) Allocator.Error!bool {
+        var operands: std.ArrayList(Operand) = .empty;
+        defer operands.deinit(self.allocator);
+        try appendOperands(self.allocator, &operands, self.source.get(id));
+        for (operands.items) |operand| switch (operand) {
+            .recipe => |next| if (self.source.resolve(next) == id) return true,
+            .static => {},
+        };
+        return false;
+    }
+
+    /// The word of `recipe`, every recipe it reads evaluated.
+    fn evaluateOne(self: *Evaluation, recipe: Recipe) Allocator.Error!StaticDescs.CaptureWord {
+        const program = self.program;
+        return switch (recipe) {
+            .input => |index| if (index < self.inputs.len) self.inputs[index] else invariant("a table recipe reads an input its instantiation lacks"),
+            .desc => |desc| try self.descWord(desc.ty, desc.scoped),
+            .args_desc => |args| blk: {
+                const elems = try self.allocator.alloc(TypeId, args.elems.len);
+                defer self.allocator.free(elems);
+                var entries: std.ArrayList(StaticDescs.ScopedMethods) = .empty;
+                defer entries.deinit(self.allocator);
+                for (elems, args.elems) |*elem, operand| {
+                    const elem_word = self.operandWord(operand);
+                    elem.* = describedType(elem_word);
+                    try self.appendScope(&entries, elem_word);
+                }
+                const scope = try program.static_descs.internScope(entries.items);
+                break :blk .{ .node = (try program.static_descs.argsDescriptor(args.leading, elems, scope)).node };
+            },
+            .callable => |callable| blk: {
+                const words = try self.operandWords(callable.captures);
+                defer self.allocator.free(words);
+                break :blk .{ .callable = (try program.static_descs.dictionary(program.worker(callable.entry).proc, words)).node };
+            },
+            .table => |table| blk: {
+                const words = try self.operandWords(table.inputs);
+                defer self.allocator.free(words);
+                break :blk .{ .table = (try program.static_descs.table(table.worker, words)).node };
+            },
+        };
+    }
+
+    fn operandWords(self: *Evaluation, operands: []const Operand) Allocator.Error![]StaticDescs.CaptureWord {
+        const words = try self.allocator.alloc(StaticDescs.CaptureWord, operands.len);
+        for (words, operands) |*out, operand| out.* = self.operandWord(operand);
+        return words;
+    }
+
+    /// The type a descriptor word describes.
+    fn describedType(word_: StaticDescs.CaptureWord) TypeId {
+        return switch (word_) {
+            .desc => |ty| ty,
+            .scoped_desc => |scoped| scoped.ty,
+            .callable, .table, .node, .zero => invariant("a type table's descriptor word is not a descriptor"),
+        };
+    }
+
+    /// Append the override scope of descriptor word `word_`'s entries,
+    /// merging those `entries` has.
+    fn appendScope(self: *Evaluation, entries: *std.ArrayList(StaticDescs.ScopedMethods), word_: StaticDescs.CaptureWord) Allocator.Error!void {
+        const scope = switch (word_) {
+            .scoped_desc => |scoped| scoped.scope,
+            .desc => return,
+            .callable, .table, .node, .zero => invariant("a type table's descriptor word is not a descriptor"),
+        };
+        for (self.program.static_descs.scopeEntries(scope)) |entry| try mergeEntry(self.allocator, entries, entry);
+    }
+
+    /// The descriptor word of the type `ty` over the worker's variables at
+    /// this instantiation: the type with each variable at the type its
+    /// descriptor input describes, in the override scope of those inputs and
+    /// of `scoped`.
+    fn descWord(self: *Evaluation, ty: TypeId, scoped: []const ScopedOverride) Allocator.Error!StaticDescs.CaptureWord {
+        const program = self.program;
+        if (self.desc_count > self.inputs.len) invariant("a table's instantiation lacks a variable's descriptor");
+        const bound = try self.allocator.alloc(TypeId, self.desc_count);
+        defer self.allocator.free(bound);
+        var entries: std.ArrayList(StaticDescs.ScopedMethods) = .empty;
+        defer entries.deinit(self.allocator);
+        for (bound, self.inputs[0..self.desc_count]) |*slot, input| {
+            slot.* = describedType(input);
+            try self.appendScope(&entries, input);
+        }
+        const closed = try program.substitute(self.allocator, ty, bound);
+        if (!program.store.isClosed(closed)) invariant("a table's descriptor recipe is open at its instantiation");
+        for (scoped) |override| {
+            var methods: [3]?StaticDescs.CaptureWord = .{ null, null, null };
+            for (&methods, override.methods) |*method, maybe| method.* = if (maybe) |operand| self.operandWord(operand) else null;
+            try mergeEntry(self.allocator, &entries, .{ .nominal = try program.substitute(self.allocator, override.nominal, bound), .methods = methods });
+        }
+        const scope = try program.static_descs.restrictScope(try program.static_descs.internScope(entries.items), closed);
+        if (scope == .none) return .{ .desc = closed };
+        return .{ .scoped_desc = .{ .ty = closed, .scope = scope } };
+    }
+
+    /// Evaluate the cyclic group `members` (its head first), from the
+    /// group interned under its content if one was, otherwise reserving its
+    /// callables, then evaluating its descriptors and tables, which read
+    /// those callables, then filling the callables.
+    fn evaluateCycle(self: *Evaluation, members: []const RecipeId) Allocator.Error!void {
+        const program = self.program;
+        const static_descs = &program.static_descs;
+        const order = try self.groupOrder(members);
+        defer self.allocator.free(order);
+        var key: std.ArrayList(u8) = .empty;
+        defer key.deinit(self.allocator);
+        try self.groupKey(order, &key);
+        if (static_descs.group(key.items)) |words| {
+            for (order, words) |member, member_word| self.words.items[@backingInt(member)] = member_word;
+            return;
+        }
+        for (order) |member| switch (self.source.get(member)) {
+            .callable => |callable| self.words.items[@backingInt(member)] = .{ .callable = try static_descs.reserveCallable(@intCast(callable.captures.len)) },
+            .desc, .table => {},
+            .input, .args_desc => invariant("an input or an argument record's descriptor leads back to itself"),
+        };
+        for (order) |member| switch (self.source.get(member)) {
+            .desc => |desc| self.words.items[@backingInt(member)] = try self.descWord(desc.ty, desc.scoped),
+            .callable, .table, .input, .args_desc => {},
+        };
+        for (order) |member| switch (self.source.get(member)) {
+            .table => |table| self.words.items[@backingInt(member)] = try self.evaluateOne(.{ .table = table }),
+            .callable, .desc, .input, .args_desc => {},
+        };
+        for (order) |member| switch (self.source.get(member)) {
+            .callable => |callable| {
+                const words = try self.operandWords(callable.captures);
+                defer self.allocator.free(words);
+                try static_descs.fillCallable(self.words.items[@backingInt(member)].?.callable, program.worker(callable.entry).proc, words);
+            },
+            .desc, .table, .input, .args_desc => {},
+        };
+        const words = try self.allocator.alloc(StaticDescs.CaptureWord, order.len);
+        defer self.allocator.free(words);
+        for (words, order) |*out, member| out.* = self.words.items[@backingInt(member)].?;
+        try static_descs.putGroup(key.items, words);
+    }
+
+    /// The members of a group in the order a walk from its head first
+    /// reaches them through its own members, in operand order.
+    fn groupOrder(self: *Evaluation, members: []const RecipeId) Allocator.Error![]RecipeId {
+        var order: std.ArrayList(RecipeId) = .empty;
+        errdefer order.deinit(self.allocator);
+        var pending: std.ArrayList(RecipeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var operands: std.ArrayList(Operand) = .empty;
+        defer operands.deinit(self.allocator);
+        try pending.append(self.allocator, members[0]);
+        while (pending.pop()) |id| {
+            if (std.mem.findScalar(RecipeId, order.items, id) != null) continue;
+            try order.append(self.allocator, id);
+            operands.clearRetainingCapacity();
+            try appendOperands(self.allocator, &operands, self.source.get(id));
+            var index = operands.items.len;
+            while (index > 0) {
+                index -= 1;
+                const next = switch (operands.items[index]) {
+                    .recipe => |next| self.source.resolve(next),
+                    .static => continue,
+                };
+                if (std.mem.findScalar(RecipeId, members, next) != null and std.mem.findScalar(RecipeId, order.items, next) == null) try pending.append(self.allocator, next);
+            }
+        }
+        if (order.items.len != members.len) invariant("a recipe group's head does not reach every member");
+        return try order.toOwnedSlice(self.allocator);
+    }
+
+    /// The content of the group `order`: each member's kind and fields, an
+    /// operand inside the group by its position in `order`, any other by
+    /// its word, and a type at this instantiation.
+    fn groupKey(self: *Evaluation, order: []const RecipeId, key: *std.ArrayList(u8)) Allocator.Error!void {
+        const allocator = self.allocator;
+        const program = self.program;
+        const bound = try allocator.alloc(TypeId, self.desc_count);
+        defer allocator.free(bound);
+        for (bound, self.inputs[0..self.desc_count]) |*slot, input| slot.* = describedType(input);
+        for (order) |member| {
+            const recipe = self.source.get(member);
+            try key.append(allocator, @backingInt(std.meta.activeTag(recipe)));
+            switch (recipe) {
+                .desc => |desc| {
+                    try static_descs_file.appendKeyWord(allocator, key, @backingInt(try program.substitute(allocator, desc.ty, bound)));
+                    // The variables' scopes are part of the descriptor.
+                    for (self.inputs[0..self.desc_count]) |input| try static_descs_file.appendCaptureWordKey(allocator, key, input);
+                    try static_descs_file.appendKeyWord(allocator, key, @intCast(desc.scoped.len));
+                    for (desc.scoped) |override| {
+                        try static_descs_file.appendKeyWord(allocator, key, @backingInt(try program.substitute(allocator, override.nominal, bound)));
+                        for (override.methods) |method| {
+                            if (method) |operand| try self.operandKey(order, operand, key) else try key.append(allocator, 2);
+                        }
+                    }
+                },
+                .callable => |callable| {
+                    try static_descs_file.appendKeyWord(allocator, key, @backingInt(callable.entry));
+                    try static_descs_file.appendKeyWord(allocator, key, @intCast(callable.captures.len));
+                    for (callable.captures) |operand| try self.operandKey(order, operand, key);
+                },
+                .table => |table| {
+                    try static_descs_file.appendKeyWord(allocator, key, @backingInt(table.worker));
+                    try static_descs_file.appendKeyWord(allocator, key, @intCast(table.inputs.len));
+                    for (table.inputs) |operand| try self.operandKey(order, operand, key);
+                },
+                .input, .args_desc => invariant("an input or an argument record's descriptor leads back to itself"),
+            }
+        }
+    }
+
+    fn operandKey(self: *Evaluation, order: []const RecipeId, operand: Operand, key: *std.ArrayList(u8)) Allocator.Error!void {
+        switch (operand) {
+            .recipe => |id| if (std.mem.findScalar(RecipeId, order, self.source.resolve(id))) |position| {
+                try key.append(self.allocator, 0);
+                return try static_descs_file.appendKeyWord(self.allocator, key, @intCast(position));
+            },
+            .static => {},
+        }
+        try key.append(self.allocator, 1);
+        try static_descs_file.appendCaptureWordKey(self.allocator, key, self.operandWord(operand));
+    }
+};
+
+/// Add `entry` to the scope entries `entries`, which hold each nominal type
+/// once: an entry for a nominal type already there gives it the same
+/// overrides.
+fn mergeEntry(allocator: Allocator, entries: *std.ArrayList(StaticDescs.ScopedMethods), entry: StaticDescs.ScopedMethods) Allocator.Error!void {
+    for (entries.items) |existing| {
+        if (existing.nominal != entry.nominal) continue;
+        for (existing.methods, entry.methods) |a, b| {
+            if ((a == null) != (b == null)) invariant("two override scopes give one nominal type different overrides");
+            if (a) |word_| if (!StaticDescs.captureWordsEqual(word_, b.?)) invariant("two override scopes give one nominal type different overrides");
+        }
+        return;
+    }
+    try entries.append(allocator, entry);
+}
+
 fn hashWord(hasher: *std.hash.Wyhash, value: u32) void {
     hasher.update(std.mem.asBytes(&value));
 }

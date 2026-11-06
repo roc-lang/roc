@@ -131,7 +131,10 @@ pub const Built = struct {
     /// Release everything but the pieces and the image, which the caller
     /// now owns.
     pub fn deinitKeepingCode(self: Built, gpa: Allocator) void {
-        for (self.exports) |record| gpa.free(record.rc_ret_conditions);
+        for (self.exports) |record| {
+            gpa.free(record.rc_ret_conditions);
+            gpa.free(record.table_needs);
+        }
         gpa.free(self.exports);
         for (self.hosted_symbols) |symbol| gpa.free(symbol);
         gpa.free(self.hosted_symbols);
@@ -277,6 +280,7 @@ fn recordInterfaces(interfaces: *ExportInterfaces, entry: object_cache.Entry) Al
         .rc_ret_unique_fields = record.rc_ret_unique_fields,
         .rc_ret_conditions = record.rc_ret_conditions,
         .may_leave_pending = record.may_leave_pending,
+        .table_needs = record.table_needs,
     });
 }
 
@@ -287,7 +291,8 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
     const records = try gpa.alloc(object_cache.ExportRecord, lowered.lir_result.exported_procs.items.len);
     errdefer gpa.free(records);
     for (lowered.lir_result.exported_procs.items, records) |proc, *record| {
-        const interface = try interfaces.putProc(procs, proc);
+        const identity = procs.getProcSpec(proc).identity;
+        const interface = try interfaces.putProc(procs, proc, lowered.lir_result.boxy_table_needs.get(identity) orelse &.{});
         record.* = .{
             .identity = procs.getProcSpec(proc).identity.bytes,
             .rc_borrowed_params = interface.rc_borrowed_params,
@@ -298,6 +303,7 @@ pub fn exportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
             .rc_ret_unique = interface.rc_ret_unique,
             .may_leave_pending = interface.may_leave_pending,
             .rc_ret_conditions = interface.rc_ret_conditions,
+            .table_needs = interface.table_needs,
         };
     }
     return records;
@@ -688,9 +694,14 @@ fn dupeRecords(gpa: Allocator, records: []const object_cache.ExportRecord) Alloc
     const copies = try gpa.dupe(object_cache.ExportRecord, records);
     errdefer gpa.free(copies);
     var duped: usize = 0;
-    errdefer for (copies[0..duped]) |copy| gpa.free(copy.rc_ret_conditions);
+    errdefer for (copies[0..duped]) |copy| {
+        gpa.free(copy.rc_ret_conditions);
+        gpa.free(copy.table_needs);
+    };
     for (records, copies) |record, *copy| {
         copy.rc_ret_conditions = try gpa.dupe(u32, record.rc_ret_conditions);
+        errdefer gpa.free(copy.rc_ret_conditions);
+        copy.table_needs = try gpa.dupe(u8, record.table_needs);
         duped += 1;
     }
     return copies;

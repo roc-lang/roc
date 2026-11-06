@@ -43,7 +43,6 @@ pub const BoxyFunctions = struct {
     retained: *lir.CheckedPipeline.BoxyStoredFunctions,
     /// The program's result, which reading a value extends.
     result: *LirProgram.Result,
-    composition: *@import("boxy_runtime").compiled.InProcessState,
 };
 
 /// Resolves erased-callable runtime data for the active evaluator.
@@ -152,7 +151,7 @@ pub const Writer = struct {
         const functions = self.boxy_functions orelse writerInvariant("a function value reached a program that stores none");
         const data_ptr = self.readErasedCallablePointer(value);
         const resolved = try self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
-        const described = try functions.retained.describe(self.allocator, functions.result, resolved.proc, resolved.capture_ptr, functions.composition);
+        const described = try functions.retained.describe(self.allocator, functions.result, resolved.proc, resolved.capture_ptr);
         defer self.allocator.free(described.captures);
         const requests_start = self.store_requests.items.len;
         for (described.captures) |capture| {

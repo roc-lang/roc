@@ -14068,11 +14068,11 @@ including through nominal wrappers, is the component's own representation and
 never a recursion box; value slots and static descriptors read this one rule
 (`Layouts.isRecursionBox`).
 
-Every descriptor a body needs depends only on its hidden parameters, so the
-lowerer hoists all composition statements to the worker's entry block. A body
-composes each descriptor it needs once per activation, and a descriptor's
-address is stable for the whole activation. Argument-block descriptors also
-share one entry-chain result for an identical ordered list of descriptor
+Every descriptor a body needs is a word: a static descriptor of a closed
+type, one of the worker's inputs, or a word of its type table ("Type
+Tables"). The lowerer reads each in the worker's entry block, once per
+activation. Argument-block descriptors are composed there from those words,
+and share one entry-chain result for an identical ordered list of descriptor
 locals. This interning is local to lowering one worker and only records
 compositions emitted after all opened recursive members have closed. A
 composition emitted while a member is open is not shared across its close.
@@ -14094,10 +14094,9 @@ the body (it names the body's type variables; methods capture no values) is
 an override no static descriptor can hold: its function value needs the
 declaring body's descriptors and dictionaries. A type whose descriptor
 reaches such an override, through its structure or its nominals' backings,
-is composed in the body even when it is closed. The override is the local
-procedure's function value at the method's interface, built in the entry
-chain as an immortal composition (`dict_compose`), since the descriptor
-holding it lives for the program's lifetime.
+is described by a recipe of the body even when it is closed. The override is
+the local procedure's function value at the method's interface, an immortal
+callable, since the descriptor holding it lives for the program's lifetime.
 
 A closed type is otherwise never composed: the lowerer emits its static
 descriptor. Two descriptors of the same type may therefore be distinct
@@ -14106,25 +14105,60 @@ one composed from static parts at a different site); no consumer compares
 descriptors by identity, and equality, hashing, and inspection are defined on
 values through descriptors, never on descriptors.
 
+#### Type Tables
+
+A worker with hidden inputs (the descriptors of its type variables, its
+dictionaries, then its literal arguments) takes one hidden argument: the
+address of its type table, immutable static data. A template takes it after
+its explicit parameters. An erased worker's capture record holds it after the
+captured values, except for a generalized local procedure whose calls pass
+its own scheme's instantiation: its argument record leads with the table, and
+its function value captures none. A worker without inputs takes no table.
+Importing and defining units derive this ABI from the worker's signature
+alone.
+
+A table's words are the worker's inputs, then one word per recipe its body
+reads that the inputs determine (`postcheck/boxy/tables.zig`): the descriptor
+of a type over the worker's variables, carrying the override callables of the
+nominal types in its reach that only this body can build; a dictionary or
+literal thunk, an immortal callable capturing its entry's table; an argument
+record's descriptor; and the table of each worker the body calls or packs.
+The worker's needs list says what each word is, as a recipe over its inputs.
+It is fixed when the worker's body is lowered, holds only the recipes its
+slots reach, and names them in the order a walk from the slots reaches them.
+Word `i` is at `LIR.tableEntryOffset(i, pointer width)`, read with
+`LIR.DynOp.table_entry`; table words are immortal, so their reads take no
+reference counts.
+
+Every table is filled at compile time. A recipe that reads no input is
+evaluated where the body reads it, into static data. A table is reserved,
+keyed by its worker and its input words, when a word naming it is evaluated,
+and filled once its worker's needs list exists: lowering alternates between
+lowering queued workers and filling reserved tables until neither has work.
+Evaluating a descriptor recipe substitutes the types its descriptor inputs
+describe into its type, in the override scope of those inputs and its own
+overrides. Recipes that lead back to one another (a dictionary whose
+requirements capture it, a descriptor whose override captures that
+descriptor) are evaluated together, their callables reserved before any is
+filled. Such a group is interned by its content, so the same group is the
+same static data wherever it is evaluated and the tables keyed by its words
+are shared; since polymorphic recursion is rejected, a program has finitely
+many tables.
+
+An imported worker's tables are filled in the importing unit, from the needs
+list the worker's object exports (`ExportRecord.table_needs`), in which types
+and workers are named by their checked identities. The exports digest covers
+it, so an importer of a changed needs list is lowered again. In a
+compile-time program that stores function values, each table ends with one
+more word, its position among the program's tables, by which the stored
+function writer reads a function value's table inputs (design.md "Stored
+Function Values").
+
 #### Dynamic Values In LIR
 
-Template workers receive an additional hidden descriptor argument for each
-unique dynamic composite type in their parameters and result and in those
-types' descriptor components. Roots follow signature order (parameters, then
-result); components follow breadth-first order, deduplicated by checked type.
-The graph is exactly the graph descriptor composition consumes, including
-nominal backings and open row extensions, and a visited set terminates recursive
-types. The lowerer memoizes this immutable requirement list per worker. Bare type variables already receive hidden
-descriptors, and representation-closed types need no additional argument.
-The caller substitutes the checked call edge's type arguments into these
-formal types and prepares the descriptors in its entry chain. The callee
-binds them before constructing parameter and result locals, and consumes
-those bindings wherever it needs the same descriptor. Importing units and
-defining units derive this ABI from the same declared signature, without
-inspecting the callee's body. Direct calls, erased adapters, override workers,
-and generated codec calls pass the same explicit descriptor arguments.
 Host-visible signatures and erased callable signatures do not change; their
-wrappers supply these hidden arguments when calling a template worker.
+wrappers supply the type table when calling a worker that takes one ("Type
+Tables").
 
 A local whose checked type mentions a type variable in scope has the LIR
 layout `dynamic` and names the local holding its descriptor. A dynamic local
@@ -14450,10 +14484,10 @@ and holds the capture bytes after the fixed capture offset. This is the host
 ABI representation of `Box(function)` and is unchanged by strategy.
 
 The captures of a compiler-created callable are the captured binders' values,
-followed by every hidden descriptor and dictionary parameter of the enclosing
-worker that the callable's body mentions. A closure created in a generic body
-thus carries the type knowledge of its creation site, and its worker needs no
-hidden parameters of its own: it reads them from its captures. When any
+followed by its worker's type table, whose inputs are the hidden descriptors
+and dictionaries of the enclosing worker ("Type Tables"). A closure created in
+a generic body thus carries the type knowledge of its creation site, and its
+worker needs no hidden parameters of its own: it reads them from its table. When any
 capture is of variable type, the capture record is a dynamic record composed
 from the captures' descriptors, its first word is the capture record's
 descriptor, its second word the capture capacity of the allocation holding it
@@ -15033,13 +15067,15 @@ outcome and discarded.
 #### Stored Function Values
 
 A `.boxy` function value is an erased callable: a worker's code and what the
-worker captured, which is values, the descriptors of its scope's type
-variables, and dictionaries, themselves erased callables. Compile-time
-evaluation under `.boxy` stores exactly that (`ConstValue.boxy_fn`): a recipe
-naming the worker and the type each captured descriptor describes, with the
-captured values and dictionaries as nodes of the constant store. Restoring
-the value rebuilds the worker from the recipe and packs the same captures, so
-nothing is inferred about the value and no checked evidence is consulted.
+worker captured, which is values and its type table, whose inputs are the
+descriptors of its scope's type variables and dictionaries, themselves
+erased callables ("Type Tables"). Compile-time evaluation under `.boxy`
+stores exactly that (`ConstValue.boxy_fn`): a recipe naming the worker and
+the type each descriptor input describes, with the captured values and the
+dictionaries as nodes of the constant store. Restoring the value rebuilds the
+worker from the recipe, each dictionary as the immortal callable its own
+recipe names, and packs the values with the worker's table at those inputs,
+so nothing is inferred about the value and no checked evidence is consulted.
 
 The recipe begins with the table of the modules it names, by checked key, each
 once, which the constant store reads to name a stored function in an identity
@@ -15053,15 +15089,10 @@ named as their keys name them: templates and lambdas by checked id, codec
 pieces by their family's derivation, a compile-time slot by its root.
 
 Function types share one descriptor, so a descriptor cannot be read back into
-a type by its structure. A program that stores function values records, as it
-composes each descriptor, the type it was composed for and the descriptors of
-that type's variables (`LIR.DynOp.desc_note`). Every type with one descriptor
-is the same to generic code, so the lowest type id stands for them all, which
-keeps the choice independent of thread timing, and a function inside a
-recorded type stands for any function.
-
-Only compile-time programs record descriptors. The notes run in the compiling
-process and no runtime target accepts them.
+a type by its structure. A function value's table names its inputs instead:
+in a program that stores function values, each table's word past its needs
+holds its position among the program's tables, whose inputs the lowering
+kept as the static words they were filled with.
 
 A function value has no slot for another root to read, so a module's roots
 holding one, with every pending root they read, run first in their own

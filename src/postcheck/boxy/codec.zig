@@ -759,8 +759,15 @@ fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Body.
             value.* = try b.localMethodWord(table.evidenceNode(local.node), fn_ty);
         }
     }
-    for (bound, captures[fam_.locals.items.len..]) |ty, *desc| desc.* = try b.descWord(ty);
-    const composed = try b.composeDictionary(try constructorWorker(b.program, family), captures);
+    // The constructor captures the local procedures' function values, then
+    // its type table at the descriptors of its family's types.
+    const constructor = try constructorWorker(b.program, family);
+    const descs = try b.descWords(bound);
+    const words: []const Body.Word = if (descs.len == 0) captures[0..fam_.locals.items.len] else blk: {
+        captures[fam_.locals.items.len] = try b.tableWord(constructor, descs);
+        break :blk captures[0 .. fam_.locals.items.len + 1];
+    };
+    const composed: Body.Word = .{ .recipe = try b.recipes.intern(.{ .callable = .{ .entry = constructor, .captures = words } }) };
     return try b.adaptDictionary(composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound), actual);
 }
 
@@ -1276,16 +1283,10 @@ const Gen = struct {
                 };
                 defer b.allocator.free(instance.hidden);
                 const ret_ty = fnRet(program_, callable.fn_ty);
-                const call_args = try b.allocator.dupe(LocalId, args);
-                defer b.allocator.free(call_args);
                 // The result is adapted to the call's own type, since a
                 // sealed row of it may be widened here (design.md "Sealed
                 // Result Rows").
-                const hidden = try b.materializeAll(instance.hidden);
-                defer b.allocator.free(hidden);
-                const passed = try b.callDescriptorArgs(callee, instance.bound);
-                defer b.allocator.free(passed);
-                const all = try std.mem.concat(b.allocator, LocalId, &.{ call_args, hidden, passed });
+                const all = try b.callArgs(args, callee, instance.hidden);
                 defer b.allocator.free(all);
                 const target = try self.local(instance.ret);
                 try b.emitLinear(.{ .assign_call = .{ .target = target, .proc = target_worker.proc, .args = try b.store.addLocalSpan(all), .next = undefined } });
@@ -1297,7 +1298,9 @@ const Gen = struct {
     /// Call the family helper for `value_ty` at result type `ret_ty`.
     fn callHelper(self: *Gen, kind: Kind, value_ty: TypeId, ret_ty: TypeId, explicit: []const LocalId) Allocator.Error!LocalId {
         const worker = try helperWorker(self.program(), self.family, kind, value_ty, ret_ty);
-        const all = try std.mem.concat(self.b.allocator, LocalId, &.{ explicit, &.{ self.encoding, self.names }, self.b.var_descs });
+        const explicit_all = try std.mem.concat(self.b.allocator, LocalId, &.{ explicit, &.{ self.encoding, self.names } });
+        defer self.b.allocator.free(explicit_all);
+        const all = try self.b.callArgs(explicit_all, worker, try self.familyInputs());
         defer self.b.allocator.free(all);
         const target = try self.local(ret_ty);
         try self.b.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program().worker(worker).proc, .args = try self.b.store.addLocalSpan(all), .next = undefined } });
@@ -1312,7 +1315,13 @@ const Gen = struct {
         defer self.b.allocator.free(captured);
         const capture_types = try std.mem.concat(self.b.allocator, TypeId, &.{ value_types, &.{ fam_.encoding, fam_.names_ty } });
         defer self.b.allocator.free(capture_types);
-        return self.b.packClosure(worker, captured, capture_types, self.b.var_descs, &.{});
+        return self.b.packClosure(worker, captured, capture_types, try self.familyInputs());
+    }
+
+    /// The inputs of the family's workers: the descriptors of its types,
+    /// which this worker's are.
+    fn familyInputs(self: *Gen) Allocator.Error![]Body.Word {
+        return try self.b.descInputWords(0, self.b.var_descs.len);
     }
 
     /// Renamed name `index` of the family's names.
@@ -1349,12 +1358,13 @@ const Gen = struct {
         const worker = b.currentWorker().*;
         b.entry_hole = try b.newHole();
         const entry = b.entry_hole;
-        // Explicit parameters, then the family's descriptors.
-        const params = try b.allocator.alloc(LocalId, worker.params.len + worker.scheme_vars.len);
-        b.var_descs = try b.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
-        for (b.var_descs, params[worker.params.len..]) |*desc, *param| {
-            desc.* = try b.closedLocal(.opaque_ptr);
-            param.* = desc.*;
+        // Explicit parameters, then the type table, which holds the
+        // family's descriptors.
+        const has_table = b.program.inputCount(b.worker_id) != 0;
+        const params = try b.allocator.alloc(LocalId, worker.params.len + @intFromBool(has_table));
+        if (has_table) {
+            params[worker.params.len] = try b.closedLocal(.opaque_ptr);
+            try b.beginTable(params[worker.params.len], 0);
         }
         for (params[0..worker.params.len], worker.params) |*param, ty| param.* = try b.localOf(ty, .param);
         const ret_layout = try self.resultLayout(worker.ret);
@@ -1380,8 +1390,10 @@ const Gen = struct {
     fn beginErased(self: *Gen) Allocator.Error!Erased {
         const b = self.b;
         const worker = b.currentWorker().*;
-        // Captured values, then the family's descriptors.
-        const capture_layouts = try b.allocator.alloc(layout.Idx, worker.capture_types.len + worker.scheme_vars.len);
+        // Captured values, then the type table, which holds the family's
+        // descriptors.
+        const has_table = b.program.inputCount(b.worker_id) != 0;
+        const capture_layouts = try b.allocator.alloc(layout.Idx, worker.capture_types.len + @intFromBool(has_table));
         defer b.allocator.free(capture_layouts);
         var all_zero_sized = true;
         for (capture_layouts, 0..) |*slot, index| {
@@ -1398,7 +1410,7 @@ const Gen = struct {
                 try b.emitEntry(.{ .assign_struct = .{ .target = capture.*, .fields = LIR.LocalSpan.empty(), .next = undefined } });
             }
         }
-        b.var_descs = try b.program.arena.allocator().dupe(LocalId, start.captures[worker.capture_types.len..]);
+        if (has_table) try b.beginTable(start.captures[worker.capture_types.len], 0);
         var record: ?LocalId = null;
         if (worker.params.len != 0) record = try b.erasedParamLocal(worker.params);
         const ret_layout = try self.resultLayout(worker.ret);
@@ -1447,7 +1459,7 @@ const Gen = struct {
             slot.* = (try self.callFormat("rename_field", null, &.{ encoding, label })).value;
         }
         const runtime = try runtimeWorker(program_, self.family);
-        const closure = try self.b.packClosure(runtime, captured, program_.worker(runtime).capture_types, self.b.var_descs, &.{});
+        const closure = try self.b.packClosure(runtime, captured, program_.worker(runtime).capture_types, try self.familyInputs());
         try self.ret(closure);
         try self.finishErased(frame);
     }
@@ -2665,7 +2677,7 @@ const Gen = struct {
         const fields_ty = try self.fieldsTypeOf(iter_ty);
         const u64_ty = try self.u64Ty();
         const worker = try pieceWorker(program_, self.b.module, .{ .family = no_family, .kind = .field_names_step, .a = @backingInt(iter_ty), .b = @intFromBool(filtered) }, &.{}, fnRet(program_, step_fn), &.{ fields_ty, u64_ty, u64_ty }, true);
-        const step = try self.b.packClosure(worker, &.{ fields, position, size }, &.{ fields_ty, u64_ty, u64_ty }, &.{}, &.{});
+        const step = try self.b.packClosure(worker, &.{ fields, position, size }, &.{ fields_ty, u64_ty, u64_ty }, &.{});
         // `len_if_known : Try(U64, [Unknown])`.
         const len = if (filtered) blk: {
             const parts = (try tryParts(program_, len_ty)) orelse invariant("an iterator's len_if_known is not a Try");

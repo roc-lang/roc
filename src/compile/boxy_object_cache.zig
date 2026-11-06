@@ -21,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 13;
+pub const format_version: u32 = 14;
 
 const magic = "RBXO";
 
@@ -125,6 +125,9 @@ pub const ExportRecord = struct {
     rc_ret_unique: bool,
     may_leave_pending: bool,
     rc_ret_conditions: []const u32,
+    /// The worker's encoded needs list, for a worker that takes a type
+    /// table (`LirProgram.Result.boxy_table_needs`); empty otherwise.
+    table_needs: []const u8 = &.{},
 };
 
 /// One inline `expect` a test unit counts, at the unit-local site id that
@@ -196,6 +199,8 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
         try bytes.append(allocator, @intFromBool(record.may_leave_pending));
         try appendU32(&bytes, allocator, @intCast(record.rc_ret_conditions.len));
         for (record.rc_ret_conditions) |word| try appendU32(&bytes, allocator, word);
+        try appendU32(&bytes, allocator, @intCast(record.table_needs.len));
+        try bytes.appendSlice(allocator, record.table_needs);
     }
     for ([_][]const []const u8{ entry.hosted_symbols, entry.link_root_symbols, entry.app_export_symbols }) |symbols| {
         try appendU32(&bytes, allocator, @intCast(symbols.len));
@@ -232,7 +237,7 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
 
 /// The bytes of an export record with no return conditions: its identity,
 /// four 64-bit masks, three flags, and its condition count.
-const min_export_record_size = 32 + 4 * @sizeOf(u64) + 3 + @sizeOf(u32);
+const min_export_record_size = 32 + 4 * @sizeOf(u64) + 3 + 2 * @sizeOf(u32);
 
 /// The bytes of an expect-site or test-root record: a digest and two words.
 const table_record_size = 32 + 2 * @sizeOf(u32);
@@ -274,7 +279,10 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     const exports = try allocator.alloc(ExportRecord, export_count);
     errdefer allocator.free(exports);
     var decoded_exports: usize = 0;
-    errdefer for (exports[0..decoded_exports]) |record| allocator.free(record.rc_ret_conditions);
+    errdefer for (exports[0..decoded_exports]) |record| {
+        allocator.free(record.rc_ret_conditions);
+        allocator.free(record.table_needs);
+    };
     for (exports) |*record| {
         const identity = try reader.take(32);
         record.* = .{
@@ -293,7 +301,10 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         const conditions = try allocator.alloc(u32, condition_count);
         errdefer allocator.free(conditions);
         for (conditions) |*word| word.* = try reader.word32();
+        const needs_len = try reader.word32();
+        const needs = try allocator.dupe(u8, try reader.take(needs_len));
         record.rc_ret_conditions = conditions;
+        record.table_needs = needs;
         decoded_exports += 1;
     }
     const hosted_symbols = try decodeSymbols(allocator, &reader);
@@ -381,7 +392,10 @@ pub fn deinitEntry(allocator: Allocator, entry: Entry) void {
 
 /// Free an entry `decodeView` returned, leaving the bytes it borrows.
 pub fn deinitEntryView(allocator: Allocator, entry: Entry) void {
-    for (entry.exports) |record| allocator.free(record.rc_ret_conditions);
+    for (entry.exports) |record| {
+        allocator.free(record.rc_ret_conditions);
+        allocator.free(record.table_needs);
+    }
     allocator.free(entry.exports);
     freeSymbols(allocator, entry.hosted_symbols);
     freeSymbols(allocator, entry.link_root_symbols);

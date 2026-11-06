@@ -74,6 +74,15 @@ pub const StaticDescs = struct {
     next_unfilled: usize = 0,
     /// The root callable of each static dictionary tree, by its root.
     dictionary_trees: std.StringHashMapUnmanaged(ExportIndex) = .empty,
+    /// Whether each type table ends with its position among the reserved
+    /// tables, which reading a stored function value's table names
+    /// (`StoredFn.Retained`), in a program that stores function values.
+    table_identities: bool = false,
+    /// The words of each cyclic recipe group a table evaluated, by the
+    /// group's content (`tables.Evaluation`), in the group's own order.
+    groups: std.StringHashMapUnmanaged([]const CaptureWord) = .empty,
+    /// The static-data slot whose value is each word (`wordSlot`).
+    word_slots: std.HashMapUnmanaged(CaptureWord, LIR.StaticDataId, WordContext, std.hash_map.default_max_load_percentage) = .empty,
 
     /// A descriptor's identity: a type, or the recursion box around one, and
     /// the override scope that supplies the overrides of the nominal types
@@ -93,11 +102,9 @@ pub const StaticDescs = struct {
     pub const ScopedMethods = struct { nominal: TypeId, methods: [3]?CaptureWord };
 
     /// A table reserved by `table` whose words its worker's needs give.
-    pub const UnfilledTable = struct { worker: WorkerId, inputs: []const CaptureWord, reserved: Reserved };
+    /// `index` is its position among the reserved tables.
+    pub const UnfilledTable = struct { worker: WorkerId, inputs: []const CaptureWord, reserved: Reserved, index: u32 };
 
-    /// What a static dictionary's callables capture: the target's hidden
-    /// words directly, or the type table of the target's dictionary entry.
-    pub const Capture = enum { words, table };
     const Pending = struct { key: Key, node: ExportIndex };
 
     pub fn init(allocator: Allocator, store: *types.Store, layouts: *Layouts, result: *LirProgram.Result, target_usize: base.target.TargetUsize) StaticDescs {
@@ -136,7 +143,75 @@ pub const StaticDescs = struct {
         for (self.unfilled_tables.items) |unfilled| self.allocator.free(unfilled.inputs);
         self.unfilled_tables.deinit(self.allocator);
         freeKeys(self.allocator, &self.dictionary_trees);
+        var groups = self.groups.iterator();
+        while (groups.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.groups.deinit(self.allocator);
+        self.word_slots.deinit(self.allocator);
         self.pending.deinit(self.allocator);
+    }
+
+    const WordContext = struct {
+        pub fn hash(_: WordContext, word: CaptureWord) u64 {
+            var hasher = std.hash.Wyhash.init(0);
+            hashCaptureWord(&hasher, word);
+            return hasher.final();
+        }
+
+        pub fn eql(_: WordContext, a: CaptureWord, b: CaptureWord) bool {
+            return captureWordsEqual(a, b);
+        }
+    };
+
+    /// The static-data slot whose value is `word`, which a body reads
+    /// into a local with a `static_data` literal.
+    pub fn wordSlot(self: *StaticDescs, word: CaptureWord) Allocator.Error!LIR.StaticDataId {
+        if (self.word_slots.get(word)) |known| return known;
+        const slot = try self.addSlot();
+        const slot_export = try self.addExport(try LirProgram.staticDataSymbolName(self.allocator, slot), self.ptrSize(), self.ptrSize(), slot);
+        if (try self.wordTarget(word)) |target| {
+            try self.setRelocations(slot_export, &.{.{ .offset = 0, .target = target.node, .addend = target.addend }});
+        }
+        try self.drain();
+        try self.word_slots.put(self.allocator, word, slot);
+        return slot;
+    }
+
+    /// The words of the cyclic recipe group whose content is `key`, if a
+    /// table evaluated it before.
+    pub fn group(self: *const StaticDescs, key: []const u8) ?[]const CaptureWord {
+        return self.groups.get(key);
+    }
+
+    /// Record `words` as the words of the cyclic recipe group `key`.
+    pub fn putGroup(self: *StaticDescs, key: []const u8, words: []const CaptureWord) Allocator.Error!void {
+        const owned_key = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(owned_key);
+        const owned_words = try self.allocator.dupe(CaptureWord, words);
+        errdefer self.allocator.free(owned_words);
+        try self.groups.put(self.allocator, owned_key, owned_words);
+    }
+
+    /// The entries of override scope `scope_id`.
+    pub fn scopeEntries(self: *const StaticDescs, scope_id: ScopeId) []const ScopedMethods {
+        if (scope_id == .none) return &.{};
+        return self.scopes.items[@backingInt(scope_id)];
+    }
+
+    /// An immortal callable of `proc` with `word_count` capture words,
+    /// reserved: `fillCallable` gives its words once the callables it
+    /// captures, which may capture it, are reserved too.
+    pub fn reserveCallable(self: *StaticDescs, word_count: u32) Allocator.Error!ExportIndex {
+        self.extra_nodes += 1;
+        return try self.reserveStaticCallable(0, 16 + self.extra_nodes, word_count);
+    }
+
+    /// Fill the callable `reserveCallable` reserved.
+    pub fn fillCallable(self: *StaticDescs, node: ExportIndex, proc: LIR.LirProcSpecId, words: []const CaptureWord) Allocator.Error!void {
+        try self.fillStaticCallable(node, proc, words);
+        try self.drain();
     }
 
     /// Free the owned byte keys of `map` and the map.
@@ -231,7 +306,7 @@ pub const StaticDescs = struct {
     /// `root`: its structure, its nominal types' arguments, and their
     /// backings. Descriptors of types whose reach names no scoped nominal
     /// type share the scope-less key.
-    fn restrictScope(self: *StaticDescs, scope_id: ScopeId, root: TypeId) Allocator.Error!ScopeId {
+    pub fn restrictScope(self: *StaticDescs, scope_id: ScopeId, root: TypeId) Allocator.Error!ScopeId {
         if (scope_id == .none) return .none;
         if (self.restricted_scopes.get(.{ .scope = scope_id, .ty = root })) |known| return known;
         const entries = self.scopes.items[@backingInt(scope_id)];
@@ -346,7 +421,7 @@ pub const StaticDescs = struct {
         const owned_key = try self.allocator.dupe(u8, key.items);
         errdefer self.allocator.free(owned_key);
         try self.tables.put(self.allocator, owned_key, reserved);
-        self.unfilled_tables.appendAssumeCapacity(.{ .worker = worker, .inputs = owned_inputs, .reserved = reserved });
+        self.unfilled_tables.appendAssumeCapacity(.{ .worker = worker, .inputs = owned_inputs, .reserved = reserved, .index = @intCast(self.unfilled_tables.items.len) });
         return reserved;
     }
 
@@ -357,13 +432,18 @@ pub const StaticDescs = struct {
         return self.unfilled_tables.items[self.next_unfilled];
     }
 
-    /// Fill the reserved table `node` with `words`, word `index` at
-    /// `tables.entryOffset(index, pointer width)`.
-    pub fn fillTable(self: *StaticDescs, node: ExportIndex, words: []const CaptureWord) Allocator.Error!void {
+    /// Fill the reserved table `unfilled` with `words`, word `index` at
+    /// `tables.entryOffset(index, pointer width)`. With `table_identities`,
+    /// a word past them holds the table's position among the reserved
+    /// tables.
+    pub fn fillTable(self: *StaticDescs, unfilled: UnfilledTable, words: []const CaptureWord) Allocator.Error!void {
+        const node = unfilled.reserved.node;
         const item = &self.exports.items[node];
         if (item.bytes.len != 0) types.invariant("a type table was filled twice");
-        const bytes = try self.allocator.alloc(u8, words.len * self.ptrSize());
+        const word_count = words.len + @intFromBool(self.table_identities);
+        const bytes = try self.allocator.alloc(u8, word_count * self.ptrSize());
         @memset(bytes, 0);
+        if (self.table_identities) writeU32(bytes, LIR.tableEntryOffset(@intCast(words.len), self.ptrSize()), unfilled.index);
         self.allocator.free(item.bytes);
         item.bytes = bytes;
         var pointers: std.ArrayList(Pointer) = .empty;
@@ -536,7 +616,7 @@ pub const StaticDescs = struct {
                     .desc, .scoped_desc, .table, .node, .zero => types.invariant("an override scope's method is not a callable"),
                 } else null
             else if (overrides[index]) |override| switch (override) {
-                .procedure => |procedure| try self.staticCallable(owner, @intCast(4 + index), procedure, .words),
+                .procedure => |procedure| try self.staticCallable(owner, @intCast(4 + index), procedure),
                 .local => types.invariant("a static descriptor's type holds a local-procedure override outside the override scope that supplies it"),
             } else null;
             if (callable) |node| try pointers.append(self.allocator, .{ .offset = methods_layout.of(field), .target = node, .addend = static_callable_header });
@@ -580,33 +660,31 @@ pub const StaticDescs = struct {
         return std.meta.eql(a, b);
     }
 
-    /// An immortal erased callable of `override`'s entry, its captures as
-    /// `capture` says, through `staticDictionaryTree`.
-    fn staticCallable(self: *StaticDescs, owner: u32, index: u32, override: @FieldType(lower.NominalOverride, "procedure"), capture: Capture) Allocator.Error!ExportIndex {
+    /// An immortal erased callable of `override`'s entry, through
+    /// `staticDictionaryTree`.
+    fn staticCallable(self: *StaticDescs, owner: u32, index: u32, override: @FieldType(lower.NominalOverride, "procedure")) Allocator.Error!ExportIndex {
         return try self.staticDictionaryTree(owner, index, .{ .target = .{
             .target = override.target,
             .instance = .{ .bound = override.bound, .requirements = override.dicts },
-        } }, override.entry, capture);
+        } }, override.entry);
     }
 
     /// The static dictionary of the closed requirement tree `root`
     /// (`Program.dictionaryTree`): each target an immortal erased callable of
     /// its dictionary entry (`root_entry` for a target root, which may name
     /// another entry than the target's own), each resolved requirement a
-    /// static callable of its structural or crashing method. With `capture`
-    /// `words`, a target's callable captures the descriptors of its scheme's
-    /// types, then its dictionaries, then its literal thunks, one word each;
-    /// with `table`, it captures the type table of its entry at those words.
+    /// static callable of its structural or crashing method. A target's
+    /// callable captures the type table of its entry at the descriptors of
+    /// its scheme's types, then its dictionaries, then its literal thunks.
     ///
     /// Every callable is reserved before any is filled, so the dictionaries
     /// of a requirement that reaches itself capture one another. The tree is
     /// a function of its closed root, so it is emitted once per root: a
     /// dictionary capturing itself is the same static data wherever its root
     /// is asked for, and so are the tables keyed by it.
-    pub fn staticDictionaryTree(self: *StaticDescs, owner: u32, index: u32, root: lower.DictionaryRoot, root_entry: ?WorkerId, capture: Capture) Allocator.Error!ExportIndex {
+    pub fn staticDictionaryTree(self: *StaticDescs, owner: u32, index: u32, root: lower.DictionaryRoot, root_entry: ?WorkerId) Allocator.Error!ExportIndex {
         var key: std.ArrayList(u8) = .empty;
         defer key.deinit(self.allocator);
-        try key.append(self.allocator, @backingInt(capture));
         try appendKeyWord(self.allocator, &key, if (root_entry) |entry| @backingInt(entry) + 1 else 0);
         switch (root) {
             .requirement => |requirement| {
@@ -655,10 +733,7 @@ pub const StaticDescs = struct {
                     // callable per literal thunk, capturing nothing
                     // (design.md "Literal Arguments").
                     thunks[position] = try program_.literalThunks(self.allocator, target.target, target.instance.bound);
-                    const words = switch (capture) {
-                        .words => target.instance.bound.len + target.children.len + thunks[position].len,
-                        .table => 1,
-                    };
+                    const words: u32 = if (program_.inputCount(entries[position]) == 0) 0 else 1;
                     // Each node index past the slot's own names one callable.
                     const node_index: u32 = if (position == 0) index else blk: {
                         self.extra_nodes += 1;
@@ -669,8 +744,9 @@ pub const StaticDescs = struct {
                 .resolved => |resolution| switch (resolution) {
                     .structural => |structural| {
                         self.extra_nodes += 1;
-                        const worker = program_.worker(try program_.structuralWorker(modules[position], structural.method)).*;
-                        nodes[position] = try self.staticCallableOf(owner, 16 + self.extra_nodes, worker.proc, &.{.{ .desc = structural.over }});
+                        const structural_id = try program_.structuralWorker(modules[position], structural.method);
+                        const worker = program_.worker(structural_id).*;
+                        nodes[position] = try self.staticCallableOf(owner, 16 + self.extra_nodes, worker.proc, &.{.{ .table = (try self.table(structural_id, &.{.{ .desc = structural.over }})).node }});
                     },
                     .crash => |kind| {
                         self.extra_nodes += 1;
@@ -704,18 +780,18 @@ pub const StaticDescs = struct {
             switch (try program_.storageDifference(own_ty, requirement.callable)) {
                 .none => {},
                 .function => {
-                    // The adapter is in the target's variables, whose
-                    // descriptors it captures after the dictionary.
+                    // The adapter is in the target's variables: it captures
+                    // the dictionary, then its table at their descriptors.
                     const adapter = try program_.adapterWorker(target.target, own_ty, requirement.callable);
+                    const descs = try self.allocator.alloc(CaptureWord, target.instance.bound.len);
+                    defer self.allocator.free(descs);
+                    for (descs, target.instance.bound) |*desc, ty| desc.* = .{ .desc = ty };
                     var words: std.ArrayList(CaptureWord) = .empty;
                     defer words.deinit(self.allocator);
                     try words.append(self.allocator, .{ .callable = nodes[position] });
-                    for (target.instance.bound) |ty| try words.append(self.allocator, .{ .desc = ty });
+                    if (descs.len != 0) try words.append(self.allocator, .{ .table = (try self.table(adapter, descs)).node });
                     self.extra_nodes += 1;
-                    adapted_node.* = switch (capture) {
-                        .words => try self.staticCallableOf(owner, 16 + self.extra_nodes, program_.worker(adapter).proc, words.items),
-                        .table => try self.staticCallableOf(owner, 16 + self.extra_nodes, program_.worker(adapter).proc, &.{.{ .table = (try self.table(adapter, words.items)).node }}),
-                    };
+                    adapted_node.* = try self.staticCallableOf(owner, 16 + self.extra_nodes, program_.worker(adapter).proc, words.items);
                 },
                 .rows, .record_order => types.invariant("two callable types of a dictionary differ outside the signature of the function it is"),
             }
@@ -735,12 +811,11 @@ pub const StaticDescs = struct {
                 try words.append(self.allocator, .{ .callable = callable });
             }
             const proc = program_.worker(entries[position]).proc;
-            switch (capture) {
-                .words => try self.fillStaticCallable(nodes[position], proc, words.items),
-                .table => {
-                    const entry_table = try self.table(entries[position], words.items);
-                    try self.fillStaticCallable(nodes[position], proc, &.{.{ .table = entry_table.node }});
-                },
+            if (words.items.len == 0) {
+                try self.fillStaticCallable(nodes[position], proc, &.{});
+            } else {
+                const entry_table = try self.table(entries[position], words.items);
+                try self.fillStaticCallable(nodes[position], proc, &.{.{ .table = entry_table.node }});
             }
         }
         const owned_key = try self.allocator.dupe(u8, key.items);
@@ -1152,12 +1227,12 @@ pub const StaticDescs = struct {
 };
 
 /// Append `value` to an interning key.
-fn appendKeyWord(allocator: Allocator, key: *std.ArrayList(u8), value: u32) Allocator.Error!void {
+pub fn appendKeyWord(allocator: Allocator, key: *std.ArrayList(u8), value: u32) Allocator.Error!void {
     try key.appendSlice(allocator, std.mem.asBytes(&value));
 }
 
 /// Append `word` to an interning key.
-fn appendCaptureWordKey(allocator: Allocator, key: *std.ArrayList(u8), word: StaticDescs.CaptureWord) Allocator.Error!void {
+pub fn appendCaptureWordKey(allocator: Allocator, key: *std.ArrayList(u8), word: StaticDescs.CaptureWord) Allocator.Error!void {
     try key.append(allocator, @backingInt(std.meta.activeTag(word)));
     switch (word) {
         .desc => |ty| try appendKeyWord(allocator, key, @backingInt(ty)),
@@ -1371,7 +1446,7 @@ test "type tables are reserved once per worker and inputs, then filled" {
 
         // A table reaching itself: its second word addresses it.
         const args = try fixture.descs.argsDescriptor(1, &.{number}, .none);
-        try fixture.descs.fillTable(reserved.node, &.{ .{ .desc = number }, .zero, .{ .table = reserved.node }, .{ .node = args.node } });
+        try fixture.descs.fillTable(first, &.{ .{ .desc = number }, .zero, .{ .table = reserved.node }, .{ .node = args.node } });
         const filled = fixture.descs.exports.items[reserved.node];
         const ptr = width.size();
         try std.testing.expectEqual(@as(usize, 4 * ptr), filled.bytes.len);

@@ -32,14 +32,17 @@ fn inspect(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLi
         try std.testing.expect(std.mem.findScalar(lir.LIR.StaticDataId, slots.items, stmt.dyn.composition_cache.?) != null);
         if (op == .dict_compose or op == .dict_record) dictionaries += 1 else descriptors += 1;
     }
+    // Argument records' descriptors are composed; every dictionary is a
+    // word of static data or of a type table.
     try std.testing.expect(descriptors > 0);
-    try std.testing.expect(dictionaries > 0);
+    try std.testing.expectEqual(@as(usize, 0), dictionaries);
 }
 
 test "issue 12734: boxy composition sites survive ARC and static data compaction" {
     try harness.runLoweredInspection(
         \\pair = |x| { first: x, second: [x] }
-        \\render = |x| Str.inspect(pair(x))
+        \\both = |f, x| f(x, x)
+        \\render = |x| Str.inspect(both(|a, b| { a, b }, pair(x)))
         \\main! = |args| {
         \\    echo!(render(args))
         \\    echo!(render(args.len()))
@@ -65,7 +68,8 @@ fn expectNoSites(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.Low
 test "a consumer that reads no composition sites gets no site slots" {
     try harness.runLoweredInspection(
         \\pair = |x| { first: x, second: [x] }
-        \\render = |x| Str.inspect(pair(x))
+        \\both = |f, x| f(x, x)
+        \\render = |x| Str.inspect(both(|a, b| { a, b }, pair(x)))
         \\main! = |args| {
         \\    echo!(render(args))
         \\    echo!(render(args.len()))
@@ -115,8 +119,16 @@ fn expectClosedDictionariesStatic(lowered: *const lir.CheckedPipeline.LoweredPro
     try std.testing.expect(staticCallables(lowered.frozen_static_data.?.exports) > 0);
 }
 
-fn expectOpenDictionaryComposed(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
-    try std.testing.expect((try dictionaryCompositions(&lowered.lir_result.store)).open > 0);
+fn expectOpenDictionaryFromTable(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
+    const store = &lowered.lir_result.store;
+    const compositions = try dictionaryCompositions(store);
+    try std.testing.expectEqual(@as(usize, 0), compositions.open + compositions.closed);
+    var table_reads: usize = 0;
+    for (0..store.cfStmtCount()) |i| {
+        const stmt = store.getCFStmt(@fromBackingInt(@intCast(i)));
+        if (stmt == .dyn and store.stmtRow(stmt.dyn.data) == .table_entry) table_reads += 1;
+    }
+    try std.testing.expect(table_reads > 0);
 }
 
 test "a dictionary of closed types is static data, even inside a generic body" {
@@ -140,7 +152,7 @@ test "a dictionary of closed types is static data, even inside a generic body" {
     , .{ .specialization_strategy = .boxy }, expectClosedDictionariesStatic);
 }
 
-test "a dictionary that captures a body's hidden parameter is composed" {
+test "a dictionary that captures a body's hidden parameter is a word of its type table" {
     try harness.runLoweredInspection(
         \\equal = |a, b| a == b
         \\
@@ -151,5 +163,5 @@ test "a dictionary that captures a body's hidden parameter is composed" {
         \\    echo!(Str.inspect(pairs_equal(args, args)))
         \\    Ok({})
         \\}
-    , .{ .specialization_strategy = .boxy }, expectOpenDictionaryComposed);
+    , .{ .specialization_strategy = .boxy }, expectOpenDictionaryFromTable);
 }

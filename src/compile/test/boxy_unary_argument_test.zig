@@ -47,7 +47,7 @@ test "boxy declared primitives lower directly at closed and open call sites" {
     }
 }
 
-test "boxy caller supplies the composite parameter and result descriptor once" {
+test "boxy worker reads the composite parameter and result descriptor once from its type table" {
     for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
         try harness.expectLirInspectionWithOptions(
             \\keep : List(a) -> List(a)
@@ -64,14 +64,13 @@ test "boxy caller supplies the composite parameter and result descriptor once" {
                     const name = store.procDebugName(@fromBackingInt(@intCast(index))) orelse continue;
                     if (!std.mem.eql(u8, name, "keep") and !std.mem.endsWith(u8, name, ".keep")) continue;
                     found = true;
-                    // The list, a's descriptor, and one shared List(a) descriptor.
+                    // The list and the type table, whose one List(a)
+                    // descriptor the parameter and the result share.
                     const args = store.getLocalSpan(proc.args);
-                    try std.testing.expectEqual(@as(usize, 3), args.len);
-                    const descriptor = collections.GuardedList.at(args, 2);
+                    try std.testing.expectEqual(@as(usize, 2), args.len);
                     const param = store.localDyn(collections.GuardedList.at(args, 0)) orelse return error.TestUnexpectedResult;
                     const result = store.localDyn(proc.dyn_result orelse return error.TestUnexpectedResult) orelse return error.TestUnexpectedResult;
-                    try std.testing.expectEqual(descriptor, param.desc);
-                    try std.testing.expectEqual(descriptor, result.desc);
+                    try std.testing.expectEqual(param.desc, result.desc);
                 }
                 try std.testing.expect(found);
             }
@@ -208,7 +207,7 @@ fn inspectEntries(store: *const lir.LirStore, _: *const layout.Store) harness.Lo
     try std.testing.expect(direct_forwarders != 0);
 }
 
-test "boxy caller supplies dynamic nominal backing descriptors" {
+test "boxy worker reads dynamic nominal backing descriptors from its type table" {
     for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
         try harness.expectLirInspectionWithOptions(
             \\wrap : a -> Try(a, {})
@@ -225,8 +224,9 @@ test "boxy caller supplies dynamic nominal backing descriptors" {
                     const name = store.procDebugName(@fromBackingInt(@intCast(index))) orelse continue;
                     if (!std.mem.eql(u8, name, "wrap") and !std.mem.endsWith(u8, name, ".wrap")) continue;
                     found = true;
-                    // value, a's descriptor, Try(a, {}) and its backing union.
-                    try std.testing.expectEqual(@as(usize, 4), store.getLocalSpan(proc.args).len);
+                    // The value and the type table, which holds Try(a, {})
+                    // and its backing union: the body composes neither.
+                    try std.testing.expectEqual(@as(usize, 2), store.getLocalSpan(proc.args).len);
                     var pending: std.ArrayList(lir.LIR.CFStmtId) = .empty;
                     defer pending.deinit(std.testing.allocator);
                     var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);

@@ -26,10 +26,12 @@ const lir_core = @import("lir_core");
 const boxy_runtime = @import("boxy_runtime");
 
 const types = @import("types.zig");
+const Tables = @import("tables.zig");
 const lower = @import("lower.zig");
 const const_schema = @import("const_schema.zig");
 const Codec = @import("codec.zig");
 const body = @import("body.zig");
+const StaticDescs = @import("static_descs.zig").StaticDescs;
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -37,14 +39,14 @@ const ExprId = check.CheckedBodies.ExprId;
 const LIR = lir_core.LIR;
 const LirProgram = lir_core.Program;
 const TypeDesc = boxy_runtime.desc.TypeDesc;
-const InProcessState = boxy_runtime.compiled.InProcessState;
 const TypeId = types.TypeId;
 const Program = lower.Program;
 const WorkerId = lower.WorkerId;
 const invariant = types.invariant;
 
-/// What a worker's erased callable captures, in the order a body packs it:
-/// `values`, then `descs` descriptors, then `dicts` erased callables.
+/// What a worker's erased callable captures: `values`, then its type
+/// table, whose inputs are `descs` descriptors, then `dicts` erased
+/// callables.
 pub const CaptureShape = struct {
     values: []const TypeId,
     descs: u32,
@@ -109,27 +111,23 @@ pub const Retained = struct {
     allocator: Allocator,
     program: *Program,
     workers: std.AutoHashMapUnmanaged(LIR.ProcIdentity, WorkerId) = .empty,
-    /// The closed type of each descriptor resolved so far.
-    desc_types: std.AutoHashMapUnmanaged(*const TypeDesc, TypeId) = .empty,
 
     /// Free the retained program and everything read from it.
     pub fn deinit(self: *Retained) void {
         self.workers.deinit(self.allocator);
-        self.desc_types.deinit(self.allocator);
         self.program.release();
         self.allocator.destroy(self.program);
         self.allocator.destroy(self);
     }
 
     /// Read the function value of the proc `proc` whose capture record is at
-    /// `capture`, as `composition` composed its descriptors.
+    /// `capture`.
     pub fn describe(
         self: *Retained,
         allocator: Allocator,
         result: *LirProgram.Result,
         proc: LIR.LirProcSpecId,
         capture: [*]u8,
-        composition: *InProcessState,
     ) Allocator.Error!Described {
         const program = self.program;
         program.result = result.*;
@@ -138,11 +136,12 @@ pub const Retained = struct {
             invariant("a stored function value's code is no worker of its program");
         const shape = captureShape(program, worker_id);
         const open = !try allClosed(program, shape.values);
-        const word_count = shape.descs + shape.dicts;
+        const has_table = shape.descs + shape.dicts != 0;
+        const word_count: u32 = @intFromBool(has_table);
 
         // Where each capture is: a closed record's order is values, then
-        // words; a dynamic record's is its own descriptor and capacity,
-        // words, then values.
+        // the type table; a dynamic record's is its own descriptor and
+        // capacity, the type table, then values.
         const offsets = try allocator.alloc(u32, shape.values.len + word_count);
         defer allocator.free(offsets);
         if (open) {
@@ -151,7 +150,7 @@ pub const Retained = struct {
             for (0..word_count) |index| offsets[shape.values.len + index] = record_desc.fieldOffset(@intCast(leading + index));
             for (0..shape.values.len) |index| offsets[index] = record_desc.fieldOffset(@intCast(leading + word_count + index));
         } else if (offsets.len != 0) {
-            const record = try closedRecordLayout(program, shape);
+            const record = try closedRecordLayout(program, shape.values, word_count);
             if (record != .zst) {
                 const layouts = &program.result.layouts;
                 const struct_idx = layouts.getLayout(record).getStruct().idx;
@@ -161,12 +160,18 @@ pub const Retained = struct {
             }
         }
 
+        // The table's inputs: the descriptors of the types the value is at,
+        // then its dictionaries, which the table holds as words.
+        const table: ?[*]u8 = if (has_table) @ptrCast(@constCast(readWord(capture + offsets[shape.values.len]))) else null;
+        const inputs: []const StaticDescs.CaptureWord = if (table) |address| self.tableInputs(worker_id, address) else &.{};
+        if (inputs.len != shape.descs + shape.dicts) invariant("a stored function value's table inputs differ from its worker's");
         const bound = try allocator.alloc(TypeId, shape.descs);
         defer allocator.free(bound);
-        for (bound, offsets[shape.values.len..][0..shape.descs]) |*ty, offset| {
-            const desc: *const TypeDesc = @ptrCast(@alignCast(readWord(capture + offset)));
-            ty.* = try self.descType(desc, composition);
-        }
+        for (bound, inputs[0..shape.descs]) |*ty, input| ty.* = switch (input) {
+            .desc => |desc_ty| desc_ty,
+            .scoped_desc => |scoped| scoped.ty,
+            .callable, .table, .node, .zero => invariant("a type table's descriptor input is not a descriptor"),
+        };
 
         var recipe = Encoder{ .allocator = allocator, .program = program };
         defer recipe.deinit();
@@ -193,33 +198,30 @@ pub const Retained = struct {
             };
         }
         const dictionary_ty = try program.anyFunction();
-        for (captures[shape.values.len..], offsets[shape.values.len + shape.descs ..]) |*slot, offset| {
+        const word_bytes = program.static_descs.width.bytes();
+        for (captures[shape.values.len..], shape.descs..) |*slot, index| {
             slot.* = .{
                 .plan = try const_schema.constPlanOf(program, dictionary_ty),
                 .layout_idx = try program.result.layouts.insertErasedCallable(),
-                .ptr = capture + offset,
+                .ptr = table.? + LIR.tableEntryOffset(@intCast(index), word_bytes),
             };
         }
         return .{ .recipe = try recipe.finish(), .captures = captures };
     }
 
-    /// A closed type `desc` describes (`LIR.DynOp.desc_note`): the noted type
-    /// with its variables at the types their descriptors describe. Function
-    /// types share a descriptor, so a function in it stands for any function.
-    fn descType(self: *Retained, desc: *const TypeDesc, composition: *InProcessState) Allocator.Error!TypeId {
-        if (self.desc_types.get(desc)) |known| return known;
-        const origin = composition.origin(desc) orelse invariant("a stored function value captured a descriptor its program never noted");
-        const noted: TypeId = @fromBackingInt(origin.ty);
+    /// The inputs of worker `id`'s type table at `address`, which the
+    /// program filled: the word past its needs names it among the tables
+    /// (`StaticDescs.table_identities`).
+    fn tableInputs(self: *Retained, id: WorkerId, address: [*]u8) []const StaticDescs.CaptureWord {
         const program = self.program;
-        const bound = try self.allocator.alloc(TypeId, origin.vars.len);
-        defer self.allocator.free(bound);
-        for (bound, origin.vars) |*ty, variable| ty.* = try self.descType(variable, composition);
-        const resolved = try program.substituteRepresentation(self.allocator, noted, bound);
-        try self.desc_types.put(self.allocator, desc, resolved);
-        return resolved;
+        const needs = program.worker(id).needs orelse invariant("a stored function value's worker has a table but no needs");
+        const offset = LIR.tableEntryOffset(needs.wordCount(), program.static_descs.width.bytes());
+        const index = std.mem.readInt(u32, address[offset..][0..4], @import("builtin").cpu.arch.endian());
+        const tables = program.static_descs.unfilled_tables.items;
+        if (index >= tables.len or tables[index].worker != id) invariant("a stored function value's table is no table its program filled for its worker");
+        return tables[index].inputs;
     }
 };
-
 /// Keep `program` for reading the function values its program evaluates to.
 pub fn retain(allocator: Allocator, program: *Program) Allocator.Error!*Retained {
     const retained = try allocator.create(Retained);
@@ -244,20 +246,16 @@ fn allClosed(program: *Program, tys: []const TypeId) Allocator.Error!bool {
     return true;
 }
 
-/// A closed capture record's layout (`Builder.captureLayout`).
-fn closedRecordLayout(program: *Program, shape: CaptureShape) Allocator.Error!layout.Idx {
+/// A closed capture record's layout (`Builder.captureLayout`): `values`,
+/// then `word_count` pointer-sized words.
+fn closedRecordLayout(program: *Program, values: []const TypeId, word_count: u32) Allocator.Error!layout.Idx {
     const allocator = program.allocator;
-    const fields = try allocator.alloc(layout.StructField, shape.values.len + shape.descs + shape.dicts);
+    const fields = try allocator.alloc(layout.StructField, values.len + word_count);
     defer allocator.free(fields);
     for (fields, 0..) |*field, index| {
         field.* = .{
             .index = @intCast(index),
-            .layout = if (index < shape.values.len)
-                try program.layouts.layoutOf(shape.values[index])
-            else if (index < shape.values.len + shape.descs)
-                .opaque_ptr
-            else
-                try program.result.layouts.insertErasedCallable(),
+            .layout = if (index < values.len) try program.layouts.layoutOf(values[index]) else .opaque_ptr,
         };
     }
     return try program.result.layouts.putStructFields(fields);
@@ -564,7 +562,7 @@ const Encoder = struct {
 };
 
 const Decoder = struct {
-    b: *body.Builder,
+    program: *Program,
     bytes: []const u8,
     at: usize = 0,
     modules: []const [32]u8 = &.{},
@@ -584,7 +582,7 @@ const Decoder = struct {
     }
 
     fn module(self: *Decoder) types.ModuleIndex {
-        return self.b.program.moduleByKey(.{ .bytes = self.modules[self.word()] }).index;
+        return self.program.moduleByKey(.{ .bytes = self.modules[self.word()] }).index;
     }
 
     /// The table of modules, which `module` indexes.
@@ -599,7 +597,7 @@ const Decoder = struct {
     }
 
     fn typeSpan(self: *Decoder) Allocator.Error![]const TypeId {
-        const out = try self.b.program.arena.allocator().alloc(TypeId, self.word());
+        const out = try self.program.arena.allocator().alloc(TypeId, self.word());
         for (out) |*ty| ty.* = self.typeOf();
         return out;
     }
@@ -610,14 +608,14 @@ const Decoder = struct {
     }
 
     fn readTable(self: *Decoder) Allocator.Error!void {
-        self.table = try self.b.allocator.alloc(TypeId, self.word());
+        self.table = try self.program.allocator.alloc(TypeId, self.word());
         for (self.table) |*ty| ty.* = try self.tableEntry();
     }
 
     /// One entry of the table, whose components are entries before it.
     fn tableEntry(self: *Decoder) Allocator.Error!TypeId {
-        const program = self.b.program;
-        const allocator = self.b.allocator;
+        const program = self.program;
+        const allocator = program.allocator;
         const store = &program.store;
         const node_tag: std.meta.Tag(types.Node) = @fromBackingInt(@intCast(self.byte()));
         return switch (node_tag) {
@@ -684,12 +682,11 @@ const Decoder = struct {
 
     fn name(self: *Decoder) Allocator.Error!types.NameId {
         const len = self.word();
-        return try self.b.program.store.internName(self.take(len));
+        return try self.program.store.internName(self.take(len));
     }
 
     fn worker(self: *Decoder) Allocator.Error!WorkerId {
-        const b = self.b;
-        const program = b.program;
+        const program = self.program;
         const tag: Tag = @fromBackingInt(@intCast(self.byte()));
         switch (tag) {
             .template => {
@@ -699,7 +696,10 @@ const Decoder = struct {
             .lambda => {
                 const expr: ExprId = @fromBackingInt(self.word());
                 const captured_scheme = self.word() != 0;
-                return try b.storedLambdaWorker(try self.worker(), expr, captured_scheme);
+                const outer = try self.worker();
+                var builder = try body.Builder.init(program, outer);
+                defer builder.deinit();
+                return try builder.storedLambdaWorker(outer, expr, captured_scheme);
             },
             .adapter => {
                 const from = self.typeOf();
@@ -785,11 +785,137 @@ pub const Decoded = struct {
 
 /// Read a stored function's recipe.
 pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
-    var decoder = Decoder{ .b = b, .bytes = recipe };
+    var decoder = Decoder{ .program = b.program, .bytes = recipe };
     decoder.readModules();
     try decoder.readTable();
     defer b.allocator.free(decoder.table);
     const worker = try decoder.worker();
     const bound = try decoder.typeSpan();
     return .{ .worker = worker, .bound = bound, .rebuilt = decoder.byte() != 0 };
+}
+
+/// A worker's needs list (`tables.Needs`) as bytes another unit reads, in
+/// the encoding of a stored function's recipe: its types and workers named
+/// by their checked identities, never by this lowering's ids, so equal
+/// needs are equal bytes. Caller frees.
+pub fn encodeNeeds(allocator: Allocator, program: *Program, needs: Tables.Needs) Allocator.Error![]const u8 {
+    var encoder = Encoder{ .allocator = allocator, .program = program };
+    defer encoder.deinit();
+    try encoder.word(needs.input_count);
+    try encoder.word(needs.desc_count);
+    try encoder.word(@intCast(needs.recipes.len));
+    for (needs.recipes) |recipe| {
+        try encoder.bytes.append(allocator, @backingInt(std.meta.activeTag(recipe)));
+        switch (recipe) {
+            .input => |index| try encoder.word(index),
+            .desc => |desc| {
+                try encoder.typeOf(desc.ty);
+                try encoder.word(@intCast(desc.scoped.len));
+                for (desc.scoped) |override| {
+                    try encoder.typeOf(override.nominal);
+                    for (override.methods) |method| {
+                        try encoder.bytes.append(allocator, @intFromBool(method != null));
+                        if (method) |operand| try encodeOperand(&encoder, operand);
+                    }
+                }
+            },
+            .args_desc => |args| {
+                try encoder.word(args.leading);
+                try encodeOperands(&encoder, args.elems);
+            },
+            .callable => |callable| {
+                try encoder.worker(callable.entry);
+                try encodeOperands(&encoder, callable.captures);
+            },
+            .table => |table| {
+                try encoder.worker(table.worker);
+                try encodeOperands(&encoder, table.inputs);
+            },
+        }
+    }
+    try encoder.word(@intCast(needs.slots.len));
+    for (needs.slots) |slot| try encoder.word(@backingInt(slot));
+    return try encoder.finish();
+}
+
+fn encodeOperands(encoder: *Encoder, operands: []const Tables.Operand) Allocator.Error!void {
+    try encoder.word(@intCast(operands.len));
+    for (operands) |operand| try encodeOperand(encoder, operand);
+}
+
+/// An operand: another recipe, or a static word, which a recipe holds
+/// only as a closed type's descriptor or the null word.
+fn encodeOperand(encoder: *Encoder, operand: Tables.Operand) Allocator.Error!void {
+    switch (operand) {
+        .recipe => |id| {
+            try encoder.bytes.append(encoder.allocator, 0);
+            try encoder.word(@backingInt(id));
+        },
+        .static => |word| switch (word) {
+            .desc => |ty| {
+                try encoder.bytes.append(encoder.allocator, 1);
+                try encoder.typeOf(ty);
+            },
+            .zero => try encoder.bytes.append(encoder.allocator, 2),
+            .scoped_desc, .callable, .table, .node => invariant("a recipe holds a static word other than a closed type's descriptor or the null word"),
+        },
+    }
+}
+
+/// Read the needs list `encodeNeeds` wrote, its types and workers in this
+/// lowering, allocated in the program's arena.
+pub fn decodeNeeds(program: *Program, bytes: []const u8) Allocator.Error!Tables.Needs {
+    const arena = program.arena.allocator();
+    var decoder = Decoder{ .program = program, .bytes = bytes };
+    decoder.readModules();
+    try decoder.readTable();
+    defer program.allocator.free(decoder.table);
+    const input_count = decoder.word();
+    const desc_count = decoder.word();
+    const recipes = try arena.alloc(Tables.Recipe, decoder.word());
+    for (recipes) |*recipe| {
+        const tag: std.meta.Tag(Tables.Recipe) = @fromBackingInt(@intCast(decoder.byte()));
+        recipe.* = switch (tag) {
+            .input => .{ .input = decoder.word() },
+            .desc => blk: {
+                const ty = decoder.typeOf();
+                const scoped = try arena.alloc(Tables.ScopedOverride, decoder.word());
+                for (scoped) |*override| {
+                    override.* = .{ .nominal = decoder.typeOf(), .methods = undefined };
+                    for (&override.methods) |*method| method.* = if (decoder.byte() != 0) try decodeOperand(&decoder) else null;
+                }
+                break :blk .{ .desc = .{ .ty = ty, .scoped = scoped } };
+            },
+            .args_desc => blk: {
+                const leading = decoder.word();
+                break :blk .{ .args_desc = .{ .leading = leading, .elems = try decodeOperands(&decoder) } };
+            },
+            .callable => blk: {
+                const entry = try decoder.worker();
+                break :blk .{ .callable = .{ .entry = entry, .captures = try decodeOperands(&decoder) } };
+            },
+            .table => blk: {
+                const worker = try decoder.worker();
+                break :blk .{ .table = .{ .worker = worker, .inputs = try decodeOperands(&decoder) } };
+            },
+        };
+    }
+    const slots = try arena.alloc(Tables.RecipeId, decoder.word());
+    for (slots) |*slot| slot.* = @fromBackingInt(decoder.word());
+    return .{ .input_count = input_count, .desc_count = desc_count, .recipes = recipes, .slots = slots };
+}
+
+fn decodeOperands(decoder: *Decoder) Allocator.Error![]const Tables.Operand {
+    const operands = try decoder.program.arena.allocator().alloc(Tables.Operand, decoder.word());
+    for (operands) |*operand| operand.* = try decodeOperand(decoder);
+    return operands;
+}
+
+fn decodeOperand(decoder: *Decoder) Allocator.Error!Tables.Operand {
+    return switch (decoder.byte()) {
+        0 => .{ .recipe = @fromBackingInt(decoder.word()) },
+        1 => .{ .static = .{ .desc = decoder.typeOf() } },
+        2 => .{ .static = .zero },
+        else => invariant("an encoded needs list holds an operand of no kind"),
+    };
 }

@@ -6225,7 +6225,7 @@ fn evalDevProgramRoots(
         .context = @ptrCast(&resolver),
         .resolve = DevResolver.resolve,
     });
-    if (lowered.boxy_functions) |retained| writer.setBoxyFunctions(.{ .retained = retained, .result = &lowered.lir_result, .composition = native.composition.? });
+    if (lowered.boxy_functions) |retained| writer.setBoxyFunctions(.{ .retained = retained, .result = &lowered.lir_result });
 
     var had_problem = false;
     for (jobs[0..jobs_len]) |*job| {

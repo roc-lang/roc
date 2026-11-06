@@ -25,6 +25,7 @@ const Body = @import("body.zig");
 const Codec = @import("codec.zig");
 const const_schema = @import("const_schema.zig");
 const StoredFn = @import("stored_fn.zig");
+const Tables = @import("tables.zig");
 const ConstSchema = const_schema.ConstSchema;
 
 const Allocator = std.mem.Allocator;
@@ -65,9 +66,9 @@ pub const Input = struct {
     /// parameter is a dictionary (`Program.runtimeDictionary`) and each
     /// instance-dependent literal is converted where it is.
     compile_time: bool = false,
-    /// The program evaluates roots holding function values: it notes where
-    /// each descriptor came from (`LIR.DynOp.desc_note`), and the lowering
-    /// keeps the program for reading those values (`Output.retained`).
+    /// The program evaluates roots holding function values: each type table
+    /// names itself (`StaticDescs.table_identities`), and the lowering keeps
+    /// the program for reading those values (`Output.retained`).
     stored_functions: bool = false,
     /// The consumer reads composition sites, so each composition statement
     /// gets a slot (design.md "Runtime").
@@ -117,6 +118,9 @@ pub const ExportInterface = struct {
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: []const u32 = &.{},
     may_leave_pending: bool = false,
+    /// For a worker that takes a type table: its encoded needs list
+    /// (`StoredFn.encodeNeeds`), which an importer fills its tables from.
+    table_needs: []const u8 = &.{},
 };
 
 /// The export interfaces of every object a unit imports, by worker identity.
@@ -158,12 +162,14 @@ pub const ExportInterfaces = struct {
         defer self.mutex.unlock(self.io);
         var owned = interface;
         owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, interface.rc_ret_conditions);
+        owned.table_needs = try self.arena.allocator().dupe(u8, interface.table_needs);
         try self.map.put(self.allocator, identity, owned);
     }
 
-    /// Record the interface ARC solved for `proc` of `store`, under the
-    /// procedure's identity, and return it.
-    pub fn putProc(self: *ExportInterfaces, store: *const lir_core.LirStore, proc: LIR.LirProcSpecId) Allocator.Error!ExportInterface {
+    /// Record the interface ARC solved for `proc` of `store`, with the
+    /// worker's encoded needs list `table_needs`, under the procedure's
+    /// identity, and return it.
+    pub fn putProc(self: *ExportInterfaces, store: *const lir_core.LirStore, proc: LIR.LirProcSpecId, table_needs: []const u8) Allocator.Error!ExportInterface {
         const spec = store.getProcSpec(proc);
         const words = store.getU32Span(spec.rc_ret_conditions);
         self.mutex.lockUncancelable(self.io);
@@ -179,6 +185,7 @@ pub const ExportInterfaces = struct {
             .rc_ret_unique_fields = spec.rc_ret_unique_fields,
             .rc_ret_conditions = conditions,
             .may_leave_pending = spec.may_leave_pending,
+            .table_needs = try self.arena.allocator().dupe(u8, table_needs),
         };
         try self.map.put(self.allocator, spec.identity, interface);
         return interface;
@@ -311,8 +318,6 @@ pub const Worker = struct {
     dictionary_params: []const u32,
     params: []const TypeId,
     ret: TypeId,
-    /// Immutable descriptor requirements derived from the declared signature.
-    passed_descriptor_types: ?[]const TypeId = null,
     lowered: bool = false,
     /// Whether the worker's body is queued for lowering.
     queued: bool = false,
@@ -356,6 +361,9 @@ pub const Worker = struct {
     /// For a generalized local procedure: how many literal arguments of its
     /// own scope its argument record carries after its own dictionaries.
     own_literals: u32 = 0,
+    /// For a worker with inputs (`Program.inputCount`), once lowered or
+    /// imported: what each word of its type tables is (`tables.zig`).
+    needs: ?Tables.Needs = null,
 
     /// The bytes of the worker's procedure identity.
     pub fn identityBytes(self: Worker, program: *const Program) [32]u8 {
@@ -700,36 +708,6 @@ pub const Program = struct {
         }, base.SourceLoc.none);
     }
 
-    /// The signature's dynamic descriptor graph, in breadth-first order.
-    /// Both defining and importing units derive it from checked types alone.
-    /// Passing its components also covers body uses of a nominal's backing
-    /// or a nested payload without asking an importer to inspect the body.
-    pub fn passedDescriptorTypes(self: *Program, allocator: Allocator, id: WorkerId) Allocator.Error![]TypeId {
-        if (self.worker(id).passed_descriptor_types) |cached| return allocator.dupe(TypeId, cached);
-        var result: std.ArrayList(TypeId) = .empty;
-        defer result.deinit(self.allocator);
-        var pending: std.ArrayList(TypeId) = .empty;
-        defer pending.deinit(self.allocator);
-        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
-        defer seen.deinit(self.allocator);
-        const target = self.worker(id).*;
-        if (target.key == .template) {
-            try pending.appendSlice(self.allocator, target.params);
-            try pending.append(self.allocator, target.ret);
-            var index: usize = 0;
-            while (index < pending.items.len) : (index += 1) {
-                const ty = pending.items[index];
-                if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
-                if (self.store.get(ty) == .variable or try self.converter().representationClosed(ty)) continue;
-                try result.append(self.allocator, ty);
-                try self.appendDescriptorComponents(ty, &pending, self.allocator);
-            }
-        }
-        const cached = try self.arena.allocator().dupe(TypeId, result.items);
-        self.worker(id).passed_descriptor_types = cached;
-        return allocator.dupe(TypeId, cached);
-    }
-
     /// The immediate types whose descriptors compose `ty`'s. This is the
     /// same graph for caller preparation and the body's composition walk.
     pub fn appendDescriptorComponents(self: *Program, ty: TypeId, out: *std.ArrayList(TypeId), allocator: Allocator) Allocator.Error!void {
@@ -754,7 +732,7 @@ pub const Program = struct {
 
     /// Declare the signature of imported template worker `id`, exactly as
     /// its defining unit's body lowering declares it: explicit parameters,
-    /// then hidden descriptors and dictionaries, and a dynamic result slot
+    /// then its type table when it has inputs, and a dynamic result slot
     /// when the result is dynamic. A dynamic parameter's descriptor local
     /// is never read: the worker has no body here.
     fn declareImportedTemplateSignature(self: *Program, id: WorkerId) Allocator.Error!void {
@@ -771,13 +749,7 @@ pub const Program = struct {
                 try args.append(self.allocator, try store.addLocal(.{ .layout_idx = dynamic_layout, .dyn = .{ .desc = desc, .storage = .param } }));
             }
         }
-        for (imported.scheme_vars) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = .opaque_ptr }));
-        const erased = try self.result.layouts.insertErasedCallable();
-        for (imported.dictionary_params) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = erased }));
-        for (0..imported.literal_params) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = erased }));
-        const passed_types = try self.passedDescriptorTypes(self.allocator, id);
-        defer self.allocator.free(passed_types);
-        for (passed_types) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = .opaque_ptr }));
+        if (self.inputCount(id) != 0) try args.append(self.allocator, try store.addLocal(.{ .layout_idx = .opaque_ptr }));
         const proc = store.getProcSpecPtr(imported.proc);
         proc.args = try store.addLocalSpan(args.items);
         if (try self.converter().representationClosed(imported.ret)) {
@@ -2587,12 +2559,87 @@ pub const Program = struct {
         };
     }
 
+    /// Lower every queued worker, and fill every reserved type table, each
+    /// once its worker's needs are known; filling a table reserves the
+    /// tables its words name, so the two alternate until neither has work.
     fn drain(self: *Program) Allocator.Error!void {
-        while (self.worklist.pop()) |id| {
-            if (self.worker(id).lowered) continue;
-            self.worker(id).lowered = true;
-            try Body.lowerWorker(self, id);
+        while (true) {
+            while (self.worklist.pop()) |id| {
+                if (self.worker(id).lowered) continue;
+                self.worker(id).lowered = true;
+                try Body.lowerWorker(self, id);
+            }
+            const unfilled = self.static_descs.nextUnfilledTable() orelse return;
+            try self.fillTable(unfilled);
         }
+    }
+
+    /// Fill the reserved table `unfilled`: its worker's inputs, then each
+    /// slot's recipe evaluated at them.
+    fn fillTable(self: *Program, unfilled: StaticDescs.UnfilledTable) Allocator.Error!void {
+        // Tables are filled once the worklist is empty, so every worker
+        // something called is lowered or imported.
+        const target = self.worker(unfilled.worker);
+        if (!target.lowered) invariant("a type table names a worker nothing lowers");
+        // Another object's worker is filled from the needs its object
+        // exports.
+        if (target.imported and target.needs == null) {
+            const unit = self.moduleUnit() orelse invariant("an imported worker outside a module unit");
+            const interface = unit.imports.get(self.result.store.getProcSpec(target.proc).identity) orelse
+                invariant("a type table names a worker of an imported module whose object exports no such worker");
+            if (interface.table_needs.len == 0) invariant("an imported worker with inputs exports no needs");
+            const decoded = try StoredFn.decodeNeeds(self, interface.table_needs);
+            self.worker(unfilled.worker).needs = decoded;
+        }
+        const needs = self.worker(unfilled.worker).needs orelse invariant("a type table names a worker without needs");
+        if (unfilled.inputs.len != needs.input_count) invariant("a type table's inputs differ from its worker's");
+        const words = try self.allocator.alloc(StaticDescs.CaptureWord, needs.wordCount());
+        defer self.allocator.free(words);
+        @memcpy(words[0..needs.input_count], unfilled.inputs);
+        var evaluation = Tables.Evaluation.init(self, .{ .needs = &needs }, unfilled.inputs, needs.desc_count);
+        defer evaluation.deinit();
+        for (words[needs.input_count..], needs.slots) |*slot_word, recipe| slot_word.* = try evaluation.word(recipe);
+        try self.static_descs.fillTable(unfilled, words);
+    }
+
+    /// How many input words lead worker `id`'s tables: its variables'
+    /// descriptors, its dictionaries, then its literal arguments, the hidden
+    /// words its callers supply. A worker with inputs takes the address of
+    /// its type table as its one hidden argument (`tables.zig`).
+    pub fn inputCount(self: *Program, id: WorkerId) u32 {
+        const target = self.worker(id).*;
+        return switch (target.key) {
+            .template => @intCast(target.scheme_vars.len + target.dictionary_params.len + target.literal_params),
+            .lambda => blk: {
+                var count: u32 = @intCast(target.scheme_vars.len);
+                for (target.dict_scopes) |scope| count += @intCast(scope.len);
+                for (target.literal_scopes) |scope| count += @intCast(scope.len);
+                break :blk count;
+            },
+            .adapter, .codec => @intCast(target.scheme_vars.len),
+            .method_entry => |entry_target| self.inputCount(entry_target),
+            .structural, .structural_map => target.structural_descs,
+            .default, .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert => 0,
+        };
+    }
+
+    /// Whether worker `id` is a generalized local procedure whose calls
+    /// pass its own scheme's instantiation, and with it its type table, in
+    /// its argument record; its function value captures no table.
+    pub fn perCall(self: *Program, id: WorkerId) bool {
+        const target = self.worker(id).*;
+        return target.key == .lambda and target.own_descs + target.own_dicts + target.own_literals != 0;
+    }
+
+    /// How many of worker `id`'s inputs are its variables' descriptors.
+    pub fn descCount(self: *Program, id: WorkerId) u32 {
+        const target = self.worker(id).*;
+        return switch (target.key) {
+            .template, .lambda, .adapter, .codec => @intCast(target.scheme_vars.len),
+            .method_entry => |entry_target| self.descCount(entry_target),
+            .structural, .structural_map => target.structural_descs,
+            .default, .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert => 0,
+        };
     }
 };
 
@@ -2641,6 +2688,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .layouts = &program.result.layouts,
     };
     program.static_descs = StaticDescs.init(allocator, &program.store, &program.layouts, &program.result, input.target_usize);
+    program.static_descs.table_identities = input.stored_functions;
 
     _ = try program.modules.add(checked.importedView(input.modules.root.module));
     for (input.modules.imports) |view| _ = try program.modules.add(view);
@@ -2803,6 +2851,13 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             if (worker.imported or !Program.exportableKind(worker.key)) continue;
             program.result.store.getProcSpecPtr(worker.proc).exported = true;
             try program.result.exported_procs.append(allocator, worker.proc);
+            // An importer fills the worker's tables from its needs.
+            if (worker.needs) |needs| {
+                const result_allocator = program.result.store.allocator;
+                const bytes = try StoredFn.encodeNeeds(result_allocator, program, needs);
+                errdefer result_allocator.free(bytes);
+                try program.result.boxy_table_needs.put(result_allocator, program.result.store.getProcSpec(worker.proc).identity, bytes);
+            }
         }
     }
 

@@ -420,6 +420,10 @@ pub const Result = struct {
     /// (`LIR.LirProcSpec.exported`), roots of reachability and ARC beside
     /// `root_procs` (design.md "Per-Module Output").
     exported_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
+    /// The encoded needs list of each exported `.boxy` worker that takes a
+    /// type table, by its procedure's identity: what an importer fills the
+    /// worker's tables from (`postcheck.Boxy.Tables`).
+    boxy_table_needs: std.AutoHashMapUnmanaged(LIR.ProcIdentity, []const u8) = .empty,
     root_metadata: std.ArrayList(root.RootMetadata) = .empty,
     requested_layouts: std.ArrayList(RequestedLayout) = .empty,
     const_types: const_store.ConstTypeStore,
@@ -476,6 +480,9 @@ pub const Result = struct {
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
         self.exported_procs.deinit(allocator);
+        var needs = self.boxy_table_needs.valueIterator();
+        while (needs.next()) |bytes| allocator.free(bytes.*);
+        self.boxy_table_needs.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
     }
