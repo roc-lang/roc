@@ -113,14 +113,17 @@ pub const CheckedProcedureTemplateId = enum(u128) {
 /// little-endian.
 pub fn digestId(raw: u128, hasher: anytype) void {
     if (raw >> 32 == 0) {
-        const little = std.mem.nativeToLittle(u32, @truncate(raw));
-        hasher.update(std.mem.asBytes(&little));
+        var row: [4]u8 = undefined;
+        std.mem.writeInt(u32, &row, @truncate(raw), .little);
+        hasher.update(&row);
         return;
     }
-    const marker = std.mem.nativeToLittle(u32, std.math.maxInt(u32));
-    hasher.update(std.mem.asBytes(&marker));
-    const little = std.mem.nativeToLittle(u128, raw);
-    hasher.update(std.mem.asBytes(&little));
+    var marker: [4]u8 = undefined;
+    std.mem.writeInt(u32, &marker, std.math.maxInt(u32), .little);
+    hasher.update(&marker);
+    var identity: [16]u8 = undefined;
+    std.mem.writeInt(u128, &identity, raw, .little);
+    hasher.update(&identity);
 }
 /// Public `NestedProcSiteId` declaration.
 pub const NestedProcSiteId = enum(u32) { _ };

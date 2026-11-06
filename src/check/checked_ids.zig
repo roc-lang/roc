@@ -91,10 +91,12 @@ pub const ComptimeRootKey = enum(u128) {
     /// little-endian, as `canonical_names.digestId` feeds every identity
     /// that is not a template table row.
     pub fn digestInto(self: ComptimeRootKey, hasher: anytype) void {
-        const marker = std.mem.nativeToLittle(u32, std.math.maxInt(u32));
-        hasher.update(std.mem.asBytes(&marker));
-        const little = std.mem.nativeToLittle(u128, @backingInt(self));
-        hasher.update(std.mem.asBytes(&little));
+        var marker: [4]u8 = undefined;
+        std.mem.writeInt(u32, &marker, std.math.maxInt(u32), .little);
+        hasher.update(&marker);
+        var identity: [16]u8 = undefined;
+        std.mem.writeInt(u128, &identity, @backingInt(self), .little);
+        hasher.update(&identity);
     }
 };
 /// Stable identity of a generalized-local dispatch scope within a checked

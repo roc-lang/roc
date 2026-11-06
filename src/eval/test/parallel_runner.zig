@@ -1026,7 +1026,7 @@ fn runComptimeFloatBitsTest(
         };
     }
 
-    const node = switch (roots[0].payload) {
+    const node = switch (resources.checked_artifact.evaluation.rootPayload(roots[0].id)) {
         .const_node => |value| value,
         .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => {
             return .{
@@ -1139,7 +1139,7 @@ fn materializedComptimeFloatBitsMatch(
         .const_ref => |value| value,
         .procedure_binding => return false,
     };
-    const const_node = switch (compile_time_root.payload) {
+    const const_node = switch (resources.checked_artifact.evaluation.rootPayload(compile_time_root.id)) {
         .const_node => |value| value,
         .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => return false,
     };
