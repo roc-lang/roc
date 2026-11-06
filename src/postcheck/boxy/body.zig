@@ -4443,7 +4443,7 @@ pub const Builder = struct {
             .closure => |closure| closure.lambda,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
-        const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }) orelse
+        const scope_id = (try self.program.localScope(self.module, lambda_expr)) orelse
             return try self.localProcValue(local);
         var scheme = try self.localScheme(scope_id);
         if (!scheme.per_call or (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0)) return try self.localProcValue(local);
@@ -4586,7 +4586,7 @@ pub const Builder = struct {
         // restored in its procedure's scope, and the procedure is declared
         // in that scope's body, which ran at compile time.
         const scope = self.program.worker(scope_worker).*;
-        const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr })) |scope_id| blk: {
+        const own: ?lower.LocalScheme = if (try self.program.localScope(self.module, lambda_expr)) |scope_id| blk: {
             const scheme = try self.localScheme(scope_id);
             break :blk if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) null else scheme;
         } else null;
@@ -4780,7 +4780,7 @@ pub const Builder = struct {
             .dictionaries = dictionaries.items,
             .params = evidence_params,
             .literal_requirements = templates.scopeLiteralRequirements(&scope),
-            .per_call = self.program.local_procs.contains(.{ .module = view.index, .expr = scope.checked_expr }),
+            .per_call = try self.program.isLocalProc(view.index, scope.checked_expr),
         };
     }
 
@@ -5156,7 +5156,7 @@ pub const Builder = struct {
                 // The closure in its owner's scope (and, for a generalized
                 // lambda, its own scheme's), whose variables the stored
                 // value's type instantiates; the value captures them all.
-                const own_scope = self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr });
+                const own_scope = try self.program.localScope(owner.module, lambda_expr);
                 const own: ?lower.LocalScheme = if (own_scope) |scope_id| blk: {
                     var scheme = try self.localSchemeIn(owner_view, scope_id);
                     if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
@@ -5340,7 +5340,7 @@ pub const Builder = struct {
         const owner_view = self.program.module(owner.module);
         const expr = owner_view.bodies().expr(lambda_expr);
         const captures = try self.program.siteCaptures(owner.module, lambda_expr);
-        const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr })) |scope_id| blk: {
+        const own: ?lower.LocalScheme = if (try self.program.localScope(owner.module, lambda_expr)) |scope_id| blk: {
             var scheme = try self.localSchemeIn(owner_view, scope_id);
             if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
             if (captured_scheme) scheme.per_call = false;
@@ -7717,7 +7717,7 @@ pub const Builder = struct {
     pub fn lowerClosure(self: *Builder, expr_id: CheckedExprId, lambda_expr: CheckedExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
         // A generalized local procedure's type is converted with its own
         // scheme's variables in scope.
-        const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr })) |scope_id|
+        const own: ?lower.LocalScheme = if (try self.program.localScope(self.module, lambda_expr)) |scope_id|
             try self.localScheme(scope_id)
         else
             null;
@@ -7769,7 +7769,7 @@ pub const Builder = struct {
             }
             try self.resolveOwnKinds(self.bodies().expr(expr_id).ty, scheme, own_types);
             for (own_types) |own_ty| try own_descs.append(self.allocator, try self.descOf(own_ty));
-            const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }).?;
+            const scope_id = (try self.program.localScope(self.module, lambda_expr)).?;
             const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
             for (scheme.dictionaries) |param_index| {
                 if (param_index >= evidence.len) invariant("a generalized lambda's construction evidence does not cover its dictionaries");
@@ -8125,7 +8125,7 @@ pub const Builder = struct {
         for (fields, ordered, slots) |field, value, *slot| {
             slot.* = value orelse switch (field.kind) {
                 .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(field.ty), try self.program.store.internName(@import("layouts.zig").missing_label), &.{}),
-                .inline_slot => try self.defaultValue(self.program.omitted_defaults.get(.{ .module = self.module, .expr = expr_id, .name = field.name }) orelse
+                .inline_slot => try self.defaultValue((try self.program.omittedDefault(.{ .module = self.module, .expr = expr_id, .name = field.name })) orelse
                     invariant("a record construction omits a field it has no default for")),
                 .variable_slot => invariant("a record construction omits a field of undetermined kind"),
             };
@@ -8983,7 +8983,7 @@ pub const Builder = struct {
                 // instantiation (`lowerAliasUse`).
                 if (self.bodies().pattern_binder_by_pattern[@backingInt(decl.pattern)].get()) |binder| {
                     if (self.bodies().patternBinder(binder).is_scheme_alias) {
-                        if (self.program.local_scopes.get(.{ .module = self.module, .expr = decl.expr })) |scope_id| {
+                        if (try self.program.localScope(self.module, decl.expr)) |scope_id| {
                             const scheme = try self.localScheme(scope_id);
                             if (scheme.scheme_vars.len != 0 or scheme.dictionaries.len != 0) return;
                         }

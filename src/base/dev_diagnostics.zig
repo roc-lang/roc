@@ -82,6 +82,9 @@ pub const Var = enum {
 
 /// Stage-owned counters used to prove complete-command reuse skips producers.
 pub const TestWork = enum {
+    boxy_body_index_available_modules,
+    boxy_body_index_prepared_modules,
+    boxy_body_index_rows,
     checked_root_eligibility_queries,
     checked_root_concreteness_nodes,
     checked_root_callable_nodes,

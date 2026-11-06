@@ -14715,6 +14715,19 @@ A literal argument root ("Literal Arguments") is the module's program's
 whatever its value: one whose value holds a function is evaluated for its
 outcome and discarded.
 
+#### Demanded Checked Body Indexes
+
+A Boxy lowering registers every visible module's identity and interface, but
+indexes a module's local scopes, captures, local procedure references, and
+omitted field defaults only when a consumer requests that module's body
+metadata. Each lookup first ensures the complete index for that module; an
+absent entry is the checked producer's absence, never an uninitialized table.
+The index is built directly from checked records once per lowering, with no
+source traversal, guessed reachability, or persistent cache. Imports used only
+through linked code do not require their private body indexes. Allocation
+failure propagates, and the index is marked complete only after publication of
+all its records succeeds.
+
 #### Stored Function Values
 
 A `.boxy` function value is an erased callable: a worker's code and what the
