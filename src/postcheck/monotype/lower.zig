@@ -2808,6 +2808,15 @@ const EvidenceChain = struct {
         return null;
     }
 
+    /// Whether `other` is this frame's instance of its scope: the same
+    /// substitution of the scope's scheme and the same evidence vector, so
+    /// the two frames bind the scope's variables identically.
+    fn sameInstance(self: EvidenceChain, other: EvidenceChain) bool {
+        return EvidenceScope.eql(self.scope, other.scope) and
+            self.subst.ptr == other.subst.ptr and self.subst.len == other.subst.len and
+            self.vector.ptr == other.vector.ptr and self.vector.len == other.vector.len;
+    }
+
     fn at(self: *const EvidenceChain, ref: static_dispatch.EvidenceChainIndex) ?SpecEvidence {
         var chain: *const EvidenceChain = self;
         var depth = ref.depth;
@@ -25418,13 +25427,18 @@ const BodyContext = struct {
         var child = try self.childContextWithTypeCells(current_fn_key, false);
         errdefer child.deinit();
         // The child starts from this context's binder relations, related
-        // once for every nested context rather than once by each. An
+        // once for every nested context rather than once by each. Another
         // instance of a generalized scope made inside an instance of that
         // same scope (a recursive use, which an annotated local may make at
         // other types) has variables of its own where the enclosing
         // instance's binders mention the enclosing instance's: it starts
-        // from relations of the binders that mention none of them.
-        const relation_base = if (evidence.schema != null and self.evidence.atScope(evidence.scope) != null) owned: {
+        // from relations of the binders that mention none of them. A child
+        // in the enclosing instance itself (such as one constructing a
+        // nested function's scheme in this context's own evidence) shares
+        // that instance's variables, and with them the shared relations.
+        const recursive_instance = evidence.schema != null and
+            if (self.evidence.atScope(evidence.scope)) |active| !active.sameInstance(evidence) else false;
+        const relation_base = if (recursive_instance) owned: {
             const owned = try self.recursiveNestedRelationBase(evidence.schema.?);
             child.owned_relation_base = owned;
             break :owned owned;
