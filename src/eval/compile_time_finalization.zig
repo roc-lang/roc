@@ -1269,14 +1269,15 @@ pub const ExportInterfaces = lir.CheckedPipeline.BoxyExportInterfaces;
 pub const ModuleNames = lir.CheckedPipeline.BoxyModuleNames;
 
 /// How a cached module's code reaches this process for compile-time
-/// evaluation. A Linux x86_64 host, whose module units carry unit images
-/// (`compile.boxy_unit.producesImage`), loads each unit's image as the
-/// cache holds it; every other host composes the unit's pieces into a
-/// relocatable object and loads that.
+/// evaluation. A host whose module units carry unit images
+/// (`compile.boxy_unit.producesImage`: Linux x86_64, macOS arm64, Windows
+/// x86_64 or arm64) loads each unit's
+/// image as the cache holds it; every other host composes the unit's pieces
+/// into a relocatable object and loads that.
 pub const BoxyObjectCode = enum { image, pieces };
 
 /// The form this host loads module objects in.
-pub const boxy_object_code: BoxyObjectCode = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) .image else .pieces;
+pub const boxy_object_code: BoxyObjectCode = if (backend.dev.UnitImageLoader != void) .image else .pieces;
 
 /// One imported module's object, loaded into the compiler's process.
 pub const BoxyObject = struct {
@@ -7381,33 +7382,100 @@ test "compile-time finalization declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-/// A whole image with a callable, mutable zero-fill and, optionally, a data
-/// pointer to another image's callable. No executable instruction references
-/// that import: demand must follow the data relocation.
+/// A whole image with a callable returning 42, mutable zero-fill and,
+/// optionally, a data pointer to another image's callable, in the host's
+/// own instruction set and object format. No executable instruction
+/// references that import: demand must follow the data relocation.
 fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []const u8, imported: ?[]const u8, weak: bool) backend.dev.UnitImage.BuildError![]align(16) u8 {
     const Image = backend.dev.UnitImage;
-    const symbols = [_]Image.TestObject.TestSymbol{
-        .{ .name = name, .section = 1, .size = 6, .global = true, .func = true },
-        .{ .name = pointer, .section = 2, .size = 8, .global = true },
-        .{ .name = imported orelse name, .section = 0, .global = true, .func = true, .weak = weak },
+    // mov w0, #42; ret, or mov eax, 42; ret.
+    const arm64_text = [_]u8{ 0x40, 0x05, 0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6 };
+    const x86_64_text = [_]u8{ 0xb8, 42, 0, 0, 0, 0xc3, 0x90, 0x90 };
+    const text: []const u8 = if (builtin.cpu.arch == .aarch64) &arm64_text else &x86_64_text;
+    const object = if (builtin.os.tag == .macos) macho: {
+        const name_z = try std.fmt.allocPrint(allocator, "_{s}", .{name});
+        defer allocator.free(name_z);
+        const pointer_z = try std.fmt.allocPrint(allocator, "_{s}", .{pointer});
+        defer allocator.free(pointer_z);
+        const imported_z = try std.fmt.allocPrint(allocator, "_{s}", .{imported orelse name});
+        defer allocator.free(imported_z);
+        const symbols = [_]Image.TestMachObject.TestSymbol{
+            .{ .name = name_z, .section = 1, .value = 0, .external = true },
+            .{ .name = pointer_z, .section = 2, .value = 0, .external = true },
+            .{ .name = imported_z, .section = 0, .external = true, .weak_ref = weak },
+        };
+        // `ARM64_RELOC_UNSIGNED` or `X86_64_RELOC_UNSIGNED`, an 8-byte pointer.
+        const relocations = [_]Image.TestMachObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = 0, .pcrel = false, .length = 3 }};
+        const encode = if (builtin.cpu.arch == .aarch64) Image.TestMachObject.encode else Image.TestMachObject.encodeX86_64;
+        break :macho try encode(allocator, &.{
+            .{ .segname = "__TEXT", .sectname = "__text", .bytes = text, .flags = 0x8000_0000 },
+            .{ .segname = "__DATA", .sectname = "__data", .bytes = &@as([8]u8, @splat(0)), .@"align" = 3 },
+            .{ .segname = "__DATA", .sectname = "__bss", .size = 8, .@"align" = 3, .flags = 1 },
+        }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
+    } else if (builtin.os.tag == .windows) coff: {
+        // A weak reference is a weak external whose tag is undefined too.
+        const symbols = [_]Image.TestCoffObject.TestSymbol{
+            .{ .name = name, .section = 1, .value = 0, .function = true },
+            .{ .name = pointer, .section = 2, .value = 0 },
+            if (weak) .{ .name = imported orelse name, .section = 0, .class = .weak_external, .tag = 3 } else .{ .name = imported orelse name, .section = 0 },
+            .{ .name = ".weak.default", .section = 0 },
+        };
+        const count: usize = if (imported == null) 2 else if (weak) 4 else 3;
+        // `IMAGE_REL_AMD64_ADDR64` or `IMAGE_REL_ARM64_ADDR64`.
+        const relocations = [_]Image.TestCoffObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 2, .type = if (builtin.cpu.arch == .aarch64) 0x000e else 0x0001 }};
+        break :coff try Image.TestCoffObject.encode(allocator, if (builtin.cpu.arch == .aarch64) 0xaa64 else 0x8664, &.{
+            .{ .name = ".text", .bytes = text, .characteristics = 0x6050_0020 },
+            .{ .name = ".data", .bytes = &@as([8]u8, @splat(0)), .characteristics = 0xc040_0040 },
+            .{ .name = ".bss", .size = 8, .characteristics = 0xc050_0080 },
+        }, symbols[0..count], if (imported != null) &relocations else &.{});
+    } else elf: {
+        const symbols = [_]Image.TestObject.TestSymbol{
+            .{ .name = name, .section = 1, .size = 6, .global = true, .func = true },
+            .{ .name = pointer, .section = 2, .size = 8, .global = true },
+            .{ .name = imported orelse name, .section = 0, .global = true, .func = true, .weak = weak },
+        };
+        // `R_AARCH64_ABS64` or `R_X86_64_64`.
+        const relocations = [_]Image.TestObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = if (builtin.cpu.arch == .aarch64) 257 else 1, .addend = 0 }};
+        const encode = if (builtin.cpu.arch == .aarch64) Image.TestObject.encodeAarch64 else Image.TestObject.encode;
+        break :elf try encode(allocator, &.{
+            .{ .name = ".text", .flags = 6, .bytes = text },
+            .{ .name = ".data", .flags = 3, .bytes = &@as([8]u8, @splat(0)), .addralign = 8 },
+            .{ .name = ".bss", .type = 8, .flags = 3, .size = 8, .addralign = 8 },
+        }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
     };
-    const relocations = [_]Image.TestObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = 1, .addend = 0 }};
-    const object = try Image.TestObject.encode(allocator, &.{
-        .{ .name = ".text", .flags = 6, .bytes = &.{ 0xb8, 42, 0, 0, 0, 0xc3 } },
-        .{ .name = ".data", .flags = 3, .bytes = &@as([8]u8, @splat(0)), .addralign = 8 },
-        .{ .name = ".bss", .type = 8, .flags = 3, .size = 8, .addralign = 8 },
-    }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
     defer allocator.free(object);
     return Image.build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
 }
 
-fn ctfeSelectionTest(allocator: Allocator) (FinalizeError || backend.dev.UnitImage.BuildError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
-    const leaf = try ctfeSelectionTestImage(allocator, "leaf", "leaf_pointer", null, false);
-    defer allocator.free(leaf);
-    const middle = try ctfeSelectionTestImage(allocator, "middle", "callback", "leaf", false);
-    defer allocator.free(middle);
-    const unused = try ctfeSelectionTestImage(allocator, "unused", "unused_pointer", null, false);
-    defer allocator.free(unused);
+/// The images `ctfeSelectionTest` selects among. They are built before the
+/// test runs so an allocation-failure sweep covers only the selection's own
+/// allocations: building an image allocates through an arena, whose growth
+/// depends on whether the backing allocator extends a block in place.
+const CtfeSelectionImages = struct {
+    leaf: []align(16) u8,
+    middle: []align(16) u8,
+    unused: []align(16) u8,
+
+    fn init(allocator: Allocator) backend.dev.UnitImage.BuildError!CtfeSelectionImages {
+        const leaf = try ctfeSelectionTestImage(allocator, "leaf", "leaf_pointer", null, false);
+        errdefer allocator.free(leaf);
+        const middle = try ctfeSelectionTestImage(allocator, "middle", "callback", "leaf", false);
+        errdefer allocator.free(middle);
+        const unused = try ctfeSelectionTestImage(allocator, "unused", "unused_pointer", null, false);
+        return .{ .leaf = leaf, .middle = middle, .unused = unused };
+    }
+
+    fn deinit(self: CtfeSelectionImages, allocator: Allocator) void {
+        allocator.free(self.leaf);
+        allocator.free(self.middle);
+        allocator.free(self.unused);
+    }
+};
+
+fn ctfeSelectionTest(allocator: Allocator, built: CtfeSelectionImages) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const leaf = built.leaf;
+    const middle = built.middle;
+    const unused = built.unused;
     var images = BoxyLinkedImages{ .allocator = allocator };
     defer images.deinit();
     const objects = [_]BoxyObject{
@@ -7449,12 +7517,16 @@ fn ctfeSelectionTest(allocator: Allocator) (FinalizeError || backend.dev.UnitIma
 
 test "CTFE image demand follows data callbacks and resets only reused reachable images" {
     if (comptime boxy_object_code != .image) return error.SkipZigTest;
-    try ctfeSelectionTest(std.testing.allocator);
+    const built = try CtfeSelectionImages.init(std.testing.allocator);
+    defer built.deinit(std.testing.allocator);
+    try ctfeSelectionTest(std.testing.allocator, built);
 }
 
 test "CTFE image demand releases partial registrations and mappings on allocation failure" {
     if (comptime boxy_object_code != .image) return error.SkipZigTest;
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, ctfeSelectionTest, .{});
+    const built = try CtfeSelectionImages.init(std.testing.allocator);
+    defer built.deinit(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, ctfeSelectionTest, .{built});
 }
 
 test "CTFE image demand keeps registration bindings independent of load order" {

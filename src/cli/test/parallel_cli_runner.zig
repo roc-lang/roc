@@ -10750,18 +10750,20 @@ fn customBoxyInterfaceEdits(
 
     const Edit = struct { name: []const u8, file: []const u8, from: []const u8, to: []const u8, stdout: []const u8, objects: usize };
     // `objects` counts the module objects the edit files. B calls A and
-    // stores a value read from it, and C calls B; the app's own unit is
-    // filed only by a build, so it counts for none of these.
+    // stores a value read from it, and C calls B. A dev run of the app
+    // builds it, so every edit also files the linked program's root unit,
+    // and an edit that reaches an interface the app reads also files the
+    // app's own module unit.
     const edits = [_]Edit{
-        .{ .name = "a body no importer's value reads", .file = "A.roc", .from = "other = |x| x + 1", .to = "other = |x| x + 2", .stdout = "3 b-alpha 2 1 5 1 10 12", .objects = 1 },
-        .{ .name = "a defaulted field", .file = "Point.roc", .from = "?? 5", .to = "?? 6", .stdout = "3 b-alpha 2 1 6 1 10 12", .objects = 1 },
-        .{ .name = "a value an importer stores", .file = "A.roc", .from = "alpha", .to = "beta", .stdout = "3 b-beta 2 1 6 1 10 12", .objects = 3 },
-        .{ .name = "a parameter's ownership", .file = "A.roc", .from = "keep = |s| s", .to = "keep = |s| Str.concat(s, \"!\")", .stdout = "4 b-beta 2 1 6 1 10 12", .objects = 3 },
-        .{ .name = "a generic body's literal", .file = "A.roc", .from = "bump = |x| x + 1", .to = "bump = |x| x + 3", .stdout = "4 b-beta 2 3 6 1 10 12", .objects = 3 },
-        .{ .name = "a function an importer stores", .file = "Adder.roc", .from = "add_to(1)", .to = "add_to(4)", .stdout = "4 b-beta 2 3 6 4 10 12", .objects = 3 },
-        .{ .name = "a function an importer stores inside a constant", .file = "Adder.roc", .from = "add_to(10)", .to = "add_to(20)", .stdout = "4 b-beta 2 3 6 4 20 12", .objects = 3 },
-        .{ .name = "a padded record's declared order", .file = "Spaced.roc", .from = "a : U64, _ : U8, z : U64", .to = "z : U64, _ : U8, a : U64", .stdout = "4 b-beta 2 3 6 4 20 12", .objects = 3 },
-        .{ .name = "a padded record's unnamed field", .file = "Spaced.roc", .from = "_ : U8", .to = "_ : U64", .stdout = "4 b-beta 2 3 6 4 20 12", .objects = 3 },
+        .{ .name = "a body no importer's value reads", .file = "A.roc", .from = "other = |x| x + 1", .to = "other = |x| x + 2", .stdout = "3 b-alpha 2 1 5 1 10 12", .objects = 2 },
+        .{ .name = "a defaulted field", .file = "Point.roc", .from = "?? 5", .to = "?? 6", .stdout = "3 b-alpha 2 1 6 1 10 12", .objects = 2 },
+        .{ .name = "a value an importer stores", .file = "A.roc", .from = "alpha", .to = "beta", .stdout = "3 b-beta 2 1 6 1 10 12", .objects = 5 },
+        .{ .name = "a parameter's ownership", .file = "A.roc", .from = "keep = |s| s", .to = "keep = |s| Str.concat(s, \"!\")", .stdout = "4 b-beta 2 1 6 1 10 12", .objects = 5 },
+        .{ .name = "a generic body's literal", .file = "A.roc", .from = "bump = |x| x + 1", .to = "bump = |x| x + 3", .stdout = "4 b-beta 2 3 6 1 10 12", .objects = 5 },
+        .{ .name = "a function an importer stores", .file = "Adder.roc", .from = "add_to(1)", .to = "add_to(4)", .stdout = "4 b-beta 2 3 6 4 10 12", .objects = 5 },
+        .{ .name = "a function an importer stores inside a constant", .file = "Adder.roc", .from = "add_to(10)", .to = "add_to(20)", .stdout = "4 b-beta 2 3 6 4 20 12", .objects = 5 },
+        .{ .name = "a padded record's declared order", .file = "Spaced.roc", .from = "a : U64, _ : U8, z : U64", .to = "z : U64, _ : U8, a : U64", .stdout = "4 b-beta 2 3 6 4 20 12", .objects = 5 },
+        .{ .name = "a padded record's unnamed field", .file = "Spaced.roc", .from = "_ : U8", .to = "_ : U64", .stdout = "4 b-beta 2 3 6 4 20 12", .objects = 5 },
     };
     const run = struct {
         fn app(run_io: std.Io, run_allocator: Allocator, run_env: *const CaseEnv, run_timer: *harness.Timer, run_timeout_ms: u64, path: []const u8, stdout: []const u8) ?TestResult {
@@ -10841,8 +10843,10 @@ fn appendLine(io: std.Io, path: []const u8, text: []const u8) (std.Io.Dir.ReadFi
 }
 
 /// `roc build --specialize=no --opt=dev` adds exactly the per-module Boxy
-/// object entries to what `roc check --specialize=no` leaves, and `roc run`
-/// of the same program adds nothing (design.md "Caching Under `.boxy`").
+/// object entries to what `roc check --specialize=no` leaves, and a dev run
+/// of the same app, which builds it, keeps every entry the check filed and
+/// adds the app's own unit and the linked root unit, which a second run
+/// reuses (design.md "Caching Under `.boxy`").
 /// `roc check` compiles and files the objects of the modules a module's
 /// compile-time program imports; a later command reuses them, and a crash in
 /// another module's code reports what a compilation with no cache reports.
@@ -10892,8 +10896,24 @@ fn customBoxyCompileTimeObjects(
     // Every native command reads one default platform header, so a run reuses
     // the app's checked module, and with it the constants it stores.
     if (checked_modules_after != checked_modules) return customFailure(allocator, timer, "`roc run` checked modules again: {d} became {d}", .{ checked_modules, checked_modules_after });
-    // A run reuses every object the check filed.
-    if (objects_after != objects) return customFailure(allocator, timer, "`roc run` rebuilt module objects: {d} became {d}", .{ objects, objects_after });
+    // A run reuses every object the check filed, and adds the app's own
+    // unit and the linked root unit.
+    for (inventory) |entry| {
+        if (entry.family != .boxy_object) continue;
+        const kept = for (after_run) |later| {
+            if (later.family == entry.family and std.mem.eql(u8, &later.key, &entry.key)) break true;
+        } else false;
+        if (!kept) return customFailure(allocator, timer, "`roc run` dropped a module object the check filed", .{});
+    }
+    if (objects_after != objects + 2) return customFailure(allocator, timer, "`roc run` filed {d} module objects, expected the app's unit and the linked root unit", .{objects_after - objects});
+    // A second run reuses every object.
+    const rerun_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "case timeout exhausted before the second run");
+    const reran = runRocInEnv(io, allocator, &isolated, &.{ "--opt=dev", "--specialize=no" }, app, .relative, &.{}, null, rerun_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
+    if (!processSucceeded(reran.term)) return failureFromRun(allocator, timer, reran, "the app did not run again");
+    const after_rerun = cacheInventory(io, allocator, cache_root) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
+    if (after_rerun.len != after_run.len) return customFailure(allocator, timer, "a second `roc run` filed {d} new cache entries", .{after_rerun.len -| after_run.len});
 
     var reports: [2][]const u8 = undefined;
     for ([_]bool{ false, true }, &reports) |no_cache, *report| {
