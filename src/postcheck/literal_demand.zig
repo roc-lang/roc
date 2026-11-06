@@ -394,15 +394,8 @@ const Builder = struct {
             },
             .imported => |imported| blk: {
                 const view = self.views.get(imported.artifact.bytes) orelse break :blk .unbounded;
-                for (view.exported_procedure_bindings.bindings) |binding| {
-                    if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
-                    break :blk switch (binding.body) {
-                        .direct_template => |direct| self.bindingBodyTarget(view, .{ .direct_template = direct }),
-                        .callable_eval_template => |id| self.bindingBodyTarget(view, .{ .callable_eval_template = id }),
-                        .checked_error => |expr| self.bindingBodyTarget(view, .{ .checked_error = expr }),
-                    };
-                }
-                break :blk .unbounded;
+                const binding = view.exported_procedure_bindings.lookup(imported.def, imported.pattern) orelse break :blk .unbounded;
+                break :blk self.bindingBodyTarget(view, binding.body);
             },
             .hosted => null,
             .platform_required => |required| blk: {
