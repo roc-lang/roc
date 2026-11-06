@@ -25673,6 +25673,21 @@ The specialization, evaluation, runtime LIR, ARC, static-data and native test
 execution producers increment their own counters. A complete result hit leaves
 every counter zero. This variable uses the same developer-only gate.
 
+`ROC_PROFILE_ALLOCATIONS` attributes native test-root allocations on Linux x64.
+Each root owns its diagnostic table, aggregating allocation and reallocation
+calls and requested bytes by the first sixteen native return addresses. The
+live root caller bounds the frame-pointer walk. Loaded unit images print their
+address-to-source maps for offline attribution; addresses are observations of
+this process, never persistent identities. Requested bytes count every request,
+including the full new size of a reallocation, and are not peak live memory.
+Profiling changes neither allocation policy nor ownership. Its table and hot-path
+recording are absent from compilers without developer diagnostics. Profiled
+execution times include the recording overhead and are not benchmark results.
+
+`ROC_TRACE_BOXY_WORK` also separates checked-root graph construction from
+function-containing-root classification when evaluation timings are available.
+These diagnostic durations exclude the trace's per-root printing.
+
 `ROC_VERIFY_SEALED_TYPE_VIEW` builds each published module's sealed type view
 (`src/check/sealed_type_view.zig`, which reads checked types directly from the
 sealed solver store) and asserts, before anything rewrites the publication,

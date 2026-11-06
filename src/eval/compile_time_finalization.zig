@@ -1574,6 +1574,7 @@ const BoxyLinkedImages = struct {
             error.SiteOutOfRange => finalizationInvariantFmt("a cached Boxy module's image has a reference to '{s}' out of its field's reach", .{diagnostic.name}),
         };
         errdefer image.unload();
+        (backend.dev.CodeLocations{ .bytes = object.code_locations }).dumpAllocationMap(@intFromPtr(image.text().ptr));
         const symbols = view.symbols();
         try self.exports.ensureUnusedCapacity(self.allocator, @intCast(view.exports().len));
         for (view.exports()) |index| {
@@ -1848,7 +1849,9 @@ fn evaluateRootsBoxy(
         states_initialized += 1;
     }
 
+    const graph_started = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (options.timing) |timing| nowNs(timing.std_io) else 0) else 0;
     var graph = try checked_root_graph.build(allocator, artifacts, roots);
+    const graph_finished = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (options.timing) |timing| nowNs(timing.std_io) else 0) else 0;
     defer graph.deinit(allocator);
     const specialized = try allocator.alloc(bool, roots.len);
     defer allocator.free(specialized);
@@ -1864,10 +1867,14 @@ fn evaluateRootsBoxy(
     // A literal argument root is the `.boxy` evaluator's whatever its
     // value: one holding a function is validated and discarded
     // (design.md "Literal Arguments").
+    const classification_started = if (base.dev_diagnostics.isSet(.trace_boxy_work)) (if (options.timing) |timing| nowNs(timing.std_io) else 0) else 0;
     for (roots, specialized) |root, *flag| {
         flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind != .literal_argument and
             try checked_root_graph.rootHoldsFunction(allocator, lowering_modules.root, lowering_modules.imports, artifacts[root.module], root.request);
     }
+    if (base.dev_diagnostics.isSet(.trace_boxy_work)) if (options.timing) |timing| {
+        std.debug.print("boxy-work: root preparation roots={d} graph_ns={d} classification_ns={d}\n", .{ roots.len, graph_finished - graph_started, nowNs(timing.std_io) - classification_started });
+    };
     var images = BoxyLinkedImages{ .allocator = allocator };
     defer images.deinit();
     var evaluations = try ModuleEvaluations.init(allocator, modules, roots, &graph);
