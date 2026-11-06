@@ -761,15 +761,23 @@ pub const NodeBits = struct {
     }
 };
 
-/// The module's single-source calls (`singleSourceCalls`).
-const SingleSourceFacts = struct {
-    /// Local templates, ascending.
+/// The module's templates with a single-source call
+/// (`computeSingleSourceTemplates`), ascending.
+const SingleSourceTemplates = struct {
     templates: []canonical.CheckedProcedureTemplateId,
-    /// Nested procedure site expressions, ascending.
+
+    fn destroy(self: *SingleSourceTemplates, allocator: Allocator) void {
+        allocator.free(self.templates);
+        allocator.destroy(self);
+    }
+};
+
+/// The module's nested procedure site expressions with a single-source call
+/// (`computeSingleSourceSites`), ascending.
+const SingleSourceSites = struct {
     sites: []u32,
 
-    fn destroy(self: *SingleSourceFacts, allocator: Allocator) void {
-        allocator.free(self.templates);
+    fn destroy(self: *SingleSourceSites, allocator: Allocator) void {
         allocator.free(self.sites);
         allocator.destroy(self);
     }
@@ -852,9 +860,9 @@ pub const BodyAnalyses = struct {
     env: *const ModuleEnv,
     index: ModuleIndex,
     unit_slots: []UnitSlot,
-    dispatch_crashes: collections.OnceSlot(*NodeBits, .body_dispatch_crashes) = .empty,
     diagnostic_errors: collections.OnceSlot(*NodeBits, .body_diagnostic_errors) = .empty,
-    single_source: collections.OnceSlot(*SingleSourceFacts, .body_single_source_calls) = .empty,
+    single_source_templates: collections.OnceSlot(*SingleSourceTemplates, .body_single_source_calls) = .empty,
+    single_source_sites: collections.OnceSlot(*SingleSourceSites, .body_single_source_sites) = .empty,
     exhaustiveness_index: collections.OnceSlot(*ExhaustivenessIndex, .body_exhaustiveness_index) = .empty,
     /// Set once the module is published (`CheckedModuleArtifact.openToAnalyses`):
     /// no slot of the module runs before it.
@@ -897,13 +905,12 @@ pub const BodyAnalyses = struct {
         const allocator = self.allocator;
         for (self.unit_slots) |*slot| if (slot.peek()) |facts| facts.destroy(allocator);
         allocator.free(self.unit_slots);
-        inline for (.{ "dispatch_crashes", "diagnostic_errors" }) |name| {
-            if (@field(self, name).peek()) |bits| {
-                bits.deinit(allocator);
-                allocator.destroy(bits);
-            }
+        if (self.diagnostic_errors.peek()) |bits| {
+            bits.deinit(allocator);
+            allocator.destroy(bits);
         }
-        if (self.single_source.peek()) |facts| facts.destroy(allocator);
+        if (self.single_source_templates.peek()) |facts| facts.destroy(allocator);
+        if (self.single_source_sites.peek()) |facts| facts.destroy(allocator);
         if (self.exhaustiveness_index.peek()) |index| index.destroy(allocator);
         self.index.deinit(allocator);
         allocator.destroy(self);
@@ -927,27 +934,6 @@ pub const BodyAnalyses = struct {
 
         fn compute(request: UnitRequest) Allocator.Error!*UnitFacts {
             return computeUnitFacts(request.analyses.allocator, request.bodies, request.unit);
-        }
-    };
-
-    /// The nodes whose own static dispatch cannot run: a dispatch,
-    /// `from_numeral` or `from_quote` plan keyed by the node resolves to a
-    /// checked error or unreachable.
-    pub fn dispatchCrashes(self: *BodyAnalyses, bodies: CheckedBodies) Allocator.Error!*const NodeBits {
-        self.assertPublished();
-        return self.dispatch_crashes.getOrCompute(self.io, Allocator.Error, DispatchCrashRequest{ .analyses = self, .bodies = bodies }, DispatchCrashRequest.compute);
-    }
-
-    const DispatchCrashRequest = struct {
-        analyses: *BodyAnalyses,
-        bodies: CheckedBodies,
-
-        fn compute(request: DispatchCrashRequest) Allocator.Error!*NodeBits {
-            const allocator = request.analyses.allocator;
-            const bits = try allocator.create(NodeBits);
-            errdefer allocator.destroy(bits);
-            bits.* = try dispatchNodes(allocator, request.bodies, dispatchResolutionCrashes);
-            return bits;
         }
     };
 
@@ -1010,7 +996,7 @@ pub const BodyAnalyses = struct {
 
     pub fn templateHasSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!bool {
         self.assertPublished();
-        const facts = try self.singleSourceFacts(bodies);
+        const facts = try self.single_source_templates.getOrCompute(self.io, Allocator.Error, SingleSourceRequest{ .analyses = self, .bodies = bodies }, SingleSourceRequest.templates);
         return std.sort.binarySearch(canonical.CheckedProcedureTemplateId, facts.templates, template, struct {
             fn order(key: canonical.CheckedProcedureTemplateId, item: canonical.CheckedProcedureTemplateId) std.math.Order {
                 return std.math.order(@backingInt(key), @backingInt(item));
@@ -1020,7 +1006,7 @@ pub const BodyAnalyses = struct {
 
     pub fn nestedProcSiteIsSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, site: canonical.NestedProcSiteId) Allocator.Error!bool {
         self.assertPublished();
-        const facts = try self.singleSourceFacts(bodies);
+        const facts = try self.single_source_sites.getOrCompute(self.io, Allocator.Error, SingleSourceRequest{ .analyses = self, .bodies = bodies }, SingleSourceRequest.sites);
         return std.sort.binarySearch(u32, facts.sites, @backingInt(site), orderU32) != null;
     }
 
@@ -1061,16 +1047,16 @@ pub const BodyAnalyses = struct {
         }
     };
 
-    fn singleSourceFacts(self: *BodyAnalyses, bodies: CheckedBodies) Allocator.Error!*SingleSourceFacts {
-        return self.single_source.getOrCompute(self.io, Allocator.Error, SingleSourceRequest{ .analyses = self, .bodies = bodies }, SingleSourceRequest.compute);
-    }
-
     const SingleSourceRequest = struct {
         analyses: *BodyAnalyses,
         bodies: CheckedBodies,
 
-        fn compute(request: SingleSourceRequest) Allocator.Error!*SingleSourceFacts {
-            return computeSingleSourceCalls(request.analyses.allocator, request.bodies);
+        fn templates(request: SingleSourceRequest) Allocator.Error!*SingleSourceTemplates {
+            return computeSingleSourceTemplates(request.analyses.allocator, request.bodies);
+        }
+
+        fn sites(request: SingleSourceRequest) Allocator.Error!*SingleSourceSites {
+            return computeSingleSourceSites(request.analyses.allocator, request.bodies);
         }
     };
 };
@@ -1104,7 +1090,6 @@ fn dispatchNodes(
 fn computeUnitFacts(allocator: Allocator, bodies: CheckedBodies, unit_id: UnitId) Allocator.Error!*UnitFacts {
     const index = bodies.index();
     const nodes = index.unitNodeSlice(unit_id);
-    const crashes = try bodies.analyses.dispatchCrashes(bodies);
     const facts = try allocator.create(UnitFacts);
     errdefer allocator.destroy(facts);
     const flags = try allocator.alloc(u8, nodes.len);
@@ -1112,7 +1097,7 @@ fn computeUnitFacts(allocator: Allocator, bodies: CheckedBodies, unit_id: UnitId
     @memset(flags, 0);
 
     {
-        var scan = DivergenceScan{ .allocator = allocator, .bodies = bodies, .unit = unit_id, .crashes = crashes, .states = flags };
+        var scan = DivergenceScan{ .allocator = allocator, .bodies = bodies, .unit = unit_id, .states = flags };
         defer scan.deinit();
         for (nodes) |raw| switch (index.nodeKind(raw)) {
             .expr, .statement => _ = try scan.eval(raw),
@@ -1157,6 +1142,19 @@ fn appendDispatchOperands(bodies: CheckedBodies, raw_node: u32, out: anytype) Al
         .checked_expr => |expr| try out.add(expr),
         .generated_interpolation_segments, .generated_numeral, .generated_quote, .literal_pattern_value, .literal_pattern_conversion => {},
     };
+}
+
+/// Whether node `raw`'s own static dispatch cannot run: a dispatch,
+/// `from_numeral` or `from_quote` plan keyed by the node resolves to a
+/// checked error or unreachable.
+fn nodeDispatchCrashes(bodies: CheckedBodies, raw: u32) Allocator.Error!bool {
+    const plans = bodies.tables.plans orelse invariant("a body analysis ran without the module's dispatch plans");
+    for ([_]?static_dispatch.StaticDispatchPlanId{ plans.lookupByNode(raw), plans.numeralPlanForNode(raw), plans.quotePlanForNode(raw) }) |found| {
+        const plan = found orelse continue;
+        const dispatch = bodies.tables.dispatch orelse invariant("a body analysis read a dispatch plan without the module's dispatch resolution");
+        if (dispatchResolutionCrashes((try dispatch.plan(plan)).resolution)) return true;
+    }
+    return false;
 }
 
 fn dispatchResolutionCrashes(resolution: static_dispatch.CheckedCallResolution) bool {
@@ -1270,8 +1268,6 @@ const DivergenceScan = struct {
     bodies: CheckedBodies,
     /// The unit whose nodes `states` covers; null when it covers every node.
     unit: ?UnitId,
-    /// The nodes whose own dispatch plan cannot run.
-    crashes: *const NodeBits,
     /// Per node, one specialization's evidence: true where that evidence
     /// resolves the node's dispatch to a checked error or unreachable value.
     evidence_crashes: []const bool = &.{},
@@ -1415,7 +1411,7 @@ const DivergenceScan = struct {
     fn expandExpr(self: *DivergenceScan, id: ExprId) Allocator.Error!Expansion {
         const raw = @backingInt(id);
         if (raw < self.evidence_crashes.len and self.evidence_crashes[raw]) return .{ .value = diverges_both };
-        if (self.crashes.isSet(raw)) return .{ .value = diverges_both };
+        if (try nodeDispatchCrashes(self.bodies, raw)) return .{ .value = diverges_both };
         const bodies = self.bodies;
         return switch (bodies.exprData(id)) {
             .crash,
@@ -1580,7 +1576,6 @@ pub fn dispatchDivergenceForEvidence(
         .allocator = allocator,
         .bodies = bodies,
         .unit = null,
-        .crashes = try bodies.analyses.dispatchCrashes(bodies),
         .evidence_crashes = evidence_crashes,
         .states = states,
     };
@@ -2522,15 +2517,14 @@ const DiagnosticScan = struct {
 };
 
 /// The procedure templates whose every call, in every program, comes from
-/// one site of their module's source, and the nested procedure sites whose
-/// function the module's source calls at one site and never otherwise uses.
-/// A template qualifies when it is private (a promoted local, or a source
-/// definition the module neither exposes nor registers as a method), no
-/// dispatch plan targets it, and the module's source references it exactly
-/// once, as the function of a call. Dev builds inline by these facts rather
-/// than by how many callers one program has, so the decision is the same in
-/// every program that links the code (design.md "Object cache").
-fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!*SingleSourceFacts {
+/// one site of their module's source. A template qualifies when it is
+/// private (a promoted local, or a source definition the module neither
+/// exposes nor registers as a method), no dispatch plan targets it, and the
+/// module's source references it exactly once, as the function of a call.
+/// Dev builds inline by these facts rather than by how many callers one
+/// program has, so the decision is the same in every program that links the
+/// code (design.md "Object cache").
+fn computeSingleSourceTemplates(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!*SingleSourceTemplates {
     const tables = bodies.tables;
     const templates = tables.templates orelse invariant("single-source calls were computed without the module's templates");
     const refs = tables.refs orelse invariant("single-source calls were computed without the module's value references");
@@ -2577,10 +2571,31 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
         if (template.target != .roc or template.body != .checked_body) is_eligible.* = false;
     }
 
-    // A dispatch target can be reached without a reference.
+    // A dispatch target can be reached without a reference. A plan's direct
+    // target is the procedure a method registry entry of its method names,
+    // and only this module's entries can name its private templates, so only
+    // the plans of those entries' methods can target an eligible template.
     const dispatch = tables.dispatch orelse invariant("single-source calls were computed without the module's dispatch resolution");
-    for (0..templates.templates.items.len) |raw_template| {
+    const plans = tables.plans orelse invariant("single-source calls were computed without the module's dispatch plans");
+    var target_methods = collections.DenseMap(canonical.MethodNameId, void).init(allocator);
+    defer target_methods.deinit();
+    for (dispatch.source.method_registry.entries) |entry| {
+        const target = entry.target orelse continue;
+        switch (target.kind) {
+            .procedure => |procedure| if (local.template(procedure.template)) |id| {
+                if (eligible[id.index()]) try target_methods.put(entry.key.method, {});
+            },
+            .local_proc, .structural => {},
+        }
+    }
+    for (templates.templates.items, 0..) |template, raw_template| {
+        if (target_methods.count() == 0) break;
+        const plan_refs = templates.dispatch_plan_refs[template.static_dispatch_plans.start..][0..template.static_dispatch_plans.len];
+        for (plan_refs) |plan_id| {
+            if (target_methods.contains(plans.plans[@backingInt(plan_id)].method)) break;
+        } else continue;
         for ((try dispatch.templateRelations(@fromBackingInt(@intCast(raw_template)))).direct) |plan_id| {
+            if (!target_methods.contains(plans.plans[@backingInt(plan_id)].method)) continue;
             const direct = switch ((try dispatch.plan(plan_id)).resolution) {
                 .direct_closed, .direct_parametric => |direct| direct,
                 .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => continue,
@@ -2643,11 +2658,21 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
         }
     }
 
+    const facts = try allocator.create(SingleSourceTemplates);
+    errdefer allocator.destroy(facts);
+    facts.* = .{ .templates = try published.toOwnedSlice(allocator) };
+    return facts;
+}
+
+/// The nested procedure sites whose function the module's source calls at
+/// one site and never otherwise uses.
+fn computeSingleSourceSites(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!*SingleSourceSites {
+    var shapes = try SourceCallShapes.collect(allocator, bodies);
+    defer shapes.deinit(allocator);
     const sites = try singleSourceSites(allocator, try bodies.moduleNestedProcSites(), &shapes);
     errdefer allocator.free(sites);
-
-    const facts = try allocator.create(SingleSourceFacts);
-    facts.* = .{ .templates = try published.toOwnedSlice(allocator), .sites = sites };
+    const facts = try allocator.create(SingleSourceSites);
+    facts.* = .{ .sites = sites };
     return facts;
 }
 

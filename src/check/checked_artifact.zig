@@ -1276,8 +1276,8 @@ fn moduleRootRequests(allocator: Allocator, owner: ImportedModuleView) Allocator
     }
     {
         const graph = try dispatch.literalGraph();
-        for (0..graph.components.count()) |component| {
-            const done = try dispatch.source.analyses.literalComponent(dispatch, graph, @intCast(component));
+        for ((try dispatch.source.analyses.literalComponentOrder(dispatch, graph)).leaders) |leader| {
+            const done = try dispatch.source.analyses.literalComponent(dispatch, graph, leader);
             for (done.roots) |*record| try appendLiteralRootRequest(&requests, allocator, owner.key.digest(), record);
         }
     }
@@ -13646,6 +13646,14 @@ pub const TemplateDispatch = struct {
     pub fn site(self: *const TemplateDispatch, key: u32) ?*const static_dispatch.SiteEvidenceEntry {
         return lookupSiteEvidence(self.site_evidence, key);
     }
+
+    /// Whether the template's chain deferred use site `key` to the module.
+    pub fn defersSite(self: *const TemplateDispatch, key: u32) bool {
+        for (self.deferred_sites) |deferred| {
+            if (deferred.site_key == key) return true;
+        }
+        return false;
+    }
 };
 
 fn lookupPlanResolution(entries: []const PlanResolutionEntry, id: static_dispatch.StaticDispatchPlanId) ?static_dispatch.PlanResolution {
@@ -13808,6 +13816,8 @@ pub const DispatchIndex = struct {
     iterator_sites: []PlanReach = &.{},
     /// Use sites, sorted by key then template order.
     site_reach: []SiteReach = &.{},
+    /// The use sites of the defaulted-field expressions, sorted.
+    default_sites: []u32 = &.{},
 
     /// One reference to a plan: the template whose body reaches it (null for
     /// a defaulted-field expression) and the scope it occurs in.
@@ -13843,7 +13853,17 @@ pub const DispatchIndex = struct {
         allocator.free(self.plan_sites);
         allocator.free(self.iterator_sites);
         allocator.free(self.site_reach);
+        allocator.free(self.default_sites);
         allocator.destroy(self);
+    }
+
+    /// Whether `site` is a use site of a defaulted-field expression.
+    pub fn isDefaultSite(self: *const DispatchIndex, site: u32) bool {
+        return std.sort.binarySearch(u32, self.default_sites, site, struct {
+            fn order(key: u32, item: u32) std.math.Order {
+                return std.math.order(key, item);
+            }
+        }.order) != null;
     }
 
     pub fn planSites(self: *const DispatchIndex, plan: static_dispatch.StaticDispatchPlanId) []const PlanReach {
@@ -14063,7 +14083,7 @@ pub const CheckedDispatch = struct {
     pub fn templateLiteralRequirements(self: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Error![]const LiteralRequirement {
         const row = template.rowIndex() orelse return &.{};
         const graph = try self.literalGraph();
-        const component = try self.analyses().literalComponent(self, graph, graph.components.component_of[row]);
+        const component = try self.analyses().literalComponent(self, graph, row);
         return component.requirementsOf(.{ .template = row, .scope = null });
     }
 
@@ -14071,7 +14091,7 @@ pub const CheckedDispatch = struct {
     pub fn scopeLiteralRequirements(self: CheckedDispatch, scope: DispatchScopeId) Error![]const LiteralRequirement {
         const graph = try self.literalGraph();
         const key: LiteralScopeKey = .{ .template = graph.scope_owners[@backingInt(scope)], .scope = @backingInt(scope) };
-        const component = try self.analyses().literalComponent(self, graph, graph.components.component_of[graph.nodeOfScope(key)]);
+        const component = try self.analyses().literalComponent(self, graph, graph.nodeOfScope(key));
         return component.requirementsOf(key);
     }
 
@@ -14080,9 +14100,12 @@ pub const CheckedDispatch = struct {
     /// has none.
     pub fn literalEdgeArgs(self: CheckedDispatch, edge: LiteralEdge) Error![]const LiteralArgSource {
         const graph = try self.literalGraph();
-        const index = graph.edgeIndex(edge) orelse return &.{};
-        const component = try self.analyses().literalComponent(self, graph, graph.components.component_of[graph.edges[index].holder]);
-        return component.edgeArgs(index);
+        const holder = (try self.analyses().literalEdgeHolder(self, graph, edge)) orelse return &.{};
+        // A dispatch edge whose alias chain leaves the module is no edge of
+        // the graph, though its holder's walk reaches it.
+        const index = (try self.analyses().literalNode(self, graph, holder)).edgeIndex(edge) orelse return &.{};
+        const component = try self.analyses().literalComponent(self, graph, holder);
+        return component.edgeArgs(literalEdgeRef(holder, index));
     }
 
     /// Append the literal argument roots template `template`'s edges read to
@@ -14127,8 +14150,8 @@ pub const CheckedDispatch = struct {
             for (conversions.records) |record| try out.append(allocator, record.root.id);
         }
         const graph = try self.literalGraph();
-        for (0..graph.components.count()) |component| {
-            const done = try self.analyses().literalComponent(self, graph, @intCast(component));
+        for ((try self.analyses().literalComponentOrder(self, graph)).leaders) |leader| {
+            const done = try self.analyses().literalComponent(self, graph, leader);
             for (done.roots) |record| try out.append(allocator, record.root.id);
         }
     }
@@ -14150,8 +14173,8 @@ pub const CheckedDispatch = struct {
             },
             .argument => |argument| {
                 const graph = try self.literalGraph();
-                const index = graph.edgeIndex(argument.edge) orelse checkedArtifactInvariant("a literal argument root names an edge no body holds", .{});
-                const component = try self.analyses().literalComponent(self, graph, graph.components.component_of[graph.edges[index].holder]);
+                const holder = (try self.analyses().literalEdgeHolder(self, graph, argument.edge)) orelse checkedArtifactInvariant("a literal argument root names an edge no body holds", .{});
+                const component = try self.analyses().literalComponent(self, graph, holder);
                 return component.root(id) orelse checkedArtifactInvariant("a literal argument root names an argument its edge does not root", .{});
             },
         }
@@ -17579,6 +17602,24 @@ fn fillDispatchReach(allocator: Allocator, source: DispatchSource, index: *Dispa
     }
     site_reach.shrinkRetainingCapacity(len);
     index.site_reach = try site_reach.toOwnedSlice(allocator);
+
+    var default_sites = std.ArrayList(u32).empty;
+    defer default_sites.deinit(allocator);
+    const defaults = sites.defaultsIndex();
+    const default_value_refs = sites.defaultRefs(TemplateDispatchSites.default_value_refs);
+    for (source.refs.template_refs[default_value_refs.start..][0..default_value_refs.len]) |ref_id| {
+        try default_sites.append(allocator, @backingInt(source.refs.records[@backingInt(ref_id)].expr));
+    }
+    const default_scheme_uses = sites.schemeUseSpan(defaults);
+    for (sites.scheme_use_sites[default_scheme_uses.start..][0..default_scheme_uses.len]) |site| {
+        try default_sites.append(allocator, @backingInt(site.checked_expr));
+    }
+    const default_scope_sites = sites.scopeSiteSpan(defaults);
+    for (sites.scope_sites[default_scope_sites.start..][0..default_scope_sites.len]) |site| {
+        try default_sites.append(allocator, @backingInt(site.checked_expr));
+    }
+    std.mem.sort(u32, default_sites.items, {}, std.sort.asc(u32));
+    index.default_sites = try default_sites.toOwnedSlice(allocator);
 }
 
 fn dispatchPlanSpan(templates: *const CheckedProcedureTemplateTable, template: usize) artifact_serialize.Span {
@@ -22324,36 +22365,85 @@ pub fn callGraphComponents(allocator: Allocator, successor_starts: []const u32, 
     };
 }
 
+test "lazy components assign only what a node reaches, callees first" {
+    const gpa = std.testing.allocator;
+    // 0 -> 1 -> 2 -> 1 (1 and 2 form a cycle), 3 -> 0, 4 alone.
+    const Graph = struct {
+        callees: []const []const u32,
+
+        pub fn calleesOf(self: *const @This(), node: u32) []const u32 {
+            return self.callees[node];
+        }
+    };
+    const graph: Graph = .{ .callees = &.{ &.{1}, &.{2}, &.{1}, &.{0}, &.{} } };
+    var components = try LazyComponents.init(gpa, 5);
+    defer components.deinit(gpa);
+
+    try components.assign(gpa, 0, &graph);
+    try std.testing.expectEqual(@as(?u32, 0), components.leaderOf(0));
+    try std.testing.expectEqual(@as(?u32, 1), components.leaderOf(1));
+    try std.testing.expectEqual(@as(?u32, 1), components.leaderOf(2));
+    try std.testing.expectEqual(@as(?u32, null), components.leaderOf(3));
+    try std.testing.expectEqual(@as(?u32, null), components.leaderOf(4));
+    try std.testing.expectEqualSlices(u32, &.{ 1, 2 }, components.info(1).members);
+    try std.testing.expectEqualSlices(u32, &.{1}, components.info(0).callees);
+    try std.testing.expectEqual(@as(u32, 1), components.info(1).memberIndex(2));
+
+    try components.assign(gpa, 3, &graph);
+    try std.testing.expectEqual(@as(?u32, 3), components.leaderOf(3));
+    try std.testing.expectEqualSlices(u32, &.{0}, components.info(3).callees);
+    try std.testing.expectEqual(@as(?u32, null), components.leaderOf(4));
+}
+
 /// The slot holding one literal component's results.
 pub const LiteralComponentSlot = collections.OnceSlot(*LiteralComponent, .module_literal_component);
 /// The slot holding the literal argument roots one template's edges read.
 pub const LiteralDemandSlot = collections.OnceSlot(*LiteralArgumentDemand, .module_literal_demand);
+/// The slot holding one node's part of a module's literal graph.
+pub const LiteralNodeSlot = collections.OnceSlot(*LiteralNodeEdges, .module_literal_node);
+/// The slot holding the holders of the evidence nodes one resolution's
+/// pool gives the literal walks.
+pub const LiteralPoolSlot = collections.OnceSlot(*LiteralPoolHolders, .module_literal_pool);
+/// The slot holding the holders of the evidence nodes of the module's own
+/// resolution that the literal walks reach.
+pub const LiteralModulePoolSlot = collections.OnceSlot(*LiteralPoolHolders, .module_literal_module_pool);
+/// The slot holding the order of every component of a module's literal
+/// graph.
+pub const LiteralOrderSlot = collections.OnceSlot(*LiteralComponentOrder, .module_literal_component_order);
 
-/// A module's literal call graph (`ModuleAnalyses.literalGraph`): every
-/// instantiation edge its bodies hold, each scheme's own open literals, and
-/// the strongly connected components the edges between the templates whose
-/// bodies hold them form, numbered callees first. Nodes are the module's
-/// templates in template order, then the defaulted-field expressions as one
-/// node. Each component's literal requirements, edge arguments and literal
-/// argument roots are a slot of their own (`LiteralComponent`).
+/// A module's literal call graph (`ModuleAnalyses.literalGraph`). Nodes are
+/// the module's templates in template order, then the defaulted-field
+/// expressions as one node. An edge is held by the first node, in node
+/// order, whose body reaches it, and that node's component computes its
+/// literal arguments. The graph itself holds only what needs no dispatch
+/// resolution: which node first reaches each value reference and each
+/// generalized local function's construction. Each node's edges and own open
+/// literals (`LiteralNodeEdges`), the first node reaching each evidence node
+/// of a resolution's pool (`LiteralPoolHolders`), each strongly connected
+/// component of the edges between nodes, and each component's literal
+/// requirements, edge arguments and literal argument roots
+/// (`LiteralComponent`) are slots of their own, so a consumer of one
+/// template's requirements resolves only the templates that template reaches.
 pub const LiteralGraph = struct {
     template_count: u32,
     /// The template whose body owns each generalized local scope.
     scope_owners: []const ?u32,
-    /// Every edge, in the order the nodes' bodies first hold them, so node
-    /// `n`'s edges are `edges[edge_starts[n]..edge_starts[n + 1]]`.
-    edges: []const LiteralGraphEdge,
-    edge_starts: []const u32,
-    node_edges: []const LiteralEdgeIndex,
-    use_edges: []const LiteralEdgeIndex,
-    /// The edges template `t`'s body holds, its own first:
-    /// `held[held_starts[t]..held_starts[t + 1]]`.
-    held_starts: []const u32,
-    held: []const u32,
-    /// Node `n`'s own open literals: `own_sites[own_starts[n]..own_starts[n + 1]]`.
-    own_starts: []const u32,
-    own_sites: []const LiteralOwnSite,
-    components: CallGraphComponents,
+    /// The first node holding a value reference at each expression, with
+    /// that reference.
+    value_ref_firsts: std.AutoHashMapUnmanaged(u32, LiteralValueRefFirst),
+    /// The first node holding a generalized local function's construction
+    /// at each expression.
+    scope_site_firsts: std.AutoHashMapUnmanaged(u32, u32),
+    /// One per node.
+    node_slots: []LiteralNodeSlot,
+    /// One per template, for the evidence pool of the template's
+    /// resolution.
+    pool_slots: []LiteralPoolSlot,
+    module_pool_slot: LiteralModulePoolSlot = .empty,
+    order_slot: LiteralOrderSlot = .empty,
+    /// The strongly connected components of the edges between nodes.
+    components: LazyComponents,
+    /// Each component's results, by its leader.
     component_slots: []LiteralComponentSlot,
     demand_slots: []LiteralDemandSlot,
 
@@ -22375,39 +22465,305 @@ pub const LiteralGraph = struct {
         };
     }
 
-    pub fn nodeEdges(self: *const LiteralGraph, node: u32) []const LiteralGraphEdge {
-        return self.edges[self.edge_starts[node]..self.edge_starts[node + 1]];
+    /// Node `node`'s edges and own literals, which its component's
+    /// assignment computed.
+    pub fn finishedNode(self: *const LiteralGraph, node: u32) *const LiteralNodeEdges {
+        return self.node_slots[node].peek() orelse
+            checkedArtifactInvariant("a literal graph node was read before its edges were computed", .{});
     }
 
-    /// The index of edge `edge`, or null when no body holds it.
-    pub fn edgeIndex(self: *const LiteralGraph, edge: LiteralEdge) ?u32 {
+    /// The leader of node `node`'s component, or null before an assignment
+    /// reaches the node.
+    pub fn leaderOf(self: *const LiteralGraph, node: u32) ?u32 {
+        return self.components.leaderOf(node);
+    }
+
+    /// Component `leader`'s members and callee components.
+    pub fn componentInfo(self: *const LiteralGraph, leader: u32) *const CallGraphComponentInfo {
+        return self.components.info(leader);
+    }
+
+    /// The local schemes node `node`'s edges instantiate, which its
+    /// component's assignment computed.
+    pub fn calleesOf(self: *const LiteralGraph, node: u32) []const u32 {
+        return self.finishedNode(node).callees;
+    }
+
+    /// The first node whose body reaches a value reference or a local
+    /// function construction at `expr`, whichever comes first; null when no
+    /// literal walk reads the expression's evidence.
+    pub fn firstSiteWalker(self: *const LiteralGraph, expr: u32) ?u32 {
+        const by_ref: ?u32 = if (self.value_ref_firsts.get(expr)) |first| first.node else null;
+        const by_scope = self.scope_site_firsts.get(expr);
+        if (by_ref) |ref_node| return if (by_scope) |scope_node| @min(ref_node, scope_node) else ref_node;
+        return by_scope;
+    }
+
+    pub fn destroy(self: *LiteralGraph, allocator: Allocator) void {
+        for (self.component_slots) |*slot| if (slot.peek()) |result| result.destroy(allocator);
+        for (self.demand_slots) |*slot| if (slot.peek()) |result| result.destroy(allocator);
+        for (self.node_slots) |*slot| if (slot.peek()) |result| result.destroy(allocator);
+        for (self.pool_slots) |*slot| if (slot.peek()) |result| result.destroy(allocator);
+        if (self.module_pool_slot.peek()) |result| result.destroy(allocator);
+        if (self.order_slot.peek()) |result| result.destroy(allocator);
+        self.components.deinit(allocator);
+        allocator.free(self.component_slots);
+        allocator.free(self.demand_slots);
+        allocator.free(self.node_slots);
+        allocator.free(self.pool_slots);
+        allocator.free(self.scope_owners);
+        self.value_ref_firsts.deinit(allocator);
+        self.scope_site_firsts.deinit(allocator);
+        allocator.destroy(self);
+    }
+};
+
+/// The first node holding a value reference at an expression, and the
+/// reference.
+pub const LiteralValueRefFirst = struct {
+    node: u32,
+    ref: ResolvedValueRefId,
+};
+
+fn orderU32(key: u32, item: u32) std.math.Order {
+    return std.math.order(key, item);
+}
+
+/// One strongly connected component of a module's call graph
+/// (`LazyComponents`): its members, ascending (the first is its leader), and
+/// the leaders of the other components its members' edges reach, ascending.
+pub const CallGraphComponentInfo = struct {
+    members: []const u32,
+    callees: []const u32,
+
+    /// Node `node`'s index among the members.
+    pub fn memberIndex(self: *const CallGraphComponentInfo, node: u32) u32 {
+        const index = std.sort.binarySearch(u32, self.members, node, orderU32) orelse checkedArtifactInvariant("a node was looked up in a component it is no member of", .{});
+        return @intCast(index);
+    }
+
+    pub fn destroy(self: *CallGraphComponentInfo, allocator: Allocator) void {
+        allocator.free(self.members);
+        allocator.free(self.callees);
+        allocator.destroy(self);
+    }
+};
+
+/// The strongly connected components of a module's call graph over dense
+/// nodes, assigned as consumers reach them rather than for the whole module.
+/// A component is named by its least member, its leader. An assignment from
+/// a node reads the finished edges of every unassigned node it reaches, so
+/// a consumer computes those before taking `mutex`, which is held around one
+/// assignment only.
+pub const LazyComponents = struct {
+    mutex: std.Io.Mutex = .init,
+    /// Each node's leader; `unassigned` until an assignment reaches the node.
+    /// A node is assigned only after every node it reaches is.
+    node_leaders: []std.atomic.Value(u32),
+    /// Each component's record, by its leader.
+    infos: []std.atomic.Value(?*CallGraphComponentInfo),
+
+    pub const unassigned = std.math.maxInt(u32);
+
+    pub fn init(allocator: Allocator, node_count: usize) Allocator.Error!LazyComponents {
+        const node_leaders = try allocator.alloc(std.atomic.Value(u32), node_count);
+        errdefer allocator.free(node_leaders);
+        @memset(node_leaders, .init(unassigned));
+        const infos = try allocator.alloc(std.atomic.Value(?*CallGraphComponentInfo), node_count);
+        @memset(infos, .init(null));
+        return .{ .node_leaders = node_leaders, .infos = infos };
+    }
+
+    pub fn deinit(self: *LazyComponents, allocator: Allocator) void {
+        for (self.infos) |*slot| if (slot.load(.acquire)) |record| record.destroy(allocator);
+        allocator.free(self.node_leaders);
+        allocator.free(self.infos);
+    }
+
+    /// The leader of node `node`'s component, or null before an assignment
+    /// reaches the node.
+    pub fn leaderOf(self: *const LazyComponents, node: u32) ?u32 {
+        const leader = self.node_leaders[node].load(.acquire);
+        return if (leader == unassigned) null else leader;
+    }
+
+    /// Component `leader`'s record.
+    pub fn info(self: *const LazyComponents, leader: u32) *const CallGraphComponentInfo {
+        return self.infos[leader].load(.acquire) orelse
+            checkedArtifactInvariant("a call graph component was read before its assignment", .{});
+    }
+
+    /// Assign every node `start` reaches and no assignment has reached yet to
+    /// its strongly connected component (Tarjan's algorithm, iteratively),
+    /// creating each new component's record. `graph.calleesOf(node)` gives
+    /// each such node's finished callees. The caller holds `mutex`.
+    pub fn assign(self: *LazyComponents, allocator: Allocator, start: u32, graph: anytype) Allocator.Error!void {
+        if (self.leaderOf(start) != null) return;
+        var order = std.AutoHashMapUnmanaged(u32, u32).empty;
+        defer order.deinit(allocator);
+        var low = std.AutoHashMapUnmanaged(u32, u32).empty;
+        defer low.deinit(allocator);
+        var on_stack = std.AutoHashMapUnmanaged(u32, void).empty;
+        defer on_stack.deinit(allocator);
+        var stack: std.ArrayList(u32) = .empty;
+        defer stack.deinit(allocator);
+        const Frame = struct { node: u32, next: u32 };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer frames.deinit(allocator);
+        var members: std.ArrayList(u32) = .empty;
+        defer members.deinit(allocator);
+        var callees: std.ArrayList(u32) = .empty;
+        defer callees.deinit(allocator);
+        var next_order: u32 = 0;
+
+        try order.put(allocator, start, next_order);
+        try low.put(allocator, start, next_order);
+        next_order += 1;
+        try stack.append(allocator, start);
+        try on_stack.put(allocator, start, {});
+        try frames.append(allocator, .{ .node = start, .next = 0 });
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            const node = frame.node;
+            const successors = graph.calleesOf(node);
+            if (frame.next < successors.len) {
+                const callee = successors[frame.next];
+                frame.next += 1;
+                if (self.leaderOf(callee) != null) continue;
+                if (order.get(callee)) |callee_order| {
+                    if (on_stack.contains(callee)) {
+                        const node_low = low.getPtr(node).?;
+                        node_low.* = @min(node_low.*, callee_order);
+                    }
+                    continue;
+                }
+                try order.put(allocator, callee, next_order);
+                try low.put(allocator, callee, next_order);
+                next_order += 1;
+                try stack.append(allocator, callee);
+                try on_stack.put(allocator, callee, {});
+                try frames.append(allocator, .{ .node = callee, .next = 0 });
+                continue;
+            }
+            _ = frames.pop();
+            const node_low = low.get(node).?;
+            if (frames.items.len != 0) {
+                const parent_low = low.getPtr(frames.items[frames.items.len - 1].node).?;
+                parent_low.* = @min(parent_low.*, node_low);
+            }
+            if (node_low != order.get(node).?) continue;
+
+            members.clearRetainingCapacity();
+            while (stack.pop()) |member| {
+                _ = on_stack.remove(member);
+                try members.append(allocator, member);
+                if (member == node) break;
+            }
+            std.mem.sort(u32, members.items, {}, std.sort.asc(u32));
+            const leader = members.items[0];
+            // Every callee outside the component is assigned already: Tarjan
+            // completes a component's callee components before it.
+            callees.clearRetainingCapacity();
+            for (members.items) |member| for (graph.calleesOf(member)) |callee| {
+                if (std.sort.binarySearch(u32, members.items, callee, orderU32) != null) continue;
+                try callees.append(allocator, self.leaderOf(callee) orelse
+                    checkedArtifactInvariant("a call graph component was assigned before its callee component", .{}));
+            };
+            std.mem.sort(u32, callees.items, {}, std.sort.asc(u32));
+            var kept: usize = 0;
+            for (callees.items, 0..) |callee, index| {
+                if (index != 0 and callees.items[index - 1] == callee) continue;
+                callees.items[kept] = callee;
+                kept += 1;
+            }
+            const record = try allocator.create(CallGraphComponentInfo);
+            errdefer allocator.destroy(record);
+            const owned_members = try allocator.dupe(u32, members.items);
+            errdefer allocator.free(owned_members);
+            record.* = .{ .members = owned_members, .callees = try allocator.dupe(u32, callees.items[0..kept]) };
+            self.infos[leader].store(record, .release);
+            for (members.items) |member| self.node_leaders[member].store(leader, .release);
+        }
+    }
+};
+
+/// Every component of a module's literal graph, by leader, numbered as
+/// Tarjan's algorithm over the nodes in node order completes them (callees
+/// first).
+pub const LiteralComponentOrder = struct {
+    leaders: []const u32,
+
+    pub fn destroy(self: *LiteralComponentOrder, allocator: Allocator) void {
+        allocator.free(self.leaders);
+        allocator.destroy(self);
+    }
+};
+
+/// An edge a node's body reaches, with the node holding it.
+pub const LiteralReachedEdge = struct {
+    key: LiteralEdge,
+    holder: u32,
+};
+
+/// One node's part of a module's literal graph (`ModuleAnalyses.literalNode`).
+pub const LiteralNodeEdges = struct {
+    /// The node's own open literals.
+    own_sites: []const LiteralOwnSite,
+    /// The edges the node holds, in the order its body first reaches them.
+    edges: []const LiteralGraphEdge,
+    /// `edges` by key, sorted: evidence node edges and use edges apart.
+    node_keys: []const LiteralEdgeIndex,
+    use_keys: []const LiteralEdgeIndex,
+    /// Every edge a template's body reaches, each once, in the order it
+    /// first reaches them; empty for the defaulted-field node.
+    reached: []const LiteralReachedEdge,
+    /// The nodes of the local schemes `edges` instantiate, each once.
+    callees: []const u32,
+
+    /// The index in `edges` of the edge keyed `edge`, or null when the node
+    /// does not hold it.
+    pub fn edgeIndex(self: *const LiteralNodeEdges, edge: LiteralEdge) ?u32 {
         const entries: []const LiteralEdgeIndex, const key: u64 = switch (edge) {
-            .node => |id| .{ self.node_edges, @bitCast(id) },
-            .use => |expr| .{ self.use_edges, @backingInt(expr) },
+            .node => |id| .{ self.node_keys, @bitCast(id) },
+            .use => |expr| .{ self.use_keys, @backingInt(expr) },
             .literal => return null,
         };
         const found = std.sort.binarySearch(LiteralEdgeIndex, entries, key, LiteralEdgeIndex.order) orelse return null;
         return entries[found].edge;
     }
 
-    pub fn destroy(self: *LiteralGraph, allocator: Allocator) void {
-        for (self.component_slots) |*slot| if (slot.peek()) |result| result.destroy(allocator);
-        for (self.demand_slots) |*slot| if (slot.peek()) |result| result.destroy(allocator);
-        allocator.free(self.component_slots);
-        allocator.free(self.demand_slots);
-        allocator.free(self.scope_owners);
-        allocator.free(self.edges);
-        allocator.free(self.edge_starts);
-        allocator.free(self.node_edges);
-        allocator.free(self.use_edges);
-        allocator.free(self.held_starts);
-        allocator.free(self.held);
-        allocator.free(self.own_starts);
+    pub fn destroy(self: *LiteralNodeEdges, allocator: Allocator) void {
         allocator.free(self.own_sites);
-        self.components.deinit(allocator);
+        allocator.free(self.edges);
+        allocator.free(self.node_keys);
+        allocator.free(self.use_keys);
+        allocator.free(self.reached);
+        allocator.free(self.callees);
         allocator.destroy(self);
     }
 };
+
+/// The first node, in node order, whose literal walk reaches each evidence
+/// node of one evidence pool, sorted by evidence node.
+pub const LiteralPoolHolders = struct {
+    holders: []const LiteralEdgeIndex,
+
+    pub fn holder(self: *const LiteralPoolHolders, id: static_dispatch.EvidenceNodeId) ?u32 {
+        const found = std.sort.binarySearch(LiteralEdgeIndex, self.holders, @as(u64, @bitCast(id)), LiteralEdgeIndex.order) orelse return null;
+        return self.holders[found].edge;
+    }
+
+    pub fn destroy(self: *LiteralPoolHolders, allocator: Allocator) void {
+        allocator.free(self.holders);
+        allocator.destroy(self);
+    }
+};
+
+/// The identity of an edge a component's literal arguments are listed by:
+/// its holding node and its index among that node's edges.
+pub fn literalEdgeRef(node: u32, index: u32) u64 {
+    return (@as(u64, node) << 32) | index;
+}
 
 /// The literal kind of a plan with a generated literal operand.
 fn literalKindOfPlan(table: *const static_dispatch.StaticDispatchPlanTable, plan: static_dispatch.StaticDispatchCallPlan) ?LiteralArgumentKind {
@@ -22426,6 +22782,9 @@ fn literalKindOfPlan(table: *const static_dispatch.StaticDispatchPlanTable, plan
 const LiteralEdgeWalker = struct {
     allocator: Allocator,
     dispatch: CheckedDispatch,
+    /// Whether the walk follows generated codecs' calls, whose evidence
+    /// is the module resolution's own.
+    follow_derivations: bool = true,
     stack: std.ArrayListUnmanaged(static_dispatch.EvidenceNodeId) = .empty,
     visited_derivations: collections.DenseMapUnmanaged(static_dispatch.GeneratedCodecDerivationId, void) = .empty,
 
@@ -22483,6 +22842,7 @@ const LiteralEdgeWalker = struct {
     /// Queue the method calls a generated codec's body makes, through the
     /// codecs it nests.
     fn derivationNodes(self: *LiteralEdgeWalker, first: static_dispatch.GeneratedCodecDerivationId) Allocator.Error!void {
+        if (!self.follow_derivations) return;
         var pending: std.ArrayListUnmanaged(static_dispatch.GeneratedCodecDerivationId) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, first);
@@ -22564,20 +22924,130 @@ fn literalTemplateOfValueRef(dispatch: CheckedDispatch, ref: ResolvedValueRef) A
     };
 }
 
-/// The module's literal call graph: every template's and the defaulted
-/// fields' edges and own open literals, and the components of the edges
-/// between templates.
+/// The scheme a value reference's use instantiates, which its use edge
+/// names; null when the use instantiates none.
+fn literalValueRefCallee(dispatch: CheckedDispatch, record: ResolvedValueRefRecord) Allocator.Error!?LiteralCallee {
+    return switch (record.ref) {
+        .local_proc => |local| if (local.dispatch_scope) |scope| .{ .scope = scope } else null,
+        .top_level_proc, .imported_proc, .promoted_top_level_proc, .platform_required_proc, .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_declaration, .platform_required_checked_error => if (try literalTemplateOfValueRef(dispatch, record.ref)) |template| .{ .template = template } else null,
+    };
+}
+
+/// Walk node `node`'s body in the order the literal graph reads it: its
+/// plans, its value references, then the constructions of its generalized
+/// local functions (the defaulted-field node reads only its plans that
+/// resolved to a direct call). `sink` receives each read's evidence edges
+/// (`evidence`) and each use edge (`use`).
+fn walkLiteralNode(
+    dispatch: CheckedDispatch,
+    graph: *const LiteralGraph,
+    node: u32,
+    walker: *LiteralEdgeWalker,
+    found: *std.ArrayListUnmanaged(LiteralEdgeWalker.Found),
+    sink: anytype,
+) Allocator.Error!void {
+    const source = dispatch.source;
+    const templates = source.templates;
+    const refs = source.refs;
+    const sites = &templates.dispatch_sites;
+    const scopes = templates.dispatch_scopes;
+    if (node < graph.template_count) {
+        const template = templates.templates.items[node];
+        const plan_start = template.static_dispatch_plans.start;
+        for (templates.dispatch_plan_refs[plan_start..][0..template.static_dispatch_plans.len], 0..) |plan_id, i| {
+            const plan = try dispatch.plan(plan_id);
+            found.clearRetainingCapacity();
+            try walker.plan(plan, found);
+            try sink.evidence(found.items, literalScopeKeyOf(node, templates.dispatch_ref_scopes[plan_start + i]), @fromBackingInt(@intCast(plan.node)));
+        }
+        const ref_start = template.resolved_value_refs.start;
+        for (refs.template_refs[ref_start..][0..template.resolved_value_refs.len], 0..) |ref_id, i| {
+            try walkLiteralValueRef(dispatch, walker, found, refs.records[@backingInt(ref_id)], literalScopeKeyOf(node, sites.value_ref_scopes[ref_start + i]), sink);
+        }
+        const site_span = sites.scopeSiteSpan(node);
+        for (sites.scope_sites[site_span.start..][0..site_span.len]) |scope_site| {
+            const parent = scopes[@backingInt(scope_site.scope)].parent;
+            try walkLiteralScopeSite(walker, found, scope_site, .{ .template = node, .scope = if (parent) |p| @backingInt(p) else null }, sink);
+        }
+        return;
+    }
+    const span = sites.defaultRefs(TemplateDispatchSites.default_plan_refs);
+    for (templates.dispatch_plan_refs[span.start..][0..span.len]) |plan_id| {
+        const plan = try dispatch.plan(plan_id);
+        switch (plan.resolution) {
+            .direct_closed, .direct_parametric => {
+                found.clearRetainingCapacity();
+                try walker.plan(plan, found);
+                try sink.evidence(found.items, null, @fromBackingInt(@intCast(plan.node)));
+            },
+            .evidence_dependent, .checked_error, .@"unreachable", .structural, .direct_pending => {},
+        }
+    }
+    const value_refs = sites.defaultRefs(TemplateDispatchSites.default_value_refs);
+    for (refs.template_refs[value_refs.start..][0..value_refs.len]) |ref_id| {
+        try walkLiteralValueRef(dispatch, walker, found, refs.records[@backingInt(ref_id)], null, sink);
+    }
+    const default_sites = sites.scopeSiteSpan(sites.defaultsIndex());
+    for (sites.scope_sites[default_sites.start..][0..default_sites.len]) |scope_site| {
+        const parent = scopes[@backingInt(scope_site.scope)].parent;
+        try walkLiteralScopeSite(walker, found, scope_site, if (parent) |p| .{ .template = null, .scope = @backingInt(p) } else null, sink);
+    }
+}
+
+fn walkLiteralValueRef(
+    dispatch: CheckedDispatch,
+    walker: *LiteralEdgeWalker,
+    found: *std.ArrayListUnmanaged(LiteralEdgeWalker.Found),
+    record: ResolvedValueRefRecord,
+    scope: ?LiteralScopeKey,
+    sink: anytype,
+) Allocator.Error!void {
+    found.clearRetainingCapacity();
+    try walker.site(record.expr, found);
+    try sink.evidence(found.items, scope, record.expr);
+    const callee = (try literalValueRefCallee(dispatch, record)) orelse return;
+    try sink.use(.{
+        .key = .{ .use = record.expr },
+        .holder = undefined, // Set by the sink to the node holding the edge.
+        .callee = callee,
+        .scope = scope,
+        .owner_expr = record.expr,
+        .subst = .{ .site = record.expr },
+    });
+}
+
+fn walkLiteralScopeSite(
+    walker: *LiteralEdgeWalker,
+    found: *std.ArrayListUnmanaged(LiteralEdgeWalker.Found),
+    scope_site: CollectedScopeConstructionSite,
+    scope: ?LiteralScopeKey,
+    sink: anytype,
+) Allocator.Error!void {
+    found.clearRetainingCapacity();
+    try walker.site(scope_site.checked_expr, found);
+    try sink.evidence(found.items, scope, scope_site.checked_expr);
+    try sink.use(.{
+        .key = .{ .use = scope_site.checked_expr },
+        .holder = undefined, // Set by the sink to the node holding the edge.
+        .callee = .{ .scope = scope_site.scope },
+        .scope = scope,
+        .owner_expr = scope_site.checked_expr,
+        .subst = .{ .site = scope_site.checked_expr },
+    });
+}
+
+/// The module's literal call graph: the owner of each generalized local
+/// scope and the first node reaching each value reference and each local
+/// function construction. Everything that needs dispatch resolution is a
+/// slot of its own.
 pub fn computeLiteralGraph(allocator: Allocator, dispatch: CheckedDispatch) Allocator.Error!*LiteralGraph {
     const source = dispatch.source;
-    const owner = source.key.digest();
     const templates = source.templates;
-    const plans = source.plans;
     const refs = source.refs;
     const sites = &templates.dispatch_sites;
     const scopes = templates.dispatch_scopes;
     const template_count: u32 = @intCast(templates.templates.items.len);
     const node_count = template_count + 1;
-    const bodies = dispatchSourceBodies(source);
 
     const scope_owners = try allocator.alloc(?u32, scopes.len);
     errdefer allocator.free(scope_owners);
@@ -22592,14 +23062,91 @@ pub fn computeLiteralGraph(allocator: Allocator, dispatch: CheckedDispatch) Allo
         }
     }
 
+    var value_ref_firsts = std.AutoHashMapUnmanaged(u32, LiteralValueRefFirst).empty;
+    errdefer value_ref_firsts.deinit(allocator);
+    var scope_site_firsts = std.AutoHashMapUnmanaged(u32, u32).empty;
+    errdefer scope_site_firsts.deinit(allocator);
+    for (0..node_count) |raw_node| {
+        const node: u32 = @intCast(raw_node);
+        const value_refs = if (node < template_count) blk: {
+            const span = templates.templates.items[node].resolved_value_refs;
+            break :blk refs.template_refs[span.start..][0..span.len];
+        } else blk: {
+            const span = sites.defaultRefs(TemplateDispatchSites.default_value_refs);
+            break :blk refs.template_refs[span.start..][0..span.len];
+        };
+        for (value_refs) |ref_id| {
+            const entry = try value_ref_firsts.getOrPut(allocator, @backingInt(refs.records[@backingInt(ref_id)].expr));
+            if (!entry.found_existing) entry.value_ptr.* = .{ .node = node, .ref = ref_id };
+        }
+        const site_span = sites.scopeSiteSpan(if (node < template_count) node else sites.defaultsIndex());
+        for (sites.scope_sites[site_span.start..][0..site_span.len]) |scope_site| {
+            const entry = try scope_site_firsts.getOrPut(allocator, @backingInt(scope_site.checked_expr));
+            if (!entry.found_existing) entry.value_ptr.* = node;
+        }
+    }
+
+    const node_slots = try allocator.alloc(LiteralNodeSlot, node_count);
+    errdefer allocator.free(node_slots);
+    @memset(node_slots, .empty);
+    const pool_slots = try allocator.alloc(LiteralPoolSlot, template_count);
+    errdefer allocator.free(pool_slots);
+    @memset(pool_slots, .empty);
+    var components = try LazyComponents.init(allocator, node_count);
+    errdefer components.deinit(allocator);
+    const component_slots = try allocator.alloc(LiteralComponentSlot, node_count);
+    errdefer allocator.free(component_slots);
+    @memset(component_slots, .empty);
+    const demand_slots = try allocator.alloc(LiteralDemandSlot, template_count);
+    errdefer allocator.free(demand_slots);
+    @memset(demand_slots, .empty);
+
+    const result = try allocator.create(LiteralGraph);
+    result.* = .{
+        .template_count = template_count,
+        .scope_owners = scope_owners,
+        .value_ref_firsts = value_ref_firsts,
+        .scope_site_firsts = scope_site_firsts,
+        .node_slots = node_slots,
+        .pool_slots = pool_slots,
+        .components = components,
+        .component_slots = component_slots,
+        .demand_slots = demand_slots,
+    };
+    return result;
+}
+
+/// The first node, in node order, whose body holds the use edge keyed by
+/// `expr`; null when no body does.
+pub fn literalUseHolder(dispatch: CheckedDispatch, graph: *const LiteralGraph, expr: CIR.Expr.Idx) Allocator.Error!?u32 {
+    const key = @backingInt(expr);
+    var holder: ?u32 = graph.scope_site_firsts.get(key);
+    if (graph.value_ref_firsts.get(key)) |first| {
+        if (try literalValueRefCallee(dispatch, dispatch.source.refs.records[@backingInt(first.ref)]) != null) {
+            holder = if (holder) |scope_node| @min(scope_node, first.node) else first.node;
+        }
+    }
+    return holder;
+}
+
+/// Node `node`'s part of the literal graph: its own open literals, the
+/// edges it holds (those no earlier node's body reaches), every edge a
+/// template's body reaches, and the nodes of the local schemes its edges
+/// instantiate.
+pub fn computeLiteralNodeEdges(allocator: Allocator, dispatch: CheckedDispatch, graph: *LiteralGraph, node: u32) Allocator.Error!*LiteralNodeEdges {
+    const source = dispatch.source;
+    const owner = source.key.digest();
+    const templates = source.templates;
+    const plans = source.plans;
+    const sites = &templates.dispatch_sites;
+    const bodies = dispatchSourceBodies(source);
+
     // Own sites: each open literal conversion plan is a literal requirement
     // of the innermost scheme around it.
     var own_sites: std.ArrayList(LiteralOwnSite) = .empty;
     defer own_sites.deinit(allocator);
-    const own_starts = try allocator.alloc(u32, node_count + 1);
-    errdefer allocator.free(own_starts);
-    for (templates.templates.items, 0..) |template, template_index| {
-        own_starts[template_index] = @intCast(own_sites.items.len);
+    if (node < graph.template_count) {
+        const template = templates.templates.items[node];
         const start = template.static_dispatch_plans.start;
         for (templates.dispatch_plan_refs[start..][0..template.static_dispatch_plans.len], 0..) |plan_id, i| {
             const plan = try dispatch.plan(plan_id);
@@ -22621,14 +23168,12 @@ pub fn computeLiteralGraph(allocator: Allocator, dispatch: CheckedDispatch) Allo
                 .numeral, .quote => (try bodies.literalConversion(plan.node)).ty,
             };
             try own_sites.append(allocator, .{
-                .scope = literalScopeKeyOf(@intCast(template_index), templates.dispatch_ref_scopes[start + i]),
+                .scope = literalScopeKeyOf(node, templates.dispatch_ref_scopes[start + i]),
                 .site = .{ .module = owner, .node = plan.node, .kind = kind },
                 .ty = ty,
             });
         }
-    }
-    own_starts[template_count] = @intCast(own_sites.items.len);
-    {
+    } else {
         const span = sites.defaultRefs(TemplateDispatchSites.default_plan_refs);
         for (templates.dispatch_plan_refs[span.start..][0..span.len]) |plan_id| {
             const plan = try dispatch.plan(plan_id);
@@ -22640,225 +23185,243 @@ pub fn computeLiteralGraph(allocator: Allocator, dispatch: CheckedDispatch) Allo
             }
         }
     }
-    own_starts[node_count] = @intCast(own_sites.items.len);
 
-    // The edges: every instantiation of a scheme inside this module, held
-    // first by the node whose body reaches it first.
-    var edges: std.ArrayList(LiteralGraphEdge) = .empty;
-    defer edges.deinit(allocator);
-    var edge_keys = std.AutoHashMapUnmanaged(LiteralEdge, u32).empty;
-    defer edge_keys.deinit(allocator);
-    const edge_starts = try allocator.alloc(u32, node_count + 1);
-    errdefer allocator.free(edge_starts);
-    const held_starts = try allocator.alloc(u32, template_count + 1);
-    errdefer allocator.free(held_starts);
-    var held: std.ArrayList(u32) = .empty;
-    defer held.deinit(allocator);
-    var walker: LiteralEdgeWalker = .{ .allocator = allocator, .dispatch = dispatch };
-    defer walker.deinit();
-    var found: std.ArrayListUnmanaged(LiteralEdgeWalker.Found) = .empty;
-    defer found.deinit(allocator);
-
-    const Builder = struct {
+    const Sink = struct {
         allocator: Allocator,
         dispatch: CheckedDispatch,
+        graph: *LiteralGraph,
         owner: canonical.ArtifactRef,
-        edges: *std.ArrayList(LiteralGraphEdge),
-        keys: *std.AutoHashMapUnmanaged(LiteralEdge, u32),
-        held: *std.ArrayList(u32),
-        held_start: usize = 0,
-        node: u32 = 0,
-        holds: bool = false,
+        node: u32,
+        holds: bool,
+        edges: std.ArrayList(LiteralGraphEdge) = .empty,
+        added: std.AutoHashMapUnmanaged(LiteralEdge, void) = .empty,
+        reached: std.ArrayList(LiteralReachedEdge) = .empty,
+        reached_keys: std.AutoHashMapUnmanaged(LiteralEdge, void) = .empty,
 
-        fn add(self: *@This(), edge: LiteralGraphEdge) Allocator.Error!void {
-            const seen = try self.keys.getOrPut(self.allocator, edge.key);
-            if (!seen.found_existing) {
-                seen.value_ptr.* = @intCast(self.edges.items.len);
-                var placed = edge;
-                placed.holder = self.node;
-                try self.edges.append(self.allocator, placed);
-            }
-            if (!self.holds) return;
-            for (self.held.items[self.held_start..]) |existing| if (existing == seen.value_ptr.*) return;
-            try self.held.append(self.allocator, seen.value_ptr.*);
+        fn deinit(self: *@This()) void {
+            self.edges.deinit(self.allocator);
+            self.added.deinit(self.allocator);
+            self.reached.deinit(self.allocator);
+            self.reached_keys.deinit(self.allocator);
         }
 
-        fn evidence(self: *@This(), items: []const LiteralEdgeWalker.Found, scope: ?LiteralScopeKey, owner_expr: CIR.Expr.Idx) Allocator.Error!void {
+        fn place(self: *@This(), key: LiteralEdge, holder: u32) Allocator.Error!bool {
+            // The node reaches the edge, so the first node reaching it comes
+            // no later.
+            if (holder > self.node) checkedArtifactInvariant("a literal edge's holder comes after a node whose body reaches it", .{});
+            if (self.holds and !(try self.reached_keys.getOrPut(self.allocator, key)).found_existing) {
+                try self.reached.append(self.allocator, .{ .key = key, .holder = holder });
+            }
+            if (holder != self.node) return false;
+            return !(try self.added.getOrPut(self.allocator, key)).found_existing;
+        }
+
+        pub fn evidence(self: *@This(), items: []const LiteralEdgeWalker.Found, scope: ?LiteralScopeKey, owner_expr: CIR.Expr.Idx) Allocator.Error!void {
             for (items) |item| {
                 // An alias chain that leaves this module is instantiated
                 // where the chain's procedure lives.
                 if (item.alias and !item.template.artifact.eql(self.owner)) continue;
-                try self.add(.{
+                const holder = (try self.dispatch.source.analyses.literalEvidenceHolder(self.dispatch, self.graph, item.id)) orelse
+                    checkedArtifactInvariant("a literal edge reached from a body has no holder", .{});
+                if (!try self.place(.{ .node = item.id }, holder)) continue;
+                try self.edges.append(self.allocator, .{
                     .key = .{ .node = item.id },
-                    .holder = undefined, // Set by `add` to the node holding the edge first.
+                    .holder = self.node,
                     .callee = .{ .template = item.template },
                     .scope = scope,
                     .owner_expr = owner_expr,
-                    .subst = if (item.alias) .{ .alias_chain = item.id } else .{ .evidence = (try self.dispatchNode(item.id)).subst },
+                    .subst = if (item.alias) .{ .alias_chain = item.id } else .{ .evidence = (try self.dispatch.evidenceNode(item.id)).subst },
                 });
             }
         }
 
-        fn dispatchNode(self: *@This(), id: static_dispatch.EvidenceNodeId) Allocator.Error!static_dispatch.EvidenceNode {
-            return self.dispatch.evidenceNode(id);
-        }
-
-        fn valueRef(self: *@This(), walker_: *LiteralEdgeWalker, found_: *std.ArrayListUnmanaged(LiteralEdgeWalker.Found), record: ResolvedValueRefRecord, scope: ?LiteralScopeKey) Allocator.Error!void {
-            found_.clearRetainingCapacity();
-            try walker_.site(record.expr, found_);
-            try self.evidence(found_.items, scope, record.expr);
-            const callee: LiteralCallee = switch (record.ref) {
-                .local_proc => |local| .{ .scope = local.dispatch_scope orelse return },
-                .top_level_proc, .imported_proc, .promoted_top_level_proc, .platform_required_proc, .hosted_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_const, .local_param, .local_value, .local_mutable_version, .pattern_binder, .platform_required_declaration, .platform_required_checked_error => .{ .template = (try literalTemplateOfValueRef(self.dispatch, record.ref)) orelse return },
-            };
-            try self.add(.{
-                .key = .{ .use = record.expr },
-                .holder = undefined, // Set by `add` to the node holding the edge first.
-                .callee = callee,
-                .scope = scope,
-                .owner_expr = record.expr,
-                .subst = .{ .site = record.expr },
-            });
-        }
-
-        fn scopeSite(self: *@This(), walker_: *LiteralEdgeWalker, found_: *std.ArrayListUnmanaged(LiteralEdgeWalker.Found), scope_site: CollectedScopeConstructionSite, scope: ?LiteralScopeKey) Allocator.Error!void {
-            found_.clearRetainingCapacity();
-            try walker_.site(scope_site.checked_expr, found_);
-            try self.evidence(found_.items, scope, scope_site.checked_expr);
-            try self.add(.{
-                .key = .{ .use = scope_site.checked_expr },
-                .holder = undefined, // Set by `add` to the node holding the edge first.
-                .callee = .{ .scope = scope_site.scope },
-                .scope = scope,
-                .owner_expr = scope_site.checked_expr,
-                .subst = .{ .site = scope_site.checked_expr },
-            });
+        pub fn use(self: *@This(), edge: LiteralGraphEdge) Allocator.Error!void {
+            const holder = (try literalUseHolder(self.dispatch, self.graph, edge.key.use)) orelse
+                checkedArtifactInvariant("a use edge reached from a body has no holder", .{});
+            if (!try self.place(edge.key, holder)) return;
+            var placed = edge;
+            placed.holder = self.node;
+            try self.edges.append(self.allocator, placed);
         }
     };
-    var builder: Builder = .{ .allocator = allocator, .owner = owner, .edges = &edges, .keys = &edge_keys, .held = &held, .dispatch = dispatch };
+    var sink: Sink = .{
+        .allocator = allocator,
+        .dispatch = dispatch,
+        .graph = graph,
+        .owner = owner,
+        .node = node,
+        .holds = node < graph.template_count,
+    };
+    defer sink.deinit();
+    var walker: LiteralEdgeWalker = .{ .allocator = allocator, .dispatch = dispatch };
+    defer walker.deinit();
+    var found: std.ArrayListUnmanaged(LiteralEdgeWalker.Found) = .empty;
+    defer found.deinit(allocator);
+    try walkLiteralNode(dispatch, graph, node, &walker, &found, &sink);
 
-    for (templates.templates.items, 0..) |template, template_index| {
-        const t: u32 = @intCast(template_index);
-        edge_starts[template_index] = @intCast(edges.items.len);
-        held_starts[template_index] = @intCast(held.items.len);
-        builder.node = t;
-        builder.holds = true;
-        builder.held_start = held.items.len;
-        const plan_start = template.static_dispatch_plans.start;
-        for (templates.dispatch_plan_refs[plan_start..][0..template.static_dispatch_plans.len], 0..) |plan_id, i| {
-            const plan = try dispatch.plan(plan_id);
-            found.clearRetainingCapacity();
-            try walker.plan(plan, &found);
-            try builder.evidence(found.items, literalScopeKeyOf(t, templates.dispatch_ref_scopes[plan_start + i]), @fromBackingInt(@intCast(plan.node)));
+    var node_keys: std.ArrayList(LiteralEdgeIndex) = .empty;
+    defer node_keys.deinit(allocator);
+    var use_keys: std.ArrayList(LiteralEdgeIndex) = .empty;
+    defer use_keys.deinit(allocator);
+    var callees: std.ArrayList(u32) = .empty;
+    defer callees.deinit(allocator);
+    var seen_callees = std.AutoHashMapUnmanaged(u32, void).empty;
+    defer seen_callees.deinit(allocator);
+    for (sink.edges.items, 0..) |edge, index| {
+        switch (edge.key) {
+            .node => |id| try node_keys.append(allocator, .{ .key = @bitCast(id), .edge = @intCast(index) }),
+            .use => |expr| try use_keys.append(allocator, .{ .key = @backingInt(expr), .edge = @intCast(index) }),
+            .literal => checkedArtifactInvariant("a literal requirement's own literal was collected as an edge", .{}),
         }
-        const ref_start = template.resolved_value_refs.start;
-        for (refs.template_refs[ref_start..][0..template.resolved_value_refs.len], 0..) |ref_id, i| {
-            try builder.valueRef(&walker, &found, refs.records[@backingInt(ref_id)], literalScopeKeyOf(t, sites.value_ref_scopes[ref_start + i]));
-        }
-        const site_span = sites.scopeSiteSpan(template_index);
-        for (sites.scope_sites[site_span.start..][0..site_span.len]) |scope_site| {
-            const parent = scopes[@backingInt(scope_site.scope)].parent;
-            try builder.scopeSite(&walker, &found, scope_site, .{ .template = t, .scope = if (parent) |p| @backingInt(p) else null });
+        if (graph.calleeNode(owner, edge.callee)) |callee| {
+            if (!(try seen_callees.getOrPut(allocator, callee)).found_existing) try callees.append(allocator, callee);
         }
     }
-    edge_starts[template_count] = @intCast(edges.items.len);
-    held_starts[template_count] = @intCast(held.items.len);
-    {
-        builder.node = template_count;
-        builder.holds = false;
-        const span = sites.defaultRefs(TemplateDispatchSites.default_plan_refs);
-        for (templates.dispatch_plan_refs[span.start..][0..span.len]) |plan_id| {
-            const plan = try dispatch.plan(plan_id);
-            switch (plan.resolution) {
-                .direct_closed, .direct_parametric => {
-                    found.clearRetainingCapacity();
-                    try walker.plan(plan, &found);
-                    try builder.evidence(found.items, null, @fromBackingInt(@intCast(plan.node)));
-                },
-                .evidence_dependent, .checked_error, .@"unreachable", .structural, .direct_pending => {},
-            }
-        }
-        const value_refs = sites.defaultRefs(TemplateDispatchSites.default_value_refs);
-        for (refs.template_refs[value_refs.start..][0..value_refs.len]) |ref_id| {
-            try builder.valueRef(&walker, &found, refs.records[@backingInt(ref_id)], null);
-        }
-        const default_sites = sites.scopeSiteSpan(sites.defaultsIndex());
-        for (sites.scope_sites[default_sites.start..][0..default_sites.len]) |scope_site| {
-            const parent = scopes[@backingInt(scope_site.scope)].parent;
-            try builder.scopeSite(&walker, &found, scope_site, if (parent) |p| .{ .template = null, .scope = @backingInt(p) } else null);
-        }
-    }
-    edge_starts[node_count] = @intCast(edges.items.len);
+    std.mem.sort(LiteralEdgeIndex, node_keys.items, {}, LiteralEdgeIndex.lessThan);
+    std.mem.sort(LiteralEdgeIndex, use_keys.items, {}, LiteralEdgeIndex.lessThan);
 
-    // The call graph: each node to the nodes of the local schemes its
-    // edges instantiate.
+    const owned_own_sites = try own_sites.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_own_sites);
+    const owned_edges = try sink.edges.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_edges);
+    const owned_node_keys = try node_keys.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_node_keys);
+    const owned_use_keys = try use_keys.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_use_keys);
+    const owned_reached = try sink.reached.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_reached);
+    const owned_callees = try callees.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_callees);
+    const result = try allocator.create(LiteralNodeEdges);
+    result.* = .{
+        .own_sites = owned_own_sites,
+        .edges = owned_edges,
+        .node_keys = owned_node_keys,
+        .use_keys = owned_use_keys,
+        .reached = owned_reached,
+        .callees = owned_callees,
+    };
+    return result;
+}
+
+/// Collects, for each evidence node a walk reaches, the least node said to
+/// reach it.
+const LiteralHolderCollector = struct {
+    allocator: Allocator,
+    holders: std.AutoHashMapUnmanaged(u64, u32) = .empty,
+
+    fn deinit(self: *LiteralHolderCollector) void {
+        self.holders.deinit(self.allocator);
+    }
+
+    fn note(self: *LiteralHolderCollector, id: static_dispatch.EvidenceNodeId, node: u32) Allocator.Error!void {
+        const entry = try self.holders.getOrPut(self.allocator, @bitCast(id));
+        if (!entry.found_existing or node < entry.value_ptr.*) entry.value_ptr.* = node;
+    }
+
+    fn finish(self: *LiteralHolderCollector) Allocator.Error!*LiteralPoolHolders {
+        const holders = try self.allocator.alloc(LiteralEdgeIndex, self.holders.count());
+        errdefer self.allocator.free(holders);
+        var it = self.holders.iterator();
+        var index: usize = 0;
+        while (it.next()) |entry| : (index += 1) holders[index] = .{ .key = entry.key_ptr.*, .edge = entry.value_ptr.* };
+        std.mem.sort(LiteralEdgeIndex, holders, {}, LiteralEdgeIndex.lessThan);
+        const result = try self.allocator.create(LiteralPoolHolders);
+        result.* = .{ .holders = holders };
+        return result;
+    }
+};
+
+/// The first node, in node order, whose body reaches each evidence node of
+/// template `template`'s resolution. A literal walk enters a resolution's
+/// pool only through a plan or a use site that resolution resolves, and every
+/// node holding that plan or site walks it, so the first such node of the
+/// plans and sites reaching an evidence node is its holder. Generated codecs'
+/// calls are the module resolution's evidence, so these walks leave them.
+pub fn computeLiteralPoolHolders(allocator: Allocator, dispatch: CheckedDispatch, graph: *const LiteralGraph, template: u32) Allocator.Error!*LiteralPoolHolders {
+    const analyses = dispatch.source.analyses;
+    const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(template);
+    const owner = static_dispatch.EvidenceOwner.forTemplate(template_id);
+    const resolution = try analyses.templateDispatch(dispatch, template_id);
+    const index = try analyses.dispatchIndex(dispatch);
+    var collector: LiteralHolderCollector = .{ .allocator = allocator };
+    defer collector.deinit();
+    var walker: LiteralEdgeWalker = .{ .allocator = allocator, .dispatch = dispatch, .follow_derivations = false };
+    defer walker.deinit();
+    var found: std.ArrayListUnmanaged(LiteralEdgeWalker.Found) = .empty;
+    defer found.deinit(allocator);
+
+    for (resolution.plans) |entry| {
+        const plan_id: static_dispatch.StaticDispatchPlanId = @fromBackingInt(entry.plan);
+        if (try analyses.planResolver(dispatch, plan_id) != template) continue;
+        const first = index.planSites(plan_id)[0].template orelse graph.defaultsNode();
+        found.clearRetainingCapacity();
+        try walker.plan(try dispatch.plan(plan_id), &found);
+        for (found.items) |item| try noteLiteralPoolHolder(&collector, owner, item.id, first);
+    }
+    for (resolution.site_evidence) |entry| {
+        const first = graph.firstSiteWalker(entry.key) orelse continue;
+        if (try analyses.siteResolver(dispatch, entry.key) != template) continue;
+        found.clearRetainingCapacity();
+        try walker.site(@fromBackingInt(entry.key), &found);
+        for (found.items) |item| try noteLiteralPoolHolder(&collector, owner, item.id, first);
+    }
+    return collector.finish();
+}
+
+fn noteLiteralPoolHolder(collector: *LiteralHolderCollector, owner: static_dispatch.EvidenceOwner, id: static_dispatch.EvidenceNodeId, node: u32) Allocator.Error!void {
+    if (id.owner == owner) return collector.note(id, node);
+    if (id.owner.template() != null) checkedArtifactInvariant("a template resolution's evidence named another template's pool", .{});
+}
+
+/// The first node, in node order, whose body reaches each evidence node of
+/// the module's own resolution: generated codecs' calls and what no
+/// template's chain binds, which any node's walk can reach.
+pub fn computeLiteralModulePoolHolders(allocator: Allocator, dispatch: CheckedDispatch, graph: *const LiteralGraph) Allocator.Error!*LiteralPoolHolders {
+    var collector: LiteralHolderCollector = .{ .allocator = allocator };
+    defer collector.deinit();
+    var found: std.ArrayListUnmanaged(LiteralEdgeWalker.Found) = .empty;
+    defer found.deinit(allocator);
+    const Sink = struct {
+        collector: *LiteralHolderCollector,
+        node: u32,
+
+        pub fn evidence(self: *@This(), items: []const LiteralEdgeWalker.Found, _: ?LiteralScopeKey, _: CIR.Expr.Idx) Allocator.Error!void {
+            for (items) |item| if (item.id.owner.template() == null) try self.collector.note(item.id, self.node);
+        }
+
+        pub fn use(_: *@This(), _: LiteralGraphEdge) Allocator.Error!void {}
+    };
+    for (0..graph.template_count + 1) |raw_node| {
+        const node: u32 = @intCast(raw_node);
+        var walker: LiteralEdgeWalker = .{ .allocator = allocator, .dispatch = dispatch };
+        defer walker.deinit();
+        var sink: Sink = .{ .collector = &collector, .node = node };
+        try walkLiteralNode(dispatch, graph, node, &walker, &found, &sink);
+    }
+    return collector.finish();
+}
+
+/// Every component of the module's literal graph, by leader, in the order
+/// Tarjan's algorithm over every node, in node order, completes them.
+pub fn computeLiteralComponentOrder(allocator: Allocator, dispatch: CheckedDispatch, graph: *LiteralGraph) Allocator.Error!*LiteralComponentOrder {
+    const node_count = graph.template_count + 1;
     const successor_starts = try allocator.alloc(u32, node_count + 1);
     defer allocator.free(successor_starts);
     var successors: std.ArrayList(u32) = .empty;
     defer successors.deinit(allocator);
-    var graph: LiteralGraph = .{
-        .template_count = template_count,
-        .scope_owners = scope_owners,
-        .edges = edges.items,
-        .edge_starts = edge_starts,
-        .node_edges = &.{},
-        .use_edges = &.{},
-        .held_starts = held_starts,
-        .held = held.items,
-        .own_starts = own_starts,
-        .own_sites = own_sites.items,
-        .components = undefined, // Computed below from the edges.
-        .component_slots = &.{},
-        .demand_slots = &.{},
-    };
     for (0..node_count) |node| {
         successor_starts[node] = @intCast(successors.items.len);
-        for (graph.nodeEdges(@intCast(node))) |edge| {
-            if (graph.calleeNode(owner, edge.callee)) |callee| try successors.append(allocator, callee);
-        }
+        try successors.appendSlice(allocator, (try dispatch.source.analyses.literalNode(dispatch, graph, @intCast(node))).callees);
     }
     successor_starts[node_count] = @intCast(successors.items.len);
     var components = try callGraphComponents(allocator, successor_starts, successors.items);
-    errdefer components.deinit(allocator);
-
-    var node_edges: std.ArrayList(LiteralEdgeIndex) = .empty;
-    defer node_edges.deinit(allocator);
-    var use_edges: std.ArrayList(LiteralEdgeIndex) = .empty;
-    defer use_edges.deinit(allocator);
-    for (edges.items, 0..) |edge, index| switch (edge.key) {
-        .node => |id| try node_edges.append(allocator, .{ .key = @bitCast(id), .edge = @intCast(index) }),
-        .use => |expr| try use_edges.append(allocator, .{ .key = @backingInt(expr), .edge = @intCast(index) }),
-        .literal => checkedArtifactInvariant("a literal requirement's own literal was collected as an edge", .{}),
-    };
-    std.mem.sort(LiteralEdgeIndex, node_edges.items, {}, LiteralEdgeIndex.lessThan);
-    std.mem.sort(LiteralEdgeIndex, use_edges.items, {}, LiteralEdgeIndex.lessThan);
-
-    const component_slots = try allocator.alloc(LiteralComponentSlot, components.count());
-    errdefer allocator.free(component_slots);
-    @memset(component_slots, .empty);
-    const demand_slots = try allocator.alloc(LiteralDemandSlot, template_count);
-    errdefer allocator.free(demand_slots);
-    @memset(demand_slots, .empty);
-    const owned_edges = try edges.toOwnedSlice(allocator);
-    errdefer allocator.free(owned_edges);
-    const owned_held = try held.toOwnedSlice(allocator);
-    errdefer allocator.free(owned_held);
-    const owned_own_sites = try own_sites.toOwnedSlice(allocator);
-    errdefer allocator.free(owned_own_sites);
-    const owned_node_edges = try node_edges.toOwnedSlice(allocator);
-    errdefer allocator.free(owned_node_edges);
-    const owned_use_edges = try use_edges.toOwnedSlice(allocator);
-    errdefer allocator.free(owned_use_edges);
-    graph.edges = owned_edges;
-    graph.held = owned_held;
-    graph.own_sites = owned_own_sites;
-    graph.node_edges = owned_node_edges;
-    graph.use_edges = owned_use_edges;
-    graph.components = components;
-    graph.component_slots = component_slots;
-    graph.demand_slots = demand_slots;
-    const result = try allocator.create(LiteralGraph);
-    result.* = graph;
+    defer components.deinit(allocator);
+    const leaders = try allocator.alloc(u32, components.count());
+    errdefer allocator.free(leaders);
+    for (leaders, 0..) |*leader, component| leader.* = components.componentMembers(@intCast(component))[0];
+    const result = try allocator.create(LiteralComponentOrder);
+    result.* = .{ .leaders = leaders };
     return result;
 }
 
@@ -22936,9 +23499,10 @@ pub const LiteralComponent = struct {
     scope_keys: []const LiteralScopeKey,
     scope_spans: []const artifact_serialize.Span,
     requirements: []const LiteralRequirement,
-    /// The edges the component's nodes hold first, ascending, with their
-    /// literal arguments: edge `arg_edges[i]`'s are `args[arg_spans[i]]`.
-    arg_edges: []const u32,
+    /// The edges the component's nodes hold, by `literalEdgeRef`, ascending,
+    /// with their literal arguments: edge `arg_edges[i]`'s are
+    /// `args[arg_spans[i]]`.
+    arg_edges: []const u64,
     arg_spans: []const artifact_serialize.Span,
     args: []const LiteralArgSource,
     /// The component's literal argument roots, by id.
@@ -22951,9 +23515,10 @@ pub const LiteralComponent = struct {
         return &.{};
     }
 
-    pub fn edgeArgs(self: *const LiteralComponent, edge: u32) []const LiteralArgSource {
-        const index = std.sort.binarySearch(u32, self.arg_edges, edge, struct {
-            fn order(key: u32, item: u32) std.math.Order {
+    /// The literal arguments of the edge `edge` names (`literalEdgeRef`).
+    pub fn edgeArgs(self: *const LiteralComponent, edge: u64) []const LiteralArgSource {
+        const index = std.sort.binarySearch(u64, self.arg_edges, edge, struct {
+            fn order(key: u64, item: u64) std.math.Order {
                 return std.math.order(key, item);
             }
         }.order) orelse return &.{};
@@ -23155,7 +23720,7 @@ pub fn computeLiteralComponent(
     const io = source.analyses.io;
     const templates = source.templates;
     const import_views = try dispatchImportViews(dispatch);
-    const members = graph.components.componentMembers(component);
+    const members = graph.componentInfo(component).members;
 
     var orderer = CheckedIdentityOrderer.init(allocator, names, store);
     defer orderer.deinit();
@@ -23173,7 +23738,7 @@ pub fn computeLiteralComponent(
 
     // The component's own open literals.
     for (members) |node| {
-        for (graph.own_sites[graph.own_starts[node]..graph.own_starts[node + 1]]) |own| {
+        for (graph.finishedNode(node).own_sites) |own| {
             const entry = try states.getOrPut(allocator, own.scope);
             if (!entry.found_existing) entry.value_ptr.* = .{};
             const slot = try entry.value_ptr.index.getOrPut(allocator, .{ .site = own.site, .ty = try literalRequirementTypeIdentity(store, names, &orderer, own.ty) });
@@ -23185,7 +23750,8 @@ pub fn computeLiteralComponent(
 
     const ArgBuild = union(enum) { root: ComptimeRootKey, forwarded: u32, unbound };
     const EdgeState = struct {
-        index: u32,
+        /// The edge's `literalEdgeRef`.
+        index: u64,
         edge: LiteralGraphEdge,
         callee: LiteralCalleeScheme,
         alias_steps: std.ArrayListUnmanaged(LiteralAliasStep) = .empty,
@@ -23215,7 +23781,7 @@ pub fn computeLiteralComponent(
     var modules: std.ArrayListUnmanaged(ModuleId) = .empty;
     defer modules.deinit(allocator);
     for (members) |node| {
-        for (graph.nodeEdges(node), graph.edge_starts[node]..) |edge, edge_index| {
+        for (graph.finishedNode(node).edges, 0..) |edge, edge_index| {
             const callee: LiteralCalleeScheme = switch (edge.callee) {
                 .template => |template| blk: {
                     if (template.artifact.eql(owner)) {
@@ -23238,7 +23804,7 @@ pub fn computeLiteralComponent(
                     (try dispatch.scopeSchema(scope_id)).vars,
                 ),
             };
-            var state: EdgeState = .{ .index = @intCast(edge_index), .edge = edge, .callee = callee };
+            var state: EdgeState = .{ .index = literalEdgeRef(node, @intCast(edge_index)), .edge = edge, .callee = callee };
             switch (edge.subst) {
                 .evidence => |span| state.subst = try dispatch.substitution(span),
                 .site => |expr| state.subst = (try dispatch.siteSubstitution(expr)) orelse &.{},
@@ -23363,7 +23929,7 @@ pub fn computeLiteralComponent(
     }
 
     // The edges' literal arguments.
-    var arg_edges: std.ArrayListUnmanaged(u32) = .empty;
+    var arg_edges: std.ArrayListUnmanaged(u64) = .empty;
     defer arg_edges.deinit(allocator);
     var arg_spans: std.ArrayListUnmanaged(artifact_serialize.Span) = .empty;
     defer arg_spans.deinit(allocator);
@@ -23456,10 +24022,14 @@ pub fn computeLiteralComponent(
 pub fn computeLiteralArgumentDemand(allocator: Allocator, graph: *const LiteralGraph, template: u32) Allocator.Error!*LiteralArgumentDemand {
     var roots: std.ArrayList(ComptimeRootKey) = .empty;
     defer roots.deinit(allocator);
-    for (graph.held[graph.held_starts[template]..graph.held_starts[template + 1]]) |edge| {
-        const component = graph.component_slots[graph.components.component_of[graph.edges[edge].holder]].peek() orelse
-            checkedArtifactInvariant("a template's literal demand was computed before the component of an edge it holds", .{});
-        for (component.edgeArgs(edge)) |arg| switch (arg) {
+    for (graph.finishedNode(template).reached) |reached| {
+        const leader = graph.leaderOf(reached.holder) orelse
+            checkedArtifactInvariant("a template's literal demand was computed before the component of an edge it reaches", .{});
+        const component = graph.component_slots[leader].peek() orelse
+            checkedArtifactInvariant("a template's literal demand was computed before the component of an edge it reaches", .{});
+        const index = graph.finishedNode(reached.holder).edgeIndex(reached.key) orelse
+            checkedArtifactInvariant("a literal edge's holder does not hold it", .{});
+        for (component.edgeArgs(literalEdgeRef(reached.holder, index))) |arg| switch (arg) {
             .root => |id| try roots.append(allocator, id),
             .forwarded, .unbound => {},
         };
@@ -23508,7 +24078,8 @@ fn literalCalleeRequirements(callee: LiteralCalleeScheme, states: *const Literal
 /// computed, otherwise the finished requirements of its component.
 fn literalLocalCallee(graph: *const LiteralGraph, component: u32, key: LiteralScopeKey, vars: []const CheckedTypeId) LiteralCalleeScheme {
     const node = graph.nodeOfScope(key);
-    const callee_component = graph.components.component_of[node];
+    const callee_component = graph.leaderOf(node) orelse
+        checkedArtifactInvariant("a literal component was computed before its callee component was assigned", .{});
     if (callee_component == component) return .{ .live = key, .finished = &.{}, .vars = vars, .module = null };
     const done = graph.component_slots[callee_component].peek() orelse
         checkedArtifactInvariant("a literal component was computed before its callee component", .{});
@@ -26607,61 +27178,54 @@ pub const TemplateDemandComponent = struct {
 /// The slot holding one component's demand vectors.
 pub const TemplateDemandComponentSlot = collections.OnceSlot(*TemplateDemandComponent, .module_template_demand);
 
-/// A module's demand call graph (`ModuleAnalyses.templateDemandGraph`):
-/// every template's demand vector as its own body sets it, the edges along
-/// which its callees' demands raise it, and the strongly connected
-/// components of the graph the local edges form, numbered callees first.
-/// Each component's vectors are a slot of their own.
-pub const TemplateDemandGraph = struct {
-    /// Template `t`'s vector before propagation:
-    /// `bases[base_starts[t]..base_starts[t + 1]]`.
-    base_starts: []const u32,
-    bases: []const SchemeVarDemand,
-    /// Template `t`'s edges: `edges[edge_starts[t]..edge_starts[t + 1]]`.
-    edge_starts: []const u32,
+/// The slot holding one template's part of a module's demand call graph.
+pub const TemplateDemandNodeSlot = collections.OnceSlot(*TemplateDemandNode, .module_template_demand_node);
+
+/// One template's part of a module's demand call graph
+/// (`ModuleAnalyses.templateDemandNode`): its demand vector as its own body
+/// sets it, the edges along which its callees' demands raise it, and the
+/// templates of the module those edges call, each once.
+pub const TemplateDemandNode = struct {
+    base: []const SchemeVarDemand,
     edges: []const TemplateDemandEdge,
-    /// Each template's component and its index among the component's members.
-    component_of: []const u32,
-    member_index: []const u32,
-    /// Component `c`'s templates, ascending:
-    /// `members[member_starts[c]..member_starts[c + 1]]`.
-    member_starts: []const u32,
-    members: []const u32,
-    /// Component `c`'s local callee components other than itself, each once:
-    /// `callees[callee_starts[c]..callee_starts[c + 1]]`.
-    callee_starts: []const u32,
     callees: []const u32,
+
+    pub fn destroy(self: *TemplateDemandNode, allocator: Allocator) void {
+        allocator.free(self.base);
+        allocator.free(self.edges);
+        allocator.free(self.callees);
+        allocator.destroy(self);
+    }
+};
+
+/// A module's demand call graph (`ModuleAnalyses.templateDemandGraph`),
+/// built only as far as a consumer reaches it: each template's own vector
+/// and edges (`TemplateDemandNode`) and each strongly connected component of
+/// the local edges, with the component's vectors, are slots of their own.
+pub const TemplateDemandGraph = struct {
+    node_slots: []TemplateDemandNodeSlot,
+    components: LazyComponents,
+    /// Each component's vectors, by its leader.
     component_slots: []TemplateDemandComponentSlot,
 
-    pub fn base(self: *const TemplateDemandGraph, template: u32) []const SchemeVarDemand {
-        return self.bases[self.base_starts[template]..self.base_starts[template + 1]];
+    /// Template `template`'s part of the graph, which its component's
+    /// assignment computed.
+    pub fn finishedNode(self: *const TemplateDemandGraph, template: u32) *const TemplateDemandNode {
+        return self.node_slots[template].peek() orelse
+            checkedArtifactInvariant("a demand graph node was read before it was computed", .{});
     }
 
-    pub fn templateEdges(self: *const TemplateDemandGraph, template: u32) []const TemplateDemandEdge {
-        return self.edges[self.edge_starts[template]..self.edge_starts[template + 1]];
-    }
-
-    pub fn componentMembers(self: *const TemplateDemandGraph, component: u32) []const u32 {
-        return self.members[self.member_starts[component]..self.member_starts[component + 1]];
-    }
-
-    pub fn componentCallees(self: *const TemplateDemandGraph, component: u32) []const u32 {
-        return self.callees[self.callee_starts[component]..self.callee_starts[component + 1]];
+    /// The templates template `template`'s edges call.
+    pub fn calleesOf(self: *const TemplateDemandGraph, template: u32) []const u32 {
+        return self.finishedNode(template).callees;
     }
 
     pub fn destroy(self: *TemplateDemandGraph, allocator: Allocator) void {
         for (self.component_slots) |*slot| if (slot.peek()) |result| result.destroy(allocator);
+        for (self.node_slots) |*slot| if (slot.peek()) |result| result.destroy(allocator);
         allocator.free(self.component_slots);
-        allocator.free(self.base_starts);
-        allocator.free(self.bases);
-        allocator.free(self.edge_starts);
-        allocator.free(self.edges);
-        allocator.free(self.component_of);
-        allocator.free(self.member_index);
-        allocator.free(self.member_starts);
-        allocator.free(self.members);
-        allocator.free(self.callee_starts);
-        allocator.free(self.callees);
+        allocator.free(self.node_slots);
+        self.components.deinit(allocator);
         allocator.destroy(self);
     }
 };
@@ -26685,9 +27249,26 @@ fn dispatchSourceBodies(source: DispatchSource) CheckedBodies {
     };
 }
 
-/// The module's demand call graph: each template's body walked once into
-/// its own demand vector and the edges to the templates it calls.
+/// The module's demand call graph: the slots of its templates and their
+/// components.
 pub fn computeTemplateDemandGraph(allocator: Allocator, dispatch: CheckedDispatch) Allocator.Error!*TemplateDemandGraph {
+    const count = dispatch.source.templates.templates.items.len;
+    const node_slots = try allocator.alloc(TemplateDemandNodeSlot, count);
+    errdefer allocator.free(node_slots);
+    @memset(node_slots, .empty);
+    const component_slots = try allocator.alloc(TemplateDemandComponentSlot, count);
+    errdefer allocator.free(component_slots);
+    @memset(component_slots, .empty);
+    var components = try LazyComponents.init(allocator, count);
+    errdefer components.deinit(allocator);
+    const result = try allocator.create(TemplateDemandGraph);
+    result.* = .{ .node_slots = node_slots, .components = components, .component_slots = component_slots };
+    return result;
+}
+
+/// Template `template`'s body walked into its own demand vector and the
+/// edges to the templates it calls.
+pub fn computeTemplateDemandNode(allocator: Allocator, dispatch: CheckedDispatch, template: u32) Allocator.Error!*TemplateDemandNode {
     const source = dispatch.source;
     // The resolver the reach walk finds declaring modules through reads
     // `import_views`, which outlives the walk.
@@ -26715,7 +27296,7 @@ pub fn computeTemplateDemandGraph(allocator: Allocator, dispatch: CheckedDispatc
         },
     };
     defer pass.deinit();
-    return pass.graph();
+    return pass.walkTemplate(template);
 }
 
 /// The demand vectors of the templates of component `component` of
@@ -26728,23 +27309,24 @@ pub fn computeTemplateDemandComponent(
     graph: *const TemplateDemandGraph,
     component: u32,
 ) Allocator.Error!*TemplateDemandComponent {
-    const members = graph.componentMembers(component);
+    const info = graph.components.info(component);
+    const members = info.members;
     const starts = try allocator.alloc(u32, members.len + 1);
     errdefer allocator.free(starts);
     starts[0] = 0;
-    for (members, 0..) |template, index| starts[index + 1] = starts[index] + @as(u32, @intCast(graph.base(template).len));
+    for (members, 0..) |template, index| starts[index + 1] = starts[index] + @as(u32, @intCast(graph.finishedNode(template).base.len));
     const demands = try allocator.alloc(SchemeVarDemand, starts[members.len]);
     errdefer allocator.free(demands);
-    for (members, 0..) |template, index| @memcpy(demands[starts[index]..starts[index + 1]], graph.base(template));
+    for (members, 0..) |template, index| @memcpy(demands[starts[index]..starts[index + 1]], graph.finishedNode(template).base);
 
     // The edges between members, grouped by callee, so a changed member
     // revisits only its callers.
     const by_callee_starts = try allocator.alloc(u32, members.len + 1);
     defer allocator.free(by_callee_starts);
     @memset(by_callee_starts, 0);
-    for (members) |template| for (graph.templateEdges(template)) |edge| switch (edge.callee) {
-        .local => |callee| if (graph.component_of[callee] == component) {
-            by_callee_starts[graph.member_index[callee] + 1] += 1;
+    for (members) |template| for (graph.finishedNode(template).edges) |edge| switch (edge.callee) {
+        .local => |callee| if (graph.components.leaderOf(callee) == component) {
+            by_callee_starts[info.memberIndex(callee) + 1] += 1;
         },
         .imported => {},
     };
@@ -26759,19 +27341,20 @@ pub fn computeTemplateDemandComponent(
     // along them once.
     for (members, 0..) |template, index| {
         const vector = demands[starts[index]..starts[index + 1]];
-        for (graph.templateEdges(template)) |edge| {
+        for (graph.finishedNode(template).edges) |edge| {
             const callee_demand = switch (edge.callee) {
                 .local => |callee| blk: {
-                    const callee_component = graph.component_of[callee];
+                    const callee_component = graph.components.leaderOf(callee) orelse
+                        checkedArtifactInvariant("a demand component was computed before its callee was assigned", .{});
                     if (callee_component == component) {
-                        const member = graph.member_index[callee];
+                        const member = info.memberIndex(callee);
                         by_callee[cursor[member]] = .{ .caller = @intCast(index), .edge = edge };
                         cursor[member] += 1;
                         continue;
                     }
                     const done = graph.component_slots[callee_component].peek() orelse
                         checkedArtifactInvariant("a demand component was computed before its callee component", .{});
-                    break :blk done.member(graph.member_index[callee])[edge.callee_slot];
+                    break :blk done.member(graph.components.info(callee_component).memberIndex(callee))[edge.callee_slot];
                 },
                 .imported => |callee| (try importedTemplateDemands(dispatch, callee))[edge.callee_slot],
             };
@@ -26831,11 +27414,9 @@ const TemplateDemandWalk = struct {
     dispatch: CheckedDispatch,
 
     mentions: TypeVarMentions,
-    /// Every template's own vector, at `base_starts`.
+    /// The walked template's own vector.
     demands: std.ArrayList(SchemeVarDemand) = .empty,
-    base_starts: std.ArrayList(u32) = .empty,
     edges: std.ArrayList(TemplateDemandEdge) = .empty,
-    edge_starts: std.ArrayList(u32) = .empty,
     work: std.ArrayList(Work) = .empty,
     imported_templates: std.AutoHashMapUnmanaged(ImportedDefKey, ?canonical.ProcedureTemplateRef) = .empty,
 
@@ -26917,179 +27498,36 @@ const TemplateDemandWalk = struct {
         self.raised.deinit(self.allocator);
         self.raise_pending.deinit(self.allocator);
         self.demands.deinit(self.allocator);
-        self.base_starts.deinit(self.allocator);
         self.edges.deinit(self.allocator);
-        self.edge_starts.deinit(self.allocator);
         self.work.deinit(self.allocator);
         self.imported_templates.deinit(self.allocator);
     }
 
-    fn graph(self: *TemplateDemandWalk) Allocator.Error!*TemplateDemandGraph {
+    fn walkTemplate(self: *TemplateDemandWalk, raw: u32) Allocator.Error!*TemplateDemandNode {
         const allocator = self.allocator;
-        const templates = self.templates.templates.items;
-        try self.base_starts.ensureTotalCapacity(allocator, templates.len + 1);
-        for (0..templates.len) |raw| {
-            self.base_starts.appendAssumeCapacity(@intCast(self.demands.items.len));
-            const vars = try self.dispatch.templateSchemeVars(@fromBackingInt(@intCast(raw)));
-            try self.demands.appendNTimes(allocator, .none, vars.len);
-        }
-        self.base_starts.appendAssumeCapacity(@intCast(self.demands.items.len));
-        try self.edge_starts.ensureTotalCapacity(allocator, templates.len + 1);
-        for (templates, 0..) |*template, raw| {
-            self.edge_starts.appendAssumeCapacity(@intCast(self.edges.items.len));
-            self.current = @fromBackingInt(@intCast(raw));
-            self.current_vars = try self.dispatch.templateSchemeVars(self.current);
-            self.current_slots.clearRetainingCapacity();
-            for (self.current_vars, 0..) |var_ty, slot| try self.current_slots.put(var_ty, @intCast(slot));
-            self.raised.clearRetainingCapacity();
-            self.current_demands = self.demands.items[self.base_starts.items[raw]..self.base_starts.items[raw + 1]];
-            try self.analyzeTemplate(template);
-        }
-        self.edge_starts.appendAssumeCapacity(@intCast(self.edges.items.len));
-        return self.components();
-    }
+        self.current = @fromBackingInt(raw);
+        self.current_vars = try self.dispatch.templateSchemeVars(self.current);
+        for (self.current_vars, 0..) |var_ty, slot| try self.current_slots.put(var_ty, @intCast(slot));
+        try self.demands.appendNTimes(allocator, .none, self.current_vars.len);
+        self.current_demands = self.demands.items;
+        try self.analyzeTemplate(&self.templates.templates.items[raw]);
 
-    /// The strongly connected components of the local edges (Tarjan's
-    /// algorithm, iteratively), numbered as they complete, so every
-    /// component's callee components precede it.
-    fn components(self: *TemplateDemandWalk) Allocator.Error!*TemplateDemandGraph {
-        const allocator = self.allocator;
-        const count = self.edge_starts.items.len - 1;
-        const unvisited = std.math.maxInt(u32);
-        const order = try allocator.alloc(u32, count);
-        defer allocator.free(order);
-        @memset(order, unvisited);
-        const low = try allocator.alloc(u32, count);
-        defer allocator.free(low);
-        var on_stack = try std.DynamicBitSetUnmanaged.initEmpty(allocator, count);
-        defer on_stack.deinit(allocator);
-        var stack: std.ArrayList(u32) = .empty;
-        defer stack.deinit(allocator);
-        const Frame = struct { template: u32, next_edge: u32 };
-        var frames: std.ArrayList(Frame) = .empty;
-        defer frames.deinit(allocator);
-
-        const component_of = try allocator.alloc(u32, count);
-        errdefer allocator.free(component_of);
-        var members: std.ArrayList(u32) = .empty;
-        defer members.deinit(allocator);
-        var member_starts: std.ArrayList(u32) = .empty;
-        defer member_starts.deinit(allocator);
-        try member_starts.append(allocator, 0);
-        var next_order: u32 = 0;
-
-        for (0..count) |start| {
-            if (order[start] != unvisited) continue;
-            order[start] = next_order;
-            low[start] = next_order;
-            next_order += 1;
-            try stack.append(allocator, @intCast(start));
-            on_stack.set(start);
-            try frames.append(allocator, .{ .template = @intCast(start), .next_edge = self.edge_starts.items[start] });
-            while (frames.items.len != 0) {
-                const frame = &frames.items[frames.items.len - 1];
-                const template = frame.template;
-                if (frame.next_edge < self.edge_starts.items[template + 1]) {
-                    const edge = self.edges.items[frame.next_edge];
-                    frame.next_edge += 1;
-                    const callee = switch (edge.callee) {
-                        .local => |callee| callee,
-                        .imported => continue,
-                    };
-                    if (order[callee] == unvisited) {
-                        order[callee] = next_order;
-                        low[callee] = next_order;
-                        next_order += 1;
-                        try stack.append(allocator, callee);
-                        on_stack.set(callee);
-                        try frames.append(allocator, .{ .template = callee, .next_edge = self.edge_starts.items[callee] });
-                    } else if (on_stack.isSet(callee)) {
-                        low[template] = @min(low[template], order[callee]);
-                    }
-                    continue;
-                }
-                _ = frames.pop();
-                if (frames.items.len != 0) {
-                    const parent = frames.items[frames.items.len - 1].template;
-                    low[parent] = @min(low[parent], low[template]);
-                }
-                if (low[template] != order[template]) continue;
-                const component: u32 = @intCast(member_starts.items.len - 1);
-                const first = members.items.len;
-                while (stack.pop()) |member| {
-                    on_stack.unset(member);
-                    component_of[member] = component;
-                    try members.append(allocator, member);
-                    if (member == template) break;
-                }
-                std.mem.sort(u32, members.items[first..], {}, std.sort.asc(u32));
-                try member_starts.append(allocator, @intCast(members.items.len));
-            }
-        }
-
-        const component_count = member_starts.items.len - 1;
-        const member_index = try allocator.alloc(u32, count);
-        errdefer allocator.free(member_index);
-        for (0..component_count) |component| {
-            for (members.items[member_starts.items[component]..member_starts.items[component + 1]], 0..) |member, index| member_index[member] = @intCast(index);
-        }
         var callees: std.ArrayList(u32) = .empty;
         defer callees.deinit(allocator);
-        var callee_starts: std.ArrayList(u32) = .empty;
-        defer callee_starts.deinit(allocator);
-        try callee_starts.append(allocator, 0);
-        for (0..component_count) |component| {
-            const first = callees.items.len;
-            for (members.items[member_starts.items[component]..member_starts.items[component + 1]]) |member| {
-                for (self.edges.items[self.edge_starts.items[member]..self.edge_starts.items[member + 1]]) |edge| switch (edge.callee) {
-                    .local => |callee| if (component_of[callee] != component) try callees.append(allocator, component_of[callee]),
-                    .imported => {},
-                };
-            }
-            const added = callees.items[first..];
-            std.mem.sort(u32, added, {}, std.sort.asc(u32));
-            var kept: usize = 0;
-            for (added, 0..) |callee, index| {
-                if (index != 0 and added[index - 1] == callee) continue;
-                added[kept] = callee;
-                kept += 1;
-            }
-            callees.shrinkRetainingCapacity(first + kept);
-            try callee_starts.append(allocator, @intCast(callees.items.len));
-        }
-
-        const component_slots = try allocator.alloc(TemplateDemandComponentSlot, component_count);
-        errdefer allocator.free(component_slots);
-        @memset(component_slots, .empty);
-        const result = try allocator.create(TemplateDemandGraph);
-        errdefer allocator.destroy(result);
-        const base_starts = try self.base_starts.toOwnedSlice(allocator);
-        errdefer allocator.free(base_starts);
-        const bases = try self.demands.toOwnedSlice(allocator);
-        errdefer allocator.free(bases);
-        const edge_starts = try self.edge_starts.toOwnedSlice(allocator);
-        errdefer allocator.free(edge_starts);
+        var seen_callees = std.AutoHashMapUnmanaged(u32, void).empty;
+        defer seen_callees.deinit(allocator);
+        for (self.edges.items) |edge| switch (edge.callee) {
+            .local => |callee| if (!(try seen_callees.getOrPut(allocator, callee)).found_existing) try callees.append(allocator, callee),
+            .imported => {},
+        };
+        const own = try self.demands.toOwnedSlice(allocator);
+        errdefer allocator.free(own);
         const edges = try self.edges.toOwnedSlice(allocator);
         errdefer allocator.free(edges);
-        const owned_member_starts = try member_starts.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_member_starts);
-        const owned_members = try members.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_members);
-        const owned_callee_starts = try callee_starts.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_callee_starts);
-        result.* = .{
-            .base_starts = base_starts,
-            .bases = bases,
-            .edge_starts = edge_starts,
-            .edges = edges,
-            .component_of = component_of,
-            .member_index = member_index,
-            .member_starts = owned_member_starts,
-            .members = owned_members,
-            .callee_starts = owned_callee_starts,
-            .callees = try callees.toOwnedSlice(allocator),
-            .component_slots = component_slots,
-        };
+        const owned_callees = try callees.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_callees);
+        const result = try allocator.create(TemplateDemandNode);
+        result.* = .{ .base = own, .edges = edges, .callees = owned_callees };
         return result;
     }
 
@@ -29530,68 +29968,76 @@ pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleV
     var visited_types = std.AutoHashMap(ModuleTypeVisit, void).init(allocator);
     defer visited_types.deinit();
 
-    for (owner.exports.defs) |def_idx| {
-        const root = try reachedSourceRoot(owner, ModuleEnv.varFrom(def_idx)) orelse {
-            checkedArtifactInvariant("exported def type root was not published", .{});
-        };
-        try appendPublicApiTypeDependencies(allocator, artifact_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
-    }
+    // A type walk adds the owner of a type its walk names, and every name
+    // the module's types use comes from a module of its sealed origins.
+    if (typesNameDependencyModule(owner, resolver)) {
+        for (owner.exports.defs) |def_idx| {
+            const root = try reachedSourceRoot(owner, ModuleEnv.varFrom(def_idx)) orelse {
+                checkedArtifactInvariant("exported def type root was not published", .{});
+            };
+            try appendPublicApiTypeDependencies(allocator, artifact_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
+        }
 
-    // Platform requirement signatures are public API too: requirement
-    // unification copies them into each app's store, so nominals they mention
-    // (e.g. a hosted-interface type from a sibling module) must be reachable
-    // through this artifact's type-owner dependencies (issue 9911).
-    for (module_env.requires_types.items.items) |required_type| {
-        const root = try reachedSourceRoot(owner, ModuleEnv.varFrom(required_type.type_anno)) orelse continue;
-        try appendPublicApiTypeDependencies(allocator, artifact_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
-    }
+        // Platform requirement signatures are public API too: requirement
+        // unification copies them into each app's store, so nominals they mention
+        // (e.g. a hosted-interface type from a sibling module) must be reachable
+        // through this artifact's type-owner dependencies (issue 9911).
+        for (module_env.requires_types.items.items) |required_type| {
+            const root = try reachedSourceRoot(owner, ModuleEnv.varFrom(required_type.type_anno)) orelse continue;
+            try appendPublicApiTypeDependencies(allocator, artifact_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
+        }
 
-    try appendExposedTypeDeclarationPublicApiDependencies(allocator, owner, resolver, &visited_types, &keys, &type_owner_keys);
+        try appendExposedTypeDeclarationPublicApiDependencies(allocator, owner, resolver, &visited_types, &keys, &type_owner_keys);
 
-    // Generated-codec requirements serialized on binding schemes are copied
-    // into every importer that instantiates the binding (an exported def or a
-    // method reached by static dispatch), and each copy is revalidated there.
-    // A receiver can name a nominal the binding's type never mentions (issue
-    // 11839), so its owner must be reachable through this artifact's
-    // type-owner dependencies.
-    for (module_env.binding_scheme_codec_requirements.items.items) |requirement| {
-        const constraint = module_env.types.getStaticDispatchConstraintAt(requirement.constraint_index);
-        for ([_]Var{ @fromBackingInt(@intCast(requirement.receiver_var)), constraint.fn_var }) |requirement_var| {
-            const root = try reachedSourceRoot(owner, requirement_var) orelse {
-                checkedArtifactInvariant("binding scheme codec requirement root was not published", .{});
+        // Generated-codec requirements serialized on binding schemes are copied
+        // into every importer that instantiates the binding (an exported def or a
+        // method reached by static dispatch), and each copy is revalidated there.
+        // A receiver can name a nominal the binding's type never mentions (issue
+        // 11839), so its owner must be reachable through this artifact's
+        // type-owner dependencies.
+        for (module_env.binding_scheme_codec_requirements.items.items) |requirement| {
+            const constraint = module_env.types.getStaticDispatchConstraintAt(requirement.constraint_index);
+            for ([_]Var{ @fromBackingInt(@intCast(requirement.receiver_var)), constraint.fn_var }) |requirement_var| {
+                const root = try reachedSourceRoot(owner, requirement_var) orelse {
+                    checkedArtifactInvariant("binding scheme codec requirement root was not published", .{});
+                };
+                try appendPublicApiTypeDependencies(allocator, artifact_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
+            }
+        }
+
+        for (owner.platform_required_declarations.declarations) |declaration| {
+            if (declaration.requires_idx >= module_env.requires_types.items.items.len) {
+                checkedArtifactInvariant("platform requirement declaration has an out-of-range required index", .{});
+            }
+            const required_type = module_env.requires_types.items.items[declaration.requires_idx];
+            const root = try reachedSourceRoot(owner, ModuleEnv.varFrom(required_type.type_anno)) orelse {
+                checkedArtifactInvariant("platform requirement declaration has no platform-owned checked payload", .{});
             };
             try appendPublicApiTypeDependencies(allocator, artifact_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
         }
     }
 
-    for (owner.platform_required_declarations.declarations) |declaration| {
-        if (declaration.requires_idx >= module_env.requires_types.items.items.len) {
-            checkedArtifactInvariant("platform requirement declaration has an out-of-range required index", .{});
-        }
-        const required_type = module_env.requires_types.items.items[declaration.requires_idx];
-        const root = try reachedSourceRoot(owner, ModuleEnv.varFrom(required_type.type_anno)) orelse {
-            checkedArtifactInvariant("platform requirement declaration has no platform-owned checked payload", .{});
-        };
-        try appendPublicApiTypeDependencies(allocator, artifact_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
+    // A closure leaves the module only through a reference to another
+    // module's value or template.
+    if (closuresNameDependencyModule(owner, resolver)) {
+        var closure_dependencies = PublicApiClosureDependencyCollector.init(
+            allocator,
+            artifact_key,
+            resolver,
+            owner.checked_procedure_templates,
+            owner.callable_eval_templates,
+            owner.entry_wrappers,
+            owner.const_templates,
+            owner.checked_const_bodies,
+            owner.resolved_value_refs,
+            owner.top_level_procedure_bindings,
+            owner.platform_required_bindings,
+            &keys,
+            &type_owner_keys,
+        );
+        defer closure_dependencies.deinit();
+        try closure_dependencies.appendExportClosures(owner, try owner.exportClosures(resolver));
     }
-
-    var closure_dependencies = PublicApiClosureDependencyCollector.init(
-        allocator,
-        artifact_key,
-        resolver,
-        owner.checked_procedure_templates,
-        owner.callable_eval_templates,
-        owner.entry_wrappers,
-        owner.const_templates,
-        owner.checked_const_bodies,
-        owner.resolved_value_refs,
-        owner.top_level_procedure_bindings,
-        owner.platform_required_bindings,
-        &keys,
-        &type_owner_keys,
-    );
-    defer closure_dependencies.deinit();
-    try closure_dependencies.appendExportClosures(owner, try owner.exportClosures(resolver));
 
     const artifacts = try keys.toOwnedSlice(allocator);
     errdefer allocator.free(artifacts);
@@ -29601,6 +30047,71 @@ pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleV
         .artifacts = artifacts,
         .type_owner_artifacts = type_owner_artifacts,
     };
+}
+
+/// Whether a name `owner`'s types use comes from a module that can be a
+/// public API dependency: one other than `owner` and the builtin modules.
+fn typesNameDependencyModule(owner: ImportedModuleView, resolver: ModuleResolver) bool {
+    const sealed = owner.checked_types.sealed orelse checkedArtifactInvariant("public API dependencies were demanded of a store without sealed types", .{});
+    const own = owner.key.digest();
+    for (sealed.origins) |origin| {
+        if (origin.has_owner == 0) continue;
+        if (ModuleId.eql(origin.owner, own)) continue;
+        if (publicApiDependencyKeyIsKnownBuiltin(origin.owner, resolver)) continue;
+        return true;
+    }
+    return false;
+}
+
+/// Whether one of `owner`'s exports or value references names a module that
+/// can be a public API dependency: one other than `owner` and the builtin
+/// modules. A platform requirement's relation reaches the app.
+fn closuresNameDependencyModule(owner: ImportedModuleView, resolver: ModuleResolver) bool {
+    const own = owner.key.digest();
+    const Names = struct {
+        own: ModuleId,
+        resolver: ModuleResolver,
+
+        fn dependency(self: @This(), key: ModuleId) bool {
+            return !ModuleId.eql(key, self.own) and !publicApiDependencyKeyIsKnownBuiltin(key, self.resolver);
+        }
+
+        fn binding(self: @This(), ref: ProcedureBindingRef) bool {
+            return switch (ref) {
+                .top_level => |top_level| self.dependency(top_level.artifact),
+                .imported => |imported| self.dependency(imported.artifact),
+                .hosted => |hosted| self.dependency(hosted.template.artifact),
+                .platform_required => true,
+            };
+        }
+
+        fn callable(self: @This(), template: canonical.CallableProcedureTemplateRef) bool {
+            return switch (template) {
+                .checked => |checked| self.dependency(checked.artifact),
+                .synthetic => |synthetic| self.dependency(synthetic.template.artifact),
+                .lifted => true,
+            };
+        }
+    };
+    const names: Names = .{ .own = own, .resolver = resolver };
+    for (owner.exported_procedure_templates.templates) |exported| {
+        if (names.dependency(exported.template.artifact)) return true;
+    }
+    for (owner.exported_procedure_bindings.bindings) |binding| switch (binding.body) {
+        .direct_template => |direct| if (names.callable(direct.template)) return true,
+        .callable_eval_template, .checked_error => {},
+    };
+    for (owner.exported_const_templates.templates) |exported| {
+        if (names.dependency(exported.const_ref.artifact)) return true;
+    }
+    for (owner.resolved_value_refs.records) |record| switch (record.ref) {
+        .top_level_const, .imported_const => |const_use| if (names.dependency(const_use.const_ref.artifact)) return true,
+        .selected_hoisted_const => |selected| if (names.dependency(selected.const_use.const_ref.artifact)) return true,
+        .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |procedure| if (names.binding(procedure.binding)) return true,
+        .platform_required_const, .platform_required_proc => return true,
+        .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .platform_required_declaration, .platform_required_checked_error => {},
+    };
+    return false;
 }
 
 fn appendExposedTypeDeclarationPublicApiDependencies(

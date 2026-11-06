@@ -5184,9 +5184,15 @@ after checking, are on-demand analyses of the sealed module
   `erroneous_nodes` entry, any child's, a dispatch total resolution rejected,
   and, when a dispatch was rejected, a resolved local constant reference to
   an erroneous value; the constant-following part crosses definitions, so it
-  is one slot for the module), which templates and nested procedure sites
-  are single-source calls, and the exhaustiveness check checking left at
-  each match expression and destructuring pattern.
+  is one slot for the module), which templates are single-source calls,
+  which nested procedure sites are (a slot of its own, since only it reads
+  the module's nested procedure sites), and the exhaustiveness check
+  checking left at each match expression and destructuring pattern. Whether
+  a node's own dispatch plan cannot run is read from the node's plans as a
+  unit's facts need it, not computed for the module. A dispatch reaches a
+  template only as the target a method registry entry of the plan's method
+  names, so the single-source analysis resolves only the plans whose method
+  names a private template.
 
 There is no propagation pass over finished bodies during checking or
 checked module assembly, and no analysis result is serialized.
@@ -5437,12 +5443,31 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
 - Per-component slots: analyses that are fixpoints over the call graph
   (template demand vectors, literal requirements) are claimed for a whole
   strongly connected component of the module's call graph, never per root.
-  The graph and its components are a per-module slot (for demand vectors,
-  `templateDemandGraph`: every template's base vector and edges, read from
-  its body, its schema and its plans' dispatch resolution; for literal
-  requirements, `literalGraph`: every edge the module's bodies hold, with
-  the node that holds it first, which computes its arguments, and each
-  scheme's own open literals). A consumer demands, holding no claim, every
+  For demand vectors each template's base vector and edges, read from its
+  body, its schema and its plans' dispatch resolution, are a slot of their
+  own and components are assigned as consumers reach them
+  (`templateDemandGraph`). For literal
+  requirements the graph is built only as far as a consumer reaches it
+  (`literalGraph`): the module slot holds only what needs no dispatch
+  resolution (the owner of each generalized local scope and the first
+  node holding each value reference and local function construction), and
+  each node's edges and own open literals (`literalNode`), the first node
+  reaching each evidence node of a template resolution's pool
+  (`computeLiteralPoolHolders`) and each node's component are slots of their
+  own. An edge is held by the first node, in node order, whose body reaches
+  it, which computes its arguments. A literal walk enters a template
+  resolution's pool only through a plan or a use site that resolution
+  resolves, and every node holding that plan or site walks it, so a pool's
+  holders follow from the pool's own plans and sites and the first node
+  holding each; generated codecs' calls and what no template's chain binds
+  are the module resolution's, which any node's walk can reach, so their
+  holders are one slot over every node. Components are assigned under the
+  graph's mutex, held around one assignment that reads only finished node
+  slots, and named by their least member; the order of every component
+  (`literalComponentOrder`, Tarjan's over every node in node order) is a
+  slot of its own, read where the module's own literal argument roots are
+  listed. A consumer of one template's requirements therefore resolves
+  only the templates that template reaches. A consumer demands, holding no claim, every
   component a component reaches and every imported callee's result before
   it claims the component, so a component's computation reads only
   finished results and never waits on a slot of its own kind, in its own
@@ -5462,9 +5487,9 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   eligibility, and its entry wrapper's function type and scheme, created
   under the creation lock after the slots the decision reads.
 - Per-module slots: the key index (one over source types, one over
-  synthesized types), the method registry view, provided exports, the
-  nodes whose dispatch plan cannot run, diagnostic errors, single-source
-  calls, the exhaustiveness check checking left at each match
+  synthesized types), the method registry view, provided exports,
+  diagnostic errors, single-source calls, the exhaustiveness check
+  checking left at each match
   expression and destructuring pattern, by node, and the module's root
   requests (`ModuleAnalyses.rootRequests`: its explicit roots and checking
   mode, which its checking context records, its provided and exposed
@@ -5523,7 +5548,15 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   enclosing template's body declares) and its components are not the call
   graph's. Each resolution owns the evidence pool its evidence ids name,
   and a plan's or site's resolution is the first template's, in template
-  order, that holds it, otherwise the module's. A platform/app pairing has
+  order, that holds it, otherwise the module's. The module's resolution
+  holds site evidence only for the defaulted-field expressions' sites and
+  the sites a template's chain deferred, so the evidence of a site the
+  templates holding it neither resolved nor deferred is read as absent
+  without resolving the module (`siteEvidence`). A module's public API
+  dependencies leave out itself and the builtin modules, so a module whose
+  types name no other module skips the walk over its types, and one whose
+  exports and value references name no other module skips its export
+  closures. A platform/app pairing has
   analyses of its own; its export closures, public API dependencies,
   interface capabilities, dispatch resolution, demand vectors, nested
   procedure sites and per-template exhaustiveness sites are its
@@ -14559,12 +14592,12 @@ at a user type, through the builtin type's own `from_numeral`.
 The data is derived from every checked module on demand, whatever strategy
 the compilation runs under: it describes the program, and a checked module
 serves both strategies' programs (its cache identity names no strategy).
-The module's literal call graph (`ModuleAnalyses.literalGraph`) holds every
+The module's literal call graph (`ModuleAnalyses.literalGraph`) is every
 edge its bodies hold, each scheme's own open literals, and the strongly
-connected components of the edges between templates, numbered callees
-first; each component's requirements, edge arguments and argument roots are
-one slot (`ModuleAnalyses.literalComponent`, "On-Demand Analyses And
-Write-Once Slots").
+connected components of the edges between templates, computed only as far
+as a consumer reaches them; each component's requirements, edge arguments
+and argument roots are one slot (`ModuleAnalyses.literalComponent`,
+"On-Demand Analyses And Write-Once Slots").
 
 - A scheme's *literal requirements* (`CheckedDispatch.templateLiteralRequirements`,
   `CheckedDispatch.scopeLiteralRequirements`): one per literal of its own body
@@ -17413,11 +17446,12 @@ The demand of a variable is one of three values, the same scale
 
 A template's demand vector is a per-component on-demand analysis read
 through the module's dispatch reader (`CheckedDispatch.templateDemands`).
-The module's demand call graph is a per-module slot
-(`ModuleAnalyses.templateDemandGraph`): each body is walked once into a
-base vector and a set of edges, and the edges between the module's own
-templates are split into strongly connected components, numbered so every
-component's callee components come before it. A direct call or a dispatch
+The module's demand call graph (`ModuleAnalyses.templateDemandGraph`) is
+built only as far as a consumer reaches it: each body is walked once, on
+first demand, into a base vector and a set of edges (a slot per template),
+and the edges between the module's own templates are split into strongly
+connected components as consumers reach them (`LazyComponents`, each named
+by its least member). A direct call or a dispatch
 that checking resolved to one procedure template relates each caller
 variable that the callee slot's checked substitution mentions to that
 slot's demand: fully where the mention needs the variable's exact type,
