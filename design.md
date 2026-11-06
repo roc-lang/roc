@@ -2466,6 +2466,19 @@ arguments, which the prologue writes, and locals in deferred string-match
 captures, which the backend materializes outside the statements that access
 them, keep their activation lifetime.
 
+A speed build marks two kinds of procedure `alwaysinline`: a wrapper, a
+loop-free body of a few statements of its own, and a leaf, a moderate body
+that calls nothing. A leaf is judged by the body LLVM emits for it, with its
+always-inline callees expanded: it calls nothing only when every procedure it
+calls is always-inline and calls nothing itself, and its size counts a copy
+of each such callee at each of its call sites, so the leaf budget bounds what
+every call site of a leaf duplicates. A helper is therefore a leaf whether
+SpecConstr inlined its callees into it or the backend does; a builtin like
+`dict_insert_new_data`, whose shift-up loop SpecConstr leaves a call because
+no known value crosses it, still expands completely into `Dict.insert`. A
+procedure on a cycle of direct calls keeps a call however much is expanded,
+so it is never a leaf.
+
 The always-inline selection of wrappers and leaves is a speed-build policy.
 A size build (`--opt=size`) selects nothing: every function the module
 defines, including the linked builtins and the private runtime, carries

@@ -3974,14 +3974,6 @@ pub const MonoLlvmCodeGen = struct {
         callees: std.ArrayList(LirProcSpecId) = .empty,
     };
 
-    /// Decide which procs are worth inlining at every call site. LLVM sizes a
-    /// proc only after the builtins it calls have been expanded into it, so a
-    /// checked wrapper around one operation, or a helper whose bounds checks
-    /// each expand into a compare-and-branch pair, looks far larger to it
-    /// than its LIR is. Two shapes are inlined everywhere: a handful of
-    /// statements with no loop, and a leaf of moderate size. Larger bodies
-    /// remain ordinary calls, so LLVM can simplify them before deciding
-    /// whether to duplicate them into their callers.
     /// The inlining attributes of a generated procedure. Diagnostics builds
     /// keep every procedure out of line so crash frames name it. A speed
     /// build inlines the procedures `computeInlineEverywhere` selects
@@ -4000,11 +3992,27 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    /// Select the procedures a speed build inlines everywhere: wrappers (no
-    /// loop, few statements) and leaves (no calls, moderate size), whose
-    /// per-call cost in their callers' loops exceeds the work they do. That
-    /// is a speed policy; a size build selects nothing and leaves every
-    /// decision to LLVM's size cost model.
+    /// Select the procedures a speed build inlines everywhere. LLVM sizes a
+    /// proc only after the builtins it calls have been expanded into it, so a
+    /// checked wrapper around one operation, or a helper whose bounds checks
+    /// each expand into a compare-and-branch pair, looks far larger to it
+    /// than its LIR is. Two shapes are inlined everywhere, because their
+    /// per-call cost in their callers' loops exceeds the work they do: a
+    /// wrapper (no loop, few statements of its own) and a leaf (moderate
+    /// size, no calls). Larger bodies remain ordinary calls, so LLVM can
+    /// simplify them before deciding whether to duplicate them into their
+    /// callers. That is a speed policy; a size build selects nothing and
+    /// leaves every decision to LLVM's size cost model.
+    ///
+    /// A leaf is judged by the body it has once its always-inline callees
+    /// are expanded into it, which is the body LLVM emits: it calls nothing
+    /// only when every proc it calls is inlined everywhere and calls nothing
+    /// itself, and its size counts a copy of each such callee at each of its
+    /// call sites. A helper is a leaf whether an earlier stage inlined its
+    /// callees into it or this selection does, and a leaf's every call site
+    /// duplicates at most `max_leaf_inline_stmts` statements of expanded
+    /// body either way. A proc on a cycle of direct calls always keeps a
+    /// call, so it is never a leaf.
     fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         self.inline_everywhere.clearRetainingCapacity();
         try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
@@ -4019,12 +4027,68 @@ pub const MonoLlvmCodeGen = struct {
             if (proc.is_static_initializer) continue;
             if (proc.body) |body| try self.inlineShapeOf(body, &shapes[i]);
         }
-        for (procs, 0..) |proc, i| {
-            if (proc.body == null or proc.is_static_initializer) continue;
-            const shape = &shapes[i];
-            const wrapper = shape.count <= max_wrapper_inline_stmts and !shape.has_loop;
-            const leaf = shape.count <= max_leaf_inline_stmts and shape.callees.items.len == 0 and !shape.opaque_call;
-            self.inline_everywhere.items[i] = wrapper or leaf;
+
+        const Expansion = struct {
+            state: enum { unvisited, active, done } = .unvisited,
+            /// Statements once every always-inline callee is expanded,
+            /// saturating.
+            size: usize = 0,
+            /// Whether a call remains once every always-inline callee is
+            /// expanded.
+            calls: bool = false,
+        };
+        const expansions = try self.allocator.alloc(Expansion, procs.len);
+        defer self.allocator.free(expansions);
+        @memset(expansions, .{});
+        const Frame = struct { proc: usize, next_callee: usize };
+        var stack: std.ArrayList(Frame) = .empty;
+        defer stack.deinit(self.allocator);
+
+        for (procs, 0..) |root_proc, root| {
+            if (root_proc.body == null or root_proc.is_static_initializer) continue;
+            if (expansions[root].state != .unvisited) continue;
+            expansions[root] = .{ .state = .active, .size = shapes[root].count, .calls = shapes[root].opaque_call };
+            try stack.append(self.allocator, .{ .proc = root, .next_callee = 0 });
+            while (stack.items.len > 0) {
+                const frame = &stack.items[stack.items.len - 1];
+                const shape = &shapes[frame.proc];
+                if (frame.next_callee < shape.callees.items.len) {
+                    const callee: usize = @backingInt(shape.callees.items[frame.next_callee]);
+                    const callee_proc = procs[callee];
+                    if (callee_proc.body == null or callee_proc.is_static_initializer) {
+                        expansions[frame.proc].calls = true;
+                        frame.next_callee += 1;
+                        continue;
+                    }
+                    switch (expansions[callee].state) {
+                        .unvisited => {
+                            expansions[callee] = .{ .state = .active, .size = shapes[callee].count, .calls = shapes[callee].opaque_call };
+                            try stack.append(self.allocator, .{ .proc = callee, .next_callee = 0 });
+                            continue;
+                        },
+                        // A call back into a proc still being expanded is a
+                        // cycle, which no amount of inlining removes.
+                        .active => expansions[frame.proc].calls = true,
+                        .done => {
+                            if (self.inline_everywhere.items[callee]) {
+                                expansions[frame.proc].size +|= expansions[callee].size;
+                                expansions[frame.proc].calls = expansions[frame.proc].calls or expansions[callee].calls;
+                            } else {
+                                expansions[frame.proc].calls = true;
+                            }
+                        },
+                    }
+                    frame.next_callee += 1;
+                    continue;
+                }
+                const finished = frame.proc;
+                _ = stack.pop();
+                const expansion = &expansions[finished];
+                expansion.state = .done;
+                const wrapper = shape.count <= max_wrapper_inline_stmts and !shape.has_loop;
+                const leaf = expansion.size <= max_leaf_inline_stmts and !expansion.calls;
+                self.inline_everywhere.items[finished] = wrapper or leaf;
+            }
         }
     }
 
@@ -16004,6 +16068,88 @@ test "issue 11451: forced inlining at deep call sites is capped per caller" {
         .{ forced_sites, deep_sites, callee_stmts + 1 },
     );
     try std.testing.expect(forced_sites <= max_forced_sites);
+}
+
+test "a looping helper whose only callees are inlined everywhere is a leaf" {
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+
+    const Fixture = struct {
+        store: *lir.LirStore,
+        next_join: u32 = 0,
+        next_proc: u32 = 0,
+
+        /// `|x| x`: a wrapper.
+        fn identity(self: *@This()) !LirProcSpecId {
+            const arg = try self.store.addLocal(.{ .layout_idx = .i64 });
+            const body = try self.store.addCFStmt(.{ .ret = .{ .value = arg } }, .test_fixture);
+            return self.proc(arg, body, &.{});
+        }
+
+        /// A loop calling `callee` on every pass, or calling itself when
+        /// `callee` is null.
+        fn looping(self: *@This(), callee: ?LirProcSpecId) !LirProcSpecId {
+            const arg = try self.store.addLocal(.{ .layout_idx = .i64 });
+            const result = try self.store.addLocal(.{ .layout_idx = .i64 });
+            const join: lir.LIR.JoinPointId = @fromBackingInt(self.next_join);
+            self.next_join += 1;
+            const id: LirProcSpecId = @fromBackingInt(self.next_proc);
+            const repeat = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
+            const call = try self.store.addCFStmt(.{ .assign_call = .{
+                .target = result,
+                .proc = callee orelse id,
+                .args = try self.store.addLocalSpan(&.{arg}),
+                .next = repeat,
+            } }, .test_fixture);
+            const enter = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
+            const body = try self.store.addCFStmt(.{ .join = .{
+                .id = join,
+                .params = .empty(),
+                .body = call,
+                .remainder = enter,
+            } }, .test_fixture);
+            return self.proc(arg, body, &.{result});
+        }
+
+        fn proc(self: *@This(), arg: LocalId, body: CFStmtId, extra_locals: []const LocalId) !LirProcSpecId {
+            var locals: [2]LocalId = undefined;
+            locals[0] = arg;
+            for (extra_locals, 1..) |local, i| locals[i] = local;
+            self.next_proc += 1;
+            return self.store.addProcSpec(.{
+                .name = .fromRaw(self.next_proc),
+                .identity = lir.LIR.ProcIdentity.forTest(self.next_proc),
+                .args = try self.store.addLocalSpan(&.{arg}),
+                .frame_locals = try self.store.addLocalSpan(locals[0 .. extra_locals.len + 1]),
+                .body = body,
+                .ret_layout = .i64,
+            }, .none);
+        }
+    };
+    var fixture: Fixture = .{ .store = &store };
+    const wrapper = try fixture.identity();
+    // Calls only the wrapper: once it is expanded, a loop that calls nothing.
+    const over_wrapper = try fixture.looping(wrapper);
+    // Calls only that leaf, which expands to a loop calling nothing.
+    const over_leaf = try fixture.looping(over_wrapper);
+    // Calls itself, which no expansion removes.
+    const recursive = try fixture.looping(null);
+    // Calls a proc that stays a call.
+    const over_recursive = try fixture.looping(recursive);
+
+    var codegen = MonoLlvmCodeGen.init(gpa, &store);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    try codegen.computeInlineEverywhere(store.getProcSpecs());
+
+    try std.testing.expect(codegen.inlineEverywhere(wrapper));
+    try std.testing.expect(codegen.inlineEverywhere(over_wrapper));
+    try std.testing.expect(codegen.inlineEverywhere(over_leaf));
+    try std.testing.expect(!codegen.inlineEverywhere(recursive));
+    try std.testing.expect(!codegen.inlineEverywhere(over_recursive));
 }
 
 test "wasm C-ABI classification follows the target's SIMD support" {
