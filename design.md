@@ -8995,7 +8995,11 @@ completed loops or continuations back through general normalization. Calls stay
 opaque; it cannot discover call patterns, emit workers, or reopen the
 specialization graph. Existing branch structure and shared continuations remain
 shared rather than being distributed into branch arms. Statement suffixes are
-borrowed source spans, not repeatedly copied sequences.
+borrowed source spans, not repeatedly copied sequences. An
+`uninitialized_payload` loop initializer is not a value and evaluates nothing,
+so no clone, this one included, names it with a strict binding: it stays a
+direct initial value of its own loop, naming that loop's emitted flag
+parameter, which is the only position LIR lowering reads it from.
 
 The rewrite is lexical: it carries the selected exit ABI while traversing the
 owning loop body and rewrites every owned `break`, including those in branch
