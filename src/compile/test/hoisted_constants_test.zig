@@ -2526,6 +2526,9 @@ fn findHoistedArtifact(
     min_count: usize,
 ) ?check.CheckedArtifact.ImportedModuleView {
     for (views) |view| {
+        // Builtin has hoisted constants of its own; these tests look for the
+        // program's modules.
+        if (view.module_env.module_role == .builtin) continue;
         if (view.hoisted_constants.entries.len >= min_count) return view;
     }
     return null;

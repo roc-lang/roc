@@ -896,11 +896,13 @@ pub const ValueReferenceTarget = union(enum(u8)) {
     /// A data-valued selected hoisted root, by its binding pattern.
     hoisted_constant: CIR.Pattern.Idx,
     /// A definition (or exposed destructure binder) of a directly imported
-    /// module, by that module's own node id.
-    imported: ImportedValueReference,
+    /// module: the one the lookup (`e_lookup_external`) names.
+    imported,
     /// A definition of the module that declares a type an associated lookup
-    /// names, by that module's own definition id.
-    associated: AssociatedValueReference,
+    /// names: the one the lookup (`e_lookup_associated_resolved`) names.
+    /// Neither foreign target is repeated here, so the record holds no id of
+    /// another module.
+    associated,
     /// A platform requirement, by its index in the requires clause.
     required: u32,
 };
@@ -913,19 +915,6 @@ pub const LocalProcedureReference = struct {
     /// For an exact procedure alias, the lookup the alias chain ends at: the
     /// first lookup along it that is not itself an alias.
     alias_target: ?CIR.Expr.Idx,
-};
-
-/// A value reference into a directly imported module.
-pub const ImportedValueReference = struct {
-    import: CIR.Import.Idx,
-    /// The definition node, or the binder node of an exposed destructure.
-    node: u32,
-};
-
-/// A value reference into the module that declares a type.
-pub const AssociatedValueReference = struct {
-    owner: base.ModuleIdentity.Idx,
-    def: CIR.Def.Idx,
 };
 
 /// What evaluating one top-level binding of this module produces, recorded by

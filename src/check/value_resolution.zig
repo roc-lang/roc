@@ -284,18 +284,12 @@ const Resolver = struct {
                     continue;
                 }
             else if (data == .e_lookup_external)
-                .{ .imported = .{
-                    .import = data.e_lookup_external.module_idx,
-                    .node = data.e_lookup_external.target_node_idx,
-                } }
+                .imported
             else if (data == .e_lookup_associated_resolved)
                 if (data.e_lookup_associated_resolved.module_identity == env.selfModuleIdentity())
                     .{ .top_level = data.e_lookup_associated_resolved.target_def_idx }
                 else
-                    .{ .associated = .{
-                        .owner = data.e_lookup_associated_resolved.module_identity,
-                        .def = data.e_lookup_associated_resolved.target_def_idx,
-                    } }
+                    .associated
             else if (data == .e_lookup_required)
                 .{ .required = data.e_lookup_required.requires_idx.toU32() }
             else
@@ -357,8 +351,8 @@ const Resolver = struct {
         }
     }
 
-    fn referencedBinding(self: *const Resolver, target: ValueReferenceTarget) ReferencedBinding {
-        return switch (target) {
+    fn referencedBinding(self: *const Resolver, reference: ValueReference) ReferencedBinding {
+        return switch (reference.target) {
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .required => .none,
             .local_procedure => |procedure| .{ .local_procedure = procedure },
             .top_level => |def| .{ .local = self.top_level_bindings.get(self.env.store.getDef(def).pattern) orelse
@@ -366,14 +360,16 @@ const Resolver = struct {
             .hoisted_procedure => |pattern| .{ .local = self.hoisted_procedures.get(pattern).? },
             .promoted_procedure => |pattern| .{ .local = self.promoted_procedures.get(pattern).? },
             .hoisted_constant => |pattern| .{ .local = self.hoisted_constants.get(pattern).? },
-            .imported => |imported| blk: {
-                const module_idx = self.env.imports.getResolvedModule(imported.import) orelse unreachable; // reached lookups have resolved imports
+            .imported => blk: {
+                const imported = self.env.store.getExpr(reference.expr).e_lookup_external;
+                const module_idx = self.env.imports.getResolvedModule(imported.module_idx) orelse unreachable; // reached lookups have resolved imports
                 const module = self.dependencies.imported_modules[module_idx];
-                break :blk .{ .foreign = module.bindingResolutionForNode(imported.node) orelse unreachable }; // an imported value is a recorded top-level binding
+                break :blk .{ .foreign = module.bindingResolutionForNode(imported.target_node_idx) orelse unreachable }; // an imported value is a recorded top-level binding
             },
-            .associated => |associated| blk: {
-                const module = self.dependencies.owner_env(self.dependencies.context, associated.owner);
-                break :blk .{ .foreign = module.bindingResolutionForNode(@backingInt(associated.def)) orelse unreachable }; // an associated value is a recorded top-level binding
+            .associated => blk: {
+                const associated = self.env.store.getExpr(reference.expr).e_lookup_associated_resolved;
+                const module = self.dependencies.owner_env(self.dependencies.context, associated.module_identity);
+                break :blk .{ .foreign = module.bindingResolutionForNode(@backingInt(associated.target_def_idx)) orelse unreachable }; // an associated value is a recorded top-level binding
             },
         };
     }
@@ -397,12 +393,12 @@ const Resolver = struct {
     /// Whether a call through `target` calls a procedure directly. A call
     /// through an exact procedure alias is direct when the alias reaches a
     /// directly callable procedure.
-    fn callableDirectly(self: *const Resolver, target: ValueReferenceTarget) bool {
-        const binding = self.referencedBinding(target);
+    fn callableDirectly(self: *const Resolver, reference: ValueReference) bool {
+        const binding = self.referencedBinding(reference);
         return switch (binding) {
             .none => false,
             .local_procedure => |procedure| if (procedure.alias_target) |alias_target|
-                self.callableDirectly(self.references.items[self.referenceIndex(alias_target).?].target)
+                self.callableDirectly(self.references.items[self.referenceIndex(alias_target).?])
             else
                 true,
             .local, .foreign => switch (self.bindingBody(binding).?) {
@@ -430,7 +426,7 @@ const Resolver = struct {
                 const index = self.referenceIndex(root) orelse continue;
                 const target = self.references.items[index].target;
                 if (target == .local_procedure) continue;
-                if (!self.callableDirectly(target)) continue;
+                if (!self.callableDirectly(self.references.items[index])) continue;
                 binding.forwarded_lookup = root;
                 changed = true;
             }
@@ -450,7 +446,7 @@ const Resolver = struct {
         const env = self.env;
         var rejected = self.rejected;
         for (self.references.items) |reference| {
-            const body = self.bindingBody(self.referencedBinding(reference.target)) orelse continue;
+            const body = self.bindingBody(self.referencedBinding(reference)) orelse continue;
             if (body == .checked_error) {
                 self.retired.set(@backingInt(reference.expr));
                 rejected = true;
@@ -472,7 +468,7 @@ const Resolver = struct {
                 continue;
             }
             const index = self.referenceIndex(data.e_call.func) orelse continue;
-            if (self.callableDirectly(self.references.items[index].target)) try candidate_calls.append(self.gpa, expr);
+            if (self.callableDirectly(self.references.items[index])) try candidate_calls.append(self.gpa, expr);
         }
 
         if (rejected) try self.propagate();
@@ -503,7 +499,7 @@ const Resolver = struct {
             if (data == .e_call) try addDependent(self.gpa, &dependents, data.e_call.func, expr);
         }
         for (self.references.items) |reference| {
-            const id = switch (self.referencedBinding(reference.target)) {
+            const id = switch (self.referencedBinding(reference)) {
                 .local => |id| id,
                 .none, .local_procedure, .foreign => continue,
             };

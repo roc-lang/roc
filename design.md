@@ -5206,10 +5206,11 @@ entries:
   binder or block-local function (an exact procedure alias carries the
   lookup its alias chain ends at), a top-level definition, a bound selected
   hoisted root (function- or data-valued), a promoted local procedure, a
-  directly imported module's definition or exposed destructure binder (by
-  import and that module's own node id), the definition of the module that
-  declares a type an associated lookup names (by owner identity and that
-  module's own definition id), or a platform requirement;
+  directly imported module's definition or exposed destructure binder, the
+  definition of the module that declares a type an associated lookup names,
+  or a platform requirement. A foreign target is the one the lookup
+  expression itself names, so the record holds no id of another module and
+  stays valid when a cache entry's foreign references are rebound;
 - `binding_resolutions`: for every top-level binding (each top-level value
   definition, each bound selected hoisted root, each promoted local
   procedure), whether it is a constant, a procedure, a function value

@@ -11783,7 +11783,7 @@ pub const ResolvedValueRefTable = struct {
             var resolved_ref = publishedValueRef(
                 module,
                 artifact_key,
-                reference.target,
+                reference,
                 imports,
                 available_artifacts,
                 hosted_procs,
@@ -11885,7 +11885,7 @@ pub const ResolvedValueTable = ResolvedValueRefTable;
 fn publishedValueRef(
     module: TypedCIR.Module,
     artifact_key: CheckedModuleArtifactKey,
-    target: ModuleEnv.ValueReferenceTarget,
+    reference: ModuleEnv.ValueReference,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
     hosted_procs: *const HostedProcTable,
@@ -11895,7 +11895,7 @@ fn publishedValueRef(
     selected_hoisted_callables: *const SelectedHoistedCallableTable,
     hoisted_constants: *const HoistedConstTable,
 ) ResolvedValueRef {
-    return switch (target) {
+    return switch (reference.target) {
         .local_param => |binder| .{ .local_param = .{ .binder = binder } },
         .local_value => |binder| .{ .local_value = .{ .binder = binder } },
         .local_mutable_version => |binder| .{ .local_mutable_version = .{ .binder = binder } },
@@ -11932,11 +11932,14 @@ fn publishedValueRef(
                 checkedArtifactInvariant("a hoisted constant lookup has no published constant", .{}),
             .{ .binder = pattern },
         ),
-        .imported => |imported| categorizeImportedValueRef(module, imported.import, imported.node, imports),
-        .associated => |associated| categorizeResolvedAssociatedValueRef(
+        .imported => blk: {
+            const imported = module.expr(reference.expr).data.e_lookup_external;
+            break :blk categorizeImportedValueRef(module, imported.module_idx, imported.target_node_idx, imports);
+        },
+        .associated => categorizeResolvedAssociatedValueRef(
             module,
-            associated.owner,
-            associated.def,
+            module.expr(reference.expr).data.e_lookup_associated_resolved.module_identity,
+            module.expr(reference.expr).data.e_lookup_associated_resolved.target_def_idx,
             imports,
             available_artifacts,
         ),
