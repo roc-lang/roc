@@ -4982,6 +4982,56 @@ test "issue 11317 or-pattern captures reuse one closure with and without special
     }
 }
 
+test "issue 12705 an inline lambda calling a capturing local procedure gets one body per enclosing type" {
+    const allocator = std.testing.allocator;
+    // `h` captures `x`, so each instantiation of `f` has its own `h`. The
+    // inline lambda captures nothing itself, but it calls `h`, so each
+    // instantiation of `f` needs its own copy of the lambda too.
+    const source =
+        \\G := {}.{
+        \\    f : G, a -> (U64 -> U64)
+        \\    f = |_g, x| {
+        \\        h = |p| {
+        \\            _ = x
+        \\            p
+        \\        }
+        \\        |p| h(p)
+        \\    }
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| G.({}).f(1.U8)(n) + G.({}).f("s")(n)
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 4), lowered.mono.view().nested_defs.len);
+}
+
+test "a local procedure shares one body across enclosing types it does not capture" {
+    const allocator = std.testing.allocator;
+    // `h` captures only `x`, which is `U8` in both instantiations of `f`.
+    // `y` differs between them, but `h` never reads it.
+    const source =
+        \\G := {}.{
+        \\    f : G, a, b -> (U64 -> U64)
+        \\    f = |_g, x, y| {
+        \\        _ = y
+        \\        h = |p| {
+        \\            _ = x
+        \\            p
+        \\        }
+        \\        h
+        \\    }
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |n| G.({}).f(1.U8, "a")(n) + G.({}).f(1.U8, 2.U16)(n)
+    ;
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), lowered.mono.view().nested_defs.len);
+}
+
 test "shared callees are lifted once and never gain spurious captures" {
     // A small diamond call graph: every function calls the one below it twice.
     // Capture collection reuses each callee's solved free set instead of

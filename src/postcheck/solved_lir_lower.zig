@@ -1194,6 +1194,12 @@ const Lowerer = struct {
                 if (initial.data != .uninitialized_payload) continue;
                 const param = GuardedList.at(params, index);
                 const condition = initial.data.uninitialized_payload;
+                if (builtin.mode == .debug) {
+                    const sibling = for (0..params.len) |other| {
+                        if (GuardedList.at(params, other).local == condition.condition) break true;
+                    } else false;
+                    if (!sibling) Common.invariant("uninitialized_payload condition was not a parameter of its own loop");
+                }
                 const slot = try payload_conditions.getOrPut(param.local);
                 if (slot.found_existing and (slot.value_ptr.condition != condition.condition or slot.value_ptr.mask != condition.mask)) {
                     Common.invariant("one loop payload local had conflicting initialization conditions");
@@ -7716,7 +7722,10 @@ const Lowerer = struct {
                 .next = next,
             } }, where.source()) },
             .@"unreachable" => Common.invariant("unreachable marker escaped its terminated block-final position during direct LIR lowering"),
-            .uninitialized, .uninitialized_payload => .{ .ret = next },
+            .uninitialized => .{ .ret = next },
+            // A loop initial value never reaches here: the loop records the
+            // slot's initialization condition and writes nothing for it.
+            .uninitialized_payload => Common.invariant("uninitialized_payload reached LIR lowering outside a direct loop initial value"),
             .static_data_candidate => |candidate| try self.staticDataCandidateStep(where, target, candidate, expr_ty, next),
             .comptime_value => |value| .{ .ret = try self.lowerComptimeValueInto(where, target, value, expr_ty, next) },
             .typed_boundary => |boundary| try self.typedBoundaryStep(where, target, expr_ty, boundary, next),
