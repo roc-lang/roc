@@ -684,6 +684,42 @@ pub const StaticDescs = struct {
                 .back_edge => |head| nodes[position] = nodes[head],
             }
         }
+        // A target's dictionary, at the callable type its requirement names:
+        // an adapter around the target's entry where the two store the
+        // method's signature differently (`Program.storageDifference`), as
+        // a body's dictionary of the same requirement is adapted.
+        const adapted = try self.allocator.alloc(ExportIndex, tree.len);
+        defer self.allocator.free(adapted);
+        for (tree, adapted, 0..) |node, *adapted_node, position| {
+            adapted_node.* = nodes[position];
+            const requirement = node.requirement orelse continue;
+            const target = switch (node.kind) {
+                .target => |target| target,
+                .back_edge => |head| tree[head].kind.target,
+                .resolved => continue,
+            };
+            const target_worker = program_.worker(target.target).*;
+            const own_fn = try program_.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
+            const own_ty = try program_.substitute(self.allocator, own_fn, target.instance.bound);
+            switch (try program_.storageDifference(own_ty, requirement.callable)) {
+                .none => {},
+                .function => {
+                    // The adapter is in the target's variables, whose
+                    // descriptors it captures after the dictionary.
+                    const adapter = try program_.adapterWorker(target.target, own_ty, requirement.callable);
+                    var words: std.ArrayList(CaptureWord) = .empty;
+                    defer words.deinit(self.allocator);
+                    try words.append(self.allocator, .{ .callable = nodes[position] });
+                    for (target.instance.bound) |ty| try words.append(self.allocator, .{ .desc = ty });
+                    self.extra_nodes += 1;
+                    adapted_node.* = switch (capture) {
+                        .words => try self.staticCallableOf(owner, 16 + self.extra_nodes, program_.worker(adapter).proc, words.items),
+                        .table => try self.staticCallableOf(owner, 16 + self.extra_nodes, program_.worker(adapter).proc, &.{.{ .table = (try self.table(adapter, words.items)).node }}),
+                    };
+                },
+                .rows, .record_order => types.invariant("two callable types of a dictionary differ outside the signature of the function it is"),
+            }
+        }
         for (tree, 0..) |node, position| {
             const target = switch (node.kind) {
                 .target => |target| target,
@@ -692,7 +728,7 @@ pub const StaticDescs = struct {
             var words: std.ArrayList(CaptureWord) = .empty;
             defer words.deinit(self.allocator);
             for (target.instance.bound) |ty| try words.append(self.allocator, .{ .desc = ty });
-            for (target.children) |child| try words.append(self.allocator, .{ .callable = nodes[child] });
+            for (target.children) |child| try words.append(self.allocator, .{ .callable = adapted[child] });
             for (thunks[position]) |thunk| {
                 self.extra_nodes += 1;
                 const callable = try self.staticCallableOf(owner, 16 + self.extra_nodes, program_.worker(thunk).proc, &.{});
@@ -709,8 +745,8 @@ pub const StaticDescs = struct {
         }
         const owned_key = try self.allocator.dupe(u8, key.items);
         errdefer self.allocator.free(owned_key);
-        try self.dictionary_trees.put(self.allocator, owned_key, nodes[0]);
-        return nodes[0];
+        try self.dictionary_trees.put(self.allocator, owned_key, adapted[0]);
+        return adapted[0];
     }
 
     /// A static callable's export, sized for `word_count` capture words.

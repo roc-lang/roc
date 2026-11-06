@@ -2307,134 +2307,11 @@ pub const Builder = struct {
         try self.finishErasedProc(entry, body_start, args.items, ret_layout, capture_ptr);
     }
 
-    /// Where two types of one value differ: nowhere; only in the tags of
-    /// rows, one widening the other along the coercion's reach (design.md
-    /// "Sealed Result Rows"); in the memory order of a record, one being the
-    /// record a padded nominal lifts it into (design.md "Nominal Record Field
-    /// Order"); or inside the function type the value has.
-    pub const StorageDifference = enum { none, rows, record_order, function };
+    pub const StorageDifference = Program.StorageDifference;
 
-    /// A function value inside data is outside every row widening's reach
-    /// (design.md "Row Coercion Primitive"), so both types of the value store
-    /// such a function's signature alike.
-    const nested_function_storage = "two types of one value store the signature of a function value inside data differently";
-
+    /// Where two types of one value differ (`Program.storageDifference`).
     pub fn storageDifference(self: *Builder, from_root: TypeId, to_root: TypeId) Allocator.Error!StorageDifference {
-        if (from_root == to_root) return .none;
-        const store = &self.program.store;
-        // Where a pair sits: in data, in the signature of the root function
-        // or of a function its signature passes (each adapted by its own
-        // adapter), in data such a signature passes, or in a function type
-        // inside data.
-        const Place = enum { data, root_function, signature_data, nested_function };
-        const Pair = struct { from: TypeId, to: TypeId, place: Place };
-        var pending: std.ArrayList(Pair) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .from = from_root, .to = to_root, .place = .data });
-        var result: StorageDifference = .none;
-        while (pending.pop()) |pair| {
-            if (pair.from == pair.to) continue;
-            const from = store.get(pair.from);
-            const to = store.get(pair.to);
-            if ((from == .variable) != (to == .variable)) {
-                // A value whose type a variable of the body leaves open, flowing
-                // into a tag row or out of one (a `?` return's error into the
-                // function's composed row): the variable's tags are known
-                // only at run time, so the value is re-tagged by name under
-                // the destination's descriptor. Elsewhere a variable has the
-                // one representation every type has.
-                if (pair.place == .data and try self.isTagRow(if (from == .variable) pair.to else pair.from)) {
-                    if (result == .none) result = .rows;
-                }
-                continue;
-            }
-            if (from == .variable) continue;
-            if (std.meta.activeTag(from) != std.meta.activeTag(to)) {
-                // A nominal shares its backing's representation.
-                if (from == .nominal and from.nominal.has_backing) {
-                    try pending.append(self.allocator, .{ .from = try self.program.converter().backing(pair.from), .to = pair.to, .place = pair.place });
-                } else if (to == .nominal and to.nominal.has_backing) {
-                    try pending.append(self.allocator, .{ .from = pair.from, .to = try self.program.converter().backing(pair.to), .place = pair.place });
-                } else if (paddedAgainstEmpty(from, to)) {
-                    switch (pair.place) {
-                        .data => result = .record_order,
-                        .root_function, .signature_data => return .function,
-                        .nested_function => invariant(nested_function_storage),
-                    }
-                }
-                continue;
-            }
-            // The place of a component of a non-function type.
-            const inner: Place = if (pair.place == .root_function) .signature_data else pair.place;
-            switch (from) {
-                .record => |record| {
-                    if (!store.sameRecordOrder(record, to.record)) switch (pair.place) {
-                        .data => result = .record_order,
-                        .root_function, .signature_data => return .function,
-                        .nested_function => invariant(nested_function_storage),
-                    };
-                    for (store.fieldSpan(to.record.fields)) |to_field| {
-                        for (store.fieldSpan(record.fields)) |from_field| {
-                            if (from_field.name != to_field.name) continue;
-                            if (from_field.kind != to_field.kind or from_field.slot_variable != to_field.slot_variable) {
-                                invariant("two types of one value store a record field differently, though a field has one storage at an instantiation");
-                            }
-                            try pending.append(self.allocator, .{ .from = from_field.ty, .to = to_field.ty, .place = inner });
-                        }
-                    }
-                    if (record.ext != null and to.record.ext != null) try pending.append(self.allocator, .{ .from = record.ext.?, .to = to.record.ext.?, .place = inner });
-                },
-                .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
-                .tag_union => |tag_union| {
-                    // A row the destination widens holds its tags under
-                    // other discriminants: the value is converted.
-                    if (tag_union.tags.len != to.tag_union.tags.len or (tag_union.ext == null) != (to.tag_union.ext == null)) switch (pair.place) {
-                        .data => if (result == .none) {
-                            result = .rows;
-                        },
-                        .root_function, .signature_data => return .function,
-                        .nested_function => invariant(nested_function_storage),
-                    };
-                    for (store.tagSpan(to.tag_union.tags)) |to_tag| {
-                        for (store.tagSpan(tag_union.tags)) |from_tag| {
-                            if (from_tag.name != to_tag.name or from_tag.payloads.len != to_tag.payloads.len) continue;
-                            for (store.span(from_tag.payloads), store.span(to_tag.payloads)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner });
-                        }
-                    }
-                    if (tag_union.ext != null and to.tag_union.ext != null) try pending.append(self.allocator, .{ .from = tag_union.ext.?, .to = to.tag_union.ext.?, .place = inner });
-                },
-                .list => |elem| try pending.append(self.allocator, .{ .from = elem, .to = to.list, .place = inner }),
-                .box => |payload| try pending.append(self.allocator, .{ .from = payload, .to = to.box, .place = inner }),
-                .nominal => |nominal| for (store.nominalArgs(nominal), store.nominalArgs(to.nominal)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
-                .function => |function| {
-                    const place: Place = switch (pair.place) {
-                        .data => if (pair.from == from_root) .root_function else .nested_function,
-                        .root_function => .root_function,
-                        .signature_data, .nested_function => .nested_function,
-                    };
-                    for (store.span(function.args), store.span(to.function.args)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = place });
-                    try pending.append(self.allocator, .{ .from = function.ret, .to = to.function.ret, .place = place });
-                },
-                .primitive, .empty_record, .variable => {},
-            }
-        }
-        return result;
-    }
-
-    /// Whether one of two nodes is the backing of a padded nominal of no named
-    /// fields and the other the empty record, which has no storage.
-    fn paddedAgainstEmpty(a: types.Node, b: types.Node) bool {
-        return a == .empty_record and b == .record and b.record.declared != null or
-            b == .empty_record and a == .record and a.record.declared != null;
-    }
-
-    /// Whether `ty` is a tag union, through the backing of a nominal.
-    fn isTagRow(self: *Builder, ty: TypeId) Allocator.Error!bool {
-        return switch (self.program.store.get(ty)) {
-            .tag_union => true,
-            .nominal => |nominal| nominal.has_backing and try self.isTagRow(try self.program.converter().backing(ty)),
-            .primitive, .empty_record, .record, .tuple, .list, .box, .function, .variable => false,
-        };
+        return try self.program.storageDifference(from_root, to_root);
     }
 
     /// The value `value` of type `from` at type `to`, a type of the same
@@ -2897,7 +2774,14 @@ pub const Builder = struct {
         }
         var start = try self.beginErasedWorker(field_layouts);
         defer self.allocator.free(start.captures);
-        self.var_descs = try self.program.arena.allocator().dupe(LocalId, start.captures[0..target_worker.scheme_vars.len]);
+        // The entry holds the target's scopes: its descriptors, then its
+        // dictionaries, then its literal arguments.
+        const arena = self.program.arena.allocator();
+        const descs = target_worker.scheme_vars.len;
+        const dicts = target_worker.dictionary_params.len;
+        self.var_descs = try arena.dupe(LocalId, start.captures[0..descs]);
+        self.dict_locals = try arena.dupe(LocalId, start.captures[descs..][0..dicts]);
+        self.literal_locals = try arena.dupe(LocalId, start.captures[descs + dicts ..]);
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .call = .{ .target = target, .hidden = start.captures } });
     }
 
@@ -7769,7 +7653,7 @@ pub const Builder = struct {
                     try pending.append(self.allocator, .{ try self.program.converter().backing(pair[0]), pair[1] });
                 } else if (to == .nominal and to.nominal.has_backing) {
                     try pending.append(self.allocator, .{ pair[0], try self.program.converter().backing(pair[1]) });
-                } else if (paddedAgainstEmpty(from, to)) {
+                } else if (Program.paddedAgainstEmpty(from, to)) {
                     return true;
                 }
                 continue;
