@@ -135,7 +135,7 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
     defer allocator.free(app_path);
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,

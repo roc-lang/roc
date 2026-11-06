@@ -228,6 +228,72 @@ test "str append fuses a single-use call result into a direct append call" {
     try std.testing.expectEqual(layout_mod.Idx.str, store.getLocal(GuardedList.at(variant_args, 0)).layout_idx);
 }
 
+test "str append variant keeps a dynamic parameter's descriptor binding" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    const dynamic = try layouts.dynamicLayout();
+
+    // `inspect(value: a) -> Str`, whose parameter `a` is described by the
+    // descriptor parameter that follows it.
+    const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+    const value = try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = desc, .storage = .param } });
+    const rendered = try testStrLocal(&store);
+    const callee_ret = try store.addCFStmt(.{ .ret = .{ .value = rendered } }, .test_fixture);
+    const inspect = try store.addCFStmt(.{ .dyn = .{
+        .target = rendered,
+        .data = try store.addStmtRow(LIR.DynOp, .{ .inspect = .{ .value = value, .desc = desc } }),
+        .next = callee_ret,
+    } }, .test_fixture);
+    const callee = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{ value, desc }),
+        .frame_locals = try store.addLocalSpan(&.{ value, desc, rendered }),
+        .body = inspect,
+        .ret_layout = .str,
+    }, .none);
+
+    // `out = Str.concat(acc, inspect(n))` with a closed `n`.
+    const acc = try testStrLocal(&store);
+    const n = try store.addLocal(.{ .layout_idx = .i64 });
+    const n_desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+    const result = try testStrLocal(&store);
+    const out = try testStrLocal(&store);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = out } }, .test_fixture);
+    const concat = try testConcat(&store, out, &.{ acc, result }, ret);
+    const call = try store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try store.addLocalSpan(&.{ n, n_desc }),
+        .next = concat,
+    } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(2),
+        .args = try store.addLocalSpan(&.{ acc, n, n_desc }),
+        .frame_locals = try store.addLocalSpan(&.{ acc, n, n_desc, result, out }),
+        .body = call,
+        .ret_layout = .str,
+    }, .none);
+
+    try run(&store, &layouts);
+
+    const rewritten = store.getCFStmtImmediate(call).assign_call;
+    try std.testing.expect(rewritten.proc != callee);
+    const variant_args = store.getLocalSpan(store.getProcSpec(rewritten.proc).args);
+    try std.testing.expectEqual(@as(usize, 3), variant_args.len);
+    const variant_value = store.getLocal(GuardedList.at(variant_args, 1));
+    const variant_desc = GuardedList.at(variant_args, 2);
+    try std.testing.expectEqual(dynamic, variant_value.layout_idx);
+    const binding = variant_value.dyn orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(variant_desc, binding.desc);
+    try std.testing.expectEqual(LIR.DynStorage.param, binding.storage);
+    try std.testing.expect(store.getLocal(variant_desc).dyn == null);
+}
+
 test "str append fuses through a single-use alias of the call result" {
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);

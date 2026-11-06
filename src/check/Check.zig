@@ -25,7 +25,7 @@ const problem = @import("problem.zig");
 const snapshot_mod = @import("snapshot.zig");
 const exhaustive = @import("exhaustive.zig");
 const ExhaustivenessContext = @import("exhaustiveness_context.zig");
-const hoist_roots = @import("hoist_roots.zig");
+const hoist_roots = @import("can").HoistRoots;
 const output_type_roots = @import("output_type_roots.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
@@ -4854,12 +4854,12 @@ pub fn deinit(self: *Self) void {
 
 /// Returns the hoisted roots selected while checking this module.
 pub fn selectedHoistedRoots(self: *const Self) []const hoist_roots.SelectedHoistedRoot {
-    return self.selected_hoisted_roots.items;
+    return self.cir.selected_hoisted_roots.items.items;
 }
 
 /// Returns the local function bindings this module promoted to procedures.
 pub fn promotedLocalProcedures(self: *const Self) []const hoist_roots.PromotedLocalProcedure {
-    return self.promoted_local_procedures.items;
+    return self.cir.promoted_local_procedures.items.items;
 }
 
 /// Mark every candidate on the stack from `depth` inward contextual: its
@@ -14387,11 +14387,11 @@ const PendingRecordDestruct = struct {
 };
 
 /// Type-check every def in the module, including the numeric-literal
-/// defaulting rounds at finalize (see `checkFileInternal`), then seal the
-/// solved type store: every later stage only reads it.
+/// defaulting rounds at finalize (see `checkFileInternal`), then canonicalize
+/// and seal the solved type store: every later stage only reads it.
 pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     try self.checkFileInternal(false);
-    self.types.seal();
+    try self.types.canonicalizeAndSeal(self.cir.getIdentStoreConst());
 }
 
 /// `checkFile` for a test that drives solver machinery on the checked module
@@ -14716,6 +14716,8 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.withdrawSupersededLiteralDefaultWarnings();
 
     try self.publishCallableCheckingFacts();
+    try self.recordErroneousNodes();
+    try self.recordCheckingOutputs();
     var checking_scope = try checking_interface.makeScope(self.gpa, self.cir, self.builtin_ctx.builtin_module, self.imported_modules, self.owner_modules);
     defer checking_scope.deinit();
     try checking_interface.publish(self.cir, &checking_scope, defReference, checkingBindingOwner);
@@ -14723,6 +14725,239 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     self.debugAssertNominalDeclTableComplete();
     self.debugAssertFramesBalanced();
 }
+
+/// Record the selected compile-time roots, the promoted local procedures,
+/// the platform requirement solutions and the pending exhaustiveness checks
+/// into the module's checked outputs. A pending exhaustiveness check's index
+/// in `ModuleEnv.exhaustiveness_obligations` is its checked site id.
+fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
+    const env = self.cir;
+    try env.selected_hoisted_roots.items.ensureTotalCapacity(env.gpa, self.selected_hoisted_roots.items.len);
+    env.selected_hoisted_roots.items.clearRetainingCapacity();
+    for (self.selected_hoisted_roots.items) |root| {
+        var recorded = root;
+        recorded.top_level = self.selectedHoistedRootIsTopLevel(root);
+        env.selected_hoisted_roots.items.appendAssumeCapacity(recorded);
+    }
+    env.promoted_local_procedures.items.clearRetainingCapacity();
+    try env.promoted_local_procedures.items.appendSlice(env.gpa, self.promoted_local_procedures.items);
+
+    env.platform_requirement_solutions.items.clearRetainingCapacity();
+    env.platform_requirement_identity_vars.items.clearRetainingCapacity();
+    try env.platform_requirement_solutions.items.ensureTotalCapacity(env.gpa, self.platform_requirement_solutions.items.len);
+    for (self.platform_requirement_solutions.items) |solution| {
+        const identities_start: u32 = @intCast(env.platform_requirement_identity_vars.items.items.len);
+        try env.platform_requirement_identity_vars.items.appendSlice(env.gpa, solution.identity_vars);
+        env.platform_requirement_solutions.items.appendAssumeCapacity(.{
+            .requires_idx = solution.requires_idx,
+            .def = solution.def,
+            .solved_var = solution.solved_var,
+            .is_function = solution.is_function,
+            .outcome = switch (solution.outcome) {
+                .success => .success,
+                .checked_error => .checked_error,
+                .pending => unreachable, // finalizePlatformRequirementSolutions decides every solution
+            },
+            .identities_start = identities_start,
+            .identities_len = @intCast(solution.identity_vars.len),
+        });
+    }
+
+    const pending = self.problems.pending_static_exhaustiveness.items;
+    env.exhaustiveness_obligations.items.clearRetainingCapacity();
+    try env.exhaustiveness_obligations.items.ensureTotalCapacity(env.gpa, pending.len);
+    for (pending, 0..) |*obligation, index| {
+        obligation.site = @fromBackingInt(@intCast(index));
+        env.exhaustiveness_obligations.items.appendAssumeCapacity(.{
+            .mode = obligation.mode,
+            .source = obligation.source,
+            .region = obligation.region,
+        });
+    }
+}
+
+/// Record every node whose own checked state is erroneous
+/// (`ModuleEnv.erroneous_nodes`): a runtime error node, an expression or
+/// pattern whose type contains an error, a call or interpolation whose
+/// function type contains one, a row-coerced result whose widened type
+/// contains one, and a dispatch whose obligation checking rejected. A node
+/// whose child is erroneous is not recorded for that child.
+fn recordErroneousNodes(self: *Self) Allocator.Error!void {
+    var errors = ErroneousTypeMemo.init(self);
+    defer errors.deinit();
+    const store = &self.cir.store;
+    var top_level_def_patterns = collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx).init(self.gpa);
+    defer top_level_def_patterns.deinit();
+    for (store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        try top_level_def_patterns.put(store.getDef(def_idx).pattern, def_idx);
+    }
+    var erroneous: std.ArrayList(u32) = .empty;
+    defer erroneous.deinit(self.gpa);
+    var raw_node: u32 = 0;
+    const node_count: u32 = @intCast(store.nodes.len());
+    while (raw_node < node_count) : (raw_node += 1) {
+        const node: CIR.Node.Idx = @fromBackingInt(raw_node);
+        const tag = store.nodes.get(node).tag;
+        const node_erroneous = if (isExprNodeTag(tag))
+            try self.exprIsErroneous(&errors, @fromBackingInt(raw_node))
+        else if (isPatternNodeTag(tag)) blk: {
+            const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(raw_node);
+            if (store.getPattern(pattern_idx) == .runtime_error) break :blk true;
+            const type_var = if (top_level_def_patterns.get(pattern_idx)) |def_idx| ModuleEnv.varFrom(def_idx) else ModuleEnv.varFrom(pattern_idx);
+            break :blk try errors.contains(type_var);
+        } else if (isStatementNodeTag(tag))
+            store.getStatement(@fromBackingInt(raw_node)) == .s_runtime_error
+        else
+            false;
+        if (node_erroneous) try erroneous.append(self.gpa, raw_node);
+    }
+    try self.cir.recordErroneousNodes(erroneous.items);
+}
+
+fn exprIsErroneous(self: *Self, errors: *ErroneousTypeMemo, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {
+    const expr = self.cir.store.getExpr(expr_idx);
+    switch (expr) {
+        .e_runtime_error => return true,
+        .e_call => |call| if (call.constraint_fn_var) |fn_var| {
+            if (try errors.contains(fn_var)) return true;
+        },
+        .e_interpolation => |interpolation| {
+            if (interpolation.assembler_fn_var) |assembler| {
+                if (try errors.contains(assembler)) return true;
+            }
+            if (interpolation.constraint_fn_var) |fn_var| {
+                if (self.types.varStaticDispatchRejected(fn_var)) return true;
+            }
+        },
+        inline .e_dispatch_call, .e_method_eq, .e_type_dispatch_call => |dispatch| {
+            if (self.types.varStaticDispatchRejected(dispatch.constraint_fn_var)) return true;
+        },
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_structural_eq, .e_structural_hash, .e_type_method_call, .e_tuple_access, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => {},
+    }
+    if (self.cir.rowCoercedResultWideVar(ModuleEnv.nodeIdxFrom(expr_idx))) |wide_var| {
+        if (try errors.contains(wide_var)) return true;
+    }
+    return try errors.contains(ModuleEnv.varFrom(expr_idx));
+}
+
+/// Whether a type reaches erroneous content, memoized per class
+/// representative. A walk that finds no error proves every class it visited
+/// clean, because it visited everything those classes reach.
+const ErroneousTypeMemo = struct {
+    const unknown: u8 = 0;
+    const clean: u8 = 1;
+    const erroneous: u8 = 2;
+    const visiting: u8 = 3;
+
+    checker: *Self,
+    /// Per representative: `unknown`, `clean`, `erroneous`, or `visiting`
+    /// while the current walk holds it.
+    states: std.ArrayList(u8) = .empty,
+    visited: std.ArrayList(Var) = .empty,
+    stack: std.ArrayList(Var) = .empty,
+
+    fn init(checker: *Self) ErroneousTypeMemo {
+        return .{ .checker = checker };
+    }
+
+    fn deinit(self: *ErroneousTypeMemo) void {
+        const gpa = self.checker.gpa;
+        self.states.deinit(gpa);
+        self.visited.deinit(gpa);
+        self.stack.deinit(gpa);
+    }
+
+    fn state(self: *ErroneousTypeMemo, var_: Var) u8 {
+        const index: usize = @backingInt(var_);
+        return if (index < self.states.items.len) self.states.items[index] else 0;
+    }
+
+    fn setState(self: *ErroneousTypeMemo, var_: Var, value: u8) Allocator.Error!void {
+        const index: usize = @backingInt(var_);
+        if (index >= self.states.items.len) try self.states.appendNTimes(self.checker.gpa, 0, index + 1 - self.states.items.len);
+        self.states.items[index] = value;
+    }
+
+    fn contains(self: *ErroneousTypeMemo, root_var: Var) Allocator.Error!bool {
+        const store = self.checker.types;
+        if (!store.mayContainErrorState()) return false;
+        const gpa = self.checker.gpa;
+        const root = store.resolveVar(root_var).var_;
+        const root_state = self.state(root);
+        if (root_state == clean) return false;
+        if (root_state == erroneous) return true;
+        self.visited.clearRetainingCapacity();
+        self.stack.clearRetainingCapacity();
+        try self.stack.append(gpa, root);
+        const found = while (self.stack.pop()) |next| {
+            const resolved = store.resolveVar(next);
+            const var_ = resolved.var_;
+            const var_state = self.state(var_);
+            if (var_state == clean or var_state == visiting) continue;
+            if (var_state == erroneous) break true;
+            try self.setState(var_, visiting);
+            try self.visited.append(gpa, var_);
+            if (resolved.desc.flags.empty_tag_union_is_default) continue;
+            switch (resolved.desc.content) {
+                .err, .field_presence => break true,
+                .flex => |flex| for (store.sliceStaticDispatchConstraints(flex.constraints)) |constraint| try self.push(constraint.fn_var),
+                .rigid => |rigid| for (store.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| try self.push(constraint.fn_var),
+                .alias => |alias| {
+                    try self.push(store.getAliasBackingVar(alias));
+                    for (store.sliceAliasArgs(alias)) |arg| try self.push(arg);
+                },
+                .structure => |flat| switch (flat) {
+                    .empty_record, .empty_tag_union => {},
+                    .tuple => |tuple| for (store.sliceVars(tuple.elems)) |elem| try self.push(elem),
+                    .nominal_type => |nominal| {
+                        if (store.nominalDeclIsInvalid(nominal)) break true;
+                        for (store.sliceNominalArgs(nominal)) |arg| try self.push(arg);
+                    },
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        for (store.sliceVars(func.args)) |arg| try self.push(arg);
+                        try self.push(func.ret);
+                    },
+                    .record => |record| {
+                        const fields = store.getRecordFieldsSlice(record.fields);
+                        if (fields.len == 0 and rowExtIsClosed(store, record.ext, .empty_record)) continue;
+                        for (fields.items(.presence)) |presence| switch (presence.decode()) {
+                            .required => |type_var| try self.push(type_var),
+                            .unknown => |field| {
+                                if (store.resolveVar(field.presence).desc.content == .flex) try self.push(field.presence);
+                                try self.push(field.var_);
+                            },
+                        };
+                        try self.push(record.ext);
+                    },
+                    .tag_union => |tag_union| {
+                        const tags = store.getTagsSlice(tag_union.tags);
+                        if (tags.len == 0 and rowExtIsClosed(store, tag_union.ext, .empty_tag_union)) continue;
+                        for (tags.items(.args)) |args| for (store.sliceVars(args)) |arg| try self.push(arg);
+                        try self.push(tag_union.ext);
+                    },
+                },
+            }
+        } else false;
+        if (found) {
+            for (self.visited.items) |var_| try self.setState(var_, unknown);
+            try self.setState(root, erroneous);
+        } else {
+            for (self.visited.items) |var_| try self.setState(var_, clean);
+        }
+        return found;
+    }
+
+    fn rowExtIsClosed(store: *const types_mod.Store, ext: Var, comptime closed: std.meta.Tag(FlatType)) bool {
+        return switch (store.resolveVar(ext).desc.content) {
+            .structure => |flat| flat == closed,
+            .flex, .rigid, .alias, .field_presence, .err => false,
+        };
+    }
+
+    fn push(self: *ErroneousTypeMemo, var_: Var) Allocator.Error!void {
+        try self.stack.append(self.checker.gpa, var_);
+    }
+};
 
 /// A literal default that a later requirement rejects is reported once, as
 /// the `undetermined_type` problem for the defaulted class (design.md
@@ -19724,13 +19959,6 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
         });
         identity_vars_owned = false;
     }
-}
-
-/// The platform requirement solutions recorded while checking this app root,
-/// in requires-clause order. The rows and their identity slices are
-/// checker-owned and remain valid until `deinit`.
-pub fn platformRequirementSolutions(self: *const Self) []const requirement_solution.SolutionInput {
-    return self.platform_requirement_solutions.items;
 }
 
 fn instantiatePlatformRequiredType(
@@ -35355,6 +35583,10 @@ fn isExprNodeTag(tag: CIR.Node.Tag) bool {
 
 fn isPatternNodeTag(tag: CIR.Node.Tag) bool {
     return Ident.textStartsWith(@tagName(tag), "pattern_");
+}
+
+fn isStatementNodeTag(tag: CIR.Node.Tag) bool {
+    return Ident.textStartsWith(@tagName(tag), "statement_");
 }
 
 const AnnoVars = struct {
@@ -61008,9 +61240,22 @@ fn checkBranchBodyAgainstExpected(
     // (Every Rejection Is Explicit Recovery).
     if (self.branchValueIsErroneous(body_expr_idx)) return;
 
+    // A body whose type reaches a closed tag union relates to the result
+    // through a widening copy and crosses into it through a row coercion
+    // (design.md "Row Subsumption"): both the probe against the annotated
+    // result and the fold into the accumulator relate the copy. The copy only
+    // re-opens rows the body's own type closes, so a rejected relation is
+    // reported through that own type.
+    std.debug.assert(!self.result_relation_defers);
+    self.result_relation_defers = target == .annotated;
+    const widening = try self.widenResultValue(body_expr_idx, env);
+    self.result_relation_defers = false;
+    const related_var = if (widening) |w| w.wide_var else body_var;
+
     // Probe (1): does the body match the annotated return type? That relation
     // reads only this branch's value.
-    if (!try self.probeBranchCompatible(body_var, expected_ret)) {
+    if (!try self.probeBranchCompatible(related_var, expected_ret)) {
+        if (widening) |w| self.discardResultWidening(w);
         const previous_relation = try self.enterRelation(.of(.value, body_expr_idx, 0));
         try self.reportBranchMismatchAndPoison(body_expr_idx, expected_ret, ctx);
         try self.leaveRelation(previous_relation);
@@ -61025,20 +61270,12 @@ fn checkBranchBodyAgainstExpected(
     // commit-probe. Success keeps the merge (regions/rank/deferred constraints
     // already propagated into env); failure falls through to the report below
     // AFTER the scope's rollback, so the snapshots it takes see the pristine vars.
-    // A body whose type reaches a closed tag union folds in through a widening
-    // copy and crosses into the result through a row coercion (design.md "Row
-    // Subsumption"); the copy only re-opens rows the body's own type closes,
-    // so a rejected fold is reported through that own type.
     {
-        std.debug.assert(!self.result_relation_defers);
-        self.result_relation_defers = target == .annotated;
-        const widening = try self.widenResultValue(body_expr_idx, env);
-        self.result_relation_defers = false;
         var commit_probe = try self.beginCommitProbe(env);
         var committed = false;
         defer if (!committed) commit_probe.rollback();
 
-        const result = try commit_probe.unifyInContext(if (widening) |w| w.wide_var else body_var, acc, ctx);
+        const result = try commit_probe.unifyInContext(related_var, acc, ctx);
         if (result.isAccepted() and (widening == null or try self.liftKeptTailSources(env, ctx))) {
             committed = true;
             try commit_probe.commit();

@@ -81,8 +81,10 @@ pub const Options = struct {
     /// Runtime outcomes already supplied by the caller. Only their literal
     /// conversion obligations may specialize; these roots never execute.
     discovery_roots: lir.CheckedPipeline.RootRequestSet = .{},
-    /// Test/check commands must validate every pending compile-time root.
-    validate_all_comptime_roots: bool = false,
+    /// Validate every compile-time root, as an explicit test run does. Such a
+    /// program lowers its compile-time roots on demand (design.md
+    /// "Demand-Driven Compile-Time Evaluation").
+    validate_every_comptime_root: bool = false,
     max_threads: usize = 0,
     /// Borrow the coordinator's workers after all frontend tasks have finished.
     /// Standalone finalizers without a coordinator lower on their calling thread.
@@ -185,9 +187,6 @@ const DebugEvents = struct {
     };
     allocator: Allocator,
     events: std.ArrayList(Event) = .empty,
-    /// Literal-root messages are emitted directly, without a checked root
-    /// to attach a stored event to. They still prevent silent discovery reuse.
-    emitted: bool = false,
 
     fn deinit(self: *DebugEvents) void {
         for (self.events.items) |event| self.allocator.free(event.message);
@@ -374,9 +373,6 @@ pub const ProgramSession = struct {
     /// The position of each runtime request in the specialized program's root
     /// plan.
     runtime_positions: []u32,
-    /// All compile-time observations, including replayed observations, were
-    /// empty. Together with the caller's error check this certifies discovery.
-    discovery_silent: bool = false,
 
     /// Where a runtime consumer reads completed values from.
     pub const RuntimeStages = union(enum) {
@@ -940,7 +936,7 @@ pub fn finalizeProgram(
     defer debug_events.deinit();
 
     const lss_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
-    const demand_driven = options.validate_all_comptime_roots;
+    const demand_driven = options.validate_every_comptime_root;
     const owned_imports = try allocator.dupe(checked.ImportedModuleView, lowering_modules.imports);
     errdefer allocator.free(owned_imports);
     const owned_relations = try allocator.dupe(checked.ImportedModuleView, lowering_modules.root.relation_modules);
@@ -1042,7 +1038,6 @@ pub fn finalizeProgram(
         .runtime_stages = runtime_stages,
         .runtime_prepared = runtime_prepared,
         .runtime_positions = runtime_positions,
-        .discovery_silent = debug_events.events.items.len == 0 and !debug_events.emitted,
     };
 }
 
@@ -1185,9 +1180,9 @@ const SpecializedProgram = struct {
     }
 };
 
-/// Specialize pending compile-time roots with the program roots, then evaluate
-/// them and the program's literal conversions. Finalized module constants are
-/// restored only through the exact checked-module cache entry.
+/// Specialize the modules' pending compile-time roots together with the
+/// program roots, and evaluate those roots and every literal root the
+/// specialization registers (see `finalizeProgram`).
 fn specializeAndEvaluate(
     allocator: Allocator,
     modules: []const ProgramModule,
@@ -1321,8 +1316,7 @@ fn specializeAndEvaluate(
     const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
     var host_target = compileTimeTarget(options, solved_policy);
     host_target.demand_driven_comptime_roots = demand_driven;
-    host_target.validate_all_comptime_roots = options.validate_all_comptime_roots;
-
+    host_target.validate_every_comptime_root = options.validate_every_comptime_root;
     const host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
     if (runtime_target) |target| {
         host_target.work_metrics = target.work_metrics;
@@ -1394,14 +1388,15 @@ pub const ExportInterfaces = lir.CheckedPipeline.BoxyExportInterfaces;
 pub const ModuleNames = lir.CheckedPipeline.BoxyModuleNames;
 
 /// How a cached module's code reaches this process for compile-time
-/// evaluation. A Linux x86_64 host, whose module units carry unit images
-/// (`compile.boxy_unit.producesImage`), loads each unit's image as the
-/// cache holds it; every other host composes the unit's pieces into a
-/// relocatable object and loads that.
+/// evaluation. A host whose module units carry unit images
+/// (`compile.boxy_unit.producesImage`: Linux x86_64, macOS arm64, Windows
+/// x86_64 or arm64) loads each unit's
+/// image as the cache holds it; every other host composes the unit's pieces
+/// into a relocatable object and loads that.
 pub const BoxyObjectCode = enum { image, pieces };
 
 /// The form this host loads module objects in.
-pub const boxy_object_code: BoxyObjectCode = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) .image else .pieces;
+pub const boxy_object_code: BoxyObjectCode = if (backend.dev.UnitImageLoader != void) .image else .pieces;
 
 /// One imported module's object, loaded into the compiler's process.
 pub const BoxyObject = struct {
@@ -1923,7 +1918,6 @@ fn finalizeProgramBoxy(
         .runtime_stages = .evaluation,
         .runtime_prepared = null,
         .runtime_positions = runtime_positions,
-        .discovery_silent = debug_events.events.items.len == 0 and !debug_events.emitted,
     };
 }
 
@@ -4116,13 +4110,10 @@ const RootCompletionState = struct {
                 .local_proc, .structural => {},
             },
             .use => |expr| {
-                const raw = @backingInt(expr);
-                if (raw < self.module.resolved_value_refs.by_checked_expr.len) {
-                    if (self.module.resolved_value_refs.by_checked_expr[raw].get()) |ref_id| {
-                        switch (self.resolvedRefDependency(self.module.resolved_value_refs.records[@backingInt(ref_id)].ref)) {
-                            .complete => |complete| if (!complete) return false,
-                            .template => |dependency| try self.pending_templates.append(self.allocator, dependency),
-                        }
+                if (self.module.resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {
+                    switch (self.resolvedRefDependency(self.module.resolved_value_refs.records[@backingInt(ref_id)].ref)) {
+                        .complete => |complete| if (!complete) return false,
+                        .template => |dependency| try self.pending_templates.append(self.allocator, dependency),
                     }
                 }
             },
@@ -4237,9 +4228,9 @@ const RootCompletionState = struct {
                     dependent_def,
                     dependency_def,
                 ),
-                .expr, .statement, .required_binding, .hoisted => true,
+                .expr, .statement, .required_binding, .hoisted, .literal => true,
             },
-            .expr, .statement, .required_binding, .hoisted => true,
+            .expr, .statement, .required_binding, .hoisted, .literal => true,
         };
         if (!is_strict) return true;
 
@@ -4258,11 +4249,11 @@ const RootCompletionState = struct {
                 return self.module.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse
                     finalizationInvariant("local const dependency had no compile-time root");
             },
-            .hoisted_expr => |hoisted| {
+            .hoisted_root => |hoisted| {
                 if (hoisted.module_idx != self.module.module_identity.module_idx) {
                     finalizationInvariant("local hoisted const dependency had mismatched module index");
                 }
-                const entry = self.module.hoisted_constants.lookupByExpr(hoisted.expr) orelse
+                const entry = self.module.hoisted_constants.lookupByRoot(hoisted.root) orelse
                     finalizationInvariant("local hoisted const dependency had no hoisted const entry");
                 return entry.root;
             },
@@ -4834,7 +4825,7 @@ fn reportForeignLiteralRejection(
     var targets = try owners.reportTargets(site.owner);
     const literal_module = (targets.nextTarget() orelse finalizationInvariant("a rejected literal's module has no checked module data")).module;
     const literal_env = literal_module.moduleEnvConst();
-    const info = literal_env.calcRegionInfo(literal_module.checked_bodies.expr(@fromBackingInt(@intCast(site.checked_expr))).source_region);
+    const info = literal_env.calcRegionInfo(literalSourceRegion(literal_module, site.node));
     const env = module.moduleEnvConst();
     const bare_name_collides = if (env.common.idents.lookup(base.Ident.for_text(literal_env.module_name))) |display_ident|
         display_ident.eql(env.display_module_name_idx)
@@ -4934,7 +4925,6 @@ fn evalInterpreterLiteralRoot(
     // A failure that read a member of its group not yet evaluated
     // (`Options.retry`) leaves the root for the group to run again.
     if (failure) |failed| if (options.retry) |retry| if (retry.holds(failed.meaning)) return false;
-
     for (program.host.debugMessages()) |message| try emitDebugMessage(allocator, options, false, message);
     for (interpreter.getExpectFailures()) |expect_failure| {
         try reportLiteralRootExpectFailure(owners, lowered, plan, expect_failure.message, expect_failure.region, expect_failure.loc);
@@ -4971,16 +4961,15 @@ fn evalDevLiteralRoot(
     host.timing_io = if (options.timing) |timing| timing.std_io else null;
 
     host.resetForRun();
-    host.entry_frame = @frameAddress();
+    var root_call: DevRootCall = .{ .host = &host, .executable = &native.executable, .entry_offset = entry_offset, .ret = ret_buf.ptr };
     var crash_boundary = host.enterCrashBoundary();
     const entered = builtins.in_process_host.enter(host.ops(), null);
     const composition = native.enterComposition();
-    if (crash_boundary.set() == 0) {
-        native.executable.callRocABIAt(entry_offset, @ptrCast(ret_buf.ptr), null);
-    }
+    const ran = crash_boundary.run(DevRootCall, &root_call, DevRootCall.call);
     DevProgram.leaveComposition(composition);
     builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
+    _ = try ran;
 
     const producer: lir.LIR.ComptimeProducer = .{ .literal = plan.id };
     const failure: ?LiteralRootFailure = switch (host.termination) {
@@ -4994,7 +4983,6 @@ fn evalDevLiteralRoot(
     // A failure that read a member of its group not yet evaluated
     // (`Options.retry`) leaves the root for the group to run again.
     if (failure) |failed| if (options.retry) |retry| if (retry.holds(failed.meaning)) return false;
-
     for (host.events.items) |event| switch (event) {
         .dbg => |message| try emitDebugMessage(allocator, options, false, message),
         .expect_failed => |expect_failure| {
@@ -5051,7 +5039,7 @@ fn reportLiteralRootFailure(
     var targets = try owners.reportTargets(plan.site.owner);
     while (targets.nextTarget()) |owner| {
         const store = owner.problem_store orelse continue;
-        const literal_region = owner.module.checked_bodies.expr(@fromBackingInt(@intCast(plan.site.checked_expr))).source_region;
+        const literal_region = literalSourceRegion(owner.module, plan.site.node);
         const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, literal_region, failure.region, failure.loc);
         const message_idx = try store.putExtraString(failure.message);
         _ = try store.appendProblem(.{ .comptime_crash = .{
@@ -5073,7 +5061,7 @@ fn reportLiteralRootExpectFailure(
     var targets = try owners.reportTargets(plan.site.owner);
     while (targets.nextTarget()) |owner| {
         const store = owner.problem_store orelse continue;
-        const literal_region = owner.module.checked_bodies.expr(@fromBackingInt(@intCast(plan.site.checked_expr))).source_region;
+        const literal_region = literalSourceRegion(owner.module, plan.site.node);
         const site = comptimeFailureSiteFromLoc(owner.module, &lowered.lir_result.store, literal_region, region, loc);
         const message_idx = try store.putExtraString(message);
         _ = try store.appendProblem(.{ .comptime_expect_failed = .{
@@ -6538,6 +6526,21 @@ fn evalDevProgramRoots(
     return had_problem;
 }
 
+/// One compile-time root's entry wrapper, called on the evaluation stack.
+const DevRootCall = struct {
+    host: *CompileTimeHost,
+    executable: *const backend.ExecutableMemory,
+    entry_offset: usize,
+    ret: [*]u8,
+
+    fn call(self: *DevRootCall) void {
+        // Failure points are walked from the failing frame up to this one,
+        // which is the generated code's entry on the evaluation stack.
+        self.host.entry_frame = @frameAddress();
+        self.executable.callRocABIAt(self.entry_offset, @ptrCast(self.ret), null);
+    }
+};
+
 fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     base.dev_diagnostics.countTestWork(.ctfe_execution, 1);
     const job = &context.jobs[item_id];
@@ -6547,25 +6550,24 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     job.progress.store(@backingInt(DevRootProgressState.running), .release);
     if (context.progress_reporter) |progress| progress.rootStarted();
 
-    job.host.entry_frame = @frameAddress();
+    var root_call: DevRootCall = .{ .host = &job.host, .executable = &context.program.executable, .entry_offset = job.entry_offset, .ret = job.ret_buf.ptr };
     var crash_boundary = job.host.enterCrashBoundary();
     const entered = builtins.in_process_host.enter(job.host.ops(), null);
     const composition = context.program.enterComposition();
-    if (crash_boundary.set() == 0) {
-        context.program.executable.callRocABIAt(
-            job.entry_offset,
-            @ptrCast(job.ret_buf.ptr),
-            null,
-        );
-    }
+    const ran = crash_boundary.run(DevRootCall, &root_call, DevRootCall.call);
     DevProgram.leaveComposition(composition);
     builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
 
-    job.result = switch (job.host.termination) {
+    job.result = if (ran) |_| switch (job.host.termination) {
         .returned => .success,
         .crashed => .crashed,
         .host_oom => blk: {
+            context.had_oom.store(true, .release);
+            break :blk .host_oom;
+        },
+    } else |err| switch (err) {
+        error.OutOfMemory => blk: {
             context.had_oom.store(true, .release);
             break :blk .host_oom;
         },
@@ -6641,8 +6643,34 @@ fn devRootSourceRegion(
         .expr => |expr_idx| env.store.getExprRegion(expr_idx),
         .statement => |stmt_idx| env.store.getStatementRegion(stmt_idx),
         .hoisted => |hoisted| env.store.getExprRegion(hoisted.expr),
-        .required_binding => module.checked_bodies.expr(root.expr).source_region,
+        .literal => |literal| literalSourceRegion(module, literal.node()),
+        .required_binding => rootBodySourceRegion(module, root),
     };
+}
+
+/// The source region of a compile-time root's body: its expression's; for a
+/// literal conversion root, its literal's; or, for a hoisted pattern root,
+/// its binding pattern's when the root rejects that binder, and otherwise the
+/// pattern's it matches.
+fn rootBodySourceRegion(
+    module: *const checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+) base.Region {
+    const store = &module.moduleEnvConst().store;
+    if (root.literalNode()) |literal| return literalSourceRegion(module, literal.node());
+    const body = root.hoisted_body orelse return store.getExprRegion(root.rootExpr());
+    return switch (body) {
+        .expr, .valueless_binding => store.getExprRegion(root.rootExpr()),
+        .pattern_error => store.getPatternRegion(root.pattern orelse finalizationInvariant("pattern-error hoisted root had no binding pattern")),
+        .pattern_extraction => |extraction| store.getPatternRegion(extraction.scrutinee_pattern),
+        .pattern_validation => |validation| store.getPatternRegion(validation.scrutinee_pattern),
+    };
+}
+
+/// The source region of a literal's CIR node: an expression, or a custom
+/// literal pattern.
+fn literalSourceRegion(module: *const checked.CheckedModuleArtifact, node: u32) base.Region {
+    return module.moduleEnvConst().store.getNodeRegion(@fromBackingInt(node));
 }
 
 fn truncateSnippet(allocator: Allocator, bytes: []const u8, max_bytes: usize) Allocator.Error![]u8 {
@@ -6741,7 +6769,7 @@ fn reportDevHostEvents(
     events: []const CompileTimeHost.HostEvent,
 ) FinalizeError!bool {
     var had_problem = false;
-    const root_region = module.checked_bodies.expr(root.expr).source_region;
+    const root_region = rootBodySourceRegion(module, root);
     for (events) |event| {
         switch (event) {
             .dbg => |msg| try reportDebugMessage(allocator, options, module.key.digest(), root, msg),
@@ -6784,7 +6812,6 @@ fn reportDebugMessage(allocator: Allocator, options: Options, module: checked.Mo
 }
 
 fn emitDebugMessage(allocator: Allocator, options: Options, is_repl: bool, message: []const u8) Allocator.Error!void {
-    if (options.debug_events) |events| events.emitted = true;
     if (options.debug_observer) |observer| try observer.observe(observer.context, message);
     if (is_repl) {
         if (options.event_callback) |callback| callback.notify(callback.context, .{ .dbg = message });
@@ -6807,7 +6834,7 @@ fn failedLiteralRejection(lir_result: *const lir.Program.Result, meaning: ?lir.L
     return switch (meaning orelse return null) {
         .literal_rejection => |literal| .{
             .owner = lir_result.loweringModuleId(loweredModuleOfKey(lir_result, literal.module)).?,
-            .checked_expr = literal.checked_expr,
+            .node = literal.node,
             .kind = literal.kind,
         },
         .checked_error, .failed_value, .exhaustiveness => null,
@@ -6826,7 +6853,7 @@ fn reportLiteralRejection(
     var targets = try owners.reportTargets(site.owner);
     while (targets.nextTarget()) |owner| {
         const store = owner.problem_store orelse continue;
-        const region = owner.module.checked_bodies.expr(@fromBackingInt(@intCast(site.checked_expr))).source_region;
+        const region = literalSourceRegion(owner.module, site.node);
         if (literalRejectionReported(store, site.kind, region)) continue;
         const failure_site = comptimeFailureSiteFrom(owner.module, region, null, null, null);
         const message_idx = try store.putExtraString(message);
@@ -6907,7 +6934,7 @@ fn reportCompileTimeExpectFailures(
 ) FinalizeError!bool {
     if (failures.len == 0) return false;
     const problem_store = maybe_problem_store orelse return false;
-    const root_region = module.checked_bodies.expr(root.expr).source_region;
+    const root_region = rootBodySourceRegion(module, root);
     for (failures) |failure| {
         const message_idx = try problem_store.putExtraString(failure.message);
         const site = comptimeFailureSiteFromLoc(
@@ -7127,7 +7154,7 @@ fn reportCompileTimeCrash(
     lir_result: *const lir.Program.Result,
     message: []const u8,
 ) FinalizeError!checked.CompileTimeRootPayload {
-    const root_region = module.checked_bodies.expr(root.expr).source_region;
+    const root_region = rootBodySourceRegion(module, root);
     switch (try reportEmbeddedFailure(maybe_problem_store, module, root_region, owners, lir_result, failed_at, message)) {
         .reported, .reported_elsewhere => return try failedRootPayload(module, root, message, RootFailure.of(failed_at.meaning)),
         .none => {},
@@ -7461,7 +7488,7 @@ pub fn finishConstRoot(
         .constant => blk: {
             const def_idx = switch (root.source) {
                 .def => |def| def,
-                .expr, .statement, .required_binding, .hoisted => finalizationInvariant("constant root source was not a top-level definition"),
+                .expr, .statement, .required_binding, .hoisted, .literal => finalizationInvariant("constant root source was not a top-level definition"),
             };
             const top_level = module.top_level_values.lookupByDef(def_idx) orelse
                 finalizationInvariant("constant root had no top-level value");
@@ -7503,6 +7530,7 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
         .statement => |left| left == b.statement,
         .required_binding => |left| left == b.required_binding,
         .hoisted => |left| left.index == b.hoisted.index and left.expr == b.hoisted.expr,
+        .literal => |left| std.meta.eql(left, b.literal),
     };
 }
 
@@ -7601,33 +7629,100 @@ test "compile-time finalization declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-/// A whole image with a callable, mutable zero-fill and, optionally, a data
-/// pointer to another image's callable. No executable instruction references
-/// that import: demand must follow the data relocation.
+/// A whole image with a callable returning 42, mutable zero-fill and,
+/// optionally, a data pointer to another image's callable, in the host's
+/// own instruction set and object format. No executable instruction
+/// references that import: demand must follow the data relocation.
 fn ctfeSelectionTestImage(allocator: Allocator, name: []const u8, pointer: []const u8, imported: ?[]const u8, weak: bool) backend.dev.UnitImage.BuildError![]align(16) u8 {
     const Image = backend.dev.UnitImage;
-    const symbols = [_]Image.TestObject.TestSymbol{
-        .{ .name = name, .section = 1, .size = 6, .global = true, .func = true },
-        .{ .name = pointer, .section = 2, .size = 8, .global = true },
-        .{ .name = imported orelse name, .section = 0, .global = true, .func = true, .weak = weak },
+    // mov w0, #42; ret, or mov eax, 42; ret.
+    const arm64_text = [_]u8{ 0x40, 0x05, 0x80, 0x52, 0xc0, 0x03, 0x5f, 0xd6 };
+    const x86_64_text = [_]u8{ 0xb8, 42, 0, 0, 0, 0xc3, 0x90, 0x90 };
+    const text: []const u8 = if (builtin.cpu.arch == .aarch64) &arm64_text else &x86_64_text;
+    const object = if (builtin.os.tag == .macos) macho: {
+        const name_z = try std.fmt.allocPrint(allocator, "_{s}", .{name});
+        defer allocator.free(name_z);
+        const pointer_z = try std.fmt.allocPrint(allocator, "_{s}", .{pointer});
+        defer allocator.free(pointer_z);
+        const imported_z = try std.fmt.allocPrint(allocator, "_{s}", .{imported orelse name});
+        defer allocator.free(imported_z);
+        const symbols = [_]Image.TestMachObject.TestSymbol{
+            .{ .name = name_z, .section = 1, .value = 0, .external = true },
+            .{ .name = pointer_z, .section = 2, .value = 0, .external = true },
+            .{ .name = imported_z, .section = 0, .external = true, .weak_ref = weak },
+        };
+        // `ARM64_RELOC_UNSIGNED` or `X86_64_RELOC_UNSIGNED`, an 8-byte pointer.
+        const relocations = [_]Image.TestMachObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = 0, .pcrel = false, .length = 3 }};
+        const encode = if (builtin.cpu.arch == .aarch64) Image.TestMachObject.encode else Image.TestMachObject.encodeX86_64;
+        break :macho try encode(allocator, &.{
+            .{ .segname = "__TEXT", .sectname = "__text", .bytes = text, .flags = 0x8000_0000 },
+            .{ .segname = "__DATA", .sectname = "__data", .bytes = &@as([8]u8, @splat(0)), .@"align" = 3 },
+            .{ .segname = "__DATA", .sectname = "__bss", .size = 8, .@"align" = 3, .flags = 1 },
+        }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
+    } else if (builtin.os.tag == .windows) coff: {
+        // A weak reference is a weak external whose tag is undefined too.
+        const symbols = [_]Image.TestCoffObject.TestSymbol{
+            .{ .name = name, .section = 1, .value = 0, .function = true },
+            .{ .name = pointer, .section = 2, .value = 0 },
+            if (weak) .{ .name = imported orelse name, .section = 0, .class = .weak_external, .tag = 3 } else .{ .name = imported orelse name, .section = 0 },
+            .{ .name = ".weak.default", .section = 0 },
+        };
+        const count: usize = if (imported == null) 2 else if (weak) 4 else 3;
+        // `IMAGE_REL_AMD64_ADDR64` or `IMAGE_REL_ARM64_ADDR64`.
+        const relocations = [_]Image.TestCoffObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 2, .type = if (builtin.cpu.arch == .aarch64) 0x000e else 0x0001 }};
+        break :coff try Image.TestCoffObject.encode(allocator, if (builtin.cpu.arch == .aarch64) 0xaa64 else 0x8664, &.{
+            .{ .name = ".text", .bytes = text, .characteristics = 0x6050_0020 },
+            .{ .name = ".data", .bytes = &@as([8]u8, @splat(0)), .characteristics = 0xc040_0040 },
+            .{ .name = ".bss", .size = 8, .characteristics = 0xc050_0080 },
+        }, symbols[0..count], if (imported != null) &relocations else &.{});
+    } else elf: {
+        const symbols = [_]Image.TestObject.TestSymbol{
+            .{ .name = name, .section = 1, .size = 6, .global = true, .func = true },
+            .{ .name = pointer, .section = 2, .size = 8, .global = true },
+            .{ .name = imported orelse name, .section = 0, .global = true, .func = true, .weak = weak },
+        };
+        // `R_AARCH64_ABS64` or `R_X86_64_64`.
+        const relocations = [_]Image.TestObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = if (builtin.cpu.arch == .aarch64) 257 else 1, .addend = 0 }};
+        const encode = if (builtin.cpu.arch == .aarch64) Image.TestObject.encodeAarch64 else Image.TestObject.encode;
+        break :elf try encode(allocator, &.{
+            .{ .name = ".text", .flags = 6, .bytes = text },
+            .{ .name = ".data", .flags = 3, .bytes = &@as([8]u8, @splat(0)), .addralign = 8 },
+            .{ .name = ".bss", .type = 8, .flags = 3, .size = 8, .addralign = 8 },
+        }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
     };
-    const relocations = [_]Image.TestObject.TestRelocation{.{ .section = 2, .offset = 0, .symbol = 3, .type = 1, .addend = 0 }};
-    const object = try Image.TestObject.encode(allocator, &.{
-        .{ .name = ".text", .flags = 6, .bytes = &.{ 0xb8, 42, 0, 0, 0, 0xc3 } },
-        .{ .name = ".data", .flags = 3, .bytes = &@as([8]u8, @splat(0)), .addralign = 8 },
-        .{ .name = ".bss", .type = 8, .flags = 3, .size = 8, .addralign = 8 },
-    }, symbols[0..if (imported != null) 3 else 2], if (imported != null) &relocations else &.{});
     defer allocator.free(object);
     return Image.build(allocator, &.{object}, .{ .keep_debug = false, .atoms = .whole });
 }
 
-fn ctfeSelectionTest(allocator: Allocator) (FinalizeError || backend.dev.UnitImage.BuildError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
-    const leaf = try ctfeSelectionTestImage(allocator, "leaf", "leaf_pointer", null, false);
-    defer allocator.free(leaf);
-    const middle = try ctfeSelectionTestImage(allocator, "middle", "callback", "leaf", false);
-    defer allocator.free(middle);
-    const unused = try ctfeSelectionTestImage(allocator, "unused", "unused_pointer", null, false);
-    defer allocator.free(unused);
+/// The images `ctfeSelectionTest` selects among. They are built before the
+/// test runs so an allocation-failure sweep covers only the selection's own
+/// allocations: building an image allocates through an arena, whose growth
+/// depends on whether the backing allocator extends a block in place.
+const CtfeSelectionImages = struct {
+    leaf: []align(16) u8,
+    middle: []align(16) u8,
+    unused: []align(16) u8,
+
+    fn init(allocator: Allocator) backend.dev.UnitImage.BuildError!CtfeSelectionImages {
+        const leaf = try ctfeSelectionTestImage(allocator, "leaf", "leaf_pointer", null, false);
+        errdefer allocator.free(leaf);
+        const middle = try ctfeSelectionTestImage(allocator, "middle", "callback", "leaf", false);
+        errdefer allocator.free(middle);
+        const unused = try ctfeSelectionTestImage(allocator, "unused", "unused_pointer", null, false);
+        return .{ .leaf = leaf, .middle = middle, .unused = unused };
+    }
+
+    fn deinit(self: CtfeSelectionImages, allocator: Allocator) void {
+        allocator.free(self.leaf);
+        allocator.free(self.middle);
+        allocator.free(self.unused);
+    }
+};
+
+fn ctfeSelectionTest(allocator: Allocator, built: CtfeSelectionImages) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const leaf = built.leaf;
+    const middle = built.middle;
+    const unused = built.unused;
     var images = BoxyLinkedImages{ .allocator = allocator };
     defer images.deinit();
     const objects = [_]BoxyObject{
@@ -7669,12 +7764,16 @@ fn ctfeSelectionTest(allocator: Allocator) (FinalizeError || backend.dev.UnitIma
 
 test "CTFE image demand follows data callbacks and resets only reused reachable images" {
     if (comptime boxy_object_code != .image) return error.SkipZigTest;
-    try ctfeSelectionTest(std.testing.allocator);
+    const built = try CtfeSelectionImages.init(std.testing.allocator);
+    defer built.deinit(std.testing.allocator);
+    try ctfeSelectionTest(std.testing.allocator, built);
 }
 
 test "CTFE image demand releases partial registrations and mappings on allocation failure" {
     if (comptime boxy_object_code != .image) return error.SkipZigTest;
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, ctfeSelectionTest, .{});
+    const built = try CtfeSelectionImages.init(std.testing.allocator);
+    defer built.deinit(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, ctfeSelectionTest, .{built});
 }
 
 test "CTFE image demand keeps registration bindings independent of load order" {

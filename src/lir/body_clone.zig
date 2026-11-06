@@ -1219,18 +1219,20 @@ pub fn cloneCallVariant(
     defer variant_args.deinit(store.allocator);
     variant_args.appendSliceAssumeCapacity(spec.leading_args);
 
-    for (0..source_args.len) |index| {
-        const source_arg = GuardedList.at(source_args, index);
-        const arg = try store.addLocal(.{ .layout_idx = store.getLocal(source_arg).layout_idx });
-        variant_args.appendAssumeCapacity(arg);
-    }
-
     var cloner = try BodyCloner(Rewriter).init(store, rewriter);
     defer cloner.deinit();
 
+    // The variant's parameters are the source's, so each keeps its dynamic
+    // binding: callers pass a closed argument to a dynamic parameter by
+    // address. The non-dynamic parameters are mapped first, so a dynamic
+    // parameter whose descriptor is another parameter binds the variant's
+    // own descriptor parameter.
     for (0..source_args.len) |index| {
         const source_arg = GuardedList.at(source_args, index);
-        try cloner.local_map.put(source_arg, variant_args.items[index + spec.leading_args.len]);
+        if (store.getLocal(source_arg).dyn == null) _ = try cloner.mapLocal(source_arg);
+    }
+    for (0..source_args.len) |index| {
+        variant_args.appendAssumeCapacity(try cloner.mapLocal(GuardedList.at(source_args, index)));
     }
 
     try cloner.new_locals.appendSlice(store.allocator, variant_args.items);

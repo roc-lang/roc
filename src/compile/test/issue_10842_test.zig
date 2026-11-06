@@ -73,7 +73,7 @@ test "issue 10842: where-clause method arity that no target satisfies reports ty
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
     defer builtin_modules.deinit();
 
     var coord = try Coordinator.init(

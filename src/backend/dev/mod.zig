@@ -58,9 +58,16 @@ pub const HostSplice = if (builtin.os.tag == .freestanding) void else @import("H
 pub const UnitPieces = @import("UnitPieces.zig");
 /// One unit's machine code laid out for a fast dev link.
 pub const UnitImage = @import("UnitImage.zig");
-/// Loads a unit image into this process; only a Linux x86_64 host loads
-/// the x86_64 code unit images hold.
-pub const UnitImageLoader = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) @import("UnitImageLoader.zig") else void;
+/// Loads a unit image into this process: every 64-bit x86 or ARM host the
+/// compiler runs on, whose own instruction set its native unit images hold.
+pub const UnitImageLoader = if (loader_host) @import("UnitImageLoader.zig") else void;
+const loader_host = (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) and imageOs(builtin.os.tag);
+
+/// The operating systems whose executables unit images serve: those with
+/// an ELF, Mach-O or COFF fast dev link.
+pub fn imageOs(os: std.Target.Os.Tag) bool {
+    return os == .linux or os == .macos or os == .windows or os == .freebsd or os == .openbsd or os == .netbsd;
+}
 pub const Composition = @import("Composition.zig");
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;

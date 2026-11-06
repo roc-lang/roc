@@ -1174,19 +1174,14 @@ pub const InterfaceConstraints = struct {
         }
         fn write(self: *IdentityWriter, comptime T: type, value: T) Allocator.Error!void {
             const ns = self.graph.name_store;
-            // Applied checked-type ids are provenance, not nominal identity.
-            // Match Type.Store.typeEql; the declaration, arguments, backing
-            // authority and all open constraints are encoded separately. A
-            // settled leaf is identified the same way, by its representation
-            // digest, so requests that differ only in the checked occurrence
-            // through which a named type was reached share one interface.
-            if (T == Type.NamedType) return self.write(names.CheckedModuleDigest, value.module);
             if (T == @FieldType(InstNode, "tag_union")) {
                 // The actual ordered tags and their extension are constraints;
                 // the producer's memo that this order is sorted is not.
                 try self.write(@TypeOf(value.tags), value.tags);
                 return self.write(NodeId, value.ext);
             }
+            // A settled leaf is identified by its representation digest, as
+            // Type.Store.typeEql identifies it.
             if (T == Type.TypeId) {
                 try self.leaves.append(self.graph.allocator, value);
                 const digest = self.graph.types.representationDigestCached(ns, value, null);
@@ -10497,11 +10492,6 @@ fn backingEql(left: ?InstBacking, right: ?InstBacking) bool {
     return right == null;
 }
 
-fn testCheckedTypeId(comptime value: u32) checked.CheckedTypeId {
-    comptime std.debug.assert(value != 0);
-    return @fromBackingInt(@intCast(value));
-}
-
 test "monotype solve declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
@@ -10620,7 +10610,7 @@ fn testGeneratedIteratorMigration(gpa: Allocator) (Allocator.Error || error{ Tes
     const component = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     const backing = try graph.newNode(.empty_record);
     const source: InstIteratorPublicSource = .{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(9), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{
             .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x62)))),
             .type_name = try name_store.internTypeName("Iter"),
@@ -10855,7 +10845,7 @@ test "structural backing traversal preserves cycle entry and clears only visited
         for (nodes, 0..) |node, index| {
             const next = if (index + 1 < nodes.len) nodes[index + 1] else if (cycle_entry) |entry| nodes[entry] else terminal;
             try graph.setContent(node, try graph.namedContent(.{
-                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = .{ .module = module_identity, .type_name = type_name },
                 .kind = .nominal,
                 .builtin_owner = null,
@@ -11102,7 +11092,7 @@ test "open function interface shape includes producer-owned graph evidence" {
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xA7))));
     const type_name = try name_store.internTypeName("PrivateShape");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const private_left = try graph.newNode(try graph.namedContent(.{
         .named_type = named_type,
@@ -11563,7 +11553,7 @@ test "record field graph access distinguishes inspection from runtime constructi
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xB1))));
     const type_name = try name_store.internTypeName("PrivateRecord");
     const named = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(11), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
         .builtin_owner = null,
@@ -11645,7 +11635,7 @@ test "alias unification does not make the alias its own backing" {
 
     const backing = try graph.newNode(.{ .primitive = .u64 });
     const alias = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB)))), .type_name = @fromBackingInt(@intCast(1)) },
         .kind = .alias,
         .builtin_owner = null,
@@ -11913,7 +11903,7 @@ test "reset discards nominal relationships and constructor evidence before reusi
         const left_backing = try graph.newNode(.empty_record);
         const right_backing = try graph.newNode(.empty_record);
         var named: InstNamed = .{
-            .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module, .type_name = type_name },
             .kind = .nominal,
             .builtin_owner = null,
@@ -12061,7 +12051,7 @@ test "generated-private traversal scratch handles cycles and epoch rollover" {
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x47))));
     const type_name = try name_store.internTypeName("PrivateValue");
     _ = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(31), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
         .builtin_owner = null,
@@ -12107,7 +12097,7 @@ test "generated-private containment follows optional field value types" {
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x47))));
     const type_name = try name_store.internTypeName("PrivateValue");
     const private_value = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(31), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
         .builtin_owner = null,
@@ -12169,7 +12159,7 @@ test "iterator-interface containment caches exact graph dependencies" {
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x42))));
     const type_name = try name_store.internTypeName("Iter");
     try graph.setContent(child, try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(14), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
         .builtin_owner = .iter,
@@ -12244,7 +12234,7 @@ test "iterator-interface containment agrees between Monotype and graph" {
                 } }),
                 // A nominal wrapper reaching the leaf through its backing.
                 7 => try self.graph.newNode(try self.graph.namedContent(.{
-                    .named_type = .{ .module = .{}, .ty = testCheckedTypeId(21), .ty_module = .{} },
+                    .named_type = .{ .module = .{} },
                     .def = .{ .module = self.module_identity, .type_name = self.wrapper_name },
                     .kind = .nominal,
                     .builtin_owner = null,
@@ -12253,7 +12243,7 @@ test "iterator-interface containment agrees between Monotype and graph" {
                 })),
                 // A nominal wrapper reaching the leaf through a type argument.
                 8 => try self.graph.newNode(try self.graph.namedContent(.{
-                    .named_type = .{ .module = .{}, .ty = testCheckedTypeId(22), .ty_module = .{} },
+                    .named_type = .{ .module = .{} },
                     .def = .{ .module = self.module_identity, .type_name = self.wrapper_name },
                     .kind = .nominal,
                     .builtin_owner = null,
@@ -12295,7 +12285,7 @@ test "iterator-interface containment agrees between Monotype and graph" {
     for (0..position_count) |position| {
         for ([_]bool{ true, false }, 0..) |iterator_leaf, leaf_index| {
             const leaf = if (iterator_leaf) try graph.newNode(try graph.namedContent(.{
-                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(20), .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = .{ .module = module_identity, .type_name = iter_name },
                 .kind = .@"opaque",
                 .builtin_owner = .iter,
@@ -12642,7 +12632,7 @@ test "opaque interface relation preserves distinct public and generated-private 
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAD))));
     const type_name = try name_store.internTypeName("FieldNames");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_args = try graph.arena().alloc(NodeId, 1);
     public_args[0] = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
@@ -12717,7 +12707,7 @@ test "construction selection preserves private evidence while absorbing optional
     const type_name = try name_store.internTypeName("PrivateEvidence");
     const evidence_field = try name_store.internRecordFieldLabel("evidence");
     const optional_field = try name_store.internRecordFieldLabel("optional");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(18), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const private_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
@@ -12804,7 +12794,7 @@ test "named type relation to its own backing preserves the backing edge" {
         .ext = try graph.newNode(.empty_record),
     } });
     const named = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
         .builtin_owner = null,
@@ -12846,7 +12836,7 @@ test "record row follows an inspectable nominal record extension" {
     });
     const backing = try graph.newNode(.{ .record = .{ .fields = backing_fields, .ext = empty } });
     const nominal = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .builtin_owner = null,
@@ -12876,7 +12866,7 @@ test "opaque interface relation preserves forced-dynamic iterator identity" {
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xFE))));
     const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(4), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const public_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const private_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const public_backing = try graph.newNode(.empty_record);
@@ -12931,7 +12921,7 @@ test "opaque iterator relation materializes unresolved public interface from pro
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x51))));
     const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(9), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const public_backing = try graph.newNode(.empty_record);
     const public_source: InstIteratorPublicSource = .{
         .named_type = named_type,
@@ -12990,7 +12980,7 @@ test "opaque iterator relation resolves unresolved public variable to imported g
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x71))));
     const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(12), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const public = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const item = try graph.newNode(.{ .primitive = .u64 });
     const private = try graph.newNode(try graph.namedContent(.{
@@ -13037,7 +13027,7 @@ test "opaque interface relation delegates nested private iterator requests to un
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x73))));
     const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(13), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const item = try graph.newNode(.{ .primitive = .u64 });
     const left_component = try graph.newNode(.empty_record);
     const right_component = try graph.newNode(.empty_record);
@@ -13110,8 +13100,8 @@ test "opaque relation materializes unresolved public named shell from request" {
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x52))));
     const shell_type_name = try name_store.internTypeName("ShellEvidence");
     const iter_type_name = try name_store.internTypeName("Iter");
-    const shell_named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(10), .ty_module = .{} };
-    const iter_named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(11), .ty_module = .{} };
+    const shell_named_type: Type.NamedType = .{ .module = .{} };
+    const iter_named_type: Type.NamedType = .{ .module = .{} };
     const shell_def: Type.TypeDef = .{ .module = module_identity, .type_name = shell_type_name };
     const iter_def: Type.TypeDef = .{ .module = module_identity, .type_name = iter_type_name };
     const public = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
@@ -13181,7 +13171,7 @@ test "generated iterator index reset discards replaced and rekeyed producers" {
     const component = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     const backing = try graph.newNode(.empty_record);
     const public_named: InstNamed = .{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .@"opaque",
         .builtin_owner = .iter,
@@ -13277,7 +13267,7 @@ test "generated iterator depth visits wide graphs without a size cutoff" {
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x64))));
     const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(5), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const public_backing = try graph.newNode(.empty_record);
     const public_source: InstIteratorPublicSource = .{
         .named_type = named_type,
@@ -13356,7 +13346,7 @@ test "generated iterator identity uses current graph content rather than an impo
     const item_ty = try type_store.add(.{ .primitive = .u64 });
     const backing_ty = try type_store.add(.{ .record = .empty() });
     const source_ty = try type_store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = type_name, .iterator_representation = .minted, .iterator_kind = .list, .iterator_depth = 1 },
         .kind = .@"opaque",
         .builtin_owner = .iter,
@@ -13371,14 +13361,14 @@ test "generated iterator identity uses current graph content rather than an impo
         const backing = try graph.newNode(.empty_record);
         const public_def: Type.TypeDef = .{ .module = module, .type_name = type_name };
         const owned: InstNode = try graph.namedContent(.{
-            .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module, .type_name = type_name, .iterator_representation = .minted, .iterator_kind = .numeric_to, .iterator_depth = 1 },
             .kind = .@"opaque",
             .builtin_owner = .iter,
             .args = try graph.arena().dupe(NodeId, &.{item}),
             .backing = .{ .node = backing, .use = .runtime_layout_only, .authority = .generated_private },
             .generated_iterator = try graph.generatedIterator(.{ .callable_evidence = null, .public_source = .{
-                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = public_def,
                 .kind = .@"opaque",
                 .builtin_owner = .iter,
@@ -13409,64 +13399,6 @@ test "generated iterator identity uses current graph content rather than an impo
     try std.testing.expectEqual(identities[0], identities[2]);
 }
 
-test "generated iterator identity ignores checked provenance that type equality ignores" {
-    // Two requests equal under `typeEql` must mint equal iterator types. The
-    // item's checked type id is provenance: `typeEql` and specialization
-    // identity ignore it, so producer identity must ignore it too.
-    const gpa = std.testing.allocator;
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-    const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x83))));
-    const iter_name = try name_store.internTypeName("Iter");
-    const item_name = try name_store.internTypeName("ByteRange");
-    for ([_]Type.IteratorRepresentation{ .minted, .forced_dynamic }) |representation| {
-        var identities: [2]names.TypeDigest = undefined;
-        var items: [2]Type.TypeId = undefined;
-        const provenances = [_]checked.CheckedTypeId{ testCheckedTypeId(10), testCheckedTypeId(11) };
-        for (&identities, &items, provenances) |*identity, *item_ty, provenance| {
-            const graph = try InstGraph.create(gpa, &type_store, &name_store);
-            defer graph.destroy();
-            const field = try graph.newNode(.{ .primitive = .u64 });
-            const item = try graph.newNode(try graph.namedContent(.{
-                .named_type = .{ .module = .{}, .ty = provenance, .ty_module = .{} },
-                .def = .{ .module = module, .type_name = item_name, .source_decl = 1 },
-                .kind = .@"opaque",
-                .builtin_owner = null,
-                .args = &.{},
-                .backing = .{ .node = field, .use = .runtime_layout_only },
-            }));
-            const backing = try graph.newNode(.empty_record);
-            const node = try graph.newNode(try graph.namedContent(.{
-                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
-                .def = .{ .module = module, .type_name = iter_name, .iterator_representation = representation, .iterator_kind = .custom, .iterator_depth = 1 },
-                .kind = .@"opaque",
-                .builtin_owner = .iter,
-                .args = try graph.arena().dupe(NodeId, &.{item}),
-                .backing = .{ .node = backing, .use = .runtime_layout_only, .authority = .generated_private },
-                .generated_iterator = try graph.generatedIterator(.{ .callable_evidence = null, .public_source = .{
-                    .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
-                    .def = .{ .module = module, .type_name = iter_name },
-                    .kind = .@"opaque",
-                    .builtin_owner = .iter,
-                    .backing = .{ .node = backing, .use = .runtime_layout_only },
-                    .declared_order = &.{},
-                } }),
-            }));
-            try graph.finalizeGeneratedIteratorIdentities();
-            identity.* = (try graph.content(node)).named.def.generated.?;
-            var finals = GraphTypeFinals.initProvisionalSnapshot(graph);
-            defer finals.deinit();
-            item_ty.* = try finals.sealNode(item);
-        }
-        // The items differ only in provenance that equality ignores.
-        try std.testing.expect(try type_store.typeEql(&name_store, items[0], items[1]));
-        try std.testing.expect(!std.meta.eql(type_store.typeDigest(&name_store, items[0]), type_store.typeDigest(&name_store, items[1])));
-        try std.testing.expectEqual(identities[0], identities[1]);
-    }
-}
-
 test "recursive join keeps graph-owned iterator provenance over a finished Monotype" {
     const gpa = std.testing.allocator;
 
@@ -13481,7 +13413,7 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x65))));
     const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(6), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const public_def: Type.TypeDef = .{
         .module = module_identity,
         .type_name = type_name,
@@ -13576,8 +13508,8 @@ test "opaque interface relation preserves nested generated-private backing" {
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xBC))));
     const type_name = try name_store.internTypeName("NestedEvidence");
     const inner_type_name = try name_store.internTypeName("InnerEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(2), .ty_module = .{} };
-    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(3), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
+    const inner_named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
     const public_inner_backing = try graph.newNode(.empty_record);
@@ -14019,7 +13951,7 @@ test "related named instances reuse exact backing witnesses" {
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAC))));
     const type_name = try name_store.internTypeName("Wrap");
     const other_type_name = try name_store.internTypeName("Other");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const other_def: Type.TypeDef = .{ .module = module_identity, .type_name = other_type_name };
 
@@ -14109,7 +14041,7 @@ test "issue 9647: same nominal backing wrapper resolves to structural backing on
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Role");
     const tag_name = try name_store.internTagLabel("Tile");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const empty_args = try graph.arena().alloc(NodeId, 0);
 
@@ -14164,7 +14096,7 @@ test "issue 9647: recursive nominal backing cycle is not chased as structural ba
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Recursive");
     const tag_name = try name_store.internTagLabel("Wrap");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(2), .ty_module = .{} };
+    const named_type: Type.NamedType = .{ .module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
 
     const nominal = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
@@ -14209,7 +14141,7 @@ test "issue 11767: an imported nominal owns its backing apart from an equal stru
     });
     const backing_ty = try type_store.add(.{ .tag_union = backing_tags });
     const maybe_ty = try type_store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .builtin_owner = null,
@@ -14250,8 +14182,8 @@ test "recursive nominal backing can meet an alias to that nominal" {
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const nominal_name = try name_store.internTypeName("Role");
     const alias_name = try name_store.internTypeName("Wrapper.Role");
-    const nominal_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)), .ty_module = .{} };
-    const alias_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(4)), .ty_module = .{} };
+    const nominal_type: Type.NamedType = .{ .module = .{} };
+    const alias_type: Type.NamedType = .{ .module = .{} };
     const nominal_def: Type.TypeDef = .{ .module = module_identity, .type_name = nominal_name };
     const alias_def: Type.TypeDef = .{ .module = module_identity, .type_name = alias_name };
 
@@ -14317,7 +14249,7 @@ fn testGeneratedIteratorIndex(gpa: Allocator) (Allocator.Error || error{ TestUne
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
     const source: InstIteratorPublicSource = .{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{
             .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x62)))),
             .type_name = try name_store.internTypeName("Iter"),
@@ -14410,7 +14342,7 @@ test "issue 11362: generated iterator index follows root unions and producer rep
     const component = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     const backing = try graph.newNode(.empty_record);
     const public_named: InstNamed = .{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .@"opaque",
         .builtin_owner = .iter,
@@ -14502,7 +14434,7 @@ test "generated iterator index preserves evidence, argument classes, unions and 
             const component = try graph.newNode(.empty_record);
             const other_component = try graph.newNode(.empty_record);
             const public_source: InstIteratorPublicSource = .{
-                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = .{ .module = module, .type_name = type_name },
                 .kind = .@"opaque",
                 .builtin_owner = .iter,
@@ -14652,7 +14584,7 @@ test "generated iterator index follows content replacement and argument unions" 
             const component = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
             const other_component = try graph.newNode(.{ .primitive = .u8 });
             const source: InstIteratorPublicSource = .{
-                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(9), .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = .{
                     .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x62)))),
                     .type_name = try name_store.internTypeName("Iter"),
@@ -14982,7 +14914,7 @@ test "interface constraints preserve nominal equality and independent private ba
     };
     var roots: [2]NodeId = undefined;
     for (&roots) |*root| root.* = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = def,
         .kind = .@"opaque",
         .builtin_owner = null,
@@ -14990,9 +14922,8 @@ test "interface constraints preserve nominal equality and independent private ba
         .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only, .authority = .generated_private },
     }));
     const first_identity = try (try InterfaceConstraints.capture(graph, graph.arena(), &.{roots[0]})).identity(graph);
-    var renamed = (try graph.content(roots[0])).named.*;
-    renamed.named_type.ty = testCheckedTypeId(2);
-    const equivalent = try graph.newNode(try graph.namedContent(renamed));
+    const copied = (try graph.content(roots[0])).named.*;
+    const equivalent = try graph.newNode(try graph.namedContent(copied));
     const equivalent_identity = try (try InterfaceConstraints.capture(graph, graph.arena(), &.{equivalent})).identity(graph);
     try std.testing.expect(try first_identity.eql(equivalent_identity, &types, &name_store));
     try graph.relateNamedInstances(roots[0], roots[1]);
@@ -15019,7 +14950,7 @@ test "interface constraints preserve finalized private representation witnesses"
     const graph = try InstGraph.create(allocator, &types, &name_store);
     defer graph.destroy();
     const private = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{
             .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xC3)))),
             .type_name = try name_store.internTypeName("FinalizedPrivate"),
@@ -15049,7 +14980,7 @@ test "interface request identity omits finished witnesses of open classes" {
     const graph = try InstGraph.create(allocator, &types, &name_store);
     defer graph.destroy();
     const private = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = .{
             .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xC4)))),
             .type_name = try name_store.internTypeName("RequestedPrivate"),
@@ -15090,7 +15021,7 @@ test "interface agreement ignores finished witnesses of open classes" {
     const Instances = struct {
         fn new(g: *InstGraph, d: Type.TypeDef) Allocator.Error!NodeId {
             return try g.newNode(try g.namedContent(.{
-                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = d,
                 .kind = .nominal,
                 .builtin_owner = null,
@@ -15136,7 +15067,7 @@ test "comparing interface summaries leaves the graph they describe unchanged" {
     };
     var args = [_]NodeId{try graph.newNode(.{ .unresolved = InstVariable.placeholder() })};
     const instance = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+        .named_type = .{ .module = .{} },
         .def = def,
         .kind = .nominal,
         .builtin_owner = null,
@@ -15192,7 +15123,7 @@ test "interface constraints separate declarations sharing a related backing grou
         const def: Type.TypeDef = .{ .module = module, .type_name = try name_store.internTypeName(name) };
         for (0..2) |j| {
             roots[i * 2 + j] = try graph.newNode(try graph.namedContent(.{
-                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = def,
                 .kind = .nominal,
                 .builtin_owner = null,
@@ -15488,7 +15419,7 @@ test "nominal joins after lifting another instance backing preserve structure in
                 const first_backing = try graph.newNode(.empty_record);
                 const second_backing = try graph.newNode(.empty_record);
                 const first = try graph.newNode(try graph.namedContent(.{
-                    .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+                    .named_type = .{ .module = .{} },
                     .def = .{ .module = module, .type_name = name },
                     .kind = .nominal,
                     .builtin_owner = null,

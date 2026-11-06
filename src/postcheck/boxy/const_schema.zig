@@ -257,12 +257,10 @@ fn declaredOrderOf(program: *Program, backing_ty: TypeId) Allocator.Error!const_
     return try const_types.appendDeclaredFieldSpan(out);
 }
 
-/// The named type a stored nominal value names: its declaration's root in
-/// the declaring module's type store.
+/// The named type a stored nominal value names: its declaring module.
 fn namedType(program: *Program, nominal: types.Nominal) const_store.NamedType {
     const view = program.module(nominal.decl.module);
-    const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
-    return .{ .module = view.key, .ty = declaration.declaration_root, .ty_module = view.key };
+    return .{ .module = view.key };
 }
 
 /// The builtin owner a stored builtin nominal dispatches through; `Try` has

@@ -8,6 +8,8 @@
 //! compile-time evaluation workers, compile coordinator workers) must pass the
 //! same value to `std.Thread.spawn`, so a Roc program's recursion depth limit
 //! never depends on which thread the work happens to be scheduled on.
+//! Compiled code the compiler runs in its own process runs on an evaluation
+//! stack of this size (`eval_stack.zig`) rather than on the thread's stack.
 //!
 //! This file must stay dependency-free: build.zig imports it by path.
 

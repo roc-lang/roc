@@ -355,9 +355,7 @@ const Walker = struct {
                 .local_proc, .structural => {},
             },
             .use => |expr| {
-                const raw = @backingInt(expr);
-                if (raw >= artifact.resolved_value_refs.by_checked_expr.len) return;
-                const ref_id = artifact.resolved_value_refs.by_checked_expr[raw].get() orelse return;
+                const ref_id = artifact.resolved_value_refs.lookupIdByExpr(expr) orelse return;
                 try self.walkRef(artifact.resolved_value_refs.records[@backingInt(ref_id)].ref);
             },
         }
@@ -396,7 +394,7 @@ const Walker = struct {
         }
         const root: checked.ComptimeRootId = switch (const_ref.owner) {
             .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
-            .hoisted_expr => |hoisted| (artifact.hoisted_constants.lookupByExpr(hoisted.expr) orelse return).root,
+            .hoisted_root => |hoisted| (artifact.hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
         };
         try self.readRoot(module, root);
     }
@@ -409,7 +407,7 @@ const Walker = struct {
                 const entry = self.modules[module].top_level_values.lookupByDef(imported.def) orelse return;
                 switch (entry.value) {
                     .procedure_binding => |procedure_binding| try self.topLevelBinding(module, procedure_binding),
-                    .const_ref => |const_ref| try self.constUse(.{ .const_ref = const_ref, .requested_source_ty_template = proc_use.source_fn_ty_template }),
+                    .const_ref => |const_ref| try self.constUse(.{ .const_ref = const_ref, .requested_source_ty_payload = proc_use.source_fn_ty_payload }),
                 }
             },
             .hosted => {},
@@ -465,7 +463,7 @@ pub fn rootHoldsFunction(
     defer seen.deinit(allocator);
     var pending = std.ArrayList(Pending).empty;
     defer pending.deinit(allocator);
-    const own_types = artifact.checked_types.view();
+    const own_types = artifact.typesView();
     const own_key = artifact.key.digest().bytes;
     // The root's checked type is its wrapper's function type; its value is
     // the wrapper's result.
@@ -484,12 +482,18 @@ pub fn rootHoldsFunction(
                 for (alias.args) |arg| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = arg });
             },
             .record => |record| {
-                for (record.fields) |field| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = field.ty });
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = field.ty });
+                }
                 try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = record.ext });
             },
             .tuple => |items| for (items) |elem| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = elem }),
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| for (tag.argsSlice(item.types)) |arg| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = arg });
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    for (tag.args) |arg| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = arg });
+                }
                 try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = tag_union.ext });
             },
             .nominal => |nominal| {
@@ -521,10 +525,12 @@ pub fn rootHoldsFunction(
                             base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
                         try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = declaration.backing });
                     },
+                    // The capability names its nominal in the declaring
+                    // module's own names.
                     .imported_box_payload_capability => |imported| {
                         const declaring = program.moduleByKey(imported.artifact) orelse
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
-                        const declaration = declaring.checked_types.nominalDeclarationForPayload(nominal) orelse
+                        const declaration = declaring.checked_types.nominalDeclaration(declaring.interface_capabilities.boxPayloadCapability(imported.capability).nominal) orelse
                             base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
                         try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring.checked_types, .ty = declaration.backing });
                     },
@@ -557,7 +563,7 @@ test "CTFE root classification resolves nominal backings throughout the checked 
             \\import Holder
             \\value : Holder
             \\value = Holder.make(7)
-        , &.{.{ .name = "Holder", .source = case.source }}, .{ .roots = .published_only });
+        , &.{.{ .name = "Holder", .source = case.source }}, .{ .io = std.testing.io, .roots = .published_only });
         defer parsed.deinit(allocator);
         try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
         const consumer = &parsed.checked_artifact;
@@ -578,7 +584,7 @@ test "CTFE root classification resolves nominal backings throughout the checked 
 
 fn expectSharedDependencies(source: []const u8, imports: []const @import("inspected.zig").ModuleSource) (@import("inspected.zig").Error || Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
-    var parsed = try @import("inspected.zig").parseProgram(allocator, .module, source, imports, .{ .roots = .published_only });
+    var parsed = try @import("inspected.zig").parseProgram(allocator, .module, source, imports, .{ .io = std.testing.io, .roots = .published_only });
     defer parsed.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
     var modules = std.ArrayList(*checked.CheckedModuleArtifact).empty;

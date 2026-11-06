@@ -42,7 +42,7 @@ pub const ModuleView = struct {
         return self.view.checked_types;
     }
 
-    pub fn bodies(self: *const ModuleView) checked.CheckedBodyStoreView {
+    pub fn bodies(self: *const ModuleView) checked.CheckedBodies {
         return self.view.checked_bodies;
     }
 
@@ -893,7 +893,7 @@ pub const Converter = struct {
             pending.shrinkRetainingCapacity(frame.pending_start);
             // A type with no identity variables converts the same under
             // every environment.
-            if (!self.seal_undetermined_kinds and !rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
+            if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, built);
             }
             if (frames.items.len == 0) return built;
@@ -911,11 +911,8 @@ pub const Converter = struct {
         return identities.get(.{ .module = module, .ty = ty });
     }
 
-    pub fn rootHasIdentityVariables(view: *const ModuleView, ty: checked.CheckedTypeId) bool {
-        const roots = view.types().rootRows();
-        const index: usize = @backingInt(ty);
-        if (index >= roots.len) return true;
-        return roots[index].contains_identity_variables;
+    pub fn rootHasIdentityVariables(view: *const ModuleView, ty: checked.CheckedTypeId) Allocator.Error!bool {
+        return try view.types().rootHasIdentityVariables(ty);
     }
 
     /// The node for `ty` when it needs no children converted first.
@@ -923,7 +920,7 @@ pub const Converter = struct {
         if (env.lookup(module, ty)) |bound| return bound;
         if (self.platformIdentity(module, ty)) |solved| return solved;
         const view = self.modules.get(module);
-        if (!self.seal_undetermined_kinds and !rootHasIdentityVariables(view, ty)) {
+        if (!self.seal_undetermined_kinds and !try rootHasIdentityVariables(view, ty)) {
             if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| return memo;
         }
         return switch (view.types().payload(ty)) {
@@ -1002,12 +999,18 @@ pub const Converter = struct {
                     try pending.append(allocator, alias.backing);
                 },
                 .record => |record| {
-                    for (record.fields) |field| try pending.append(allocator, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try pending.append(allocator, field.ty);
+                    }
                     try pending.append(allocator, record.ext);
                 },
                 .tuple => |items| try pending.appendSlice(allocator, items),
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try pending.appendSlice(allocator, tag.args);
+                    }
                     try pending.append(allocator, tag_union.ext);
                 },
                 .function => |inner| {
@@ -1055,7 +1058,10 @@ pub const Converter = struct {
             switch (types.payload(ty)) {
                 .alias => |alias| try reached.append(allocator, alias.backing),
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try reached.appendSlice(allocator, tag.argsSlice(types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try reached.appendSlice(allocator, tag.args);
+                    }
                     try reached.append(allocator, tag_union.ext);
                 },
                 .nominal => |nominal| switch (nominal.representation) {
@@ -1094,12 +1100,18 @@ pub const Converter = struct {
                     try pending.append(allocator, alias.backing);
                 },
                 .record => |record| {
-                    for (record.fields) |field| try pending.append(allocator, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try pending.append(allocator, field.ty);
+                    }
                     try pending.append(allocator, record.ext);
                 },
                 .tuple => |items| try pending.appendSlice(allocator, items),
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try pending.appendSlice(allocator, tag.args);
+                    }
                     try pending.append(allocator, tag_union.ext);
                 },
                 .function => |function| {
@@ -1134,12 +1146,12 @@ pub const Converter = struct {
                     try pending.append(scratch, alias.backing);
                 },
                 .record => |record| {
-                    for (record.fields) |field| try pending.append(scratch, field.ty);
+                    for (0..record.fields.len()) |field_index| try pending.append(scratch, record.fields.get(field_index).ty);
                     try pending.append(scratch, record.ext);
                 },
                 .tuple => |items| try pending.appendSlice(scratch, items),
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try pending.appendSlice(scratch, tag.argsSlice(types));
+                    for (0..tag_union.tags.len()) |tag_index| try pending.appendSlice(scratch, tag_union.tags.get(tag_index).args);
                     try pending.append(scratch, tag_union.ext);
                 },
                 .function => |function| {
@@ -1180,12 +1192,18 @@ pub const Converter = struct {
                 .field_kind, .err => return true,
                 .alias => |alias| try pending.append(allocator, alias.backing),
                 .record => |record| {
-                    for (record.fields) |field| try pending.append(allocator, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try pending.append(allocator, field.ty);
+                    }
                     try pending.append(allocator, record.ext);
                 },
                 .tuple => |items| try pending.appendSlice(allocator, items),
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try pending.appendSlice(allocator, tag.args);
+                    }
                     try pending.append(allocator, tag_union.ext);
                 },
                 .function => |function| {
@@ -1230,8 +1248,11 @@ pub const Converter = struct {
                 var current_fields = record.fields;
                 var current = record.ext;
                 while (true) {
-                    for (current_fields) |field| try pending.append(allocator, .{ .module = module, .ty = field.ty });
-                    current_fields = &.{};
+                    for (0..current_fields.len()) |field_index| {
+                        const field = current_fields.get(field_index);
+                        try pending.append(allocator, .{ .module = module, .ty = field.ty });
+                    }
+                    current_fields = .empty;
                     switch (types.payload(current)) {
                         .alias => |alias| current = alias.backing,
                         .record => |ext_record| {
@@ -1252,10 +1273,11 @@ pub const Converter = struct {
                 var current_tags = tag_union.tags;
                 var current = tag_union.ext;
                 while (true) {
-                    for (current_tags) |tag| {
-                        for (tag.argsSlice(types)) |arg| try pending.append(allocator, .{ .module = module, .ty = arg });
+                    for (0..current_tags.len()) |tag_index| {
+                        const tag = current_tags.get(tag_index);
+                        for (tag.args) |arg| try pending.append(allocator, .{ .module = module, .ty = arg });
                     }
-                    current_tags = &.{};
+                    current_tags = .empty;
                     switch (types.payload(current)) {
                         .alias => |alias| current = alias.backing,
                         .tag_union => |ext_union| {
@@ -1308,13 +1330,14 @@ pub const Converter = struct {
                 var current_fields = record.fields;
                 var current = record.ext;
                 while (true) {
-                    for (current_fields) |field| {
+                    for (0..current_fields.len()) |field_index| {
+                        const field = current_fields.get(field_index);
                         const field_name = try self.store.internName(name_store.recordFieldLabelText(field.name));
                         try fields.append(allocator, self.convertedField(module, field_name, children[child_index], field.kind, env));
                         if (field.kind.tag == .defaulted) try defaults.append(allocator, .{ .name = field_name, .default = field.kind.default });
                         child_index += 1;
                     }
-                    current_fields = &.{};
+                    current_fields = .empty;
                     switch (types.payload(current)) {
                         .alias => |alias| current = alias.backing,
                         .record => |ext_record| {
@@ -1356,15 +1379,16 @@ pub const Converter = struct {
                 var current_tags = tag_union.tags;
                 var current = tag_union.ext;
                 while (true) {
-                    for (current_tags) |tag| {
-                        const count = tag.argsSlice(types).len;
+                    for (0..current_tags.len()) |tag_index| {
+                        const tag = current_tags.get(tag_index);
+                        const count = tag.args.len;
                         try tags.append(allocator, .{
                             .name = try self.store.internName(name_store.tagLabelText(tag.name)),
                             .payloads = children[child_index..][0..count],
                         });
                         child_index += count;
                     }
-                    current_tags = &.{};
+                    current_tags = .empty;
                     switch (types.payload(current)) {
                         .alias => |alias| current = alias.backing,
                         .tag_union => |ext_union| {

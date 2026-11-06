@@ -166,6 +166,8 @@ fn serializeBuiltinArtifact(
         0,
         .{
             .module_env_storage = .{ .checked_source = builtin_env },
+            .hoisted_roots = .none,
+            .io = io,
             .compile_time_finalizer = comptime_finalizer.finalizerWithOptions(&finalizer_options),
         },
     );

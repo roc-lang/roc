@@ -1355,12 +1355,16 @@ const Transform = struct {
             return;
         };
         const first = try self.store.addCFStmt(self.store.getCFStmt(entry), self.store.stmtOrigin(entry));
-        try self.store.replaceCFStmt(entry, .{ .join = .{
+        const join_stmt: LIR.CFStmt = .{ .join = .{
             .id = self.join_id,
             .params = params,
             .body = first,
             .remainder = remainder,
-        } }, origin);
+        } };
+        try self.store.replaceCFStmt(entry, join_stmt, origin);
+        // Replacing a statement records no shapes; the loop's join is one
+        // the procedure's shapes must admit to the join phases.
+        self.store.noteStmtShapes(join_stmt);
     }
 
     /// TRMC's loop when it begins after the entry statements, which read

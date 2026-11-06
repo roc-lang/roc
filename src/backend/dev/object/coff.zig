@@ -49,6 +49,7 @@ const COFF = struct {
 
     // x86_64 relocation types
     const IMAGE_REL_AMD64_ADDR64 = 0x0001;
+    const IMAGE_REL_AMD64_ADDR32 = 0x0002;
     const IMAGE_REL_AMD64_REL32 = 0x0004;
     const IMAGE_REL_AMD64_ADDR32NB = 0x0003; // 32-bit address w/o base (RVA)
     const IMAGE_REL_AMD64_SECREL = 0x000B; // 32-bit offset from the target section start
@@ -402,7 +403,13 @@ pub const CoffWriter = struct {
                 .x86_64 => invariant("COFF invariant violated: pageoff12 data relocation in x86_64 code, which emits rel32", .{}),
                 .aarch64 => COFF.IMAGE_REL_ARM64_PAGEOFFSET_12A,
             },
-            .abs32s => invariant("COFF invariant violated: an abs32s data relocation, which only a Linux x86_64 test unit emits", .{}),
+            // The field's own bytes hold the addend, as for every COFF
+            // absolute field.
+            .abs32s => switch (self.arch) {
+                .x86_64 => COFF.IMAGE_REL_AMD64_ADDR32,
+                .aarch64 => invariant("COFF invariant violated: abs32s data relocation in aarch64 code, which only an x86_64 test unit emits", .{}),
+            },
+            .abs64_field => self.arch.absolutePointerRelocType(),
         };
         try self.text_relocs.append(self.allocator, .{
             .offset = offset,

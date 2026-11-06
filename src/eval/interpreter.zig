@@ -116,8 +116,6 @@ const InterpreterRocEnv = struct {
     allocator: Allocator,
     crashed: bool = false,
     crash_message: ?[]const u8 = null,
-    /// The crash is this interpreter's call depth running out.
-    stack_overflowed: bool = false,
     runtime_error_message: ?[]const u8 = null,
     expect_message: ?[]const u8 = null,
     expect_failures: std.ArrayList(ExpectFailure) = .empty,
@@ -145,7 +143,6 @@ const InterpreterRocEnv = struct {
     /// Reset the static buffer—call once at the start of a full evaluation.
     fn resetForEval(self: *InterpreterRocEnv) void {
         self.crashed = false;
-        self.stack_overflowed = false;
         if (self.crash_message) |msg| self.allocator.free(msg);
         self.crash_message = null;
         self.runtime_error_message = null;
@@ -986,11 +983,6 @@ pub const Interpreter = struct {
     /// The message of the Roc crash that ended the last evaluation with
     /// `error.Crash`. The message is owned by the interpreter and valid until
     /// the next eval or deinit.
-    /// Whether the last evaluation's crash is its stack running out.
-    pub fn stackOverflowed(self: *const LirInterpreter) bool {
-        return self.roc_env.stack_overflowed;
-    }
-
     pub fn getCrashMessage(self: *const LirInterpreter) []const u8 {
         return self.roc_env.crash_message orelse self.invariantFailed(
             "LIR/interpreter invariant violated: crash message requested without a recorded crash",
@@ -2054,7 +2046,6 @@ pub const Interpreter = struct {
 
         if (comptime builtin.mode == .debug) {
             if (self.call_depth >= max_call_depth) {
-                self.roc_env.stack_overflowed = true;
                 return self.triggerCrash(stack_overflow_message);
             }
         }

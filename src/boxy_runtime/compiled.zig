@@ -459,11 +459,11 @@ pub fn dictCompose(callable_fn: erased_callable.CallableFnPtr, capture_prefix: u
     var scratch: ?[*]u64 = null;
     const key_len = 3 + captures.len;
     const key: []u64 = if (key_len <= key_buffer.len) key_buffer[0..key_len] else blk: {
-        const words: [*]u64 = @ptrCast(@alignCast(immortal_ops.allocRaw(key_len * @sizeOf(u64), @alignOf(u64))));
+        const words = compose.scratchAlloc(u64, key_len, immortal_ops).ptr;
         scratch = words;
         break :blk words[0..key_len];
     };
-    defer if (scratch) |words| immortal_ops.dealloc(@ptrCast(words), @alignOf(u64));
+    defer if (scratch) |words| compose.scratchFree(u64, words[0..key_len], immortal_ops);
     key[0] = dict_compose_tag;
     key[1] = @intFromPtr(callable_fn);
     key[2] = capture_prefix;
@@ -497,11 +497,11 @@ pub fn dictRecord(methods: []const usize, immortal_ops: *RocOps) [*]const usize 
     var scratch: ?[*]u64 = null;
     const key_len = 1 + methods.len;
     const key: []u64 = if (key_len <= key_buffer.len) key_buffer[0..key_len] else blk: {
-        const words: [*]u64 = @ptrCast(@alignCast(immortal_ops.allocRaw(key_len * @sizeOf(u64), @alignOf(u64))));
+        const words = compose.scratchAlloc(u64, key_len, immortal_ops).ptr;
         scratch = words;
         break :blk words[0..key_len];
     };
-    defer if (scratch) |words| immortal_ops.dealloc(@ptrCast(words), @alignOf(u64));
+    defer if (scratch) |words| compose.scratchFree(u64, words[0..key_len], immortal_ops);
     key[0] = dict_record_tag;
     for (methods, key[1..]) |method, *word| word.* = method;
     if (dictionaryCache().lookup(key)) |existing| return @ptrCast(@alignCast(existing));

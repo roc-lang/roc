@@ -57,6 +57,7 @@ const Relocation = @import("Relocation.zig").IndexedRelocation;
 const relocation_mod = @import("Relocation.zig");
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
+const UnitImage = @import("UnitImage.zig");
 const StackPlan = lir.StackPlan;
 const boxy_runtime = @import("boxy_runtime");
 const BoxyListOp = boxy_runtime.compiled.ListOp;
@@ -22137,9 +22138,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Call one of the host's fixed runtime symbols: by its in-process
         /// address under native execution, by relocation everywhere else.
-        /// Load `site`, a unit-local expect site id, into `dst` as an
-        /// `abs32s` field against `expect_site_base_symbol` whose bytes hold
-        /// the id.
+        /// Load `site`, a unit-local expect site id, into `dst` as a field
+        /// against `expect_site_base_symbol` whose bytes hold the id: an
+        /// `abs32s` immediate on x86_64, an `abs64_field` literal in the
+        /// instruction stream on arm64.
         fn emitRelocatableExpectSite(self: *Self, dst: GeneralReg, site: u32) Allocator.Error!void {
             switch (isa) {
                 .x86_64 => {
@@ -22152,7 +22154,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .kind = .abs32s,
                     } });
                 },
-                .aarch64 => base.invariant("LirCodeGen invariant violated: relocatable expect sites in aarch64 code; only Linux x86_64 test units relocate them", .{}),
+                .aarch64 => {
+                    const start = self.codegen.currentOffset();
+                    // ldr dst, #8; b #12; .quad site
+                    try self.codegen.emit.ldrLiteral64(dst, 8);
+                    try self.codegen.emit.b(12);
+                    try self.codegen.emit.literal64(site);
+                    try self.codegen.relocations.append(self.allocator, .{ .linked_data = .{
+                        .offset = @intCast(start + 8),
+                        .symbol = try self.codegen.symbols.intern(self.allocator, relocation_mod.expect_site_base_symbol, .shared),
+                        .kind = .abs64_field,
+                    } });
+                },
             }
         }
 
@@ -23514,19 +23527,52 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return false;
         }
 
-        /// Offset within a reference's instruction of the 4-byte relative
-        /// displacement field `normalizeExcerptRefSite` clears: what a unit
-        /// image records for a reference it resolves (`UnitImage.CodeEdge`).
-        pub fn codeRefFieldOffset(form: CodeRefForm) usize {
+        /// The fields a unit image records for a reference at `site` of
+        /// `form` to `target_offset` that the assembly resolved in place
+        /// (`UnitImage.CodeEdge`): the reference's own field, or for an
+        /// AArch64 call through its veneer, the branch to the veneer and
+        /// the veneer's address sequence.
+        pub fn codeRefEdges(self: *const Self, site: usize, form: CodeRefForm, target_offset: usize) CodeRefEdges {
             switch (isa) {
-                .aarch64 => unreachable, // unit images are built for x86_64 targets only (boxy_unit.producesImage), and only their builder asks
-                .x86_64 => return switch (form) {
-                    .call => 1,
-                    .addr => 3,
-                    .inline_call => unreachable, // only aarch64 direct calls record the inline-call form
+                .aarch64 => switch (form) {
+                    .addr => return .one(.{ .site = site, .target = target_offset, .kind = .pc_sequence, .addend = 0 }),
+                    .inline_call => return .one(.{ .site = site, .target = target_offset, .kind = if (self.codegen.directCallBranches(site)) .branch26 else .pc_sequence, .addend = 0 }),
+                    .call => {
+                        const veneer = self.codegen.callVeneerTaken(site, target_offset) orelse return .one(.{ .site = site, .target = target_offset, .kind = .branch26, .addend = 0 });
+                        return .{ .edges = .{
+                            .{ .site = site, .target = veneer, .kind = .branch26, .addend = 0 },
+                            .{ .site = veneer, .target = target_offset, .kind = .pc_sequence, .addend = 0 },
+                        }, .len = 2 };
+                    },
                 },
+                // A call's and a LEA's displacement is their last 4 bytes,
+                // counting from the end of the instruction.
+                .x86_64 => return .one(.{
+                    .site = site + switch (form) {
+                        .call => @as(usize, 1),
+                        .addr => 3,
+                        .inline_call => unreachable, // only aarch64 direct calls record the inline-call form
+                    },
+                    .target = target_offset,
+                    .kind = .pc32,
+                    .addend = -4,
+                }),
             }
         }
+
+        /// The one or two fields of a resolved code reference.
+        pub const CodeRefEdges = struct {
+            edges: [2]UnitImage.CodeEdge,
+            len: u8,
+
+            fn one(edge: UnitImage.CodeEdge) CodeRefEdges {
+                return .{ .edges = .{ edge, undefined }, .len = 1 };
+            }
+
+            pub fn slice(self: *const CodeRefEdges) []const UnitImage.CodeEdge {
+                return self.edges[0..self.len];
+            }
+        };
 
         /// Remove placement-specific stub displacements using producer records.
         /// Clear the placement-specific displacement of a reference at

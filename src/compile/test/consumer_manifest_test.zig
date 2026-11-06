@@ -218,7 +218,7 @@ test "a build evaluates every compile-time value and materializes the ones its p
     ctx.ctx = &capture;
     ctx.vtable.writeStderr = Capture.write;
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,
@@ -311,7 +311,7 @@ test "one evaluated root has one completed-value slot however many places read i
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
     defer allocator.free(app_path);
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,
@@ -431,7 +431,7 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
     defer allocator.free(app_path);
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,
@@ -521,7 +521,7 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
     defer allocator.free(app_path);
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,

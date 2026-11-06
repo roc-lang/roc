@@ -16,6 +16,7 @@ const reporting = @import("reporting");
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 const CIR = @import("CIR.zig");
+const HoistRoots = @import("hoist_roots.zig");
 const DependencyGraph = @import("DependencyGraph.zig");
 
 const TypeWriter = types_mod.TypeWriter;
@@ -843,9 +844,9 @@ pub const RecordOmittedDefault = extern struct {
 /// closed tag union where the annotation leaves the union open (design.md
 /// "Row Subsumption"). The expression keeps its own type; the function's
 /// result relates to `wide_var`, a copy of that type with each such closed
-/// row re-opened. Checked-body construction keeps the expression's own node
-/// and adds a `row_coerce` of it at the wide type, which is the node the
-/// expression's parent refers to.
+/// row re-opened. The checked body reader reports the coercion on the
+/// expression's own node (`CheckedBodies.rowCoercion`), and each lowering
+/// coerces the value to the wide type where the expression's parent reads it.
 pub const RowCoercedResult = extern struct {
     /// The value expression node (`Node.Idx`).
     node_idx: u32,
@@ -853,6 +854,68 @@ pub const RowCoercedResult = extern struct {
     wide_var: u32,
 
     /// The checked module's sorted table of row-coerced results.
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// A source node whose own checked state is erroneous (`erroneous_nodes`).
+pub const ErroneousNode = extern struct {
+    node_idx: u32,
+
+    /// The checked module's sorted table of erroneous nodes.
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// A compile-time root checking selected (`selected_hoisted_roots`).
+pub const SelectedHoistedRoot = HoistRoots.SelectedHoistedRoot;
+/// A local function binding checking promoted to a procedure of its own
+/// (`promoted_local_procedures`).
+pub const PromotedLocalProcedure = HoistRoots.PromotedLocalProcedure;
+
+/// The app definition checking solved one platform requirement with
+/// (`platform_requirement_solutions`).
+pub const PlatformRequirementSolution = struct {
+    /// Index of the requirement in the platform's requires clause.
+    requires_idx: u32,
+    /// The exported app definition the requirement resolved to.
+    def: CIR.Def.Idx,
+    /// The requirement type instantiated into the app's store and unified
+    /// against the app definition's expression.
+    solved_var: types_mod.Var,
+    /// Whether the platform declares the requirement at a function type.
+    is_function: bool,
+    outcome: Outcome,
+    /// Range of `platform_requirement_identity_vars`: the requirement type's
+    /// identity variables in the app's store, in canonical identity-slot
+    /// order.
+    identities_start: u32,
+    identities_len: u32,
+
+    pub const Outcome = enum(u8) { success, checked_error };
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// A `match` or destructure whose exhaustiveness checking left to be decided
+/// after checking (`exhaustiveness_obligations`). Its index in the module's
+/// list is the checked exhaustiveness site id.
+pub const ExhaustivenessObligation = struct {
+    mode: Mode,
+    source: Source,
+    region: Region,
+
+    pub const Mode = enum(u8) {
+        /// Missing cases are a diagnostic unless a compile-time root that
+        /// replaces the site decides it by evaluation.
+        static,
+        /// Only an evaluation that reaches a missing case reports it.
+        empirical,
+    };
+
+    pub const Source = union(enum) {
+        match_expr: CIR.Expr.Idx,
+        destructure_pattern: CIR.Pattern.Idx,
+    };
+
     pub const SafeList = collections.SafeList(@This());
 };
 
@@ -1112,8 +1175,26 @@ dispatch_relation_merges: DispatchRelationMerge.SafeList,
 /// Sorted by source node for allocation-free cross-module lookup.
 binding_schemes: BindingScheme.SafeList,
 /// Value expressions whose checked type is a widening copy of their own
-/// type, lowered as a `row_coerce` of the expression. Sorted by source node.
+/// type, which lowering coerces the expression's value to. Sorted by source
+/// node.
 row_coerced_results: RowCoercedResult.SafeList,
+/// Nodes whose own checked state is erroneous: an expression or pattern
+/// whose type contains an error, a runtime error node, or a dispatch whose
+/// obligation checking rejected. Recorded once checking is complete.
+/// Sorted by source node.
+erroneous_nodes: ErroneousNode.SafeList,
+/// Compile-time roots checking selected, in selection order.
+selected_hoisted_roots: collections.SafeList(SelectedHoistedRoot),
+/// Local function bindings checking promoted to procedures of their own.
+promoted_local_procedures: collections.SafeList(PromotedLocalProcedure),
+/// For an app checked against its platform's requirements: one solution per
+/// requirement checking finalized, in requires-clause order.
+platform_requirement_solutions: PlatformRequirementSolution.SafeList,
+/// Flat pool backing `PlatformRequirementSolution.identities_start/identities_len`.
+platform_requirement_identity_vars: collections.SafeList(types_mod.Var),
+/// Exhaustiveness checks checking left to evaluation or to the build's
+/// diagnostics, indexed by checked exhaustiveness site id.
+exhaustiveness_obligations: ExhaustivenessObligation.SafeList,
 /// Generated-codec relations carried by those schemes. Sorted by source node;
 /// multiple requirements for one binding occupy one contiguous run.
 binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
@@ -1531,6 +1612,12 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .dispatch_relation_merges = try DispatchRelationMerge.SafeList.initCapacity(gpa, 0),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
         .row_coerced_results = try RowCoercedResult.SafeList.initCapacity(gpa, 8),
+        .erroneous_nodes = try ErroneousNode.SafeList.initCapacity(gpa, 0),
+        .selected_hoisted_roots = try collections.SafeList(SelectedHoistedRoot).initCapacity(gpa, 0),
+        .promoted_local_procedures = try collections.SafeList(PromotedLocalProcedure).initCapacity(gpa, 0),
+        .platform_requirement_solutions = try PlatformRequirementSolution.SafeList.initCapacity(gpa, 0),
+        .platform_requirement_identity_vars = try collections.SafeList(types_mod.Var).initCapacity(gpa, 0),
+        .exhaustiveness_obligations = try ExhaustivenessObligation.SafeList.initCapacity(gpa, 0),
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
@@ -1571,6 +1658,12 @@ pub fn deinit(self: *Self) void {
     self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.row_coerced_results.deinit(self.gpa);
+    self.erroneous_nodes.deinit(self.gpa);
+    self.selected_hoisted_roots.deinit(self.gpa);
+    self.promoted_local_procedures.deinit(self.gpa);
+    self.platform_requirement_solutions.deinit(self.gpa);
+    self.platform_requirement_identity_vars.deinit(self.gpa);
+    self.exhaustiveness_obligations.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -1729,6 +1822,12 @@ pub fn deinitCachedModule(self: *Self) void {
     self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.row_coerced_results.deinit(self.gpa);
+    self.erroneous_nodes.deinit(self.gpa);
+    self.selected_hoisted_roots.deinit(self.gpa);
+    self.promoted_local_procedures.deinit(self.gpa);
+    self.platform_requirement_solutions.deinit(self.gpa);
+    self.platform_requirement_identity_vars.deinit(self.gpa);
+    self.exhaustiveness_obligations.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -4020,6 +4119,12 @@ pub const Serialized = extern struct {
     dispatch_relation_merges: DispatchRelationMerge.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
     row_coerced_results: RowCoercedResult.SafeList.Serialized,
+    erroneous_nodes: ErroneousNode.SafeList.Serialized,
+    selected_hoisted_roots: collections.SafeList(SelectedHoistedRoot).Serialized,
+    promoted_local_procedures: collections.SafeList(PromotedLocalProcedure).Serialized,
+    platform_requirement_solutions: PlatformRequirementSolution.SafeList.Serialized,
+    platform_requirement_identity_vars: collections.SafeList(types_mod.Var).Serialized,
+    exhaustiveness_obligations: ExhaustivenessObligation.SafeList.Serialized,
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
@@ -4145,6 +4250,12 @@ pub const Serialized = extern struct {
         try self.dispatch_relation_merges.serialize(&env.dispatch_relation_merges, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
         try self.row_coerced_results.serialize(&env.row_coerced_results, allocator, writer);
+        try self.erroneous_nodes.serialize(&env.erroneous_nodes, allocator, writer);
+        try self.selected_hoisted_roots.serialize(&env.selected_hoisted_roots, allocator, writer);
+        try self.promoted_local_procedures.serialize(&env.promoted_local_procedures, allocator, writer);
+        try self.platform_requirement_solutions.serialize(&env.platform_requirement_solutions, allocator, writer);
+        try self.platform_requirement_identity_vars.serialize(&env.platform_requirement_identity_vars, allocator, writer);
+        try self.exhaustiveness_obligations.serialize(&env.exhaustiveness_obligations, allocator, writer);
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
@@ -4225,6 +4336,12 @@ pub const Serialized = extern struct {
             .dispatch_relation_merges = self.dispatch_relation_merges.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .row_coerced_results = self.row_coerced_results.deserializeInto(base_addr),
+            .erroneous_nodes = self.erroneous_nodes.deserializeInto(base_addr),
+            .selected_hoisted_roots = self.selected_hoisted_roots.deserializeInto(base_addr),
+            .promoted_local_procedures = self.promoted_local_procedures.deserializeInto(base_addr),
+            .platform_requirement_solutions = self.platform_requirement_solutions.deserializeInto(base_addr),
+            .platform_requirement_identity_vars = self.platform_requirement_identity_vars.deserializeInto(base_addr),
+            .exhaustiveness_obligations = self.exhaustiveness_obligations.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
@@ -4309,6 +4426,12 @@ pub const Serialized = extern struct {
             .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .row_coerced_results = try self.row_coerced_results.deserializeWithCopy(base_addr, gpa),
+            .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
+            .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
+            .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
+            .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
+            .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
+            .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -4408,6 +4531,12 @@ pub const Serialized = extern struct {
             .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .row_coerced_results = try self.row_coerced_results.deserializeWithCopy(base_addr, gpa),
+            .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
+            .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
+            .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
+            .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
+            .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
+            .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -4648,6 +4777,29 @@ pub fn rowCoercedResultWideVar(self: *const Self, node_idx: Node.Idx) ?types_mod
         @backingInt(node_idx),
     ) orelse return null;
     return @fromBackingInt(entry.wide_var);
+}
+
+/// The identity variables of a platform requirement solution, in canonical
+/// identity-slot order.
+pub fn platformRequirementIdentityVars(self: *const Self, solution: PlatformRequirementSolution) []const types_mod.Var {
+    return self.platform_requirement_identity_vars.items.items[solution.identities_start..][0..solution.identities_len];
+}
+
+/// Record the nodes whose own checked state is erroneous, in increasing node
+/// order (`erroneous_nodes`).
+pub fn recordErroneousNodes(self: *Self, nodes: []const u32) std.mem.Allocator.Error!void {
+    self.erroneous_nodes.items.clearRetainingCapacity();
+    try self.erroneous_nodes.items.ensureTotalCapacity(self.gpa, nodes.len);
+    for (nodes, 0..) |node, index| {
+        std.debug.assert(index == 0 or nodes[index - 1] < node);
+        self.erroneous_nodes.items.appendAssumeCapacity(.{ .node_idx = node });
+    }
+}
+
+/// Whether checking recorded the node at `node_idx` as erroneous in its own
+/// right (`erroneous_nodes`).
+pub fn nodeIsErroneous(self: *const Self, node_idx: Node.Idx) bool {
+    return findSortedByNode(ErroneousNode, self.erroneous_nodes.items.items, @backingInt(node_idx)) != null;
 }
 
 /// Record one exact generated-codec relation owned by a source binding scheme.

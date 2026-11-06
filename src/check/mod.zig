@@ -21,16 +21,21 @@ pub const exhaustive = @import("exhaustive.zig");
 pub const ExhaustivenessContext = @import("exhaustiveness_context.zig");
 pub const TypedCIR = @import("typed_cir.zig");
 pub const CheckedIds = @import("checked_ids.zig");
+pub const CheckedTypeIds = @import("checked_type_ids.zig");
 pub const CanonicalNames = @import("canonical_names.zig");
 /// Checked boundary names exported under the post-check-facing name.
 pub const CheckedNames = CanonicalNames;
 pub const CanonicalTypeKeys = @import("canonical_type_keys.zig");
 pub const StaticDispatchRegistry = @import("static_dispatch_registry.zig");
 pub const CheckedTraverse = @import("checked_traverse.zig");
-pub const HoistRoots = @import("hoist_roots.zig");
+pub const HoistRoots = @import("can").HoistRoots;
 pub const RequirementSolution = @import("requirement_solution.zig");
 pub const ConstStore = @import("const_store.zig");
 pub const CheckedArtifact = @import("checked_artifact.zig");
+/// The reader over a checked module's bodies.
+pub const CheckedBodies = @import("checked_bodies.zig");
+/// The body facts a checked module computes on first demand.
+pub const BodyAnalyses = @import("body_analyses.zig");
 /// Import-facing checking identities and explicit binding to current owners.
 pub const CheckingDependencies = @import("checking_dependencies.zig");
 pub const CheckingInterface = @import("checking_interface.zig");
@@ -65,7 +70,6 @@ test "check tests" {
     std.testing.refAllDecls(@import("report.zig"));
     std.testing.refAllDecls(@import("static_dispatch_registry.zig"));
     std.testing.refAllDecls(@import("checked_traverse.zig"));
-    std.testing.refAllDecls(@import("hoist_roots.zig"));
     std.testing.refAllDecls(@import("requirement_solution.zig"));
     std.testing.refAllDecls(@import("canonical_names.zig"));
     std.testing.refAllDecls(@import("canonical_type_keys.zig"));
@@ -73,7 +77,10 @@ test "check tests" {
     std.testing.refAllDecls(@import("const_store.zig"));
     std.testing.refAllDecls(@import("artifact_serialize.zig"));
     std.testing.refAllDecls(@import("checked_artifact.zig"));
+    std.testing.refAllDecls(@import("checked_bodies.zig"));
+    std.testing.refAllDecls(@import("body_analyses.zig"));
     std.testing.refAllDecls(@import("sealed_type_view.zig"));
+    std.testing.refAllDecls(@import("checked_type_ids.zig"));
     std.testing.refAllDecls(@import("evaluation_diagnostics.zig"));
     std.testing.refAllDecls(@import("checked_ids.zig"));
     std.testing.refAllDecls(@import("typed_cir.zig"));
