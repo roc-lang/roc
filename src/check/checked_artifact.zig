@@ -17543,7 +17543,7 @@ pub const NestedProcSiteTable = struct {
         // procedure), a default's root lambda is an ordinary nested function
         // value.
         for (default_exprs) |default| {
-            builder.current_scope = .root;
+            builder.beginScan();
             try builder.scanExpr(default, .{ .default_root = default }, false);
         }
 
@@ -18244,9 +18244,15 @@ const NestedProcSiteBuilder = struct {
     resolved_value_refs: ?*const ResolvedValueRefTable = null,
     /// Per site, by site index: the site lexically enclosing it, if any.
     site_parents: std.ArrayList(?u32) = .empty,
-    /// Per pattern binder, by binder node: the innermost site whose body
-    /// binds it, or null when the enclosing template body binds it.
-    binder_sites: std.ArrayList(?u32) = .empty,
+    /// Per site, by site index: the scan that recorded it. One body can be
+    /// scanned once per owner (a template and an entry wrapper reaching the
+    /// same expression), and each scan records its own copy of every site.
+    site_scans: std.ArrayList(u32) = .empty,
+    /// The scan in progress; every scan entry point starts a new one.
+    current_scan: u32 = 0,
+    /// Per scan and pattern binder: the innermost site of that scan whose
+    /// body binds it, or null when the scanned root's body binds it.
+    binder_sites: std.AutoHashMapUnmanaged(ScanBinder, ?u32) = .empty,
     /// The sites whose bodies the walk is inside, innermost last.
     open_sites: std.ArrayList(canonical.NestedProcSiteId) = .empty,
     /// Every local procedure a site's own body selects.
@@ -18255,6 +18261,16 @@ const NestedProcSiteBuilder = struct {
     const SelectedLocalProc = struct {
         site: u32,
         proc_expr: CIR.Expr.Idx,
+    };
+
+    const ScanBinder = struct {
+        scan: u32,
+        binder: CIR.Pattern.Idx,
+    };
+
+    const ScanExpr = struct {
+        scan: u32,
+        expr: CIR.Expr.Idx,
     };
 
     fn init(
@@ -18282,6 +18298,7 @@ const NestedProcSiteBuilder = struct {
 
     fn deinitScratch(self: *NestedProcSiteBuilder) void {
         self.site_parents.deinit(self.allocator);
+        self.site_scans.deinit(self.allocator);
         self.binder_sites.deinit(self.allocator);
         self.open_sites.deinit(self.allocator);
         self.selected_procs.deinit(self.allocator);
@@ -18293,13 +18310,20 @@ const NestedProcSiteBuilder = struct {
         self.template_refs.deinit(self.allocator);
     }
 
-    fn scanCheckedBody(self: *NestedProcSiteBuilder, root_expr: CIR.Expr.Idx, template: canonical.ProcedureTemplateRef) Allocator.Error!void {
+    /// Begin scanning a new root: its sites and binders are related only to
+    /// each other.
+    fn beginScan(self: *NestedProcSiteBuilder) void {
+        self.current_scan += 1;
         self.current_scope = .root;
+    }
+
+    fn scanCheckedBody(self: *NestedProcSiteBuilder, root_expr: CIR.Expr.Idx, template: canonical.ProcedureTemplateRef) Allocator.Error!void {
+        self.beginScan();
         try self.scanExpr(root_expr, .{ .template = template }, true);
     }
 
     fn scanEntryWrapper(self: *NestedProcSiteBuilder, wrapper: EntryWrapper, root: CompileTimeRoot) Allocator.Error!void {
-        self.current_scope = .root;
+        self.beginScan();
         const parts = root.bodyParts();
         if (parts.expr) |expr| try self.scanExpr(expr, .{ .template = wrapper.template }, false);
         if (parts.pattern) |pattern| try self.scanPattern(pattern, .{ .template = wrapper.template });
@@ -18334,6 +18358,7 @@ const NestedProcSiteBuilder = struct {
         };
 
         try self.site_parents.append(self.allocator, self.innermostOpenSite());
+        try self.site_scans.append(self.allocator, self.current_scan);
         try self.sites.append(self.allocator, .{
             .site = site,
             .owner = owner,
@@ -18726,11 +18751,7 @@ const NestedProcSiteBuilder = struct {
     }
 
     fn recordBinderSite(self: *NestedProcSiteBuilder, binder: CIR.Pattern.Idx) Allocator.Error!void {
-        const raw = @backingInt(binder);
-        if (raw >= self.binder_sites.items.len) {
-            try self.binder_sites.appendNTimes(self.allocator, null, raw + 1 - self.binder_sites.items.len);
-        }
-        self.binder_sites.items[raw] = self.innermostOpenSite();
+        try self.binder_sites.put(self.allocator, .{ .scan = self.current_scan, .binder = binder }, self.innermostOpenSite());
     }
 
     /// Record that the innermost open site's own body selects the local
@@ -18767,12 +18788,9 @@ const NestedProcSiteBuilder = struct {
     }
 
     /// Whether the body of `site`, or of a site nested in it, binds `binder`.
+    /// A binder the site's scan never binds is bound outside the scanned root.
     fn binderBoundWithin(self: *const NestedProcSiteBuilder, site: u32, binder: CIR.Pattern.Idx) bool {
-        const raw = @backingInt(binder);
-        if (raw >= self.binder_sites.items.len) {
-            checkedArtifactInvariant("nested procedure runtime capture named a binder no scanned pattern binds", .{});
-        }
-        var current = self.binder_sites.items[raw];
+        var current = self.binder_sites.get(.{ .scan = self.site_scans.items[site], .binder = binder }) orelse return false;
         while (current) |candidate| {
             if (candidate == site) return true;
             current = self.site_parents.items[candidate];
@@ -18814,13 +18832,15 @@ const NestedProcSiteBuilder = struct {
     /// its own body does not bind.
     fn publishRuntimeCaptures(self: *NestedProcSiteBuilder, sites: []NestedProcSite) Allocator.Error![]CheckedCapture {
         const allocator = self.allocator;
-        var site_by_expr = collections.DenseMapUnmanaged(CIR.Expr.Idx, u32){};
+        // A selected procedure's site is the one its selector's scan
+        // recorded: another scan's copy relates to other sites and binders.
+        var site_by_expr = std.AutoHashMapUnmanaged(ScanExpr, u32){};
         defer site_by_expr.deinit(allocator);
-        for (sites, 0..) |site, index| {
+        for (sites, self.site_scans.items, 0..) |site, scan, index| {
             const expr_id = site.checked_expr orelse continue;
-            try site_by_expr.put(allocator, expr_id, @intCast(index));
+            try site_by_expr.put(allocator, .{ .scan = scan, .expr = expr_id }, @intCast(index));
             const data = self.bodies.exprData(expr_id);
-            if (data == .closure) try site_by_expr.put(allocator, data.closure.lambda, @intCast(index));
+            if (data == .closure) try site_by_expr.put(allocator, .{ .scan = scan, .expr = data.closure.lambda }, @intCast(index));
         }
 
         const needs = try allocator.alloc(std.ArrayList(CIR.Pattern.Idx), sites.len);
@@ -18835,7 +18855,7 @@ const NestedProcSiteBuilder = struct {
         while (changed) {
             changed = false;
             for (self.selected_procs.items) |selected| {
-                const proc_site = site_by_expr.get(selected.proc_expr) orelse continue;
+                const proc_site = site_by_expr.get(.{ .scan = self.site_scans.items[selected.site], .expr = selected.proc_expr }) orelse continue;
                 var index: usize = 0;
                 while (index < needs[proc_site].items.len) : (index += 1) {
                     const binder = needs[proc_site].items[index];

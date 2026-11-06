@@ -9288,7 +9288,17 @@ const Cloner = struct {
             LoopValueCursor.whole_body + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a LoopValueCursor constant
         }
         if (frame.index < task.initial_values.len) {
-            return .{ .call = .{ .demanding = .{ .expr = task.initial_values[frame.index], .bindings = task.bindings } } };
+            const initial = task.initial_values[frame.index];
+            // An `uninitialized_payload` initializer is not a value: it marks
+            // this slot empty under a sibling param's flag, and lowering reads
+            // it only as a direct loop initial value. It evaluates nothing, so
+            // it is cloned in place rather than demanded, which could name it
+            // with a strict binding outside the loop. Its flag reference is
+            // retargeted to the emitted param once the params exist.
+            if (self.pass.program.getExpr(initial).data == .uninitialized_payload) {
+                return .{ .call = .{ .expr_value = .{ .expr = initial, .bindings = task.bindings } } };
+            }
+            return .{ .call = .{ .demanding = .{ .expr = initial, .bindings = task.bindings } } };
         }
         self.subst.restore(task.forward_start);
 
@@ -13989,6 +13999,9 @@ const Cloner = struct {
         while (current) |node| : (current = node.next) {
             switch (node.binding) {
                 .strict => |binding| {
+                    if (builtin.mode == .debug and self.pass.program.getExpr(binding.value).data == .uninitialized_payload) {
+                        Common.invariant("SpecConstr named an uninitialized_payload loop initializer with a strict binding");
+                    }
                     const pat = try self.pass.program.addPat(.{
                         .ty = binding.ty,
                         .data = .{ .bind = binding.local },
@@ -20385,6 +20398,41 @@ test "loop exit projection preserves nested exits and established tuple paramete
     try std.testing.expectEqual(ty, selected.ty);
     try std.testing.expectEqual(@as(u32, 0), selected.data.tuple_access.elem_index);
     try std.testing.expectEqual(GuardedList.at(program.typedLocalSpan(loop.params), 0).local, program.getExpr(selected.data.tuple_access.tuple).data.local);
+}
+
+test "loop exit projection keeps an uninitialized payload initializer on its own loop" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.{ .primitive = .u8 });
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ ty, ty }) });
+    const flag = try program.addLocal(@fromBackingInt(@intCast(1)), ty);
+    const payload = try program.addLocal(@fromBackingInt(@intCast(2)), ty);
+    const zero = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 0)), .kind = .u128 } } });
+    const empty_payload = try program.addExpr(.{ .ty = ty, .data = .{ .uninitialized_payload = .{ .condition = flag, .mask = 1 } } });
+    const flag_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = flag } });
+    const payload_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = payload } });
+    const result_tuple = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&.{ flag_ref, payload_ref }) } });
+    const exit = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .break_ = result_tuple } });
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForLoopExitSelection(&pass);
+    defer cloner.deinit();
+    const result = try cloner.cloneLoopWithSelectedExit(ty, Mono.LoopExpr{
+        .params = try program.addTypedLocalSpan(&.{ .{ .local = flag, .ty = ty }, .{ .local = payload, .ty = ty } }),
+        .initial_values = try program.addExprSpan(&.{ zero, empty_payload }),
+        .body = exit,
+    }, .{ .source_ty = tuple_ty, .source_arity = 2, .kept_indices = &.{0}, .kept_types = &.{ty}, .transfer = .break_value });
+    // No strict binding names the initializer ahead of the loop.
+    try std.testing.expect(program.getExpr(result).data == .loop_);
+    const loop = program.getExpr(result).data.loop_;
+    const params = program.typedLocalSpan(loop.params);
+    const initials = program.exprSpan(loop.initial_values);
+    try std.testing.expectEqual(@as(u32, 2), params.len);
+    const initial = program.getExpr(GuardedList.at(initials, 1)).data;
+    try std.testing.expect(initial == .uninitialized_payload);
+    try std.testing.expectEqual(GuardedList.at(params, 0).local, initial.uninitialized_payload.condition);
+    try std.testing.expectEqual(@as(u64, 1), initial.uninitialized_payload.mask);
 }
 
 test "loop exit projection orders an earlier opaque item before a later block chain" {
