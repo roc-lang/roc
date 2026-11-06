@@ -2853,6 +2853,13 @@ const Pass = struct {
         if (!self.plans[raw].source.size.admits()) return;
 
         const pattern = (try self.callPatternForValues(fn_id, values)) orelse return;
+        try self.ensureCallPattern(fn_id, pattern);
+    }
+
+    /// Reserve a worker for `pattern` of source function `fn_id` unless one is
+    /// recorded already or admission refuses it.
+    fn ensureCallPattern(self: *Pass, fn_id: Ast.FnId, pattern: CallPattern) Common.LowerError!void {
+        const raw = @backingInt(fn_id);
         for (self.plans[raw].specs.items) |spec| {
             if (try patternEql(self.program, spec.pattern, pattern)) return;
         }
@@ -6230,6 +6237,10 @@ const Cloner = struct {
                 self.spare_lists.exprs.give(allocator, task.out);
                 task.out_owned = false;
             },
+            .inline_direct => |*task| if (task.worker_out_owned) {
+                self.spare_lists.exprs.give(allocator, task.worker_out);
+                task.worker_out_owned = false;
+            },
             .stmt_span => |*task| {
                 task.values.deinit(allocator);
                 task.values = .empty;
@@ -6240,7 +6251,7 @@ const Cloner = struct {
                 task.scopes.deinit(allocator);
                 task.scopes = .empty;
             },
-            .expr, .keeping, .parts, .without_reuse, .expr_value_owned, .expr_value, .demanding, .callable_from_function_value, .wrapped_value, .plain, .join_point, .let_value, .let_with_value, .bind_let_value, .positioned_reusable, .loop_exit_values, .loop_body, .selected_loop_exit, .make_reusable, .let_of_case, .let_of_case_shared, .divergent_tail, .capture_let_case_jump, .inline_let_case_join, .finalize_let_case_join, .rebuild_let_case_join_value, .emit_block_with_tail, .append_exprs_from_value, .supply_loop_slot, .field_access_value, .tuple_access, .match, .select_known_match, .bind_pat_to_match_value, .local_value, .inline_value, .case_of_case, .distribute_value, .inline_callable, .inline_direct, .wrap_typed_boundary, .stmt, .expr_span, .capture_span, .field_span, .span, .branch_span, .if_branch_span, .materialize, .materialize_callable, .materialize_worker, .materialize_with_captures, .value_flow_bind => {},
+            .expr, .keeping, .parts, .without_reuse, .expr_value_owned, .expr_value, .demanding, .callable_from_function_value, .wrapped_value, .plain, .join_point, .let_value, .let_with_value, .bind_let_value, .positioned_reusable, .loop_exit_values, .loop_body, .selected_loop_exit, .make_reusable, .let_of_case, .let_of_case_shared, .divergent_tail, .capture_let_case_jump, .inline_let_case_join, .finalize_let_case_join, .rebuild_let_case_join_value, .emit_block_with_tail, .append_exprs_from_value, .supply_loop_slot, .field_access_value, .tuple_access, .match, .select_known_match, .bind_pat_to_match_value, .local_value, .inline_value, .case_of_case, .distribute_value, .inline_callable, .wrap_typed_boundary, .stmt, .expr_span, .capture_span, .field_span, .span, .branch_span, .if_branch_span, .materialize, .materialize_callable, .materialize_worker, .materialize_with_captures, .value_flow_bind => {},
         }
     }
 
@@ -6859,7 +6870,8 @@ const Cloner = struct {
                     return .{ .call = .{ .plain = .{ .expr = expr_id } } };
                 }
                 const callee = Ast.localDirectCallee(call) orelse return .{ .call = .{ .plain = .{ .expr = expr_id } } };
-                if (!try self.admitsDirectInline(expr_id, callee, call)) {
+                const admission = try self.admitsDirectInline(expr_id, callee, call);
+                if (admission == .residual) {
                     return .{ .call = .{ .plain = .{ .expr = expr_id } } };
                 }
                 task.enters_iterator = self.iterator_inline_depth != 0 or isIteratorProducer(call.iterator_procedure);
@@ -6872,6 +6884,7 @@ const Cloner = struct {
                     .original_expr = expr_id,
                     .result_shape_demanded = false,
                     .bindings = bindings,
+                    .worker_slots = admission.workerSlots(),
                 } } };
             },
             .unit,
@@ -7060,7 +7073,8 @@ const Cloner = struct {
                     return .{ .tail = value_task };
                 }
                 const callee = Ast.localDirectCallee(call) orelse return .{ .tail = value_task };
-                if (!try self.admitsDirectInline(expr_id, callee, call)) return .{ .tail = value_task };
+                const admission = try self.admitsDirectInline(expr_id, callee, call);
+                if (admission == .residual) return .{ .tail = value_task };
                 task.enters_iterator = self.iterator_inline_depth != 0 or isIteratorProducer(call.iterator_procedure);
                 if (task.enters_iterator) self.iterator_inline_depth += 1;
                 frame.cursor = 1;
@@ -7071,6 +7085,7 @@ const Cloner = struct {
                     .original_expr = expr_id,
                     .result_shape_demanded = true,
                     .bindings = bindings,
+                    .worker_slots = admission.workerSlots(),
                 } } };
             },
             .call_value => |call| switch (frame.cursor) {
@@ -11470,6 +11485,122 @@ const Cloner = struct {
         return .{ .call = try self.withoutReuseTask(.{ .expr_value = .{ .expr = task.source_expr, .bindings = task.bindings } }) };
     }
 
+    const ExactWorker = struct { pattern: CallPattern, fn_id: Ast.FnId };
+
+    /// The worker of `callee` for exactly the pattern `values` have, when
+    /// that worker serves every slot of `slots`: no consumer inside the
+    /// callee's extent meets a part of the argument that this clone knows
+    /// and the pattern lacks, so the worker's body simplifies everything the
+    /// copied body would. A pattern admission refuses, or one that knows
+    /// less than the crossing relied on, has no such worker, and the call is
+    /// inlined.
+    fn exactWorker(self: *Cloner, callee: Ast.FnId, args: []const Ast.ExprId, values: []const Value, slots: u64) Common.LowerError!?ExactWorker {
+        const pass = self.pass;
+        const pattern = (try pass.callPatternForValues(callee, values)) orelse return null;
+        {
+            // A query's scratch is its own: only the answer leaves it.
+            const position = self.arena.mark();
+            defer self.arena.restore(position);
+            const session = self.crossingSession();
+            for (pattern.args, args, 0..) |shape, arg, index| {
+                if (index >= 64 or slots & (@as(u64, 1) << @intCast(index)) == 0) continue;
+                var known_to_clone: ArgumentSeed = .{ .cloner = self, .expr = arg };
+                var lacking: LackingSeed = .{ .known_to_clone = known_to_clone.oracle(), .shape = shape };
+                if (try session.calleeConsumes(lacking.oracle(), callee, .{ .kind = .arg, .index = @intCast(index) })) return null;
+            }
+        }
+        try pass.ensureCallPattern(callee, pattern);
+        for (pass.plans[@backingInt(callee)].specs.items) |spec| {
+            if (!try patternEql(pass.program, spec.pattern, pattern)) continue;
+            return .{
+                .pattern = spec.pattern,
+                .fn_id = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls"),
+            };
+        }
+        return null;
+    }
+
+    /// The parts of an argument this clone knows and a call pattern's shape
+    /// lacks. A walk follows every part the clone knows, and a consumer
+    /// counts only where the shape does not know the part it meets: such a
+    /// consumer is one the copied body would simplify and the worker cloned
+    /// for the pattern would not.
+    const LackingSeed = struct {
+        known_to_clone: InlineCrossing.Oracle,
+        shape: Shape,
+
+        fn oracle(self: *LackingSeed) InlineCrossing.Oracle {
+            return .{ .ctx = self, .known = known };
+        }
+
+        fn known(ctx: *anyopaque, path: []const InlineCrossing.Step, kinds: InlineCrossing.Consumers) Allocator.Error!bool {
+            const self: *LackingSeed = @ptrCast(@alignCast(ctx));
+            if (!try self.known_to_clone.known(self.known_to_clone.ctx, path, kinds)) return false;
+            // A walk asks about every consumer at once to follow a part.
+            if (kinds.eql(InlineCrossing.known_parts)) return true;
+            return !shapeKnownAt(self.shape, path, kinds);
+        }
+    };
+
+    /// Whether a call pattern's shape knows the part at `path` well enough
+    /// for one of `kinds`: what the worker cloned for the pattern knows
+    /// about the argument.
+    fn shapeKnownAt(root: Shape, path: []const InlineCrossing.Step, kinds: InlineCrossing.Consumers) bool {
+        var shape = root;
+        var steps = path;
+        while (true) switch (shape) {
+            .any => return false,
+            .nominal => |nominal| shape = nominal.backing.*,
+            .tag => |tag| {
+                if (steps.len == 0) return kinds.contains(.match) or kinds.contains(.loop);
+                const payload = for (tag.payloads, 0..) |payload, index| {
+                    if (steps[0].isPayload(tag.name, @intCast(index))) break payload;
+                } else return false;
+                shape = payload;
+                steps = steps[1..];
+            },
+            .record => |record| {
+                if (steps.len == 0) return kinds.contains(.project);
+                const field = for (record.fields) |field| {
+                    if (steps[0].isField(field.name)) break field.shape;
+                } else return false;
+                shape = field;
+                steps = steps[1..];
+            },
+            .tuple => |tuple| {
+                if (steps.len == 0) return kinds.contains(.project);
+                const item = for (tuple.items, 0..) |item, index| {
+                    if (steps[0].isItem(@intCast(index))) break item;
+                } else return false;
+                shape = item;
+                steps = steps[1..];
+            },
+            .callable => return steps.len == 0 and (kinds.contains(.call) or kinds.contains(.loop)),
+        };
+    }
+
+    /// Emit the arguments a bound worker takes, then the call to it.
+    fn nextWorkerCallArg(self: *Cloner, frame: *CloneFrame, task: *InlineDirectTask) Common.LowerError!CloneStep {
+        const pattern = task.worker_pattern;
+        if (frame.index < pattern.args.len) {
+            frame.cursor = InlineDirectCursor.worker_arg;
+            return .{ .call = .{ .append_exprs_from_value = .{ .shape = pattern.args[frame.index], .value = task.arg_values[frame.index], .out = task.worker_out } } };
+        }
+        const program = self.pass.program;
+        const args = try program.addExprSpan(task.worker_out.items);
+        self.spare_lists.exprs.give(self.pass.allocator, task.worker_out);
+        task.worker_out_owned = false;
+        const call = program.getExpr(task.original_expr).data.call_proc;
+        if (call.captures.len != 0) Common.invariant("a call with capture operands was bound to a worker in place of its inline");
+        return retValue(.{ .expr = try self.addExpr(.{ .ty = task.result_ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = task.worker_fn },
+            .args = args,
+            .iterator_procedure = call.iterator_procedure,
+            .captures = call.captures,
+            .is_cold = call.is_cold,
+        } } }) });
+    }
+
     const InlineDirectTask = struct {
         callee: Ast.FnId,
         args_span: Ast.Span(Ast.ExprId),
@@ -11477,6 +11608,18 @@ const Cloner = struct {
         original_expr: Ast.ExprId,
         result_shape_demanded: bool,
         bindings: *BindingChain,
+        /// The argument slots, one bit each, whose known values gain only
+        /// inside the callee's extent: a worker for the call's exact pattern
+        /// serves them, and the call binds one where it can instead of
+        /// copying the body.
+        worker_slots: u64 = 0,
+        /// The inline growth charged for this call, returned when a worker
+        /// takes it.
+        growth_charged: usize = 0,
+        worker_pattern: CallPattern = undefined,
+        worker_fn: Ast.FnId = undefined,
+        worker_out: *std.ArrayList(Ast.ExprId) = undefined,
+        worker_out_owned: bool = false,
         result_ty: Type.TypeId = undefined,
         source_expr: Ast.ExprId = undefined,
         needs_typed_boundary: bool = false,
@@ -11503,6 +11646,7 @@ const Cloner = struct {
         const prepared_arg = 5;
         const body = 6;
         const boundary = 7;
+        const worker_arg = 8;
     };
 
     fn plainDirectCall(frame: *CloneFrame, task: *InlineDirectTask) CloneStep {
@@ -11543,6 +11687,7 @@ const Cloner = struct {
                     if (current_size == 0 or current_size >= active_size) return plainDirectCall(frame, task);
                 }
                 if (!self.admitInlineBodyGrowth(source.size)) return plainDirectCall(frame, task);
+                task.growth_charged = @max(source.size.exactValue() orelse 0, 1);
                 task.source_expr = source.expr;
                 task.source_args = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.args);
                 task.args = try walkRows(self.pass.program, arena, Ast.ExprId, task.args_span);
@@ -11590,7 +11735,11 @@ const Cloner = struct {
                 return self.finishInlinedCall(task, inlined, callee);
             },
             InlineDirectCursor.boundary => return self.finishInlinedCall(task, input.?.get(.value), callee),
-            InlineDirectCursor.boundary + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to an InlineDirectCursor constant
+            InlineDirectCursor.worker_arg => {
+                frame.index += 1;
+                return try self.nextWorkerCallArg(frame, task);
+            },
+            InlineDirectCursor.worker_arg + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to an InlineDirectCursor constant
         }
         if (frame.cursor == InlineDirectCursor.capture_value) {
             if (frame.index < task.operands.len) {
@@ -11605,6 +11754,19 @@ const Cloner = struct {
                     @backingInt(callee) < self.pass.plans.len and
                     self.pass.plans[@backingInt(callee)].used_args[frame.index];
                 return .{ .call = .{ .inline_value = .{ .expr = task.args[frame.index], .demand_shape = demand_arg_shape, .bindings = task.bindings } } };
+            }
+            if (task.worker_slots != 0) {
+                if (try self.exactWorker(callee, task.args, task.arg_values, task.worker_slots)) |worker| {
+                    // The body is not copied, so its growth is not spent.
+                    self.inline_body_growth.remaining += task.growth_charged;
+                    task.worker_pattern = worker.pattern;
+                    task.worker_fn = worker.fn_id;
+                    task.worker_out = try arena.create(std.ArrayList(Ast.ExprId));
+                    task.worker_out.* = self.spare_lists.exprs.take();
+                    task.worker_out_owned = true;
+                    frame.index = 0;
+                    return try self.nextWorkerCallArg(frame, task);
+                }
             }
             frame.index = 0;
             frame.cursor = InlineDirectCursor.prepared_capture;
@@ -12866,24 +13028,45 @@ const Cloner = struct {
         return result;
     }
 
+    /// What a clone does with a direct call.
+    const DirectInline = union(enum) {
+        /// The call stays a call.
+        residual,
+        /// The callee's body is copied into the caller.
+        copy,
+        /// Every productive crossing is a known argument whose consumers lie
+        /// inside the callee's extent. The call binds the worker for its
+        /// exact pattern where that worker serves the slots named here, one
+        /// bit each, and the body is copied otherwise.
+        worker_first: u64,
+
+        fn workerSlots(self: DirectInline) u64 {
+            return switch (self) {
+                .worker_first => |slots| slots,
+                .residual, .copy => 0,
+            };
+        }
+    };
+
     /// Whether this clone may inline the direct call `expr_id` to `callee`.
     /// The checker-stamped iterator protocol always inlines: a producer
     /// exposes its construction to fusion, and `next` exposes the step call it
     /// forwards to the code that matches its result. A wrapper always inlines,
     /// since its body costs less than the call. A call whose captures this
     /// context substituted also always inlines; any other call inlines only
-    /// when inlining is productive.
-    fn admitsDirectInline(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!bool {
-        if (!self.inline_direct_requires_productivity) return true;
-        if (call.iterator_procedure != null) return true;
-        if (self.crossingIndex().isWrapper(callee)) return true;
+    /// when inlining is productive, and then only when a worker would not
+    /// simplify the same consumers.
+    fn admitsDirectInline(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!DirectInline {
+        if (!self.inline_direct_requires_productivity) return .copy;
+        if (call.iterator_procedure != null) return .copy;
+        if (self.crossingIndex().isWrapper(callee)) return .copy;
         // A direct call carries its callee's captures by the callee's own
         // capture locals: the residual call imports those locals into the
         // enclosing function. In a context where a capture operand has been
         // substituted away from the callee's local, that import would name a
         // local the context does not have, so the call cannot stay residual
         // and must inline.
-        if (self.callCapturesAreForeign(call.captures)) return true;
+        if (self.callCapturesAreForeign(call.captures)) return .copy;
         return self.crossingIsProductive(expr_id, callee, call);
     }
 
@@ -12902,7 +13085,13 @@ const Cloner = struct {
     /// builds on every path that returns, met in the caller's continuation,
     /// or a known part of an argument or capture, met in the callee's extent
     /// or, through its result, in the caller's continuation.
-    fn crossingIsProductive(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!bool {
+    ///
+    /// A copy is needed only for a consumer beyond the callee's extent. When
+    /// every productive crossing is a known argument that gains inside the
+    /// extent alone, a worker cloned from the callee for that argument
+    /// simplifies the same consumers once for every call with the pattern,
+    /// so the answer names those slots instead.
+    fn crossingIsProductive(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!DirectInline {
         // A query's scratch is its own: only the answer leaves it.
         const position = self.arena.mark();
         defer self.arena.restore(position);
@@ -12914,22 +13103,33 @@ const Cloner = struct {
 
         const root_fn = self.crossing_root_fn;
         var result_seed: ResultSeed = .{ .cloner = self, .callee = callee, .call = call };
-        if (try session.resultCrosses(result_seed.oracle(), root_fn, frames, expr_id)) return true;
+        if (try session.resultCrosses(result_seed.oracle(), root_fn, frames, expr_id)) return .copy;
 
         const program = self.pass.program;
         const args = program.exprSpan(call.args);
+        const operands = program.captureOperandSpan(call.captures);
+        // A worker takes a call pattern's arguments, and a call that passes
+        // captures clones them before its arguments, so only a call without
+        // capture operands can still become a worker call once its argument
+        // values are cloned.
+        const worker_eligible = self.rewrite_call_patterns and operands.len == 0 and
+            @backingInt(callee) < self.pass.plans.len;
+        var worker_slots: u64 = 0;
         for (0..args.len) |index| {
             var seed: ArgumentSeed = .{ .cloner = self, .expr = GuardedList.at(args, index) };
-            if (try session.argumentCrosses(seed.oracle(), root_fn, frames, expr_id, callee, .{ .kind = .arg, .index = @intCast(index) })) return true;
+            const slot: InlineCrossing.Slot = .{ .kind = .arg, .index = @intCast(index) };
+            if (!try session.argumentCrosses(seed.oracle(), root_fn, frames, expr_id, callee, slot)) continue;
+            if (!worker_eligible or index >= 64) return .copy;
+            if (try session.argumentCrossesBeyond(seed.oracle(), root_fn, frames, expr_id, callee, slot)) return .copy;
+            worker_slots |= @as(u64, 1) << @intCast(index);
         }
-        const operands = program.captureOperandSpan(call.captures);
         for (0..operands.len) |index| {
             const operand = GuardedList.at(operands, index);
             var seed: ArgumentSeed = .{ .cloner = self, .expr = operand.value };
             const slot = InlineCrossing.captureSlot(program, callee, operand.id);
-            if (try session.argumentCrosses(seed.oracle(), root_fn, frames, expr_id, callee, .{ .kind = .capture, .index = slot })) return true;
+            if (try session.argumentCrosses(seed.oracle(), root_fn, frames, expr_id, callee, .{ .kind = .capture, .index = slot })) return .copy;
         }
-        return false;
+        return if (worker_slots != 0) .{ .worker_first = worker_slots } else .residual;
     }
 
     /// The parts of an argument or capture this clone knows.
@@ -18770,12 +18970,12 @@ test "a callable worker's body is a root context for inline productivity" {
     const make_call_data = program.getExpr(make_call).data.call_proc;
 
     // Inlined into `outer` through `middle`: the built tag meets the match.
-    try std.testing.expect(try cloner.crossingIsProductive(make_call, make, make_call_data));
+    try std.testing.expect((try cloner.crossingIsProductive(make_call, make, make_call_data)) != .residual);
 
     // A worker body cloned from `middle` while that frame is active.
     cloner.result_boundary = cloner.inline_stack.items.len;
     cloner.crossing_root_fn = middle;
-    try std.testing.expect(!try cloner.crossingIsProductive(make_call, make, make_call_data));
+    try std.testing.expect((try cloner.crossingIsProductive(make_call, make, make_call_data)) == .residual);
 }
 
 test "a known record entering a loop is productive only through the parts the loop consumes" {
@@ -18897,17 +19097,17 @@ test "a known record entering a loop is productive only through the parts the lo
 
     // A known record argument entering a loop that never takes it apart.
     cloner.crossing_root_fn = ignoring_caller;
-    try std.testing.expect(!try cloner.crossingIsProductive(ignoring_call, run_ignoring, program.getExpr(ignoring_call).data.call_proc));
+    try std.testing.expect((try cloner.crossingIsProductive(ignoring_call, run_ignoring, program.getExpr(ignoring_call).data.call_proc)) == .residual);
     // A known tag in a field of that record, matched inside the loop.
     cloner.crossing_root_fn = reading_caller;
-    try std.testing.expect(try cloner.crossingIsProductive(reading_call, run_reading, program.getExpr(reading_call).data.call_proc));
+    try std.testing.expect((try cloner.crossingIsProductive(reading_call, run_reading, program.getExpr(reading_call).data.call_proc)) != .residual);
 
     // The same two sides for a record the callee builds and the caller
     // carries into its own loop.
     cloner.crossing_root_fn = looping_ignoring;
-    try std.testing.expect(!try cloner.crossingIsProductive(make_ignored, make, program.getExpr(make_ignored).data.call_proc));
+    try std.testing.expect((try cloner.crossingIsProductive(make_ignored, make, program.getExpr(make_ignored).data.call_proc)) == .residual);
     cloner.crossing_root_fn = looping_reading;
-    try std.testing.expect(try cloner.crossingIsProductive(make_read, make, program.getExpr(make_read).data.call_proc));
+    try std.testing.expect((try cloner.crossingIsProductive(make_read, make, program.getExpr(make_read).data.call_proc)) != .residual);
 }
 
 test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
@@ -19353,6 +19553,153 @@ test "a direct call inlines only where its surroundings consume the result it co
     cloner.crossing_root_fn = matching;
     try std.testing.expect((try cloner.cloneExprValueDemandingShape(matched_call)).value == .tag);
     try std.testing.expect((try cloner.cloneExprValue(matched_call)).value == .tag);
+}
+
+test "a known argument that gains only inside its callee binds a worker instead of copying the body" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const tag_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const name_a = try program.names.internTagLabel("A");
+
+    const Build = struct {
+        program: *Ast.Program,
+        unit_ty: Type.TypeId,
+        tag_ty: Type.TypeId,
+        name_a: names.TagNameId,
+
+        fn tagA(self: @This()) Allocator.Error!Ast.ExprId {
+            return self.program.addExpr(.{ .ty = self.tag_ty, .data = .{ .tag = .{ .name = self.name_a, .payloads = .empty() } } });
+        }
+
+        /// `match scrutinee { A => on_a, _ => otherwise }`.
+        fn matchA(self: @This(), ty: Type.TypeId, scrutinee: Ast.ExprId, on_a: Ast.ExprId, otherwise: Ast.ExprId) Allocator.Error!Ast.ExprId {
+            const pat_a = try self.program.addPat(.{ .ty = self.tag_ty, .data = .{ .tag = .{ .name = self.name_a, .payloads = .empty() } } });
+            const wildcard = try self.program.addPat(.{ .ty = self.tag_ty, .data = .wildcard });
+            return self.program.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
+                .scrutinee = scrutinee,
+                .branches = try self.program.addBranchSpan(&.{ .{ .pat = pat_a, .body = on_a }, .{ .pat = wildcard, .body = otherwise } }),
+            } } });
+        }
+
+        /// A statement before the final expression keeps a body from being a
+        /// wrapper, which would inline wherever it is called.
+        fn afterStatement(self: @This(), ty: Type.TypeId, final_expr: Ast.ExprId) Allocator.Error!Ast.ExprId {
+            const unit = try self.program.addExpr(.{ .ty = self.unit_ty, .data = .unit });
+            return self.program.addExpr(.{ .ty = ty, .data = .{ .block = .{
+                .statements = try self.program.addStmtSpan(&.{try self.program.addStmt(.{ .expr = unit })}),
+                .final_expr = final_expr,
+            } } });
+        }
+
+        fn function(self: @This(), symbol: u32, arg: ?Ast.LocalId, body: Ast.ExprId, ret: Type.TypeId) Allocator.Error!Ast.FnId {
+            return self.program.addFn(.{
+                .shapes = self.program.finishFnShapes(.{}),
+                .symbol = @fromBackingInt(@intCast(symbol)),
+                .args = if (arg) |local| try self.program.addTypedLocalSpan(&.{.{ .local = local, .ty = self.tag_ty }}) else .empty(),
+                .captures = .empty(),
+                .body = .{ .roc = body },
+                .ret = ret,
+            });
+        }
+
+        fn call(self: @This(), ty: Type.TypeId, callee: Ast.FnId, arg: Ast.ExprId) Allocator.Error!Ast.ExprId {
+            return self.program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
+                .callee = .{ .lifted = callee },
+                .args = try self.program.addExprSpan(&.{arg}),
+                .captures = .empty(),
+            } } });
+        }
+    };
+    const b: Build = .{ .program = &program, .unit_ty = unit_ty, .tag_ty = tag_ty, .name_a = name_a };
+
+    // `consume` matches its argument and returns nothing the caller reads.
+    const consume_arg = try program.addLocal(@fromBackingInt(1), tag_ty);
+    const consume_scrutinee = try program.addExpr(.{ .ty = tag_ty, .data = .{ .local = consume_arg } });
+    const consume = try b.function(2, consume_arg, try b.afterStatement(unit_ty, try b.matchA(
+        unit_ty,
+        consume_scrutinee,
+        try program.addExpr(.{ .ty = unit_ty, .data = .unit }),
+        try program.addExpr(.{ .ty = unit_ty, .data = .unit }),
+    )), unit_ty);
+    // `pass` matches its argument too, and returns it on every path.
+    const pass_arg = try program.addLocal(@fromBackingInt(3), tag_ty);
+    const pass_scrutinee = try program.addExpr(.{ .ty = tag_ty, .data = .{ .local = pass_arg } });
+    const pass_fn = try b.function(4, pass_arg, try b.afterStatement(tag_ty, try b.matchA(
+        tag_ty,
+        pass_scrutinee,
+        try program.addExpr(.{ .ty = tag_ty, .data = .{ .local = pass_arg } }),
+        try program.addExpr(.{ .ty = tag_ty, .data = .{ .local = pass_arg } }),
+    )), tag_ty);
+
+    // Callers: two that only run `consume` on a known tag, and one that
+    // matches what `pass` returns for a known tag.
+    const consume_call = try b.call(unit_ty, consume, try b.tagA());
+    const running = try b.function(5, null, try b.afterStatement(unit_ty, consume_call), unit_ty);
+    const refused_call = try b.call(unit_ty, consume, try b.tagA());
+    const running_refused = try b.function(6, null, try b.afterStatement(unit_ty, refused_call), unit_ty);
+    const pass_call = try b.call(tag_ty, pass_fn, try b.tagA());
+    const matching = try b.function(7, null, try b.matchA(
+        unit_ty,
+        pass_call,
+        try program.addExpr(.{ .ty = unit_ty, .data = .unit }),
+        try program.addExpr(.{ .ty = unit_ty, .data = .unit }),
+    ), unit_ty);
+    program.next_symbol = 8;
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    try pass.collectArgUses(pass.plans.len);
+    const crossing_index = try pass.buildCrossingIndex();
+    defer crossing_index.deinit();
+    var crossing_session = try InlineCrossing.Session.init(pass.allocator, crossing_index, pass.program);
+    defer crossing_session.deinit();
+    try crossing_index.classifyWrappers(&crossing_session);
+    pass.crossing_index = crossing_index;
+    pass.crossing_session = &crossing_session;
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    cloner.inline_direct_requires_productivity = true;
+
+    // Only `consume`'s own match gains from the known tag, so the call binds
+    // the worker cloned for that tag and copies nothing.
+    cloner.crossing_root_fn = running;
+    const consume_specs = &pass.plans[@backingInt(consume)].specs;
+    const bound = program.getExpr(try cloner.cloneExpr(consume_call)).data;
+    try std.testing.expect(bound == .call_proc);
+    try std.testing.expectEqual(@as(usize, 1), consume_specs.items.len);
+    try std.testing.expectEqual(consume_specs.items[0].fn_id, Ast.localDirectCallee(bound.call_proc));
+    try std.testing.expectEqual(@as(usize, 0), program.exprSpan(bound.call_proc.args).len);
+    // The body was not copied, so the clone's inline growth is unspent.
+    try std.testing.expectEqual(@as(usize, Cloner.inline_body_work_budget), cloner.inline_body_growth.remaining);
+
+    // The caller's match reads what `pass` returns, which no worker call can
+    // show it, so that body is copied and the match selects its arm.
+    cloner.crossing_root_fn = matching;
+    try std.testing.expect((try cloner.crossingIsProductive(pass_call, pass_fn, program.getExpr(pass_call).data.call_proc)) == .copy);
+    try std.testing.expect((try cloner.cloneExprValueDemandingShape(pass_call)).value == .tag);
+    try std.testing.expectEqual(@as(usize, 0), pass.plans[@backingInt(pass_fn)].specs.items.len);
+
+    // With the worker budget spent on other patterns, admission refuses this
+    // call's pattern, and the call is copied as it is without a worker.
+    consume_specs.clearRetainingCapacity();
+    const arena = pass.arena.allocator();
+    for (0..spec_constr_specialization_count) |index| {
+        var label_buffer: [16]u8 = undefined;
+        const other_tag = try program.names.internTagLabel(try std.fmt.bufPrint(&label_buffer, "Other{d}", .{index}));
+        try consume_specs.append(allocator, .{
+            .pattern = .{ .args = try arena.dupe(Shape, &.{.{ .tag = .{ .ty = tag_ty, .name = other_tag, .payloads = &.{} } }}) },
+            .fn_id = running,
+            .written = true,
+        });
+    }
+    cloner.crossing_root_fn = running_refused;
+    try std.testing.expect((try cloner.crossingIsProductive(refused_call, consume, program.getExpr(refused_call).data.call_proc)) == .worker_first);
+    const copied = program.getExpr(try cloner.cloneExpr(refused_call)).data;
+    try std.testing.expect(copied != .call_proc);
+    try std.testing.expectEqual(spec_constr_specialization_count, consume_specs.items.len);
 }
 
 test "issue 10168 SpecConstr clones every capture when nested cloning grows the capture store" {
