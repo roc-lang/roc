@@ -2227,6 +2227,26 @@ later compilation's evaluation could contradict.
 Every command reports the compile-time failures of every root, including
 those a cache entry left unevaluated.
 
+### Compile-Time Root Eligibility Proofs
+
+Root eligibility consumes the checked producer's types and fixed-callable
+fact. It does not mutate solved types or invent evidence from a use site.
+Within each immutable root-publication batch, concreteness and reachable
+callable-slot queries reuse completed graph proofs. Concreteness keys include
+whether a node is a value type or a nominal declaration's backing template:
+a declaration formal is allowed in the latter and unresolved in the former.
+The two predicates have separate analyses; the producer's fixed-callable fact
+is combined with their answers at the root, never discarded by memoization.
+
+A negative reachability proof is committed only when its complete recursive
+component has been inspected. Seeing an active back edge does not prove a
+subgraph contains no unresolved variable or callable: another edge of that
+component may still reach one. Members of a completed component share its
+answer. A positive proof needs only its reached witness. The traversal uses
+explicit continuation and component stacks and expands each reached node
+once per analysis. Proofs live only for that immutable publication batch;
+no source-path index or persistent cache is involved.
+
 ### Content-Addressed Compile-Time Values
 
 No persistent compiler cache may use a source file's filesystem path, checkout

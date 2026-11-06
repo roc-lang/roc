@@ -15,6 +15,7 @@ const checked_ids = @import("checked_ids.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const checked_traverse = @import("checked_traverse.zig");
+const checked_reachability = @import("checked_reachability.zig");
 const canonical = @import("canonical_names.zig");
 
 /// A reference to a checked module artifact by its identity digest.
@@ -1925,68 +1926,56 @@ fn verifyCompileTimeRequestsScheduled(
 /// already checked at the application, so they count as concrete).
 const ConcreteRootWalk = enum { value_graph, decl_template };
 
+const NonConcreteRootTraversal = checked_reachability.AnyReachable(NonConcreteRootScan.Key, NonConcreteRootScan);
+
 fn checkedTypeIsConcreteCompileTimeRoot(
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
 ) Allocator.Error!bool {
-    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
-    defer active.deinit();
-    var scan = ConcreteRootScan{ .checked_types = checked_types, .active = &active };
-    return ConcreteRootScan.Eval.run(allocator, &scan, .{ .ty = .{ .walk = .value_graph, .id = root } });
+    var scan = NonConcreteRootScan{ .checked_types = checked_types };
+    var traversal = NonConcreteRootTraversal.init(allocator, &scan);
+    defer traversal.deinit();
+    return !try traversal.visit(.{ .walk = .value_graph, .id = root });
 }
 
-/// Whether a checked type is concrete enough to be a compile-time root. A
-/// type reached again while it is still being walked (a recursive type)
-/// counts as concrete.
-const ConcreteRootScan = struct {
+/// Whether a reached checked type makes its root non-concrete. Declaration
+/// formals and value variables have different meanings, so the mode is part
+/// of the key. Complete recursive components share one exact answer.
+const NonConcreteRootScan = struct {
     checked_types: *const CheckedTypeStore,
-    /// The types on the path currently being walked.
-    active: *collections.DenseMap(CheckedTypeId, void),
+    const Key = struct { walk: ConcreteRootWalk, id: CheckedTypeId };
 
-    const Leaf = union(enum) {
-        ty: struct { walk: ConcreteRootWalk, id: CheckedTypeId },
-        decided: bool,
-    };
-    const Eval = collections.AnyAll.Evaluation(Leaf, ConcreteRootScan);
-
-    fn addSpan(items: Eval.Items, walk: ConcreteRootWalk, ids: []const CheckedTypeId) Allocator.Error!void {
-        for (ids) |id| try items.add(.{ .ty = .{ .walk = walk, .id = id } });
+    fn addSpan(items: anytype, walk: ConcreteRootWalk, ids: []const CheckedTypeId) Allocator.Error!void {
+        for (ids) |id| try items.add(.{ .walk = walk, .id = id });
     }
 
-    pub fn enter(scan: *ConcreteRootScan, items: Eval.Items, leaf: Leaf) Allocator.Error!Eval.Expansion {
+    pub fn visit(scan: *NonConcreteRootScan, items: anytype, ty: Key) Allocator.Error!?bool {
         const checked_types = scan.checked_types;
-        const ty = switch (leaf) {
-            .decided => |value| return .{ .value = value },
-            .ty => |ty| ty,
-        };
         const walk = ty.walk;
-        if (scan.active.contains(ty.id)) return .{ .value = true };
-
+        base.dev_diagnostics.countTestWork(.checked_root_concreteness_nodes, 1);
         const index = @backingInt(ty.id);
-        if (index >= checked_types.payloads.items.len) {
-            checkedArtifactInvariant("compile-time root checked type id is out of range", .{});
-        }
+        if (index >= checked_types.payloads.items.len) checkedArtifactInvariant("compile-time root checked type id is out of range", .{});
         switch (checked_types.payload(@fromBackingInt(@intCast(index)))) {
             .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
-            .field_kind, .err => return .{ .value = false },
-            .flex => return .{ .value = false },
-            .rigid => return .{ .value = walk == .decl_template },
+            .field_kind, .err => return true,
+            .flex => return true,
+            .rigid => return walk != .decl_template,
             .empty_record,
             .empty_tag_union,
-            => return .{ .value = true },
+            => return false,
             .alias => |alias| {
                 try addSpan(items, walk, alias.args);
-                try items.add(.{ .ty = .{ .walk = walk, .id = alias.backing } });
+                try items.add(.{ .walk = walk, .id = alias.backing });
             },
             .record => |record| {
                 for (record.fields) |field| {
                     if (field.kind.tag == .undetermined) {
-                        try items.add(.{ .decided = false });
-                        break;
+                        return true;
                     }
-                    try items.add(.{ .ty = .{ .walk = walk, .id = field.ty } });
-                } else try items.add(.{ .ty = .{ .walk = walk, .id = record.ext } });
+                    try items.add(.{ .walk = walk, .id = field.ty });
+                }
+                try items.add(.{ .walk = walk, .id = record.ext });
             },
             .tuple => |items_ids| try addSpan(items, walk, items_ids),
             .nominal => |nominal| {
@@ -2022,7 +2011,7 @@ const ConcreteRootScan = struct {
                     // Declaration formals stand for the args checked above, so they
                     // count as concrete while walking the backing template.
                     if (checked_types.nominalBackingTemplateForPayload(nominal)) |backing| {
-                        try items.add(.{ .ty = .{ .walk = .decl_template, .id = backing } });
+                        try items.add(.{ .walk = .decl_template, .id = backing });
                     }
                 }
             },
@@ -2030,19 +2019,14 @@ const ConcreteRootScan = struct {
             // args and return contain no identity variables.
             .function => |function| {
                 try addSpan(items, walk, function.args);
-                try items.add(.{ .ty = .{ .walk = walk, .id = function.ret } });
+                try items.add(.{ .walk = walk, .id = function.ret });
             },
             .tag_union => |tag_union| {
                 for (tag_union.tags) |tag| try addSpan(items, walk, tag.argsSlice(checked_types));
-                try items.add(.{ .ty = .{ .walk = walk, .id = tag_union.ext } });
+                try items.add(.{ .walk = walk, .id = tag_union.ext });
             },
         }
-        try scan.active.put(ty.id, {});
-        return .{ .group = .all };
-    }
-
-    pub fn exit(scan: *ConcreteRootScan, leaf: Leaf, _: ?bool) Allocator.Error!void {
-        _ = scan.active.remove(leaf.ty.id);
+        return null;
     }
 };
 
@@ -29555,38 +29539,40 @@ fn checkedTypeKeysForIds(
     return out;
 }
 
-/// Whether no type reachable from `root` holds a callable. The answer is the
-/// conjunction of every reachable type's own verdict, so each is visited once
-/// from an explicit work list.
+const CallableRootTraversal = checked_reachability.AnyReachable(CheckedTypeId, CallableRootScan);
+
+/// Whether no type reachable from `root` holds a callable. One-off consumers
+/// own one analysis; root publication shares its analysis across the batch.
 fn checkedTypeHasNoReachableCallableSlots(
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
 ) Allocator.Error!bool {
-    var visited = collections.DenseMap(CheckedTypeId, void).init(allocator);
-    defer visited.deinit();
-    var pending: std.ArrayListUnmanaged(CheckedTypeId) = .empty;
-    defer pending.deinit(allocator);
-    try pending.append(allocator, root);
-    while (pending.pop()) |ty| {
-        const index: usize = @backingInt(ty);
-        if (index >= checked_types.payloads.items.len) {
-            checkedArtifactInvariant("callable-slot proof referenced a missing checked type", .{});
-        }
-        if (visited.contains(ty)) continue;
-        try visited.put(ty, {});
+    var scan = CallableRootScan{ .checked_types = checked_types };
+    var traversal = CallableRootTraversal.init(allocator, &scan);
+    defer traversal.deinit();
+    return !try traversal.visit(root);
+}
 
+const CallableRootScan = struct {
+    checked_types: *const CheckedTypeStore,
+
+    pub fn visit(self: *CallableRootScan, children: anytype, ty: CheckedTypeId) Allocator.Error!?bool {
+        const checked_types = self.checked_types;
+        const index = @backingInt(ty);
+        if (index >= checked_types.payloads.items.len) checkedArtifactInvariant("callable-slot proof referenced a missing checked type", .{});
+        base.dev_diagnostics.countTestWork(.checked_root_callable_nodes, 1);
         switch (checked_types.payload(@fromBackingInt(@intCast(index)))) {
             .pending => checkedArtifactInvariant("callable-slot proof reached pending checked type", .{}),
             .field_kind, .err => {},
             .flex,
             .rigid,
             .function,
-            => return false,
+            => return true,
             .empty_record,
             .empty_tag_union,
             => {},
-            .alias => |alias| try pending.append(allocator, alias.backing),
+            .alias => |alias| try children.add(alias.backing),
             .nominal => |nominal| {
                 if (nominal.builtin) |builtin_nominal| {
                     switch (builtin_nominal) {
@@ -29625,45 +29611,45 @@ fn checkedTypeHasNoReachableCallableSlots(
                         .box,
                         => {
                             if (nominal.args.len != 1) checkedArtifactInvariant("builtin container nominal had non-unary args", .{});
-                            try pending.append(allocator, nominal.args[0]);
+                            try children.add(nominal.args[0]);
                         },
                         .try_ => {
                             if (nominal.args.len != 2) checkedArtifactInvariant("builtin Try nominal had non-binary args", .{});
-                            try pending.appendSlice(allocator, nominal.args[0..2]);
+                            try children.addSlice(nominal.args[0..2]);
                         },
                         .set => {
                             if (nominal.args.len != 1) checkedArtifactInvariant("builtin Set nominal had non-unary args", .{});
-                            try pending.append(allocator, nominal.args[0]);
+                            try children.add(nominal.args[0]);
                         },
                         .dict => {
                             if (nominal.args.len != 2) checkedArtifactInvariant("builtin Dict nominal had non-binary args", .{});
-                            try pending.appendSlice(allocator, nominal.args[0..2]);
+                            try children.addSlice(nominal.args[0..2]);
                         },
                         .iter, .stream => {
                             if (checked_types.nominalBackingTemplateForPayload(nominal)) |backing| {
-                                try pending.append(allocator, backing);
+                                try children.add(backing);
                             }
                         },
                     }
-                    continue;
+                    return null;
                 }
                 if (checked_types.nominalBackingTemplateForPayload(nominal)) |backing| {
-                    try pending.append(allocator, backing);
+                    try children.add(backing);
                 }
             },
             .record => |record| {
-                for (record.fields) |field| try pending.append(allocator, field.ty);
-                try pending.append(allocator, record.ext);
+                for (record.fields) |field| try children.add(field.ty);
+                try children.add(record.ext);
             },
-            .tuple => |items| try pending.appendSlice(allocator, items),
+            .tuple => |items| try children.addSlice(items),
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(checked_types));
-                try pending.append(allocator, tag_union.ext);
+                for (tag_union.tags) |tag| try children.addSlice(tag.argsSlice(checked_types));
+                try children.add(tag_union.ext);
             },
         }
+        return null;
     }
-    return true;
-}
+};
 
 /// Public `ComptimeRootId` declaration.
 pub const ComptimeRootId = checked_ids.ComptimeRootId;
@@ -30165,7 +30151,14 @@ fn publishCompileTimeRootRequestEligibility(
     checked_types: *const CheckedTypePublication,
     roots: []CompileTimeRoot,
 ) Allocator.Error!void {
+    var concrete_context = NonConcreteRootScan{ .checked_types = &checked_types.store };
+    var concrete = NonConcreteRootTraversal.init(allocator, &concrete_context);
+    defer concrete.deinit();
+    var callable_context = CallableRootScan{ .checked_types = &checked_types.store };
+    var callable = CallableRootTraversal.init(allocator, &callable_context);
+    defer callable.deinit();
     for (roots) |*root| {
+        base.dev_diagnostics.countTestWork(.checked_root_eligibility_queries, 1);
         const producer_callable_type_is_fixed = switch (root.kind) {
             .callable_binding => true,
             .constant => switch (root.source) {
@@ -30181,12 +30174,8 @@ fn publishCompileTimeRootRequestEligibility(
             .literal_argument,
             => false,
         };
-        const context_free = try checkedTypeIsContextFreeCompileTimeRoot(
-            allocator,
-            &checked_types.store,
-            producer_callable_type_is_fixed,
-            root.checked_type,
-        );
+        const context_free = !try concrete.visit(.{ .walk = .value_graph, .id = root.checked_type }) and
+            (producer_callable_type_is_fixed or !try callable.visit(root.checked_type));
         root.request_eligibility = if (context_free) .eligible else .ineligible;
     }
 }
@@ -43305,4 +43294,62 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const loaded_alias = roundtrip.loaded.payload(root).alias;
     try std.testing.expectEqual(@as(usize, 1), loaded_alias.args.len);
     try std.testing.expectEqual(row.ext, roundtrip.loaded.payload(loaded_alias.backing).tag_union.ext);
+}
+
+test "root eligibility shares complete recursive proofs without conflating template and value variables" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    const a: CheckedTypeId = @fromBackingInt(0);
+    const b: CheckedTypeId = @fromBackingInt(1);
+    const variable: CheckedTypeId = @fromBackingInt(2);
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{ b, variable }) }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{a}) }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .rigid = .{} }));
+    var context = NonConcreteRootScan{ .checked_types = &store };
+    var traversal = NonConcreteRootTraversal.init(allocator, &context);
+    defer traversal.deinit();
+    try std.testing.expect(!try traversal.visit(.{ .walk = .decl_template, .id = a }));
+    try std.testing.expect(!try traversal.visit(.{ .walk = .decl_template, .id = b }));
+    try std.testing.expect(try traversal.visit(.{ .walk = .value_graph, .id = a }));
+    try std.testing.expect(try traversal.visit(.{ .walk = .value_graph, .id = b }));
+    try std.testing.expectEqual(@as(usize, 6), traversal.nodes.items.len);
+}
+
+test "root eligibility callable proofs propagate through an entire recursive component" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    const a: CheckedTypeId = @fromBackingInt(0);
+    const b: CheckedTypeId = @fromBackingInt(1);
+    const callable: CheckedTypeId = @fromBackingInt(2);
+    const empty: CheckedTypeId = @fromBackingInt(3);
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{ b, callable }) }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{a}) }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .function = .{ .kind = .pure, .ret = empty } }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .empty_record));
+    var context = CallableRootScan{ .checked_types = &store };
+    var traversal = CallableRootTraversal.init(allocator, &context);
+    defer traversal.deinit();
+    try std.testing.expect(try traversal.visit(a));
+    try std.testing.expect(try traversal.visit(b));
+    try std.testing.expect(!try traversal.visit(empty));
+    try std.testing.expectEqual(@as(usize, 4), traversal.nodes.items.len);
+}
+
+test "root eligibility shared type DAG is expanded once across all roots" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .empty_record));
+    for (1..64) |index| {
+        const previous: CheckedTypeId = @fromBackingInt(@intCast(index - 1));
+        try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{ previous, previous }) }));
+    }
+    var context = NonConcreteRootScan{ .checked_types = &store };
+    var traversal = NonConcreteRootTraversal.init(allocator, &context);
+    defer traversal.deinit();
+    try std.testing.expect(!try traversal.visit(.{ .walk = .value_graph, .id = @fromBackingInt(63) }));
+    for (0..64) |index| try std.testing.expect(!try traversal.visit(.{ .walk = .value_graph, .id = @fromBackingInt(@intCast(index)) }));
+    try std.testing.expectEqual(@as(usize, 64), traversal.nodes.items.len);
 }

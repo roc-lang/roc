@@ -1624,6 +1624,7 @@ const TypeDigest = struct {
     }
 
     fn digestRoots(self: *TypeDigest, roots: []const CheckedTypeId) Allocator.Error![32]u8 {
+        base.dev_diagnostics.countTestWork(.checked_type_digest_requests, 1);
         const key = std.mem.sliceAsBytes(roots);
         if (self.completed.get(key)) |result| return result;
         const result = try self.walkRoots(roots);
@@ -1634,6 +1635,7 @@ const TypeDigest = struct {
     }
 
     fn walkRoots(self: *TypeDigest, roots: []const CheckedTypeId) Allocator.Error![32]u8 {
+        base.dev_diagnostics.countTestWork(.checked_type_digest_walks, 1);
         self.visited.clearRetainingCapacity();
         self.stack.clearRetainingCapacity();
         var hasher = Sha256.init(.{});
@@ -1653,6 +1655,7 @@ const TypeDigest = struct {
                 hashU32(&hasher, position);
                 continue;
             }
+            base.dev_diagnostics.countTestWork(.checked_type_digest_nodes, 1);
             try self.visited.put(ty, next_position);
             next_position += 1;
             children.clearRetainingCapacity();
