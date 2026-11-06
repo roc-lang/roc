@@ -30496,7 +30496,6 @@ const BodyContext = struct {
             .start => blk: {
                 const expr_id = task.expr_id;
                 const request_fn_node = task.request_fn_node;
-                var capture_nodes: []NodeId = &.{};
                 const source_fn_ty = switch (task.purpose) {
                     .draft => switch (checkedExpr(self.view, expr_id).data) {
                         .lambda => ty: {
@@ -30505,7 +30504,6 @@ const BodyContext = struct {
                         },
                         .closure => |closure| ty: {
                             self.builder.countBodyDiagnostic("nested_closures_prepared");
-                            capture_nodes = try self.closureCaptureEntryNodes(closure);
                             const lambda = checkedExpr(self.view, ExprSite.read(closure.lambda));
                             if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
                             break :ty lambda.ty;
@@ -30514,10 +30512,6 @@ const BodyContext = struct {
                     },
                     .value => if (task.closure) |closure| ty: {
                         task.capture_span = try self.lowerClosureCaptureExprSpan(closure.captures);
-                        capture_nodes = try self.graph.arena().alloc(NodeId, task.capture_span.len);
-                        for (self.fnDefCaptureSpan(task.capture_span), capture_nodes) |capture, *node| {
-                            node.* = try self.exprTypeCell(capture.value).toGraphNode(self.graph);
-                        }
                         const lambda = checkedExpr(self.view, ExprSite.read(closure.lambda));
                         if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
                         break :ty lambda.ty;
@@ -30531,6 +30525,7 @@ const BodyContext = struct {
                     try self.localProcContextsDigest(),
                     self.in_default_expr,
                 );
+                const capture_nodes = try self.nestedSiteCaptureEntryNodes(nested.site);
                 const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
                 switch (try self.builder.beginDraftNested(
                     self,
@@ -38215,7 +38210,7 @@ const BodyContext = struct {
                         DraftTypeCell.fromGraphNode(fn_node),
                         .{ .fn_def = .{ .fn_id = fn_id, .captures = try self.localProcFnDefCaptureSpan(
                             context_id,
-                            self.view.key.bytes,
+                            self.view,
                             local.binder,
                             local.expr,
                             null,
@@ -45967,7 +45962,7 @@ const BodyContext = struct {
         // specialization identity: two enclosing instantiations can request
         // this local procedure at the same monomorphic function type while
         // capturing at different types, and those must not share a body.
-        const capture_bindings = try self.localProcCaptureBindings(context);
+        const capture_bindings = try self.localProcCaptureBindings(context, local_view);
         defer self.allocator.free(capture_bindings);
         const capture_entry_guards = try self.graph.arena().alloc(NodeId, capture_bindings.len);
         for (capture_bindings, capture_entry_guards) |binding, *node| {
@@ -45990,61 +45985,107 @@ const BodyContext = struct {
         );
     }
 
-    const LocalProcCaptureBinding = struct {
+    const CaptureBinding = struct {
         local: DraftLocalId,
         ty: DraftTypeCell,
     };
 
-    /// The lexical-context bindings a local procedure captures at its
-    /// declaration, deduplicated by CaptureId (first entry wins). Every
-    /// consumer of a declaration context—capture entry guards, fn-def
-    /// capture spans, and direct-call capture operands—derives from this one
-    /// walk so they agree on count and order. Caller owns the returned slice.
+    /// The declaration-context bindings a local procedure captures: one per
+    /// binder in its checked site's `NestedProcSite.runtime_captures`, read
+    /// from the declaration context, in ascending CaptureId order. Every
+    /// consumer of a declaration context (capture entry guards, fn-def
+    /// capture spans, and direct-call capture operands) derives from this one
+    /// list so they agree on count and order. `view` is the module declaring
+    /// the procedure. Caller owns the returned slice.
     fn localProcCaptureBindings(
         self: *BodyContext,
         context: LocalProcContext,
-    ) Allocator.Error![]LocalProcCaptureBinding {
-        var seen = collections.DenseMap(checked.CaptureId, void).init(self.allocator);
-        defer seen.deinit();
-        var bindings = std.ArrayList(LocalProcCaptureBinding).empty;
+        view: ModuleView,
+    ) Allocator.Error![]CaptureBinding {
+        const site = try self.builder.nestedSiteForExpr(view, context.owner_template, context.declaration.expr, self.in_default_expr);
+        const table = view.nested_proc_sites;
+        const captures = table.runtimeCaptures(table.sites[@backingInt(site)]);
+        var bindings = try std.ArrayList(CaptureBinding).initCapacity(self.allocator, captures.len);
         errdefer bindings.deinit(self.allocator);
-
-        for (context.entries) |entry| {
+        for (captures) |capture| {
+            const entry = switch (runtimeCaptureKind(view, capture.pattern)) {
+                .scheme_alias => continue,
+                .hoisted_constant => declarationContextEntry(context.entries, capture.pattern) orelse continue,
+                .frame_value => declarationContextEntry(context.entries, capture.pattern) orelse
+                    Common.invariant("local procedure runtime capture was not bound in its declaration context"),
+            };
             const local: DraftLocalId = @fromBackingInt(@intCast(entry.local));
             const raw = @backingInt(local);
             if (raw >= self.draft.locals.items.len) {
                 Common.invariant("local procedure context capture referenced an unknown local");
             }
-            const local_data = self.draft.locals.items[raw];
-            const capture_id = local_data.identity.captureId() orelse
-                Common.invariant("local procedure context capture local had no capture identity");
-            const seen_entry = try seen.getOrPut(capture_id);
-            if (seen_entry.found_existing) continue;
-            try bindings.append(self.allocator, .{ .local = local, .ty = local_data.ty });
+            bindings.appendAssumeCapacity(.{ .local = local, .ty = self.draft.locals.items[raw].ty });
         }
-
+        self.sortCaptureBindings(bindings.items);
         return try bindings.toOwnedSlice(self.allocator);
+    }
+
+    /// How Monotype reads a binder listed in a site's
+    /// `NestedProcSite.runtime_captures`. A scheme alias owns no value: each
+    /// use lowers the callable it names, whose own captures the site already
+    /// lists. A hoisted constant's binder is a frame local only while its own
+    /// root lowers; every other read goes through the ConstStore, so it adds
+    /// nothing the enclosing frame decides.
+    const RuntimeCaptureKind = enum { frame_value, scheme_alias, hoisted_constant };
+
+    fn runtimeCaptureKind(view: ModuleView, binder: BinderId) RuntimeCaptureKind {
+        if (view.bodies.binder(binder).is_scheme_alias) return .scheme_alias;
+        if (view.hoisted_constants.lookupByPattern(binder) != null) return .hoisted_constant;
+        return .frame_value;
+    }
+
+    /// The untyped declaration-context entry for `binder`. Context entries
+    /// are sorted by kind, then binder (`sortLexicalBinderEntries`).
+    fn declarationContextEntry(entries: []const LexicalBinderEntry, binder: BinderId) ?LexicalBinderEntry {
+        const Key = struct {
+            fn order(wanted: u32, entry: LexicalBinderEntry) std.math.Order {
+                if (entry.kind != 0) return .lt;
+                return std.math.order(wanted, entry.binder);
+            }
+        };
+        const index = std.sort.binarySearch(LexicalBinderEntry, entries, @as(u32, @backingInt(binder)), Key.order) orelse return null;
+        return entries[index];
+    }
+
+    /// Sort capture bindings into ascending CaptureId order, the order of
+    /// lifted capture slots.
+    fn sortCaptureBindings(self: *BodyContext, bindings: []CaptureBinding) void {
+        const Order = struct {
+            fn captureId(draft: *const BodyDraftStore, binding: CaptureBinding) u32 {
+                const capture_id = draft.locals.items[@backingInt(binding.local)].identity.captureId() orelse
+                    Common.invariant("captured local had no capture identity");
+                return @backingInt(capture_id);
+            }
+            fn lessThan(draft: *const BodyDraftStore, lhs: CaptureBinding, rhs: CaptureBinding) bool {
+                return captureId(draft, lhs) < captureId(draft, rhs);
+            }
+        };
+        std.sort.pdq(CaptureBinding, bindings, @as(*const BodyDraftStore, self.draft), Order.lessThan);
     }
 
     fn localProcFnDefCaptureSpan(
         self: *BodyContext,
         context_id: DraftLocalProcContextId,
-        module: [32]u8,
+        view: ModuleView,
         binder: BinderId,
         expr: CIR.Expr.Idx,
         context_anchor: ?CIR.Statement.Idx,
     ) Allocator.Error!DraftSpan(DraftFnDefCapture) {
         const context = self.validateLocalProcContext(
             context_id,
-            module,
+            view.key.bytes,
             binder,
             expr,
             context_anchor,
         );
-        if (context.entries.len == 0) return DraftSpan(DraftFnDefCapture).empty();
-
-        const bindings = try self.localProcCaptureBindings(context);
+        const bindings = try self.localProcCaptureBindings(context, view);
         defer self.allocator.free(bindings);
+        if (bindings.len == 0) return DraftSpan(DraftFnDefCapture).empty();
         var captures = std.ArrayList(DraftFnDefCapture).empty;
         defer captures.deinit(self.allocator);
         try captures.ensureTotalCapacityPrecise(self.allocator, bindings.len);
@@ -46063,22 +46104,21 @@ const BodyContext = struct {
     fn localProcCaptureExprSpan(
         self: *BodyContext,
         context_id: DraftLocalProcContextId,
-        module: [32]u8,
+        view: ModuleView,
         binder: BinderId,
         expr: CIR.Expr.Idx,
         context_anchor: ?CIR.Statement.Idx,
     ) Allocator.Error!DraftSpan(DraftExprId) {
         const context = self.validateLocalProcContext(
             context_id,
-            module,
+            view.key.bytes,
             binder,
             expr,
             context_anchor,
         );
-        if (context.entries.len == 0) return DraftSpan(DraftExprId).empty();
-
-        const bindings = try self.localProcCaptureBindings(context);
+        const bindings = try self.localProcCaptureBindings(context, view);
         defer self.allocator.free(bindings);
+        if (bindings.len == 0) return DraftSpan(DraftExprId).empty();
         var captures = std.ArrayList(DraftExprId).empty;
         defer captures.deinit(self.allocator);
         try captures.ensureTotalCapacityPrecise(self.allocator, bindings.len);
@@ -46101,7 +46141,7 @@ const BodyContext = struct {
             else
                 try self.localProcCaptureExprSpan(
                     try self.localProcContextId(self.view, local.binder, local.expr),
-                    self.view.key.bytes,
+                    self.view,
                     local.binder,
                     local.expr,
                     null,
@@ -46121,7 +46161,7 @@ const BodyContext = struct {
             .local_proc => |local| try self.localProcCaptureExprSpan(
                 lookup.local_proc_context orelse
                     Common.invariant("local method target did not carry its declaration context"),
-                lookup.view.key.bytes,
+                lookup.view,
                 local.binder,
                 local.expr,
                 local.context_anchor,
@@ -46611,7 +46651,7 @@ const BodyContext = struct {
                     DraftTypeCell.fromGraphNode(fn_node),
                     .{ .fn_def = .{ .fn_id = fn_id, .captures = try self.localProcFnDefCaptureSpan(
                         context_id,
-                        self.view.key.bytes,
+                        self.view,
                         local.binder,
                         local.expr,
                         null,
@@ -46857,7 +46897,7 @@ const BodyContext = struct {
                         .fn_id = fn_id,
                         .captures = try self.localProcFnDefCaptureSpan(
                             context_id,
-                            self.view.key.bytes,
+                            self.view,
                             local.binder,
                             local.expr,
                             null,
@@ -51087,11 +51127,10 @@ const BodyContext = struct {
         expr_id: ExprSite,
         closure: anytype,
         request_fn_node: NodeId,
-        capture_entry_guards: []const NodeId,
     ) Allocator.Error!DraftFnTarget {
         const lambda = checkedExpr(self.view, ExprSite.read(closure.lambda));
         if (lambda.data != .lambda) Common.invariant("checked closure did not point at a lambda expression");
-        return try self.ensureNestedFnAtNode(expr_id, lambda.ty, request_fn_node, capture_entry_guards);
+        return try self.ensureNestedFnAtNode(expr_id, lambda.ty, request_fn_node);
     }
 
     /// Lower the nested function at `expr_id`, whose checked function type is
@@ -51101,7 +51140,6 @@ const BodyContext = struct {
         expr_id: ExprSite,
         source_fn_ty: checked.CheckedTypeId,
         request_fn_node: NodeId,
-        capture_entry_guards: []const NodeId,
     ) Allocator.Error!DraftFnTarget {
         const nested = try self.builder.nestedFnForExpr(
             self.view,
@@ -51111,6 +51149,7 @@ const BodyContext = struct {
             try self.localProcContextsDigest(),
             self.in_default_expr,
         );
+        const capture_entry_guards = try self.nestedSiteCaptureEntryNodes(nested.site);
         const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
         return try self.builder.lowerDraftNestedFromContext(
             self,
@@ -51137,7 +51176,12 @@ const BodyContext = struct {
 
         for (captures) |capture_idx| {
             const binder = self.view.bodies.capture(capture_idx).pattern;
-            const local = self.binders.get(binder) orelse continue;
+            const local = switch (runtimeCaptureKind(self.view, binder)) {
+                .scheme_alias => continue,
+                .hoisted_constant => self.binders.get(binder) orelse continue,
+                .frame_value => self.binders.get(binder) orelse
+                    Common.invariant("closure capture was not bound where the closure is built"),
+            };
             try self.markActiveConstBinderUsed(binder);
             const cell = self.localTypeCell(local);
             try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binder), cell);
@@ -51178,20 +51222,36 @@ const BodyContext = struct {
         return fn_node;
     }
 
-    /// The type nodes of the captured locals a closure draft enters with.
-    fn closureCaptureEntryNodes(self: *BodyContext, closure: @FieldType(ExprData, "closure")) Allocator.Error![]NodeId {
-        var capture_nodes = std.ArrayList(NodeId).empty;
-        defer capture_nodes.deinit(self.allocator);
-        for (closure.captures) |capture_idx| {
-            const capture = self.view.bodies.capture(capture_idx);
-            const binder = capture.pattern;
-            const local = self.binders.get(binder) orelse continue;
-            try self.markActiveConstBinderUsed(binder);
+    /// The capture entry guards of the nested procedure at `site`: one graph
+    /// node per binder in checking's `NestedProcSite.runtime_captures`, in
+    /// ascending CaptureId order, typed at this frame's local for the binder.
+    /// The list includes the binders that the local procedures the body
+    /// selects capture, so two requests share a specialization only when
+    /// everything the body reaches from its enclosing frames has the same
+    /// type. The order matches lifted capture slots, which a restored stored
+    /// function's captures follow.
+    fn nestedSiteCaptureEntryNodes(self: *BodyContext, site: names.NestedProcSiteId) Allocator.Error![]NodeId {
+        const table = self.view.nested_proc_sites;
+        const captures = table.runtimeCaptures(table.sites[@backingInt(site)]);
+        if (captures.len == 0) return &.{};
+        var bindings = try std.ArrayList(CaptureBinding).initCapacity(self.allocator, captures.len);
+        defer bindings.deinit(self.allocator);
+        for (captures) |capture| {
+            const local = switch (runtimeCaptureKind(self.view, capture.pattern)) {
+                .scheme_alias => continue,
+                .hoisted_constant => self.binders.get(capture.pattern) orelse continue,
+                .frame_value => self.binders.get(capture.pattern) orelse
+                    Common.invariant("nested procedure runtime capture was not bound where the procedure is built"),
+            };
+            try self.markActiveConstBinderUsed(capture.pattern);
             const cell = self.localTypeCell(local);
-            try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binder), cell);
-            try capture_nodes.append(self.allocator, try cell.toGraphNode(self.graph));
+            try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, capture.pattern), cell);
+            bindings.appendAssumeCapacity(.{ .local = local, .ty = cell });
         }
-        return try self.graph.arena().dupe(NodeId, capture_nodes.items);
+        self.sortCaptureBindings(bindings.items);
+        const nodes = try self.graph.arena().alloc(NodeId, bindings.items.len);
+        for (bindings.items, nodes) |binding, *node| node.* = try binding.ty.toGraphNode(self.graph);
+        return nodes;
     }
 
     /// Whether an expression is a lambda or closure, which is drafted at its
@@ -51216,7 +51276,7 @@ const BodyContext = struct {
             },
             .closure => |closure| {
                 self.builder.countBodyDiagnostic("nested_closures_prepared");
-                _ = try self.ensureClosureAtNode(expr_id, closure, request_fn_node, try self.closureCaptureEntryNodes(closure));
+                _ = try self.ensureClosureAtNode(expr_id, closure, request_fn_node);
             },
             .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
@@ -51238,7 +51298,7 @@ const BodyContext = struct {
         expr_id: ExprSite,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnTarget {
-        return try self.ensureNestedFnAtNode(expr_id, checkedExpr(self.view, expr_id).ty, request_fn_node, &.{});
+        return try self.ensureNestedFnAtNode(expr_id, checkedExpr(self.view, expr_id).ty, request_fn_node);
     }
 
     const NestedSiteEvidence = struct {

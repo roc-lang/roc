@@ -16000,6 +16000,17 @@ less the binders the site itself binds. A site's needs propagate to its lexical
 parent the same way, and the walk records which site binds each binder so the
 subtraction is exact. Recursive selections make this a least fixpoint, solved
 after the walk over the recorded selections.
+
+Monotype's capture identity for a nested procedure (lambda, closure, or local
+procedure) is the types, in the requesting frame, of the binders its site's
+runtime captures list, in ascending CaptureId order (the order of lifted
+capture slots). A lambda that captures nothing itself but calls a local
+procedure therefore differs between two enclosing instantiations whenever that
+procedure's captures do, and a local procedure does not differ on in-scope
+binders it never reads. Two binder kinds in the list contribute no frame
+value: a scheme alias, whose uses lower the callable it names, and a hoisted
+constant's binder, which is a frame local only while its own root lowers and
+is otherwise read through the ConstStore.
 Stored function evidence remains graph-free across root and cache boundaries.
 Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and
