@@ -750,6 +750,7 @@ const CustomCase = enum {
     build_windows_shared_library,
     boxy_test_outcomes,
     boxy_test_outcome_files,
+    boxy_overflowed_test_outcome,
     stored_root_declared_row,
     issue_11389_check_after_test_shared_cache,
     issue_11495_paired_body_types,
@@ -1622,6 +1623,7 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reports stored nominal boxes and rows read at Bool (dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcomes } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reports stored nominal boxes and rows read at Bool (interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcomes } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reuses each module's test outcome file across edits (dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcome_files } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reuses the outcome of a test that overflowed its stack (dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .boxy_overflowed_test_outcome } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reuses each module's test outcome file across edits (interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcome_files } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12231: deferred calls and branch results returning tuples (BoxyDeferredTupleResults, boxy, interpreter)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyDeferredTupleResults.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12231: deferred calls and branch results returning tuples (BoxyDeferredTupleResults, boxy, dev)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxyDeferredTupleResults.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
@@ -6318,6 +6320,7 @@ fn runCustomCase(
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
         .boxy_test_outcomes => customBoxyTestOutcomes(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .dev),
         .boxy_test_outcome_files => customBoxyTestOutcomeFiles(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .dev),
+        .boxy_overflowed_test_outcome => customBoxyOverflowedTestOutcome(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .dev),
         .stored_root_declared_row => customStoredRootDeclaredRow(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .issue_11389_check_after_test_shared_cache => customIssue11389CheckAfterTestSharedCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11495_paired_body_types => customIssue11495PairedBodyTypes(io, allocator, &env, &timer, timeout_ms),
@@ -15150,6 +15153,48 @@ fn expectTestOutcomeFileCount(io: std.Io, allocator: Allocator, timer: *harness.
 /// module's own source, and inside it reuses each test whose checked outcome
 /// identity is unchanged. Every cached run reports exactly what an uncached
 /// run reports.
+/// Compiled test roots run on the evaluation stack, so a root that overflows
+/// it does so at the same point, with the same output, on every run: its
+/// outcome is reused like any other crash, and reports exactly as a fresh run
+/// does.
+fn customBoxyOverflowedTestOutcome(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
+    const opt_arg = backendOptArg(allocator, backend) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
+    const dir = createWorkSubdir(io, allocator, env, "boxy_overflowed_test_outcome") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create the case directory: {}", .{err});
+    const cache_root = std.fs.path.join(allocator, &.{ dir, "cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    for ([_][2][]const u8{ .{ "ROC_CACHE_DIR", cache_root }, .{ "XDG_CACHE_HOME", cache_root }, .{ "ROC_TEST_COMMAND_WORK", "1" } }) |pair| {
+        isolated.env_map.put(pair[0], pair[1]) catch |err|
+            return customInfraFailure(allocator, timer, "environment: {}", .{err});
+    }
+    const main_source =
+        \\forever : U64 -> U64
+        \\forever = |n| 1 + forever(n + 1)
+        \\
+        \\expect forever(0) == 0
+        \\expect 1 + 1 == 2
+        \\
+    ;
+    const main_path = std.fs.path.join(allocator, &.{ dir, "Main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "main path: {}", .{err});
+    if (writeCaseFile(io, allocator, timer, dir, "Main.roc", main_source)) |failure| return failure;
+    if (expectOutcomeRun(io, allocator, &isolated, timer, timeout_ms, main_path, opt_arg, "cold", 2)) |failure| return failure;
+    if (expectOutcomeRun(io, allocator, &isolated, timer, timeout_ms, main_path, opt_arg, "unchanged", 0)) |failure| return failure;
+    if (expectTestOutcomeFileCount(io, allocator, timer, cache_root, "unchanged", 1)) |failure| return failure;
+    const reused = switch (runOutcomeCase(io, allocator, &isolated, timer, timeout_ms, main_path, &.{ "test", opt_arg, "--specialize=no" })) {
+        .run => |run| run,
+        .failure => |failure| return failure,
+    };
+    if (std.mem.find(u8, reused.result.stderr, "overflowed its stack memory") == null and std.mem.find(u8, reused.result.stdout, "overflowed its stack memory") == null) {
+        return customFailure(allocator, timer, "the reused outcome does not report the overflow\nstdout:\n{s}\nstderr:\n{s}", .{ reused.result.stdout, reused.result.stderr });
+    }
+    return null;
+}
+
 fn customBoxyTestOutcomeFiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
     const opt_arg = backendOptArg(allocator, backend) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
