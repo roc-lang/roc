@@ -481,14 +481,16 @@ const Walker = struct {
 /// backing. Such a root has no compile-time value slot, and a `.boxy`
 /// program storing it keeps what reading function values takes (design.md
 /// "Stored Function Values").
+/// Nominal declarations are resolved in the complete checked program, including
+/// its root and platform relations, independently of which modules need CTFE.
 pub fn rootHoldsFunction(
     allocator: Allocator,
-    modules: []const *const checked.CheckedModuleArtifact,
+    program_root: checked.LoweringModuleView,
     imports: []const checked.ImportedModuleView,
-    root: Root,
+    artifact: *const checked.CheckedModuleArtifact,
+    request: checked.RootRequest,
 ) Allocator.Error!bool {
-    const artifact = modules[root.module];
-    if ((try artifact.compileTimeRoot(root.root)).kind == .callable_binding) return true;
+    if ((try artifact.compileTimeRoot(request.compile_time_root.?)).kind == .callable_binding) return true;
     const Pending = struct { key: [32]u8, types: checked.CheckedTypeStoreView, ty: checked.CheckedTypeId };
     const Seen = struct { key: [32]u8, ty: checked.CheckedTypeId };
     var seen = std.AutoHashMapUnmanaged(Seen, void).empty;
@@ -499,7 +501,7 @@ pub fn rootHoldsFunction(
     const own_key = artifact.key.digest().bytes;
     // The root's checked type is its wrapper's function type; its value is
     // the wrapper's result.
-    switch (own_types.payload(root.request.checked_type)) {
+    switch (own_types.payload(request.checked_type)) {
         .function => |function| try pending.append(allocator, .{ .key = own_key, .types = own_types, .ty = function.ret }),
         .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => base.invariant("compile-time finalization invariant violated: a compile-time root's checked type is not a function type", .{}),
     }
@@ -540,7 +542,7 @@ pub fn rootHoldsFunction(
                         .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
                         .iterator => {
                             const owner = nominal.owner_module.*;
-                            const declaring = typesOf(modules, imports, owner) orelse
+                            const declaring = typesOf(program_root, imports, owner) orelse
                                 base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
                             const declaration = declaring.builtinNominalDeclaration(builtin_nominal) orelse
                                 base.invariant("compile-time finalization invariant violated: the Builtin module has no declaration for the builtin iterator", .{});
@@ -549,7 +551,7 @@ pub fn rootHoldsFunction(
                     },
                     .local_declaration => |declaration_id| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = item.types.nominalDeclarationById(declaration_id).backing }),
                     .imported_declaration => |imported| {
-                        const declaring = typesOf(modules, imports, imported.artifact) orelse
+                        const declaring = typesOf(program_root, imports, imported.artifact) orelse
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
                         try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
                     },
@@ -569,14 +571,55 @@ pub fn rootHoldsFunction(
     return false;
 }
 
-fn typesOf(modules: []const *const checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?checked.CheckedTypeStoreView {
-    for (modules) |module| {
-        if (module.key.digest().eql(key)) return module.typesView();
+fn typesOf(root: checked.LoweringModuleView, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?checked.CheckedTypeStoreView {
+    if (root.module.key.digest().eql(key)) return root.module.typesView();
+    for (root.relation_modules) |relation| {
+        if (relation.key.digest().eql(key)) return relation.checked_types;
     }
     for (imports) |import| {
         if (import.key.digest().eql(key)) return import.checked_types;
     }
     return null;
+}
+
+test "CTFE root classification resolves nominal backings throughout the checked program" {
+    const allocator = std.testing.allocator;
+    for ([_]struct { source: []const u8, holds_function: bool }{
+        .{ .source =
+        \\Holder := { value : I64 }.{
+        \\    make : I64 -> Holder
+        \\    make = |n| { value: n }
+        \\}
+        , .holds_function = false },
+        .{ .source =
+        \\Holder := { call : I64 -> I64 }.{
+        \\    make : I64 -> Holder
+        \\    make = |n| { call: |x| x + n }
+        \\}
+        , .holds_function = true },
+    }) |case| {
+        var parsed = try @import("inspected.zig").parseProgram(allocator, .module,
+            \\module [value]
+            \\import Holder
+            \\value : Holder
+            \\value = Holder.make(7)
+        , &.{.{ .name = "Holder", .source = case.source }}, .{ .io = std.testing.io, .roots = .published_only });
+        defer parsed.deinit(allocator);
+        try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
+        const consumer = &parsed.checked_artifact;
+        // The import artifacts list the builtin module, then the program's
+        // imports in order; `Holder` is the program's only import.
+        try std.testing.expectEqual(@as(usize, 2), parsed.import_artifacts.len);
+        const holder = &parsed.import_artifacts[1];
+        const compile_time_requests = (try consumer.rootRequests()).compile_time_requests;
+        try std.testing.expectEqual(@as(usize, 1), compile_time_requests.len);
+        const request = compile_time_requests[0];
+        // A nominal can be supplied by the ownership anchor, a platform
+        // relation, or an ordinary import. None needs a pending CTFE root.
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, try checked.loweringView(holder), &.{checked.importedView(consumer)}, consumer, request));
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, try checked.loweringViewWithRelations(consumer, &.{checked.importedView(holder)}), &.{}, consumer, request));
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, try checked.loweringView(consumer), &.{checked.importedView(holder)}, consumer, request));
+    }
 }
 
 fn expectSharedDependencies(source: []const u8, imports: []const @import("inspected.zig").ModuleSource) (@import("inspected.zig").Error || Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {

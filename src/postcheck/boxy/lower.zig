@@ -99,6 +99,10 @@ pub const ModuleUnit = struct {
     root: bool,
     /// The name each module of the link gives its workers and nominal types.
     names: *const types.ModuleNames,
+    /// Whether this is a test unit (`roc test`): every inline expect it
+    /// lowers gets a unit-local expect site, whether or not the unit lowers
+    /// any test root (design.md "Unit-Image Test Execution").
+    expect_sites: bool = false,
 };
 
 /// The ownership signature and tail-drive summary a unit's ARC solved for
@@ -693,6 +697,24 @@ pub const Program = struct {
         }, base.SourceLoc.none);
     }
 
+    /// Composite descriptor arguments supplied by the caller.
+    /// The signature alone declares these requirements, identically in an
+    /// importing unit and a defining unit; no body discovery is involved.
+    pub fn passedDescriptorTypes(self: *Program, allocator: Allocator, id: WorkerId) Allocator.Error![]TypeId {
+        var result: std.ArrayList(TypeId) = .empty;
+        errdefer result.deinit(allocator);
+        const target = self.worker(id).*;
+        if (target.key == .template) {
+            for (0..target.params.len + 1) |i| {
+                const ty = if (i < target.params.len) target.params[i] else target.ret;
+                if (self.store.get(ty) == .variable or try self.converter().representationClosed(ty)) continue;
+                if (std.mem.findScalar(TypeId, result.items, ty) != null) continue;
+                try result.append(allocator, ty);
+            }
+        }
+        return result.toOwnedSlice(allocator);
+    }
+
     /// Declare the signature of imported template worker `id`, exactly as
     /// its defining unit's body lowering declares it: explicit parameters,
     /// then hidden descriptors and dictionaries, and a dynamic result slot
@@ -716,6 +738,9 @@ pub const Program = struct {
         const erased = try self.result.layouts.insertErasedCallable();
         for (imported.dictionary_params) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = erased }));
         for (0..imported.literal_params) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = erased }));
+        const passed_types = try self.passedDescriptorTypes(self.allocator, id);
+        defer self.allocator.free(passed_types);
+        for (passed_types) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = .opaque_ptr }));
         const proc = store.getProcSpecPtr(imported.proc);
         proc.args = try store.addLocalSpan(args.items);
         if (try self.converter().representationClosed(imported.ret)) {
@@ -2433,7 +2458,10 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .layouts = undefined,
         .result = result,
         .static_descs = undefined,
-        .observe_expects = input.roots.test_plan_metadata.len != 0,
+        .observe_expects = input.roots.test_plan_metadata.len != 0 or switch (input.unit) {
+            .program => false,
+            .module => |unit| unit.expect_sites,
+        },
         .list_in_place_map = input.list_in_place_map,
         .arena = std.heap.ArenaAllocator.init(allocator),
     };
@@ -2723,7 +2751,13 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
         const view = &program.modules.views.items[module_position];
         files[file_index] = .{
             .name = view.view.module_env.module_name,
-            .qualified_name = view.view.module_env.qualifiedModuleName(),
+            // Persisted unit metadata must be identical across checkouts.
+            // In-process programs keep current workspace names for reporting;
+            // cached unit locations rebind through module_identity instead.
+            .qualified_name = switch (program.input.unit) {
+                .module => if (program.input.compile_time) view.view.module_env.qualifiedModuleName() else view.view.module_env.module_name,
+                .program => view.view.module_env.qualifiedModuleName(),
+            },
             .module_identity = program.modules.linkName(view.index),
         };
         program.source_files[module_position] = @intCast(file_index);

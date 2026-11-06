@@ -17,3 +17,6 @@ pub const BuiltinSignatures = @import("builtin_signatures.zig");
 pub const BoxyRuntimeSignatures = @import("boxy_runtime_signatures.zig");
 pub const StackSupport = @import("StackSupport.zig");
 pub const StackRoom = @import("StackRoom.zig");
+pub const WasmUnitImage = @import("WasmUnitImage.zig");
+pub const UnitCompile = @import("UnitCompile.zig");
+pub const ObjectImage = @import("ObjectImage.zig");

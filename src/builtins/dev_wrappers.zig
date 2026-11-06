@@ -281,6 +281,23 @@ pub fn roc_builtins_str_to_utf8(out: *RocList, str_bytes: ?[*]u8, str_len: usize
 /// update mode is forwarded to the builtin's uniqueness check; `.InPlace`
 /// skips it.
 pub fn roc_builtins_str_concat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, update_mode: utils.UpdateMode) callconv(.c) void {
+    const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
+    const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    // Two small strings into a small one: small enough here to inline at
+    // every call site where this bitcode is merged into the app's module, so
+    // a chain of them stays in registers. Everything else out of line, its
+    // fields passed in registers.
+    if (a.isSmallStr() and b.isSmallStr()) {
+        const combined_length = a.len() + b.len();
+        if (combined_length < @sizeOf(RocStr)) {
+            out.* = str.concatSmall(a, b, combined_length);
+            return;
+        }
+    }
+    strConcatOutOfLine(out, a_bytes, a_len, a_cap, b_bytes, b_len, b_cap, update_mode);
+}
+
+noinline fn strConcatOutOfLine(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, update_mode: utils.UpdateMode) void {
     const roc_ops = in_process_host.ops();
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
@@ -446,6 +463,12 @@ pub fn roc_builtins_str_join_with(out: *RocStr, list_bytes: ?[*]u8, list_len: us
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     const sep = RocStr{ .bytes = sep_bytes, .length = sep_len, .capacity_or_alloc_ptr = sep_cap };
     out.* = strJoinWithC(l, sep, roc_ops);
+}
+
+/// Wrapper: strFromParts([]const RocStr, *RocOps) -> RocStr: an interpolated
+/// literal's `count` parts at `parts`, written once. Every part is borrowed.
+pub fn roc_builtins_str_from_parts(out: *RocStr, parts: [*]const RocStr, count: usize) callconv(.c) void {
+    out.* = str.strFromParts(parts[0..count], in_process_host.ops());
 }
 
 /// Wrapper: reserveC(RocStr, u64, UpdateMode, *RocOps) -> RocStr. The update
@@ -2554,11 +2577,12 @@ pub fn roc_builtins_native_callable_call(callable: erased_callable.CallableFnPtr
     native_callable.call(callable, ret, args, capture, reuse);
 }
 /// Transfer ARC's deferred call to the waiter's pending cell.
-pub fn roc_builtins_native_callable_defer(pending: *native_callable.Pending, callable: erased_callable.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize) callconv(.c) void {
-    native_callable.deferCall(pending, callable, closure, args, args_len);
+pub fn roc_builtins_native_callable_defer(pending: *native_callable.Pending, callable: erased_callable.CallableFnPtr, closure: [*]u8, args: ?[*]const u8, args_len: usize, transfer: u8) callconv(.c) void {
+    native_callable.deferCall(pending, callable, closure, args, args_len, transfer != 0);
 }
-/// Run a producer-declared chain of pending monomorphic calls.
-pub fn roc_builtins_native_callable_drive(pending: *native_callable.Pending, ret: ?[*]u8) callconv(.c) void {
+/// Run a producer-declared chain of pending monomorphic calls, out of line
+/// (`native_callable.drivePending`).
+pub noinline fn roc_builtins_native_callable_drive(pending: *native_callable.Pending, ret: ?[*]u8) callconv(.c) void {
     native_callable.drive(pending, ret);
 }
 /// The trampoline's pending cell, when the trampoline invoked this callable.

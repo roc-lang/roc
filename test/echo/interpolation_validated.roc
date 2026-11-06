@@ -3,12 +3,12 @@
 # interpolated values at runtime. A runtime value can therefore never be
 # rejected: here it is escaped, while the segments were validated once.
 Html := [Html(Str)].{
-    from_interpolation : List(Str) -> Try((List(Str) -> Html), [InvalidInterpolation(Str)])
+    from_interpolation : List(Str) -> Try((Iter(Str) -> Html), [InvalidInterpolation(Str)])
     from_interpolation = |segments|
         if segments.any(|segment| segment.contains("<script")) {
             Err(InvalidInterpolation("Html literals can't contain script tags"))
         } else {
-            Str.from_interpolation(segments).map_ok(|assemble| |values| Html(assemble(List.map(values, |value| value.replace_each("<", "&lt;")))))
+            Str.from_interpolation(segments).map_ok(|assemble| |values| Html(assemble(values.map(|value| value.replace_each("<", "&lt;")))))
         }
 
     to_str : Html -> Str

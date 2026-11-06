@@ -34,6 +34,11 @@ pub const StaticDataExport = struct {
     is_global: bool = true,
     /// Whether this symbol is part of the host-visible ABI.
     is_exported: bool = true,
+    /// Named by the digest of its content and defined weak: every unit of a
+    /// program that carries this constant defines the same symbol, and a
+    /// link keeps one definition for all of them. Never set with
+    /// `is_exported`, and never set on a mutable constant.
+    content_named: bool = false,
     /// Zero-initialized program-owned state, never pooled or named by content.
     /// Its producer supplies a stable site identity in `symbol_name`.
     is_mutable: bool = false,

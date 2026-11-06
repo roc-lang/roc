@@ -14,14 +14,29 @@ fn setupFailed(err: anytype) error{TestUnexpectedResult} {
     return error.TestUnexpectedResult;
 }
 
+const Expected = []const struct { []const u8, []const Demand };
+
+/// A module file written beside `Demand.roc`: its file name and source.
+const ImportedSource = struct { []const u8, []const u8 };
+
 /// Check `source` as module `Demand.roc` and compare the demand vector of
 /// each named top-level function with its expected vector.
-fn expectDemands(source: []const u8, expected: []const struct { []const u8, []const Demand }) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
+fn expectDemands(source: []const u8, expected: Expected) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
+    return expectDemandsWithImports(source, &.{}, expected);
+}
+
+/// `expectDemands` with `imports` written beside `Demand.roc`, which may
+/// import them.
+fn expectDemandsWithImports(source: []const u8, imports: []const ImportedSource, expected: Expected) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     tmp.dir.writeFile(io, .{ .sub_path = "Demand.roc", .data = source }) catch |err| return setupFailed(err);
+    for (imports) |imported| {
+        const file_name, const imported_source = imported;
+        tmp.dir.writeFile(io, .{ .sub_path = file_name, .data = imported_source }) catch |err| return setupFailed(err);
+    }
     const cwd = tmp.dir.realPathFileAlloc(io, ".", gpa) catch |err| return setupFailed(err);
     defer gpa.free(cwd);
     const path = tmp.dir.realPathFileAlloc(io, "Demand.roc", gpa) catch |err| return setupFailed(err);
@@ -129,5 +144,72 @@ test "demand propagates around recursion" {
         .{ "pong", &.{.none} },
         .{ "look", &.{.full} },
         .{ "seek", &.{.full} },
+    });
+}
+
+test "a nominal argument its backing extends a row with demands all of it" {
+    try expectDemands(
+        \\module [kind_of, label_of, count_of, links]
+        \\Ref(r) := { ..r }
+        \\Labeled(r) := { label : Str, ..r }
+        \\Outer(r) := { inner : Ref(r), n : U64 }
+        \\Chain(r) := [Link({ tag : Str, ..r }, Chain(r)), End]
+        \\kind_of : Ref(r) -> Str
+        \\kind_of = |_ref| "ref"
+        \\label_of : Labeled(r) -> Str
+        \\label_of = |item| item.label
+        \\count_of : Outer(r) -> U64
+        \\count_of = |outer| outer.n
+        \\links : Chain(r) -> U64
+        \\links = |chain| match chain {
+        \\    Chain.Link(_, rest) => 1 + links(rest)
+        \\    Chain.End => 0
+        \\}
+    , &.{
+        .{ "kind_of", &.{.full} },
+        .{ "label_of", &.{.full} },
+        .{ "count_of", &.{.full} },
+        .{ "links", &.{.full} },
+    });
+}
+
+test "a nominal argument demands what its backing does with it" {
+    try expectDemands(
+        \\module [held, ignore_tag, ignore_pair]
+        \\Wrap(a) := List(a)
+        \\Tagged(t) := U64
+        \\Pair(a, b) := (a, List(b))
+        \\held : Wrap(a), U64 -> U64
+        \\held = |_w, n| n
+        \\ignore_tag : Tagged(t), U64 -> U64
+        \\ignore_tag = |_t, n| n
+        \\ignore_pair : Pair(a, b), U64 -> U64
+        \\ignore_pair = |_p, n| n
+    , &.{
+        .{ "held", &.{.none} },
+        .{ "ignore_tag", &.{.none} },
+        .{ "ignore_pair", &.{ .layout, .none } },
+    });
+}
+
+test "an imported nominal argument demands what its declaring module's backing does with it" {
+    try expectDemandsWithImports(
+        \\module [kind_of, held, ignore_tag]
+        \\import Shapes exposing [Ref, Wrap, Tagged]
+        \\kind_of : Ref(r) -> Str
+        \\kind_of = |_ref| "ref"
+        \\held : Wrap(a), U64 -> U64
+        \\held = |_w, n| n
+        \\ignore_tag : Tagged(t), U64 -> U64
+        \\ignore_tag = |_t, n| n
+    , &.{.{ "Shapes.roc",
+        \\module [Ref, Wrap, Tagged]
+        \\Ref(r) := { ..r }
+        \\Wrap(a) := List(a)
+        \\Tagged(t) := U64
+    }}, &.{
+        .{ "kind_of", &.{.full} },
+        .{ "held", &.{.none} },
+        .{ "ignore_tag", &.{.none} },
     });
 }

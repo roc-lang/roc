@@ -328,6 +328,10 @@ pub const Env = struct {
     }
 };
 
+/// How many erased-callable slots a value of a type holds
+/// (`Converter.erasedResultSlots`).
+pub const ErasedSlots = enum(u32) { none = 0, single = 1, several = 2 };
+
 /// The program-wide type store.
 pub const Store = struct {
     allocator: Allocator,
@@ -374,6 +378,8 @@ pub const Store = struct {
     field_defaults: std.AutoHashMapUnmanaged(FieldDefaultKey, checked.CheckedFieldDefault) = .empty,
     /// `Converter.representationClosed` of each type asked about.
     representation_closed: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
+    /// `Converter.erasedResultSlots` of each type asked about.
+    erased_slots: collections.DenseMapUnmanaged(TypeId, ErasedSlots) = .empty,
     /// Each module's nominal declarations by nominal key, filled once per
     /// module on first use.
     decl_by_key: std.AutoHashMapUnmanaged(DeclKey, checked.CheckedNominalDeclarationId) = .empty,
@@ -446,6 +452,7 @@ pub const Store = struct {
             self.decl_outer_vars.deinit(self.allocator);
         }
         self.representation_closed.deinit(self.allocator);
+        self.erased_slots.deinit(self.allocator);
         self.field_defaults.deinit(self.allocator);
         self.decl_by_key.deinit(self.allocator);
         self.decl_keys_indexed.deinit(self.allocator);
@@ -1573,6 +1580,131 @@ pub const Converter = struct {
         } else true;
         try store.representation_closed.put(store.allocator, root, closed);
         return closed;
+    }
+
+    /// How many erased-callable slots a value of `root` holds: none, one,
+    /// or several. A function type is one slot; a record or tuple holds the
+    /// slots of its fields; a tag union holds those of whichever variant it
+    /// is, so its count is its largest variant's; a list of callables holds
+    /// any number; a box holds its payload's, so `Box(function)` is one; a
+    /// nominal holds its backing's. A type variable holds none: its
+    /// descriptor is what says what it holds. A recursive occurrence holds
+    /// none. An erased call whose result is one slot is an owned call
+    /// (design.md "Destination-Passing Results and Allocation Reuse").
+    pub fn erasedResultSlots(self: Converter, root: TypeId) Allocator.Error!ErasedSlots {
+        const store = self.store;
+        if (store.erased_slots.get(root)) |memo| return memo;
+        const several: u32 = @backingInt(ErasedSlots.several);
+        var in_progress: collections.DenseMapUnmanaged(TypeId, void) = .empty;
+        defer in_progress.deinit(store.allocator);
+        var frames: std.ArrayList(ErasedSlotFrame) = .empty;
+        defer {
+            for (frames.items) |frame| if (frame.owns_children) store.allocator.free(frame.children);
+            frames.deinit(store.allocator);
+        }
+        const root_frame = try self.erasedSlotFrame(root, &in_progress) orelse {
+            const slots = self.erasedSlotLeaf(root);
+            try store.erased_slots.put(store.allocator, root, slots);
+            return slots;
+        };
+        try frames.append(store.allocator, root_frame);
+        var result: u32 = 0;
+        while (frames.items.len != 0) {
+            const top = &frames.items[frames.items.len - 1];
+            if (top.kind == .max and top.next < top.variants.len) {
+                const variant = top.variants[top.next];
+                top.next += 1;
+                try frames.append(store.allocator, .{ .ty = null, .kind = .sum, .children = store.span(variant.payloads) });
+                continue;
+            }
+            if (top.kind != .max and top.next < top.children.len) {
+                const child = top.children[top.next];
+                top.next += 1;
+                const contributed: u32 = if (store.erased_slots.get(child)) |memo|
+                    @backingInt(memo)
+                else if (in_progress.contains(child))
+                    0
+                else if (try self.erasedSlotFrame(child, &in_progress)) |frame| {
+                    try frames.append(store.allocator, frame);
+                    continue;
+                } else @backingInt(self.erasedSlotLeaf(child));
+                top.count = @min(several, top.count + contributed);
+                continue;
+            }
+            const finished = frames.pop().?;
+            if (finished.owns_children) store.allocator.free(finished.children);
+            const count: u32 = switch (finished.kind) {
+                .sum, .max => finished.count,
+                .list => if (finished.count == 0) 0 else several,
+            };
+            if (finished.ty) |ty| {
+                try store.erased_slots.put(store.allocator, ty, @fromBackingInt(@intCast(count)));
+                _ = in_progress.remove(ty);
+            }
+            if (frames.items.len == 0) {
+                result = count;
+                break;
+            }
+            const parent = &frames.items[frames.items.len - 1];
+            parent.count = switch (parent.kind) {
+                .sum, .list => @min(several, parent.count + count),
+                .max => @max(parent.count, count),
+            };
+        }
+        return @fromBackingInt(@intCast(result));
+    }
+
+    /// One type being counted by `erasedResultSlots`: its children's
+    /// counts join by sum, by maximum over a union's variants, or as a
+    /// list's, which holds any number of its item's.
+    const ErasedSlotFrame = struct {
+        /// The type, or null for one tag variant's payloads.
+        ty: ?TypeId,
+        kind: enum { sum, max, list },
+        children: []const TypeId = &.{},
+        /// Whether `children` was gathered for this frame rather than being
+        /// a span of the store's.
+        owns_children: bool = false,
+        next: usize = 0,
+        /// The variants a `max` frame opens, one at a time.
+        variants: []const Tag = &.{},
+        count: u32 = 0,
+    };
+
+    /// The slots a type without children holds (`erasedResultSlots`).
+    fn erasedSlotLeaf(self: Converter, ty: TypeId) ErasedSlots {
+        return switch (self.store.get(ty)) {
+            .function => .single,
+            .variable, .primitive, .empty_record, .nominal => .none,
+            .record, .tuple, .tag_union, .list, .box => unreachable, // erasedSlotFrame opens every type with children
+        };
+    }
+
+    /// The frame counting `ty`'s children (`erasedResultSlots`), marking
+    /// `ty` in progress, or null for a type without children.
+    fn erasedSlotFrame(self: Converter, ty: TypeId, in_progress: *collections.DenseMapUnmanaged(TypeId, void)) Allocator.Error!?ErasedSlotFrame {
+        const store = self.store;
+        const frame: ErasedSlotFrame = switch (store.get(ty)) {
+            .variable, .primitive, .empty_record, .function => return null,
+            .record => |record| blk: {
+                const fields = store.fieldSpan(record.fields);
+                const padding = store.paddingTypes(record);
+                const children = try store.allocator.alloc(TypeId, fields.len + padding.len);
+                for (children[0..fields.len], fields) |*child, field| child.* = field.ty;
+                @memcpy(children[fields.len..], padding);
+                break :blk .{ .ty = ty, .kind = .sum, .children = children, .owns_children = true };
+            },
+            .tuple => |items| .{ .ty = ty, .kind = .sum, .children = store.span(items) },
+            .tag_union => |tag_union| .{ .ty = ty, .kind = .max, .variants = store.tagSpan(tag_union.tags) },
+            .list => |elem| .{ .ty = ty, .kind = .list, .children = try store.allocator.dupe(TypeId, &.{elem}), .owns_children = true },
+            .box => |payload| .{ .ty = ty, .kind = .sum, .children = try store.allocator.dupe(TypeId, &.{payload}), .owns_children = true },
+            .nominal => |nominal| if (nominal.has_backing)
+                .{ .ty = ty, .kind = .sum, .children = try store.allocator.dupe(TypeId, &.{try self.backing(ty)}), .owns_children = true }
+            else
+                return null,
+        };
+        try in_progress.put(store.allocator, ty, {});
+        return frame;
     }
 
     /// The outer variables of the nominal declaration `ty` names, when `ty`

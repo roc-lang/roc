@@ -123,12 +123,12 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 334)
+								(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 337)
 									(receiver
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 312)
+													(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 315)
 														(receiver
 															(e-match
 																(match

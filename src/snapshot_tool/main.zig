@@ -3815,7 +3815,7 @@ fn snapshotHasProvidedProcedureExports(
     for (root_artifact.provided_exports.exports) |provided| {
         switch (provided) {
             .procedure => return true,
-            .data => {},
+            .data, .checked_error => {},
         }
     }
     return false;
@@ -3827,7 +3827,7 @@ fn snapshotHasProvidedDataExports(
     for (root_artifact.provided_exports.exports) |provided| {
         switch (provided) {
             .data => return true,
-            .procedure => {},
+            .procedure, .checked_error => {},
         }
     }
     return false;

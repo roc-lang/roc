@@ -2311,7 +2311,7 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Wrap := [W(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Wrap), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Wrap), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| W(Str.concat("<", Str.concat(assemble(values), ">"))))
         \\
         \\    text : Wrap -> Str

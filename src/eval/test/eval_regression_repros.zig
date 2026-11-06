@@ -866,7 +866,7 @@ pub const tests = [_]TestCase{
             .name = "Make",
             .source =
             \\Make := [].{
-            \\    make : Str -> a where [a.from_interpolation : List(Str) -> Try((List(Str) -> a), [InvalidInterpolation(Str)])]
+            \\    make : Str -> a where [a.from_interpolation : List(Str) -> Try((Iter(Str) -> a), [InvalidInterpolation(Str)])]
             \\    make = |name| "hello ${name}!"
             \\}
             ,
@@ -874,7 +874,7 @@ pub const tests = [_]TestCase{
         .source =
         \\import Make
         \\Greeting := [Greeting(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Greeting), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Greeting), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Greeting(assemble(values)))
         \\}
         \\main : Greeting

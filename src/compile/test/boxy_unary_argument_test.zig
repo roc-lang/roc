@@ -6,6 +6,38 @@ const lir = @import("lir");
 const layout = @import("layout");
 const harness = @import("lower_to_lir_harness.zig");
 
+test "boxy caller supplies the composite parameter and result descriptor once" {
+    for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
+        try harness.expectLirInspectionWithOptions(
+            \\keep : List(a) -> List(a)
+            \\keep = |items| items
+            \\main! = |args| {
+            \\    echo!(Str.inspect(keep(args)))
+            \\    echo!(Str.inspect(keep([1.I64, 2, 3])))
+            \\    Ok({})
+            \\}
+        , .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, struct {
+            fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
+                var found = false;
+                for (store.getProcSpecs(), 0..) |proc, index| {
+                    const name = store.procDebugName(@fromBackingInt(@intCast(index))) orelse continue;
+                    if (!std.mem.eql(u8, name, "keep") and !std.mem.endsWith(u8, name, ".keep")) continue;
+                    found = true;
+                    // The list, a's descriptor, and one shared List(a) descriptor.
+                    const args = store.getLocalSpan(proc.args);
+                    try std.testing.expectEqual(@as(usize, 3), args.len);
+                    const descriptor = collections.GuardedList.at(args, 2);
+                    const param = store.localDyn(collections.GuardedList.at(args, 0)) orelse return error.TestUnexpectedResult;
+                    const result = store.localDyn(proc.dyn_result orelse return error.TestUnexpectedResult) orelse return error.TestUnexpectedResult;
+                    try std.testing.expectEqual(descriptor, param.desc);
+                    try std.testing.expectEqual(descriptor, result.desc);
+                }
+                try std.testing.expect(found);
+            }
+        }.inspect);
+    }
+}
+
 test "boxy unary argument blocks preserve views and omit independent packing" {
     for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
         try harness.expectLirInspectionWithOptions(
@@ -98,7 +130,9 @@ fn inspectEntries(store: *const lir.LirStore, _: *const layout.Store) harness.Lo
         try pending.append(std.testing.allocator, proc.body.?);
         var arg_descs: usize = 0;
         const params = store.getLocalSpan(proc.args);
-        const param: ?lir.LIR.LocalId = if (params.len == 2) collections.GuardedList.at(params, 0) else null;
+        // An erased worker's last parameter is the erased ABI's reuse input.
+        const reuse_params: usize = @intFromBool(proc.erased_reuse_arg != null);
+        const param: ?lir.LIR.LocalId = if (params.len == 2 + reuse_params) collections.GuardedList.at(params, 0) else null;
         var forwards_param = false;
         var extracts_param = false;
         var retains_param = false;

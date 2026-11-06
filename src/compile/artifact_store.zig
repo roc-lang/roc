@@ -1,4 +1,4 @@
-//! Direct file storage for checked modules and Boxy objects.
+//! Direct file storage for checked modules, Boxy objects and dev link hosts.
 //! Each identity names one file. Writers stage complete bytes beside it and
 //! atomically rename them into place; readers own an open file or mapping.
 
@@ -17,6 +17,10 @@ pub const Family = enum {
     canonicalized,
     pairing,
     boxy_object,
+    /// A platform host linked once for fast dev links of its executables.
+    prelinked_host,
+    /// The host executable a composed `.boxy` dev run launches.
+    run_host,
 };
 
 /// Explicit producer identity for one file.

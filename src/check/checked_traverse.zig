@@ -98,6 +98,26 @@ pub fn BoolPredicateTraversal(comptime Key: type, comptime Context: type) type {
             }
         }
 
+        /// Call `sink.decided(key, value)` for every node whose result the
+        /// last `visit`, which returned `root_result`, proved on its own.
+        /// A node completed true reaches a true node through completed
+        /// children, so it is true wherever the walk starts. When the root is
+        /// false the walk reached every node reachable from it and found no
+        /// true one, so every node it reached is false. A node completed
+        /// false under a true root may have been cut short by a cycle back to
+        /// a node still active, so it is not reported.
+        pub fn reportDecided(self: *const Self, root_result: bool, sink: anytype) void {
+            std.debug.assert(self.frames.items.len == 0);
+            var it = self.memo.iterator();
+            while (it.next()) |entry| {
+                const value = switch (entry.value_ptr.*) {
+                    .active => unreachable, // every frame completes before visit returns
+                    .complete => |value| value,
+                };
+                if (value or !root_result) sink.decided(entry.key_ptr.*, value);
+            }
+        }
+
         /// The memoized or immediate result of `key`, or null after pushing
         /// its frame.
         fn begin(self: *Self, key: Key) Allocator.Error!?bool {

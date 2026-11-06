@@ -12798,7 +12798,7 @@ test "check type - interpolation part mismatch keeps the result's Str type" {
 test "check type - dispatch - interpolation cannot target Try" {
     const source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
@@ -14677,6 +14677,42 @@ test "check type - row subsumption - a forwarder's input row stays closed" {
         \\forward = |x| x
         \\
         \\out = forward(C)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - row subsumption - a closed branch in result position widens into the annotated result" {
+    // A branch of an `if` or `match` in result position relates to the
+    // annotated result through a widening copy, exactly as a body that is the
+    // value itself does (design.md "Row Subsumption"), whichever branch
+    // comes first.
+    const source =
+        \\else_branch : [B, C], Bool -> [A, B, C]
+        \\else_branch = |v, first| if first { A } else { v }
+        \\
+        \\then_branch : [B, C], Bool -> [A, B, C]
+        \\then_branch = |v, first| if first { v } else { A }
+        \\
+        \\match_branch : [B, C], Bool -> [A, B, C]
+        \\match_branch = |v, first| match first {
+        \\    True => A
+        \\    False => v
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - row subsumption - a closed branch in result position may not produce a tag the annotation omits" {
+    // The widening copy re-opens only the branch's own closed row, so a
+    // branch whose row holds a tag the annotated result does not list is
+    // still rejected.
+    const source =
+        \\pick : [B, C], Bool -> [A, B]
+        \\pick = |v, first| if first { A } else { v }
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();

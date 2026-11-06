@@ -243,6 +243,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             const source_name, const ffi_symbol = switch (provided) {
                 .procedure => |procedure| .{ procedure.source_name, procedure.ffi_symbol },
                 .data => |data| .{ data.source_name, data.ffi_symbol },
+                // Glue runs only on modules that checked without errors.
+                .checked_error => base.invariant("glue invariant violated: a provided export with no ABI reached glue", .{}),
             };
             type_table.boundary_value_name = artifact.nameStore().exportNameText(source_name);
             defer type_table.boundary_value_name = null;
@@ -255,6 +257,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
                     error.OutOfMemory => return error.OutOfMemory,
                     error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
                 } },
+                .checked_error => base.invariant("glue invariant violated: a provided export with no ABI reached glue", .{}),
             };
             var entry = CollectedProvidesEntry{ .name = &.{}, .ffi_symbol = &.{}, .exported = exported };
             errdefer entry.deinit(gpa);

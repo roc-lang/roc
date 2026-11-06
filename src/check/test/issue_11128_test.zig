@@ -25,8 +25,31 @@ fn schemeAllocationFailures(gpa: std.mem.Allocator) (std.mem.Allocator.Error || 
 }
 
 test "issue 11128 scheme growth and allocation failure preserve existing schemes" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, schemeAllocationFailures, .{});
+    // Growth that extends a block in place makes no allocation, and whether
+    // the backing allocator can extend one depends on its state, so the
+    // sweep runs over a backing allocator that never extends: every growth
+    // allocates, the same way on every run.
+    try std.testing.checkAllAllocationFailures(never_extending, schemeAllocationFailures, .{});
 }
+
+/// `std.testing.allocator` with every in-place resize refused.
+const never_extending: std.mem.Allocator = .{
+    .ptr = undefined,
+    .vtable = &.{
+        .alloc = struct {
+            fn alloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+                return std.testing.allocator.rawAlloc(len, alignment, ret_addr);
+            }
+        }.alloc,
+        .resize = std.mem.Allocator.noResize,
+        .remap = std.mem.Allocator.noRemap,
+        .free = struct {
+            fn free(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+                std.testing.allocator.rawFree(memory, alignment, ret_addr);
+            }
+        }.free,
+    },
+};
 
 test "issue 11128 top-level procedure binding appends stay amortized" {
     const binding_count: usize = 4096;
@@ -38,7 +61,7 @@ test "issue 11128 top-level procedure binding appends stay amortized" {
         defer table.deinit(direct_bytes.allocator());
         for (0..binding_count) |i| {
             const ordinal: u32 = @intCast(i);
-            const ref = try table.appendDirect(direct_bytes.allocator(), @fromBackingInt(0), .{ .proc_base = @fromBackingInt(@intCast(ordinal)) }, .{
+            const ref = try table.appendDirect(direct_bytes.allocator(), @fromBackingInt(@intCast(1)), .{ .proc_base = @fromBackingInt(@intCast(ordinal)) }, .{
                 .proc_base = @fromBackingInt(@intCast(ordinal)),
                 .template = @fromBackingInt(@intCast(ordinal)),
             });
@@ -53,7 +76,7 @@ test "issue 11128 top-level procedure binding appends stay amortized" {
         var table = TopLevelProcedureBindingTable.initEmpty();
         defer table.deinit(callable_eval_bytes.allocator());
         for (0..binding_count) |i| {
-            _ = try table.appendCallableEval(callable_eval_bytes.allocator(), @fromBackingInt(0), @fromBackingInt(@intCast(i)));
+            _ = try table.appendCallableEval(callable_eval_bytes.allocator(), @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(i)));
         }
         for (0..binding_count) |i| {
             try std.testing.expectEqual(i, @backingInt(table.get(@fromBackingInt(@intCast(i))).body.callable_eval_template));
@@ -81,7 +104,7 @@ test "issue 11128 wrapper and callable template appends stay amortized" {
             else if (Table == CheckedArtifact.EntryWrapperTable)
                 try table.append(gpa, @fromBackingInt(@intCast(i)), .{ .proc_base = @fromBackingInt(@intCast(i)), .template = @fromBackingInt(@intCast(i)) }, @fromBackingInt(@intCast(i)))
             else
-                try table.append(gpa, @intCast(i), @fromBackingInt(@intCast(i)), @fromBackingInt(@intCast(i)), @fromBackingInt(0), @fromBackingInt(@intCast(i)));
+                try table.append(gpa, @intCast(i), @fromBackingInt(@intCast(i)), @fromBackingInt(@intCast(i)), @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(i)));
             try std.testing.expectEqual(i, @backingInt(ref));
         }
         for (0..count) |i| {
@@ -104,7 +127,7 @@ fn bindingAllocationFailures(gpa: std.mem.Allocator) (std.mem.Allocator.Error ||
         std.debug.assert(@backingInt(row.body.callable_eval_template) == i);
     };
     while (count < 128) : (count += 1) {
-        const ref = try table.appendCallableEval(gpa, @fromBackingInt(0), @fromBackingInt(@intCast(count)));
+        const ref = try table.appendCallableEval(gpa, @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(count)));
         try std.testing.expectEqual(count, @backingInt(ref));
     }
 }

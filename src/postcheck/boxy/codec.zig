@@ -1285,7 +1285,9 @@ const Gen = struct {
                 // The result is adapted to the call's own type, since a
                 // sealed row of it may be widened here (design.md "Sealed
                 // Result Rows").
-                const all = try std.mem.concat(b.allocator, LocalId, &.{ call_args, instance.hidden });
+                const passed = try b.callDescriptorArgs(callee, instance.bound);
+                defer b.allocator.free(passed);
+                const all = try std.mem.concat(b.allocator, LocalId, &.{ call_args, instance.hidden, passed });
                 defer b.allocator.free(all);
                 const target = try self.local(instance.ret);
                 try b.emitLinear(.{ .assign_call = .{ .target = target, .proc = target_worker.proc, .args = try b.store.addLocalSpan(all), .next = undefined } });
@@ -2666,10 +2668,11 @@ const Gen = struct {
         const u64_ty = try self.u64Ty();
         const worker = try pieceWorker(program_, self.b.module, .{ .family = no_family, .kind = .field_names_step, .a = @backingInt(iter_ty), .b = @intFromBool(filtered) }, &.{}, fnRet(program_, step_fn), &.{ fields_ty, u64_ty, u64_ty }, true);
         const step = try self.b.packClosure(worker, &.{ fields, position, size }, &.{ fields_ty, u64_ty, u64_ty }, &.{}, &.{});
-        const len = if (filtered)
-            try self.tag(len_ty, "Unknown", &.{})
-        else
-            try self.tag(len_ty, "Known", &.{try self.lowLevelLayout(.num_int_sub_wrap, &.{ try self.lowLevelLayout(.list_len, &.{fields}, .u64), position }, .u64)});
+        // `len_if_known : Try(U64, [Unknown])`.
+        const len = if (filtered) blk: {
+            const parts = (try tryParts(program_, len_ty)) orelse invariant("an iterator's len_if_known is not a Try");
+            break :blk try self.tryErr(len_ty, try self.tag(parts.err, "Unknown", &.{}));
+        } else try self.tryOk(len_ty, try self.lowLevelLayout(.num_int_sub_wrap, &.{ try self.lowLevelLayout(.list_len, &.{fields}, .u64), position }, .u64));
         var values: [2]LocalId = undefined;
         for (iter_fields, &values) |field_info, *value| {
             value.* = if (std.mem.eql(u8, self.store().nameText(field_info.name), "step")) step else len;

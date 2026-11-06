@@ -10,7 +10,7 @@ main! = || {
 
 	chunks = Iter.custom(
 		0.U64,
-		Unknown,
+		Err(Unknown),
 		|start|
 			if start + 16 <= byte_count {
 				Ok((bytes.sublist({ start: start, len: 16 }), start + 16))

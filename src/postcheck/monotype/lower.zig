@@ -244,7 +244,8 @@ const CommittedGraphTypes = struct {
         if (committed.iterator_topology) |*topology| {
             topology.len_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.len_field);
             topology.step_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.step_field);
-            topology.known_tag = try relocation.relocateTagLabel(self.source_names, topology.known_tag);
+            topology.ok_tag = try relocation.relocateTagLabel(self.source_names, topology.ok_tag);
+            topology.err_tag = try relocation.relocateTagLabel(self.source_names, topology.err_tag);
             topology.unknown_tag = try relocation.relocateTagLabel(self.source_names, topology.unknown_tag);
             topology.done_tag = try relocation.relocateTagLabel(self.source_names, topology.done_tag);
             topology.one_tag = try relocation.relocateTagLabel(self.source_names, topology.one_tag);
@@ -4908,6 +4909,18 @@ const RestoredLocalProcScope = struct {
     entries: []const LexicalBinderEntry,
 };
 
+/// A stored function a body restores, read for the evidence chain of the
+/// template that declares local procedures of another template it reaches.
+const RestoredConstFn = struct {
+    store_view: ModuleView,
+    fn_value: check.ConstStore.ConstFn,
+};
+
+const RestoredDeclaringEvidence = struct {
+    owner: names.ProcTemplate,
+    chain: EvidenceChain,
+};
+
 const StoredConstFnEvidence = struct {
     entries: check.ConstStore.ConstFnEvidenceVector,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
@@ -5882,10 +5895,11 @@ const GeneratedTryTypeAddress = struct {
 
 /// Process-local O(1) reuse key for a checker-classified closed direct
 /// procedure call. `evidence` is an interned producer identity in `module`;
-/// the plan's closed callable type is likewise structurally interned there.
-/// The key is a
-/// complete identity only for specializations independent of the caller's
-/// local context, so caller-owned specializations are never stored under it.
+/// the plan's closed callable type is named by the one id its module's key
+/// index holds for it (`canonicalId`), so every call of one closed type
+/// shares the key. The key is a complete identity only for specializations
+/// independent of the caller's local context, so caller-owned specializations
+/// are never stored under it.
 const ClosedDirectCallIdentity = struct {
     callable: CheckedTypeAddress,
     evidence: static_dispatch.EvidenceNodeId,
@@ -8617,6 +8631,55 @@ const Builder = struct {
         try self.const_evidence_memo.put(key, stored);
         try self.const_evidence_by_content.put(bucket, stored);
         return stored;
+    }
+
+    /// A function's own evidence chain followed by the chain of the template
+    /// that declares the local procedures of another template it reaches.
+    /// The head names the own chain's innermost frame; the declaring chain's
+    /// root frame comes right after it.
+    fn constFnEvidenceWithDeclaring(
+        self: *Builder,
+        evidence: EvidenceChain,
+        declaring: EvidenceChain,
+    ) Allocator.Error!StoredConstFnEvidence {
+        var nodes: check.ConstStore.ConstFnEvidenceBuilder = .{};
+        defer nodes.deinit(self.allocator);
+        var frames = std.ArrayList(check.ConstStore.ConstFnEvidenceFrame).empty;
+        defer frames.deinit(self.allocator);
+        var head: ?u32 = null;
+        for ([_]*const EvidenceChain{ &evidence, &declaring }, 0..) |innermost, chain_index| {
+            var chain = std.ArrayList(*const EvidenceChain).empty;
+            defer chain.deinit(self.allocator);
+            var current: ?*const EvidenceChain = innermost;
+            while (current) |frame| : (current = frame.parent) {
+                try chain.append(self.allocator, frame);
+            }
+            var index = chain.items.len;
+            var parent: ?u32 = null;
+            while (index > 0) {
+                index -= 1;
+                const frame = chain.items[index];
+                const roots_start: u32 = @intCast(nodes.nodes.items.len);
+                try self.appendConstFnEvidence(&nodes, frame.vector);
+                const scope: check.ConstStore.ConstFnEvidenceScope = switch (frame.scope.lexical) {
+                    .root => .root,
+                    .generalized => |scope_id| .{ .generalized = @backingInt(scope_id) },
+                };
+                try frames.append(self.allocator, check.ConstStore.ConstFnEvidenceFrame.init(
+                    scope,
+                    parent,
+                    roots_start,
+                    @intCast(frame.vector.len),
+                ));
+                parent = @intCast(frames.items.len - 1);
+            }
+            if (chain_index == 0) head = parent;
+        }
+        return StoredConstFnEvidence.init(
+            try nodes.dupe(self.evidence_arena.allocator()),
+            try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, frames.items),
+            head,
+        );
     }
 
     /// Copy committed evidence out of the growable program lists so a lowered
@@ -13259,7 +13322,7 @@ const Builder = struct {
                 const draft = FinalBodyOutputGuard.begin(self);
                 const request_fn_node = try graph.importMonoIndependent(fn_template.mono_fn_ty);
                 fn_ctx.current_fn_key = nested.context_fn_key;
-                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
+                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(store_view, fn_value, nested, nested.context_fn_key);
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 try fn_ctx.restoreConstFnOwner(store_view, fn_value);
                 const fn_target = try self.lowerDraftNestedFromContext(
@@ -13430,7 +13493,7 @@ const Builder = struct {
         const family = DraftNestedFamilyAddress.init(nested, source_fn_key);
         self.countBodyDiagnostic("nested_lookup_probes");
         const family_exists = source_ctx.draft.nested_spec_families.contains(family);
-        const stored_evidence = try source_ctx.storedEvidence(requested_evidence);
+        const stored_evidence = try source_ctx.storedEvidenceForFn(requested_evidence, nested.owner);
         const evidence_digest = stored_evidence.digest;
         const draft_evidence = try source_ctx.draft.addStoredConstFnEvidence(stored_evidence);
         const resolved_request_ty: ?Type.TypeId = if (try source_ctx.graph.typeIsResolved(request_fn_node))
@@ -16231,7 +16294,7 @@ const Builder = struct {
             .nested => |nested| nested,
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("capturing stored function had no nested function identity"),
         };
-        const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, fn_ctx.current_fn_key);
+        const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(store_view, fn_value, nested, fn_ctx.current_fn_key);
         defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
 
         const capture_values = try self.allocator.alloc(DraftFnDefCapture, captures.len);
@@ -18137,6 +18200,16 @@ const DraftCodecLexicalContext = struct {
     view: [32]u8,
     binders: []const LexicalBinderEntry,
     local_procs: []const DraftCodecLocalProcContext,
+    /// The restored-function scope of a body that restores a stored function.
+    /// A deferred boundary resolves local procedures that body has not used
+    /// yet against it, exactly as the body itself would.
+    restored: ?RestoredLexicalScope = null,
+};
+
+const RestoredLexicalScope = struct {
+    /// Its entries live in the builder's evidence arena.
+    scope: RestoredLocalProcScope,
+    const_fn: ?RestoredConstFn,
 };
 
 const CodecKind = enum {
@@ -22328,6 +22401,17 @@ const BodyContext = struct {
     typed_binders: TypedBinders,
     local_proc_contexts: LocalProcContexts,
     restored_local_proc_scope: ?RestoredLocalProcScope = null,
+    /// The stored function this body restores. Its evidence frames after the
+    /// head frame are the evidence chain of the template that declares the
+    /// local procedures of another template it reaches (see
+    /// `storedDeclaringEvidence`).
+    restored_const_fn: ?RestoredConstFn = null,
+    /// The restored declaring template's chain, materialized on first use.
+    restored_declaring_evidence: ?RestoredDeclaringEvidence = null,
+    /// Some visible local procedure declaration context may belong to a
+    /// template other than `owner_template`. Only then does a function
+    /// produced here scan for a declaring template's evidence to retain.
+    may_see_other_template_local_procs: bool = false,
     /// The binder relations every nested context created from this one
     /// starts from (see `nestedRelationBase`).
     nested_relation_base: ?*NestedRelationBase = null,
@@ -24064,7 +24148,7 @@ const BodyContext = struct {
         if (!source.const_evidence.isEmpty() or source.const_evidence_frames.len != 0 or source.const_evidence_frame_head != null) {
             Common.invariant("body-local function source carried evidence outside its lexical lowering context");
         }
-        const stored_evidence = try self.storedEvidence(self.evidence);
+        const stored_evidence = try self.storedEvidenceForFn(self.evidence, self.owner_template);
         const evidence_digest = stored_evidence.digest;
         const draft_evidence = try self.draft.addStoredConstFnEvidence(stored_evidence);
         return try self.draft.addFn(.{
@@ -25312,6 +25396,9 @@ const BodyContext = struct {
         child.function_entry_demand_guards = self.function_entry_demand_guards;
         child.propagate_constructor_value_evidence = self.propagate_constructor_value_evidence;
         child.restored_local_proc_scope = self.restored_local_proc_scope;
+        child.restored_const_fn = self.restored_const_fn;
+        child.restored_declaring_evidence = self.restored_declaring_evidence;
+        child.may_see_other_template_local_procs = self.may_see_other_template_local_procs;
         child.in_default_expr = self.in_default_expr;
         child.specialization_dispatch_crashes = self.specialization_dispatch_crashes;
         child.owns_specialization_dispatch_crashes = false;
@@ -25337,9 +25424,13 @@ const BodyContext = struct {
 
     fn enterRestoredLocalProcScope(
         self: *BodyContext,
+        store_view: ModuleView,
+        fn_value: check.ConstStore.ConstFn,
         nested: Ast.NestedFn,
         base_key: names.TypeDigest,
     ) Allocator.Error!?[]LexicalBinderEntry {
+        self.restored_const_fn = .{ .store_view = store_view, .fn_value = fn_value };
+        self.restored_declaring_evidence = null;
         const digest = nested.local_proc_context_digest orelse {
             self.restored_local_proc_scope = null;
             return null;
@@ -25351,6 +25442,96 @@ const BodyContext = struct {
             .entries = entries,
         };
         return entries;
+    }
+
+    /// A restored generated codec runtime reaches the local procedures its
+    /// generated body calls, such as the format methods of a type declared in
+    /// a function body. Its stored definition names no source declaration
+    /// context of its own, so those procedures specialize under the restored
+    /// function's identity.
+    fn enterRestoredCodecLocalProcScope(
+        self: *BodyContext,
+        store_view: ModuleView,
+        fn_value: check.ConstStore.ConstFn,
+    ) Allocator.Error![]LexicalBinderEntry {
+        self.restored_const_fn = .{ .store_view = store_view, .fn_value = fn_value };
+        self.restored_declaring_evidence = null;
+        const entries = try self.captureLexicalBinderEntries();
+        self.restored_local_proc_scope = .{
+            .source_context_digest = self.current_fn_key,
+            .base_key = self.current_fn_key,
+            .entries = entries,
+        };
+        return entries;
+    }
+
+    /// The evidence chain of `owner`, a template other than this body's,
+    /// whose local procedures this body reaches through a declaration context
+    /// it was handed (only a template specialization's lexical codec context
+    /// hands one). Every such context belongs to one declaring body, and the
+    /// deepest declaration's chain contains every shallower one's.
+    fn otherTemplateDeclaringEvidence(self: *BodyContext, owner: names.ProcTemplate) ?EvidenceChain {
+        if (!self.may_see_other_template_local_procs) return null;
+        var declaring_owner: ?names.ProcTemplate = null;
+        var deepest: ?EvidenceChain = null;
+        var deepest_depth: usize = 0;
+        var iter = self.local_proc_contexts.iterator();
+        while (iter.next()) |entry| {
+            const context = self.draft.local_proc_contexts.items[@backingInt(entry.value_ptr.*)];
+            if (names.procedureTemplateRefEql(context.owner_template, owner)) continue;
+            if (declaring_owner) |existing| {
+                if (!names.procedureTemplateRefEql(existing, context.owner_template)) {
+                    Common.invariant("one body reached local procedures declared by two other templates");
+                }
+            } else declaring_owner = context.owner_template;
+            var depth: usize = 0;
+            var current: ?*const EvidenceChain = &context.evidence;
+            while (current) |frame| : (current = frame.parent) depth += 1;
+            if (deepest == null or depth > deepest_depth) {
+                deepest = context.evidence;
+                deepest_depth = depth;
+            }
+        }
+        return deepest;
+    }
+
+    /// Stored evidence for a function this body produces with owner template
+    /// `owner`: its own chain, followed by the declaring template's chain when
+    /// it reaches local procedures another template declares.
+    fn storedEvidenceForFn(
+        self: *BodyContext,
+        chain: EvidenceChain,
+        owner: names.ProcTemplate,
+    ) Allocator.Error!StoredConstFnEvidence {
+        const declaring = self.otherTemplateDeclaringEvidence(owner) orelse return try self.storedEvidence(chain);
+        return try self.builder.constFnEvidenceWithDeclaring(chain, declaring);
+    }
+
+    /// The declaring template's evidence chain a restored stored function
+    /// retained after its own head frame.
+    fn storedDeclaringEvidence(self: *BodyContext, owner: names.ProcTemplate) Allocator.Error!EvidenceChain {
+        if (self.restored_declaring_evidence) |restored| {
+            if (!names.procedureTemplateRefEql(restored.owner, owner)) {
+                Common.invariant("restored function reached local procedures declared by two other templates");
+            }
+            return restored.chain;
+        }
+        const restored = self.restored_const_fn orelse
+            Common.invariant("local procedure of another template reached a body that restores no stored function");
+        const fn_value = restored.fn_value;
+        const head = fn_value.evidence_frame_head orelse
+            Common.invariant("stored function reaching another template's local procedure had no evidence");
+        const first = head + 1;
+        if (first >= fn_value.evidence_frames.len) {
+            Common.invariant("stored function omitted the declaring template's evidence for a local procedure it reaches");
+        }
+        var cursor: usize = fn_value.evidence_frames[first].roots_start;
+        const chain = try self.materializeEvidenceFrames(restored.store_view, fn_value, owner, first, fn_value.evidence_frames.len, &cursor);
+        if (cursor != fn_value.evidence.nodes.len) {
+            Common.invariant("stored declaring evidence contained unreferenced nodes");
+        }
+        self.restored_declaring_evidence = .{ .owner = owner, .chain = chain };
+        return chain;
     }
 
     fn cloneLocalProcContext(self: *BodyContext, context: LocalProcContext) Allocator.Error!LocalProcContext {
@@ -25369,8 +25550,17 @@ const BodyContext = struct {
         const binders = try self.captureLexicalBinderEntries();
         errdefer self.allocator.free(binders);
         const local_procs = try self.allocator.alloc(DraftCodecLocalProcContext, self.local_proc_contexts.count());
+        errdefer self.allocator.free(local_procs);
         self.fillLocalProcContexts(local_procs);
-        return .{ .view = self.view.key.bytes, .binders = binders, .local_procs = local_procs };
+        const restored: ?RestoredLexicalScope = if (self.restored_local_proc_scope) |scope| .{
+            .scope = .{
+                .source_context_digest = scope.source_context_digest,
+                .base_key = scope.base_key,
+                .entries = try self.builder.evidence_arena.allocator().dupe(LexicalBinderEntry, scope.entries),
+            },
+            .const_fn = self.restored_const_fn,
+        } else null;
+        return .{ .view = self.view.key.bytes, .binders = binders, .local_procs = local_procs, .restored = restored };
     }
 
     /// Every visible local procedure context, in declaration order.
@@ -25443,7 +25633,16 @@ const BodyContext = struct {
                 else => Common.invariant("deferred lexical context had an unknown binder kind"),
             };
         }
+        if (lexical.restored) |restored| {
+            self.restored_local_proc_scope = restored.scope;
+            self.restored_const_fn = restored.const_fn;
+            self.restored_declaring_evidence = null;
+        }
         for (lexical.local_procs) |proc| {
+            const context = self.draft.local_proc_contexts.items[@backingInt(proc.context)];
+            if (!names.procedureTemplateRefEql(context.owner_template, self.owner_template)) {
+                self.may_see_other_template_local_procs = true;
+            }
             try self.local_proc_contexts.putPermanent(proc.declaration, proc.context);
         }
     }
@@ -26698,7 +26897,7 @@ const BodyContext = struct {
     /// the task marked probed, when it must be instantiated.
     fn probeInstNode(self: *BodyContext, task: *InstNodeTask) Allocator.Error!?NodeId {
         self.builder.countBodyDiagnostic("checked_node_requests");
-        task.scoped_ty = self.scopedCheckedType(task.checked_ty);
+        task.scoped_ty = try self.nodeMapType(self.scopedCheckedType(task.checked_ty));
         if (try self.scopedNode(task.scoped_ty)) |existing| {
             self.builder.countBodyDiagnostic("checked_node_cache_hits");
             return existing;
@@ -26733,7 +26932,8 @@ const BodyContext = struct {
     /// measuring context, where every closed type whose Monotype is known
     /// stays a leaf, and sealed together with every closed type the build
     /// reached.
-    fn closedCheckedMono(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
+    fn closedCheckedMono(self: *BodyContext, any_checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
+        const checked_ty = try self.view.types.canonicalId(any_checked_ty);
         if (self.graph.closedCheckedMono(checkedTypeAddress(self.view, checked_ty))) |known| return known;
         const previous = self.instantiation;
         self.instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
@@ -27408,7 +27608,18 @@ const BodyContext = struct {
         return scopes[scopes.len - 1];
     }
 
-    fn scopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!?NodeId {
+    /// The id a scope's node map holds `checked_ty` under. A type that
+    /// reaches no identity variable is one type wherever it occurs, whichever
+    /// ids name it, so it is memoized under the one id its module's key index
+    /// holds for it and instantiates once per scope (design.md "Synthesized
+    /// Types").
+    fn nodeMapType(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!checked.CheckedTypeId {
+        if (!try self.checkedTypeIsClosed(checked_ty)) return checked_ty;
+        return try self.view.types.canonicalId(checked_ty);
+    }
+
+    fn scopedNode(self: *BodyContext, any_checked_ty: checked.CheckedTypeId) Allocator.Error!?NodeId {
+        const checked_ty = try self.nodeMapType(any_checked_ty);
         const map = try self.scopedNodeMap(checked_ty);
         var entry = map.get(checked_ty) orelse return null;
         if (entry == .node) return entry.node;
@@ -27417,7 +27628,8 @@ const BodyContext = struct {
         return node;
     }
 
-    fn putScopedNode(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
+    fn putScopedNode(self: *BodyContext, any_checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
+        const checked_ty = try self.nodeMapType(any_checked_ty);
         try (try self.scopedNodeMap(checked_ty)).put(checked_ty, .{ .node = node });
         // A leaf read later reaches a closed component through its leaf
         // scope, so the scope names the same node for it.
@@ -31241,7 +31453,9 @@ const BodyContext = struct {
             var fn_node = input.?.nodeValue();
             if (self.iteratorProcedureForResolvedTarget(call.directTarget(self.view).?)) |procedure| {
                 const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
-                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+                const optional_args = try self.optionalCheckedArgs(call.args);
+                defer self.allocator.free(optional_args);
+                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, optional_args)) |private_fn_node| {
                     try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
                     try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
                     fn_node = private_fn_node;
@@ -32174,11 +32388,40 @@ const BodyContext = struct {
         expr: ExprSite,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         value_node: NodeId,
+        stage: enum {
+            start,
+            /// A value lowered; bound to a local.
+            value,
+            /// `iter` on the seed list lowered.
+            seed_iterator,
+            /// `append` of a value lowered.
+            appended,
+            /// The literal conversion lowered; the assembler is called.
+            conversion,
+            /// The literal's type is `Str`: the conversion lowered, its
+            /// segments and values are written once by `str_from_parts` (a
+            /// `StrTask` over them interleaved), and the assembler is not
+            /// called.
+            str_conversion,
+            written_once,
+        } = .start,
+        try_ty: checked.CheckedTypeId = undefined,
         try_node: NodeId = undefined,
         assembler_node: NodeId = undefined,
-        assembler: DraftExprId = undefined,
-        values_ty: Type.TypeId = undefined,
+        item_node: NodeId = undefined,
+        /// `iter` on the empty seed list, then `append` for each value.
+        iterator_plan: static_dispatch.ResolvedIteratorForPlan = undefined,
+        /// Each lowered value, bound to a local. Owned.
+        values: std.ArrayList(DraftTypedLocal) = .empty,
+        /// The bindings the interpolation's expression nests, in order:
+        /// each value, the seed list, and each iterator. Owned.
+        lets: std.ArrayList(InterpolationLet) = .empty,
+        /// The iterator built so far.
+        iterator: DraftTypedLocal = undefined,
+        index: usize = 0,
     };
+
+    const InterpolationLet = struct { pat: DraftPatId, value: DraftExprId };
 
     /// A call-site intrinsic whose arguments lower as child tasks, in
     /// argument order, before its generated body.
@@ -32245,14 +32488,16 @@ const BodyContext = struct {
         lhs: DraftExprId = undefined,
     };
 
-    /// A string whose segments lower as child tasks, concatenated in order.
+    /// A `Str` literal whose segments and values lower as child tasks and
+    /// are written once, in order, by `str_from_parts`.
     const StrTask = struct {
         segments: checked_bodies.StrParts,
         /// The cell the string's expression is built at; without one the
         /// task produces the string's expression data.
         cell: ?DraftTypeCell = null,
         index: usize = 0,
-        out: DraftExprId = undefined,
+        /// The lowered segments and values, the empty segments left out.
+        parts: std.ArrayList(DraftExprId) = .empty,
     };
 
     /// A field access whose receiver lowers as a child task, so nested
@@ -33848,12 +34093,12 @@ const BodyContext = struct {
                         // (`initial_iterator`).
                         if (self.dispatchCrashReason(task.plan.iter.resolution)) |reason| {
                             task.stage = .{ .crashing_iter = reason };
-                            return requestLowerTask(self, .{ .discarded = .{ .expr = ExprSite.read(task.plan.iterable) } });
+                            return requestLowerTask(self, .{ .discarded = .{ .expr = ExprSite.read(task.plan.forLoopSite().iterable) } });
                         }
                         task.stage = .initial_iterator;
                         return self.iteratorDispatchStep(.{
                             .plan = task.plan.iter,
-                            .loop_iterator = null,
+                            .pre_lowered = .{},
                             .expected_ret_ty = null,
                         });
                     },
@@ -33912,13 +34157,13 @@ const BodyContext = struct {
                 task.stage = .step_expr;
                 return self.iteratorDispatchStep(.{
                     .plan = plan.next,
-                    .loop_iterator = task.iterator_param,
+                    .pre_lowered = .{ .loop_iterator = task.iterator_param },
                     .expected_ret_ty = DraftTypeCell.fromGraphNode(task.step.step_node),
                 });
             },
             .step_expr => {
                 task.step_expr = input.?.exprValue();
-                try self.constrainCheckedInterfaceToCell(task.plan.step_ty, self.exprTypeCell(task.step_expr));
+                try self.constrainCheckedInterfaceToCell(task.plan.forLoopSite().step_ty, self.exprTypeCell(task.step_expr));
                 task.done_body = if (task.carries.len == 0)
                     try self.addExprWithTypeCell(task.loop_cell, .{ .break_ = null })
                 else
@@ -34073,11 +34318,34 @@ const BodyContext = struct {
         return statementStep(.{ .stmt = try self.addStmt(stmt), .termination = .none });
     }
 
+    /// The operands of an iterator dispatch that are lowered before the call
+    /// rather than as checked expressions: a loop's iterator state, and an
+    /// interpolation's seed list, the iterator it has built so far, and the
+    /// value it appends next.
+    const PreLoweredIteratorOperands = struct {
+        loop_iterator: ?DraftTypedLocal = null,
+        interpolation_seed: ?DraftTypedLocal = null,
+        interpolation_iterator: ?DraftTypedLocal = null,
+        interpolation_value: ?DraftTypedLocal = null,
+
+        /// The pre-lowered local `operand` names, or null for a checked
+        /// expression.
+        fn typedLocal(self: PreLoweredIteratorOperands, operand: static_dispatch.IteratorDispatchOperand) ?DraftTypedLocal {
+            return switch (operand) {
+                .checked_expr => null,
+                .loop_iterator_state => self.loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local"),
+                .interpolation_seed => self.interpolation_seed orelse Common.invariant("interpolation iter dispatch reached Monotype without its seed list local"),
+                .interpolation_iterator => self.interpolation_iterator orelse Common.invariant("interpolation append dispatch reached Monotype without its iterator local"),
+                .interpolation_value => self.interpolation_value orelse Common.invariant("interpolation append dispatch reached Monotype without its value local"),
+            };
+        }
+    };
+
     /// An iterator method call whose operands lower
     /// as child tasks.
     const IteratorDispatchTask = struct {
         plan: static_dispatch.ResolvedIteratorDispatchCall,
-        loop_iterator: ?DraftTypedLocal,
+        pre_lowered: PreLoweredIteratorOperands,
         expected_ret_ty: ?DraftTypeCell,
         call_ctx: ?*BodyContext = null,
         /// The generated `Iter.iter`/`Iter.next` path's procedure and
@@ -34122,7 +34390,7 @@ const BodyContext = struct {
         task.call_ctx = try self.createCallContext();
         const call_ctx = task.call_ctx.?;
 
-        var callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, task.loop_iterator, task.expected_ret_ty);
+        var callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, task.pre_lowered, task.expected_ret_ty);
         const initial_plan_fn = try self.graph.functionNodes(callable_node);
         // Instantiating the caller-authored request completes any procedure
         // operands that return iterator evidence. Only then is the producer's
@@ -34132,7 +34400,7 @@ const BodyContext = struct {
             if ((procedure == .identity or procedure == .next) and (try self.isGeneratedIteratorEvidenceNode(dispatcher_node))) {
                 try self.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
                 task.generated = .{ .procedure = procedure, .dispatcher_node = dispatcher_node };
-                switch (try self.iteratorOperandStep(plan_args[plan.dispatcher_arg_index], task.loop_iterator, dispatcher_node)) {
+                switch (try self.iteratorOperandStep(plan_args[plan.dispatcher_arg_index], task.pre_lowered, dispatcher_node)) {
                     .now => |iterator| return self.finishGeneratedIteratorDispatch(task, procedure, dispatcher_node, iterator),
                     .child => |step| return step,
                 }
@@ -34166,7 +34434,7 @@ const BodyContext = struct {
 
         const dispatcher_node = plan_fn.args[plan.dispatcher_arg_index];
         try call_ctx.constrainCheckedInterfaceToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
-        const actual_dispatcher_node = try self.iteratorOperandNode(plan_args[plan.dispatcher_arg_index], task.loop_iterator);
+        const actual_dispatcher_node = try self.iteratorOperandNode(plan_args[plan.dispatcher_arg_index], task.pre_lowered);
         try relateRequestComponent(self.graph, dispatcher_node, actual_dispatcher_node);
         // A producer-authored request intentionally remains in a different
         // class from its checked-public operand. The directed relation above
@@ -34207,7 +34475,7 @@ const BodyContext = struct {
         plan_args: []const static_dispatch.IteratorDispatchOperand,
     ) Allocator.Error!LowerStep {
         while (task.index < plan_args.len) {
-            switch (try self.iteratorOperandStep(plan_args[task.index], task.loop_iterator, task.arg_nodes[task.index])) {
+            switch (try self.iteratorOperandStep(plan_args[task.index], task.pre_lowered, task.arg_nodes[task.index])) {
                 .now => |arg| {
                     task.args[task.index] = arg;
                     task.index += 1;
@@ -34259,23 +34527,19 @@ const BodyContext = struct {
     }
 
     /// Lower one iterator dispatch operand at its instantiated argument node:
-    /// the loop's iterator local at once, a checked expression as a child.
+    /// a pre-lowered local at once, a checked expression as a child.
     fn iteratorOperandStep(
         self: *BodyContext,
         operand: static_dispatch.IteratorDispatchOperand,
-        loop_iterator: ?DraftTypedLocal,
+        pre_lowered: PreLoweredIteratorOperands,
         node: NodeId,
     ) Allocator.Error!union(enum) { now: DraftExprId, child: LowerStep } {
-        return switch (operand) {
-            .checked_expr => |expr| .{ .child = requestLowerChild(self, ExprSite.read(expr), DraftTypeCell.fromGraphNode(node)) },
-            .loop_iterator_state => blk: {
-                const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
-                const iterator_node = try iterator.ty.toGraphNode(self.graph);
-                try self.graph.unify(iterator_node, node);
-                if (!self.graph.sameClass(iterator_node, node)) Common.invariant("iterator .next operand type differed from instantiated callable argument type");
-                break :blk .{ .now = try self.addExprWithTypeCell(iterator.ty, .{ .local = iterator.local }) };
-            },
-        };
+        const local = pre_lowered.typedLocal(operand) orelse
+            return .{ .child = requestLowerChild(self, ExprSite.read(operand.checked_expr), DraftTypeCell.fromGraphNode(node)) };
+        const local_node = try local.ty.toGraphNode(self.graph);
+        try self.graph.unify(local_node, node);
+        if (!self.graph.sameClass(local_node, node)) Common.invariant("pre-lowered iterator operand type differed from instantiated callable argument type");
+        return .{ .now = try self.addExprWithTypeCell(local.ty, .{ .local = local.local }) };
     }
 
     const WithTypeTask = struct {
@@ -34810,6 +35074,8 @@ const BodyContext = struct {
                 task.prior = &.{};
             },
             .span, .prepared_span, .span_at_types, .list_span => |*task| self.releaseSpanTask(task),
+            .str => |*task| self.releaseStrTask(task),
+            .interpolation => |*task| self.releaseInterpolationTask(task),
             .constructor => |*task| self.releaseConstructorTask(task),
             .block => |task| {
                 self.releaseBlockTask(task);
@@ -34843,7 +35109,7 @@ const BodyContext = struct {
                 self.destroyLowerTaskBox(task);
             },
             .materialize => |*task| self.releaseMaterializeTask(task),
-            .branch_body, .return_value, .inspected, .divergent, .field_access, .str, .direct_structural, .inspect_only => {},
+            .branch_body, .return_value, .inspected, .divergent, .field_access, .direct_structural, .inspect_only => {},
             .scheme_alias => |*task| self.restoreSchemeAliasScope(task),
             .callsite_intrinsic => |*task| {
                 self.allocator.free(task.args);
@@ -34862,7 +35128,6 @@ const BodyContext = struct {
             .operand_at_type,
             .call_expr_at_node,
             .call_expr,
-            .interpolation,
             => {},
         }
     }
@@ -34916,7 +35181,7 @@ const BodyContext = struct {
             .inspect_only => |*task| return self.stepInspectOnly(task, input),
             .scheme_alias => |*task| return self.stepSchemeAlias(task, input),
             .callsite_intrinsic => |*task| return self.stepCallsiteIntrinsic(task, input),
-            .interpolation => |*task| return self.stepInterpolationLower(frame, task, input),
+            .interpolation => |*task| return self.stepInterpolationLower(task, input),
         }
     }
 
@@ -34925,67 +35190,175 @@ const BodyContext = struct {
     /// literal conversion it runs at compile time: its `Ok` payload, the
     /// assembler, is a literal root's value, and its `Err` is the literal's
     /// rejection. The interpolation's value is the assembler called with the
-    /// parts' values.
-    fn stepInterpolationLower(self: *BodyContext, frame: *LowerFrame, task: *InterpolationLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
-        switch (frame.cursor) {
-            0 => {
-                const try_ty = try self.literalConversionTryType(task.maybe_plan);
-                task.try_node = try self.instNode(try_ty);
+    /// iterator over its values: `iter` on an empty list, then `append` for
+    /// each value, every step bound to a local so the iterator lives on the
+    /// stack. A `Str` literal writes its parts once instead.
+    fn stepInterpolationLower(self: *BodyContext, task: *InterpolationLowerTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        const interpolation = switch (checkedExprData(self.view, task.expr)) {
+            .interpolation => |value| value,
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
+        };
+        switch (task.stage) {
+            .start => {
+                task.try_ty = try self.literalConversionTryType(task.maybe_plan);
+                task.try_node = try self.instNode(task.try_ty);
                 task.assembler_node = (try self.graphTryPayloads(task.try_node)).ok;
                 const assembler_fn = try self.graph.functionNodes(task.assembler_node);
-                if (assembler_fn.args.len != 1) Common.invariant("interpolation assembler did not take exactly the values list");
+                if (assembler_fn.args.len != 1) Common.invariant("interpolation assembler did not take exactly the values iterator");
                 try relateRequestComponent(self.graph, assembler_fn.ret, task.value_node);
                 // Every interpolated value is an item of the assembler's
-                // values list, so the item type is the values' type. The
+                // iterator, so the item type is the values' type. The
                 // selected `from_interpolation` determines the item only when
                 // its own signature fixes it.
-                const item_node = switch (try self.graph.content(assembler_fn.args[0])) {
-                    .list => |elem| elem,
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("interpolation assembler did not take a values list"),
-                };
-                const interpolation = switch (checkedExprData(self.view, task.expr)) {
-                    .interpolation => |value| value,
-                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
-                };
+                const iterator_args = (try self.graph.namedNodes(assembler_fn.args[0])).args;
+                if (iterator_args.len != 1) Common.invariant("interpolation assembler's iterator did not have one item type");
+                task.item_node = iterator_args[0];
                 for (0..interpolation.valueCount()) |index| {
-                    try relateRequestComponent(self.graph, item_node, try self.lowerExprTypeNode(ExprSite.read(interpolation.value(index))));
+                    try relateRequestComponent(self.graph, task.item_node, try self.lowerExprTypeNode(ExprSite.read(interpolation.value(index))));
                 }
-                frame.cursor = 1;
-                // The conversion runs during compile-time evaluation; see
-                // `lowerLiteralConversionDispatch`. Its operands are the
-                // literal segments, so nothing else lowers before cursor 1.
-                self.draft.evaluation_depth += 1;
-                return requestLowerTask(self, .{ .dispatch = .{
-                    .checked_ret_ty = try_ty,
-                    .maybe_plan = task.maybe_plan,
-                    .expected_ret_cell = DraftTypeCell.fromGraphNode(task.try_node),
-                } });
+                const result_is_str = switch (try self.graph.content(task.value_node)) {
+                    .primitive => |primitive| primitive == .str,
+                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
+                };
+                if (result_is_str) {
+                    task.stage = .str_conversion;
+                    return self.interpolationConversionStep(task);
+                }
+                const plan_id = self.view.bodies.iteratorForPlan(@backingInt(interpolation.node)) orelse
+                    Common.invariant("checked interpolation reached Monotype without an iterator plan");
+                task.iterator_plan = try self.view.dispatch.iteratorPlan(plan_id);
             },
-            1 => {
+            .value => {
+                const value = input.?.exprValue();
+                const cell = self.exprTypeCell(value);
+                try task.values.append(self.allocator, try self.bindInterpolationLocal(task, value, cell));
+                task.index += 1;
+            },
+            .seed_iterator => {
+                const iterator = input.?.exprValue();
+                task.iterator = try self.bindInterpolationLocal(task, iterator, self.exprTypeCell(iterator));
+                task.index = 0;
+            },
+            .appended => {
+                const iterator = input.?.exprValue();
+                task.iterator = try self.bindInterpolationLocal(task, iterator, self.exprTypeCell(iterator));
+                task.index += 1;
+            },
+            .conversion => {
+                self.draft.evaluation_depth -= 1;
+                const site = self.literalRejectionSite(task.expr);
+                // The assembler is called with the iterator the chain built,
+                // so its request names that iterator's representation, as a
+                // call's argument evidence does (`stepInstantiateCall`).
+                const assembler_fn = try self.graph.functionNodes(task.assembler_node);
+                const iterator_node = try task.iterator.ty.toGraphNode(self.graph);
+                if (try self.graph.containsGeneratedPrivate(iterator_node)) {
+                    const public_node = try self.freshInstNode(self.checkedFunctionType(try self.view.bodies.interpolationAssemblerType(interpolation.node)).args[0]);
+                    try self.graph.relateOpaqueInterface(public_node, iterator_node);
+                    try relateRequestComponent(self.graph, assembler_fn.args[0], public_node);
+                } else {
+                    try self.graph.unify(assembler_fn.args[0], iterator_node);
+                }
+                const request_fn = try functionRequestNode(self.graph, task.assembler_node, &.{iterator_node}, assembler_fn.ret);
+                const assembler = try self.unwrapLiteralConversionAtNode(input.?.exprValue(), task.try_node, request_fn, site);
+                const callee = if (self.builder.literal_roots)
+                    try self.literalRootRead(task.expr, site, assembler, request_fn)
+                else
+                    assembler;
+                const value_cell = DraftTypeCell.fromGraphNode(task.value_node);
+                const iterator_expr = try self.addExprWithTypeCell(task.iterator.ty, .{ .local = task.iterator.local });
+                var expr = try self.addExprWithTypeCell(value_cell, .{ .call_value = .{
+                    .callee = callee,
+                    .args = try self.addExprSpan(&.{iterator_expr}),
+                } });
+                var index = task.lets.items.len;
+                while (index > 0) {
+                    index -= 1;
+                    const let_ = task.lets.items[index];
+                    expr = try self.addExprWithTypeCell(value_cell, .{ .let_ = .{
+                        .bind = let_.pat,
+                        .value = let_.value,
+                        .rest = expr,
+                    } });
+                }
+                self.releaseInterpolationTask(task);
+                return loweredExprStep(expr);
+            },
+            .str_conversion => {
                 self.draft.evaluation_depth -= 1;
                 const site = self.literalRejectionSite(task.expr);
                 const assembler = try self.unwrapLiteralConversionAtNode(input.?.exprValue(), task.try_node, task.assembler_node, site);
-                task.assembler = if (self.builder.literal_roots)
-                    try self.literalRootRead(task.expr, site, assembler, task.assembler_node)
-                else
-                    assembler;
-                const interpolation = switch (checkedExprData(self.view, task.expr)) {
-                    .interpolation => |value| value,
-                    .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => Common.invariant("interpolation lowering referenced a non-interpolation expression"),
-                };
-                task.values_ty = try self.activeTypeFromNode((try self.graph.functionNodes(task.assembler_node)).args[0]);
-                frame.cursor = 2;
-                // The values are the even positions of the parts.
-                return requestLowerTask(self, .{ .list_span = .{ .exprs = interpolation.parts, .stride = 2, .list_ty = task.values_ty } });
+                if (self.builder.literal_roots) _ = try self.literalRootRead(task.expr, site, assembler, task.assembler_node);
+                // The segments and values lower interleaved, in order, each
+                // at `Str`, and are written once.
+                task.stage = .written_once;
+                return requestLowerTask(self, .{ .str = .{
+                    .segments = interpolation.data().strParts(),
+                    .cell = DraftTypeCell.fromGraphNode(task.value_node),
+                } });
             },
-            else => {
-                const values = try self.addExpr(.{ .ty = task.values_ty, .data = .{ .list = input.?.spanValue() } });
-                return loweredExprStep(try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(task.value_node), .{ .call_value = .{
-                    .callee = task.assembler,
-                    .args = try self.addExprSpan(&.{values}),
-                } }));
+            .written_once => {
+                self.releaseInterpolationTask(task);
+                return loweredExprStep(input.?.exprValue());
             },
         }
+        // The values, in order, each at the item type.
+        if (task.stage == .start or task.stage == .value) {
+            if (task.index < interpolation.valueCount()) {
+                task.stage = .value;
+                return requestLowerChild(self, ExprSite.read(interpolation.value(task.index)), DraftTypeCell.fromGraphNode(task.item_node));
+            }
+            // The iterator starts from an empty list of items.
+            const seed_cell = DraftTypeCell.fromGraphNode(try self.graph.newNode(.{ .list = task.item_node }));
+            const seed_expr = try self.addExprWithTypeCell(seed_cell, .{ .list = try self.addExprSpan(&.{}) });
+            const seed = try self.bindInterpolationLocal(task, seed_expr, seed_cell);
+            task.stage = .seed_iterator;
+            return self.iteratorDispatchStep(.{
+                .plan = task.iterator_plan.iter,
+                .pre_lowered = .{ .interpolation_seed = seed },
+                .expected_ret_ty = null,
+            });
+        }
+        if (task.index < task.values.items.len) {
+            task.stage = .appended;
+            return self.iteratorDispatchStep(.{
+                .plan = task.iterator_plan.next,
+                .pre_lowered = .{ .interpolation_iterator = task.iterator, .interpolation_value = task.values.items[task.index] },
+                .expected_ret_ty = null,
+            });
+        }
+        task.stage = .conversion;
+        return self.interpolationConversionStep(task);
+    }
+
+    /// Lower the interpolation's literal conversion. It runs during
+    /// compile-time evaluation; its operands are the literal segments, so
+    /// nothing else lowers until it returns.
+    fn interpolationConversionStep(self: *BodyContext, task: *InterpolationLowerTask) LowerStep {
+        self.draft.evaluation_depth += 1;
+        return requestLowerTask(self, .{ .dispatch = .{
+            .checked_ret_ty = task.try_ty,
+            .maybe_plan = task.maybe_plan,
+            .expected_ret_cell = DraftTypeCell.fromGraphNode(task.try_node),
+        } });
+    }
+
+    /// Bind `value` to a fresh local the interpolation's expression nests a
+    /// `let` for.
+    fn bindInterpolationLocal(self: *BodyContext, task: *InterpolationLowerTask, value: DraftExprId, cell: DraftTypeCell) Allocator.Error!DraftTypedLocal {
+        const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, null);
+        try task.lets.append(self.allocator, .{
+            .pat = try self.addPatWithTypeCell(cell, .{ .bind = local }),
+            .value = value,
+        });
+        return .{ .local = local, .ty = cell };
+    }
+
+    fn releaseInterpolationTask(self: *BodyContext, task: *InterpolationLowerTask) void {
+        task.values.deinit(self.allocator);
+        task.values = .empty;
+        task.lets.deinit(self.allocator);
+        task.lets = .empty;
     }
 
     fn requestLowerChild(ctx: *BodyContext, expr: ExprSite, cell: DraftTypeCell) LowerStep {
@@ -35514,7 +35887,22 @@ const BodyContext = struct {
                 frame.cursor = 1;
                 return requestLowerTask(self, .{ .dispatch = .{ .checked_ret_ty = expr.ty, .maybe_plan = self.view.bodies.dispatchPlan(plan_node), .expected_ret_cell = DraftTypeCell.fromGraphNode(expr_node) } });
             },
-            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
+            // A coercion's row can be open with nothing in this body to
+            // close it, as when every use matches its error with `Err(_)`. It
+            // is lowered at a graph cell of its own checked type, so a row no
+            // use relates to seals by the specialization's row defaults, as at
+            // every other coercion site, instead of being read as a settled
+            // type here.
+            .row_coerce => {
+                frame.cursor = 1;
+                return requestLowerTask(self, .{ .at_type_cell = .{
+                    .expr = expr_id,
+                    .cell = DraftTypeCell.fromGraphNode(expr_node),
+                    .demand = .runtime_value,
+                    .diverges = false,
+                } });
+            },
+            .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
         const expr_ty = try self.lowerExprType(expr_id);
         if (try self.restoredHoistedExprAtType(expr_id, expr_ty)) |restored| return self.exprInnerDone(task, restored);
@@ -36269,7 +36657,7 @@ const BodyContext = struct {
         const evidence_node = (try self.view.dispatch.evidenceNode(evidence_id));
         const lookup = self.methodLookupForResolvedTarget(evidence_node.target);
         const direct_key = ClosedDirectCallIdentity{
-            .callable = checkedTypeAddress(self.view, plan.callable_ty),
+            .callable = checkedTypeAddress(self.view, try self.view.types.canonicalId(plan.callable_ty)),
             .evidence = evidence_id,
         };
         const slot = if (self.draft.closed_direct_specializations.get(direct_key)) |existing| blk: {
@@ -37377,24 +37765,35 @@ const BodyContext = struct {
     fn stepStr(self: *BodyContext, task: *StrTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const str_ty = try self.primitiveType(.str);
         if (input) |lowered| {
-            task.out = if (task.index == 0)
-                lowered.exprValue()
-            else
-                try self.concatExpr(task.out, lowered.exprValue(), str_ty);
+            // An empty literal segment writes nothing: it is not a part.
+            if (!self.view.bodies.isEmptyStrSegment(task.segments.at(task.index))) {
+                try task.parts.append(self.allocator, lowered.exprValue());
+            }
             task.index += 1;
-        } else if (task.segments.len() == 0) {
-            return try self.finishStr(task, try self.stringExpr("", str_ty));
         }
         if (task.index < task.segments.len()) {
             return requestLowerChild(self, ExprSite.read(task.segments.at(task.index)), .{ .sealed = str_ty });
         }
-        return try self.finishStr(task, task.out);
+        const parts = task.parts.items;
+        const value = switch (parts.len) {
+            0 => try self.stringExpr("", str_ty),
+            1 => parts[0],
+            else => try self.lowLevelExpr(.str_from_parts, parts, str_ty),
+        };
+        return try self.finishStr(task, value);
     }
 
-    fn finishStr(self: *BodyContext, task: *const StrTask, value: DraftExprId) Allocator.Error!LowerStep {
+    fn finishStr(self: *BodyContext, task: *StrTask, value: DraftExprId) Allocator.Error!LowerStep {
         const data: BodyExprData = .{ .nominal = value };
-        const cell = task.cell orelse return .{ .ret = .{ .data = data } };
-        return loweredExprStep(try self.addExprWithTypeCell(cell, data));
+        const cell = task.cell;
+        self.releaseStrTask(task);
+        if (cell) |ty| return loweredExprStep(try self.addExprWithTypeCell(ty, data));
+        return .{ .ret = .{ .data = data } };
+    }
+
+    fn releaseStrTask(self: *BodyContext, task: *StrTask) void {
+        task.parts.deinit(self.allocator);
+        task.parts = .empty;
     }
 
     fn lowerStringLiteral(self: *BodyContext, id: base.StringLiteral.Idx) Allocator.Error!DraftStringLiteralId {
@@ -39075,7 +39474,7 @@ const BodyContext = struct {
         procedure: checked.IteratorProcedureId,
         public_fn_node: NodeId,
         request_fn_node: NodeId,
-        checked_args: []const CIR.Expr.Idx,
+        checked_args: []const ?CIR.Expr.Idx,
     ) Allocator.Error!?NodeId {
         const public_fn = try self.graph.functionNodes(public_fn_node);
         const request_fn = try self.graph.functionNodes(request_fn_node);
@@ -39122,8 +39521,9 @@ const BodyContext = struct {
                     return try self.graphFunctionNode(&.{ components[0], request_fn.args[1], components[1] }, expected);
                 }
                 const state_is_private = try self.graph.containsGeneratedPrivate(request_fn.args[0]);
+                const advance_arg = checked_args[2] orelse Common.invariant("custom iterator source's advance operand was not a checked expression");
                 const advance_node = if (state_is_private)
-                    try self.iterCustomAdvanceRequestNode(ExprSite.read(checked_args[2]), request_fn.args[0])
+                    try self.iterCustomAdvanceRequestNode(ExprSite.read(advance_arg), request_fn.args[0])
                 else
                     request_fn.args[2];
                 return try self.graphFunctionNode(
@@ -39132,7 +39532,7 @@ const BodyContext = struct {
                         mintedProducerKind(procedure),
                         public_fn.ret,
                         &.{ request_fn.args[0], advance_node },
-                        try self.callableArgumentEvidenceDigest(ExprSite.read(checked_args[2])),
+                        try self.callableArgumentEvidenceDigest(ExprSite.read(advance_arg)),
                     ),
                 );
             },
@@ -39282,7 +39682,7 @@ const BodyContext = struct {
         kind: Type.IteratorKind,
         public_ret: NodeId,
         args: []const NodeId,
-        checked_args: []const CIR.Expr.Idx,
+        checked_args: []const ?CIR.Expr.Idx,
         expected_ret: ?NodeId,
         callable_index: ?usize,
     ) Allocator.Error!?NodeId {
@@ -39294,7 +39694,7 @@ const BodyContext = struct {
         if (try self.generatedIteratorExpectedProducerFunctionNode(kind, args, expected_ret)) |expected_fn| return expected_fn;
         if (!(try self.isGeneratedIteratorEvidenceNode(args[0]))) return null;
         const callable_evidence = if (callable_index) |index|
-            try self.callableArgumentEvidenceDigest(ExprSite.read(checked_args[index]))
+            try self.callableArgumentEvidenceDigest(ExprSite.read(checked_args[index] orelse Common.invariant("iterator adapter's callable operand was not a checked expression")))
         else
             null;
         return try self.graphFunctionNode(
@@ -39361,7 +39761,8 @@ const BodyContext = struct {
         return .{
             .len_field = try recordFieldName(self.nameStoreMut(), self.view, topology.len_field),
             .step_field = try recordFieldName(self.nameStoreMut(), self.view, topology.step_field),
-            .known_tag = try tagName(self.nameStoreMut(), self.view, topology.known_tag),
+            .ok_tag = try tagName(self.nameStoreMut(), self.view, topology.ok_tag),
+            .err_tag = try tagName(self.nameStoreMut(), self.view, topology.err_tag),
             .unknown_tag = try tagName(self.nameStoreMut(), self.view, topology.unknown_tag),
             .done_tag = try tagName(self.nameStoreMut(), self.view, topology.done_tag),
             .one_tag = try tagName(self.nameStoreMut(), self.view, topology.one_tag),
@@ -40005,17 +40406,31 @@ const BodyContext = struct {
         ty: Type.TypeId,
         mode: FieldNamesIterMode,
     ) Allocator.Error!DraftExprId {
-        const topology = try self.iteratorRepresentationNames(.iter);
         return switch (mode) {
             .all => try self.lowerGeneratedIterLenIfKnown(remaining, ty),
-            .for_size => blk: {
-                const unknown_tag = self.monoTagByName(ty, topology.unknown_tag);
-                break :blk try self.addExpr(.{ .ty = ty, .data = .{ .tag = .{
-                    .name = unknown_tag.name,
-                    .payloads = .empty(),
-                } } });
-            },
+            .for_size => try self.lowerGeneratedIterLenUnknown(ty),
         };
+    }
+
+    /// `Err(Unknown)` at `ty`, the iterator's `len_if_known` type
+    /// `Try(U64, [Unknown])`.
+    fn lowerGeneratedIterLenUnknown(self: *BodyContext, ty: Type.TypeId) Allocator.Error!DraftExprId {
+        const topology = try self.iteratorRepresentationNames(.iter);
+        const backing_ty = namedBackingType(self.typeStore(), ty) orelse Common.invariant("Iter.len_if_known type had no backing");
+        const err_tag = self.monoTagByName(backing_ty, topology.err_tag);
+        const err_payloads = self.typeStore().span(err_tag.payloads);
+        if (err_payloads.len != 1) Common.invariant("Iter.len_if_known Err tag did not have one payload");
+        const unknown_ty = GuardedList.at(err_payloads, 0);
+        const unknown_tag = self.monoTagByName(unknown_ty, topology.unknown_tag);
+        const unknown = try self.addExpr(.{ .ty = unknown_ty, .data = .{ .tag = .{
+            .name = unknown_tag.name,
+            .payloads = .empty(),
+        } } });
+        const err = try self.addExpr(.{ .ty = backing_ty, .data = .{ .tag = .{
+            .name = err_tag.name,
+            .payloads = try self.addExprSpan(&[_]DraftExprId{unknown}),
+        } } });
+        return try self.addExpr(.{ .ty = ty, .data = .{ .nominal = err } });
     }
 
     fn lowerFieldNamesDoneStep(
@@ -40156,14 +40571,16 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const topology = try self.iteratorRepresentationNames(.iter);
-        const known_tag = self.monoTagByName(ty, topology.known_tag);
-        const payloads = self.typeStore().span(known_tag.payloads);
-        if (payloads.len != 1) Common.invariant("Iter.len_if_known Known tag did not have one payload");
+        const backing_ty = namedBackingType(self.typeStore(), ty) orelse Common.invariant("Iter.len_if_known type had no backing");
+        const ok_tag = self.monoTagByName(backing_ty, topology.ok_tag);
+        const payloads = self.typeStore().span(ok_tag.payloads);
+        if (payloads.len != 1) Common.invariant("Iter.len_if_known Ok tag did not have one payload");
         const count = try self.intLiteralExpr(@intCast(remaining), GuardedList.at(payloads, 0));
-        return try self.addExpr(.{ .ty = ty, .data = .{ .tag = .{
-            .name = known_tag.name,
+        const ok = try self.addExpr(.{ .ty = backing_ty, .data = .{ .tag = .{
+            .name = ok_tag.name,
             .payloads = try self.addExprSpan(&[_]DraftExprId{count}),
         } } });
+        return try self.addExpr(.{ .ty = ty, .data = .{ .nominal = ok } });
     }
 
     fn lowerGeneratedIterOnePayload(
@@ -47076,9 +47493,13 @@ const BodyContext = struct {
         node: checked.ConstNodeId,
         ty: Type.TypeId,
         const_locator: checked.ConstLocator,
-        checked_type: checked.CheckedTypeId,
+        any_checked_type: checked.CheckedTypeId,
         bare_fn: Builder.BareFnCandidate,
     ) Allocator.Error!DraftExprId {
+        // A closed type is one type wherever it occurs, so every read of the
+        // constant at it requests one static datum (design.md "Synthesized
+        // Types").
+        const checked_type = try type_view.types.canonicalId(any_checked_type);
         if (!moduleBytesEqual(checked.constModuleId(const_locator).bytes, store_view.key.bytes)) {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
@@ -47126,9 +47547,13 @@ const BodyContext = struct {
         node: checked.ConstNodeId,
         request_node: NodeId,
         const_locator: checked.ConstLocator,
-        checked_type: checked.CheckedTypeId,
+        any_checked_type: checked.CheckedTypeId,
         bare_fn: Builder.BareFnCandidate,
     ) Allocator.Error!DraftExprId {
+        // A closed type is one type wherever it occurs, so every read of the
+        // constant at it requests one static datum (design.md "Synthesized
+        // Types").
+        const checked_type = try type_view.types.canonicalId(any_checked_type);
         if (!moduleBytesEqual(checked.constModuleId(const_locator).bytes, store_view.key.bytes)) {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
@@ -47937,7 +48362,8 @@ const BodyContext = struct {
             .iterator_topology = if (def.iterator_topology) |topology| .{
                 .len_field = try self.constRecordFieldName(store_view, topology.len_field),
                 .step_field = try self.constRecordFieldName(store_view, topology.step_field),
-                .known_tag = try self.constTagName(store_view, topology.known_tag),
+                .ok_tag = try self.constTagName(store_view, topology.ok_tag),
+                .err_tag = try self.constTagName(store_view, topology.err_tag),
                 .unknown_tag = try self.constTagName(store_view, topology.unknown_tag),
                 .done_tag = try self.constTagName(store_view, topology.done_tag),
                 .one_tag = try self.constTagName(store_view, topology.one_tag),
@@ -48035,7 +48461,7 @@ const BodyContext = struct {
                 defer fn_ctx.deinit();
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 fn_ctx.current_fn_key = nested.context_fn_key;
-                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
+                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(store_view, fn_value, nested, nested.context_fn_key);
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 const restored_owner_scope = try fn_ctx.enterRestoredConstFnOwner();
                 defer restored_owner_scope.leave();
@@ -48127,7 +48553,7 @@ const BodyContext = struct {
         defer self.builder.releaseConstSourceCaptures(&fn_ctx, &bound_captures);
         const captures = bound_captures.items;
 
-        const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(capture_nested, fn_ctx.current_fn_key);
+        const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(store_view, fn_value, capture_nested, fn_ctx.current_fn_key);
         defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
 
         const request_fn_node = switch (request) {
@@ -48325,7 +48751,7 @@ const BodyContext = struct {
         }
         self.draft.exprs.items[@backingInt(body)].ty = ret_cell;
 
-        const stored_evidence = try self.storedEvidence(self.evidence);
+        const stored_evidence = try self.storedEvidenceForFn(self.evidence, runtime.owner);
         const evidence_digest = stored_evidence.digest;
         const draft_evidence = try self.draft.addStoredConstFnEvidence(stored_evidence);
         const runtime_fn_id = try self.draft.addFn(.{ .source = .{
@@ -48444,6 +48870,8 @@ const BodyContext = struct {
             ),
         };
         defer self.builder.releaseConstSourceCaptures(&fn_ctx, &source_captures);
+        const restored_local_proc_entries = try fn_ctx.enterRestoredCodecLocalProcScope(store_view, fn_value);
+        defer fn_ctx.allocator.free(restored_local_proc_entries);
 
         const expr = try checkedExpr(fn_view, ExprSite.own(fn_view, runtime.expr));
         const plan = try dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
@@ -51841,55 +52269,15 @@ const BodyContext = struct {
         const frames = fn_value.evidence_frames;
         const head = fn_value.evidence_frame_head orelse
             Common.invariant("stored function evidence did not declare a head frame");
-        if (frames.len == 0 or head != frames.len - 1) {
-            Common.invariant("stored function evidence head did not name its final frame");
+        if (frames.len == 0 or head >= frames.len) {
+            Common.invariant("stored function evidence head named no frame");
         }
         const owner = ownerTemplateForConstFnDef(fn_value.fn_def);
         const owner_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(owner));
         var cursor: usize = 0;
-        const arena = self.builder.evidence_arena.allocator();
-        const restored = try arena.alloc(EvidenceChain, frames.len);
-        for (frames, 0..) |frame, index| {
-            if (frame.roots_start != cursor) {
-                Common.invariant("stored function evidence frame roots were not contiguous");
-            }
-            const vector = try self.materializeConstFnEvidenceVector(store_view, fn_value.evidence, &cursor, frame.roots_len);
-            const scope: LexicalDispatchScope = switch (frame.scope()) {
-                .root => .root,
-                .generalized => |scope_id| .{ .generalized = @fromBackingInt(@intCast(scope_id)) },
-            };
-            if (index == 0) {
-                if (scope != .root or frame.parent != null) {
-                    Common.invariant("stored function evidence did not begin at the checked root scope");
-                }
-                restored[index] = rootEvidence(owner, vector);
-                restored[index].origin = .stored_function;
-                continue;
-            }
-            if (scope == .root or frame.parent == null or frame.parent.? != index - 1) {
-                Common.invariant("stored function evidence frame did not name its immediate lexical parent");
-            }
-            const scope_id = scope.generalized;
-            const raw_scope = @backingInt(scope_id);
-            if (raw_scope >= owner_view.templates.dispatch_scopes.len) {
-                Common.invariant("stored function evidence referenced an unknown checked scope");
-            }
-            const scope_record = owner_view.templates.dispatch_scopes[raw_scope];
-            const expected_parent: LexicalDispatchScope = if (scope_record.parent) |parent|
-                .{ .generalized = parent }
-            else
-                .root;
-            if (!std.meta.eql(restored[index - 1].scope.lexical, expected_parent)) {
-                Common.invariant("stored function evidence parent differed from the checked lexical scope");
-            }
-            restored[index] = .{
-                .scope = .{ .owner = owner, .lexical = scope },
-                .origin = .stored_function,
-                .vector = vector,
-                .parent = &restored[index - 1],
-            };
-        }
-        if (cursor != fn_value.evidence.nodes.len) {
+        const head_chain = try self.materializeEvidenceFrames(store_view, fn_value, owner, 0, head + 1, &cursor);
+        const own_end = if (head + 1 < frames.len) frames[head + 1].roots_start else fn_value.evidence.nodes.len;
+        if (cursor != own_end) {
             Common.invariant("stored function evidence contained unreferenced nodes");
         }
         const expected_head: LexicalDispatchScope = switch (fn_value.fn_def) {
@@ -51914,10 +52302,70 @@ const BodyContext = struct {
             },
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => .root,
         };
-        if (!std.meta.eql(restored[head].scope.lexical, expected_head)) {
+        if (!std.meta.eql(head_chain.scope.lexical, expected_head)) {
             Common.invariant("stored function evidence head differed from its checked nested site scope");
         }
-        return restored[head];
+        return head_chain;
+    }
+
+    /// Materialize the stored frames `first..end` as one lexical chain of
+    /// `owner`, returning its innermost frame. `first` is the chain's root
+    /// frame; each later frame names its immediate predecessor.
+    fn materializeEvidenceFrames(
+        self: *BodyContext,
+        store_view: ModuleView,
+        fn_value: check.ConstStore.ConstFn,
+        owner: names.ProcTemplate,
+        first: usize,
+        end: usize,
+        cursor: *usize,
+    ) Allocator.Error!EvidenceChain {
+        const frames = fn_value.evidence_frames;
+        const owner_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(owner));
+        const arena = self.builder.evidence_arena.allocator();
+        const restored = try arena.alloc(EvidenceChain, end - first);
+        for (frames[first..end], first..) |frame, index| {
+            if (frame.roots_start != cursor.*) {
+                Common.invariant("stored function evidence frame roots were not contiguous");
+            }
+            const vector = try self.materializeConstFnEvidenceVector(store_view, fn_value.evidence, cursor, frame.roots_len);
+            const scope: LexicalDispatchScope = switch (frame.scope()) {
+                .root => .root,
+                .generalized => |scope_id| .{ .generalized = @fromBackingInt(@intCast(scope_id)) },
+            };
+            const local = index - first;
+            if (local == 0) {
+                if (scope != .root or frame.parent != null) {
+                    Common.invariant("stored function evidence did not begin at the checked root scope");
+                }
+                restored[local] = rootEvidence(owner, vector);
+                restored[local].origin = .stored_function;
+                continue;
+            }
+            if (scope == .root or frame.parent == null or frame.parent.? != index - 1) {
+                Common.invariant("stored function evidence frame did not name its immediate lexical parent");
+            }
+            const scope_id = scope.generalized;
+            const raw_scope = @backingInt(scope_id);
+            if (raw_scope >= owner_view.templates.dispatch_scopes.len) {
+                Common.invariant("stored function evidence referenced an unknown checked scope");
+            }
+            const scope_record = owner_view.templates.dispatch_scopes[raw_scope];
+            const expected_parent: LexicalDispatchScope = if (scope_record.parent) |parent|
+                .{ .generalized = parent }
+            else
+                .root;
+            if (!std.meta.eql(restored[local - 1].scope.lexical, expected_parent)) {
+                Common.invariant("stored function evidence parent differed from the checked lexical scope");
+            }
+            restored[local] = .{
+                .scope = .{ .owner = owner, .lexical = scope },
+                .origin = .stored_function,
+                .vector = vector,
+                .parent = &restored[local - 1],
+            };
+        }
+        return restored[end - first - 1];
     }
 
     fn instantiateStoredEvidence(self: *BodyContext, evidence: EvidenceChain) Allocator.Error!EvidenceChain {
@@ -54439,11 +54887,13 @@ const BodyContext = struct {
         const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
         const checked_args = try self.checkedExprDispatchOperands(operands) orelse return null;
         defer self.allocator.free(checked_args);
+        const optional_args = try self.optionalCheckedArgs(checked_args);
+        defer self.allocator.free(optional_args);
         const private_node = (try self.generatedIteratorFunctionNode(
             procedure,
             public_target_node,
             request_node,
-            checked_args,
+            optional_args,
         )) orelse return null;
         try self.graph.registerRequestSourceInterface(private_node, public_target_node);
         try relateFunctionRequestInterface(self.graph, public_target_node, private_node);
@@ -54458,7 +54908,7 @@ const BodyContext = struct {
         operands: []const static_dispatch.IteratorDispatchOperand,
     ) Allocator.Error!?NodeId {
         const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
-        const checked_args = try self.checkedExprIteratorDispatchOperands(operands) orelse return null;
+        const checked_args = try self.checkedExprIteratorDispatchOperands(operands);
         defer self.allocator.free(checked_args);
         const private_node = (try self.generatedIteratorFunctionNode(
             procedure,
@@ -54494,22 +54944,28 @@ const BodyContext = struct {
         return checked_args;
     }
 
+    /// Each iterator dispatch operand's checked expression; a pre-lowered
+    /// operand has none, and its representation reaches the request through
+    /// its node instead.
     fn checkedExprIteratorDispatchOperands(
         self: *BodyContext,
         operands: []const static_dispatch.IteratorDispatchOperand,
-    ) Allocator.Error!?[]CIR.Expr.Idx {
-        const checked_args = try self.allocator.alloc(CIR.Expr.Idx, operands.len);
-        errdefer self.allocator.free(checked_args);
+    ) Allocator.Error![]?CIR.Expr.Idx {
+        const checked_args = try self.allocator.alloc(?CIR.Expr.Idx, operands.len);
         for (operands, checked_args) |operand, *checked_arg| {
             checked_arg.* = switch (operand) {
                 .checked_expr => |expr| expr,
-                .loop_iterator_state => {
-                    self.allocator.free(checked_args);
-                    return null;
-                },
+                .loop_iterator_state, .interpolation_seed, .interpolation_iterator, .interpolation_value => null,
             };
         }
         return checked_args;
+    }
+
+    /// `args` as the optional operands `generatedIteratorFunctionNode` takes.
+    fn optionalCheckedArgs(self: *BodyContext, args: []const CIR.Expr.Idx) Allocator.Error![]?CIR.Expr.Idx {
+        const out = try self.allocator.alloc(?CIR.Expr.Idx, args.len);
+        for (args, out) |arg, *slot| slot.* = arg;
+        return out;
     }
 
     fn methodTargetMonoTypeFromArgs(
@@ -64645,7 +65101,7 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         caller: *BodyContext,
         operands: []const static_dispatch.IteratorDispatchOperand,
-        loop_iterator: ?DraftTypedLocal,
+        pre_lowered: PreLoweredIteratorOperands,
         expected_ret_ty: ?DraftTypeCell,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
@@ -64677,12 +65133,12 @@ const BodyContext = struct {
                         request_arg.* = formal_node;
                     }
                 },
-                .loop_iterator_state => {
-                    const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
+                .loop_iterator_state, .interpolation_seed, .interpolation_iterator, .interpolation_value => {
+                    const local = pre_lowered.typedLocal(operand).?;
                     request_arg.* = try checkedMonoRequestNode(
                         self.graph,
                         formal_node,
-                        try iterator.ty.toGraphNode(self.graph),
+                        try local.ty.toGraphNode(self.graph),
                         .exact,
                     );
                 },
@@ -64705,15 +65161,10 @@ const BodyContext = struct {
     fn iteratorOperandNode(
         self: *BodyContext,
         operand: static_dispatch.IteratorDispatchOperand,
-        loop_iterator: ?DraftTypedLocal,
+        pre_lowered: PreLoweredIteratorOperands,
     ) Allocator.Error!NodeId {
-        return switch (operand) {
-            .checked_expr => |expr| try self.lowerExprTypeNode(ExprSite.read(expr)),
-            .loop_iterator_state => if (loop_iterator) |iterator|
-                try iterator.ty.toGraphNode(self.graph)
-            else
-                Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local"),
-        };
+        const local = pre_lowered.typedLocal(operand) orelse return try self.lowerExprTypeNode(ExprSite.read(operand.checked_expr));
+        return try local.ty.toGraphNode(self.graph);
     }
 
     fn iteratorDonePattern(self: *BodyContext, step: IterStepShape) Allocator.Error!DraftPatId {
@@ -64991,12 +65442,13 @@ const BodyContext = struct {
         plan: static_dispatch.ResolvedIteratorForPlan,
         iterator_cell: DraftTypeCell,
     ) Allocator.Error!IterStepShape {
-        const topology = plan.step_topology;
+        const for_site = plan.forLoopSite();
+        const topology = for_site.step_topology;
         const iterator_node = try iterator_cell.toGraphNode(self.graph);
         const step_node = if ((try self.isGeneratedIteratorEvidenceNode(iterator_node)))
             try self.generatedIteratorStepReturnNode(iterator_node)
         else
-            try self.lowerTypeNode(plan.step_ty);
+            try self.lowerTypeNode(for_site.step_ty);
         const done_tag_name = try tagName(self.nameStoreMut(), self.view, topology.done_tag);
         const one_tag_name = try tagName(self.nameStoreMut(), self.view, topology.one_tag);
         const skip_tag_name = try tagName(self.nameStoreMut(), self.view, topology.skip_tag);
@@ -65417,15 +65869,19 @@ const BodyContext = struct {
             .context_anchor = context_anchor,
         };
         const context_id: DraftLocalProcContextId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.local_proc_contexts.items.len))));
+        const declared = try self.restoredLocalProcDeclaration(view, expr);
+        if (!names.procedureTemplateRefEql(declared.owner, self.owner_template)) {
+            self.may_see_other_template_local_procs = true;
+        }
         const entries = try self.allocator.dupe(LexicalBinderEntry, restored.entries);
         self.draft.local_proc_contexts.append(self.allocator, .{
             .declaration = declaration,
             .lexical_owner = self.draft.current_owner,
-            .owner_template = self.owner_template,
+            .owner_template = declared.owner,
             .base_key = restored.base_key,
             .restored_specialization_key = restoredLocalProcUseContextKey(restored.base_key, restored.source_context_digest, binder),
             .entries = entries,
-            .evidence = try self.restoredLocalProcDeclarationEvidence(view, expr),
+            .evidence = declared.evidence,
         }) catch |err| {
             self.allocator.free(entries);
             return err;
@@ -65434,13 +65890,32 @@ const BodyContext = struct {
         return context_id;
     }
 
-    fn restoredLocalProcDeclarationEvidence(
+    const RestoredLocalProcDeclaration = struct {
+        owner: names.ProcTemplate,
+        evidence: EvidenceChain,
+    };
+
+    /// The checked declaring template of a restored local procedure and its
+    /// evidence at the procedure's checked nested site. The procedure's site
+    /// names the template that declares it. That is this body's own template
+    /// unless the restored function reached the procedure through a
+    /// declaration context another template handed it, whose chain the stored
+    /// function retained after its own.
+    fn restoredLocalProcDeclaration(
         self: *BodyContext,
         view: ModuleView,
         expr: CIR.Expr.Idx,
-    ) Allocator.Error!EvidenceChain {
+    ) Allocator.Error!RestoredLocalProcDeclaration {
         const site = checked.nestedProcSiteId(expr);
-        const site_owner: checked.NestedProcSiteOwner = if (self.in_default_expr) view.bodies.nestedProcSiteDefaultOwner(site) else .{ .template = self.owner_template };
+        const owner: names.ProcTemplate = if (self.in_default_expr) self.owner_template else blk: {
+            const template = try view.bodies.localProcedureTemplate(expr);
+            break :blk .{
+                .artifact = moduleDigestFromId(view.key),
+                .proc_base = (try view.template(template)).proc_base,
+                .template = template,
+            };
+        };
+        const site_owner: checked.NestedProcSiteOwner = if (self.in_default_expr) view.bodies.nestedProcSiteDefaultOwner(site) else .{ .template = owner };
         const nested_site = try view.bodies.nestedProcSite(site_owner, site);
         const wanted: LexicalDispatchScope = switch (nested_site.lexical_scope) {
             .root => .root,
@@ -65456,11 +65931,17 @@ const BodyContext = struct {
                     .{ .generalized = scope_id };
             },
         };
-
-        return self.evidence.atScope(.{
-            .owner = self.owner_template,
-            .lexical = wanted,
-        }) orelse Common.invariant("restored local procedure evidence omitted its checked lexical parent");
+        const chain = if (names.procedureTemplateRefEql(owner, self.owner_template))
+            self.evidence
+        else
+            try self.storedDeclaringEvidence(owner);
+        return .{
+            .owner = owner,
+            .evidence = chain.atScope(.{
+                .owner = owner,
+                .lexical = wanted,
+            }) orelse Common.invariant("restored local procedure evidence omitted its checked lexical parent"),
+        };
     }
 
     fn localProcBinder(self: *BodyContext, pattern_id: CIR.Pattern.Idx) BinderId {
@@ -68237,6 +68718,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     const outer_ty = try checked_types.reserveSyntheticTypeRoot(gpa);
     const inner_ty = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, outer_ty, .{ .flex = .{} });
@@ -68418,6 +68900,7 @@ test "specialization evidence equality includes exact target instantiation" {
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     checked_types.key_names = &name_store;
     // Ten distinct types: the empty record, then tuples of 1 through 9 of it.
     const unit = try checked_types.appendSyntheticPayloadRoot(gpa, .empty_record);
@@ -71679,6 +72162,7 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     const variable = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, variable, .{ .flex = .{} });
     const function = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{variable}, variable);
@@ -71779,6 +72263,7 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             var checked_types = checked.CheckedTypeStore{};
             defer checked_types.deinit(gpa);
             checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+            checked_types.key_names = &name_store;
             const recursive = try checked_types.reserveSyntheticTypeRoot(gpa);
             try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{recursive}) });
             var program = Ast.Program.init(gpa);
@@ -71930,6 +72415,7 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(std.testing.allocator);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(std.testing.allocator, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     const leaf = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator);
     try checked_types.fillSyntheticTypeRoot(std.testing.allocator, leaf, .empty_record);
     const acyclic = try checked_types.appendSyntheticFunctionRoot(std.testing.allocator, .pure, &.{leaf}, leaf);
@@ -72035,6 +72521,7 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     const leaf = try checked_types.appendSyntheticPayloadRoot(gpa, .empty_record);
     const pair = try checked_types.appendSyntheticPayloadRoot(gpa, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ leaf, leaf }) });
     const alias = try checked_types.appendSyntheticPayloadRoot(gpa, .{ .alias = .{
@@ -72106,9 +72593,12 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
 
 test "issue 11362: allocation failure removes checked instantiation markers" {
     const gpa = std.testing.allocator;
+    var key_names = names.NameStore.init(gpa);
+    defer key_names.deinit();
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &key_names;
     const recursive = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
     const Helper = struct {
@@ -72164,11 +72654,35 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{ checked_types.view(), recursive });
 }
 
+/// `std.testing.allocator` with every in-place resize refused, for
+/// allocation-failure sweeps whose allocation count must not depend on the
+/// backing allocator's state.
+const never_extending_test_allocator: Allocator = .{
+    .ptr = undefined,
+    .vtable = &.{
+        .alloc = struct {
+            fn alloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+                return std.testing.allocator.rawAlloc(len, alignment, ret_addr);
+            }
+        }.alloc,
+        .resize = Allocator.noResize,
+        .remap = Allocator.noRemap,
+        .free = struct {
+            fn free(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+                std.testing.allocator.rawFree(memory, alignment, ret_addr);
+            }
+        }.free,
+    },
+};
+
 fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     const gpa = std.testing.allocator;
+    var key_names = names.NameStore.init(gpa);
+    defer key_names.deinit();
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &key_names;
     const closed = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, closed, .empty_record);
     const leaf = try checked_types.reserveSyntheticTypeRoot(gpa);
@@ -72274,7 +72788,11 @@ test "lazy checked instantiation allocates no acyclic placeholders and preserves
 }
 
 test "lazy checked instantiation shares recursive placeholders and cleans failed construction" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testLazyCheckedInstantiation, .{true});
+    // Growth that extends a block in place makes no allocation, and whether
+    // the backing allocator can extend one depends on its state, so the
+    // sweep runs over a backing allocator that never extends: every growth
+    // allocates, the same way on every run.
+    try std.testing.checkAllAllocationFailures(never_extending_test_allocator, testLazyCheckedInstantiation, .{true});
 }
 
 test "lazy checked instantiation allocates only recursive placeholders and clears failed builds" {
@@ -72291,6 +72809,7 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             var checked_types = checked.CheckedTypeStore{};
             defer checked_types.deinit(std.testing.allocator);
             checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(std.testing.allocator, std.testing.io, 0));
+            checked_types.key_names = &name_store;
             const variable = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator);
             try checked_types.fillSyntheticTypeRoot(std.testing.allocator, variable, .{ .flex = .{} });
             const function = try checked_types.appendSyntheticFunctionRoot(std.testing.allocator, .pure, &.{variable}, variable);
@@ -72383,6 +72902,7 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
     checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(gpa, std.testing.io, 0));
+    checked_types.key_names = &name_store;
     const open = try checked_types.reserveSyntheticTypeRoot(gpa);
     const closed = try checked_types.reserveSyntheticTypeRoot(gpa);
     try checked_types.fillSyntheticTypeRoot(gpa, open, .{ .flex = .{} });

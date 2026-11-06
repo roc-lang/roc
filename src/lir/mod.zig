@@ -32,6 +32,7 @@ pub const BodyClone = @import("body_clone.zig");
 /// Exact procedure-local stack lifetimes, shared by the native and LLVM
 /// backends.
 pub const StackPlan = @import("StackPlan.zig");
+pub const LocalWrites = @import("LocalWrites.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const PruneJoinParams = @import("prune_join_params.zig");
 pub const ScalarizeJoins = @import("scalarize_joins.zig");

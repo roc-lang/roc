@@ -685,18 +685,25 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 }
             }
 
-            // Hot list and string builtins sit right at the inliner's default
-            // threshold once a caller grows: nudge every linked builtin with
-            // inlinehint so a large decode loop keeps its append and copy
-            // helpers inline, matching how the emitted procs are declared.
+            // In a speed build, hot list and string builtins sit right at the
+            // inliner's default threshold once a caller grows: nudge every
+            // linked builtin with inlinehint so a large decode loop keeps its
+            // append and copy helpers inline, matching how the emitted procs
+            // are declared. A size build gives no hint: every function in the
+            // module is marked `minsize` below, and LLVM's size cost model
+            // decides each call on the callee's size alone.
             //
             // The hint is only a cost-model bonus, and the inliner still
             // declines these helpers once a caller crosses its size budget --
             // at which point a hot loop's straight-line appends degrade into
             // out-of-line calls exactly where staying inline matters most.
             // The unchecked leaf helpers behind that failure are pinned with
-            // alwaysinline instead: they are tiny and non-recursive, so
+            // alwaysinline in every mode: they are tiny and non-recursive, so
             // inlining them is right at any caller size.
+            // The str concat wrapper is pinned for the same reason: its small-into-
+            // small path is a few word operations that only pay off in registers
+            // at the call site, and every other case is already a call to its
+            // noinline out-of-line half.
             const inlinehint_kind = externs.LLVMGetEnumAttributeKindForName("inlinehint", "inlinehint".len);
             const inlinehint_attr = externs.LLVMCreateEnumAttribute(externs.LLVMGetModuleContext(builtins_module), inlinehint_kind, 0);
             const alwaysinline_kind = externs.LLVMGetEnumAttributeKindForName("alwaysinline", "alwaysinline".len);
@@ -707,6 +714,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 "roc_builtins_list_slack_unique",
                 "roc_builtins_list_replace",
                 "roc_builtins_list_owned_unique",
+                "roc_builtins_str_concat",
             };
             var builtin_func = externs.LLVMGetFirstFunction(builtins_module);
             while (builtin_func) |fv| : (builtin_func = externs.LLVMGetNextFunction(fv)) {
@@ -724,7 +732,11 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                         break;
                     }
                 }
-                externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, if (pinned) alwaysinline_attr else inlinehint_attr);
+                if (pinned) {
+                    externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, alwaysinline_attr);
+                } else if (config.optimization != .size) {
+                    externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, inlinehint_attr);
+                }
 
                 if (!app_decls.contains(name)) {
                     externs.LLVMSetLinkage(fv, LLVMInternalLinkage);
@@ -808,6 +820,23 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 std.log.err("Failed to link the LLVM private runtime for {s}", .{@tagName(runtime_target)});
                 return false;
             }
+        }
+    }
+
+    // A size build optimizes every function the module defines for size:
+    // the emitted procedures, their wrappers and helpers, the linked
+    // builtins and the private runtime. `optsize` and `minsize` are per
+    // function, not per pipeline: without them the `Oz` pipeline's inliner
+    // and loop passes keep their speed thresholds inside every function.
+    if (config.optimization == .size) {
+        const context = externs.LLVMGetModuleContext(module);
+        const optsize_attr = externs.LLVMCreateEnumAttribute(context, externs.LLVMGetEnumAttributeKindForName("optsize", "optsize".len), 0);
+        const minsize_attr = externs.LLVMCreateEnumAttribute(context, externs.LLVMGetEnumAttributeKindForName("minsize", "minsize".len), 0);
+        var defined = externs.LLVMGetFirstFunction(module);
+        while (defined) |fv| : (defined = externs.LLVMGetNextFunction(fv)) {
+            if (externs.LLVMIsDeclaration(fv) != 0) continue;
+            externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, optsize_attr);
+            externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, minsize_attr);
         }
     }
 

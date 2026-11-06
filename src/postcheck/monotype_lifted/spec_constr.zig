@@ -90,7 +90,7 @@
 //!     range_iter = (0.I64..=15).iter()
 //!
 //!     source_stream = {
-//!         len_if_known: Known(16),
+//!         len_if_known: Ok(16),
 //!         step!: ||
 //!             match Iter.next(range_iter) {
 //!                 Done => Done
@@ -117,8 +117,8 @@
 //!     }
 //!
 //!     cap = match mapped_stream.len_if_known {
-//!         Known(n) => n
-//!         Unknown => 0
+//!         Ok(n) => n
+//!         Err(Unknown) => 0
 //!     }
 //!
 //!     var $list = List.with_capacity(cap)
@@ -12961,7 +12961,7 @@ const Cloner = struct {
                             continue;
                         }
                         for (tag.payloads, 0..) |payload, index| {
-                            if (!steps[0].eql(Step.payload(tag.name, @intCast(index)))) continue;
+                            if (!steps[0].isPayload(tag.name, @intCast(index))) continue;
                             try work.append(self.pass.allocator, .{ .value = .{ .value = payload, .steps = steps[1..] } });
                         }
                     },
@@ -12971,7 +12971,7 @@ const Cloner = struct {
                             continue;
                         }
                         for (record.fields) |field| {
-                            if (!steps[0].eql(Step.field(field.name))) continue;
+                            if (!steps[0].isField(field.name)) continue;
                             try work.append(self.pass.allocator, .{ .value = .{ .value = field.value, .steps = steps[1..] } });
                         }
                     },
@@ -12981,7 +12981,7 @@ const Cloner = struct {
                             continue;
                         }
                         for (tuple.items, 0..) |tuple_item, index| {
-                            if (!steps[0].eql(Step.item(@intCast(index)))) continue;
+                            if (!steps[0].isItem(@intCast(index))) continue;
                             try work.append(self.pass.allocator, .{ .value = .{ .value = tuple_item, .steps = steps[1..] } });
                         }
                     },
@@ -13029,7 +13029,7 @@ const Cloner = struct {
                         }
                         const payloads = program.exprSpan(tag.payloads);
                         for (0..payloads.len) |index| {
-                            if (!steps[0].eql(Step.payload(tag.name, @intCast(index)))) continue;
+                            if (!steps[0].isPayload(tag.name, @intCast(index))) continue;
                             try work.append(self.pass.allocator, .{ .expr = .{ .id = GuardedList.at(payloads, index), .steps = steps[1..] } });
                         }
                     },
@@ -13041,7 +13041,7 @@ const Cloner = struct {
                         const fields = program.fieldExprSpan(span);
                         for (0..fields.len) |index| {
                             const field = GuardedList.at(fields, index);
-                            if (!steps[0].eql(Step.field(field.name))) continue;
+                            if (!steps[0].isField(field.name)) continue;
                             try work.append(self.pass.allocator, .{ .expr = .{ .id = field.value, .steps = steps[1..] } });
                         }
                     },
@@ -13053,7 +13053,7 @@ const Cloner = struct {
                         const fields = program.fieldExprSpan(update.fields);
                         const updated = for (0..fields.len) |index| {
                             const field = GuardedList.at(fields, index);
-                            if (steps[0].eql(Step.field(field.name))) break field.value;
+                            if (steps[0].isField(field.name)) break field.value;
                         } else null;
                         if (updated) |value| {
                             try work.append(self.pass.allocator, .{ .expr = .{ .id = value, .steps = steps[1..] } });
@@ -13068,7 +13068,7 @@ const Cloner = struct {
                         }
                         const items = program.exprSpan(span);
                         for (0..items.len) |index| {
-                            if (!steps[0].eql(Step.item(@intCast(index)))) continue;
+                            if (!steps[0].isItem(@intCast(index))) continue;
                             try work.append(self.pass.allocator, .{ .expr = .{ .id = GuardedList.at(items, index), .steps = steps[1..] } });
                         }
                     },
@@ -16968,7 +16968,7 @@ test "compile-time root reads remain opaque through specialization and cloning" 
             .artifact = .{},
             .owner = .{ .hoisted_root = .{ .module_idx = 0, .root = @fromBackingInt(@intCast(1)) } },
             .template = @fromBackingInt(@intCast(1)),
-            .source_scheme = @fromBackingInt(0),
+            .source_scheme = @fromBackingInt(@intCast(1)),
         },
     };
     const root_id = try program.addComptimeValueRoot(root);
@@ -17015,7 +17015,7 @@ test "a constant read counts as one expression in either form" {
             .artifact = .{},
             .owner = .{ .hoisted_root = .{ .module_idx = 0, .root = @fromBackingInt(@intCast(1)) } },
             .template = @fromBackingInt(@intCast(1)),
-            .source_scheme = @fromBackingInt(0),
+            .source_scheme = @fromBackingInt(@intCast(1)),
         },
     });
     const read = try program.addExpr(.{ .ty = list_ty, .data = .{ .comptime_value = .{

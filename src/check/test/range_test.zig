@@ -105,7 +105,7 @@ test "Range custom supports a third-party numeric type" {
         \\    step: Meters(2),
         \\    upper_bound: Inclusive,
         \\    direction: To,
-        \\    len_if_known: Known(6),
+        \\    len_if_known: Ok(6),
         \\})
     ;
     var test_env = try TestEnv.init("Test", source);
