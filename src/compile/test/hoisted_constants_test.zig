@@ -44,7 +44,6 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         Issue806MissingStackProbe,
         Issue806UnsafeLargeStackCallArgument,
         Issue806UnsafeLargeStackCallReturn,
-        Issue806UnsafeLargeStackClosureCapture,
         Issue806UnsafeLargeStackJoinParam,
         Issue806UnsafeLargeStackPatternPayload,
         Issue806UnsafeLargeStackReturn,

@@ -149,7 +149,6 @@ pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
         Issue806UnsafeLargeStackCallArgument,
         Issue806UnsafeLargeStackReturn,
         Issue806UnsafeLargeStackJoinParam,
-        Issue806UnsafeLargeStackClosureCapture,
         Issue806UnsafeLargeStackPatternPayload,
         Issue806MissingStackProbe,
     };
