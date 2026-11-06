@@ -14641,8 +14641,17 @@ program as it is built, in the order the builds finish. The build of a program
 reads the checked modules and loads its needed images under the shared image
 lock; its other writes belong to that program. Running it, which stores values
 and reports failures,
-stays on the evaluating thread, as do the programs of roots holding function
-values ("Stored Function Values"). A module's evaluation thus waits only for
+stays on the evaluating thread. Preparing programs of roots holding function
+values ("Stored Function Values") uses the same scheduler: each module retains
+its pending function roots across stages, submits one dependency-ready batch,
+and stores that batch's values on the evaluating thread before submitting the
+next. Independent modules can prepare these batches concurrently. A batch that
+makes no progress is followed by the same final failure-reporting pass as a
+synchronous evaluation. The module's ordinary program starts only after those
+function-value stages finish. On cancellation or preparation failure, evaluation
+discards unsubmitted programs and joins submitted work before freeing the graph,
+module lists, or image set any worker borrowed; its bookkeeping needs no new
+allocation and it publishes no additional results. A module's evaluation thus waits only for
 the values its roots read and the objects of its own import closure. The link
 waits for every unit after program evaluation. Platform-only evaluation before
 pairing joins running object tasks before publishing its values, but retains
@@ -14741,8 +14750,8 @@ process and no runtime target accepts them.
 
 A function value has no slot for another root to read, so a module's roots
 holding one, with every pending root they read, run first in their own
-programs, in the order their checked reads give (`evaluateFunctionRoots`). A
-root reading a value that is not stored yet stays pending and runs again once
+programs, in the order their checked reads give
+(`ModuleEvaluation.startFunctions`). A root reading a value that is not stored yet stays pending and runs again once
 it is; if a program completes no root, the rest run once more and fail as they
 read. The module's remaining roots then restore the stored values.
 

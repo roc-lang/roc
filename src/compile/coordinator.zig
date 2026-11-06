@@ -1612,6 +1612,7 @@ const BoxyObjects = struct {
             .completed = moduleCompleted,
             .submit = submitProgram,
             .takeCompletion = takeProgramCompletion,
+            .abort = abortPrograms,
             .progress = progress,
             .interfaces = self.interfaces,
             .names = &self.digests.names,
@@ -2023,6 +2024,20 @@ const BoxyObjects = struct {
         errdefer _ = self.program_ids.remove(program.id);
         try self.programs.append(gpa, program);
         try self.submitReady();
+    }
+
+    /// The evaluation is leaving with an error. Its program tasks borrow its
+    /// root graph, module list and image set, so none may outlive it. Drop work
+    /// not submitted and join the session without allocating bookkeeping or
+    /// publishing a completed unit. UnitTask outcomes remain owned by `units`
+    /// for deinit.
+    fn abortPrograms(context: *anyopaque, reason: Error) void {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        if (self.first_error == null) self.first_error = reason;
+        self.programs.clearRetainingCapacity();
+        while (self.session.outstanding != 0) _ = self.session.receive();
+        self.program_ids.clearRetainingCapacity();
+        self.program_completions.clearRetainingCapacity();
     }
 
     /// A finished program's completion, if one is filed.
@@ -13494,4 +13509,86 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
     try std.testing.expect(!parser_changed.cached and !parser_changed.stored_before_evaluation);
     try std.testing.expect(!std.mem.eql(u8, &input_changed.key, &parser_changed.key));
     try std.testing.expectEqual(@as(i64, 15), parser_changed.value);
+}
+
+test "aborting compile-time preparation joins submitted tasks and drops queued programs" {
+    const Harness = struct {
+        tasks: [2]post_check_executor.Task = undefined,
+        accepted: usize = 0,
+        received: usize = 0,
+        lane: post_check_executor.LaneState,
+        const Job = struct {
+            ran: bool = false,
+            fn run(raw: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
+                const self: *@This() = @ptrCast(@alignCast(raw));
+                self.ran = true;
+                return null;
+            }
+        };
+        fn begin(raw: *anyopaque) Allocator.Error!*anyopaque {
+            return raw;
+        }
+        fn submit(raw: *anyopaque, _: *anyopaque, task: post_check_executor.Task) Allocator.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.tasks[self.accepted] = task;
+            self.accepted += 1;
+        }
+        fn receive(raw: *anyopaque, _: *anyopaque) post_check_executor.Completion {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            const task = self.tasks[self.received];
+            self.received += 1;
+            return .{ .id = task.id, .worker_id = 0, .value = task.run(task.context, .{
+                .id = 0,
+                .allocator = std.testing.allocator,
+                .scratch = std.testing.allocator,
+                .lane_state = &self.lane,
+            }) };
+        }
+        fn tryReceive(_: *anyopaque, _: *anyopaque) ?post_check_executor.Completion {
+            return null;
+        }
+        fn end(_: *anyopaque, _: *anyopaque) void {}
+    };
+    const allocator = std.testing.allocator;
+    var harness = Harness{ .lane = .init(allocator) };
+    defer harness.lane.deinit();
+    const executor: post_check_executor.Executor = .{
+        .context = &harness,
+        .worker_count = 2,
+        .lane_count = 1,
+        .beginFn = Harness.begin,
+        .submitFn = Harness.submit,
+        .receiveFn = Harness.receive,
+        .tryReceiveFn = Harness.tryReceive,
+        .endFn = Harness.end,
+    };
+    // Only the abort-owned fields exist in this harness. In particular it has
+    // no coordinator or cache through which abort could publish a result.
+    var objects: BoxyObjects = undefined;
+    objects.first_error = null;
+    objects.session = try executor.begin();
+    defer objects.session.end();
+    objects.programs = .empty;
+    defer objects.programs.deinit(allocator);
+    objects.program_ids = .empty;
+    defer objects.program_ids.deinit(allocator);
+    objects.program_completions = .empty;
+    defer objects.program_completions.deinit(allocator);
+    var program = Harness.Job{};
+    var unit = Harness.Job{};
+    var queued = Harness.Job{};
+    try objects.session.submit(.{ .id = 1, .context = &program, .run = Harness.Job.run });
+    try objects.session.submit(.{ .id = 2, .context = &unit, .run = Harness.Job.run });
+    try objects.program_ids.put(allocator, 1, {});
+    try objects.program_ids.put(allocator, 3, {});
+    try objects.programs.append(allocator, .{ .id = 3, .context = &queued, .run = Harness.Job.run });
+    try objects.program_completions.append(allocator, .{ .id = 4, .worker_id = 0, .value = null });
+
+    BoxyObjects.abortPrograms(&objects, error.OutOfMemory);
+    try std.testing.expectEqual(error.OutOfMemory, objects.first_error.?);
+    try std.testing.expect(program.ran and unit.ran and !queued.ran);
+    try std.testing.expectEqual(@as(usize, 0), objects.session.outstanding);
+    try std.testing.expectEqual(@as(usize, 0), objects.programs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), objects.program_ids.count());
+    try std.testing.expectEqual(@as(usize, 0), objects.program_completions.items.len);
 }

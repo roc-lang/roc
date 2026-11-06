@@ -112,7 +112,7 @@ pub const Options = struct {
     boxy_objects: ?BoxyObjectSource = null,
     /// The loaded objects a native program links against.
     boxy_linked_images: ?*BoxyLinkedImages = null,
-    /// A program of `evaluateFunctionRoots`: a root reading a value not yet
+    /// A program of `ModuleEvaluation.startFunctions`: a root reading a value not yet
     /// complete stays pending for its next program.
     function_roots: bool = false,
     /// Where a compile-time failure is reported when the source it names
@@ -1341,6 +1341,11 @@ pub const BoxyObjectSource = struct {
     /// finish. False when none is running: nothing the evaluation waits for
     /// will happen.
     progress: *const fn (context: *anyopaque) FinalizeError!bool,
+    /// Abort this evaluation after an error: discard unsubmitted programs and
+    /// join submitted work before the evaluator frees its borrowed inputs.
+    /// Its bookkeeping allocates nothing; it executes no roots and publishes
+    /// no results while accepted preparation tasks finish.
+    abort: *const fn (context: *anyopaque, reason: FinalizeError) void,
     interfaces: *ExportInterfaces,
     names: *const ModuleNames,
     /// The lowering the objects were compiled under, which a program calling
@@ -1731,10 +1736,10 @@ const IdentityScheduler = struct {
 /// each other through compile-time value slots and read earlier modules'
 /// values from their constant stores, and run in the order the values they
 /// read give them, from the checked modules alone (`checked_root_graph`).
-/// A root whose value holds a function value is specialized and evaluated
-/// by the Solved program's evaluator instead, with the roots of its module
-/// it reads, since that evaluator records the evidence a stored function
-/// value restores with.
+/// A root whose value holds a function runs in a Boxy program that retains
+/// the producer metadata needed to store its captures and type descriptors.
+/// Those programs and their dependencies are prepared on the same scheduler;
+/// their completed values are stored before the module's ordinary program.
 ///
 /// The runtime consumer of a `.boxy` program lowers from the checked
 /// modules once every root is stored, so the session carries no specialized
@@ -1882,11 +1887,6 @@ fn evaluateRootsBoxy(
     var evaluations = try ModuleEvaluations.init(allocator, modules, roots, &graph);
     defer evaluations.deinit();
     const source = options.boxy_objects;
-    // A module with no pending root is complete before anything runs.
-    for (modules, 0..) |entry, module_index| {
-        if (evaluations.of_module[module_index] != null) continue;
-        if (source) |objects| try objects.completed(objects.context, entry.module);
-    }
     const Shared = ModuleEvaluation.Shared;
     const shared: Shared = .{
         .modules = modules,
@@ -1898,26 +1898,10 @@ fn evaluateRootsBoxy(
         .options = evaluation_options,
         .images = &images,
     };
-    while (evaluations.remaining != 0) {
-        try options.checkCancelRequest();
-        var progressed = false;
-        for (evaluations.items) |*evaluation| {
-            if (evaluation.state != .waiting or !evaluations.readsDone(evaluation)) continue;
-            if (!try evaluation.canLower(shared)) continue;
-            try evaluation.start(shared, &evaluations);
-            progressed = true;
-        }
-        while (try evaluations.takeBuilt(source)) |evaluation| {
-            try evaluation.run(shared, &evaluations);
-            progressed = true;
-        }
-        if (progressed or evaluations.remaining == 0) continue;
-        // Every program not yet started waits for a build in progress: a
-        // program whose values its roots read, or an object of its import
-        // closure.
-        const objects = source orelse finalizationInvariant("a module's compile-time program waits with no scheduler to wait on");
-        if (!try objects.progress(objects.context)) finalizationInvariant("a module's compile-time program waits for an import no unit builds");
-    }
+    evaluations.run(shared) catch |err| {
+        if (source) |objects| objects.abort(objects.context, err);
+        return err;
+    };
 }
 
 /// The evaluation of each module with pending roots.
@@ -1990,6 +1974,39 @@ const ModuleEvaluations = struct {
         return true;
     }
 
+    /// Keep publication on this thread while every ready preparation uses
+    /// the shared worker session. Errors are joined by the caller before it
+    /// releases the graph, states, and image set this loop lends to tasks.
+    fn run(self: *ModuleEvaluations, shared: ModuleEvaluation.Shared) FinalizeError!void {
+        const options = shared.options;
+        const source = options.boxy_objects;
+        // A module with no pending root is complete before anything runs.
+        for (shared.modules, 0..) |entry, module_index| {
+            if (self.of_module[module_index] != null) continue;
+            if (source) |objects| try objects.completed(objects.context, entry.module);
+        }
+        while (self.remaining != 0) {
+            try options.checkCancelRequest();
+            var progressed = false;
+            for (self.items) |*evaluation| {
+                if (evaluation.state != .waiting or !self.readsDone(evaluation)) continue;
+                if (!try evaluation.canLower(shared)) continue;
+                try evaluation.start(shared, self);
+                progressed = true;
+            }
+            while (try self.takeBuilt(source)) |evaluation| {
+                try evaluation.run(shared, self);
+                progressed = true;
+            }
+            if (progressed or self.remaining == 0) continue;
+            // Every program not yet started waits for a build in progress: a
+            // program whose values its roots read, or an object of its import
+            // closure.
+            const objects = source orelse finalizationInvariant("a module's compile-time program waits with no scheduler to wait on");
+            if (!try objects.progress(objects.context)) finalizationInvariant("a module's compile-time program waits for an import no unit builds");
+        }
+    }
+
     /// An evaluation whose program is built, taken off the scheduler's
     /// completions.
     fn takeBuilt(self: *ModuleEvaluations, source: ?BoxyObjectSource) FinalizeError!?*ModuleEvaluation {
@@ -2005,7 +2022,7 @@ const ModuleEvaluations = struct {
 /// The pending roots of one module, through the steps of their
 /// evaluation. The roots whose values hold function values run first, with
 /// every pending root of the module they read, as programs that keep what
-/// storing a function value takes (`evaluateFunctionRoots`). Every root still
+/// storing a function value takes (`startFunctions`). Every root still
 /// pending is then lowered as one `.boxy` program (`ProgramBuild`), whose roots read
 /// each other through compile-time value slots (`Program.rootValueSlot`),
 /// and evaluated in the levels the values they read give them
@@ -2022,8 +2039,11 @@ const ModuleEvaluation = struct {
     reads: []const u32,
     state: enum { waiting, building, done } = .waiting,
     build: ?*ProgramBuild = null,
+    /// A function-containing value cannot be read until its recipe is stored.
+    /// Its batches therefore finish before the ordinary program is submitted.
+    phase: enum { classify, functions, function_failures, ordinary } = .classify,
+    function_pending: std.ArrayList(u32) = .empty,
 
-    /// What every module's evaluation reads.
     const Shared = struct {
         modules: []const ProgramModule,
         lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
@@ -2037,6 +2057,7 @@ const ModuleEvaluation = struct {
 
     fn deinit(self: *ModuleEvaluation, allocator: Allocator) void {
         if (self.build) |build| build.destroy();
+        self.function_pending.deinit(allocator);
         allocator.free(self.members);
         allocator.free(self.reads);
     }
@@ -2058,10 +2079,21 @@ const ModuleEvaluation = struct {
         return source.ready(source.context, self.artifact(shared));
     }
 
-    /// Evaluate the roots holding function values, then lower the rest as
-    /// the module's program: on the scheduler's session, or here.
+    /// Submit exactly one preparation stage. Its completion stores results on
+    /// the evaluating thread before another stage of this module can start.
     fn start(self: *ModuleEvaluation, shared: Shared, evaluations: *ModuleEvaluations) FinalizeError!void {
-        const allocator = evaluations.allocator;
+        std.debug.assert(self.state == .waiting and self.build == null);
+        if (self.phase == .classify) try self.classify(evaluations.allocator, shared);
+        switch (self.phase) {
+            .classify => unreachable,
+            .functions, .function_failures => try self.startFunctions(shared, evaluations),
+            .ordinary => try self.startOrdinary(shared, evaluations),
+        }
+    }
+
+    /// Preserve the checked dependency closure and its deterministic root order
+    /// across asynchronously built function-value batches.
+    fn classify(self: *ModuleEvaluation, allocator: Allocator, shared: Shared) Allocator.Error!void {
         const module_index = self.module;
         const module = self.artifact(shared);
         const roots = shared.roots;
@@ -2094,9 +2126,17 @@ const ModuleEvaluation = struct {
         if (solved.items.len != 0) {
             std.sort.pdq(u32, solved.items, {}, std.sort.asc(u32));
             if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: function roots {any} of {s}\n", .{ solved.items, module.moduleEnvConst().module_name });
-            try self.evaluateFunctionRoots(allocator, shared, solved.items);
         }
 
+        self.function_pending = solved;
+        solved = .empty;
+        self.phase = if (self.function_pending.items.len == 0) .ordinary else .functions;
+    }
+
+    fn startOrdinary(self: *ModuleEvaluation, shared: Shared, evaluations: *ModuleEvaluations) FinalizeError!void {
+        const allocator = evaluations.allocator;
+        const roots = shared.roots;
+        const module = self.artifact(shared);
         var pending = std.ArrayList(u32).empty;
         defer pending.deinit(allocator);
         for (self.members) |member| {
@@ -2119,87 +2159,71 @@ const ModuleEvaluation = struct {
                 linked = true;
             }
         }
-        try noteProgram(allocator, shared, pending.items);
-        const pending_roots = try pending.toOwnedSlice(allocator);
-        const build = build: {
-            errdefer allocator.free(pending_roots);
-            break :build try ProgramBuild.create(allocator, self, shared, pending_roots, lowering_modules, target, run_options, linked);
-        };
-        self.build = build;
-        const source = shared.options.boxy_objects orelse {
-            // Without a scheduler the program is built and run here.
-            build.complete();
-            return self.run(shared, evaluations);
-        };
-        // The program's lowering and code generation run their waves on the
-        // same pool, whichever thread builds the program.
-        self.state = .building;
-        try source.submit(source.context, .{ .id = @intFromPtr(build), .context = build, .run = ProgramBuild.run });
+        try self.submit(shared, evaluations, pending.items, lowering_modules, target, run_options, linked);
     }
 
-    /// Evaluate the roots `members` (positions in `roots`), which hold
-    /// function values or are read by roots that do, as `.boxy` programs that
-    /// keep what reading those values takes (design.md "Stored Function
-    /// Values"). A function value has no compile-time value slot, so a root
-    /// reading one waits for it to be stored and a later program restores it:
-    /// each program evaluates the roots whose checked reads are complete, and
-    /// a root whose read no checked reference names runs again in the next.
-    fn evaluateFunctionRoots(self: *const ModuleEvaluation, allocator: Allocator, shared: Shared, members: []const u32) FinalizeError!void {
-        const roots = shared.roots;
-        var target = boxyCompileTimeTarget(shared.options);
-        target.boxy_stored_functions = true;
-        var remaining = std.ArrayList(u32).empty;
-        defer remaining.deinit(allocator);
-        try remaining.appendSlice(allocator, members);
+    /// Function-valued roots and their pending dependencies keep the same retry
+    /// policy as ordinary evaluation. A batch with no progress gets one final
+    /// failure-reporting program; its failure observations are not discarded.
+    fn startFunctions(self: *ModuleEvaluation, shared: Shared, evaluations: *ModuleEvaluations) FinalizeError!void {
+        const allocator = evaluations.allocator;
+        const remaining = self.function_pending.items;
+        std.debug.assert(remaining.len != 0);
         var ready = std.ArrayList(u32).empty;
         defer ready.deinit(allocator);
-        const is_remaining = try allocator.alloc(bool, roots.len);
-        defer allocator.free(is_remaining);
-        while (remaining.items.len != 0) {
-            ready.clearRetainingCapacity();
+        if (self.phase == .function_failures) {
+            try ready.appendSlice(allocator, remaining);
+        } else {
+            const is_remaining = try allocator.alloc(bool, shared.roots.len);
+            defer allocator.free(is_remaining);
             @memset(is_remaining, false);
-            for (remaining.items) |member| is_remaining[member] = true;
-            for (remaining.items) |member| {
+            for (remaining) |member| is_remaining[member] = true;
+            for (remaining) |member| {
                 const waits = for (shared.graph.deps[member]) |dep| {
                     if (is_remaining[dep]) break true;
                 } else false;
                 if (!waits) try ready.append(allocator, member);
             }
-            if (ready.items.len == 0) try ready.appendSlice(allocator, remaining.items);
-            var stage_options = shared.options;
-            stage_options.function_roots = true;
-            try self.evaluateHere(allocator, shared, ready.items, target, stage_options);
-            var kept: usize = 0;
-            for (remaining.items) |member| {
-                const root = roots[member];
-                if (shared.states[root.module].isDone(root.root)) continue;
-                remaining.items[kept] = member;
-                kept += 1;
-            }
-            if (kept == remaining.items.len) {
-                // No root completed: the rest fail as they read.
-                stage_options.function_roots = false;
-                return self.evaluateHere(allocator, shared, remaining.items, target, stage_options);
-            }
-            remaining.shrinkRetainingCapacity(kept);
+            if (ready.items.len == 0) try ready.appendSlice(allocator, remaining);
         }
+        var target = boxyCompileTimeTarget(shared.options);
+        target.boxy_stored_functions = true;
+        var options = shared.options;
+        options.function_roots = self.phase == .functions;
+        try self.submit(shared, evaluations, ready.items, shared.lowering_modules, target, options, false);
     }
 
-    /// Lower, compile, and run `members` as one program on this thread,
-    /// against every module's source.
-    fn evaluateHere(self: *const ModuleEvaluation, allocator: Allocator, shared: Shared, members: []const u32, target: lir.CheckedPipeline.TargetConfig, options: Options) FinalizeError!void {
+    /// Every kind of preparation uses the same scheduler. In particular,
+    /// preparing one module's function recipes does not prevent independent
+    /// modules from submitting their ready programs.
+    fn submit(
+        self: *ModuleEvaluation,
+        shared: Shared,
+        evaluations: *ModuleEvaluations,
+        members: []const u32,
+        lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
+        target: lir.CheckedPipeline.TargetConfig,
+        options: Options,
+        linked: bool,
+    ) FinalizeError!void {
+        const allocator = evaluations.allocator;
         try noteProgram(allocator, shared, members);
         const pending = try allocator.dupe(u32, members);
         const build = build: {
             errdefer allocator.free(pending);
-            break :build try ProgramBuild.create(allocator, self, shared, pending, shared.lowering_modules, target, options, false);
+            break :build try ProgramBuild.create(allocator, self, shared, pending, lowering_modules, target, options, linked);
         };
-        defer build.destroy();
-        build.complete();
-        try runBuilt(allocator, shared, build);
+        self.build = build;
+        self.state = .building;
+        const source = shared.options.boxy_objects orelse {
+            build.complete();
+            return self.run(shared, evaluations);
+        };
+        try source.submit(source.context, .{ .id = @intFromPtr(build), .context = build, .run = ProgramBuild.run });
     }
 
-    /// Run the module's built program and store its roots' values.
+    /// Run one completed stage on the evaluating thread. Publishing values
+    /// and observations never races another stage's publication.
     fn run(self: *ModuleEvaluation, shared: Shared, evaluations: *ModuleEvaluations) FinalizeError!void {
         const build = self.build.?;
         defer {
@@ -2207,7 +2231,24 @@ const ModuleEvaluation = struct {
             self.build = null;
         }
         try runBuilt(evaluations.allocator, shared, build);
-        try self.finish(shared, evaluations);
+        switch (self.phase) {
+            .classify => unreachable,
+            .ordinary => return self.finish(shared, evaluations),
+            .function_failures => self.phase = .ordinary,
+            .functions => {
+                var kept: usize = 0;
+                for (self.function_pending.items) |member| {
+                    const root = shared.roots[member];
+                    if (shared.states[root.module].isDone(root.root)) continue;
+                    self.function_pending.items[kept] = member;
+                    kept += 1;
+                }
+                self.phase = if (kept == 0) .ordinary else if (kept == self.function_pending.items.len) .function_failures else .functions;
+                self.function_pending.shrinkRetainingCapacity(kept);
+            },
+        }
+        if (self.phase == .ordinary) self.function_pending.clearRetainingCapacity();
+        self.state = .waiting;
     }
 
     /// Count a program of `pending` for the timings and trace its roots.
@@ -6301,7 +6342,7 @@ fn evalDevProgramRoots(
             .pending, .host_oom => unreachable, // the payload switch above rejected or returned for these results
         };
         // A function value has no slot form: a reader of this root runs
-        // again once its value is stored (`evaluateFunctionRoots`).
+        // again once its value is stored (`ModuleEvaluation.startFunctions`).
         const publishes = options.publish_shared_slots and (failure_message != null or !try writer.planHoldsBoxyFunction(job.root.plan));
         if (publishes and failure_message == null) try native.publishRoot(lowered, job.root.owner, .{ .checked = job.root_id }, job.root.shape(), .{ .ptr = job.ret_buf.ptr });
         if (options.publish_shared_slots and failure_message != null) {
