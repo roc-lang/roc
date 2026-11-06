@@ -493,6 +493,7 @@ const Printer = struct {
                 if (call.drive != .none) try writer.print(" drive={s}", .{@tagName(call.drive)});
             },
             .dict_method => |method| try writer.print(" #{d}", .{method.index}),
+            .table_entry => |entry| try writer.print(" #{d}", .{entry.index}),
             .field_addr => |field| try writer.print(" #{d}", .{field.field_index}),
             .tag_payload_addr => |payload| try writer.print(" #{d}", .{payload.payload_index}),
             .desc_nominal => |nominal| if (nominal.inspect_opaque) try writer.writeAll(" opaque"),

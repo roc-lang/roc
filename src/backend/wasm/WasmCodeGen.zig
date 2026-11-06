@@ -9607,6 +9607,11 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitLoadOp(.i32, d.index * wasm_word_size);
             try self.bindReturnedScalar(dst, .i32);
         },
+        .table_entry => |entry| {
+            try self.emitProcLocal(entry.table);
+            try self.emitLoadOp(.i32, LIR.tableEntryOffset(entry.index, wasm_word_size));
+            try self.bindReturnedScalar(dst, .i32);
+        },
         .copy => |c| {
             const t = try self.dynTarget(dst);
             try self.emitDescCopy(c.desc, t, c.src);

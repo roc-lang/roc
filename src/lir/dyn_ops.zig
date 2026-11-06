@@ -15,7 +15,7 @@ const DynOp = LIR.DynOp;
 pub fn isComposition(op: DynOp) bool {
     return switch (op) {
         .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_compose, .dict_patch, .dict_record => true,
-        .frame_alloc, .desc_note, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => false,
+        .frame_alloc, .desc_note, .dict_method, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => false,
     };
 }
 
@@ -70,6 +70,8 @@ pub fn ownership(op: DynOp) Ownership {
         .dict_patch => .borrow_operands,
         // A dictionary's callables are immortal; the target borrows from it.
         .dict_method => |method| .{ .borrow_component = method.dict },
+        // A table's words are immortal; the target borrows from the table.
+        .table_entry => |entry| .{ .borrow_component = entry.table },
         .copy => |copy| .{ .alias = copy.src },
         .field_addr => |field| .{ .borrow_component = field.base },
         .field_addr_named => |field| .{ .borrow_component = field.base },
@@ -156,6 +158,7 @@ pub const Operands = struct {
             },
             .dict_record => |dict| result.span(dict.methods),
             .dict_method => |method| result.single(method.dict),
+            .table_entry => |entry| result.single(entry.table),
             .copy => |copy| {
                 result.single(copy.src);
                 result.single(copy.desc);
@@ -292,7 +295,7 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
             try out.append(allocator, closure.capture);
             if (closure.reuse) |reuse| try out.append(allocator, reuse);
         },
-        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .adapt => unreachable, // only construct operations consume value operands
+        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .adapt => unreachable, // only construct operations consume value operands
     }
 }
 
@@ -306,7 +309,7 @@ pub fn borrowedValues(store: *const LirStore, allocator: std.mem.Allocator, op: 
         .adapt => |adapt| try out.append(allocator, adapt.src),
         .dict_record => |dict| try appendSpan(store, allocator, dict.methods, out),
         .dict_patch => |patch| try out.appendSlice(allocator, &.{ patch.dict, patch.value }),
-        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_compose, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
+        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_compose, .dict_method, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
     }
 }
 
@@ -390,6 +393,7 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .dict_patch => |patch| .{ .dict_patch = .{ .dict = try Remap.one(context, patch.dict), .index = patch.index, .value = try Remap.one(context, patch.value) } },
         .dict_record => |dict| .{ .dict_record = .{ .methods = try Remap.span(store, context, dict.methods) } },
         .dict_method => |method| .{ .dict_method = .{ .dict = try Remap.one(context, method.dict), .index = method.index } },
+        .table_entry => |entry| .{ .table_entry = .{ .table = try Remap.one(context, entry.table), .index = entry.index } },
         .copy => |copy| .{ .copy = .{ .src = try Remap.one(context, copy.src), .desc = try Remap.one(context, copy.desc) } },
         .field_addr => |field| .{ .field_addr = .{ .base = try Remap.one(context, field.base), .desc = try Remap.one(context, field.desc), .field_index = field.field_index } },
         .field_addr_named => |field| .{ .field_addr_named = .{ .base = try Remap.one(context, field.base), .desc = try Remap.one(context, field.desc), .name = try Remap.one(context, field.name) } },

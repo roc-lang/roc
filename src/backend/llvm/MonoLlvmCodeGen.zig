@@ -4151,7 +4151,7 @@ pub const MonoLlvmCodeGen = struct {
                     // its composition takes.
                     .dyn => |dyn_stmt| switch (self.store.stmtRow(dyn_stmt.data)) {
                         .dict_compose => |compose| needs[@backingInt(compose.worker)] = true,
-                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
+                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
                     },
                     .init_uninitialized, .assign_ref, .assign_call_erased, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
                 }
@@ -12251,6 +12251,10 @@ pub const MonoLlvmCodeGen = struct {
             .dict_method => |d| {
                 const dict = try self.wordValue(d.dict);
                 try self.bindWord(target, try self.loadPointer(try self.offsetPtr(dict, d.index * self.targetWordSize())));
+            },
+            .table_entry => |entry| {
+                const table = try self.wordValue(entry.table);
+                try self.bindWord(target, try self.loadPointer(try self.offsetPtr(table, lir.LIR.tableEntryOffset(entry.index, self.targetWordSize()))));
             },
             .copy => |c| try self.emitDescCopy(c.desc, try self.targetAddress(target), try self.bytesAddress(c.src)),
             .field_addr => |f| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_field_addr", ptr_ty, &.{ ptr_ty, ptr_ty, .i32 }, &.{

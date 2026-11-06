@@ -8841,6 +8841,11 @@ pub const Interpreter = struct {
                 const record: [*]const usize = @ptrFromInt(try self.localWord(frame, d.dict));
                 try self.setWordTarget(frame, stmt_id, target, record[d.index]);
             },
+            .table_entry => |entry| {
+                const table: [*]const u8 = @ptrFromInt(try self.localWord(frame, entry.table));
+                const word = std.mem.readInt(usize, table[LIR.tableEntryOffset(entry.index, @sizeOf(usize))..][0..@sizeOf(usize)], builtin.cpu.arch.endian());
+                try self.setWordTarget(frame, stmt_id, target, word);
+            },
             .copy => |c| {
                 const desc = try self.descAt(frame, c.desc);
                 const src = try self.localBytes(frame, c.src);

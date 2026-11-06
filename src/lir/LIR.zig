@@ -1303,6 +1303,14 @@ pub const PackedErasedFnData = struct {
     reuse_unique: bool = false,
 };
 
+/// The byte offset of word `index` of a type table whose words are
+/// `ptr_bytes` wide. The table's producer writes
+/// each word here and every consumer of `DynOp.table_entry` reads it here, so
+/// this is the one place the table format names a word's position.
+pub fn tableEntryOffset(index: u32, ptr_bytes: u32) u32 {
+    return index * ptr_bytes;
+}
+
 /// One operation of a `CFStmt.dyn` statement, stored out of line (design.md
 /// "Dynamic Values In LIR", "Type Descriptors", "Dictionaries").
 ///
@@ -1395,6 +1403,17 @@ pub const DynOp = union(enum) {
     /// The callable of method `index` of a dictionary record. Target:
     /// `erased_callable`, borrowed from the immortal dictionary.
     dict_method: struct { dict: LocalId, index: u32 },
+
+    // -- Type tables --
+
+    /// Word `index` of the type table at `table` (an `opaque_ptr` local),
+    /// read at `tableEntryOffset(index, pointer width)`. A table is
+    /// immutable static data, so every read of a word yields the same value:
+    /// a descriptor or another table (target `opaque_ptr`), or an immortal
+    /// dictionary or literal thunk (target `erased_callable`), which the
+    /// target holds as a component of the table, as `dict_method` holds a
+    /// dictionary's method.
+    table_entry: struct { table: LocalId, index: u32 },
 
     // -- Values --
 

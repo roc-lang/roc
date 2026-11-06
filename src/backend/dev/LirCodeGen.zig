@@ -17956,6 +17956,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(reg);
                     try self.bindAssignedLocal(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), slot));
                 },
+                .table_entry => |entry| {
+                    const reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(entry.table));
+                    try self.emitLoad(.w64, reg, reg, @intCast(LIR.tableEntryOffset(entry.index, 8)));
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.emitStore(.w64, frame_ptr, slot, reg);
+                    self.codegen.freeGeneral(reg);
+                    try self.bindAssignedLocal(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), slot));
+                },
                 .copy => |c| {
                     const dst = try self.dynTarget(dst_local);
                     try self.addWordArg(&builder, c.desc);

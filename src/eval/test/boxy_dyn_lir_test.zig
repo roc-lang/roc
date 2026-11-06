@@ -70,6 +70,8 @@ var name_ok = testName("Ok");
 const StaticObject = union(enum) {
     desc: *const TypeDesc,
     name: *const Name,
+    /// A type table whose words address these descriptors.
+    table: []const *const TypeDesc,
 };
 
 /// Builds procedures statement by statement, last statement first.
@@ -79,6 +81,10 @@ const Builder = struct {
     /// The static data values: pointers to immortal objects.
     statics: std.ArrayList(usize) = .empty,
     cells: std.ArrayList(*usize) = .empty,
+    /// The words of each native type table, and the descriptors each
+    /// table's words address.
+    tables: std.ArrayList([]usize) = .empty,
+    table_descs: std.ArrayList([]*const TypeDesc) = .empty,
     /// The object each static slot addresses, which the wasm program
     /// serializes at its own pointer width.
     objects: std.ArrayList(StaticObject) = .empty,
@@ -102,6 +108,10 @@ const Builder = struct {
         self.statics.deinit(allocator);
         for (self.cells.items) |cell| allocator.destroy(cell);
         self.cells.deinit(allocator);
+        for (self.tables.items) |words| allocator.free(words);
+        self.tables.deinit(allocator);
+        for (self.table_descs.items) |descs| allocator.free(descs);
+        self.table_descs.deinit(allocator);
         self.objects.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
@@ -175,12 +185,28 @@ const Builder = struct {
 
     /// `target` = the address of an immortal object (a static descriptor or
     /// name), read as static data.
-    fn static(self: *Builder, target: LocalId, object: StaticObject, next: CFStmtId) TestError!CFStmtId {
+    fn static(self: *Builder, target: LocalId, given: StaticObject, next: CFStmtId) TestError!CFStmtId {
         const id: LIR.StaticDataId = @fromBackingInt(@intCast(self.statics.items.len));
+        // A table's descriptors outlive the caller's slice of them.
+        const object: StaticObject = switch (given) {
+            .desc, .name => given,
+            .table => |descs| blk: {
+                const owned = try allocator.dupe(*const TypeDesc, descs);
+                errdefer allocator.free(owned);
+                try self.table_descs.append(allocator, owned);
+                break :blk .{ .table = owned };
+            },
+        };
         const cell = try allocator.create(usize);
         cell.* = switch (object) {
             .desc => |desc| @intFromPtr(desc),
             .name => |name| @intFromPtr(name),
+            .table => |descs| blk: {
+                const words = try allocator.alloc(usize, descs.len);
+                try self.tables.append(allocator, words);
+                for (words, descs) |*word, desc| word.* = @intFromPtr(desc);
+                break :blk @intFromPtr(words.ptr);
+            },
         };
         try self.cells.append(allocator, cell);
         try self.statics.append(allocator, @intFromPtr(cell));
@@ -206,6 +232,29 @@ const Builder = struct {
             try exports.append(allocator, try wordExport(slot_name, object_name));
             switch (object) {
                 .desc => |desc| try exports.append(allocator, try descExport(object_name, desc)),
+                .table => |descs| {
+                    // Each word addresses a descriptor of its own,
+                    // `roc__d{slot}_{2 + index}`.
+                    const bytes = try allocator.alloc(u8, descs.len * wasm_word_size);
+                    errdefer allocator.free(bytes);
+                    @memset(bytes, 0);
+                    const relocations = try allocator.alloc(StaticDataRelocation, descs.len);
+                    errdefer allocator.free(relocations);
+                    const desc_names = try allocator.alloc([]u8, descs.len);
+                    defer allocator.free(desc_names);
+                    for (descs, relocations, desc_names, 0..) |_, *relocation, *desc_name, index| {
+                        desc_name.* = try std.fmt.allocPrint(allocator, "roc__d{d}_{d}", .{ slot, 2 + index });
+                        relocation.* = .{ .offset = LIR.tableEntryOffset(@intCast(index), wasm_word_size), .target_symbol_name = desc_name.* };
+                    }
+                    try exports.append(allocator, .{
+                        .symbol_name = object_name,
+                        .bytes = bytes,
+                        .alignment = wasm_word_size,
+                        .is_exported = false,
+                        .relocations = relocations,
+                    });
+                    for (descs, desc_names) |desc, desc_name| try exports.append(allocator, try descExport(desc_name, desc));
+                },
                 .name => |name| {
                     const text_name = try std.fmt.allocPrint(allocator, "roc__d{d}_2", .{slot});
                     errdefer allocator.free(text_name);
@@ -557,6 +606,63 @@ test "boxy wasm: a generic identity over I64 and Str" {
     const program = try IdentityProgram.build(&b);
     try expectWasmInt(&b, program.int_proc, .i64, -42);
     try expectWasmStr(&b, program.str_proc, "a string long enough to live on the heap, joined at runtime");
+}
+
+/// `id : a -> a` reading its descriptor from word 1 of its type table, the
+/// one hidden parameter it takes; word 0 describes another type, so a read
+/// of the wrong word returns the wrong bytes.
+const TableIdentityProgram = struct {
+    int_proc: LirProcSpecId,
+    str_proc: LirProcSpecId,
+
+    fn build(b: *Builder) TestError!TableIdentityProgram {
+        const table = try b.local(.opaque_ptr);
+        const desc = try b.local(.opaque_ptr);
+        const x = try b.dynLocal(desc, .param);
+        const result = try b.dynLocal(desc, .result);
+        const id = try b.proc(&.{ x, table }, try b.dyn(desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.ret(x)), b.dynamic, .{ .dyn_result = result });
+
+        const int_table = try b.local(.opaque_ptr);
+        const int_arg = try b.local(.i64);
+        const int_out = try b.local(.i64);
+        const int_body = try b.static(int_table, .{ .table = &.{ boxy.compose.strDesc(), boxy.compose.scalarDesc(.i64) } }, try b.int(int_arg, -42, try b.call(int_out, id, &.{ int_arg, int_table }, try b.ret(int_out))));
+        const int_proc = try b.proc(&.{}, int_body, .i64, .{});
+
+        const str_table = try b.local(.opaque_ptr);
+        const left = try b.local(.str);
+        const right = try b.local(.str);
+        const str_arg = try b.local(.str);
+        const str_out = try b.local(.str);
+        const str_body = try b.static(str_table, .{ .table = &.{ boxy.compose.scalarDesc(.i64), boxy.compose.strDesc() } }, try b.str(left, "a string long enough to live on the heap, ", try b.str(right, "read through a table", try b.lowLevel(str_arg, .str_concat, &.{ left, right }, false, try b.call(str_out, id, &.{ str_arg, str_table }, try b.ret(str_out))))));
+        const str_proc = try b.proc(&.{}, str_body, .str, .{});
+        return .{ .int_proc = int_proc, .str_proc = str_proc };
+    }
+};
+
+test "boxy interpreter: a generic identity reads its descriptor from its type table" {
+    var b = try Builder.init(.native);
+    defer b.deinit();
+    const program = try TableIdentityProgram.build(&b);
+
+    var run: Run = undefined;
+    try run.init(&b);
+    defer run.deinit();
+
+    const int_result = try run.eval(program.int_proc, .i64);
+    try std.testing.expectEqual(@as(i64, -42), int_result.value.read(i64));
+
+    const str_result = try run.eval(program.str_proc, .str);
+    try std.testing.expectEqualStrings("a string long enough to live on the heap, read through a table", readStr(str_result.value));
+    run.interpreter.dropValue(str_result.value, .str);
+    try run.env.checkForLeaks();
+}
+
+test "boxy wasm: a generic identity reads its descriptor from its type table" {
+    var b = try Builder.init(.u32);
+    defer b.deinit();
+    const program = try TableIdentityProgram.build(&b);
+    try expectWasmInt(&b, program.int_proc, .i64, -42);
+    try expectWasmStr(&b, program.str_proc, "a string long enough to live on the heap, read through a table");
 }
 
 /// Composes `{ a : I64, b : Str }` and builds one in a dynamic frame local.
