@@ -9188,7 +9188,6 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     } });
     const worker_fn_id = try mono.addFn(.{
         .fn_def = undefined,
-        .source_fn_ty = undefined,
         .source_fn_key = .{},
         .mono_fn_ty = worker_fn_ty,
     });
