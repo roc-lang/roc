@@ -26,6 +26,7 @@ const StaticDescs = static_descs_file.StaticDescs;
 
 const Allocator = std.mem.Allocator;
 const LIR = lir_core.LIR;
+const LirProgram = lir_core.Program;
 const TypeId = types.TypeId;
 const WorkerId = lower.WorkerId;
 const invariant = types.invariant;
@@ -457,7 +458,7 @@ pub const Evaluation = struct {
         try frames.append(self.allocator, .{ .id = id, .operands = owned, .next = 0 });
     }
 
-    /// Evaluate the group `members`, whose first member is its head.
+    /// Evaluate the strongly connected group `members`.
     fn evaluateGroup(self: *Evaluation, members: []const RecipeId) Allocator.Error!void {
         if (members.len == 1 and !try self.readsItself(members[0])) {
             self.words.items[@backingInt(members[0])] = try self.evaluateOne(self.source.get(members[0]));
@@ -562,18 +563,35 @@ pub const Evaluation = struct {
         return .{ .scoped_desc = .{ .ty = closed, .scope = scope } };
     }
 
-    /// Evaluate the cyclic group `members` (its head first), from the
-    /// group interned under its content if one was, otherwise reserving its
-    /// callables, then evaluating its descriptors and tables, which read
-    /// those callables, then filling the callables.
+    /// Evaluate the cyclic group `members`, from the group interned under
+    /// its content if one was, otherwise reserving its callables, then
+    /// evaluating its descriptors and tables, which read those callables,
+    /// then filling the callables. The group's content is its smallest key
+    /// over each member as head, so it is the same whichever member the
+    /// search entered the group by.
     fn evaluateCycle(self: *Evaluation, members: []const RecipeId) Allocator.Error!void {
         const program = self.program;
         const static_descs = &program.static_descs;
-        const order = try self.groupOrder(members);
+        var order = try self.groupOrder(members, members[0]);
         defer self.allocator.free(order);
         var key: std.ArrayList(u8) = .empty;
         defer key.deinit(self.allocator);
         try self.groupKey(order, &key);
+        var candidate_key: std.ArrayList(u8) = .empty;
+        defer candidate_key.deinit(self.allocator);
+        for (members[1..]) |head| {
+            const candidate = try self.groupOrder(members, head);
+            errdefer self.allocator.free(candidate);
+            candidate_key.clearRetainingCapacity();
+            try self.groupKey(candidate, &candidate_key);
+            if (std.mem.order(u8, candidate_key.items, key.items) != .lt) {
+                self.allocator.free(candidate);
+                continue;
+            }
+            self.allocator.free(order);
+            order = candidate;
+            std.mem.swap(std.ArrayList(u8), &key, &candidate_key);
+        }
         if (static_descs.group(key.items)) |words| {
             for (order, words) |member, member_word| self.words.items[@backingInt(member)] = member_word;
             return;
@@ -605,16 +623,16 @@ pub const Evaluation = struct {
         try static_descs.putGroup(key.items, words);
     }
 
-    /// The members of a group in the order a walk from its head first
-    /// reaches them through its own members, in operand order.
-    fn groupOrder(self: *Evaluation, members: []const RecipeId) Allocator.Error![]RecipeId {
+    /// The members of a group in the order a walk from `head` first reaches
+    /// them through its own members, in operand order.
+    fn groupOrder(self: *Evaluation, members: []const RecipeId, head: RecipeId) Allocator.Error![]RecipeId {
         var order: std.ArrayList(RecipeId) = .empty;
         errdefer order.deinit(self.allocator);
         var pending: std.ArrayList(RecipeId) = .empty;
         defer pending.deinit(self.allocator);
         var operands: std.ArrayList(Operand) = .empty;
         defer operands.deinit(self.allocator);
-        try pending.append(self.allocator, members[0]);
+        try pending.append(self.allocator, head);
         while (pending.pop()) |id| {
             if (std.mem.findScalar(RecipeId, order.items, id) != null) continue;
             try order.append(self.allocator, id);
@@ -630,7 +648,7 @@ pub const Evaluation = struct {
                 if (std.mem.findScalar(RecipeId, members, next) != null and std.mem.findScalar(RecipeId, order.items, next) == null) try pending.append(self.allocator, next);
             }
         }
-        if (order.items.len != members.len) invariant("a recipe group's head does not reach every member");
+        if (order.items.len != members.len) invariant("a recipe group's member does not reach every member");
         return try order.toOwnedSlice(self.allocator);
     }
 
@@ -837,6 +855,57 @@ test "recipes are interned by content, reserved ones included" {
     try std.testing.expectEqual(@as(u32, 0), needs.recipes[1].input);
     try std.testing.expectEqual(@as(RecipeId, @fromBackingInt(3)), needs.recipes[4].callable.captures[0].recipe);
     try std.testing.expectEqual(@as(RecipeId, @fromBackingInt(4)), needs.recipes[3].callable.captures[0].recipe);
+}
+
+test "a cyclic group has the same words whichever member its evaluation enters by" {
+    const allocator = std.testing.allocator;
+    // An evaluation reads the program's allocator, store, layouts, result,
+    // static data and workers; every other field stays unread.
+    var program: lower.Program = undefined;
+    program.allocator = allocator;
+    program.store = types.Store.init(allocator);
+    defer program.store.deinit();
+    program.modules = .{ .allocator = allocator };
+    defer program.modules.deinit();
+    program.result = try LirProgram.Result.init(allocator, .u64);
+    defer program.result.deinit();
+    program.layouts = .{
+        .allocator = allocator,
+        .store = &program.store,
+        .converter = .{ .store = &program.store, .modules = &program.modules },
+        .layouts = &program.result.layouts,
+    };
+    defer program.layouts.deinit();
+    program.static_descs = StaticDescs.init(allocator, &program.store, &program.layouts, &program.result, .u64);
+    defer program.static_descs.deinit();
+    program.workers = .empty;
+    defer program.workers.deinit(allocator);
+
+    const store = &program.result.store;
+    const target = try store.addLocal(.{ .layout_idx = .u8 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
+    const proc = try store.addProcSpec(.{ .name = .fromRaw(0), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try store.addLocalSpan(&.{target}), .body = ret, .ret_layout = .u8 }, .none);
+    // The evaluation reads a callable's worker for its procedure alone.
+    var entry: lower.Worker = undefined;
+    entry.proc = proc;
+    try program.workers.append(allocator, entry);
+
+    // A dictionary capturing a table whose input is that dictionary.
+    var recipes = Recipes.init(allocator);
+    defer recipes.deinit();
+    const callable = try recipes.reserve();
+    const table = try recipes.intern(.{ .table = .{ .worker = @fromBackingInt(1), .inputs = &.{.{ .recipe = callable }} } });
+    try recipes.set(callable, .{ .callable = .{ .entry = @fromBackingInt(0), .captures = &.{.{ .recipe = table }} } });
+
+    var from_callable = Evaluation.init(&program, .{ .building = &recipes }, &.{}, 0);
+    defer from_callable.deinit();
+    const callable_word = try from_callable.word(callable);
+    const table_word = try from_callable.word(table);
+
+    var from_table = Evaluation.init(&program, .{ .building = &recipes }, &.{}, 0);
+    defer from_table.deinit();
+    try std.testing.expect(StaticDescs.captureWordsEqual(table_word, try from_table.word(table)));
+    try std.testing.expect(StaticDescs.captureWordsEqual(callable_word, try from_table.word(callable)));
 }
 
 test "table words sit at consecutive pointer-sized offsets" {
