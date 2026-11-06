@@ -982,6 +982,137 @@ test "range prove keeps a loop test whose body allocates many value nodes" {
     try testing.expect(store.getCFStmtImmediate(loop_switch).* == .switch_stmt);
 }
 
+/// A merge environment meet for `local` carrying the given upper bounds.
+fn testEnvMeet(local: LocalId, bounds: []const MeetBound) EnvMeet {
+    var meet: EnvMeet = .{
+        .local = local,
+        .root = 0,
+        .off_lo = 0,
+        .off_hi = 0,
+        .valid = false,
+        .bounds = .{},
+        .lower = .{},
+        .lower_any = .{},
+        .len_bounds = .{},
+        .len_bounds_any = .{},
+    };
+    for (bounds) |bound| meet.bounds.append(bound);
+    return meet;
+}
+
+test "range prove reaches a fixpoint when a merge's bound drops out and reappears" {
+    const testing = std.testing;
+    var pass = Pass.init(testing.allocator);
+    defer pass.deinit();
+    // A merged local bounded by two list lengths, as a merge in a large
+    // procedure is when a capped query reaches the second length only on
+    // every other round.
+    const list_a: LocalId = @fromBackingInt(1);
+    const list_b: LocalId = @fromBackingInt(2);
+    const merged: LocalId = @fromBackingInt(3);
+    const len_a: NodeId = 0;
+    const len_b: NodeId = 1;
+    try pass.nodes.append(testing.allocator, .{ .root = len_a, .off_lo = 0, .off_hi = 0, .lo = 0, .hi = std.math.maxInt(i64) });
+    try pass.nodes.append(testing.allocator, .{ .root = len_b, .off_lo = 0, .off_hi = 0, .lo = 0, .hi = std.math.maxInt(i64) });
+    try pass.len_roots.put(len_a, list_a);
+    try pass.len_roots.put(len_b, list_b);
+    const head: CFStmtId = @fromBackingInt(7);
+
+    var state = MergeState{ .live = true, .captures = 2, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
+    defer state.env.deinit(testing.allocator);
+    try state.env.append(testing.allocator, testEnvMeet(merged, &.{}));
+
+    var rounds: usize = 0;
+    var round: usize = 0;
+    while (round < 40) : (round += 1) {
+        // The first length's slack weakens on odd rounds and tightens on
+        // even ones; the second length's bound is derived on even rounds
+        // only.
+        const slack_a: i128 = if (round % 2 == 0) -4 else -2;
+        state.env.items[0] = if (round % 2 == 0)
+            testEnvMeet(merged, &.{ .{ .root = len_a, .c = slack_a }, .{ .root = len_b, .c = -1 } })
+        else
+            testEnvMeet(merged, &.{.{ .root = len_a, .c = slack_a }});
+        pass.seeds_grew = false;
+        try pass.persistMergeEnv(head, &state);
+        if (pass.seeds_grew) rounds = round + 1;
+    }
+    // Only the first round admits anything; every later round, whatever it
+    // derives, only weakens what is persisted.
+    try testing.expectEqual(@as(usize, 1), rounds);
+
+    const stored = pass.merge_env.getPtr(head).?;
+    try testing.expectEqual(@as(usize, 1), stored.len);
+    const entry = stored.items[0];
+    try testing.expectEqual(merged, entry.local);
+    try testing.expectEqual(@as(usize, 2), entry.len);
+    for (entry.bounds[0..entry.len]) |bound| {
+        switch (bound.base) {
+            // The slack only grew, to the loosest any round derived.
+            .len_of => |list| if (list == list_a) {
+                try testing.expectEqual(@as(i128, -2), bound.c);
+            } else {
+                // Dropped on the first round that missed it, and never
+                // admitted again.
+                try testing.expectEqual(list_b, list);
+                try testing.expect(bound.c >= Pass.dropped_slack);
+            },
+            .value_of, .constant => return error.TestUnexpectedResult,
+        }
+    }
+}
+
+test "range prove persisted merge facts only weaken and admit endpoints once" {
+    const testing = std.testing;
+    var pass = Pass.init(testing.allocator);
+    defer pass.deinit();
+    const list: LocalId = @fromBackingInt(1);
+    const cursor: LocalId = @fromBackingInt(2);
+    const limit: LocalId = @fromBackingInt(3);
+    const head: CFStmtId = @fromBackingInt(7);
+    const cursor_in_list = StableFact{ .a = .{ .value_of = cursor }, .b = .{ .len_of = list }, .c = -8 };
+    const cursor_under_limit = StableFact{ .a = .{ .value_of = cursor }, .b = .{ .value_of = limit }, .c = 0 };
+
+    var state = MergeState{ .live = true, .captures = 2, .facts = .empty, .stable = .{}, .env = .empty, .entry_captures = 0, .entry_stable = .{} };
+    defer state.stable.deinit(testing.allocator);
+    try state.stable.ensureCapacity(testing.allocator, 4);
+
+    var admitting_rounds: usize = 0;
+    var round: usize = 0;
+    while (round < 40) : (round += 1) {
+        // The first fact's slack grows by one every round; the second holds
+        // on every third round only, and twice over at different slacks
+        // when it does.
+        var first = cursor_in_list;
+        first.c += @intCast(round);
+        state.stable.items[0] = first;
+        state.stable.len = 1;
+        if (round % 3 == 0) {
+            state.stable.items[1] = cursor_under_limit;
+            state.stable.items[2] = .{ .a = cursor_under_limit.a, .b = cursor_under_limit.b, .c = 5 };
+            state.stable.len = 3;
+        }
+        pass.seeds_grew = false;
+        try pass.persistMergeFacts(head, &state);
+        if (pass.seeds_grew) admitting_rounds += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), admitting_rounds);
+
+    const stored = pass.merge_facts.getPtr(head).?;
+    try testing.expectEqual(@as(usize, 2), stored.len);
+    for (stored.items[0..stored.len]) |fact| {
+        if (std.meta.eql(fact.b, cursor_in_list.b)) {
+            // Its slack followed the loosest derivation.
+            try testing.expectEqual(cursor_in_list.c + 39, fact.c);
+        } else {
+            // One entry for the pair, though rounds derive it twice at
+            // different slacks; dropped on the first round without it.
+            try testing.expect(std.meta.eql(fact.b, cursor_under_limit.b));
+            try testing.expect(fact.c >= Pass.dropped_slack);
+        }
+    }
+}
+
 /// One symbolic value. A node is either a root (its own `root`, carrying
 /// inclusive unsigned bounds in `lo`/`hi`) or a bounded affine offset from a
 /// root: control reaching the defining statement guarantees
