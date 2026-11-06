@@ -610,13 +610,17 @@ fn runGlueSpecPlugin(
     const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
     defer builtins.in_process_host.leave(entered);
 
-    const sj = crash_boundary.set();
-    if (sj == 0) {
-        entry(
-            @ptrCast(result_ptr),
-            @ptrCast(types_list),
-        );
-    }
+    const GlueCall = struct {
+        entry: GlueEntryFn,
+        result: [*]u8,
+        types: ?*anyopaque,
+
+        fn call(self: *@This()) void {
+            self.entry(self.result, self.types);
+        }
+    };
+    var glue_call: GlueCall = .{ .entry = entry, .result = result_ptr, .types = @ptrCast(types_list) };
+    _ = try crash_boundary.run(GlueCall, &glue_call, GlueCall.call);
 
     switch (runtime_env.crashState()) {
         .did_not_crash => {},

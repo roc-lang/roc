@@ -23211,6 +23211,31 @@ caught by the guard-page handler, which records the faulting program counter,
 frame pointer, and stack pointer before escaping; the host records the counter
 when it is in generated code and walks the chain from the frame pointer.
 
+Compile-time code runs on a dedicated fixed stack, the evaluation stack
+(`base.eval_stack`), never on the stack of whichever worker picked the root up.
+So does every other compiled code the compiler runs in its own process: test
+roots, REPL evaluation and glue specs. Each thread maps one evaluation stack of
+`stack_budget.roc_stack_size` bytes the first time it runs compiled code,
+committed only as it is used, and reuses it for every later root until the
+thread exits. On Linux and macOS it is one anonymous mapping whose lowest
+pages are an inaccessible guard, entered by switching the stack pointer to
+its page-aligned top. On Windows it is a fiber with that reserve: the
+kernel's guard-page growth, its stack-overflow exception, `_resetstkoflw` and
+the system unwinder all read a stack's extent from the thread's TEB, and
+`SwitchToFiber` is the documented operation that switches those fields with
+the stack pointer, together with the fiber-local storage the C runtime keeps
+its per-thread state in. Every root starts at the same top, the same distance
+above the guard, with no compiler frames beneath the generated entry, so how
+deep a program recurses before it overflows, and the instruction that
+overflows, are a function of the program and the compiler build alone, and an
+overflow's reported position is reproducible. The crash boundary is set on the
+evaluation stack (`CrashBoundary.run`), so the escape from a crash or an
+overflow lands there and the root returns to the thread's own stack through
+the switch it entered by. While a root runs there, the fault handler
+classifies the thread's faults against the evaluation stack's bounds, and the
+frame-pointer walk ends at the generated code's entry frame on it. The
+interpreter and compiled runtime programs keep their own stack handling.
+
 The evaluating program resolves the point: the meaning of the innermost call,
 and the source position of the innermost statement with a region among the
 faulting instruction's and the enclosing generated calls'. A return address
@@ -23623,14 +23648,16 @@ checked definition identity; primary source excerpts and line numbers render
 from current sources.
 
 Passes, failed expects and Roc crashes are equally admissible; compiler errors,
-backend failures and incomplete execution are not durable outcomes. Neither is
-a root that ran out of stack: how deep it got depended on the executing
-thread's stack and on the compiler frames beneath it, which no identity
-records, so the host reports the overflow explicitly
-(`BoolRootEvalResult.stack_overflowed`) and the root runs again on every
-command. Neither is an interpreter root that failed to allocate. A command that
-crashes or is interrupted publishes nothing, because files are written only
-after the roots finish.
+backend failures and incomplete execution are not durable outcomes. A root
+that ran out of stack is a Roc crash like any other. Compiled roots run on the
+evaluation stack (Compile-Time Failure Sites), so how deep one gets, and the
+output it produces on the way, are a function of its code and the compiler
+build, which the outcome identity and the cache directory cover. The
+interpreter reports an overflow only at its debug-build call-depth limit, a
+fixed depth; in an optimized build an interpreted overflow ends the process,
+which publishes nothing. An interpreter root that failed to allocate is not a
+durable outcome. A command that crashes or is interrupted publishes nothing,
+because files are written only after the roots finish.
 
 Nothing else a root observes lies outside its identity. Roc has no ambient
 input a pure `expect` can read, and an `expect` body cannot be effectful, so no
@@ -24366,7 +24393,9 @@ The Linux default-platform runtime is the only default-platform runtime that
 installs fatal-signal handlers. It decides whether a `SIGSEGV` is a stack
 overflow with `classifyFault` in `src/base/memory_fault.zig`, the same
 dependency-free function the compiler's own crash handler calls, so the two
-never disagree about what a stack overflow is. The runtime passes the fault
+never disagree about what a stack overflow is. The compiler's handler passes
+the faulting thread's stack bounds, which are the evaluation stack's while
+compiled code runs on it. The runtime passes the fault
 address and the interrupted stack pointer from the signal context and no stack
 bounds, because a process without libc has no exact stack range to report: a
 fault within `stack_overflow_proximity` of the stack pointer is reported as

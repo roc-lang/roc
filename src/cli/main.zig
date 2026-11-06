@@ -12565,9 +12565,9 @@ const CliTestResultItem = struct {
     failure_detail: ?[]const u8,
     failure_detail_visibility: CliTestFailureDetailVisibility = .always,
     /// Whether execution completed with a source-language outcome. Backend
-    /// failures, incomplete execution, allocation failure and running out of
-    /// stack, which depend on the executing process rather than the checked
-    /// program, are not reusable test outcomes.
+    /// failures, incomplete execution and allocation failure, which depend on
+    /// the executing process rather than the checked program, are not
+    /// reusable test outcomes.
     cacheable: bool = true,
 };
 
@@ -14529,7 +14529,7 @@ fn runInterpreterTestRoots(
                     .transcript = transcript,
                     .failure_detail = failure_detail,
                     .failure_detail_visibility = .always,
-                    .cacheable = !interpreter.stackOverflowed() and switch (err) {
+                    .cacheable = switch (err) {
                         error.OutOfMemory => false,
                         error.Crash,
                         error.DivisionByZero,
@@ -14771,7 +14771,6 @@ fn cliTestResultItemFromEval(
                 .transcript = crash_transcript,
                 .failure_detail = null,
                 .failure_detail_visibility = .always,
-                .cacheable = !eval_result.stack_overflowed,
             };
         },
         .expect_err => |failure| {
