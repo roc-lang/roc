@@ -8995,7 +8995,11 @@ completed loops or continuations back through general normalization. Calls stay
 opaque; it cannot discover call patterns, emit workers, or reopen the
 specialization graph. Existing branch structure and shared continuations remain
 shared rather than being distributed into branch arms. Statement suffixes are
-borrowed source spans, not repeatedly copied sequences.
+borrowed source spans, not repeatedly copied sequences. An
+`uninitialized_payload` loop initializer is not a value and evaluates nothing,
+so no clone, this one included, names it with a strict binding: it stays a
+direct initial value of its own loop, naming that loop's emitted flag
+parameter, which is the only position LIR lowering reads it from.
 
 The rewrite is lexical: it carries the selected exit ABI while traversing the
 owning loop body and rewrites every owned `break`, including those in branch
@@ -16016,6 +16020,17 @@ less the binders the site itself binds. A site's needs propagate to its lexical
 parent the same way, and the walk records which site binds each binder so the
 subtraction is exact. Recursive selections make this a least fixpoint, solved
 after the walk over the recorded selections.
+
+Monotype's capture identity for a nested procedure (lambda, closure, or local
+procedure) is the types, in the requesting frame, of the binders its site's
+runtime captures list, in ascending CaptureId order (the order of lifted
+capture slots). A lambda that captures nothing itself but calls a local
+procedure therefore differs between two enclosing instantiations whenever that
+procedure's captures do, and a local procedure does not differ on in-scope
+binders it never reads. Two binder kinds in the list contribute no frame
+value: a scheme alias, whose uses lower the callable it names, and a hoisted
+constant's binder, which is a frame local only while its own root lowers and
+is otherwise read through the ConstStore.
 Stored function evidence remains graph-free across root and cache boundaries.
 Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and
@@ -24384,13 +24399,23 @@ added `LirProcSpec.ret_desc`.
 
 A viewed layout store answers every read-only query the producing store
 answers, including `contentDigest`, which backends use to name refcount
-helpers. The image therefore carries `Store.recursive_layout_keys`, the
-recursive-graph key of every cyclic committed layout, as an ordinary array;
-the digest of a cyclic layout hashes that key. The view leaves the interning
-tables empty, since a view never commits layouts. A commit records a key only
-together with the layout it creates, so a layout has at most one key and a
-memoized digest never depends on a key recorded after it: digest memos live
-for their store's whole lifetime and take in newly recorded keys as they go.
+helpers. A content digest is a function of the committed layouts alone: the
+digest cache reduces every layout a query reaches through the shared
+recursive-type reduction (`base.recursive_digest`), so a cyclic layout
+digests as its position in its group's coarsest bisimulation, and layouts
+that unfold to the same runtime representation digest identically however
+they were committed. The image therefore carries no digest data. The view
+leaves the interning tables and the commit's recursive-graph keys empty,
+since a view never commits layouts. Those keys identify logical layout
+graphs, not layouts: a graph whose recursion box is explicit and one whose
+box the commit inserts have different keys and the same layout. Structural
+interning gives equal acyclic layouts one index, but a cyclic layout is
+built in raw slots of its own, so a commit that creates cyclic layouts looks
+each new layout's digest up among the layouts earlier such commits created
+and among its own, and commits again with every duplicate redirected to the
+existing layout. Each runtime representation therefore has one layout index,
+which is what lets refcount helper names and layout-keyed procedure
+identities treat equal digests as equal layouts.
 
 The producer of a copied LirImage states which of two byte contracts the image
 has. A *persisted* image is one whose bytes are written into a file that
