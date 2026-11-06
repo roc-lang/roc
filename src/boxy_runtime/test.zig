@@ -701,6 +701,29 @@ test "boxy composition site retains complete snapshots and reuses alternating in
     try testing.expectEqual(@as(usize, 0), site.load().?.operands(0).len);
 }
 
+test "composition temporary large keys do not grow the immortal arena on hits" {
+    const state = try compiled.InProcessState.create(testing.allocator);
+    defer state.destroy();
+    const elems: [65]*const TypeDesc = @splat(compose.scalarDesc(.u64));
+    const first = compose.tuple(&state.descriptors, &state.ops, &elems);
+    const capacity = state.arena.queryCapacity();
+    for (0..2000) |_| try testing.expectEqual(first, compose.tuple(&state.descriptors, &state.ops, &elems));
+    try testing.expectEqual(capacity, state.arena.queryCapacity());
+}
+
+test "dictionary composition temporary keys do not grow the immortal arena on hits" {
+    const state = try compiled.InProcessState.create(testing.allocator);
+    defer state.destroy();
+    const entered = state.enter();
+    defer compiled.InProcessState.leave(entered);
+    const methods: [65]usize = @splat(17);
+    const first = compiled.dictRecord(&methods, &state.ops);
+    const capacity = state.arena.queryCapacity();
+    for (0..2000) |_| try testing.expectEqual(first, compiled.dictRecord(&methods, &state.ops));
+    try testing.expectEqual(capacity, state.arena.queryCapacity());
+    try testing.expectEqualSlices(usize, &methods, first[0..methods.len]);
+}
+
 test "boxy composition site concurrent writers publish whole operand result pairs" {
     if (@import("builtin").single_threaded) return error.SkipZigTest;
     const state = try compiled.InProcessState.create(testing.allocator);

@@ -34,7 +34,9 @@ pub const BuiltinModules = struct {
     pub const InitError = Allocator.Error || error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch, CorruptArtifact, StaleEmbeddedBuiltins, CorruptEmbeddedBuiltins };
 
     /// Initialize builtin handles over the baked static ModuleEnv and artifact.
-    pub fn init(allocator: Allocator) InitError!BuiltinModules {
+    /// Every thread that reads the builtin artifact's key slots waits on them
+    /// through `io`.
+    pub fn init(allocator: Allocator, io: std.Io) InitError!BuiltinModules {
         const indices = compiled_builtins.builtinIndices(CIR);
         if (builtin.mode == .debug) {
             try builtin_static.validateBuiltinManifest(
@@ -64,11 +66,12 @@ pub const BuiltinModules = struct {
         // L-10: bounds-check every relocatable marker against the buffer before any
         // sub-store aliases it, so a corrupt/truncated baked blob fails cleanly.
         try serialized.validate(artifact_buffer.len);
-        const checked_artifact = serialized.deserializeStatic(
+        var checked_artifact = serialized.deserializeStatic(
             artifact_buffer,
             allocator,
             .{ .static_builtin = builtin_module.env },
         );
+        try checked_artifact.attachSealedTypes(allocator, io);
 
         return BuiltinModules{
             .allocator = allocator,

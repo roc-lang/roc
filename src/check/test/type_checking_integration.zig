@@ -20,7 +20,7 @@ const MethodRegistryTestCheckedTypes = struct {
     store: Store = .{},
 
     const Store = struct {
-        pub fn payloadCount(_: Store) usize {
+        pub fn typeCount(_: Store) usize {
             @panic("the method registry test source declares no methods, so the registry never queries checked types");
         }
 
@@ -40,33 +40,17 @@ const MethodRegistryTestCheckedTypes = struct {
     }
 };
 
-const MethodRegistryTestCheckedBodies = struct {
-    pub fn patternBinderForSource(
-        _: *const @This(),
-        _: can.CIR.Pattern.Idx,
-    ) ?checked_ids.PatternBinderId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
+const MethodRegistryTestModuleIndex = struct {
+    pub fn reachesExpr(_: *const @This(), _: can.CIR.Expr.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
     }
 
-    pub fn exprIdForSource(
-        _: *const @This(),
-        _: can.CIR.Expr.Idx,
-    ) ?checked_ids.CheckedExprId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
+    pub fn reachesPattern(_: *const @This(), _: can.CIR.Pattern.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
     }
 
-    pub fn patternIdForSource(
-        _: *const @This(),
-        _: can.CIR.Pattern.Idx,
-    ) ?checked_ids.CheckedPatternId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
-    }
-
-    pub fn statementIdForSource(
-        _: *const @This(),
-        _: can.CIR.Statement.Idx,
-    ) ?checked_ids.CheckedStatementId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
+    pub fn reachesStatement(_: *const @This(), _: can.CIR.Statement.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
     }
 };
 
@@ -3831,7 +3815,7 @@ test "checked artifact method registry skips nominal associated values" {
         .by_def = &.{},
     };
     const checked_types = MethodRegistryTestCheckedTypes{};
-    const checked_bodies = MethodRegistryTestCheckedBodies{};
+    const module_index = MethodRegistryTestModuleIndex{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
@@ -3842,7 +3826,7 @@ test "checked artifact method registry skips nominal associated values" {
         &names,
         &template_lookup,
         &checked_types,
-        &checked_bodies,
+        &module_index,
     );
     defer registry.deinit(testing.allocator);
 
@@ -14694,6 +14678,42 @@ test "check type - row subsumption - a forwarder's input row stays closed" {
         \\forward = |x| x
         \\
         \\out = forward(C)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - row subsumption - a closed branch in result position widens into the annotated result" {
+    // A branch of an `if` or `match` in result position relates to the
+    // annotated result through a widening copy, exactly as a body that is the
+    // value itself does (design.md "Row Subsumption"), whichever branch
+    // comes first.
+    const source =
+        \\else_branch : [B, C], Bool -> [A, B, C]
+        \\else_branch = |v, first| if first { A } else { v }
+        \\
+        \\then_branch : [B, C], Bool -> [A, B, C]
+        \\then_branch = |v, first| if first { v } else { A }
+        \\
+        \\match_branch : [B, C], Bool -> [A, B, C]
+        \\match_branch = |v, first| match first {
+        \\    True => A
+        \\    False => v
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - row subsumption - a closed branch in result position may not produce a tag the annotation omits" {
+    // The widening copy re-opens only the branch's own closed row, so a
+    // branch whose row holds a tag the annotated result does not list is
+    // still rejected.
+    const source =
+        \\pick : [B, C], Bool -> [A, B]
+        \\pick = |v, first| if first { A } else { v }
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();

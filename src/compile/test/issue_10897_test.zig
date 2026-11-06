@@ -40,7 +40,7 @@ fn compileWithCache(
     }, roc_ctx);
     defer cache_manager.deinit();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
     defer builtin_modules.deinit();
 
     var coord = try Coordinator.init(

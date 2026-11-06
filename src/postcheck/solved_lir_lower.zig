@@ -5545,11 +5545,7 @@ const Lowerer = struct {
                 const backing = named.backing orelse Common.invariant("named type without backing reached ConstStore plan output");
                 const backing_plan = input orelse return .{ .call = .{ .plan = .{ .ty = backing.ty } } };
                 break :blk .{ .named = .{
-                    .named_type = .{
-                        .module = named.named_type.module,
-                        .ty = named.named_type.ty,
-                        .ty_module = named.named_type.ty_module,
-                    },
+                    .named_type = .{ .module = named.named_type.module },
                     .backing = backing_plan.get(.plan),
                 } };
             },
@@ -5680,11 +5676,7 @@ const Lowerer = struct {
                 const named = content.named;
                 const backing = named.backing.?;
                 return try self.finishConstType(task, .{ .named = .{
-                    .named_type = .{
-                        .module = named.named_type.module,
-                        .ty = named.named_type.ty,
-                        .ty_module = named.named_type.ty_module,
-                    },
+                    .named_type = .{ .module = named.named_type.module },
                     .def = task.def,
                     .kind = constNamedKind(named.kind),
                     .builtin_owner = named.builtin_owner,
@@ -5760,11 +5752,7 @@ const Lowerer = struct {
                     return constTypeStep(backing.ty);
                 }
                 return try self.finishConstType(task, .{ .named = .{
-                    .named_type = .{
-                        .module = named.named_type.module,
-                        .ty = named.named_type.ty,
-                        .ty_module = named.named_type.ty_module,
-                    },
+                    .named_type = .{ .module = named.named_type.module },
                     .def = task.def,
                     .kind = constNamedKind(named.kind),
                     .builtin_owner = named.builtin_owner,
@@ -6189,11 +6177,7 @@ const Lowerer = struct {
                         });
                     }
                     break :blk .{ .named = .{
-                        .named_type = .{
-                            .module = named.named_type.module,
-                            .ty = named.named_type.ty,
-                            .ty_module = named.named_type.ty_module,
-                        },
+                        .named_type = .{ .module = named.named_type.module },
                         .def = try self.constTypeDef(named.def),
                         .kind = constNamedKind(named.kind),
                         .builtin_owner = named.builtin_owner,
@@ -16018,9 +16002,9 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             .root = .{ .checked = @fromBackingInt(@intCast(91)) },
             .const_locator = .{
                 .artifact = .{ .bytes = @splat(1) },
-                .owner = .{ .hoisted_expr = .{ .module_idx = 7, .expr = @fromBackingInt(@intCast(31)) } },
+                .owner = .{ .hoisted_root = .{ .module_idx = 7, .root = @fromBackingInt(@intCast(31)) } },
                 .template = @fromBackingInt(@intCast(47)),
-                .source_scheme = .{ .bytes = @splat(3) },
+                .source_scheme = @fromBackingInt(3),
             },
         },
     };
@@ -16124,7 +16108,7 @@ test "layout lowering accepts tag payload alias backed by primitive" {
     const alias_ty = try lowerer.types.add(.{
         .named = .{
             // Layout lowering does not read checked type ids for this synthetic type.
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = alias_name },
             .kind = .alias,
             .args = .empty(),
@@ -16143,7 +16127,7 @@ test "layout lowering accepts tag payload alias backed by primitive" {
     const repro_ty = try lowerer.types.add(.{
         .named = .{
             // Layout lowering does not read checked type ids for this synthetic type.
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = repro_name },
             .kind = .nominal,
             .args = .empty(),
@@ -16193,7 +16177,7 @@ test "layout lowering sorts a padding-free nominal record structurally" {
     const state_ty = try lowerer.types.add(.{
         .named = .{
             // Layout lowering does not read checked type ids for this synthetic type.
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = state_name },
             .kind = .nominal,
             .args = .empty(),
@@ -16246,7 +16230,7 @@ test "layout lowering keeps opted-in nominal record declaration order" {
     });
     const state_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = state_name },
             .kind = .nominal,
             .args = .empty(),
@@ -16287,7 +16271,7 @@ test "a record row keeps its structural layout when a padded nominal backs onto 
     });
     const padded = try solved.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = padded_name },
             .kind = .nominal,
             .args = .empty(),
@@ -16339,7 +16323,7 @@ test "sparse local layout nodes commit in type id order" {
     });
     const first_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 42 },
             .kind = .nominal,
             .args = .empty(),
@@ -16349,7 +16333,7 @@ test "sparse local layout nodes commit in type id order" {
     });
     const second_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = second_name, .source_decl = 42 },
             .kind = .nominal,
             .args = .empty(),
@@ -16371,7 +16355,7 @@ test "sparse local layout nodes commit in type id order" {
 
     const probe_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = probe_name, .source_decl = 42 },
             .kind = .nominal,
             .args = .empty(),
@@ -16406,7 +16390,7 @@ test "named layout index reuses only representation-equivalent instantiations" {
 
     const first_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 42 },
             .kind = .nominal,
             .args = first_args,
@@ -16415,7 +16399,7 @@ test "named layout index reuses only representation-equivalent instantiations" {
     });
     const equivalent_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             // A source declaration identifies the type, so display-name text is
             // intentionally absent from the shallow representation key.
             .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 42 },
@@ -16426,7 +16410,7 @@ test "named layout index reuses only representation-equivalent instantiations" {
     });
     const different_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = different_name, .source_decl = 42 },
             .kind = .nominal,
             .args = different_args,
@@ -16478,7 +16462,7 @@ test "named layout index reuses structurally equivalent recursive types" {
 
     try lowerer.types.set(first_ty, .{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 43 },
             .kind = .nominal,
             .args = .empty(),
@@ -16487,7 +16471,7 @@ test "named layout index reuses structurally equivalent recursive types" {
     });
     try lowerer.types.set(equivalent_ty, .{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+            .named_type = .{ .module = .{} },
             .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 43 },
             .kind = .nominal,
             .args = .empty(),
@@ -16535,7 +16519,7 @@ test "named layout index applies backing metadata by named type policy" {
         const source_decl: u32 = @intCast(100 + case_index);
         const lhs_ty = try lowerer.types.add(.{
             .named = .{
-                .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = .{ .module = module_identity, .type_name = type_name, .source_decl = source_decl },
                 .kind = case.kind,
                 .builtin_owner = case.owner,
@@ -16549,7 +16533,7 @@ test "named layout index applies backing metadata by named type policy" {
         });
         const rhs_ty = try lowerer.types.add(.{
             .named = .{
-                .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
+                .named_type = .{ .module = .{} },
                 .def = .{ .module = module_identity, .type_name = type_name, .source_decl = source_decl },
                 .kind = case.kind,
                 .builtin_owner = case.owner,

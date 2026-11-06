@@ -1664,7 +1664,7 @@ pub const Program = struct {
         self: *Program,
         symbol: Common.Symbol,
         ty: Type.TypeId,
-        binder: ?check.CheckedModule.PatternBinderId,
+        binder: ?check.CheckedBodies.BinderId,
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(self.localCount()))));
         try self.locals.ensureUnusedCapacity(self.allocator, 1);
@@ -1690,7 +1690,7 @@ pub const Program = struct {
         self: *Program,
         symbol: Common.Symbol,
         ty: Type.TypeId,
-        binder: ?check.CheckedModule.PatternBinderId,
+        binder: ?check.CheckedBodies.BinderId,
         capture_id: check.CheckedModule.CaptureId,
         checked_capture_id: ?check.CheckedModule.CaptureId,
         capture_kind: check.CheckedModule.ConstCaptureKind,

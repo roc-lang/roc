@@ -406,7 +406,7 @@ fn writeFailureMeaning(writer: *Writer, meaning: lir.LIR.FailureMeaning) Allocat
         .literal_rejection => |literal| {
             try writer.byte(1);
             try writer.raw(&literal.module);
-            try writer.word(literal.checked_expr);
+            try writer.word(literal.node);
             try writer.byte(@backingInt(literal.kind));
         },
         .exhaustiveness => |exhaustiveness| {
@@ -441,7 +441,7 @@ fn readFailureMeaning(reader: *Reader) ReadError!lir.LIR.FailureMeaning {
         0 => .checked_error,
         1 => .{ .literal_rejection = .{
             .module = (try reader.raw(32))[0..32].*,
-            .checked_expr = try reader.word(),
+            .node = try reader.word(),
             .kind = std.enums.fromInt(lir.LIR.LiteralRejectionKind, try reader.byte()) orelse return error.MalformedPieces,
         } },
         2 => .{ .exhaustiveness = .{

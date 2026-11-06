@@ -109,7 +109,7 @@ pub const Digests = struct {
             .templates => for (artifact.exported_procedure_templates.templates) |exported| self.hashTemplateRef(hasher, artifact, exported.template),
             .bindings => self.hashBindings(hasher, artifact),
             .methods => self.hashMethods(hasher, artifact),
-            .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.checked_bodies.view().default_exprs.len)))),
+            .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len)))),
             .nominals => hashNominals(hasher, artifact),
             .consts => try self.hashConsts(hasher, artifact),
             .values => try self.hashStoredValues(hasher, artifact, .read_by_importers),
@@ -210,7 +210,7 @@ pub const Digests = struct {
         }
         self.hashBindings(hasher, artifact);
         self.hashMethods(hasher, artifact);
-        hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.checked_bodies.view().default_exprs.len))));
+        hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len))));
         hashNominals(hasher, artifact);
         try self.hashConsts(hasher, artifact);
         try self.hashStoredValues(hasher, artifact, .read_by_importers);
@@ -244,7 +244,7 @@ pub const Digests = struct {
     }
 
     fn hashNominals(hasher: *Sha256, artifact: *const Artifact) void {
-        const checked_types = artifact.checked_types.view();
+        const checked_types = artifact.typesView();
         for (checked_types.nominal_declarations) |declaration| {
             hashBytes(hasher, artifact.canonical_names.typeNameText(checked_types.nominalDeclarationName(declaration)));
         }
@@ -255,7 +255,7 @@ pub const Digests = struct {
         for (exported_consts) |exported| try self.hashConstTemplate(hasher, artifact, exported.template);
         for (artifact.const_templates.templates.items) |template| switch (template.owner) {
             .top_level_binding => try self.hashConstTemplate(hasher, artifact, template),
-            .hoisted_expr => {},
+            .hoisted_root => {},
         };
     }
 
@@ -284,7 +284,7 @@ pub const Digests = struct {
             .eval_template => |eval_template| self.hashTemplateRef(hasher, artifact, eval_template.entry_template),
             .stored_const => {
                 const root = switch (template.owner) {
-                    .hoisted_expr => |hoisted| (artifact.hoisted_constants.lookupByExpr(hoisted.expr) orelse return).root,
+                    .hoisted_root => |hoisted| (artifact.hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
                     .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
                 };
                 try self.hashRootValue(hasher, artifact, artifact.compile_time_roots.root(root));

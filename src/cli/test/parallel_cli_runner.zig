@@ -749,7 +749,6 @@ const CustomCase = enum {
     build_glibc_target_non_linux_error,
     build_windows_shared_library,
     boxy_test_outcomes,
-    boxy_test_outcome_files,
     stored_root_declared_row,
     issue_11389_check_after_test_shared_cache,
     issue_11495_paired_body_types,
@@ -1621,8 +1620,6 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test restores stored encoders whose local format reads its builder's type variable from a cold and a warm cache (specialize=yes)", .timeout_ms = 600_000, .body = .{ .custom = .local_format_outer_type_var_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reports stored nominal boxes and rows read at Bool (dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcomes } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reports stored nominal boxes and rows read at Bool (interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcomes } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reuses each module's test outcome file across edits (dev)", .backend = .dev, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcome_files } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc test under Boxy reuses each module's test outcome file across edits (interpreter)", .backend = .interpreter, .timeout_ms = 600_000, .body = .{ .custom = .boxy_test_outcome_files } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12231: deferred calls and branch results returning tuples (BoxyDeferredTupleResults, boxy, interpreter)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyDeferredTupleResults.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12231: deferred calls and branch results returning tuples (BoxyDeferredTupleResults, boxy, dev)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxyDeferredTupleResults.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12231: deferred calls and branch results returning tuples (BoxyDeferredTupleResults, specialized)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/BoxyDeferredTupleResults.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
@@ -6317,7 +6314,6 @@ fn runCustomCase(
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
         .boxy_test_outcomes => customBoxyTestOutcomes(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .dev),
-        .boxy_test_outcome_files => customBoxyTestOutcomeFiles(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .dev),
         .stored_root_declared_row => customStoredRootDeclaredRow(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .issue_11389_check_after_test_shared_cache => customIssue11389CheckAfterTestSharedCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11495_paired_body_types => customIssue11495PairedBodyTypes(io, allocator, &env, &timer, timeout_ms),
@@ -10451,13 +10447,12 @@ fn customBoxyTestOutcomes(io: std.Io, allocator: Allocator, env: *const CaseEnv,
 }
 
 /// design.md "Caching Under `.boxy`": with `--specialize=no`, a command
-/// writes nothing to the cache once its checking is done apart from `roc
-/// test`'s outcome files and the test units a dev `roc test` runs its roots
-/// from (Unit-Image Test Execution). `roc test` checks its module with
-/// explicit roots, so its checked entries are its own; what it may not add
-/// is an entry of another family `roc check` writes none of, and running
-/// its tests again under another execution mode, which has its own outcome
-/// file, must change nothing else.
+/// writes nothing to the cache once its checking is done apart from the test
+/// units a dev `roc test` runs its roots from (Unit-Image Test Execution).
+/// `roc test` checks its module with explicit roots, so its checked entries
+/// are its own; what it may not add is an entry of another family `roc
+/// check` writes none of, and running its tests again under another
+/// execution mode must change nothing else.
 fn customBoxyCachesNothingAfterChecking(
     io: std.Io,
     allocator: Allocator,
@@ -10502,19 +10497,10 @@ fn customBoxyCachesNothingAfterChecking(
         if (command.env_index != 1) continue;
         const inventory = cacheInventory(io, allocator, cache_roots[1]) catch |err|
             return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
-        // Each execution mode owns its test outcomes; everything else a run
-        // leaves is what `roc check` leaves.
-        var outcomes: usize = 0;
-        var lowered = std.ArrayList(CacheEntryName).empty;
-        for (inventory) |entry| {
-            if (entry.family == .test_outcomes) outcomes += 1 else lowered.append(allocator, entry) catch |err|
-                return customInfraFailure(allocator, timer, "failed to filter the cache: {}", .{err});
-        }
-        if (outcomes == 0) return customFailure(allocator, timer, "`roc test {s}` recorded no test outcome", .{command.args[2]});
         if (test_inventory) |previous| {
             // A dev run files its modules' test units, which run its roots;
             // it changes nothing else.
-            for (lowered.items) |entry| {
+            for (inventory) |entry| {
                 const before = for (previous) |earlier| {
                     if (earlier.eql(entry)) break true;
                 } else false;
@@ -10523,13 +10509,13 @@ fn customBoxyCachesNothingAfterChecking(
                 }
             }
             for (previous) |earlier| {
-                const after = for (lowered.items) |entry| {
+                const after = for (inventory) |entry| {
                     if (earlier.eql(entry)) break true;
                 } else false;
                 if (!after) return customFailure(allocator, timer, "running the tests again with {s} removed a cache entry: {s} {x}", .{ command.args[2], @tagName(earlier.family), &earlier.key });
             }
         }
-        test_inventory = lowered.items;
+        test_inventory = inventory;
     }
 
     const check_inventory = cacheInventory(io, allocator, cache_roots[0]) catch |err|
@@ -11023,7 +11009,7 @@ fn customBoxyBuildAndRunCacheWhatCheckCaches(
                 .boxy_object => true,
                 .prelinked_host => is_build,
                 .run_host => !is_build,
-                .checked, .canonicalized, .pairing, .test_outcomes => false,
+                .checked, .canonicalized, .pairing => false,
             };
             if (!allowed) return customFailure(allocator, timer, "`roc {s} --specialize=no` left a cache entry `roc check` does not: {s} {x}", .{ args[0], @tagName(entry.family), entry.key });
             if (entry.family == .boxy_object) objects += 1;
@@ -15045,277 +15031,6 @@ fn customPipelineParitySharedCache(io: std.Io, allocator: Allocator, env: *const
         if (after != expected_entries) {
             return customFailure(allocator, timer, "`roc {s}` did not reuse the shared checked-module cache: expected {d} entries, found {d}", .{ step.name, expected_entries, after });
         }
-    }
-    return null;
-}
-
-/// One `roc test` run of the outcome-file case: its process result and how
-/// many test roots it executed.
-const OutcomeRun = struct {
-    result: std.process.RunResult,
-    executed: u64,
-};
-
-/// The run's output with the work-counter lines, which differ between a
-/// cached and an uncached run by design, removed.
-fn withoutTestWorkLines(allocator: Allocator, bytes: []const u8) Allocator.Error![]const u8 {
-    var kept = std.ArrayList(u8).empty;
-    var lines = std.mem.splitScalar(u8, bytes, '\n');
-    var first = true;
-    while (lines.next()) |line| {
-        if (std.mem.startsWith(u8, line, "test-work ")) continue;
-        if (!first) try kept.append(allocator, '\n');
-        first = false;
-        try kept.appendSlice(allocator, line);
-    }
-    return kept.toOwnedSlice(allocator);
-}
-
-/// Run `roc test` on `main_path` and read how many roots it executed.
-fn runOutcomeCase(
-    io: std.Io,
-    allocator: Allocator,
-    env: *const CaseEnv,
-    timer: *harness.Timer,
-    timeout_ms: u64,
-    main_path: []const u8,
-    args: []const []const u8,
-) union(enum) { run: OutcomeRun, failure: TestResult } {
-    const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
-        return .{ .failure = timeoutFailure(allocator, timer, .run, "case timeout exhausted before command started") };
-    const result = runRocInEnv(io, allocator, env, args, main_path, .absolute, &.{}, null, child_timeout_ms) catch |err|
-        return .{ .failure = customInfraFailure(allocator, timer, "run spawn error: {}", .{err}) };
-    if (std.mem.find(u8, result.stderr, "panic") != null) return .{ .failure = failureFromRun(allocator, timer, result, "`roc test` panicked") };
-    const needle = "test-work test_root_execution=";
-    const start = (std.mem.find(u8, result.stderr, needle) orelse
-        return .{ .failure = failureFromRun(allocator, timer, result, "`roc test` printed no work counters") }) + needle.len;
-    const end = std.mem.findScalarPos(u8, result.stderr, start, '\n') orelse result.stderr.len;
-    const executed = std.fmt.parseInt(u64, result.stderr[start..end], 10) catch
-        return .{ .failure = failureFromRun(allocator, timer, result, "`roc test` printed a malformed work counter") };
-    return .{ .run = .{ .result = result, .executed = executed } };
-}
-
-/// Run `main_path` through the outcome cache and expect it to execute `executed`
-/// roots and report exactly what an uncached run reports, with the same
-/// exit status.
-fn expectOutcomeRun(
-    io: std.Io,
-    allocator: Allocator,
-    env: *const CaseEnv,
-    timer: *harness.Timer,
-    timeout_ms: u64,
-    main_path: []const u8,
-    opt_arg: []const u8,
-    step: []const u8,
-    executed: ?u64,
-) ?TestResult {
-    const cached = switch (runOutcomeCase(io, allocator, env, timer, timeout_ms, main_path, &.{ "test", opt_arg, "--specialize=no" })) {
-        .run => |run| run,
-        .failure => |failure| return failure,
-    };
-    if (executed) |expected| if (cached.executed != expected) {
-        return customFailure(allocator, timer, "{s}: executed {d} test roots, expected {d}\nstdout:\n{s}\nstderr:\n{s}", .{ step, cached.executed, expected, cached.result.stdout, cached.result.stderr });
-    };
-    const fresh = switch (runOutcomeCase(io, allocator, env, timer, timeout_ms, main_path, &.{ "test", opt_arg, "--specialize=no", "--no-cache" })) {
-        .run => |run| run,
-        .failure => |failure| return failure,
-    };
-    if (!std.meta.eql(cached.result.term, fresh.result.term)) {
-        return customFailure(allocator, timer, "{s}: exit status {any} differed from the uncached run's {any}", .{ step, cached.result.term, fresh.result.term });
-    }
-    const streams = [_][2][]const u8{
-        .{ cached.result.stdout, fresh.result.stdout },
-        .{ cached.result.stderr, fresh.result.stderr },
-    };
-    for (streams, [_][]const u8{ "stdout", "stderr" }) |pair, name| {
-        const lhs = withoutTestWorkLines(allocator, preSummaryBytes(pair[0])) catch |err|
-            return customInfraFailure(allocator, timer, "output: {}", .{err});
-        const rhs = withoutTestWorkLines(allocator, preSummaryBytes(pair[1])) catch |err|
-            return customInfraFailure(allocator, timer, "output: {}", .{err});
-        if (!std.mem.eql(u8, lhs, rhs)) {
-            return customFailure(allocator, timer, "{s}: cached {s} differed from the uncached run\ncached:\n{s}\nuncached:\n{s}", .{ step, name, lhs, rhs });
-        }
-    }
-    return null;
-}
-
-/// The published test outcome files under `cache_root`.
-fn testOutcomeFiles(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError![]const []const u8 {
-    var store = try artifact_store.Store.init(allocator, io, cache_root);
-    defer store.deinit();
-    var dir = std.Io.Dir.cwd().openDir(io, store.root, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return allocator.alloc([]const u8, 0),
-        else => return err,
-    };
-    defer dir.close(io);
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-    var paths = std.ArrayList([]const u8).empty;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".data")) continue;
-        if (std.mem.find(u8, entry.path, @tagName(artifact_store.Family.test_outcomes)) == null) continue;
-        try paths.append(allocator, try std.fs.path.join(allocator, &.{ store.root, entry.path }));
-    }
-    return paths.toOwnedSlice(allocator);
-}
-
-fn expectTestOutcomeFileCount(io: std.Io, allocator: Allocator, timer: *harness.Timer, cache_root: []const u8, step: []const u8, expected: usize) ?TestResult {
-    const files = testOutcomeFiles(io, allocator, cache_root) catch |err|
-        return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
-    if (files.len != expected) return customFailure(allocator, timer, "{s}: found {d} test outcome files, expected {d}", .{ step, files.len, expected });
-    return null;
-}
-
-/// `roc test --specialize=no` keeps one outcome file per module, keyed by the
-/// module's own source, and inside it reuses each test whose checked outcome
-/// identity is unchanged. Every cached run reports exactly what an uncached
-/// run reports.
-fn customBoxyTestOutcomeFiles(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
-    const opt_arg = backendOptArg(allocator, backend) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
-    const dir = createWorkSubdir(io, allocator, env, if (backend == .interpreter) "boxy_test_outcome_files_interpreter" else "boxy_test_outcome_files") catch |err|
-        return customInfraFailure(allocator, timer, "failed to create the case directory: {}", .{err});
-    const cache_root = std.fs.path.join(allocator, &.{ dir, "cache" }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
-    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err|
-        return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
-    defer isolated.env_map.deinit();
-    for ([_][2][]const u8{ .{ "ROC_CACHE_DIR", cache_root }, .{ "XDG_CACHE_HOME", cache_root }, .{ "ROC_TEST_COMMAND_WORK", "1" } }) |pair| {
-        isolated.env_map.put(pair[0], pair[1]) catch |err|
-            return customInfraFailure(allocator, timer, "environment: {}", .{err});
-    }
-    const lib =
-        \\module [helper, other, limit, observe]
-        \\
-        \\helper = |x| x + 1
-        \\
-        \\other = |x| x * 2
-        \\
-        \\limit = 10
-        \\
-        \\observe = |x| {
-        \\    expect x > 0
-        \\    x
-        \\}
-        \\
-    ;
-    // The first and last roots are identical, so they share one entry and
-    // each still reports at its own position.
-    const main_source =
-        \\import Lib
-        \\
-        \\expect Lib.helper(2) == 3
-        \\expect Lib.other(2) == 4
-        \\expect Lib.limit == 10
-        \\expect Lib.observe(0) == 0
-        \\expect {
-        \\    dbg "kept"
-        \\    7 == 8
-        \\}
-        \\expect Lib.helper(2) == 3
-        \\
-    ;
-    const main_path = std.fs.path.join(allocator, &.{ dir, "Main.roc" }) catch |err|
-        return customInfraFailure(allocator, timer, "main path: {}", .{err});
-    if (writeCaseFile(io, allocator, timer, dir, "Lib.roc", lib)) |failure| return failure;
-    if (writeCaseFile(io, allocator, timer, dir, "Main.roc", main_source)) |failure| return failure;
-
-    // Cold, then unchanged: every root runs once, then none.
-    if (expectOutcomeRun(io, allocator, &isolated, timer, timeout_ms, main_path, opt_arg, "cold", 6)) |failure| return failure;
-    if (expectOutcomeRun(io, allocator, &isolated, timer, timeout_ms, main_path, opt_arg, "unchanged", 0)) |failure| return failure;
-    if (expectTestOutcomeFileCount(io, allocator, timer, cache_root, "unchanged", 1)) |failure| return failure;
-
-    // Edits in an imported module keep Main's file and rerun only the roots
-    // whose identity they change: an imported function, then a compile-time
-    // value. Moving an imported declaration reruns nothing and reports the
-    // inline expect at its current position.
-    const lib_steps = [_]struct { name: []const u8, old: []const u8, new: []const u8, executed: u64 }{
-        .{ .name = "imported function edit", .old = "x + 1", .new = "x + 2", .executed = 2 },
-        .{ .name = "imported constant edit", .old = "limit = 10", .new = "limit = 11", .executed = 1 },
-        .{ .name = "imported declarations moved", .old = "\nhelper = ", .new = "\n# a comment\n\n\nhelper = ", .executed = 0 },
-    };
-    var current_lib: []const u8 = lib;
-    for (lib_steps) |step| {
-        current_lib = std.mem.replaceOwned(u8, allocator, current_lib, step.old, step.new) catch |err|
-            return customInfraFailure(allocator, timer, "edit: {}", .{err});
-        if (writeCaseFile(io, allocator, timer, dir, "Lib.roc", current_lib)) |failure| return failure;
-        if (expectOutcomeRun(io, allocator, &isolated, timer, timeout_ms, main_path, opt_arg, step.name, step.executed)) |failure| return failure;
-        if (expectTestOutcomeFileCount(io, allocator, timer, cache_root, step.name, 1)) |failure| return failure;
-    }
-
-    // Editing one test in Main names a new file for Main and reruns its roots.
-    const edited_main = std.mem.replaceOwned(u8, allocator, main_source, "7 == 8", "7 == 7") catch |err|
-        return customInfraFailure(allocator, timer, "edit: {}", .{err});
-    if (writeCaseFile(io, allocator, timer, dir, "Main.roc", edited_main)) |failure| return failure;
-    if (expectOutcomeRun(io, allocator, &isolated, timer, timeout_ms, main_path, opt_arg, "own test edit", 6)) |failure| return failure;
-    if (expectOutcomeRun(io, allocator, &isolated, timer, timeout_ms, main_path, opt_arg, "own test edit rerun", 0)) |failure| return failure;
-    if (expectTestOutcomeFileCount(io, allocator, timer, cache_root, "own test edit", 2)) |failure| return failure;
-
-    // Restoring Main's bytes finds its earlier file again.
-    if (writeCaseFile(io, allocator, timer, dir, "Main.roc", main_source)) |failure| return failure;
-    if (expectOutcomeRun(io, allocator, &isolated, timer, timeout_ms, main_path, opt_arg, "restored test", 0)) |failure| return failure;
-
-    // Damaged files are misses for the entries they no longer hold, and the
-    // next run repairs them.
-    const damages = [_][]const u8{ "truncated", "flipped", "empty", "garbage" };
-    for (damages) |damage| {
-        const files = testOutcomeFiles(io, allocator, cache_root) catch |err|
-            return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
-        for (files) |path| {
-            const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(16 * 1024 * 1024)) catch |err|
-                return customInfraFailure(allocator, timer, "read {s}: {}", .{ path, err });
-            const damaged: []const u8 = if (std.mem.eql(u8, damage, "truncated"))
-                bytes[0 .. bytes.len / 2]
-            else if (std.mem.eql(u8, damage, "flipped")) blk: {
-                bytes[bytes.len / 2] ^= 0x10;
-                break :blk bytes;
-            } else if (std.mem.eql(u8, damage, "empty"))
-                ""
-            else
-                "not a test outcome file";
-            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = damaged }) catch |err|
-                return customInfraFailure(allocator, timer, "write {s}: {}", .{ path, err });
-        }
-        if (expectOutcomeRun(io, allocator, &isolated, timer, timeout_ms, main_path, opt_arg, damage, null)) |failure| return failure;
-        if (expectOutcomeRun(io, allocator, &isolated, timer, timeout_ms, main_path, opt_arg, "repaired", 0)) |failure| return failure;
-    }
-
-    // `--no-cache` and `--specialize=yes` neither read nor write outcome files.
-    const files = testOutcomeFiles(io, allocator, cache_root) catch |err|
-        return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
-    for (files) |path| std.Io.Dir.cwd().deleteFile(io, path) catch |err|
-        return customInfraFailure(allocator, timer, "delete {s}: {}", .{ path, err });
-    for ([_][]const []const u8{
-        &.{ "test", opt_arg, "--specialize=no", "--no-cache" },
-        &.{ "test", opt_arg, "--specialize=yes" },
-    }) |args| {
-        const run = switch (runOutcomeCase(io, allocator, &isolated, timer, timeout_ms, main_path, args)) {
-            .run => |run| run,
-            .failure => |failure| return failure,
-        };
-        if (run.executed != 6) return customFailure(allocator, timer, "{s} executed {d} test roots, expected 6", .{ args[2], run.executed });
-        if (expectTestOutcomeFileCount(io, allocator, timer, cache_root, args[args.len - 1], 0)) |failure| return failure;
-    }
-
-    // A root that ran out of stack is never an outcome; its neighbour is.
-    const deep =
-        \\deep : U64 -> U64
-        \\deep = |n| 1 + deep(n + 1)
-        \\
-        \\expect deep(0) == 0
-        \\expect 1 == 1
-        \\
-    ;
-    const deep_path = std.fs.path.join(allocator, &.{ dir, "Deep.roc" }) catch |err|
-        return customInfraFailure(allocator, timer, "deep path: {}", .{err});
-    if (writeCaseFile(io, allocator, timer, dir, "Deep.roc", deep)) |failure| return failure;
-    for ([_]u64{ 2, 1 }, [_][]const u8{ "stack overflow cold", "stack overflow rerun" }) |executed, step| {
-        const run = switch (runOutcomeCase(io, allocator, &isolated, timer, timeout_ms, deep_path, &.{ "test", opt_arg, "--specialize=no" })) {
-            .run => |run| run,
-            .failure => |failure| return failure,
-        };
-        if (std.mem.find(u8, run.result.stderr, "overflowed its stack") == null) return failureFromRun(allocator, timer, run.result, "the deep root did not report a stack overflow");
-        if (run.executed != executed) return customFailure(allocator, timer, "{s}: executed {d} test roots, expected {d}", .{ step, run.executed, executed });
     }
     return null;
 }
