@@ -21,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 14;
+pub const format_version: u32 = 15;
 
 const magic = "RBXO";
 
@@ -187,6 +187,7 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     errdefer bytes.deinit(allocator);
     try bytes.appendSlice(allocator, magic);
     try appendU32(&bytes, allocator, format_version);
+    const exports_start = bytes.items.len;
     try appendU32(&bytes, allocator, @intCast(entry.exports.len));
     for (entry.exports) |record| {
         try bytes.appendSlice(allocator, &record.identity);
@@ -202,6 +203,7 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
         try appendU32(&bytes, allocator, @intCast(record.table_needs.len));
         try bytes.appendSlice(allocator, record.table_needs);
     }
+    try bytes.appendSlice(allocator, &exportsDigest(bytes.items[exports_start..]));
     for ([_][]const []const u8{ entry.hosted_symbols, entry.link_root_symbols, entry.app_export_symbols }) |symbols| {
         try appendU32(&bytes, allocator, @intCast(symbols.len));
         for (symbols) |symbol| {
@@ -233,6 +235,16 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
         try bytes.appendSlice(allocator, entry.image);
     }
     return try bytes.toOwnedSlice(allocator);
+}
+
+/// The digest of an entry's encoded export records, which follows them, so
+/// altered records (needs lists among them) make the entry a miss rather
+/// than reach an importer's lowering.
+fn exportsDigest(records: []const u8) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc-boxy-object-exports-v1");
+    hasher.update(records);
+    return hasher.finalResult();
 }
 
 /// The bytes of an export record with no return conditions: its identity,
@@ -274,6 +286,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     const found_magic = try reader.take(magic.len);
     if (!std.mem.eql(u8, found_magic, magic)) return error.InvalidEntry;
     if (try reader.word32() != format_version) return error.InvalidEntry;
+    const exports_start = reader.at;
     const export_count = try reader.word32();
     if (export_count > (bytes.len - reader.at) / min_export_record_size) return error.InvalidEntry;
     const exports = try allocator.alloc(ExportRecord, export_count);
@@ -307,6 +320,10 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         record.table_needs = needs;
         decoded_exports += 1;
     }
+    // The export records are read only after their digest checks: an
+    // importer decodes their needs lists as bytes this compiler wrote.
+    const expected_digest = exportsDigest(bytes[exports_start..reader.at]);
+    if (!std.mem.eql(u8, &expected_digest, try reader.take(expected_digest.len))) return error.InvalidEntry;
     const hosted_symbols = try decodeSymbols(allocator, &reader);
     errdefer freeSymbols(allocator, hosted_symbols);
     const link_root_symbols = try decodeSymbols(allocator, &reader);
@@ -550,6 +567,20 @@ test "a Boxy object entry round-trips through its bytes" {
     defer allocator.free(altered);
     altered[0] = 'X';
     try std.testing.expectError(error.InvalidEntry, decode(allocator, altered));
+
+    // So is one whose export records' needs lists were altered.
+    const needs_entry: Entry = .{
+        .exports = &.{.{ .identity = @splat(3), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{}, .table_needs = "a needs list" }},
+        .hosted_symbols = &.{},
+        .pieces = "",
+    };
+    const needs_bytes = try encode(allocator, needs_entry);
+    defer allocator.free(needs_bytes);
+    const needs_decoded = try decode(allocator, needs_bytes);
+    deinitEntry(allocator, needs_decoded);
+    const needs_at = std.mem.find(u8, needs_bytes, "a needs list") orelse return error.TestUnexpectedResult;
+    needs_bytes[needs_at] = 'A';
+    try std.testing.expectError(error.InvalidEntry, decode(allocator, needs_bytes));
 }
 
 test "a hosted bindings digest is a function of the bindings in order" {

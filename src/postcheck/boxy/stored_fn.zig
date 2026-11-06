@@ -863,7 +863,9 @@ fn encodeOperand(encoder: *Encoder, operand: Tables.Operand) Allocator.Error!voi
 }
 
 /// Read the needs list `encodeNeeds` wrote, its types and workers in this
-/// lowering, allocated in the program's arena.
+/// lowering, allocated in the program's arena. Its bytes are this
+/// compiler's: a cached entry's export records reach a lowering only once
+/// their digest checks (`boxy_object_cache.decodeView`).
 pub fn decodeNeeds(program: *Program, bytes: []const u8) Allocator.Error!Tables.Needs {
     const arena = program.arena.allocator();
     var decoder = Decoder{ .program = program, .bytes = bytes };

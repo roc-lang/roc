@@ -14148,7 +14148,10 @@ many tables.
 An imported worker's tables are filled in the importing unit, from the needs
 list the worker's object exports (`ExportRecord.table_needs`), in which types
 and workers are named by their checked identities. The exports digest covers
-it, so an importer of a changed needs list is lowered again. In a
+it, so an importer of a changed needs list is lowered again. A cached
+object's export records are followed by their digest, which loading checks
+before an importer reads them, so an altered needs list makes the entry a
+miss rather than reach the importer's lowering. In a
 compile-time program that stores function values, each table ends with one
 more word, its position among the program's tables, by which the stored
 function writer reads a function value's table inputs (design.md "Stored
