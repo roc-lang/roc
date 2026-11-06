@@ -4236,14 +4236,14 @@ fn evalInterpreterProgramRoots(
                         error.RuntimeError, error.DivisionByZero => {
                             const message = interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed";
                             failed_message = message;
-                            break :blk try unreportedFailedRootPayload(module, compile_time_root, message, .crash);
+                            break :blk try failedRootPayload(module, compile_time_root, message, .crash);
                         },
                         error.Crash => {
                             const message = interpreter.getCrashMessage();
                             const meaning = interpreterFailedAt(&lowered.lir_result, interpreter, program.slotEnvironment()).meaning;
                             if (options.retry) |retry| if (retry.holds(meaning)) continue;
                             failed_message = message;
-                            break :blk try unreportedFailedRootPayload(module, compile_time_root, message, RootFailure.of(meaning));
+                            break :blk try failedRootPayload(module, compile_time_root, message, RootFailure.of(meaning));
                         },
                         error.UnsupportedHostedFunction => finalizationInvariant("compile-time constant reached an unsupported hosted function"),
                         error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time constant reached an invalid hosted function signature"),
@@ -6438,7 +6438,7 @@ fn devComptimeExhaustivenessRootPayload(
     had_problem: *bool,
 ) FinalizeError!checked.CompileTimeRootPayload {
     if (request.kind == .compile_time_constant and problem_store == null) {
-        return try unreportedFailedRootPayload(module, root, message, .crash);
+        return try failedRootPayload(module, root, message, .crash);
     }
 
     _ = problem_store orelse {
@@ -6471,7 +6471,7 @@ fn devCrashedRootPayload(
     }
     if (root.guarded) return try failedRootPayload(module, root, message, RootFailure.of(failed_at.meaning));
     if (request.kind == .compile_time_constant and problem_store == null) {
-        return try unreportedFailedRootPayload(module, root, message, .crash);
+        return try failedRootPayload(module, root, message, .crash);
     }
     const store = problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
@@ -6626,16 +6626,6 @@ fn literalRejectionReported(store: *const check.problem.Store, kind: lir.LIR.Lit
 }
 
 /// The payload of a failed root in an evaluation that collects no diagnostics.
-fn unreportedFailedRootPayload(
-    module: *checked.CheckedModuleArtifact,
-    root: checked.CompileTimeRoot,
-    message: []const u8,
-    failure: RootFailure,
-) Allocator.Error!checked.CompileTimeRootPayload {
-    if (root.guarded) return .runtime;
-    return .{ .const_node = try appendFailureConst(module, message, failure) };
-}
-
 fn appendCrashConst(
     module: *checked.CheckedModuleArtifact,
     message: []const u8,
