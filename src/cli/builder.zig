@@ -198,6 +198,12 @@ const LLVMCodeModelDefault: c_int = 0;
 
 // External C functions from zig_llvm.cpp and LLVM C API - only available when LLVM is enabled
 const llvm_externs = if (llvm_available) struct {
+    extern fn ZigLLVMWriteImportLibrary(
+        def_path: [*:0]const u8,
+        coff_machine: c_uint,
+        output_lib_path: [*:0]const u8,
+        kill_at: bool,
+    ) bool;
     extern fn ZigLLVMWriteArchiveFlattened(
         archive_name: [*:0]const u8,
         file_names: [*]const [*:0]const u8,
@@ -394,6 +400,26 @@ const LLVMAttributeReturnIndex: c_uint = 0;
 // LLVM archive kinds (object::Archive::Kind)
 const LLVMArchiveKindGNU: c_int = 0;
 const LLVMArchiveKindDarwin: c_int = 3;
+
+/// Write the COFF import library `output_path` from the module definition
+/// at `def_path`, for a DLL of the `machine` COFF machine type.
+pub fn writeImportLibrary(
+    gpa: Allocator,
+    def_path: []const u8,
+    machine: u16,
+    output_path: []const u8,
+) error{ OutOfMemory, ImportLibraryWriteFailed, LLVMNotAvailable }!void {
+    if (comptime !llvm_available) {
+        return error.LLVMNotAvailable;
+    }
+    const def_z = try gpa.dupeSentinel(u8, def_path, 0);
+    defer gpa.free(def_z);
+    const output_z = try gpa.dupeSentinel(u8, output_path, 0);
+    defer gpa.free(output_z);
+    if (llvm_externs.ZigLLVMWriteImportLibrary(def_z.ptr, machine, output_z.ptr, false)) {
+        return error.ImportLibraryWriteFailed;
+    }
+}
 
 /// Write a static archive containing the given input files. Inputs that are
 /// themselves archives are flattened into the output, so the result never

@@ -203,9 +203,6 @@ roc_ops: ?RocOps = null,
 jmp_buf: JmpBuf = undefined,
 active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
-/// Whether this run's crash is a caught stack overflow, which depends on the
-/// executing thread's stack rather than on the program alone.
-stack_overflowed: bool = false,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
 /// The most recently allocated live block; blocks link through their headers.
 live_blocks: ?*Header = null,
@@ -234,7 +231,6 @@ pub fn resetObservation(self: *RuntimeHostEnv) void {
     for (self.events.items) |*event| event.deinit(self.allocator);
     self.events.clearAndFree(self.allocator);
     self.termination = .returned;
-    self.stack_overflowed = false;
     self.active_jmp_buf = null;
 }
 
@@ -341,7 +337,6 @@ pub const CrashBoundary = crash_boundary_mod.CrashBoundary(RuntimeHostEnv, true)
 /// Record a caught stack overflow exactly the way a Roc `crash` is recorded,
 /// so callers report it as this run's ordinary crash outcome.
 pub fn noteStackOverflow(self: *RuntimeHostEnv) void {
-    self.stack_overflowed = true;
     self.noteCrash(crash_boundary_mod.STACK_OVERFLOW_MESSAGE);
 }
 

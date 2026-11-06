@@ -9,6 +9,8 @@
 
 const std = @import("std");
 const collections = @import("collections");
+const base = @import("base");
+const can = @import("can");
 const check = @import("check");
 const layout = @import("layout");
 const lir_core = @import("lir_core");
@@ -19,6 +21,7 @@ const match_tree = @import("../match_tree.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
+const CIR = can.CIR;
 const LIR = lir_core.LIR;
 const LocalId = LIR.LocalId;
 const CFStmtId = LIR.CFStmtId;
@@ -26,8 +29,9 @@ const TypeId = types.TypeId;
 const Builder = body_mod.Builder;
 const invariant = types.invariant;
 
-const CheckedExprId = checked.CheckedExprId;
-const CheckedPatternId = checked.CheckedPatternId;
+const bodies_mod = check.CheckedBodies;
+const PatternId = bodies_mod.PatternId;
+const BinderId = bodies_mod.BinderId;
 
 /// A match being lowered: its emitter, and what its branch requests need.
 pub const State = struct {
@@ -45,14 +49,14 @@ pub const State = struct {
     /// The type of each occurrence local.
     occ_types: collections.DenseMapUnmanaged(LocalId, TypeId) = .empty,
     /// The local each pattern binder is bound to.
-    binder_locals: collections.DenseMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
+    binder_locals: collections.DenseMapUnmanaged(BinderId, LocalId) = .empty,
     /// The representative binder of each later alternative's binder: a
     /// branch's alternatives bind one local per name, which its body reads.
-    representatives: collections.DenseMapUnmanaged(checked.PatternBinderId, checked.PatternBinderId) = .empty,
+    representatives: collections.DenseMapUnmanaged(BinderId, BinderId) = .empty,
     /// How many of the match's branch patterns each body belongs to.
-    alternatives: collections.DenseMapUnmanaged(CheckedExprId, u32) = .empty,
+    alternatives: collections.DenseMapUnmanaged(bodies_mod.ExprId, u32) = .empty,
     /// The join holding the one lowering of a body several patterns share.
-    shared_bodies: collections.DenseMapUnmanaged(CheckedExprId, LIR.JoinPointId) = .empty,
+    shared_bodies: collections.DenseMapUnmanaged(bodies_mod.ExprId, LIR.JoinPointId) = .empty,
     /// The shared bodies' joins, in the order they were lowered, with their
     /// bodies' holes.
     shared_joins: std.ArrayList(struct { id: LIR.JoinPointId, body: CFStmtId }) = .empty,
@@ -62,7 +66,7 @@ pub const State = struct {
     /// String pattern shapes, by their encoding.
     shapes: std.StringHashMapUnmanaged(u32) = .empty,
     /// The field-reading destructs of each record pattern.
-    field_destructs: collections.DenseMapUnmanaged(CheckedPatternId, []const checked.CheckedRecordDestruct) = .empty,
+    field_destructs: collections.DenseMapUnmanaged(PatternId, []const bodies_mod.RecordDestruct) = .empty,
 };
 
 /// Field indices at and past this one name an open row's field by name.
@@ -77,10 +81,10 @@ pub const Ctx = struct {
     b: *Builder,
     state: *State,
 
-    pub const PatId = CheckedPatternId;
+    pub const PatId = PatternId;
     pub const TypeId = types.TypeId;
-    pub const ExprId = CheckedExprId;
-    pub const LocalId = checked.PatternBinderId;
+    pub const ExprId = bodies_mod.ExprId;
+    pub const LocalId = BinderId;
     pub const BindingSpan = NoBindings;
     pub const LirLocal = LIR.LocalId;
     pub const CFStmtId = LIR.CFStmtId;
@@ -95,19 +99,19 @@ pub const Ctx = struct {
         }
     };
 
-    pub const SubPat = struct { index: u32, ty: types.TypeId, pat: CheckedPatternId };
+    pub const SubPat = struct { index: u32, ty: types.TypeId, pat: PatternId };
 
     pub const ListPatView = struct {
         fixed_count: u32,
-        rest: ?struct { index: u32, pattern: ?CheckedPatternId },
+        rest: ?struct { index: u32, pattern: ?PatternId },
     };
 
     fn arena(self: Ctx) Allocator {
         return self.state.arena.allocator();
     }
 
-    fn pattern(self: Ctx, pat: CheckedPatternId) checked.CheckedPattern {
-        return self.b.bodies().pattern(pat);
+    fn patternData(self: Ctx, pat: PatternId) bodies_mod.PatternData {
+        return self.b.bodies().patternData(pat);
     }
 
     fn store(self: Ctx) *types.Store {
@@ -129,8 +133,8 @@ pub const Ctx = struct {
 
     // -- Construction --
 
-    pub fn patKind(self: Ctx, pat: CheckedPatternId) match_tree.PatKind {
-        return switch (self.pattern(pat).data) {
+    pub fn patKind(self: Ctx, pat: PatternId) match_tree.PatKind {
+        return switch (self.patternData(pat)) {
             .assign => .bind,
             .underscore => .wildcard,
             .as => .as_pattern,
@@ -141,10 +145,10 @@ pub const Ctx = struct {
             .applied_tag => .tag,
             // A builtin numeral's kind of number is its occurrence's: an
             // integer one switches, any other compares (`intSwitchValue`).
-            .numeral_literal => |numeral| if (numeral.guard != null) .guarded_lit else .int_lit,
-            .str_literal => |literal| if (literal.guard != null) .guarded_lit else .str_lit,
+            .numeral_literal => if (self.b.bodies().literalPatternIsCustom(pat)) .guarded_lit else .int_lit,
+            .str_literal => if (self.b.bodies().literalPatternIsCustom(pat)) .guarded_lit else .str_lit,
             .str_interpolation => .str_pattern,
-            .runtime_error, .pending => invariant("an erroneous pattern reached Boxy match lowering"),
+            .runtime_error => invariant("an erroneous pattern reached Boxy match lowering"),
         };
     }
 
@@ -158,7 +162,7 @@ pub const Ctx = struct {
     }
 
     /// The local `binder` is bound to, made on first use.
-    fn binderLocal(self: Ctx, binder: checked.PatternBinderId, pat: CheckedPatternId) Allocator.Error!void {
+    fn binderLocal(self: Ctx, binder: BinderId, pat: PatternId) Allocator.Error!void {
         if (self.state.binder_locals.contains(binder)) return;
         const representative = self.state.representatives.get(binder) orelse binder;
         const local = self.state.binder_locals.get(representative) orelse blk: {
@@ -171,35 +175,40 @@ pub const Ctx = struct {
         try self.b.binders.put(self.b.allocator, binder, local);
     }
 
-    pub fn bindLocal(self: Ctx, pat: CheckedPatternId) checked.PatternBinderId {
-        const binder = self.pattern(pat).data.assign;
-        self.binderLocal(binder, pat) catch invariant("out of memory binding a pattern");
-        return binder;
+    /// An assign pattern binds itself.
+    pub fn bindLocal(self: Ctx, pat: PatternId) BinderId {
+        if (self.patternData(pat) != .assign) invariant("a binding was asked of a pattern that is not an assignment");
+        self.binderLocal(pat, pat) catch invariant("out of memory binding a pattern");
+        return pat;
     }
 
-    pub fn asInfo(self: Ctx, pat: CheckedPatternId) struct { pattern: CheckedPatternId, local: checked.PatternBinderId } {
-        const as = self.pattern(pat).data.as;
-        self.binderLocal(as.binder, pat) catch invariant("out of memory binding a pattern");
-        return .{ .pattern = as.pattern, .local = as.binder };
+    /// An as-pattern binds itself.
+    pub fn asInfo(self: Ctx, pat: PatternId) struct { pattern: PatternId, local: BinderId } {
+        const as = self.patternData(pat).as;
+        self.binderLocal(pat, pat) catch invariant("out of memory binding a pattern");
+        return .{ .pattern = as.pattern, .local = pat };
     }
 
     /// The destructs of a record pattern that read a field.
-    fn fieldDestructs(self: Ctx, pat: CheckedPatternId) Allocator.Error![]const checked.CheckedRecordDestruct {
+    fn fieldDestructs(self: Ctx, pat: PatternId) Allocator.Error![]const bodies_mod.RecordDestruct {
         if (self.state.field_destructs.get(pat)) |memo| return memo;
-        var out: std.ArrayList(checked.CheckedRecordDestruct) = .empty;
-        for (self.pattern(pat).data.record_destructure) |destruct| switch (destruct.kind) {
-            .rest => {},
-            .required, .sub_pattern => try out.append(self.arena(), destruct),
-        };
+        var out: std.ArrayList(bodies_mod.RecordDestruct) = .empty;
+        for (self.patternData(pat).record_destructure) |destruct_id| {
+            const destruct = self.b.bodies().recordDestruct(destruct_id);
+            switch (destruct.kind) {
+                .rest => {},
+                .required, .sub_pattern => try out.append(self.arena(), destruct),
+            }
+        }
         try self.state.field_destructs.put(self.arena(), pat, out.items);
         return out.items;
     }
 
-    pub fn recordDestructCount(self: Ctx, pat: CheckedPatternId) u32 {
+    pub fn recordDestructCount(self: Ctx, pat: PatternId) u32 {
         return @intCast((self.fieldDestructs(pat) catch invariant("out of memory reading a record pattern")).len);
     }
 
-    pub fn recordDestruct(self: Ctx, pat: CheckedPatternId, ty: types.TypeId, i: u32) Allocator.Error!SubPat {
+    pub fn recordDestruct(self: Ctx, pat: PatternId, ty: types.TypeId, i: u32) Allocator.Error!SubPat {
         const destruct = (try self.fieldDestructs(pat))[i];
         const sub = switch (destruct.kind) {
             .required, .sub_pattern => |p| p,
@@ -225,21 +234,21 @@ pub const Ctx = struct {
         return .{ .index = named_field_base + position, .ty = try self.b.patternType(sub), .pat = sub };
     }
 
-    pub fn tupleItemCount(self: Ctx, pat: CheckedPatternId) u32 {
-        return @intCast(self.pattern(pat).data.tuple.len);
+    pub fn tupleItemCount(self: Ctx, pat: PatternId) u32 {
+        return @intCast(self.patternData(pat).tuple.len);
     }
 
-    pub fn tupleItem(self: Ctx, pat: CheckedPatternId, ty: types.TypeId, i: u32) Allocator.Error!SubPat {
+    pub fn tupleItem(self: Ctx, pat: PatternId, ty: types.TypeId, i: u32) Allocator.Error!SubPat {
         const tuple_ty = try self.b.structuralType(ty);
         const elems = switch (self.store().get(tuple_ty)) {
             .tuple => |span| self.store().span(span),
             .primitive, .empty_record, .record, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a tuple pattern's type is not a tuple"),
         };
-        return .{ .index = i, .ty = elems[i], .pat = self.pattern(pat).data.tuple[i] };
+        return .{ .index = i, .ty = elems[i], .pat = self.patternData(pat).tuple[i] };
     }
 
-    pub fn nominalInner(self: Ctx, pat: CheckedPatternId, ty: types.TypeId) Allocator.Error!SubPat {
-        return .{ .index = 0, .ty = try self.b.structuralType(ty), .pat = self.pattern(pat).data.nominal.backing_pattern };
+    pub fn nominalInner(self: Ctx, pat: PatternId, ty: types.TypeId) Allocator.Error!SubPat {
+        return .{ .index = 0, .ty = try self.b.structuralType(ty), .pat = self.patternData(pat).nominal.backing_pattern };
     }
 
     /// The tags a tag pattern on `ty` selects among: the type's own, in
@@ -259,9 +268,9 @@ pub const Ctx = struct {
         };
     }
 
-    pub fn tagVariant(self: Ctx, pat: CheckedPatternId, ty: types.TypeId) Allocator.Error!layout.VariantIndex {
-        const tag = self.pattern(pat).data.applied_tag;
-        const name = try self.store().internName(self.b.view.nameStore().tagLabelText(tag.name));
+    pub fn tagVariant(self: Ctx, pat: PatternId, ty: types.TypeId) Allocator.Error!layout.VariantIndex {
+        const tag = self.patternData(pat).applied_tag;
+        const name = try self.store().internName(self.b.view.nameStore().tagLabelText(self.b.bodies().tagLabel(tag.name)));
         if (try self.isBool(ty)) return @intFromBool(std.mem.eql(u8, self.store().nameText(name), "True"));
         const structural = try self.b.structuralType(ty);
         if (try self.b.closed(structural)) {
@@ -273,14 +282,14 @@ pub const Ctx = struct {
         invariant("a tag pattern's tag is absent from its type");
     }
 
-    pub fn tagPayloadCount(self: Ctx, pat: CheckedPatternId) u32 {
-        return @intCast(self.pattern(pat).data.applied_tag.args.len);
+    pub fn tagPayloadCount(self: Ctx, pat: PatternId) u32 {
+        return @intCast(self.patternData(pat).applied_tag.args.len);
     }
 
-    pub fn tagPayload(self: Ctx, pat: CheckedPatternId, ty: types.TypeId, i: u32) Allocator.Error!SubPat {
+    pub fn tagPayload(self: Ctx, pat: PatternId, ty: types.TypeId, i: u32) Allocator.Error!SubPat {
         const variant = try self.tagVariant(pat, ty);
         const payloads = self.store().span((try self.unionTags(ty))[variant].payloads);
-        return .{ .index = i, .ty = payloads[i], .pat = self.pattern(pat).data.applied_tag.args[i] };
+        return .{ .index = i, .ty = payloads[i], .pat = self.patternData(pat).applied_tag.args[i] };
     }
 
     pub fn tagVariantCount(self: Ctx, ty: types.TypeId) ?u32 {
@@ -296,11 +305,11 @@ pub const Ctx = struct {
         return if (self.b.closed(structural) catch invariant("out of memory reading a tag pattern's type")) .tag else .tag_name;
     }
 
-    pub fn recordRest(self: Ctx, pat: CheckedPatternId, _: types.TypeId) Allocator.Error!?SubPat {
-        for (self.pattern(pat).data.record_destructure) |destruct| switch (destruct.kind) {
+    pub fn recordRest(self: Ctx, pat: PatternId, _: types.TypeId) Allocator.Error!?SubPat {
+        for (self.patternData(pat).record_destructure) |destruct_id| switch (self.b.bodies().recordDestruct(destruct_id).kind) {
             .rest => |rest| {
                 // `..` with nothing to bind reads nothing.
-                if (self.pattern(rest).data == .underscore) return null;
+                if (self.patternData(rest) == .underscore) return null;
                 return .{ .index = 0, .ty = try self.b.patternType(rest), .pat = rest };
             },
             .required, .sub_pattern => {},
@@ -310,18 +319,18 @@ pub const Ctx = struct {
 
     /// A pattern on an optional field matches the field's presence as
     /// `Try(value, [MissingField])`, which its slot stores another way.
-    pub fn retype(self: Ctx, pat: CheckedPatternId, ty: types.TypeId) ?struct { key: u32, ty: types.TypeId } {
+    pub fn retype(self: Ctx, pat: PatternId, ty: types.TypeId) ?struct { key: u32, ty: types.TypeId } {
         if (self.b.program.layouts.presenceSlotPayload(ty) == null) return null;
         const pattern_ty = self.b.patternType(pat) catch invariant("out of memory reading a pattern's type");
         if (pattern_ty == ty) return null;
         return .{ .key = 0, .ty = pattern_ty };
     }
 
-    pub fn callableVariant(_: Ctx, _: CheckedPatternId, _: types.TypeId) u32 {
+    pub fn callableVariant(_: Ctx, _: PatternId, _: types.TypeId) u32 {
         invariant("a callable pattern reached Boxy match lowering");
     }
 
-    pub fn callablePayload(_: Ctx, _: CheckedPatternId, _: types.TypeId) Allocator.Error!?SubPat {
+    pub fn callablePayload(_: Ctx, _: PatternId, _: types.TypeId) Allocator.Error!?SubPat {
         invariant("a callable pattern reached Boxy match lowering");
     }
 
@@ -329,16 +338,16 @@ pub const Ctx = struct {
         invariant("a callable pattern reached Boxy match lowering");
     }
 
-    pub fn listView(self: Ctx, pat: CheckedPatternId) ListPatView {
-        const list = self.pattern(pat).data.list;
+    pub fn listView(self: Ctx, pat: PatternId) ListPatView {
+        const list = self.patternData(pat).list;
         return .{
             .fixed_count = @intCast(list.patterns.len),
             .rest = if (list.rest) |rest| .{ .index = rest.index, .pattern = rest.pattern } else null,
         };
     }
 
-    pub fn listElemPat(self: Ctx, pat: CheckedPatternId, i: u32) CheckedPatternId {
-        return self.pattern(pat).data.list.patterns[i];
+    pub fn listElemPat(self: Ctx, pat: PatternId, i: u32) PatternId {
+        return self.patternData(pat).list.patterns[i];
     }
 
     pub fn listElemTy(self: Ctx, ty: types.TypeId) types.TypeId {
@@ -349,13 +358,13 @@ pub const Ctx = struct {
     }
 
     /// The exact numeral a builtin numeral pattern names.
-    fn exactNumeral(self: Ctx, pat: CheckedPatternId) checked.exact_numeral.Exact {
-        return self.b.view.view.module_env.exactNumeral(self.pattern(pat).data.numeral_literal.literal);
+    fn exactNumeral(self: Ctx, pat: PatternId) checked.exact_numeral.Exact {
+        return self.b.view.view.module_env.exactNumeral(self.b.bodies().numeralLiteral(@backingInt(pat)));
     }
 
     /// An integer pattern's value at its primitive, as a two's complement
     /// 128-bit integer; null when it does not fit the primitive.
-    fn intValue(self: Ctx, pat: CheckedPatternId, ty: types.TypeId) ?i128 {
+    fn intValue(self: Ctx, pat: PatternId, ty: types.TypeId) ?i128 {
         const exact_numeral = checked.exact_numeral;
         const target: exact_numeral.Target = switch (self.literalPrimitive(ty)) {
             inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| @field(exact_numeral.Target, @tagName(p)),
@@ -368,13 +377,13 @@ pub const Ctx = struct {
         };
     }
 
-    pub fn ctorKey(self: Ctx, pat: CheckedPatternId, ty: types.TypeId) Allocator.Error!u128 {
-        return switch (self.pattern(pat).data) {
+    pub fn ctorKey(self: Ctx, pat: PatternId, ty: types.TypeId) Allocator.Error!u128 {
+        return switch (self.patternData(pat)) {
             .applied_tag => try self.tagVariant(pat, ty),
             // A numeral matched where a body knows its number type only by
             // descriptor, or through its checked conversion guard, is
             // identified by its exact value.
-            .numeral_literal => |numeral| if (numeral.guard != null or !try self.b.closed(try self.b.structuralType(ty))) try self.exactKey(pat) else switch (self.literalPrimitive(ty)) {
+            .numeral_literal => if (self.b.bodies().literalPatternIsCustom(pat) or !try self.b.closed(try self.b.structuralType(ty))) try self.exactKey(pat) else switch (self.literalPrimitive(ty)) {
                 .dec => @bitCast((try checked.exact_numeral.decBits(self.arena(), self.exactNumeral(pat))) orelse
                     invariant("a numeral pattern does not fit its Dec type")),
                 // IEEE `==`: +0.0 and -0.0 are one constructor.
@@ -388,16 +397,16 @@ pub const Ctx = struct {
                 },
                 .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => @bitCast(self.intValue(pat, ty) orelse invariant("a numeral pattern does not fit its integer type")),
             },
-            .str_literal => |literal| try self.strShapeKey(self.b.bodies().stringLiteral(literal.literal), &.{}, .exact),
-            .str_interpolation => |str| try self.strShapeKey(self.b.bodies().stringLiteral(str.prefix), str.steps, str.end),
+            .str_literal => |literal| try self.strShapeKey(self.b.bodies().text(literal), null, .exact),
+            .str_interpolation => |str| try self.strShapeKey(self.b.bodies().text(str.prefix), str.steps, str.end),
             .list => |list| list.patterns.len,
-            .assign, .underscore, .as, .record_destructure, .tuple, .nominal, .runtime_error, .pending => invariant("a constructor key was asked of a pattern with no constructor"),
+            .assign, .underscore, .as, .record_destructure, .tuple, .nominal, .runtime_error => invariant("a constructor key was asked of a pattern with no constructor"),
         };
     }
 
     /// The key of a numeral's exact value, interned among the match's
     /// shapes.
-    fn exactKey(self: Ctx, pat: CheckedPatternId) Allocator.Error!u128 {
+    fn exactKey(self: Ctx, pat: PatternId) Allocator.Error!u128 {
         const exact = self.exactNumeral(pat);
         var encoded: std.ArrayList(u8) = .empty;
         try encoded.append(self.arena(), 2);
@@ -412,10 +421,15 @@ pub const Ctx = struct {
         return entry.value_ptr.*;
     }
 
-    fn strShapeKey(self: Ctx, prefix: []const u8, steps: []const checked.CheckedStrPatternStep, end: checked.CheckedStrPatternEnd) Allocator.Error!u128 {
+    fn strShapeKey(self: Ctx, prefix: []const u8, steps: ?CIR.Pattern.StrPatternStep.Span, end: checked.CheckedStrPatternEnd) Allocator.Error!u128 {
         var encoded: std.ArrayList(u8) = .empty;
         try appendLenPrefixed(&encoded, self.arena(), prefix);
-        for (steps) |step| try appendLenPrefixed(&encoded, self.arena(), self.b.bodies().stringLiteral(step.delimiter));
+        if (steps) |span| {
+            var offset: u32 = 0;
+            while (offset < span.span.len) : (offset += 1) {
+                try appendLenPrefixed(&encoded, self.arena(), self.b.bodies().text(self.b.bodies().strPatternStep(span, offset).delimiter));
+            }
+        }
         try encoded.append(self.arena(), switch (end) {
             .exact => 0,
             .tail => 1,
@@ -432,8 +446,8 @@ pub const Ctx = struct {
         try list.appendSlice(allocator, bytes);
     }
 
-    pub fn intSwitchValue(self: Ctx, pat: CheckedPatternId, ty: types.TypeId) ?u64 {
-        if (self.pattern(pat).data != .numeral_literal or self.pattern(pat).data.numeral_literal.guard != null) return null;
+    pub fn intSwitchValue(self: Ctx, pat: PatternId, ty: types.TypeId) ?u64 {
+        if (self.patternData(pat) != .numeral_literal or self.b.bodies().literalPatternIsCustom(pat)) return null;
         const value = self.intValue(pat, ty) orelse return null;
         // A narrow signed condition switches only on sign-bit-clear values,
         // where every executor's widening agrees.
@@ -458,15 +472,15 @@ pub const Ctx = struct {
         return true;
     }
 
-    pub fn strCaptureCount(self: Ctx, pat: CheckedPatternId) u32 {
-        return switch (self.pattern(pat).data) {
-            .str_interpolation => |str| @intCast(str.steps.len),
-            .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .underscore, .runtime_error => 0,
+    pub fn strCaptureCount(self: Ctx, pat: PatternId) u32 {
+        return switch (self.patternData(pat)) {
+            .str_interpolation => |str| str.steps.span.len,
+            .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .underscore, .runtime_error => 0,
         };
     }
 
-    pub fn strCapturePat(self: Ctx, pat: CheckedPatternId, i: u32) ?CheckedPatternId {
-        return self.pattern(pat).data.str_interpolation.steps[i].capture;
+    pub fn strCapturePat(self: Ctx, pat: PatternId, i: u32) ?PatternId {
+        return self.b.bodies().strPatternStep(self.patternData(pat).str_interpolation.steps, i).capture;
     }
 
     // -- Emission --
@@ -628,10 +642,10 @@ pub const Ctx = struct {
         return try self.b.endBackward(start, next);
     }
 
-    pub fn tagNameTest(self: Ctx, source: LIR.LocalId, ty: types.TypeId, pat: CheckedPatternId, on_match: LIR.CFStmtId, on_miss: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    pub fn tagNameTest(self: Ctx, source: LIR.LocalId, ty: types.TypeId, pat: PatternId, on_match: LIR.CFStmtId, on_miss: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         const union_ty = try self.b.structuralType(ty);
-        const tag = self.pattern(pat).data.applied_tag;
-        const name = try self.store().internName(self.b.view.nameStore().tagLabelText(tag.name));
+        const tag = self.patternData(pat).applied_tag;
+        const name = try self.store().internName(self.b.view.nameStore().tagLabelText(self.b.bodies().tagLabel(tag.name)));
         const start = try self.b.beginBackward();
         const desc = try self.b.descOf(union_ty);
         const actual = try self.b.closedLocal(.u32);
@@ -644,7 +658,7 @@ pub const Ctx = struct {
         return self.b.endBackwardTerminal(start);
     }
 
-    pub fn literalGuardTemp(self: Ctx, _: CheckedPatternId) Allocator.Error!LIR.LocalId {
+    pub fn literalGuardTemp(self: Ctx, _: PatternId) Allocator.Error!LIR.LocalId {
         return try self.b.closedLocal(.bool);
     }
 
@@ -667,14 +681,14 @@ pub const Ctx = struct {
         return self.b.endBackwardTerminal(start);
     }
 
-    pub fn literalEqTest(self: Ctx, source: LIR.LocalId, ty: types.TypeId, pat: CheckedPatternId, on_match: LIR.CFStmtId, on_miss: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    pub fn literalEqTest(self: Ctx, source: LIR.LocalId, ty: types.TypeId, pat: PatternId, on_match: LIR.CFStmtId, on_miss: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         const start = try self.b.beginBackward();
         const matches = try self.b.closedLocal(.bool);
-        switch (self.pattern(pat).data) {
-            .numeral_literal => |numeral| {
+        switch (self.patternData(pat)) {
+            .numeral_literal => {
                 const structural = try self.b.structuralType(ty);
                 if (try self.b.closed(structural)) {
-                    const expected = try self.b.builtinNumeral(numeral.literal, structural);
+                    const expected = try self.b.builtinNumeral(self.b.bodies().numeralLiteral(@backingInt(pat)), structural);
                     try self.b.emitLowLevel(matches, .num_is_eq, &.{ source, expected });
                 } else {
                     // A numeral matched at a type the body knows only by its
@@ -685,45 +699,46 @@ pub const Ctx = struct {
                 }
             },
             .str_literal => |literal| {
-                const expected = try self.b.strLiteral(self.b.bodies().stringLiteral(literal.literal));
+                const expected = try self.b.strLiteral(self.b.bodies().text(literal));
                 try self.b.emitLowLevel(matches, .str_is_eq, &.{ source, expected });
             },
-            .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .underscore, .runtime_error => invariant("an equality arm was asked of a non-literal pattern"),
+            .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .underscore, .runtime_error => invariant("an equality arm was asked of a non-literal pattern"),
         }
         try self.b.emitTerminal(try self.boolSwitchStmt(matches, on_match, on_miss));
         return self.b.endBackwardTerminal(start);
     }
 
-    pub fn strArmCaptureLocals(self: Ctx, pat: CheckedPatternId) Allocator.Error![]const ?LIR.LocalId {
-        return switch (self.pattern(pat).data) {
+    pub fn strArmCaptureLocals(self: Ctx, pat: PatternId) Allocator.Error![]const ?LIR.LocalId {
+        return switch (self.patternData(pat)) {
             .str_literal => &.{},
             .str_interpolation => |str| blk: {
-                const locals = try self.arena().alloc(?LIR.LocalId, str.steps.len);
-                for (locals, str.steps) |*out, step| {
-                    out.* = if (step.capture != null) try self.b.closedLocal(.str) else null;
+                const locals = try self.arena().alloc(?LIR.LocalId, str.steps.span.len);
+                for (locals, 0..) |*out, offset| {
+                    out.* = if (self.b.bodies().strPatternStep(str.steps, @intCast(offset)).capture != null) try self.b.closedLocal(.str) else null;
                 }
                 break :blk locals;
             },
-            .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .underscore, .runtime_error => invariant("a string arm was asked of a non-string pattern"),
+            .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .underscore, .runtime_error => invariant("a string arm was asked of a non-string pattern"),
         };
     }
 
-    fn lirStr(self: Ctx, literal: checked.CheckedStringLiteralId) Allocator.Error!LIR.StrLiteral {
-        const text = self.b.bodies().stringLiteral(literal);
+    fn lirStr(self: Ctx, literal: base.StringLiteral.Idx) Allocator.Error!LIR.StrLiteral {
+        const text = self.b.bodies().text(literal);
         return .{ .backing = try self.b.store.insertString(text), .offset = 0, .len = @intCast(text.len) };
     }
 
-    pub fn buildStrArm(self: Ctx, pat: CheckedPatternId, capture_locals: []const ?LIR.LocalId, on_match: LIR.CFStmtId) Allocator.Error!LIR.StrMatchArm {
-        return switch (self.pattern(pat).data) {
+    pub fn buildStrArm(self: Ctx, pat: PatternId, capture_locals: []const ?LIR.LocalId, on_match: LIR.CFStmtId) Allocator.Error!LIR.StrMatchArm {
+        return switch (self.patternData(pat)) {
             .str_literal => |literal| .{
-                .prefix = try self.lirStr(literal.literal),
+                .prefix = try self.lirStr(literal),
                 .steps = try self.b.store.addStrMatchSteps(&.{}),
                 .end = .exact,
                 .on_match = on_match,
             },
             .str_interpolation => |str| blk: {
-                const steps = try self.arena().alloc(LIR.StrMatchStep, str.steps.len);
-                for (steps, str.steps, capture_locals) |*out, step, capture| {
+                const steps = try self.arena().alloc(LIR.StrMatchStep, str.steps.span.len);
+                for (steps, capture_locals, 0..) |*out, capture, offset| {
+                    const step = self.b.bodies().strPatternStep(str.steps, @intCast(offset));
                     out.* = .{
                         .capture = if (capture) |local| .{ .view = local } else .discard,
                         .delimiter = try self.lirStr(step.delimiter),
@@ -739,7 +754,7 @@ pub const Ctx = struct {
                     .on_match = on_match,
                 };
             },
-            .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .underscore, .runtime_error => invariant("a string arm was asked of a non-string pattern"),
+            .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .underscore, .runtime_error => invariant("a string arm was asked of a non-string pattern"),
         };
     }
 
@@ -751,7 +766,7 @@ pub const Ctx = struct {
         } }, self.b.origin(.source));
     }
 
-    pub fn bindPatternLocal(self: Ctx, binder: checked.PatternBinderId, _: types.TypeId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    pub fn bindPatternLocal(self: Ctx, binder: BinderId, _: types.TypeId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         const local = self.state.binder_locals.get(binder) orelse invariant("a pattern binder has no local");
         if (self.b.store.localDyn(local)) |dyn| {
             return try self.b.store.addCFStmt(.{ .dyn = .{
@@ -763,7 +778,7 @@ pub const Ctx = struct {
         return try self.b.store.addCFStmt(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.local(source), .next = next } }, self.b.origin(.source));
     }
 
-    pub fn guardTemp(self: Ctx, _: CheckedExprId) Allocator.Error!LIR.LocalId {
+    pub fn guardTemp(self: Ctx, _: ExprId) Allocator.Error!LIR.LocalId {
         return try self.b.closedLocal(.bool);
     }
 

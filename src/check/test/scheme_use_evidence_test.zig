@@ -138,7 +138,7 @@ fn assertBuiltinIterExtremum(
     const wanted_offset = std.mem.find(u8, source, needle) orelse return error.TestUnexpectedResult;
     var found_plan = false;
 
-    for (artifact.static_dispatch_plans.by_expr) |entry| {
+    for (artifact.static_dispatch_plans.by_node) |entry| {
         const expr_idx: can.CIR.Expr.Idx = @fromBackingInt(@intCast(entry.key));
         const expr = env.store.getExpr(expr_idx);
         if (expr != .e_dispatch_call) continue;
@@ -220,6 +220,7 @@ test "scheme use evidence resolves Builtin Iter min and max through exact raw wh
         gpa,
         .{ .static_builtin = builtin_module.env },
     );
+    try artifact.attachSealedTypes(gpa, std.testing.io);
     artifact_owns_module = true;
     defer artifact.deinit(gpa);
 

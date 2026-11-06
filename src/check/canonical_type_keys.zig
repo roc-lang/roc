@@ -199,7 +199,8 @@ pub fn schemeFromVar(
 }
 
 /// A source scheme's key: its root type's key in the scheme namespace.
-fn schemeKeyForType(key: canonical.CanonicalTypeKey) canonical.CanonicalTypeSchemeKey {
+/// The scheme key of a type whose key is `key`.
+pub fn schemeKeyForType(key: canonical.CanonicalTypeKey) canonical.CanonicalTypeSchemeKey {
     var hasher = TypeDigestHasher.init();
     hasher.update(&.{@backingInt(KeyTag.canonical_type_scheme)});
     hasher.update(&key.bytes);

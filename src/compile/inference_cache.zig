@@ -142,7 +142,7 @@ test "inference capsule rejects truncation corruption incompatible versions and 
     const key: [32]u8 = @splat(7);
     const bytes = try encode(arena.allocator(), key, &env, &.{});
     const bodies = try decode(key, bytes);
-    try std.testing.expectEqual(@as(usize, 0), bodies.metadata.hoisted_roots.len);
+    try std.testing.expectEqual(@as(usize, 0), bodies.metadata.foreign_references.len);
     try std.testing.expectError(error.CorruptArtifact, decode(@splat(8), bytes));
     for ([_]usize{ 0, header_len - 1, header_len, bytes.len - 1 }) |len|
         try std.testing.expectError(error.CorruptArtifact, decode(key, bytes[0..len]));

@@ -107,6 +107,38 @@ my @RULES = (
     { category => 'text-identity-glue-def-probe', regex => qr/\bfindTopLevelDefByName\b/, allowed => {} },
     { category => 'text-identity-artifact-env-match', regex => qr/\bmoduleEnvNameMatches\b/, allowed => {} },
     { category => 'body-const-global-type-owner', regex => qr/\bconstBuilder\b/, allowed => {} },
+    # Checked types are read in place from each module's sealed solver store.
+    # Nothing copies source types into a published table, verifies a view
+    # against such a copy, chooses representative closed occurrences, or
+    # releases a solver store before its consumers are done.
+    { category => 'source-type-publication', regex => qr/\bCheckedTypePublisher\b/, allowed => {} },
+    { category => 'sealed-view-gate', regex => qr/\bverifyAgainstPublication\b/, allowed => {} },
+    { category => 'sealed-view-gate', regex => qr/\bverifyModulePublication\b/, allowed => {} },
+    { category => 'sealed-view-gate', regex => qr/\bverify_sealed_type_view\b/, allowed => {} },
+    { category => 'closed-occurrence-representative', regex => qr/\bClosedOccurrenceIndex\b/, allowed => {} },
+    { category => 'closed-occurrence-representative', regex => qr/\bcanonicalNamedOccurrence\b/, allowed => {} },
+    { category => 'solver-store-release', regex => qr/\breleaseCheckedSolverTypes\b/, allowed => {} },
+    { category => 'solver-store-release', regex => qr/\brelease_checked_solver_types\b/, allowed => {} },
+    # Lowering reads bodies from the canonical IR through the checked body
+    # reader, keyed by CIR ids. Nothing copies a body after checking, so the
+    # frozen body store, its id spaces, its source-to-copy maps, and its
+    # synthetic nodes stay gone; a row coercion is a lowering-side construct,
+    # never a checked expression variant.
+    { category => 'checked-body-store', regex => qr/\bCheckedBodyStore\w*\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bCheckedExprId\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bCheckedPatternId\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bexprIdForSource\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bpatternIdForSource\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bSyntheticExprOrigin\b/, allowed => {} },
+    { category => 'checked-row-coerce-variant', regex => qr/\brow_coerce\b/, scope => qr{\Asrc/check/}, allowed => {} },
+    # Post-check code reads sealed solver stores through the checked type
+    # reader and never writes one.
+    {
+        category => 'postcheck-solver-store-write',
+        regex => qr/(?:typeStore(?:Const)?\(\)|\.types|types_store|type_store)\.(?:setVarContent|dangerousSetVarDesc|dangerousSetVarRedirect|fresh\w*|append(?:Vars|RecordFields|Tags|StaticDispatchConstraints\w*|InterpolationParts)|canonicalizeAndSeal|seal|setNominalDecl|markNominalDeclInvalid|setDerivedMapPlan|union_|setRank|resolveVarAndCompressPath)\(/,
+        scope => qr{\Asrc/postcheck/},
+        allowed => {},
+    },
 );
 
 sub iter_zig_files {
@@ -147,6 +179,7 @@ for my $rel (iter_zig_files()) {
 
         for my $rule (@RULES) {
             next if $rule->{allowed}{$rel};
+            next if $rule->{scope} && $rel !~ $rule->{scope};
             # Architecture rules constrain Zig tokens, not prose or fixture
             # strings. A rule must opt in explicitly if raw source text matters.
             my $subject;

@@ -709,7 +709,11 @@ fn readonlySection(target: RocTarget, object_bytes: []const u8) error{ Unsupport
     return switch (roc_target.classifyOs(target.toOsTag())) {
         .macos => try machoSection(object_bytes, "__const"),
         .windows => try coffSectionData(object_bytes, ".rdata"),
-        .linux, .freebsd, .openbsd, .netbsd => try elfSectionData(object_bytes, ".rodata"),
+        // Pointer-bearing read-only data is `.data.rel.ro`.
+        .linux, .freebsd, .openbsd, .netbsd => elfSectionData(object_bytes, ".rodata") catch |err| switch (err) {
+            error.SectionNotFound => try elfSectionData(object_bytes, ".data.rel.ro"),
+            error.InvalidObjectFile, error.UnsupportedTarget => return err,
+        },
         .other => error.UnsupportedTarget,
     };
 }
@@ -1030,7 +1034,7 @@ const TestObjectTables = struct {
             .linux => return .{
                 .format = .elf,
                 .text = try elfSectionData(bytes, ".rela.text"),
-                .data = try elfSectionData(bytes, ".rela.rodata"),
+                .data = try elfSectionData(bytes, ".rela.data.rel.ro"),
                 .symbols = try elfSectionData(bytes, ".symtab"),
                 .strings = try elfSectionData(bytes, ".strtab"),
                 .relocation_size = 24,

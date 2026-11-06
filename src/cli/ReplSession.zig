@@ -155,7 +155,7 @@ pub fn init(
 ) ReplInitError!ReplSession {
     const builtin_modules = try allocator.create(eval.BuiltinModules);
     errdefer allocator.destroy(builtin_modules);
-    builtin_modules.* = try eval.BuiltinModules.init(allocator);
+    builtin_modules.* = try eval.BuiltinModules.init(allocator, roc_ctx.std_io);
     return .{
         .allocator = allocator,
         .roc_ctx = roc_ctx,
@@ -897,6 +897,7 @@ pub fn inspectExpressionType(
 
     var parsed = eval.Inspected.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
         self.allocator,
+        self.roc_ctx.std_io,
         .module,
         source,
         import_sources,
@@ -1148,6 +1149,7 @@ fn initParsedResources(self: *ReplSession) ReplStepError!eval.Inspected.ParsedRe
 
     return try eval.Inspected.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
         self.allocator,
+        self.roc_ctx.std_io,
         .module,
         source,
         import_sources,
@@ -1366,6 +1368,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
 
     if (eval.Inspected.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
         self.allocator,
+        self.roc_ctx.std_io,
         .module,
         source,
         import_sources,
@@ -1430,6 +1433,7 @@ fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: rep
 
     var resources = eval.Inspected.publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
         self.allocator,
+        self.roc_ctx.std_io,
         .module,
         source,
         import_sources,
@@ -2034,7 +2038,7 @@ var shared_test_builtins: ?eval.BuiltinModules = null;
 
 fn sharedTestBuiltins() ReplInitError!*eval.BuiltinModules {
     if (shared_test_builtins == null) {
-        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator, std.testing.io);
     }
     return &shared_test_builtins.?;
 }

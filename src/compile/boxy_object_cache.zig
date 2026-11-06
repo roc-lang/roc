@@ -21,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 12;
+pub const format_version: u32 = 13;
 
 const magic = "RBXO";
 
@@ -172,8 +172,9 @@ pub const Entry = struct {
     /// Module names are semantic; module identities bind locations to the
     /// current compilation's source environments, independent of checkout.
     code_locations: []const u8 = &.{},
-    /// The module's unit image: a `UnitImage` for a Linux x86_64 target, a
-    /// `WasmUnitImage` for a wasm target, and empty for any other target.
+    /// The module's unit image: a `UnitImage` for a target whose
+    /// `boxy_unit.imageKind` is native, a `WasmUnitImage` for a wasm
+    /// target, and empty for any other target.
     image: []const u8 = &.{},
 };
 

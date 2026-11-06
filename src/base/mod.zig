@@ -62,6 +62,7 @@ pub const memory_fault = @import("memory_fault.zig");
 pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
 pub const stack_budget = @import("stack_budget.zig");
+pub const eval_stack = @import("eval_stack.zig");
 pub const stack_overflow = @import("stack_overflow.zig");
 
 pub const target = @import("target.zig");
@@ -205,6 +206,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("CommonEnv.zig"));
     std.testing.refAllDecls(@import("ConcurrentU64.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
+    std.testing.refAllDecls(@import("eval_stack.zig"));
     std.testing.refAllDecls(@import("death_test.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("ice_context.zig"));

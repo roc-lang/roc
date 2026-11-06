@@ -197,11 +197,17 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     try std.testing.expectEqual(@as(usize, if (expected_rejections == 0) 0 else 1), mismatches);
 
     const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
+    const bodies = artifact.bodies();
+    const store = &artifact.moduleEnvConst().store;
     var rejected: usize = 0;
     for (artifact.static_dispatch_plans.plans) |plan| {
         if (plan.resolution != .checked_error) continue;
         rejected += 1;
-        try std.testing.expect(artifact.checked_bodies.exprContainsDiagnosticError(plan.expr));
+        try std.testing.expect(switch (bodies.index().nodeKind(plan.node)) {
+            .expr => try bodies.exprContainsDiagnosticError(@fromBackingInt(plan.node)),
+            .pattern => try bodies.patternContainsDiagnosticError(@fromBackingInt(plan.node)),
+            .statement, .unreached => false,
+        });
     }
     try std.testing.expectEqual(expected_rejections, rejected);
 
@@ -209,20 +215,21 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     var found_independent = expected.independent_expr == null;
     var completed_conversions: usize = 0;
     for (artifact.compile_time_roots.roots) |root| {
-        const expr = artifact.checked_bodies.expr(root.expr);
+        const root_node = if (root.literalNode()) |literal| literal.node() else @backingInt(root.rootExpr());
+        const region = store.getNodeRegion(@fromBackingInt(root_node));
         // A root evaluated at compile time whose own body contains the
         // rejected code reaches it and stores the crash, without reporting the
         // problem a second time.
-        if (artifact.checked_bodies.exprContainsDiagnosticError(root.expr) and root.kind != .expect and
+        if (try bodies.rootContainsDiagnosticError(root) and root.kind != .expect and
             root.request_eligibility == .eligible)
         {
             try std.testing.expect(root.payload == .const_node);
             try std.testing.expect(artifact.const_store.get(root.payload.const_node) == .checked_error);
         }
-        const expr_source = module_source[expr.source_region.start.offset..expr.source_region.end.offset];
+        const expr_source = module_source[region.start.offset..region.end.offset];
         if (expected.independent_expr) |independent| {
             if (std.mem.eql(u8, expr_source, independent)) {
-                try std.testing.expect(!artifact.checked_bodies.exprContainsDiagnosticError(root.expr));
+                try std.testing.expect(!try bodies.rootContainsDiagnosticError(root));
                 try std.testing.expect(root.payload == .const_node);
                 found_independent = true;
             }

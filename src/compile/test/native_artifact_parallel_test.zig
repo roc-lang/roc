@@ -304,7 +304,7 @@ fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram, phase: Re
     defer baseline_object.deinit();
     try expectUseful(object_metrics);
     const baseline_object_procedures = object_metrics.procedures_emitted;
-    var builtins = try eval.BuiltinModules.init(allocator);
+    var builtins = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtins.deinit();
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
@@ -457,7 +457,7 @@ test "wasm modules are byte identical across worker counts, completion orders, a
     const baseline = try eval.Inspected.wasmModuleBytes(allocator, lowered, null);
     defer allocator.free(baseline);
 
-    var builtins = try eval.BuiltinModules.init(allocator);
+    var builtins = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtins.deinit();
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();

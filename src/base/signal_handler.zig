@@ -510,6 +510,16 @@ pub fn currentThreadStackBoundsForTest() ?StackBounds {
     return thread_stack_bounds;
 }
 
+/// Make `bounds` the stack the fault handler classifies the current thread's
+/// faults against, and return the bounds it replaces. A thread that switches
+/// to another stack passes that stack's bounds while it runs there and
+/// restores the returned bounds when it switches back.
+pub fn swapCurrentThreadStackBounds(bounds: ?StackBounds) ?StackBounds {
+    const previous = thread_stack_bounds;
+    thread_stack_bounds = bounds;
+    return previous;
+}
+
 fn installPosixProcessHandlers(callbacks: Callbacks) bool {
     while (!install_mutex.tryLock()) {}
     defer install_mutex.unlock();
@@ -550,12 +560,12 @@ fn installPosixProcessHandlers(callbacks: Callbacks) bool {
     return true;
 }
 
-// Per-thread guarantee reserved so EXCEPTION_STACK_OVERFLOW can dispatch.
-// Without this, an overflow on a worker thread takes the process down before
-// any handler runs—the OS only reserves a guarantee for the main thread.
-// 32 KB is well below the default 1 MB stack and large enough to host our
-// minimal handler frame.
-const WINDOWS_STACK_GUARANTEE: ULONG = 32 * 1024;
+/// Per-thread (and per-fiber) guarantee reserved so EXCEPTION_STACK_OVERFLOW
+/// can dispatch. Without this, an overflow on a worker thread takes the
+/// process down before any handler runs—the OS only reserves a guarantee for
+/// the main thread. 32 KB is well below the default 1 MB stack and large
+/// enough to host our minimal handler frame.
+pub const windows_stack_guarantee: ULONG = 32 * 1024;
 
 fn installWindows(callbacks: Callbacks) bool {
     while (!install_mutex.tryLock()) {}
@@ -575,7 +585,7 @@ fn installWindows(callbacks: Callbacks) bool {
     }
 
     if (!current_thread_installed) {
-        var guarantee: ULONG = WINDOWS_STACK_GUARANTEE;
+        var guarantee: ULONG = windows_stack_guarantee;
         _ = SetThreadStackGuarantee(&guarantee);
         current_thread_installed = true;
     }
