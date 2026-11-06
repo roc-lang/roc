@@ -2499,14 +2499,14 @@ and calls its out-of-line half for everything else, so each inlined copy adds
 that path to its caller on top of the call. Two properties of the mandatory
 inliner make that unbounded. It inlines at every site, with no measure of what
 the copies add to one caller, and it runs before the inlining pipeline has
-simplified any callee, so what it copies is the body as linked: the wrapper's
-unoptimized bitcode, several times its simplified size, with a stack slot for
-every temporary. A procedure that formats many strings holds tens of thousands
-of concat sites, since single-use substitution gathers a program's formatting
-into few procedures, and the function passes that then have to simplify those
-copies in one body are superlinear in its size. The cost-model inliner works
-bottom-up instead: it weighs the wrapper's simplified body at each site and
-declines the sites it estimates cold.
+simplified any callee, so what it copies is the wrapper while the helpers it
+calls are still calls and its temporaries are still stack slots, several times
+its simplified size. A procedure that formats many strings holds tens of
+thousands of concat sites, since single-use substitution gathers a program's
+formatting into few procedures, and the function passes that then have to
+simplify those copies in one body are superlinear in its size. The cost-model
+inliner works bottom-up instead: it weighs the wrapper's simplified body at
+each site and declines the sites it estimates cold.
 
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
