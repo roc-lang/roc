@@ -202,7 +202,8 @@ test "an imported nominal argument demands what its declaring module's backing d
         \\held = |_w, n| n
         \\ignore_tag : Tagged(t), U64 -> U64
         \\ignore_tag = |_t, n| n
-    , &.{.{ "Shapes.roc",
+    , &.{.{
+        "Shapes.roc",
         \\module [Ref, Wrap, Tagged]
         \\Ref(r) := { ..r }
         \\Wrap(a) := List(a)
