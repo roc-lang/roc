@@ -20233,23 +20233,48 @@ assumption that fell (not re-derived, or shed in turn) is shed and retries
 next round, and the rest verify at once, so assumptions that support one
 another promote together. An assumption that fails is not refuted, only
 unprovable under that round's proof data. Rounds that rewrite a statement or
-persist a new bound open a new epoch; once the rounds after one reach their
+admit a persisted bound open a new epoch; once the rounds after one reach their
 fixpoint, every assumption that died under an earlier epoch's proof data is
 seeded once more, since the updated proof data may carry its verification (a
 counter's floor that needs the bound on its increment, which itself takes
 rounds to settle). Assumptions are never retried against the proof data they
-already failed under, which is what bounds the round count.
+already failed under, so each epoch revives each assumption at most once.
 
-Bounds persisted from round to round are widened rather than iterated: a
-persisted bound that comes back weaker three rounds in a row is being pushed
-along by the loop it describes (a cursor that advances by a constant each
-iteration bounded against a length, say) and would weaken forever, so it is
-replaced by a tombstone that later rounds skip and that keeps the widening
-from being forgotten. A bound that weakens once or twice while a loop's
-edges are still being discovered settles and is kept. Accumulated slack
-inside a query is clamped far outside any genuine bound; past that magnitude
-the ordering constraints contradict one another, which the clamp preserves
-without letting the arithmetic overflow.
+Everything a round carries into later rounds (each merge's environment meet
+and ordering intersection, each loop's entry orderings, each loop parameter's
+bounds) is a list of bounds or orderings, each identified by what it bounds:
+a bound by its base, an ordering by its endpoints. The lists form a lattice that only ever
+weakens. A round joins what it derived into each list it persists: an item
+it derived again keeps the larger of its stored and derived slack; an item
+it did not derive is dropped, and stays listed so that it is never admitted
+again; an item no round derived before is admitted while the list has room.
+
+Soundness follows from the induction the persisted state already rests on.
+The first round is seeded with nothing, so what it derives holds. A later
+round derives from seeds that hold, so what it derives holds too, and a
+rewrite only removes paths, so a relation every path satisfied still holds
+afterwards. The lattice never persists anything stronger than what the
+latest round to persist the list derived: a kept item's slack only grows,
+dropping removes an item, and an admission is exactly what that round
+derived. Weakening a true relation, or forgetting it, leaves a true relation.
+
+The lattice is also what bounds the rounds. Only an admission strengthens
+what the next round is seeded with, so a round asks for another only when it
+admitted something, rewrote a statement, or deferred or resolved an assumed
+invariant; a round that merely weakens the persisted state cannot prove
+anything the round before it could not. Each list admits each base or pair
+of endpoints at most once and has a fixed capacity, so the admissions, and
+with them the epochs and the rounds, are bounded by the procedure, and there
+is no cap on rounds. Debug builds assert that every round that asks for
+another made one of these one-way steps. A bound that its loop pushes along
+(a cursor that advances by a constant each iteration, bounded against a
+length) keeps the loosest slack any round derived rather than chasing the
+loop, and a bound that a capped query reaches only on some rounds drops out
+for good on the first round that misses it rather than oscillating.
+
+Accumulated slack inside a query is clamped far outside any genuine bound;
+past that magnitude the ordering constraints contradict one another, which
+the clamp preserves without letting the arithmetic overflow.
 
 A loop parameter that a back edge carries back as the very value its body
 was seeded with is unchanged around the loop, so the meet keeps the entry
