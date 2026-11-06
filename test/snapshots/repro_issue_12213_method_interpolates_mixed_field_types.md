@@ -194,7 +194,7 @@ NO CHANGE
 								(field (name "age")
 									(e-num (value "36")))))))
 				(s-expr
-					(e-call (constraint-fn-var 378)
+					(e-call (constraint-fn-var 379)
 						(e-lookup-local
 							(p-assign (ident "echo!")))
 						(e-runtime-error (tag "erroneous_value_expr")

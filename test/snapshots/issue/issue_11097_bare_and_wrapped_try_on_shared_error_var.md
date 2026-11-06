@@ -152,7 +152,7 @@ NO CHANGE
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 375)
+		(e-call (constraint-fn-var 378)
 			(e-lookup-local
 				(p-assign (ident "run")))
 			(e-lambda
