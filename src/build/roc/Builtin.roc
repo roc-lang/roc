@@ -4177,7 +4177,6 @@ Builtin :: [].{
 		## If you plan to use [List.reserve] on an empty list, use [List.with_capacity]
 		## instead.
 		reserve : List(item), U64 -> List(item)
-		reserve = |list, spare| list_reserve(list, spare)
 
 		## Reduce memory usage by trimming unused capacity.
 		release_excess_capacity : List(item) -> List(item)

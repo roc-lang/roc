@@ -2027,8 +2027,12 @@ fn publishImportKeysWithBuiltin(
         };
     }
     for (artifacts, 0..) |artifact, i| {
+        // The loaded builtin artifact (`publishImportArtifacts` puts it first)
+        // is the baked one, whose own module index is the builtin compiler's;
+        // in this program Builtin is module 1, as a borrowed one is.
+        const loaded_builtin = pre_published_builtin == null and i == 0;
         imports[i + borrowed_builtin_count] = .{
-            .module_idx = artifact.module_identity.module_idx,
+            .module_idx = if (loaded_builtin) 1 else artifact.module_identity.module_idx,
             .key = artifact.key,
             .view = check.CheckedArtifact.importedView(&artifacts[i]),
         };

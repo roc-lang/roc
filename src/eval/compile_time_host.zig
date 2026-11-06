@@ -48,12 +48,12 @@ const allocation_header_stamp: u64 = 0x5f6d_6f63_7074_696d;
 /// every target and to every compiler host, including the 32-bit hosts whose
 /// compile-time interpreter cannot address more, so evaluation runs in that
 /// address space wherever the compiler runs (design.md "Compile-Time
-/// Constants"). A request past it, like one the host
-/// cannot satisfy, is the root's out-of-memory crash.
+/// Constants"). A request past it, like one the host cannot satisfy, is the
+/// root's out-of-memory crash.
 pub const max_roc_allocation_bytes: usize = std.math.maxInt(u32);
 
 /// The crash message of a compile-time allocation that was refused.
-pub const out_of_memory_message = "ran out of memory";
+const out_of_memory_message = "ran out of memory";
 
 const AllocationHeader = extern struct {
     size: usize,

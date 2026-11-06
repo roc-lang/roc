@@ -7074,10 +7074,20 @@ fn methodCallRequestsCapacity(self: *Self, call: anytype) bool {
 /// capacity (`LowLevel.requestsCapacity`).
 fn callRequestsCapacity(self: *Self, callee: CIR.Expr.Idx) bool {
     const callee_expr = self.cir.store.getExpr(callee);
-    if (callee_expr != .e_lookup_associated_resolved) return false;
-    const resolved = callee_expr.e_lookup_associated_resolved;
-    const target = self.moduleEnvForIdentity(self.cir, resolved.module_identity);
-    return builtinDefRequestsCapacity(target.env, resolved.target_def_idx);
+    if (callee_expr == .e_lookup_associated_resolved) {
+        const resolved = callee_expr.e_lookup_associated_resolved;
+        const target = self.moduleEnvForIdentity(self.cir, resolved.module_identity);
+        return builtinDefRequestsCapacity(target.env, resolved.target_def_idx);
+    }
+    if (callee_expr == .e_lookup_external) {
+        const external = callee_expr.e_lookup_external;
+        const module = self.hoistedImportedModule(self.cir, external.module_idx) orelse return false;
+        // An imported procedure is exposed by its definition's node.
+        const node: CIR.Node.Idx = @fromBackingInt(@intCast(external.target_node_idx));
+        if (module.store.nodes.get(node).tag != .def) return false;
+        return builtinDefRequestsCapacity(module, @fromBackingInt(@intCast(external.target_node_idx)));
+    }
+    return false;
 }
 
 /// Whether `def_idx` is a Builtin procedure whose body is exactly a
