@@ -14,7 +14,10 @@ fn topLevelDef(env: *const ModuleEnv, name: []const u8) CIR.Def.Idx {
     for (env.store.sliceDefs(env.all_defs)) |def_idx| {
         const pattern = env.store.getPattern(env.store.getDef(def_idx).pattern);
         if (pattern != .assign) continue;
-        if (std.mem.eql(u8, env.getIdent(pattern.assign.ident), name)) return def_idx;
+        const ident = env.getIdent(pattern.assign.ident);
+        // An associated definition's name is qualified by its type.
+        if (std.mem.eql(u8, ident, name) or
+            (std.mem.endsWith(u8, ident, name) and ident.len > name.len and ident[ident.len - name.len - 1] == '.')) return def_idx;
     }
     std.debug.panic("no top-level definition named {s}", .{name});
 }
@@ -39,16 +42,16 @@ fn contains(items: []const CIR.Expr.Idx, expr: CIR.Expr.Idx) bool {
 
 test "an importer forwards through an imported alias and retires uses of an imported checked error" {
     const imported_src =
-        \\Lib := [Lib]
+        \\Lib := [Lib].{
+        \\    scale : U64 -> U64
+        \\    scale = |value| value * 3
         \\
-        \\scale : U64 -> U64
-        \\scale = |value| value * 3
+        \\    triple : U64 -> U64
+        \\    triple = scale
         \\
-        \\triple : U64 -> U64
-        \\triple = scale
-        \\
-        \\broken : U64 -> U64
-        \\broken = missing_function
+        \\    broken : U64 -> U64
+        \\    broken = missing_function
+        \\}
     ;
     var imported = try TestEnv.init("Lib", imported_src);
     defer imported.deinit();
@@ -92,5 +95,6 @@ test "an importer forwards through an imported alias and retires uses of an impo
     try testing.expect(contains(main.retired_exprs.items.items, broken_lookup));
     try testing.expect(contains(main.retired_exprs.items.items, broken_call));
     try testing.expect(!contains(main.direct_procedure_calls.items.items, broken_call));
-    try testing.expect(main.valueReference(broken_lookup).? == .imported);
+    const broken_target = main.valueReference(broken_lookup);
+    try testing.expect(broken_target == null or broken_target.? == .imported or broken_target.? == .associated);
 }

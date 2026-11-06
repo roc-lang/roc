@@ -104,6 +104,8 @@ const Resolver = struct {
     /// target is not resolved yet.
     pending_aliases: std.ArrayList(bool) = .empty,
     retired: std.DynamicBitSetUnmanaged = .{},
+    /// Whether resolution retired a use of a rejected binding.
+    rejected: bool = false,
     direct_calls: std.ArrayList(CIR.Expr.Idx) = .empty,
 
     fn init(gpa: Allocator, env: *ModuleEnv, index: *const ModuleIndex, dependencies: Dependencies) Allocator.Error!Resolver {
@@ -175,11 +177,16 @@ const Resolver = struct {
                 .discarded => continue,
                 .data_constant => {
                     const pattern = hoistedRootPattern(root) orelse continue;
+                    // A lookup of a top-level definition's pattern names the
+                    // definition, even when checking also selected it as a
+                    // hoisted root.
+                    if (self.top_level_bindings.contains(pattern)) continue;
                     const id = try self.appendBinding(.{ .pattern = pattern, .body = .constant });
                     try self.hoisted_constants.put(pattern, id);
                 },
                 .callable_binding => {
                     const pattern = hoistedRootPattern(root) orelse unreachable; // a function-valued hoisted root binds a pattern
+                    if (self.top_level_bindings.contains(pattern)) continue;
                     const evaluated: ?CIR.Expr.Idx = switch (root.body) {
                         .expr, .valueless_binding => root.expr,
                         .pattern_error, .pattern_extraction, .pattern_validation => null,
@@ -270,7 +277,12 @@ const Resolver = struct {
             var pending_alias = false;
             const data = env.store.getExpr(expr);
             const target: ValueReferenceTarget = if (data == .e_lookup_local)
-                self.resolveLocal(data.e_lookup_local.pattern_idx, &pending_alias)
+                self.resolveLocal(data.e_lookup_local.pattern_idx, &pending_alias) orelse {
+                    // A use of a rejected binding is retired.
+                    self.retired.set(raw);
+                    self.rejected = true;
+                    continue;
+                }
             else if (data == .e_lookup_external)
                 .{ .imported = .{
                     .import = data.e_lookup_external.module_idx,
@@ -293,8 +305,12 @@ const Resolver = struct {
         }
     }
 
-    fn resolveLocal(self: *const Resolver, pattern: CIR.Pattern.Idx, pending_alias: *bool) ValueReferenceTarget {
-        std.debug.assert(self.index.reachesPattern(pattern));
+    /// The binding a local lookup names, or null when its binding was rejected.
+    fn resolveLocal(self: *const Resolver, pattern: CIR.Pattern.Idx, pending_alias: *bool) ?ValueReferenceTarget {
+        // A binder whose binding statement checking rejected is not
+        // reached: the statement evaluates as a runtime error and binds
+        // nothing, so a use of the binder names no binding.
+        if (!self.index.reachesPattern(pattern)) return null;
         if (self.top_level_defs.get(pattern)) |def| return .{ .top_level = def };
         if (self.hoisted_procedures.contains(pattern)) return .{ .hoisted_procedure = pattern };
         if (self.promoted_procedures.contains(pattern)) return .{ .promoted_procedure = pattern };
@@ -432,7 +448,7 @@ const Resolver = struct {
     /// is retired becomes a checked error.
     fn retire(self: *Resolver) Allocator.Error!void {
         const env = self.env;
-        var rejected = false;
+        var rejected = self.rejected;
         for (self.references.items) |reference| {
             const body = self.bindingBody(self.referencedBinding(reference.target)) orelse continue;
             if (body == .checked_error) {
