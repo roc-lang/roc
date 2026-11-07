@@ -6543,10 +6543,10 @@ pub const Builder = struct {
     pub fn aliasTargetInstance(self: *Builder, node: static_dispatch.EvidenceNode, callee: WorkerId, edge: checked.LiteralEdge) Allocator.Error!CallInstance {
         const table = self.view.view.static_dispatch_plans;
         const alias = node.target.alias orelse invariant("an alias-instantiated target has no alias binding");
-        const alias_module = self.program.moduleByIdx(node.target.module_idx).index;
+        const alias_module = self.program.moduleByKey(alias.module).index;
         const chain_frame = self.chain_frame;
         self.chain_frame = false;
-        const first: AliasStep = switch (alias) {
+        const first: AliasStep = switch (alias.binding) {
             .top_level => |pattern| self.callableEvalAliasStep(alias_module, self.program.callable_eval_by_pattern.get(.{ .module = alias_module, .pattern = pattern }) orelse
                 invariant("a method's alias binding has no callable-eval template")),
             .local => |local| self.localAliasStep(alias_module, local.lookup, local.dispatch_scope),

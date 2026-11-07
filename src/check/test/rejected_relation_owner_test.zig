@@ -249,3 +249,82 @@ test "a top-level literal pattern whose conversion fails retires the definition"
     }
     try std.testing.expectEqual(@as(usize, 1), retired_defs);
 }
+
+/// The single element of the list a `var` statement initializes.
+fn varListElement(test_env: *TestEnv, def_name: []const u8, stmt_index: usize) TestEnv.TestEnvError!CIR.Expr {
+    const store = &test_env.module_env.store;
+    const stmt = try test_env.lambdaBodyStatement(def_name, stmt_index);
+    try std.testing.expect(stmt == .s_var);
+    const list = store.getExpr(stmt.s_var.expr);
+    try std.testing.expect(list == .e_list);
+    const elems = store.sliceExpr(list.e_list.elems);
+    try std.testing.expectEqual(@as(usize, 1), elems.len);
+    return store.getExpr(elems[0]);
+}
+
+test "a literal whose type a copied requirement's resolution grounds is the runtime error itself (issue 12727)" {
+    // Resolving the call's copy of `append` makes the list's item `Bool`. The
+    // literal's conversion belongs to the literal, not to the call whose
+    // requirement grounded it: the `1` is retired and the call stays a call.
+    const source =
+        \\bad = |xs| xs.append(Bool.True)
+        \\
+        \\run = |_| {
+        \\    var $xs = [1]
+        \\    $xs = bad($xs)
+        \\    $xs
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+    try std.testing.expect(try varListElement(&test_env, "run", 0) == .e_runtime_error);
+    const reassign = try test_env.lambdaBodyStatement("run", 1);
+    try std.testing.expect(reassign == .s_reassign);
+    try std.testing.expect(test_env.module_env.store.getExpr(reassign.s_reassign.expr) == .e_call);
+}
+
+test "a literal a copied requirement grounds to a builtin non-number type is the runtime error itself (issue 12727)" {
+    // The appended value is a `Str` itself, not a quote literal: a quote's
+    // own conversion would be generalized with `bad`, leaving the item a
+    // variable that converts from both literals rather than a `Str`.
+    const source =
+        \\bad = |xs| xs.append(Str.concat("a", "b"))
+        \\
+        \\run = |_| {
+        \\    var $xs = [1]
+        \\    $xs = bad($xs)
+        \\    $xs
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+    try std.testing.expect(try varListElement(&test_env, "run", 0) == .e_runtime_error);
+    const reassign = try test_env.lambdaBodyStatement("run", 1);
+    try std.testing.expect(reassign == .s_reassign);
+    try std.testing.expect(test_env.module_env.store.getExpr(reassign.s_reassign.expr) == .e_call);
+}
+
+test "a copied literal conversion still fails at the use that copied it (issue 12727)" {
+    // `wrap`'s `1` is generalized with `wrap`; the call's copy of its
+    // conversion fails at the call, and `wrap`'s own body stays valid.
+    const source =
+        \\wrap = |xs| xs.append(1)
+        \\
+        \\run = |_| wrap([Bool.True])
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try std.testing.expect(try test_env.typeProblemCount() != 0);
+    const store = &test_env.module_env.store;
+    const run = store.getExpr(try test_env.defExpr("run"));
+    try std.testing.expect(run == .e_lambda);
+    try std.testing.expect(store.getExpr(run.e_lambda.body) == .e_runtime_error);
+    const wrap = store.getExpr(try test_env.defExpr("wrap"));
+    try std.testing.expect(wrap == .e_lambda);
+    try std.testing.expect(store.getExpr(wrap.e_lambda.body) != .e_runtime_error);
+}
