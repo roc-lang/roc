@@ -438,6 +438,10 @@ pub const Solution = struct {
 
     /// The local a solved-borrowed local borrows its value through, or null
     /// for owned bindings and borrowed parameters.
+    pub fn borrowFacts(self: *const Solution) BorrowFacts {
+        return .{ .borrowed = &self.borrowed, .leaders = self.leader };
+    }
+
     pub fn borrowSourceOf(self: *const Solution, local: LIR.LocalId) ?LIR.LocalId {
         const index = @backingInt(local);
         if (index >= self.borrow_source.len) return null;
@@ -897,6 +901,7 @@ fn FrozenProcRows(comptime T: type) type {
 const Solver = struct {
     allocator: Allocator,
     store: *const LirStore,
+    layouts: *const layout_mod.Store,
     rc_local: []const bool,
     consume_dead_boxes: bool,
     /// Run the host-visibility analysis. Off, every local is visible.
@@ -996,6 +1001,7 @@ pub fn solveWithOptions(
     var solver = Solver{
         .allocator = allocator,
         .store = store,
+        .layouts = layouts,
         .rc_local = rc_local,
         .consume_dead_boxes = consume_dead_boxes,
         .thread_confined_rc = thread_confined_rc,
@@ -1148,11 +1154,17 @@ pub fn solveWithOptions(
             // and a parameter holding a demand hole is borrowed by its type:
             // the body demands nothing of the hole, and no refcount operation
             // exists for a value holding one (design.md "Specialization By
-            // Demand"). The position is not tracked, so no demand flips it.
+            // Demand"). Such a parameter is a borrowed binding like any
+            // borrowed parameter, which nothing demands, so no demand flips
+            // the pinned position.
             const params = store.getLocalSpan(proc.args);
             for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
                 const param = GuardedList.at(params, position);
-                if (layouts.layoutHoldsHole(store.getLocal(param).layout_idx)) sig = sig.withBorrowedParam(position);
+                if (!layouts.layoutHoldsHole(store.getLocal(param).layout_idx)) continue;
+                sig = sig.withBorrowedParam(position);
+                const param_index = domain.indexOf(param) orelse continue;
+                solver.param_position[param_index] = @intCast(position);
+                solver.param_proc[param_index] = @intCast(proc_index);
             }
         }
         solver.sigs[proc_index] = sig;
@@ -2677,6 +2689,7 @@ fn flipParamIfRequired(solver: *Solver, local_index: u32, work: *std.ArrayList(u
     if (sig.paramMode(position) == .owned) return;
     const required = solver.demand[local_index] or solver.defs[local_index] == .multi;
     if (!required) return;
+    if (solver.pinned.isSet(proc_index)) solveInvariant("ARC demanded a parameter its pinned signature borrows");
     sig.borrowed_params &= ~arc_sig.paramBit(position).?;
     try work.append(solver.allocator, proc_index * arc_sig.tracked_param_count + position);
 }
@@ -2885,6 +2898,16 @@ fn liftVisibilitySeed(solver: *Solver, local: LIR.LocalId) SolveError!void {
     if (!solver.thread_confined_rc) return;
     if (solver.domain.indexOf(local) == null) return;
     try solver.visibility_facts.append(solver.allocator, .{ .seed = local });
+}
+
+/// Whether a join parameter carries an ownership unit into its body. One
+/// holding a demand hole carries none (design.md "Specialization By
+/// Demand"): only a tail loop over a demand-shaped procedure binds such a
+/// parameter, which is one of that procedure's own parameters, borrowed by
+/// its type, and every value the loop rebinds it to holds a hole too, so it
+/// is a borrow of one of those parameters, which live for the whole call.
+fn joinParamCarriesUnit(solver: *const Solver, param: LIR.LocalId) bool {
+    return !solver.layouts.layoutHoldsHole(solver.store.getLocal(param).layout_idx);
 }
 
 fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
@@ -3142,6 +3165,10 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             }
         },
         .set_local => |assign| {
+            // A join parameter holding a demand hole carries no ownership
+            // unit (`joinParamCarriesUnit`): initializing it neither defines
+            // a unit nor demands one of its value.
+            if (assign.mode == .initialize_join_param and !joinParamCarriesUnit(solver, assign.target)) return;
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             if (assign.target != assign.value) try solver.binding_facts.append(allocator, .{ .demand = assign.value });
             try liftVisibilityLink(solver, assign.target, assign.value);
@@ -3218,6 +3245,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             const params = store.getLocalSpan(join_stmt.params);
             for (0..GuardedList.borrowLen(params)) |param_index| {
                 const param = GuardedList.at(params, param_index);
+                if (!joinParamCarriesUnit(solver, param)) continue;
                 try solver.binding_facts.append(allocator, .{ .multi = param });
                 if (solver.domain.indexOf(param)) |arc_index| solver.join_param.set(arc_index);
                 try solver.unique_facts.append(allocator, .{ .join_target = param });
@@ -4065,8 +4093,32 @@ pub const TakeSource = union(enum) {
     none,
     /// The `take_kind` emission stamped on each `assign_ref`.
     stamped,
-    /// The statements of committed unconditional takes, before emission.
-    set: *const std.bit_set.DynamicBitSetUnmanaged,
+    /// The committed takes and complete-projection decisions, before
+    /// emission.
+    set: PlannedTakes,
+};
+
+/// What emission will do at the reads dismantle committed, decided before
+/// emission runs.
+pub const PlannedTakes = struct {
+    /// Statements of committed unconditional takes.
+    takes: *const std.bit_set.DynamicBitSetUnmanaged,
+    /// Statements of complete projection reads whose root's ownership place
+    /// is used again after the read. Emission retains the projected value
+    /// right after such a read, exactly as the `incref` a stamped body
+    /// carries there, so the value has a second owner.
+    retaining_projections: *const std.bit_set.DynamicBitSetUnmanaged,
+};
+
+/// The solved binding facts the analysis reads views and ownership places
+/// from.
+pub const BorrowFacts = struct {
+    /// Bit set => the local's binding is borrowed.
+    borrowed: *const std.bit_set.DynamicBitSetUnmanaged,
+    /// Each local's liveness-group leader (`Solution.leader`). A group is the
+    /// ownership place of its leader: the leader and every borrowed local
+    /// anchored on it, all of which need the leader's unit alive.
+    leaders: []const u32,
 };
 
 const FieldStoreEdge = struct { source: u32, container: u32, field: u32, stmt: u32 };
@@ -4135,6 +4187,81 @@ const ConsumeAt = struct {
 /// One transfer edge (alias definition or join-parameter initialization)
 /// whose target is foreign when the source is used again after `stmt`.
 const EdgeCheck = struct { source: LIR.LocalId, stmt: u32, target: u32 };
+
+/// The ownership place of every analyzed local: its liveness group, the
+/// leader together with every borrowed local anchored on it. Each member
+/// reads the leader's allocation without a unit of its own, so a transfer
+/// out of any member moves the place's unit only when no member is used
+/// afterwards; otherwise emission retains the transferred value, which then
+/// has a second owner. Without solved borrow facts every local is its own
+/// place.
+const OwnershipPlaces = struct {
+    /// Dense index of each local's group leader, or empty when every local
+    /// is its own place.
+    group_of: []u32 = &.{},
+    members: ?EdgeRows = null,
+
+    fn init(allocator: Allocator, borrows: ?BorrowFacts, marks: anytype, index_to_local: []const u32) Allocator.Error!OwnershipPlaces {
+        const facts = borrows orelse return .{};
+        const group_of = try allocator.alloc(u32, index_to_local.len);
+        errdefer allocator.free(group_of);
+        var grouped = false;
+        for (group_of, index_to_local, 0..) |*group, raw, index| {
+            const leader = facts.leaders[raw];
+            group.* = @intCast(index);
+            if (leader != raw and marks.indexOf(@fromBackingInt(raw)) != null) {
+                group.* = marks.indexOf(@fromBackingInt(leader)) orelse
+                    solveInvariant("ARC uniqueness found a refcounted local whose liveness leader is outside its domain");
+            }
+            grouped = grouped or group.* != index;
+        }
+        if (!grouped) {
+            allocator.free(group_of);
+            return .{};
+        }
+        return .{ .group_of = group_of, .members = try EdgeRows.build(allocator, index_to_local.len, group_of) };
+    }
+
+    fn deinit(self: *OwnershipPlaces, allocator: Allocator) void {
+        if (self.members) |*members| members.deinit(allocator);
+        allocator.free(self.group_of);
+    }
+
+    fn membersOf(self: *const OwnershipPlaces, index: u32, single: *[1]u32) []const u32 {
+        const members = self.members orelse {
+            single[0] = index;
+            return single;
+        };
+        return members.row(self.group_of[index]);
+    }
+
+    /// Whether some member of the local's place is used after `stmt`.
+    fn usedAfter(self: *const OwnershipPlaces, order: *UseOrder, index_to_local: []const u32, stmt: u32, index: u32) SolveError!bool {
+        var single: [1]u32 = undefined;
+        for (self.membersOf(index, &single)) |member| {
+            if (try order.usesAfter(stmt, @fromBackingInt(@intCast(index_to_local[member])))) return true;
+        }
+        return false;
+    }
+
+    /// One check per member of the source's place other than the target,
+    /// for the transfer edge from `source` to `target` at `stmt`.
+    fn appendEdgeChecks(
+        self: *const OwnershipPlaces,
+        allocator: Allocator,
+        checks: *std.ArrayList(EdgeCheck),
+        index_to_local: []const u32,
+        source: u32,
+        stmt: u32,
+        target: u32,
+    ) Allocator.Error!void {
+        var single: [1]u32 = undefined;
+        for (self.membersOf(source, &single)) |member| {
+            if (member == target) continue;
+            try checks.append(allocator, .{ .source = @fromBackingInt(@intCast(index_to_local[member])), .stmt = stmt, .target = target });
+        }
+    }
+};
 
 /// Decides every transfer edge's liveness with one marking per source local.
 fn settleEdgeChecks(order: *UseOrder, checks: []EdgeCheck, ctx: anytype) SolveError!void {
@@ -4260,6 +4387,14 @@ const ConsumptionProof = struct {
 /// flows into. Candidate origins ascend as well: a local starts from the
 /// candidate reads among its own definitions and gathers its inputs'
 /// origins, and a stored field gathers its inputs' origins.
+///
+/// A value with a second holder has every stored field shared with that
+/// holder, and so does every container viewing its fields. One bit per
+/// value records this: it starts on the destroyed values, follows the
+/// container views (`FieldEdges.aliases`) and every newly destroyed value,
+/// and a field read through a value carrying it is dead whatever the
+/// value's per-field masks say. Each value gains the bit at most once, so
+/// sharing never re-runs per-field propagation.
 fn orOriginWords(into: []u64, origins: []const u64, origin_words: usize, local: u32) bool {
     return orWords(into, origins[local * origin_words ..][0..origin_words]);
 }
@@ -4391,6 +4526,14 @@ fn settleUniqueOrigins(
     defer mask_work.deinit(allocator);
     var mask_queued = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer mask_queued.deinit(allocator);
+    var shared = try destroyed.clone(allocator);
+    defer shared.deinit(allocator);
+    var shared_work = std.ArrayList(u32).empty;
+    defer shared_work.deinit(allocator);
+    {
+        var destroyed_iter = destroyed.iterator(.{});
+        while (destroyed_iter.next()) |index| try shared_work.append(allocator, @intCast(index));
+    }
     var container_count: u32 = 0;
     for (0..local_count) |index| {
         const local: u32 = @intCast(index);
@@ -4458,7 +4601,22 @@ fn settleUniqueOrigins(
         }
     };
 
-    while (work.items.len != 0 or mask_work.items.len != 0) {
+    while (work.items.len != 0 or mask_work.items.len != 0 or shared_work.items.len != 0) {
+        while (shared_work.pop()) |value| {
+            for (mask_alias_rows.row(value)) |edge_index| {
+                const target = field_edges.aliases[edge_index].target;
+                if (shared.isSet(target)) continue;
+                shared.set(target);
+                try shared_work.append(allocator, target);
+            }
+            for (read_rows.row(value)) |edge_index| {
+                const target = field_edges.reads[edge_index].target;
+                if (!queued.isSet(target)) {
+                    queued.set(target);
+                    try work.append(allocator, target);
+                }
+            }
+        }
         while (mask_work.pop()) |container| {
             mask_queued.unset(container);
             // Containers without tracked field origins keep an empty mask.
@@ -4561,7 +4719,8 @@ fn settleUniqueOrigins(
                 const read = field_edges.reads[edge_index];
                 meet.fromSlot(masks, field_conds, read.container, read.field);
                 if (orWords(local_origins, field_conds.originsOf(read.container, read.field))) changed = true;
-                dead = dead or (dead_masks[read.container] & (@as(u64, 1) << @as(u6, @intCast(read.field)))) != 0;
+                dead = dead or shared.isSet(read.container) or
+                    (dead_masks[read.container] & (@as(u64, 1) << @as(u6, @intCast(read.field)))) != 0;
             }
         } else {
             for (call_inputs.row(local)) |edge_index| {
@@ -4586,6 +4745,10 @@ fn settleUniqueOrigins(
         if (dead and !destroyed.isSet(local)) {
             destroyed.set(local);
             changed = true;
+            if (!shared.isSet(local)) {
+                shared.set(local);
+                try shared_work.append(allocator, local);
+            }
         }
         if (!changed) continue;
         for (alias_edges[alias_offsets[local]..alias_offsets[local + 1]]) |target| {
@@ -4621,6 +4784,8 @@ fn settleUniqueOrigins(
             }
         }
     }
+    var shared_iter = shared.iterator(.{});
+    while (shared_iter.next()) |index| masks[index] = 0;
 }
 
 const ProcUniquenessDomain = struct {
@@ -4728,7 +4893,7 @@ const UniquenessWorkspace = struct {
         consume_dead_boxes: bool,
         layouts: *const layout_mod.Store,
         takes: TakeSource,
-        borrowed: *const std.bit_set.DynamicBitSetUnmanaged,
+        borrows: BorrowFacts,
         seed_masks: ?[]const arc_sig.ParamMask,
     ) SolveError!Uniqueness {
         // No result from the previous round survives into this call.
@@ -4738,7 +4903,7 @@ const UniquenessWorkspace = struct {
             uniqueness_analysis_rounds += 1;
         }
         self.order.use_answers = &self.use_answers;
-        return computeUniquenessDetailed(self.scratch.allocator(), store, rc_local, sigs, null, self.stmts, null, consume_dead_boxes, layouts, takes, borrowed, self, null, seed_masks);
+        return computeUniquenessDetailed(self.scratch.allocator(), store, rc_local, sigs, null, self.stmts, null, consume_dead_boxes, layouts, takes, borrows, self, null, seed_masks);
     }
 };
 
@@ -5110,7 +5275,7 @@ const UniquenessComponentTask = struct {
             self.consume_dead_boxes,
             self.layouts,
             self.takes,
-            &self.solution.borrowed,
+            self.solution.borrowFacts(),
             &result.workspace,
             null,
             self.solution.unique_seed_masks,
@@ -5497,7 +5662,7 @@ fn settleUniquenessOracle(
     const seed_scratch = try allocator.alloc(arc_sig.ParamMask, proc_count);
     defer allocator.free(seed_scratch);
     while (true) {
-        const uniqueness = try workspace.analyze(store, rc_local, solution.sigTable(), consume_dead_boxes, layouts, takes, &solution.borrowed, solution.unique_seed_masks);
+        const uniqueness = try workspace.analyze(store, rc_local, solution.sigTable(), consume_dead_boxes, layouts, takes, solution.borrowFacts(), solution.unique_seed_masks);
         var changed = false;
         rows.clearRetainingCapacity();
         for (0..proc_count) |proc_index| {
@@ -5692,7 +5857,7 @@ fn computeUniquenessDetailed(
     consume_dead_boxes: bool,
     layouts: *const layout_mod.Store,
     takes: TakeSource,
-    borrowed: ?*const std.bit_set.DynamicBitSetUnmanaged,
+    borrows: ?BorrowFacts,
     workspace: ?*UniquenessWorkspace,
     order_scratch: ?*UseOrder.Scratch,
     callee_seed_masks: ?[]const arc_sig.ParamMask,
@@ -5933,8 +6098,8 @@ fn computeUniquenessDetailed(
                     inline .list_reinterpret, .nominal => assign.op.source,
                     .discriminant, .field, .tag_payload, .tag_payload_struct => null,
                 };
-                const is_view = alias_of != null and borrowed != null and
-                    borrowed.?.isSet(@backingInt(assign.target));
+                const is_view = alias_of != null and borrows != null and
+                    borrows.?.borrowed.isSet(@backingInt(assign.target));
                 if (is_view) {
                     marks.destroy(&foreign_def, assign.target);
                     if (marks.indexOf(assign.target)) |target| if (marks.indexOf(alias_of.?)) |source| {
@@ -5975,6 +6140,16 @@ fn computeUniquenessDetailed(
                         try mask_aliases.append(allocator, .{ .source = source, .target = target });
                         field_def_counts[target] += 1;
                     };
+                }
+                // A complete projection whose root stays in use is retained
+                // right after the read, as a stamped body's `incref` there
+                // says: the projected value has a second owner.
+                switch (takes) {
+                    .set => |planned| if (planned.retaining_projections.isSet(stmt_index)) {
+                        marks.destroy(&destroyed, assign.target);
+                        marks.destroy(&retained, assign.target);
+                    },
+                    .none, .stamped => {},
                 }
             },
             .assign_literal => |assign| {
@@ -6296,7 +6471,7 @@ fn computeUniquenessDetailed(
                     .borrow_component, .borrow_operands => marks.destroy(&foreign_def, dyn_stmt.target.?),
                     .alias => |source| {
                         const target = dyn_stmt.target.?;
-                        const is_view = borrowed != null and borrowed.?.isSet(@backingInt(target));
+                        const is_view = borrows != null and borrows.?.borrowed.isSet(@backingInt(target));
                         if (is_view) {
                             marks.destroy(&foreign_def, target);
                             if (marks.indexOf(target)) |target_index| if (marks.indexOf(source)) |source_index| {
@@ -6523,17 +6698,19 @@ fn computeUniquenessDetailed(
         owned_order = try UseOrder.initFromStore(allocator, store, only_proc);
         break :blk &owned_order.?;
     };
+    var places = try OwnershipPlaces.init(allocator, borrows, marks, index_to_local);
+    defer places.deinit(allocator);
     {
         var checks = std.ArrayList(EdgeCheck).empty;
         defer checks.deinit(allocator);
         for (alias_targets.items) |target| {
-            try checks.append(allocator, .{ .source = @fromBackingInt(@intCast(index_to_local[alias_source[target]])), .stmt = alias_stmt[target], .target = target });
+            try places.appendEdgeChecks(allocator, &checks, index_to_local, alias_source[target], alias_stmt[target], target);
         }
         for (repeated_alias_edges.items) |def| {
-            try checks.append(allocator, .{ .source = @fromBackingInt(@intCast(index_to_local[def.source])), .stmt = def.stmt, .target = def.target });
+            try places.appendEdgeChecks(allocator, &checks, index_to_local, def.source, def.stmt, def.target);
         }
         for (join_incoming.items, join_incoming_stmts.items) |incoming, stmt| {
-            try checks.append(allocator, .{ .source = @fromBackingInt(@intCast(index_to_local[incoming.source])), .stmt = stmt, .target = incoming.target });
+            try places.appendEdgeChecks(allocator, &checks, index_to_local, incoming.source, stmt, incoming.target);
         }
         try settleEdgeChecks(order, checks.items, struct {
             foreign: *std.bit_set.DynamicBitSetUnmanaged,
@@ -6558,7 +6735,7 @@ fn computeUniquenessDetailed(
         }
     }.lessThan);
     for (field_stores.items) |edge| {
-        if (try order.usesAfter(edge.stmt, @fromBackingInt(@intCast(index_to_local[edge.source])))) continue;
+        if (try places.usedAfter(order, index_to_local, edge.stmt, edge.source)) continue;
         try live_stores.append(allocator, edge);
     }
     // A call carries an argument's unit into the callee only when the call
@@ -6569,7 +6746,7 @@ fn computeUniquenessDetailed(
     for (call_edges.items) |edge| {
         var live = true;
         for (call_args.items[edge.args_start..][0..edge.args_len]) |arg| {
-            if (try order.usesAfter(edge.stmt, @fromBackingInt(@intCast(index_to_local[arg])))) {
+            if (try places.usedAfter(order, index_to_local, edge.stmt, arg)) {
                 live = false;
                 break;
             }
@@ -6637,7 +6814,7 @@ fn computeUniquenessDetailed(
                 for (reads) |other_index| {
                     const other = field_reads.items[other_index];
                     if (other.take or other.field != take.field) continue;
-                    const holds_unit = if (borrowed) |modes| !modes.isSet(index_to_local[other.target]) else switch (takes) {
+                    const holds_unit = if (borrows) |facts| !facts.borrowed.isSet(index_to_local[other.target]) else switch (takes) {
                         .stamped => retained.isSet(other.target),
                         .none, .set => true,
                     };
@@ -6834,7 +7011,7 @@ fn noteFieldRead(
     const take = switch (takes) {
         .none => false,
         .stamped => store.stmtRowOrDefault(store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt))).assign_ref.extra).take_kind == .take,
-        .set => |set| set.isSet(stmt),
+        .set => |set| set.takes.isSet(stmt),
     };
     try reads.append(allocator, .{ .container = container, .target = target, .field = field, .stmt = stmt, .take = take });
 }
@@ -6919,6 +7096,16 @@ const UniquenessTest = struct {
             .body = body,
             .ret_layout = layout,
         }, .none);
+    }
+
+    /// Every local leads its own liveness group.
+    fn borrowFacts(borrowed: *const std.bit_set.DynamicBitSetUnmanaged) BorrowFacts {
+        const identity = comptime blk: {
+            var leaders: [64]u32 = undefined;
+            for (&leaders, 0..) |*leader, index| leader.* = index;
+            break :blk leaders;
+        };
+        return .{ .borrowed = borrowed, .leaders = &identity };
     }
 
     fn expectSame(expected: Uniqueness, actual: Uniqueness) error{TestExpectedEqual}!void {
@@ -7079,6 +7266,8 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
     var takes = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
     defer takes.deinit(allocator);
     takes.set(@backingInt(read));
+    var no_projections = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
+    defer no_projections.deinit(allocator);
     const rc = @as([5]bool, @splat(true));
     var sigs = [_]arc_sig.RcSig{.all_owned};
     const conditions = [_]arc_sig.RetCondition{.{ .field = arc_sig.RetCondition.whole_value, .params = 1 }};
@@ -7091,8 +7280,8 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
             sigs[0].ret_unique = true;
         }
         const table = arc_sig.SigTable{ .sigs = &sigs, .ret_conditions = &conditions };
-        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .{ .set = &takes }, &borrowed, null);
-        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .{ .set = &takes }, &borrowed, null, null, null);
+        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .{ .set = .{ .takes = &takes, .retaining_projections = &no_projections } }, UniquenessTest.borrowFacts(&borrowed), null);
+        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .{ .set = .{ .takes = &takes, .retaining_projections = &no_projections } }, UniquenessTest.borrowFacts(&borrowed), null, null, null);
         defer expected.deinit(allocator);
         try UniquenessTest.expectSame(expected, actual);
         try testing.expectEqual(topology, workspace.order.topology.preds.stmts.ptr);
@@ -7111,8 +7300,45 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
     try testing.expectEqual(@as(usize, 3), workspace.iterations);
     try testing.expectEqual(@as(usize, 1), workspace.consumption.rebuilds);
     // A separate post-take proof cannot reuse the pre-take lattice verdict.
-    const without_take = try workspace.analyze(&f.store, &rc, .{ .sigs = &sigs }, true, &f.layouts, .none, &borrowed, null);
+    const without_take = try workspace.analyze(&f.store, &rc, .{ .sigs = &sigs }, true, &f.layouts, .none, UniquenessTest.borrowFacts(&borrowed), null);
     try testing.expect(!without_take.born_unique.isSet(@backingInt(taken)));
+}
+
+test "uniqueness: a field taken through a retained complete projection is shared" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const list = try f.local(f.list);
+    const single_field = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = f.list }});
+    const pair = try f.local(single_field);
+    const projected = try f.local(single_field);
+    const taken = try f.local(f.list);
+    // list = []; pair = { list }; projected = pair; taken = projected.0 (take)
+    const ret = try f.ret(taken);
+    const read = try f.store.addCFStmt(.{ .assign_ref = .{ .target = taken, .op = .field(projected, 0), .next = ret } }, .test_fixture);
+    const projection = try f.store.addCFStmt(.{ .assign_ref = .{ .target = projected, .op = .local(pair), .next = read } }, .test_fixture);
+    const store = try f.store.addCFStmt(.{ .assign_struct = .{ .target = pair, .fields = try f.store.addLocalSpan(&.{list}), .next = projection } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .assign_list = .{ .target = list, .elems = try f.store.addLocalSpan(&.{}), .next = store } }, .test_fixture);
+    _ = try f.proc(&.{}, body, f.list);
+    var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, 4);
+    defer borrowed.deinit(allocator);
+    var takes = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
+    defer takes.deinit(allocator);
+    takes.set(@backingInt(read));
+    var retaining = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
+    defer retaining.deinit(allocator);
+    const rc = @as([4]bool, @splat(true));
+    var sigs = [_]arc_sig.RcSig{.all_owned};
+    for ([_]bool{ false, true }) |retained| {
+        retaining.setValue(@backingInt(projection), retained);
+        var uniqueness = try computeUniquenessDetailed(allocator, &f.store, &rc, .{ .sigs = &sigs }, null, null, null, true, &f.layouts, .{ .set = .{ .takes = &takes, .retaining_projections = &retaining } }, UniquenessTest.borrowFacts(&borrowed), null, null, null);
+        defer uniqueness.deinit(allocator);
+        // A retained projection gives the projected value a second owner,
+        // which shares every field it stores.
+        try testing.expectEqual(!retained, uniqueness.unique.isSet(@backingInt(taken)));
+        try testing.expectEqual(!retained, uniqueness.field_masks[@backingInt(projected)] != 0);
+    }
 }
 
 test "uniqueness workspace reanalyzes read-only signatures through borrowed views" {
@@ -7143,8 +7369,8 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
     for ([_]arc_sig.ParamMask{ 0, 1, 0 }) |read_only| {
         sigs[0].read_only_params = read_only;
         const table = arc_sig.SigTable{ .sigs = &sigs };
-        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed, null);
-        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, &borrowed, null, null, null);
+        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, UniquenessTest.borrowFacts(&borrowed), null);
+        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, UniquenessTest.borrowFacts(&borrowed), null, null, null);
         defer expected.deinit(allocator);
         try UniquenessTest.expectSame(expected, actual);
         try testing.expectEqual(read_only != 0, actual.unique.isSet(@backingInt(source)));
@@ -7155,8 +7381,8 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
     for ([_]bool{ true, false, true }, 1..) |is_view, rebuilds| {
         borrowed.setValue(@backingInt(view), is_view);
         const table = arc_sig.SigTable{ .sigs = &sigs };
-        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed, null);
-        var reference = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, &borrowed, null, null, null);
+        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, UniquenessTest.borrowFacts(&borrowed), null);
+        var reference = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, UniquenessTest.borrowFacts(&borrowed), null, null, null);
         defer reference.deinit(allocator);
         try UniquenessTest.expectSame(reference, actual);
         // An owned alias adds a holder before the source's return. Restoring
@@ -7168,8 +7394,8 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
     }
     sigs[0].borrowed_params = 0;
     const table = arc_sig.SigTable{ .sigs = &sigs };
-    const owned = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed, null);
-    var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, &borrowed, null, null, null);
+    const owned = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, UniquenessTest.borrowFacts(&borrowed), null);
+    var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, UniquenessTest.borrowFacts(&borrowed), null, null, null);
     defer expected.deinit(allocator);
     try UniquenessTest.expectSame(expected, owned);
     try testing.expectEqual(@as(usize, 4), workspace.consumption.rebuilds);
@@ -7209,7 +7435,7 @@ fn aliasBornUniqueAfterRepeatedDefinitions(sequential: bool) SolveError!bool {
     var sigs = [_]arc_sig.RcSig{.all_owned};
     var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, rc.len);
     defer borrowed.deinit(allocator);
-    var uniqueness = try computeUniquenessDetailed(allocator, &f.store, &rc, .{ .sigs = &sigs }, null, null, null, true, &f.layouts, .none, &borrowed, null, null, null);
+    var uniqueness = try computeUniquenessDetailed(allocator, &f.store, &rc, .{ .sigs = &sigs }, null, null, null, true, &f.layouts, .none, UniquenessTest.borrowFacts(&borrowed), null, null, null);
     defer uniqueness.deinit(allocator);
     return uniqueness.born_unique.isSet(@backingInt(alias));
 }
@@ -7462,11 +7688,14 @@ test "component uniqueness ignores offset-only return condition changes" {
     const rc = @as([6]bool, @splat(true));
     var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
-    // Owned inputs transfer their unit into the conditional-return edge.
+    // Owned inputs transfer their unit into the conditional-return edge, and
+    // every binding then owns its own unit.
     for (solution.sigs) |*sig| {
         sig.borrowed_params = 0;
         sig.ret_mode = .owned;
     }
+    solution.borrowed.unsetAll();
+    for (solution.leader, 0..) |*leader, index| leader.* = @intCast(index);
     UniquenessOracleState.resetCapabilities(&solution);
     var metrics: UniquenessMetrics = .{};
     try UniquenessOracleState.compare(&f, &rc, &solution, .none, &metrics);
@@ -7565,8 +7794,10 @@ test "component uniqueness recursive conditional fields restart after committed 
     var takes = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
     defer takes.deinit(allocator);
     takes.set(@backingInt(read));
+    var no_projections = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
+    defer no_projections.deinit(allocator);
     var metrics: UniquenessMetrics = .{};
-    try UniquenessOracleState.compare(&f, &rc, &solution, .{ .set = &takes }, &metrics);
+    try UniquenessOracleState.compare(&f, &rc, &solution, .{ .set = .{ .takes = &takes, .retaining_projections = &no_projections } }, &metrics);
     try std.testing.expectEqual(@as(u64, 2), metrics.components);
     try std.testing.expect(solution.unique_born.isSet(@backingInt(taken)));
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 1), solution.unique_conds[@backingInt(taken)]);
@@ -7946,8 +8177,10 @@ test "uniqueness gives a tail loop parameter no field origins from its back edge
     var takes = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
     defer takes.deinit(allocator);
     takes.set(@backingInt(read));
+    var no_projections = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
+    defer no_projections.deinit(allocator);
     var metrics: UniquenessMetrics = .{};
-    try UniquenessOracleState.compare(&f, &rc, &solution, .{ .set = &takes }, &metrics);
+    try UniquenessOracleState.compare(&f, &rc, &solution, .{ .set = .{ .takes = &takes, .retaining_projections = &no_projections } }, &metrics);
     // On the first iteration the field is whatever the caller stored, so a
     // take of it is not a unique birth under any seed.
     try std.testing.expect(!solution.unique_born.isSet(@backingInt(taken)));

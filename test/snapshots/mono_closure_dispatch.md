@@ -143,7 +143,7 @@ EndOfFile,
 					(e-num (value "10"))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 296)
+		(e-call (constraint-fn-var 302)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "1")))))

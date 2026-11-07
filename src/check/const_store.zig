@@ -1589,6 +1589,71 @@ pub const ConstStore = struct {
         return self.blobBytes(str);
     }
 
+    /// Structural equality of two value graphs: scalars bitwise, blob and tag
+    /// bytes, children in order, and named types by declaring module. A named
+    /// type's checked occurrence (`named_type.ty`) is provenance, not value
+    /// identity. Function values are never equal; no compared graph holds one.
+    pub fn graphEql(self: *const ConstStore, root: ConstNodeId, other: *const ConstStore, other_root: ConstNodeId) Allocator.Error!bool {
+        const Pair = struct { left: ConstNodeId, right: ConstNodeId };
+        var seen = std.AutoHashMap(Pair, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(Pair).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .left = root, .right = other_root });
+        while (pending.pop()) |pair| {
+            const entry = try seen.getOrPut(pair);
+            if (entry.found_existing) continue;
+            const left = self.get(pair.left);
+            const right = other.get(pair.right);
+            if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+            switch (left) {
+                .pending, .fn_value => return false,
+                .boxy_fn => |function| {
+                    const right_function = right.boxy_fn;
+                    if (!sameBytes(self.blobBytes(function.recipe), other.blobBytes(right_function.recipe))) return false;
+                    if (function.captures.len != right_function.captures.len) return false;
+                    for (function.captures, right_function.captures) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                },
+                .zst => {},
+                .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
+                .str => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.str))) return false,
+                .crash => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.crash))) return false,
+                .checked_error => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.checked_error))) return false,
+                .box => |payload| try pending.append(self.allocator, .{ .left = payload, .right = right.box }),
+                .nominal => |nominal| {
+                    if (!std.meta.eql(nominal.named_type.module.bytes, right.nominal.named_type.module.bytes)) return false;
+                    try pending.append(self.allocator, .{ .left = nominal.backing, .right = right.nominal.backing });
+                },
+                .list => |list| {
+                    const right_list = right.list;
+                    if (std.meta.activeTag(list) != std.meta.activeTag(right_list)) return false;
+                    switch (list) {
+                        .nodes => |items| {
+                            if (items.len != right_list.nodes.len) return false;
+                            for (items, right_list.nodes) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                        },
+                        .packed_bytes => |packed_list| {
+                            const r = right_list.packed_bytes;
+                            if (packed_list.len != r.len or packed_list.element != r.element or packed_list.product_width != r.product_width) return false;
+                            if (!sameBytes(self.blobBytes(packed_list.bytes), other.blobBytes(r.bytes))) return false;
+                        },
+                        .empty => |capacity| if (capacity != right_list.empty) return false,
+                    }
+                },
+                inline .tuple, .record => |items, tag| {
+                    const right_items = @field(right, @tagName(tag));
+                    if (items.len != right_items.len) return false;
+                    for (items, right_items) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                },
+                .tag => |tag| {
+                    if (!base.Ident.textEql(tag.tag_name, right.tag.tag_name) or tag.payloads.len != right.tag.payloads.len) return false;
+                    for (tag.payloads, right.tag.payloads) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                },
+            }
+        }
+        return true;
+    }
+
     pub fn blobBytes(self: *const ConstStore, blob: ConstBlob) []const u8 {
         const backing = self.blobData(blob.data);
         const offset: usize = blob.offset;
@@ -2175,4 +2240,12 @@ fn hashScalar(hasher: *base.Sha256, scalar: ConstScalar) void {
     switch (scalar) {
         inline .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64, .u128, .f32_bits, .f64_bits, .dec_bits => |value| hasher.update(std.mem.asBytes(&value)),
     }
+}
+
+fn sameBytes(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (left != right) return false;
+    }
+    return true;
 }

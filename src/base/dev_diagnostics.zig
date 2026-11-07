@@ -16,7 +16,9 @@ pub const available = builtin.link_libc and build_options.dev_diagnostics;
 
 /// One developer-diagnostic environment variable.
 pub const Var = enum {
-    /// Trace Boxy-only work; specialized compilation must produce no events.
+    /// Trace Boxy work: the `.boxy` compile-time evaluator's under either
+    /// strategy, and Boxy lowering's. A specialized compilation whose
+    /// compile-time roots are all complete produces no events.
     trace_boxy_work,
     /// Rebuild every restored Boxy object and compare it with the cached one.
     verify_boxy_object_reuse,
@@ -26,6 +28,9 @@ pub const Var = enum {
     lir_dump,
     /// Print every closed specialization key.
     spec_census,
+    /// Print the procedures each lowered LIR program compiles, one line per
+    /// program and one per procedure.
+    proc_census,
     /// Print deterministic Lambda Solved work once per required invocation.
     lambda_solve_stats,
     /// Start each top-level recursive type analysis with empty proof tables.
@@ -57,6 +62,7 @@ pub const Var = enum {
             .verify_boxy_object_reuse => "ROC_VERIFY_BOXY_OBJECT_REUSE",
             .lir_dump => "ROC_LIR_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",
+            .proc_census => "ROC_PROC_CENSUS",
             .lambda_solve_stats => "ROC_LAMBDA_SOLVE_STATS",
             .fresh_type_analysis => "ROC_FRESH_TYPE_ANALYSIS",
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",

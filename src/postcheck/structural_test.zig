@@ -1176,7 +1176,7 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "fn inspectCall(self: *BodyContext",
         "fn stepInspectBody(",
     );
-    try expectContains(inspect_call, ".sealed = try self.functionType(&.{call.value_ty}, str_ty)");
+    try expectContains(inspect_call, ".sealed = try self.functionType(&.{ str_ty, call.value_ty }, str_ty)");
     try expectNotContains(inspect_call, "oneArgFnTypeCell");
     const to_inspect = sourceSliceBetween(
         lower_source,

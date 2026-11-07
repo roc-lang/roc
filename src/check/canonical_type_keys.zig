@@ -678,6 +678,10 @@ const SourceAdapter = struct {
                 try tag(sink, .nominal);
                 try self.namedSourceIdentity(sink, nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
                 try sink.boolean(nominal.isOpaque());
+                // A declaration in a function body's application lists its
+                // context arguments after its declared ones (design.md
+                // "Body-Local Type Context"), so two instantiations of a body
+                // never share one key.
                 const args = self.store.sliceNominalArgs(nominal);
                 try sink.varint(@intCast(args.len));
                 for (args) |arg| try self.child(sink, arg);

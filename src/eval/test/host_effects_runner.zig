@@ -64,7 +64,7 @@ const NUM_BACKENDS = 2;
 const BACKEND_NAMES = [NUM_BACKENDS][]const u8{ "interpreter", "dev" };
 const DEV_BACKEND_IMPLEMENTED = eval.backendAvailable(.dev);
 
-const BackendEvalError = helpers.TestHelperError || Interpreter.Error || Allocator.Error || error{DevBackendUnavailable};
+const BackendEvalError = helpers.TestHelperError || Interpreter.Error || Allocator.Error || error{ DevBackendUnavailable, StaticDataImageFailed };
 const StatsJsonError = Allocator.Error || std.Io.Dir.AccessError || std.Io.Dir.CreateDirPathError || std.Io.File.OpenError || std.Io.File.Writer.Error;
 const RunnerMainError = std.fmt.ParseIntError || StatsJsonError || std.process.Args.ToSliceError || Allocator.Error;
 
@@ -258,10 +258,9 @@ fn forkAndEval(eval_fn: BackendEvalFn, lowered: *const LoweredProgram) ForkResul
 
     if (fork_result == 0) {
         harness.closeFd(pipe_read);
-        var child_arena = collections.SingleThreadArena.init(base.defaultGpa());
-        const child_alloc = child_arena.allocator();
-
-        const run = eval_fn(child_alloc, lowered) catch |err| {
+        // Frees take effect, so memory the evaluated program releases is
+        // reused; `_exit` reclaims whatever is left.
+        const run = eval_fn(base.defaultGpa(), lowered) catch |err| {
             const name = @errorName(err);
             harness.writeAll(pipe_write, name);
             harness.closeFd(pipe_write);
@@ -325,6 +324,8 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
+    var static_data = try eval.InterpreterStaticData.init(allocator, lowered.view.static_data, lowered.view.static_data_value_count);
+    defer static_data.deinit();
     var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
     defer static_strings.deinit();
     var interp = try Interpreter.init(
@@ -335,6 +336,8 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
         runtime_env.get_ops(),
     );
     defer interp.deinit();
+    static_data.install(&interp);
+    static_data.ownByInterpreter(&interp);
 
     const arg_layouts = try helpers.mainProcArgLayouts(allocator, lowered);
     defer allocator.free(arg_layouts);
@@ -373,6 +376,17 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
         );
         defer static_strings.deinit();
 
+        var static_image = backend.StaticDataImage.init(allocator, lowered.view.static_data) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.StaticDataImageFailed,
+        };
+        defer static_image.deinit();
+        const addresses = static_image.lirValueAddresses(allocator, lowered.view.static_data_value_count) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.StaticDataImageFailed,
+        };
+        defer allocator.free(addresses);
+
         var codegen = try HostLirCodeGen.initWithCapturePrefix(
             allocator,
             &lowered.view.store,
@@ -384,7 +398,11 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
+        codegen.setNativeStaticData(addresses);
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
+        const rc_helpers = try backend.collectRequiredRcHelpers(allocator, lowered.view.static_data);
+        defer allocator.free(rc_helpers);
+        try codegen.compileStaticDataRcHelpers(rc_helpers);
 
         const proc = lowered.view.store.getProcSpec(lowered.mainProc());
         const arg_layouts = try helpers.mainProcArgLayouts(allocator, lowered);
@@ -402,6 +420,22 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             codegen.getUnwindFunctions(),
         );
         defer exec_mem.deinit();
+        const Resolver = struct {
+            codegen: *const HostLirCodeGen,
+            executable: *const ExecutableMemory,
+            fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+                const self: *@This() = @ptrCast(@alignCast(raw.?));
+                const address = @intFromPtr(self.executable.codePtr());
+                if (relocation.rc_helper) |helper| return address + (self.codegen.compiledStaticDataRcHelperOffset(helper) orelse return null);
+                const proc_id = relocation.procedure orelse return null;
+                return address + (self.codegen.compiledProcSymbol(proc_id) orelse return null).code_start;
+            }
+        };
+        var resolver = Resolver{ .codegen = &codegen, .executable = &exec_mem };
+        static_image.resolveFunctionRelocations(.{ .context = &resolver, .resolve = Resolver.resolve }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.StaticDataImageFailed,
+        };
 
         var runtime_env = RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();

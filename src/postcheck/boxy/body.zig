@@ -175,6 +175,10 @@ pub const Task = union(enum) {
     /// the restored value's.
     /// Pop a stored function's captures and pack them (`stored_fn.zig`).
     finish_stored_fn: struct { worker: WorkerId, shape: StoredFn.CaptureShape, descs: []const LocalId, capture_types: []const TypeId },
+    /// Pop a stored generated codec constructor's declaration context's
+    /// restored dictionaries and literal arguments, and compose the
+    /// constructor again in it (`stored_fn.zig`).
+    finish_stored_codec: struct { worker: WorkerId, bound: []const TypeId, declaration: StoredFn.Decoded.Declaration },
     finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const LocalId, dicts: []const LocalId, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
@@ -219,6 +223,20 @@ pub const Task = union(enum) {
     match_advance: struct { state: *Match.State, input: ?CFStmtId },
     /// Pop a match guard's value into `cond`, continuing at `next`.
     match_guard_done: struct { cond: LocalId, next: CFStmtId },
+    /// Emit into the entry chain, building function values as immortal
+    /// compositions, until the matching `leave_immortal_restore`: a stored
+    /// dictionary built from parts is restored there with everything it
+    /// captures, as a live one is composed.
+    enter_immortal_restore,
+    leave_immortal_restore,
+};
+
+/// The emission state `Task.enter_immortal_restore` replaced.
+const ImmortalRestore = struct {
+    hole: ?CFStmtId,
+    last_stmt: ?CFStmtId,
+    emitting_entry: bool,
+    immortal_closures: bool,
 };
 
 /// A literal conversion the compile-time evaluator runs where the literal
@@ -288,6 +306,10 @@ const AliasScope = struct {
     /// other requirements can name types only the scopes the chain never
     /// entered bind: each read composes the one it names.
     deferred_dicts: ?DeferredDictionaries = null,
+    /// The declaration context `dicts` come from, for the scope a local
+    /// procedure's own scheme is resolved in when it is built from one: a
+    /// slot still being built holds a null word there.
+    declaration: ?*const Declaration = null,
     saved_env: types.Env,
 };
 
@@ -306,6 +328,9 @@ const DeferredDictionaries = struct {
     frames: usize,
     /// Each parameter's dictionary, once read.
     composed: []?LocalId,
+    /// The template worker whose call instance the frame is, whose body can
+    /// declare local procedures its dictionaries call (`Declaration`).
+    declaring: ?WorkerId = null,
 };
 
 /// Where a literal chain frame's literal arguments come from.
@@ -320,6 +345,80 @@ const DeferredLiterals = union(enum) {
     },
     /// The thunks of `owner`'s literal requirements at the types `bound`.
     thunks: struct { owner: WorkerId, bound: []const TypeId },
+};
+
+/// The declaration context of a call instance of template worker `worker`
+/// while its dictionaries are built (design.md "Dictionaries"): the hidden
+/// descriptors, dictionaries, and literal arguments the instance passes, as
+/// this body holds them. A dictionary such as a generated codec can call
+/// local procedures of the callee's body, which is not this body's; their
+/// function values are built from this context. A dictionary slot is built
+/// when the instance or a procedure first reads it; a procedure reading a
+/// slot still being built (the dictionary that captures the procedure)
+/// captures a null word there, which `dict_patch` fills once the slot is
+/// built.
+const Declaration = struct {
+    worker: WorkerId,
+    /// The callee's scheme types, in this body's variables.
+    bound: []const TypeId,
+    /// The descriptors and literal arguments; a literal chain frame's are
+    /// composed when a procedure first reads them (`declarationWords`).
+    words: ?Words,
+    /// By hidden dictionary position; null until built.
+    dicts: []?LocalId,
+    /// Which dictionary slots are being built.
+    building: []bool,
+    source: Source,
+    /// Captures holding a null word for a slot still being built.
+    patches: std.ArrayList(Patch) = .empty,
+    outer: ?*Declaration,
+
+    const Source = union(enum) {
+        /// The evidence of a call, read in `module`'s view `view`.
+        call: struct {
+            evidence: []const static_dispatch.CheckedEvidence,
+            context: Builder.ParamContext,
+            owner: ?*const types.ModuleView,
+        },
+        /// A literal chain frame's dictionaries, at its position in
+        /// `alias_scopes`; `composed` is its `DeferredDictionaries.composed`,
+        /// which identifies it.
+        frame: struct { position: usize, composed: [*]?LocalId, scope: AliasScope },
+        /// A stored dictionary's declaration context: every slot is
+        /// restored or is the one being composed again.
+        restored,
+    };
+
+    const Patch = struct { closure: LocalId, index: u32, slot: u32 };
+    const Words = struct { descs: []const LocalId, literals: []const LocalId };
+};
+
+/// A generated codec constructor being composed: its family at the types
+/// `bound` of the family's variables.
+pub const CodecComposition = struct { family: u32, bound: []const TypeId };
+
+/// A request, while composition `composition` was in progress, for the
+/// constructor it composes, at the constructor type `actual`.
+pub const CodecBackEdge = struct { composition: u32, actual: TypeId };
+
+/// Capture `index` of the composed dictionary `dict` holds the null word of
+/// the back edge `back_edge`.
+pub const CodecBackEdgePatch = struct { dict: LocalId, index: u32, back_edge: LocalId };
+
+/// The scope a local procedure's function value is built in: the worker
+/// declaring it, the procedure's worker there, and the declaring worker's
+/// scheme types and hidden words as this body holds them.
+const LocalProcScope = struct {
+    declaring: WorkerId,
+    worker: WorkerId,
+    bound: []const TypeId,
+    descs: []const LocalId,
+    /// A null word stands for each slot of `declaration` still being built.
+    dicts: []const LocalId,
+    literals: []const LocalId,
+    /// The declaration context the words come from, when the declaring
+    /// body is not one this body is lowered in.
+    declaration: ?*Declaration,
 };
 
 /// A `literal_argument` root of a module, whose thunk a body composes once.
@@ -438,6 +537,12 @@ pub const Builder = struct {
     /// alias's own module (`aliasTargetHidden`): where that alias's scopes
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
     foreign_scopes: ?usize = null,
+    /// The innermost declaration context of the call instances whose
+    /// dictionaries are being built (`Declaration`).
+    declaration: ?*Declaration = null,
+    /// The emission states the immortal restores being lowered replaced,
+    /// innermost last.
+    immortal_restores: std.ArrayList(ImmortalRestore) = .empty,
     type_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
     /// Complete argument layouts already emitted in this entry chain. Keys
     /// name the exact ordered descriptor locals, not an approximation of types.
@@ -461,6 +566,13 @@ pub const Builder = struct {
     /// The compile-time root whose entry wrapper this body is: its own
     /// hoisted expression computes its value here rather than reading it.
     own_root: ?checked.ComptimeRootId = null,
+    /// Whether this body is a compile-time root's own expression (an entry
+    /// wrapper's body that is not a literal's conversion). A failed pattern
+    /// test here at a checked exhaustiveness site ends in
+    /// `comptime_exhaustiveness_failed`, so compile-time evaluation reports
+    /// the site's empirical failure exactly as it does for `.lss` lowering
+    /// (`comptimeFailure`).
+    comptime_root_body: bool = false,
     /// The recursive components whose members' descriptors this body has
     /// begun composing.
     opened_components: std.AutoHashMapUnmanaged(u32, void) = .empty,
@@ -469,6 +581,14 @@ pub const Builder = struct {
     open_members: collections.DenseMapUnmanaged(TypeId, OpenMember) = .empty,
     /// The recursion box over each descriptor local that has one.
     recursive_boxes: collections.DenseMapUnmanaged(LocalId, LocalId) = .empty,
+    /// The generated codec constructors being composed, innermost last
+    /// (`codec.composeConstructor`).
+    codec_compositions: std.ArrayList(CodecComposition) = .empty,
+    /// The null word standing for each request of a constructor while it is
+    /// being composed, by local.
+    codec_back_edges: collections.DenseMapUnmanaged(LocalId, CodecBackEdge) = .empty,
+    /// The composed captures holding a back edge's null word.
+    codec_back_edge_patches: std.ArrayList(CodecBackEdgePatch) = .empty,
     opaque_word_desc: ?LocalId = null,
     /// Expressions whose value is built at a row coercion's destination
     /// type rather than their own (design.md "Row Coercion Primitive"), as
@@ -574,6 +694,7 @@ pub const Builder = struct {
         self.frame_locals.deinit(self.allocator);
         self.binders.deinit(self.allocator);
         self.alias_scopes.deinit(self.allocator);
+        self.immortal_restores.deinit(self.allocator);
         self.recursive_slots.deinit(self.allocator);
         self.declared_captures.deinit(self.allocator);
         self.root_thunks.deinit(self.allocator);
@@ -587,6 +708,9 @@ pub const Builder = struct {
         self.opened_components.deinit(self.allocator);
         self.open_members.deinit(self.allocator);
         self.recursive_boxes.deinit(self.allocator);
+        self.codec_compositions.deinit(self.allocator);
+        self.codec_back_edges.deinit(self.allocator);
+        self.codec_back_edge_patches.deinit(self.allocator);
         self.name_locals.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
         self.join_infos.deinit(self.allocator);
@@ -742,6 +866,26 @@ pub const Builder = struct {
             .inline_scope = LIR.InlineScopeId.none,
             .kind = kind,
         };
+    }
+
+    /// What a failed pattern test at checked exhaustiveness site
+    /// `checked_site` reports. In a compile-time root's own body, outside
+    /// every function it builds, it fails as the empirical failure of the
+    /// site, as Monotype's lowering of the body does, and the program records
+    /// the site beside the procedure (design.md "Compile-Time Failure
+    /// Sites"); elsewhere it is a runtime error.
+    pub fn comptimeFailure(self: *Builder, checked_site: ?checked.CheckedExhaustivenessSiteId) Allocator.Error!?Match.ComptimeFailure {
+        if (!self.comptime_root_body) return null;
+        const owner = self.program.lowering_module_ids[@backingInt(self.module)];
+        if (checked_site) |site| {
+            const record = self.view.view.exhaustiveness_sites.get(site);
+            const kind: LIR.ComptimeSiteKind = switch (record.kind) {
+                .match => .match,
+                .destructure => .destructure,
+            };
+            _ = try self.program.result.addComptimeSite(kind, owner, record.region, site, self.currentWorker().proc);
+        }
+        return .{ .owner = owner, .checked_site = checked_site };
     }
 
     pub fn newHole(self: *Builder) Allocator.Error!CFStmtId {
@@ -1512,6 +1656,7 @@ pub const Builder = struct {
                 // whose unit result the evaluator discards.
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 self.own_root = wrapper.root;
+                self.comptime_root_body = root.kind != .literal_argument and root.literalConversionKind() == null;
                 try self.tasks.append(self.allocator, .ret);
                 if (root.boxy_value) |stored| {
                     try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
@@ -1525,11 +1670,11 @@ pub const Builder = struct {
                             try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = self.currentWorker().ret, .root = wrapper.root } })
                         else
                             try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
-                        .fn_value => |fn_id| if (self.program.moduleUnit() != null)
-                            try self.restoreFn(.{ .module = self.module }, fn_id, self.currentWorker().ret)
-                        else
-                            try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
-                        .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
+                        // A function value the `.lss` evaluator stored means
+                        // nothing here ("Stored Function Values"): the
+                        // wrapper computes it, as it does a value no
+                        // evaluation produced.
+                        .fn_value, .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
                     },
                     // A literal argument's body is the conversion its root
                     // names, called on another module's literal.
@@ -1539,6 +1684,9 @@ pub const Builder = struct {
         }
         try self.run();
 
+        self.tail_calls.loop_params = args.items;
+        self.tail_calls.instance_start = params.len;
+        defer self.tail_calls.loop_params = &.{};
         try self.finishProc(entry, body_start, args.items, ret_layout);
     }
 
@@ -1707,6 +1855,9 @@ pub const Builder = struct {
         // copy of the body's first statement.
         const proc_body: CFStmtId = if (entry == self.entry_hole) body_start else blk: {
             try self.store.replaceCFStmt(self.entry_hole, self.store.getCFStmt(body_start), self.store.stmtOrigin(body_start));
+            // A self-tail loop re-enters the body after the entry chain,
+            // whose descriptors every iteration shares.
+            self.tail_calls.loop_entry = self.entry_hole;
             break :blk entry;
         };
 
@@ -1917,9 +2068,11 @@ pub const Builder = struct {
 
     /// Where two types of one value differ: nowhere; only in the tags of
     /// rows, one widening the other along the coercion's reach (design.md
-    /// "Sealed Result Rows"); in the memory order of a record, one being the
+    /// "Sealed Result Rows"); in the memory of a record, one being the
     /// record a padded nominal lifts it into (design.md "Nominal Record Field
-    /// Order"); or inside the function type the value has.
+    /// Order") or a closed record a use widened by optional fields it omits
+    /// (design.md "Anonymous Structure Is Copied Per Use"); or inside the
+    /// function type the value has.
     pub const StorageDifference = enum { none, rows, record_order, function };
 
     /// A function value inside data is outside every row widening's reach
@@ -1976,7 +2129,12 @@ pub const Builder = struct {
             const inner: Place = if (pair.place == .root_function) .signature_data else pair.place;
             switch (from) {
                 .record => |record| {
-                    if (!store.sameRecordOrder(record, to.record)) switch (pair.place) {
+                    // A use can widen a closed record by optional fields it
+                    // omits (design.md "Anonymous Structure Is Copied Per
+                    // Use"), which hold presence slots the narrower record
+                    // has no room for: the value is rebuilt, like a record
+                    // stored in another order.
+                    if (!store.sameRecordOrder(record, to.record) or (record.ext == null and to.record.ext == null and record.fields.len != to.record.fields.len)) switch (pair.place) {
                         .data => result = .record_order,
                         .root_function, .signature_data => return .function,
                         .nested_function => invariant(nested_function_storage),
@@ -2457,34 +2615,51 @@ pub const Builder = struct {
         try self.finishProc(entry, body_start, params, ret_layout);
     }
 
-    /// A default expression's worker: the expression, in no scope.
+    /// A default expression's worker: the expression, in the scope of its
+    /// own type's variables, whose descriptors are its parameters.
     pub fn lowerDefaultBody(self: *Builder, expr: ExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
-        self.var_descs = &.{};
+        self.var_descs = try self.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
+        for (self.var_descs) |*slot| slot.* = try self.closedLocal(.opaque_ptr);
         self.dict_locals = &.{};
-        const ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        var ret_layout: layout.Idx = undefined;
+        if (try self.closed(worker.ret)) {
+            ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        } else {
+            ret_layout = try self.program.result.layouts.dynamicLayout();
+            self.result_local = try self.localOf(worker.ret, .result);
+        }
         const body_start = try self.newHole();
         self.hole = body_start;
         try self.tasks.append(self.allocator, .ret);
         try self.tasks.append(self.allocator, .{ .own_expr = expr });
         try self.run();
-        try self.finishProc(entry, body_start, &.{}, ret_layout);
+        try self.finishProc(entry, body_start, self.var_descs, ret_layout);
     }
 
-    /// The value of the `??` default `default`: its declaring module's
-    /// default expression, evaluated now.
-    pub fn defaultValue(self: *Builder, default: checked.CheckedFieldDefault) Allocator.Error!LocalId {
+    /// The value of the `??` default `default` for a field of type
+    /// `field_ty`: its declaring module's default expression, evaluated now
+    /// at the instantiation the field's type gives its variables.
+    pub fn defaultValue(self: *Builder, default: checked.CheckedFieldDefault, field_ty: TypeId) Allocator.Error!LocalId {
         const origin_module = default.origin() orelse invariant("a field default has no declaring module");
         const module_index = self.program.by_identity.get(self.view.nameStore().moduleIdentityBytes(origin_module).*) orelse
             invariant("a field default's declaring module is not in this lowering");
         const expr = self.program.module(module_index).bodies().defaultExpr(default.expr_node) orelse
             invariant("a field default's expression was not archived");
-        const worker = try self.program.defaultWorker(module_index, expr);
-        const target = try self.localOf(self.program.worker(worker).ret, .frame);
-        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(worker).proc, .args = LIR.LocalSpan.empty(), .next = undefined } });
-        return target;
+        const worker_id = try self.program.defaultWorker(module_index, expr);
+        const worker = self.program.worker(worker_id).*;
+        const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = field_ty, .effectful = false } });
+        const bound = try self.boundTypesAt(worker_id, &.{}, fn_ty);
+        defer self.allocator.free(bound);
+        const descs = try self.allocator.alloc(LocalId, bound.len);
+        defer self.allocator.free(descs);
+        for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+        const ret = try self.program.substitute(self.allocator, worker.ret, bound);
+        const target = try self.localOf(ret, .frame);
+        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = worker.proc, .args = try self.store.addLocalSpan(descs), .next = undefined } });
+        return try self.adaptValue(target, ret, field_ty);
     }
 
     pub fn lowerMethodEntry(self: *Builder, target: WorkerId) Allocator.Error!void {
@@ -2810,7 +2985,14 @@ pub const Builder = struct {
                 }
             },
             .stmt => |stmt| if (self.hole != null) try self.stepStmt(stmt),
-            .bind => |bind| try self.bindIrrefutable(bind.pattern, self.popValue(), bind.ty),
+            .bind => |bind| {
+                const value = self.popValue();
+                // A destructure that can miss has the checked site of the
+                // pending diagnostic checking left it.
+                const failure = if (self.view.view.exhaustiveness_sites.lookupByDestructurePattern(bind.pattern)) |site| try self.comptimeFailure(site) else null;
+                const miss = try self.store.addCFStmt(Match.ComptimeFailure.terminal(failure), self.origin(.lowering_glue));
+                try self.testPattern(bind.pattern, value, bind.ty, miss);
+            },
             .discard => _ = self.popValue(),
             .runtime_error => |ty| try self.runtimeErrorValue(ty),
             .retag => |retag| {
@@ -2963,15 +3145,15 @@ pub const Builder = struct {
                 const root = owner.view.compile_time_roots.root(template.root);
                 if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
                 switch (root.payload) {
-                    .fn_value => |fn_id| try self.restoreFn(.{ .module = eval.module }, fn_id, eval.ty),
                     // Evaluation stored a value that is not a function: the
                     // crash a rejected binding is.
                     .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = node, .ty = eval.ty } }),
-                    // No compile-time evaluation produced the value (a
-                    // binding of the app a platform's roots name, or one
-                    // whose evaluation failed where it was guarded): its
-                    // entry wrapper computes it.
-                    .pending, .unevaluated, .runtime => {
+                    // No `.boxy` evaluation produced the value (a binding of
+                    // the app a platform's roots name, one whose evaluation
+                    // failed where it was guarded, or one only the `.lss`
+                    // evaluator stored, whose function value means nothing
+                    // here): its entry wrapper computes it.
+                    .fn_value, .pending, .unevaluated, .runtime => {
                         const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
                             invariant("a callable-eval binding's root has no entry wrapper");
                         const callee = try self.program.templateRefWorker(wrapper);
@@ -2987,6 +3169,30 @@ pub const Builder = struct {
                     .discarded, .expect => invariant("a callable-eval binding's root holds a value, which no expect or discarded root does"),
                 }
             },
+            .enter_immortal_restore => {
+                try self.immortal_restores.append(self.allocator, .{
+                    .hole = self.hole,
+                    .last_stmt = self.last_stmt,
+                    .emitting_entry = self.emitting_entry,
+                    .immortal_closures = self.immortal_closures,
+                });
+                if (!self.emitting_entry) {
+                    self.hole = self.entry_hole;
+                    self.emitting_entry = true;
+                }
+                self.immortal_closures = true;
+            },
+            .leave_immortal_restore => {
+                const saved = self.immortal_restores.pop() orelse invariant("an immortal restore ended without beginning");
+                if (!saved.emitting_entry) {
+                    self.entry_hole = self.hole orelse invariant("an entry-chain restore diverged");
+                    self.hole = saved.hole;
+                    self.last_stmt = saved.last_stmt;
+                    self.emitting_entry = false;
+                }
+                self.immortal_closures = saved.immortal_closures;
+            },
+            .finish_stored_codec => |stored| try self.finishStoredCodec(stored.worker, stored.bound, stored.declaration),
             .finish_stored_fn => |stored| {
                 const captured = try self.popValues(@intCast(stored.shape.values.len + stored.shape.dicts));
                 defer self.allocator.free(captured);
@@ -3045,9 +3251,9 @@ pub const Builder = struct {
                 const prefix_text = try std.fmt.allocPrint(self.allocator, "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(", .{self.bodies().text(expr.data.expect_err.snippet)});
                 defer self.allocator.free(prefix_text);
                 const with_value = try self.closedLocal(.str);
-                try self.emitLowLevel(with_value, .str_concat, &.{ try self.strLiteral(prefix_text), rendered });
+                try self.emitLowLevel(with_value, .str_append, &.{ try self.strLiteral(prefix_text), rendered });
                 const message = try self.closedLocal(.str);
-                try self.emitLowLevel(message, .str_concat, &.{ with_value, try self.strLiteral(")") });
+                try self.emitLowLevel(message, .str_append, &.{ with_value, try self.strLiteral(")") });
                 try self.emitTerminal(.{ .expect_err = .{ .message = message, .region = expr.source_region } });
                 try self.pushValue(try self.localOf(try self.exprType(fail.expr), .frame));
             },
@@ -3182,11 +3388,17 @@ pub const Builder = struct {
     /// completes (design.md "Compile-Time Evaluation Strategy").
     fn pendingValueRead(self: *Builder, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!void {
         if (self.program.evaluatesRoot(module_index, root)) {
-            if (!try self.closed(ty)) invariant("a compile-time root's value has an open type");
-            const slot = try self.program.rootValueSlot(module_index, root, ty);
-            const local = try self.closedLocal(try self.program.layouts.layoutOf(ty));
+            // The slot holds the value at the root's own type. A read in
+            // another module is checked at that module's own copy of the
+            // type, which can store the value differently (a record row
+            // lifted into a padded nominal), so it converts the value as a
+            // read of a stored value does (`pushStoredRestore`).
+            const own = try self.program.rootValueType(module_index, root);
+            if (!try self.closed(own)) invariant("a compile-time root's value has an open type");
+            const slot = try self.program.rootValueSlot(module_index, root);
+            const local = try self.closedLocal(try self.program.layouts.layoutOf(own));
             try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
-            try self.pushValue(local);
+            try self.pushValue(if (own == ty) local else try self.retagValue(local, own, ty));
             return;
         }
         // A value no program evaluates: the read fails as the recursion
@@ -3323,6 +3535,7 @@ pub const Builder = struct {
             },
             .zero_argument_tag => try self.finishTag(expr_id, null),
             .list => |items| {
+                if (try self.packedNumeralList(expr_id, items)) |packed_list| return try self.pushValue(packed_list);
                 try self.push(.{ .finish_list = expr_id });
                 try self.pushExprsReversed(items);
             },
@@ -3409,6 +3622,15 @@ pub const Builder = struct {
                 if (try self.layoutResolvedBranch(match.cond, match.branches)) |value| {
                     try self.destination_types.put(self.allocator, value, try self.exprType(expr_id));
                     return try self.push(.{ .expr = value });
+                }
+                // A scrutinee that diverges leaves every branch unreachable;
+                // checking relates no pattern to it, so it has no decision
+                // tree.
+                if (try self.bodies().exprDiverges(match.cond, self.inlineExpectMode())) {
+                    const match_ty = self.bodies().expr(expr_id).ty;
+                    try self.push(.{ .diverged = if (try self.program.converter().hasError(self.module, match_ty)) null else try self.exprType(expr_id) });
+                    try self.push(.discard);
+                    return try self.push(.{ .expr = match.cond });
                 }
                 try self.push(.{ .match_start = expr_id });
                 try self.push(.{ .expr = match.cond });
@@ -3553,6 +3775,65 @@ pub const Builder = struct {
         }
     }
 
+    /// A list of builtin numerals at a numeric primitive element type, as one
+    /// literal of the elements' packed bytes, exactly as Monotype lowers it
+    /// (`lowerPackedNumeralList`), so the list's code does not grow with its
+    /// length. Null for any other list, which builds its elements one by one.
+    fn packedNumeralList(self: *Builder, expr_id: ExprId, items: []const ExprId) Allocator.Error!?LocalId {
+        if (items.len == 0) return null;
+        const ty = try self.exprType(expr_id);
+        if (!try self.closed(ty)) return null;
+        const elem = switch (self.program.store.get(try self.structuralType(ty))) {
+            .list => |elem| elem,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a list's type is not a List"),
+        };
+        const primitive = switch (self.program.store.get(elem)) {
+            .primitive => |primitive| primitive,
+            .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => return null,
+        };
+        const width: usize = switch (primitive) {
+            .u8, .i8 => 1,
+            .u16, .i16 => 2,
+            .u32, .i32, .f32 => 4,
+            .u64, .i64, .f64 => 8,
+            .u128, .i128, .dec => 16,
+            .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
+        };
+        for (items) |item| switch (self.bodies().exprData(item)) {
+            .numeral => if (self.bodies().numeralPlan(@backingInt(item)) != null or self.bodies().literalConversionRoot(@backingInt(item)) != null) return null,
+            .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
+        };
+        const exact_numeral = checked.exact_numeral;
+        const bytes = try self.allocator.alloc(u8, items.len * width);
+        defer self.allocator.free(bytes);
+        for (items, 0..) |item, index| {
+            const exact = self.view.view.module_env.exactNumeral(self.bodies().numeralLiteral(@backingInt(item)));
+            var encoded: [16]u8 = undefined;
+            switch (primitive) {
+                inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |integer| {
+                    const bits = exact_numeral.intBits(exact, @field(exact_numeral.Target, @tagName(integer))) orelse return null;
+                    const wide: i128 = switch (bits) {
+                        .i128 => |value| value,
+                        .u128 => |value| @bitCast(value),
+                    };
+                    std.mem.writeInt(i128, &encoded, wide, .little);
+                },
+                .f32 => std.mem.writeInt(u32, encoded[0..4], @bitCast(try exact_numeral.floatBits(f32, self.allocator, exact)), .little),
+                .f64 => std.mem.writeInt(u64, encoded[0..8], @bitCast(try exact_numeral.floatBits(f64, self.allocator, exact)), .little),
+                .dec => std.mem.writeInt(i128, &encoded, (try exact_numeral.decBits(self.allocator, exact)) orelse return null, .little),
+                .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => unreachable, // the width switch admits only scalar numerics
+            }
+            @memcpy(bytes[index * width ..][0..width], encoded[0..width]);
+        }
+        const local = try self.localOf(ty, .frame);
+        const backing = try self.store.insertStringAligned(bytes, @intCast(width));
+        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .bytes_literal = .{
+            .bytes = .{ .backing = backing, .offset = 0, .len = @intCast(bytes.len) },
+            .len = @intCast(items.len),
+        } }, .next = undefined } });
+        return local;
+    }
+
     /// A numeric literal at `at`: its conversion root's value, its
     /// conversion `plan`'s result, or a builtin number.
     pub fn lowerNumeral(self: *Builder, at: LiteralAt, literal: NumeralLiteral, plan: ?static_dispatch.StaticDispatchPlanId, conversion_root: ?checked.ComptimeRootId) Allocator.Error!void {
@@ -3686,7 +3967,7 @@ pub const Builder = struct {
             },
             .pending, .field_kind, .err, .flex, .rigid, .function, .record, .tuple, .empty_record, .tag_union, .empty_tag_union => invariant("a literal conversion's result is not a Try type"),
         };
-        const try_ty = try self.program.converter().nominalAt(self.module, ret, &.{ result_ty, try self.convert(row) }, self.env);
+        const try_ty = try self.program.converter().nominalAt(self.module, ret, &.{ result_ty, try self.convert(row) });
         try self.push(.{ .finish_literal_conversion = .{ .node = node, .kind = kind, .try_ty = try_ty, .result = result_ty } });
         try self.lowerDispatchAt(plan_id, try_ty);
     }
@@ -3812,7 +4093,12 @@ pub const Builder = struct {
     /// A deferred argument is composed at each read: a read can sit in one
     /// branch of a conversion, which another branch's read must not reuse.
     fn frameLiteral(self: *Builder, position: usize, index: u32) Allocator.Error!LocalId {
-        const scope = self.alias_scopes.items[position];
+        return try self.scopeFrameLiteral(self.alias_scopes.items[position], position, index);
+    }
+
+    /// Literal argument `index` of `scope`, the frame at `position` of
+    /// `alias_scopes`, whose frames below it are in place.
+    fn scopeFrameLiteral(self: *Builder, scope: AliasScope, position: usize, index: u32) Allocator.Error!LocalId {
         const deferred = scope.deferred orelse {
             if (index >= scope.literals.len) invariant("an edge named a literal argument its scope does not have");
             return scope.literals[index];
@@ -4044,8 +4330,10 @@ pub const Builder = struct {
             try self.pushValue(if (try self.program.converter().hasError(self.module, root.checked_type)) try self.closedLocal(.zst) else try self.localOf(try self.convert(root.checked_type), .frame));
             return;
         }
-        // A miss crashes: a hole is a runtime error until it is filled.
-        const miss = try self.newHole();
+        // A miss fails as the destructure's checked site reports
+        // (`comptimeFailure`).
+        const failure = try self.comptimeFailure(self.view.view.exhaustiveness_sites.lookupByDestructurePattern(scrutinee_pattern));
+        const miss = try self.store.addCFStmt(Match.ComptimeFailure.terminal(failure), self.origin(.lowering_glue));
         try self.testPattern(scrutinee_pattern, scrutinee, try self.exprType(base_expr), miss);
         if (result_pattern) |pattern| {
             try self.pushValue(self.binders.get(pattern) orelse invariant("a hoisted extraction root's pattern never bound its result binder"));
@@ -4620,7 +4908,7 @@ pub const Builder = struct {
         // A use checking recorded no evidence for (one inside a rejected
         // expression, evaluated only for its effects) resolves the
         // procedure's dictionaries from its types.
-        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id), .{ .use = expr_id }, self.siteSubstitution(expr_id));
+        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id), .{ .use = expr_id }, self.siteSubstitution(expr_id), null);
     }
 
     /// The function value of local procedure `local` used at the function
@@ -4629,7 +4917,7 @@ pub const Builder = struct {
     /// `localProcInstanceValue` resolving the procedure's dictionaries from
     /// its types.
     fn localProcInstanceValueAt(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId) Allocator.Error!LocalId {
-        return try self.localProcInstanceValue(local, use_ty, null, null, &.{});
+        return try self.localProcInstanceValue(local, use_ty, null, null, &.{}, null);
     }
 
     /// `edge` is the checked edge the use is (design.md "Literal
@@ -4637,8 +4925,11 @@ pub const Builder = struct {
     /// literal requirements take; null derives them from the use's types, as the
     /// dictionaries are derived when `evidence` is null. `subst` is the use's
     /// checked instantiation of the procedure's scheme, when it recorded one,
-    /// for the variables its type does not relate.
-    pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId) Allocator.Error!LocalId {
+    /// for the variables its type does not relate. `site` is the view
+    /// `evidence` and `subst` are read in, when it is not this body's: a
+    /// dispatch in an importing module selecting a method of a type another
+    /// module's function body declares.
+    pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView) Allocator.Error!LocalId {
         const lambda_expr = switch (self.bodies().exprData(local.expr)) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
@@ -4647,11 +4938,39 @@ pub const Builder = struct {
         const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }) orelse
             return try self.localProcValue(local);
         var scheme = try self.localScheme(scope_id);
-        if (!scheme.per_call or (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0)) return try self.localProcValue(local);
-        const scope_worker, const per_call = try self.localProcWorker(local);
+        if (!scheme.per_call or scheme.isEmpty()) return try self.localProcValue(local);
+        const scope = try self.localProcWorker(local, self.localProcDeclaration(lambda_expr));
+        const scope_worker = scope.declaring;
         const declaring = self.program.worker(scope_worker).*;
-        const per_call_worker = self.program.worker(per_call).*;
+        const per_call_worker = self.program.worker(scope.worker).*;
         const outer_count = declaring.scheme_vars.len;
+        // Built from a declaration context, the procedure's types are read in
+        // its callee's scope, whose dictionaries the evidence of its scheme
+        // names, and its function value is a dictionary's method, an
+        // immortal composition.
+        const saved_env = self.env;
+        const saved_foreign = self.foreign_scopes;
+        const saved_scopes = self.alias_scopes.items.len;
+        const saved_immortal = self.immortal_closures;
+        defer {
+            self.env = saved_env;
+            self.foreign_scopes = saved_foreign;
+            self.alias_scopes.shrinkRetainingCapacity(saved_scopes);
+            self.immortal_closures = saved_immortal;
+        }
+        if (scope.declaration != null) {
+            self.env = .{ .module = self.module, .vars = declaring.scheme_vars, .bound = scope.bound };
+            try self.alias_scopes.append(self.allocator, .{
+                .params = declaring.dictionary_params,
+                .dicts = scope.dicts,
+                .literals = scope.literals,
+                .literal_requirements = if (declaring.literal_scopes.len == 0) &.{} else declaring.literal_scopes[0],
+                .declaration = scope.declaration,
+                .saved_env = self.env,
+            });
+            self.foreign_scopes = saved_scopes;
+            self.immortal_closures = true;
+        }
         const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ declaring.scheme_vars, scheme.scheme_vars });
         defer self.allocator.free(vars);
         const generic_bound = try self.allocator.alloc(TypeId, vars.len);
@@ -4666,7 +4985,7 @@ pub const Builder = struct {
         // A variable the use's type does not reach, like the type of a
         // numeral only the body's methods fix, takes the type those methods
         // give it.
-        for (related[0..outer_count], self.env.bound[0..outer_count]) |*slot, ty| {
+        for (related[0..outer_count], scope.bound) |*slot, ty| {
             if (slot.* == null) slot.* = ty;
         }
         try self.program.relateThroughRequirements(self.module, vars, scheme.params, related);
@@ -4676,20 +4995,22 @@ pub const Builder = struct {
         defer self.allocator.free(values);
         const declared = self.declared_captures.get(lambda_expr);
         for (per_call_worker.captures, values, 0..) |capture, *value, index| {
-            value.* = if (declared) |captured| captured[index] else self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is used");
+            value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
         }
-        var declaring_dicts: usize = 0;
-        for (declaring.dict_scopes) |dict_scope| declaring_dicts += dict_scope.len;
+        const declaring_dicts = scope.dicts.len;
         const descs = try self.allocator.alloc(LocalId, vars.len);
         defer self.allocator.free(descs);
-        @memcpy(descs[0..outer_count], self.var_descs[0..outer_count]);
+        @memcpy(descs[0..outer_count], scope.descs);
         const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
         defer self.allocator.free(own_types);
+        const declaring_module = self.module;
+        const declaring_view = self.view;
         for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*own_ty, ty, variable, index| {
-            own_ty.* = ty orelse if (index < subst.len and self.view.types().payload(subst[index]) != .err)
-                try self.convert(subst[index])
-            else
-                try self.program.converter().sealedScheme(self.module, variable);
+            own_ty.* = ty orelse if (index < subst.len and (site orelse declaring_view).types().payload(subst[index]) != .err) blk: {
+                self.enterSiteView(site);
+                defer self.leaveSiteView(declaring_module, declaring_view);
+                break :blk try self.convert(subst[index]);
+            } else try self.program.converter().sealedScheme(self.module, variable);
         }
         try self.resolveOwnKinds(lambda_ty, scheme, own_types);
         for (descs[outer_count..], own_types) |*desc, own_ty| desc.* = try self.descOf(own_ty);
@@ -4699,6 +5020,8 @@ pub const Builder = struct {
         for (scheme.dictionaries, dicts[0..scheme.dictionaries.len]) |param_index, *dict| {
             if (evidence) |entries| {
                 if (param_index >= entries.len) invariant("a local procedure use's evidence does not cover its dictionaries");
+                self.enterSiteView(site);
+                defer self.leaveSiteView(declaring_module, declaring_view);
                 dict.* = try self.paramDictionary(entries, param_index, context);
             } else {
                 const param = context.params[param_index];
@@ -4712,27 +5035,27 @@ pub const Builder = struct {
                 });
             }
         }
-        @memcpy(dicts[scheme.dictionaries.len..], self.dict_locals[self.dict_locals.len - declaring_dicts ..]);
+        @memcpy(dicts[scheme.dictionaries.len..], scope.dicts);
         // The procedure's own scheme's literal arguments, then the
         // declaring scope's.
-        var declaring_literals: usize = 0;
-        for (declaring.literal_scopes) |literal_scope| declaring_literals += literal_scope.len;
+        const declaring_literals = scope.literals.len;
         const literals = try self.allocator.alloc(LocalId, scheme.literal_requirements.len + declaring_literals);
         defer self.allocator.free(literals);
         if (edge) |use_edge| {
             try self.fillLiteralArgs(null, use_edge, literals[0..scheme.literal_requirements.len]);
         } else {
-            const bound_all = try std.mem.concat(self.allocator, TypeId, &.{ self.env.bound[0..outer_count], own_types });
+            const bound_all = try std.mem.concat(self.allocator, TypeId, &.{ scope.bound, own_types });
             defer self.allocator.free(bound_all);
             try self.derivedLiteralArgs(callee, bound_all, literals[0..scheme.literal_requirements.len]);
         }
-        @memcpy(literals[scheme.literal_requirements.len..], self.literal_locals[self.literal_locals.len - declaring_literals ..]);
+        @memcpy(literals[scheme.literal_requirements.len..], scope.literals);
         const words = try std.mem.concat(self.allocator, LocalId, &.{ dicts, literals });
         defer self.allocator.free(words);
         const closure = if (try self.allClosed(per_call_worker.capture_types))
             try self.packClosure(callee, values, per_call_worker.capture_types, descs, words)
         else
             try self.packDynamicClosure(callee, values, per_call_worker.capture_types, descs, words);
+        try self.notePendingCaptures(scope, closure, values.len + descs.len + scheme.dictionaries.len);
         // The procedure's type at this use, in this worker's variables.
         const use_bound = try self.allocator.alloc(TypeId, vars.len);
         defer self.allocator.free(use_bound);
@@ -4751,7 +5074,6 @@ pub const Builder = struct {
             .local_proc => |target| target,
             .procedure, .structural => invariant("a local method value names a procedure that is not local"),
         };
-        if (self.program.moduleByIdx(node.target.module_idx).index != self.module) invariant("a method declared in a function body is dispatched outside its module");
         const local: checked.LocalProcedureBinding = .{ .binder = target.binder, .expr = target.expr, .dispatch_scope = target.dispatch_scope };
         const table = self.view.view.static_dispatch_plans;
         const evidence: ?[]const static_dispatch.CheckedEvidence = switch (node.nested) {
@@ -4760,36 +5082,75 @@ pub const Builder = struct {
             .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
         };
         const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
-        return try self.localProcInstanceValue(local, fn_ty, evidence, null, subst);
+        // A dispatch in an importing module reaches a method of a type
+        // another module's function body declares through a requirement the
+        // body's scheme carries (design.md "Body-Local Type Context"). The
+        // procedure is built in its declaring module, from the declaration
+        // context of the call instance whose dictionaries are being built;
+        // the dispatch's evidence and substitution are read in this view.
+        const declaring = self.program.moduleByIdx(node.target.module_idx);
+        if (declaring.index == self.module) return try self.localProcInstanceValue(local, fn_ty, evidence, null, subst, null);
+        const site = self.view;
+        const site_module = self.module;
+        self.module = declaring.index;
+        self.view = declaring;
+        defer self.leaveSiteView(site_module, site);
+        return try self.localProcInstanceValue(local, fn_ty, evidence, null, subst, site);
     }
 
-    /// The worker that declares local procedure `local` (this worker or one
-    /// it is nested in) and the procedure's worker there. A procedure whose
-    /// declaring body never ran here (it ran at compile time, and a closure
-    /// it built was stored) gets its worker now.
-    pub fn localProcWorker(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!struct { WorkerId, WorkerId } {
-        const closure_expr = self.bodies().expr(local.expr);
-        const lambda_expr = switch (closure_expr.data) {
-            .lambda => local.expr,
-            .closure => |closure| closure.lambda,
-            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
-        };
-        const captures = try self.program.siteCaptures(self.module, local.expr);
-        var scope_worker = self.worker_id;
-        while (true) {
-            if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| return .{ scope_worker, id };
-            switch (self.program.worker(scope_worker).key) {
-                .lambda => |key| scope_worker = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => break,
+    /// Read in `site`'s view, when there is one (`localProcInstanceValue`).
+    fn enterSiteView(self: *Builder, site: ?*const types.ModuleView) void {
+        const view = site orelse return;
+        self.module = view.index;
+        self.view = view;
+    }
+
+    fn leaveSiteView(self: *Builder, module: ModuleIndex, view: *const types.ModuleView) void {
+        self.module = module;
+        self.view = view;
+    }
+
+    /// The declaration context a function value of the local procedure
+    /// whose lambda is `lambda_expr` is built from: the innermost one being
+    /// built whose callee is the template owning the procedure's site. There
+    /// is none when this body is, or is nested in, that template's body: a
+    /// local procedure named in this body is then this body's own, even
+    /// while it builds the dictionaries of a call of its own procedure.
+    fn localProcDeclaration(self: *Builder, lambda_expr: ExprId) ?*Declaration {
+        if (self.declaration == null) return null;
+        const owner = self.localProcOwner(lambda_expr) orelse return null;
+        var chain = self.worker_id;
+        while (chain != owner) {
+            switch (self.program.worker(chain).key) {
+                .lambda => |key| chain = key.outer,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => return self.declarationOf(owner),
             }
         }
-        // No body of the chain declared it: the chain is a stored closure
-        // restored in its procedure's scope, and the procedure is declared
-        // in that scope's body, which ran at compile time.
-        const scope = self.program.worker(scope_worker).*;
+        return null;
+    }
+
+    /// The worker of the procedure template owning the site of the local
+    /// procedure whose lambda is `lambda_expr`, when it has one.
+    fn localProcOwner(self: *Builder, lambda_expr: ExprId) ?WorkerId {
+        const site_index = self.program.sites_by_expr.get(.{ .module = self.module, .expr = lambda_expr }) orelse
+            invariant("a local procedure has no nested procedure site");
+        const owner = switch (self.view.view.nested_proc_sites.sites[site_index].owner) {
+            .template => |ref| ref,
+            .default_root => return null,
+        };
+        const owner_module = self.program.moduleByKey(.{ .bytes = owner.artifact.bytes }).index;
+        return self.program.worker_ids.get(.{ .template = .{ .module = owner_module, .template = owner.template } });
+    }
+
+    /// The worker of local procedure `lambda_expr` (of closure expression
+    /// `closure_expr`, capturing `captures`) declared in `outer`'s body,
+    /// created now when that body was never lowered here: it ran at compile
+    /// time, and a closure it built was stored.
+    fn declaredLambdaWorker(self: *Builder, outer: WorkerId, lambda_expr: ExprId, closure_ty: checked.CheckedTypeId, captures: []const checked.CheckedCapture) Allocator.Error!WorkerId {
+        const scope = self.program.worker(outer).*;
         const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr })) |scope_id| blk: {
             const scheme = try self.localScheme(scope_id);
-            break :blk if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) null else scheme;
+            break :blk if (scheme.isEmpty()) null else scheme;
         } else null;
         const vars = if (own) |scheme| try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ scope.scheme_vars, scheme.scheme_vars }) else try self.allocator.dupe(checked.CheckedTypeId, scope.scheme_vars);
         defer self.allocator.free(vars);
@@ -4797,11 +5158,95 @@ pub const Builder = struct {
         defer self.allocator.free(bound);
         for (bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
         const env: types.Env = .{ .module = self.module, .vars = vars, .bound = bound };
-        const fn_ty = try self.program.converter().convert(self.module, closure_expr.ty, env);
+        const fn_ty = try self.program.converter().convert(self.module, closure_ty, env);
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
         for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.capturedType(capture.pattern, try self.program.converter().convert(self.module, self.bodies().patternType(capture.pattern), env));
-        return .{ scope_worker, try self.program.lambdaWorker(scope_worker, lambda_expr, captures, capture_types, fn_ty, own) };
+        return try self.program.lambdaWorker(outer, lambda_expr, captures, capture_types, fn_ty, own);
+    }
+
+    /// The scope a function value of local procedure `local` is built in.
+    /// From `declaration`, it is the context's callee's; otherwise it is the
+    /// worker of this worker's chain that declares the procedure, whose
+    /// body this body is or is nested in.
+    fn localProcWorker(self: *Builder, local: checked.LocalProcedureBinding, declaration: ?*Declaration) Allocator.Error!LocalProcScope {
+        const closure_expr = self.bodies().expr(local.expr);
+        const lambda_expr = switch (closure_expr.data) {
+            .lambda => local.expr,
+            .closure => |closure| closure.lambda,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+        };
+        const captures = try self.program.siteCaptures(self.module, local.expr);
+        const context = declaration orelse {
+            var scope_worker = self.worker_id;
+            const found = while (true) {
+                if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| break id;
+                switch (self.program.worker(scope_worker).key) {
+                    .lambda => |key| scope_worker = key.outer,
+                    // The chain's procedure declares it but never lowered
+                    // its declaration here: the chain is a stored closure
+                    // of that procedure, whose body ran at compile time.
+                    .template => if (self.localProcOwner(lambda_expr) == scope_worker)
+                        break try self.declaredLambdaWorker(scope_worker, lambda_expr, closure_expr.ty, captures)
+                    else
+                        invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
+                    .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a local procedure's function value is built outside its declaring body with no declaration context"),
+                }
+            };
+            const declaring = self.program.worker(scope_worker).*;
+            var declaring_dicts: usize = 0;
+            for (declaring.dict_scopes) |scope| declaring_dicts += scope.len;
+            var declaring_literals: usize = 0;
+            for (declaring.literal_scopes) |scope| declaring_literals += scope.len;
+            return .{
+                .declaring = scope_worker,
+                .worker = found,
+                .bound = self.env.bound[0..declaring.scheme_vars.len],
+                .descs = self.var_descs[0..declaring.scheme_vars.len],
+                .dicts = self.dict_locals[self.dict_locals.len - declaring_dicts ..],
+                .literals = self.literal_locals[self.literal_locals.len - declaring_literals ..],
+                .declaration = null,
+            };
+        };
+        // A procedure built from a declaration context is a method of a type
+        // its callee's body declares, outside every generalized local other
+        // than its own scheme's. What it captures are the other local
+        // procedures of that body it refers to (`localProcCaptureValue`).
+        switch (self.view.view.nested_proc_sites.sites[self.program.sites_by_expr.get(.{ .module = self.module, .expr = lambda_expr }).?].lexical_scope) {
+            .root => {},
+            .generalized => |scope_id| if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }) != scope_id)
+                invariant("a local procedure built from a declaration context is declared in a generalized local"),
+        }
+        const worker = try self.declaredLambdaWorker(context.worker, lambda_expr, closure_expr.ty, captures);
+        const dicts = try self.program.arena.allocator().alloc(LocalId, context.dicts.len);
+        for (dicts, 0..) |*dict, slot| dict.* = (try self.declarationDictionary(context, slot)) orelse try self.nullWord();
+        const words = try self.declarationWords(context);
+        return .{
+            .declaring = context.worker,
+            .worker = worker,
+            .bound = context.bound,
+            .descs = words.descs,
+            .dicts = dicts,
+            .literals = words.literals,
+            .declaration = context,
+        };
+    }
+
+    /// What a function value of a local procedure captures for `capture`:
+    /// the value its declaration captured (`declared`), when this body
+    /// declared it; built from the declaration context `declaration`, the
+    /// function value of the other local procedure of the callee's body it
+    /// names, built from the same context, since a method of a type declared
+    /// in a function body captures only the local procedures it refers to;
+    /// otherwise the value visible here.
+    fn localProcCaptureValue(self: *Builder, capture: checked.CheckedCapture, declared: ?LocalId, declaration: ?*Declaration) Allocator.Error!LocalId {
+        if (declared) |value| return value;
+        if (declaration != null) {
+            const local = self.program.local_proc_bindings.get(.{ .module = self.module, .binder = capture.pattern }) orelse
+                invariant("a local procedure built from a declaration context captures a value that is not a local procedure");
+            return try self.localProcValue(local);
+        }
+        return self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is used");
     }
 
     /// The type a callable captures `pattern`'s binder at: its value's type
@@ -4907,34 +5352,43 @@ pub const Builder = struct {
     /// bound, or, inside the procedure's own body, the same closure rebuilt
     /// from the captures the body received.
     pub fn localProcValue(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
-        // The entry chain reads only values the entry chain defines.
-        if (self.binders.get(local.binder)) |value| {
-            if (!self.emitting_entry or self.entry_locals.contains(value)) return value;
+        const declaration = if (local.is_alias) null else self.localProcDeclaration(switch (self.bodies().expr(local.expr).data) {
+            .lambda => local.expr,
+            .closure => |closure| closure.lambda,
+            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
+        });
+        if (declaration == null) {
+            // The entry chain reads only values the entry chain defines.
+            if (self.binders.get(local.binder)) |value| {
+                if (!self.emitting_entry or self.entry_locals.contains(value)) return value;
+            }
         }
         if (local.is_alias) invariant("an alias is used only after its declaration binds it");
         // Referenced inside its own body or a nested function: build the
         // procedure's function value from its captures, which the checker
         // makes visible wherever the procedure is, and the scope it was
         // declared in, whose descriptors and dictionaries this body holds.
-        switch (self.bodies().exprData(local.expr)) {
-            .lambda, .closure => {},
-            .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
-        }
-        const scope_worker, const target = try self.localProcWorker(local);
-        const declaring = self.program.worker(scope_worker).*;
+        // Built from a declaration context, it is a dictionary's method,
+        // an immortal composition.
+        const scope = try self.localProcWorker(local, declaration);
+        const target = scope.worker;
         const target_worker = self.program.worker(target).*;
         const values = try self.allocator.alloc(LocalId, target_worker.captures.len);
         defer self.allocator.free(values);
         const declared = self.declared_captures.get(target_worker.key.lambda.expr);
         for (target_worker.captures, values, 0..) |capture, *value, index| {
-            value.* = if (declared) |captured| captured[index] else self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is referenced");
+            value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
         }
-        var declaring_dicts: usize = 0;
-        for (declaring.dict_scopes) |scope| declaring_dicts += scope.len;
-        var declaring_literals: usize = 0;
-        for (declaring.literal_scopes) |scope| declaring_literals += scope.len;
-        const descs = self.var_descs[0..declaring.scheme_vars.len];
-        const dicts = try std.mem.concat(self.program.arena.allocator(), LocalId, &.{ self.dict_locals[self.dict_locals.len - declaring_dicts ..], self.literal_locals[self.literal_locals.len - declaring_literals ..] });
+        const descs = scope.descs;
+        const dicts = try std.mem.concat(self.program.arena.allocator(), LocalId, &.{ scope.dicts, scope.literals });
+        if (scope.declaration != null) {
+            const saved = self.immortal_closures;
+            self.immortal_closures = true;
+            defer self.immortal_closures = saved;
+            const closure = try self.emitIntoEntry(packClosure, .{ target, values, target_worker.capture_types, descs, dicts });
+            try self.notePendingCaptures(scope, closure, values.len + descs.len);
+            return closure;
+        }
         // A value built from entry locals only is built once, in the entry
         // chain, for every reference; one reading a value the body computes
         // is built where it is referenced.
@@ -5376,7 +5830,7 @@ pub const Builder = struct {
                 const own_scope = self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr });
                 const own: ?lower.LocalScheme = if (own_scope) |scope_id| blk: {
                     var scheme = try self.localSchemeIn(owner_view, scope_id);
-                    if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
+                    if (scheme.isEmpty()) break :blk null;
                     scheme.per_call = false;
                     break :blk scheme;
                 } else null;
@@ -5529,6 +5983,19 @@ pub const Builder = struct {
             const instance = try self.program.targetRequirements(target, decoded.bound);
             return try self.pushValue(try self.dictionaryOfTree(.{ .target = .{ .target = target, .instance = instance } }));
         }
+        if (decoded.declaration) |declaration| {
+            const declaring = self.program.worker(declaration.worker).*;
+            if (captures.len != declaring.dictionary_params.len - declaration.self_slots.len + declaring.literal_params) invariant("a stored codec constructor's captures differ from its declaration context's");
+            try self.push(.leave_immortal_restore);
+            try self.push(.{ .finish_stored_codec = .{ .worker = decoded.worker, .bound = decoded.bound, .declaration = declaration } });
+            const function = try self.program.anyFunction();
+            var index = captures.len;
+            while (index > 0) {
+                index -= 1;
+                try self.push(.{ .restore = .{ .source = source, .node = captures[index], .ty = function } });
+            }
+            return try self.push(.enter_immortal_restore);
+        }
         const shape = StoredFn.captureShape(self.program, decoded.worker);
         const arena = self.program.arena.allocator();
         const descs = try arena.alloc(LocalId, decoded.bound.len);
@@ -5536,6 +6003,7 @@ pub const Builder = struct {
         const capture_types = try arena.alloc(TypeId, shape.values.len);
         for (shape.values, capture_types) |generic, *concrete| concrete.* = try self.program.substitute(self.allocator, generic, decoded.bound);
         if (captures.len != shape.values.len + shape.dicts) invariant("a stored function's captures differ from its worker's");
+        if (shape.composed) try self.push(.leave_immortal_restore);
         try self.push(.{ .finish_stored_fn = .{ .worker = decoded.worker, .shape = shape, .descs = descs, .capture_types = capture_types } });
         const function = try self.program.anyFunction();
         var index = captures.len;
@@ -5544,6 +6012,98 @@ pub const Builder = struct {
             const ty = if (index < capture_types.len) capture_types[index] else function;
             try self.push(.{ .restore = .{ .source = source, .node = captures[index], .ty = ty } });
         }
+        if (shape.composed) try self.push(.enter_immortal_restore);
+    }
+
+    /// Compose generated codec constructor `worker` at the types `bound`
+    /// again in the declaration context `stored` describes, whose restored
+    /// dictionaries and literal arguments are on the value stack: the
+    /// dictionary slots that lead back to the constructor are filled with
+    /// it, adapted to their parameters, once it is composed.
+    fn finishStoredCodec(self: *Builder, worker: WorkerId, bound: []const TypeId, stored: StoredFn.Decoded.Declaration) Allocator.Error!void {
+        const declaring = self.program.worker(stored.worker).*;
+        const dict_count = declaring.dictionary_params.len;
+        const words = try self.popValues(@intCast(dict_count - stored.self_slots.len + declaring.literal_params));
+        defer self.allocator.free(words);
+        const dicts = try self.allocator.alloc(?LocalId, dict_count);
+        defer self.allocator.free(dicts);
+        const building = try self.allocator.alloc(bool, dict_count);
+        defer self.allocator.free(building);
+        var next: usize = 0;
+        for (dicts, building, 0..) |*dict, *slot_building, slot| {
+            slot_building.* = std.mem.findScalar(u32, stored.self_slots, @intCast(slot)) != null;
+            if (slot_building.*) {
+                dict.* = null;
+            } else {
+                dict.* = words[next];
+                next += 1;
+            }
+        }
+        const descs = try self.allocator.alloc(LocalId, stored.bound.len);
+        defer self.allocator.free(descs);
+        for (stored.bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+        var declaration: Declaration = .{
+            .worker = stored.worker,
+            .bound = stored.bound,
+            .words = .{ .descs = descs, .literals = words[next..] },
+            .dicts = dicts,
+            .building = building,
+            .source = .restored,
+            .outer = self.declaration,
+        };
+        defer declaration.patches.deinit(self.allocator);
+        self.declaration = &declaration;
+        defer self.declaration = declaration.outer;
+        const constructor = try Codec.restoreConstructor(self, worker, bound);
+        const params = self.templateEvidenceParams(stored.worker);
+        const env: types.Env = .{ .module = declaring.module, .vars = declaring.scheme_vars, .bound = stored.bound };
+        for (stored.self_slots) |slot| {
+            const interface = try self.program.converter().convert(declaring.module, params[declaring.dictionary_params[slot]].callable_ty, env);
+            try self.completeDeclarationSlot(&declaration, slot, try self.adaptDictionary(constructor.composed, constructor.ty, interface));
+        }
+        try self.pushValue(constructor.composed);
+    }
+
+    /// The function values of generated codec family `family`'s local
+    /// procedures, at its variables' types `bound`, for restoring stored
+    /// generated runtime `stored` of procedure `owner`, into `out`. The
+    /// procedures are local procedures of `owner`'s body, built in the
+    /// declaration context of the instance of `owner` that built the
+    /// runtime: its function type, which the value records, and its stored
+    /// evidence.
+    pub fn storedRuntimeLocals(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, owner: check.CheckedNames.ProcTemplate, out: []LocalId, family: u32, bound: []const TypeId) Allocator.Error!void {
+        const owner_worker = try self.program.templateRefWorker(owner);
+        const target = self.program.worker(owner_worker).*;
+        const owner_fn_ty = stored.owner_fn_ty orelse invariant("a stored generated runtime calling local procedures records no instance of its procedure");
+        const formal = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });
+        const owner_bound = (try self.program.instantiateTarget(owner_worker, formal, try self.constType(source, owner_fn_ty))).bound;
+        const descs = try self.allocator.alloc(LocalId, owner_bound.len);
+        defer self.allocator.free(descs);
+        for (owner_bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+        const restored = try self.storedDictionaries(source, stored, owner_worker, owner_bound);
+        defer self.allocator.free(restored);
+        const dicts = try self.allocator.alloc(?LocalId, restored.len);
+        defer self.allocator.free(dicts);
+        for (dicts, restored) |*dict, dictionary| dict.* = dictionary;
+        const building = try self.allocator.alloc(bool, restored.len);
+        defer self.allocator.free(building);
+        @memset(building, false);
+        const literals = try self.allocator.alloc(LocalId, target.literal_params);
+        defer self.allocator.free(literals);
+        try self.derivedLiteralArgs(owner_worker, owner_bound, literals);
+        var declaration: Declaration = .{
+            .worker = owner_worker,
+            .bound = owner_bound,
+            .words = .{ .descs = descs, .literals = literals },
+            .dicts = dicts,
+            .building = building,
+            .source = .restored,
+            .outer = self.declaration,
+        };
+        defer declaration.patches.deinit(self.allocator);
+        self.declaration = &declaration;
+        defer self.declaration = declaration.outer;
+        try Codec.localValues(self, family, bound, out);
     }
 
     /// The lambda worker of expression `lambda_expr` of the worker
@@ -5557,7 +6117,7 @@ pub const Builder = struct {
         const captures = try self.program.siteCaptures(owner.module, lambda_expr);
         const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr })) |scope_id| blk: {
             var scheme = try self.localSchemeIn(owner_view, scope_id);
-            if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
+            if (scheme.isEmpty()) break :blk null;
             if (captured_scheme) scheme.per_call = false;
             break :blk scheme;
         } else null;
@@ -5927,7 +6487,7 @@ pub const Builder = struct {
                 if (local.is_alias) return try self.lowerValueCall(expr_id, call);
                 if (local.dispatch_scope) |scope_id| {
                     const scheme = try self.localScheme(scope_id);
-                    if (scheme.scheme_vars.len != 0 or scheme.dictionaries.len != 0) return try self.lowerGeneralizedLocalCall(expr_id, call, local, scheme);
+                    if (!scheme.isEmpty()) return try self.lowerGeneralizedLocalCall(expr_id, call, local, scheme);
                 }
                 return try self.lowerValueCall(expr_id, call);
             },
@@ -6038,6 +6598,7 @@ pub const Builder = struct {
             if (target.dictionary_params.len == 0) return .{ .hidden = hidden, .bound = bound, .ret = ret };
             const context = self.templateParamContext(callee, bound);
             var deferred = try self.deferredDictionaries(evidence, context, target.dictionary_params.len);
+            deferred.declaring = callee;
             if (evidence_owner) |owner| {
                 deferred.module = owner.index;
                 deferred.view = owner;
@@ -6047,29 +6608,6 @@ pub const Builder = struct {
             return .{ .hidden = hidden, .bound = bound, .ret = ret, .deferred_dicts = deferred };
         }
         for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
-        if (target.dictionary_params.len != 0) {
-            const context = self.templateParamContext(callee, bound);
-            const saved_module = self.module;
-            const saved_view = self.view;
-            const saved_env = self.env;
-            const saved_foreign = self.foreign_scopes;
-            defer {
-                self.module = saved_module;
-                self.view = saved_view;
-                self.env = saved_env;
-                self.foreign_scopes = saved_foreign;
-            }
-            if (evidence_owner) |owner| {
-                self.module = owner.index;
-                self.view = owner;
-                self.env = context.env;
-                self.foreign_scopes = self.alias_scopes.items.len;
-            }
-            for (target.dictionary_params, hidden[bound.len..][0..target.dictionary_params.len]) |param_index, *dict| {
-                if (param_index >= evidence.len) invariant("a call's evidence does not cover its target's dictionaries");
-                dict.* = try self.paramDictionary(evidence, param_index, context);
-            }
-        }
         const literals = hidden[bound.len + target.dictionary_params.len ..];
         if (edge == .literal) {
             // A call checking recorded no edge for (a platform requirement's
@@ -6079,7 +6617,138 @@ pub const Builder = struct {
         } else {
             try self.fillLiteralArgs(callee, edge, literals);
         }
+        if (target.dictionary_params.len != 0) {
+            const count = target.dictionary_params.len;
+            const dicts = try self.allocator.alloc(?LocalId, count);
+            defer self.allocator.free(dicts);
+            @memset(dicts, null);
+            const building = try self.allocator.alloc(bool, count);
+            defer self.allocator.free(building);
+            @memset(building, false);
+            var declaration: Declaration = .{
+                .worker = callee,
+                .bound = bound,
+                .words = .{ .descs = hidden[0..bound.len], .literals = literals },
+                .dicts = dicts,
+                .building = building,
+                .source = .{ .call = .{ .evidence = evidence, .context = self.templateParamContext(callee, bound), .owner = evidence_owner } },
+                .outer = self.declaration,
+            };
+            defer declaration.patches.deinit(self.allocator);
+            for (hidden[bound.len..][0..count], 0..) |*dict, slot| {
+                dict.* = try self.declarationDictionary(&declaration, slot) orelse invariant("a call instance's dictionary was read while it was built");
+            }
+        }
         return .{ .hidden = hidden, .bound = bound, .ret = try self.program.substitute(self.allocator, target.ret, bound) };
+    }
+
+    /// Dictionary slot `slot` of `declaration`, built on its first read;
+    /// null while it is being built.
+    fn declarationDictionary(self: *Builder, declaration: *Declaration, slot: usize) Allocator.Error!?LocalId {
+        if (declaration.dicts[slot]) |dictionary| return dictionary;
+        if (declaration.building[slot]) return null;
+        declaration.building[slot] = true;
+        // The slot is built in the scope its instance's evidence is read
+        // in, whose innermost declaration context is the instance's.
+        const saved_declaration = self.declaration;
+        self.declaration = declaration;
+        defer self.declaration = saved_declaration;
+        const param_index = self.program.worker(declaration.worker).dictionary_params[slot];
+        const dictionary = switch (declaration.source) {
+            .call => |call| blk: {
+                if (param_index >= call.evidence.len) invariant("a call's evidence does not cover its target's dictionaries");
+                const saved_module = self.module;
+                const saved_view = self.view;
+                const saved_env = self.env;
+                const saved_foreign = self.foreign_scopes;
+                defer {
+                    self.module = saved_module;
+                    self.view = saved_view;
+                    self.env = saved_env;
+                    self.foreign_scopes = saved_foreign;
+                }
+                if (call.owner) |owner| {
+                    self.module = owner.index;
+                    self.view = owner;
+                    self.env = call.context.env;
+                    self.foreign_scopes = self.alias_scopes.items.len;
+                }
+                break :blk try self.paramDictionary(call.evidence, param_index, call.context);
+            },
+            .frame => |frame| try self.frameDictionary(frame.position, param_index),
+            .restored => invariant("a restored declaration context's dictionary is neither restored nor being composed"),
+        };
+        try self.completeDeclarationSlot(declaration, slot, dictionary);
+        return dictionary;
+    }
+
+    /// Fill dictionary slot `slot` of `declaration` with `dictionary`, and
+    /// the captures that held a null word for it.
+    fn completeDeclarationSlot(self: *Builder, declaration: *Declaration, slot: usize, dictionary: LocalId) Allocator.Error!void {
+        declaration.building[slot] = false;
+        declaration.dicts[slot] = dictionary;
+        for (declaration.patches.items) |patch| {
+            if (patch.slot != slot) continue;
+            const patched = try self.closedLocal(try self.erasedLayout());
+            try self.emitEntry(.{ .dyn = .{ .target = patched, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_patch = .{
+                .dict = patch.closure,
+                .index = patch.index,
+                .value = dictionary,
+            } }), .next = undefined } });
+        }
+    }
+
+    /// The descriptors and literal arguments of `declaration`, composed at
+    /// the first read of a literal chain frame's.
+    fn declarationWords(self: *Builder, declaration: *Declaration) Allocator.Error!Declaration.Words {
+        if (declaration.words) |words| return words;
+        const frame = switch (declaration.source) {
+            .frame => |frame| frame,
+            .call, .restored => invariant("a call's declaration context has no descriptors or literal arguments"),
+        };
+        const arena = self.program.arena.allocator();
+        const descs = try arena.alloc(LocalId, declaration.bound.len);
+        for (declaration.bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+        const literals = try arena.alloc(LocalId, self.program.worker(declaration.worker).literal_params);
+        for (literals, 0..) |*literal, index| literal.* = try self.scopeFrameLiteral(frame.scope, frame.position, @intCast(index));
+        declaration.words = .{ .descs = descs, .literals = literals };
+        return declaration.words.?;
+    }
+
+    /// The innermost declaration context of the call instances being built
+    /// whose callee is `worker`.
+    fn declarationOf(self: *const Builder, worker: WorkerId) ?*Declaration {
+        var next = self.declaration;
+        while (next) |declaration| : (next = declaration.outer) {
+            if (declaration.worker == worker) return declaration;
+        }
+        return null;
+    }
+
+    /// The declaration context of the literal chain frame whose
+    /// dictionaries are `composed`, when one is being built.
+    fn frameDeclaration(self: *const Builder, composed: []?LocalId) ?*Declaration {
+        var next = self.declaration;
+        while (next) |declaration| : (next = declaration.outer) {
+            switch (declaration.source) {
+                .frame => |frame| if (frame.composed == composed.ptr) return declaration,
+                .call, .restored => {},
+            }
+        }
+        return null;
+    }
+
+    /// Record that `closure`'s capture word `index` holds a null word for
+    /// each slot of `scope`'s declaration context still being built, to be
+    /// filled with the slot's dictionary once it is. `first` is the capture
+    /// index of the scope's first dictionary.
+    fn notePendingCaptures(self: *Builder, scope: LocalProcScope, closure: LocalId, first: usize) Allocator.Error!void {
+        const declaration = scope.declaration orelse return;
+        for (declaration.dicts, 0..) |dictionary, slot| {
+            if (dictionary != null) continue;
+            if (!declaration.building[slot]) invariant("a declaration context's dictionary was neither built nor being built when a procedure captured it");
+            try declaration.patches.append(self.allocator, .{ .closure = closure, .index = @intCast(first + slot), .slot = @intCast(slot) });
+        }
     }
 
     /// The dictionaries of a literal chain frame with `count` parameters,
@@ -7047,10 +7716,15 @@ pub const Builder = struct {
                     const declaration_id = try self.program.store.declarationBySourceDecl(view, source_decl) orelse
                         invariant("a stored type names a declaration its module does not make");
                     const declaration = view.types().nominalDeclarationById(declaration_id);
-                    const args = try self.allocator.alloc(TypeId, named.args.len);
+                    // A declaration in a function body takes its context
+                    // arguments, which a stored type leaves out, from the
+                    // restoring scope.
+                    const context = declaration.contextFormalArgs(view.types());
+                    const args = try self.allocator.alloc(TypeId, named.args.len + context.len);
                     defer self.allocator.free(args);
-                    for (const_types.typeSpan(named.args), args) |child, *arg| arg.* = done.get(child).?;
-                    break :blk try self.program.converter().nominalAt(declaring, declaration.declaration_root, args, self.env);
+                    for (const_types.typeSpan(named.args), args[0..named.args.len]) |child, *arg| arg.* = done.get(child).?;
+                    for (context, args[named.args.len..]) |formal, *arg| arg.* = try self.program.converter().convert(declaring, formal, self.env);
+                    break :blk try self.program.converter().nominalAt(declaring, declaration.declaration_root, args);
                 },
                 // Only a closure's capture holds an erased function type, and
                 // its restore relates no such capture (`constTypeHasErased`).
@@ -7103,7 +7777,69 @@ pub const Builder = struct {
             .worker = self.program.worker(entry).proc,
             .captures = try self.store.addLocalSpan(captures),
         } }), .next = undefined } });
+        if (self.codec_back_edges.count() != 0) {
+            for (captures, 0..) |capture, index| {
+                if (!self.codec_back_edges.contains(capture)) continue;
+                try self.codec_back_edge_patches.append(self.allocator, .{ .dict = local, .index = @intCast(index), .back_edge = capture });
+            }
+        }
         return local;
+    }
+
+    /// Begin composing family `family`'s constructor at `bound`. Null when
+    /// that constructor is already being composed: its own local procedures'
+    /// dictionaries reach it again, as a format method whose `where` clause
+    /// requires the codec that calls it does (design.md "Codec Derivation
+    /// Recurrence"). The request then takes a null word, which every
+    /// composition capturing it gets filled with the constructor once it is
+    /// composed (`finishCodecComposition`).
+    pub fn beginCodecComposition(self: *Builder, family: u32, bound: []const TypeId, actual: TypeId) Allocator.Error!union(enum) { composing: u32, back_edge: LocalId } {
+        for (self.codec_compositions.items, 0..) |composition, index| {
+            if (composition.family != family or !std.mem.eql(TypeId, composition.bound, bound)) continue;
+            const word = try self.nullWord();
+            try self.codec_back_edges.put(self.allocator, word, .{ .composition = @intCast(index), .actual = actual });
+            return .{ .back_edge = word };
+        }
+        const index: u32 = @intCast(self.codec_compositions.items.len);
+        try self.codec_compositions.append(self.allocator, .{ .family = family, .bound = bound });
+        return .{ .composing = index };
+    }
+
+    /// Finish composition `index`, whose constructor `composed` has type
+    /// `composed_ty`: fill every capture holding one of its back edges.
+    pub fn finishCodecComposition(self: *Builder, index: u32, composed: LocalId, composed_ty: TypeId) Allocator.Error!void {
+        if (self.codec_compositions.items.len != index + 1) invariant("generated codec constructor compositions did not nest");
+        _ = self.codec_compositions.pop();
+        if (self.codec_back_edges.count() == 0) return;
+        var back_edges = std.ArrayList(struct { word: LocalId, actual: TypeId }).empty;
+        defer back_edges.deinit(self.allocator);
+        var iterator = self.codec_back_edges.iterator();
+        while (iterator.next()) |entry| {
+            if (entry.value_ptr.composition != index) continue;
+            try back_edges.append(self.allocator, .{ .word = entry.key_ptr.*, .actual = entry.value_ptr.actual });
+        }
+        for (back_edges.items) |back_edge| {
+            _ = self.codec_back_edges.remove(back_edge.word);
+            const value = try self.adaptDictionary(composed, composed_ty, back_edge.actual);
+            var patched_any = false;
+            var kept: usize = 0;
+            for (self.codec_back_edge_patches.items) |patch| {
+                if (patch.back_edge != back_edge.word) {
+                    self.codec_back_edge_patches.items[kept] = patch;
+                    kept += 1;
+                    continue;
+                }
+                patched_any = true;
+                const patched = try self.closedLocal(try self.erasedLayout());
+                try self.emitEntry(.{ .dyn = .{ .target = patched, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_patch = .{
+                    .dict = patch.dict,
+                    .index = patch.index,
+                    .value = value,
+                } }), .next = undefined } });
+            }
+            self.codec_back_edge_patches.shrinkRetainingCapacity(kept);
+            if (!patched_any) invariant("a generated codec constructor's back edge was captured by nothing a composition patches");
+        }
     }
 
     /// The dictionary of `entry` as static data, when all of `captures` are
@@ -7183,8 +7919,23 @@ pub const Builder = struct {
     fn frameDictionary(self: *Builder, position: usize, param: u32) Allocator.Error!LocalId {
         const scope = self.alias_scopes.items[position];
         const slot = std.mem.findScalar(u32, scope.params, param) orelse invariant("evidence named a dictionary parameter its alias scope does not have");
+        if (scope.declaration) |declaration| if (declaration.dicts[slot] == null) {
+            // Only a requirement naming a type the callee's body declares
+            // (a captured codec requirement whose format is a local type)
+            // composes a dictionary that reaches the callee's local
+            // procedures, so only such a slot is ever being built while one
+            // is. A local procedure's own scheme names a declaring slot only
+            // through a requirement on one of the callee's quantified
+            // variables, which the callee's annotation states outside its
+            // body and so cannot name a type its body declares; a captured
+            // requirement on a structural receiver resolves structurally.
+            invariant("a local procedure's own scheme names a declaration context's dictionary while it is built");
+        };
         const deferred = scope.deferred_dicts orelse return scope.dicts[slot];
         if (deferred.composed[slot]) |dictionary| return dictionary;
+        if (deferred.declaring) |declaring| if (self.frameDeclaration(deferred.composed) == null) {
+            return try self.frameDeclarationDictionary(position, declaring, deferred, slot);
+        };
         const saved_module = self.module;
         const saved_view = self.view;
         const saved_env = self.env;
@@ -7212,6 +7963,30 @@ pub const Builder = struct {
             invariant("an alias's evidence does not cover the parameter a chain read");
         deferred.composed[slot] = dictionary;
         return dictionary;
+    }
+
+    /// Dictionary `slot` of the literal chain frame at `position`, a call
+    /// instance of template worker `declaring`, built in the frame's
+    /// declaration context.
+    fn frameDeclarationDictionary(self: *Builder, position: usize, declaring: WorkerId, deferred: DeferredDictionaries, slot: usize) Allocator.Error!LocalId {
+        const context = deferred.context orelse invariant("a template frame's dictionaries have no parameter context");
+        const bound = context.env.bound;
+        const dicts = try self.allocator.dupe(?LocalId, deferred.composed);
+        defer self.allocator.free(dicts);
+        const building = try self.allocator.alloc(bool, dicts.len);
+        defer self.allocator.free(building);
+        @memset(building, false);
+        var declaration: Declaration = .{
+            .worker = declaring,
+            .bound = bound,
+            .words = null,
+            .dicts = dicts,
+            .building = building,
+            .source = .{ .frame = .{ .position = position, .composed = deferred.composed.ptr, .scope = self.alias_scopes.items[position] } },
+            .outer = self.declaration,
+        };
+        defer declaration.patches.deinit(self.allocator);
+        return try self.declarationDictionary(&declaration, slot) orelse invariant("a frame's dictionary was read while it was built");
     }
 
     /// The dictionary in scope for checked evidence parameter `index`.
@@ -7730,7 +8505,7 @@ pub const Builder = struct {
         switch (op) {
             .box_box => if (store.get(result_ty) == .box and store.get(store.get(result_ty).box) == .function) return try self.pushValue(args[0]),
             .box_unbox, .box_unbox_borrowed => if (store.get(result_ty) == .function) return try self.pushValue(args[0]),
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_append, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
         if (!open) {
             const target = try self.localOf(result_ty, .frame);
@@ -7752,7 +8527,7 @@ pub const Builder = struct {
                 try self.emitDyn(target, .{ .copy = .{ .src = view, .desc = try self.descOf(result_ty) } });
                 return try self.pushValue(target);
             },
-            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_append, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
         // Every Builtin low-level whose operands or result can mention a type
         // variable is a list or box operation; every other one is declared
@@ -7915,7 +8690,7 @@ pub const Builder = struct {
         else
             null;
         const fn_ty = if (own) |scheme| blk: {
-            if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk try self.exprType(expr_id);
+            if (scheme.isEmpty()) break :blk try self.exprType(expr_id);
             const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ self.env.vars, scheme.scheme_vars });
             defer self.allocator.free(vars);
             const bound = try self.allocator.alloc(TypeId, vars.len);
@@ -7923,7 +8698,7 @@ pub const Builder = struct {
             for (bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
             break :blk try self.program.converter().convert(self.module, self.bodies().exprType(expr_id), .{ .module = self.module, .vars = vars, .bound = bound });
         } else try self.exprType(expr_id);
-        const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) null else scheme) else null;
+        const generalized: ?lower.LocalScheme = if (own) |scheme| (if (scheme.isEmpty()) null else scheme) else null;
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
         const values = try self.allocator.alloc(LocalId, captures.len + self.var_descs.len + self.dict_locals.len);
@@ -8049,6 +8824,9 @@ pub const Builder = struct {
             }
             return try self.composeDictionary(callee, values);
         }
+        // A callable whose captures are all static (none, or only static
+        // callables) is static, immortal data (design.md "Function Values").
+        if (try self.staticDictionary(callee, values)) |static_callable| return static_callable;
         const target = try self.closedLocal(try self.erasedLayout());
         var capture: ?LocalId = null;
         var capture_layout: ?layout.Idx = null;
@@ -8284,7 +9062,7 @@ pub const Builder = struct {
             slot.* = value orelse switch (field.kind) {
                 .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(field.ty), try self.program.store.internName(@import("layouts.zig").missing_label), &.{}),
                 .inline_slot => try self.defaultValue(self.program.omitted_defaults.get(.{ .module = self.module, .expr = expr_id, .name = field.name }) orelse
-                    invariant("a record construction omits a field it has no default for")),
+                    invariant("a record construction omits a field it has no default for"), field.ty),
                 .variable_slot => invariant("a record construction omits a field of undetermined kind"),
             };
         }
@@ -8436,6 +9214,12 @@ pub const Builder = struct {
         try self.push(if (join) |id| .{ .jump = id } else .ret);
     }
 
+    /// What a match reports when no branch matches (`comptimeFailure`).
+    fn comptimeMatchFailure(self: *Builder, expr_id: ExprId, match: @FieldType(bodies_mod.ExprData, "match_")) Allocator.Error!?Match.ComptimeFailure {
+        if (match.skip_exhaustiveness) return null;
+        return try self.comptimeFailure(self.view.view.exhaustiveness_sites.lookupByMatchExpr(expr_id));
+    }
+
     pub fn matchStart(self: *Builder, expr_id: ExprId) Allocator.Error!void {
         const scrutinee = self.popValue();
         const match = self.bodies().exprData(expr_id).match_;
@@ -8448,6 +9232,7 @@ pub const Builder = struct {
             .tail = tail,
             .merge = null,
             .remainder = undefined,
+            .comptime_failure = try self.comptimeMatchFailure(expr_id, match),
         };
         const merge_binders = try self.bodies().stateMergeBinders(expr_id);
         if (tail) {
@@ -9131,7 +9916,7 @@ pub const Builder = struct {
                 if (self.bodies().binder(decl.pattern).is_scheme_alias) {
                     if (self.program.local_scopes.get(.{ .module = self.module, .expr = decl.expr })) |scope_id| {
                         const scheme = try self.localScheme(scope_id);
-                        if (scheme.scheme_vars.len != 0 or scheme.dictionaries.len != 0) return;
+                        if (!scheme.isEmpty()) return;
                     }
                 }
                 // A value that diverges binds nothing.

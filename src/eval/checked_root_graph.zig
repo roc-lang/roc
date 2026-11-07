@@ -17,6 +17,7 @@
 const std = @import("std");
 const base = @import("base");
 const check = @import("check");
+const lir = @import("lir");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedArtifact;
@@ -445,17 +446,17 @@ const Walker = struct {
 /// a component, a list item, a box payload, a nominal's argument or
 /// backing. Such a root has no compile-time value slot, and a `.boxy`
 /// program storing it keeps what reading function values takes (design.md
-/// "Stored Function Values").
-/// Nominal declarations are resolved in the complete checked program, including
-/// its root and platform relations, independently of which modules need CTFE.
+/// "Stored Function Values"). `modules` lists the artifacts `root.module`
+/// indexes; `program` is every module of the program the root is evaluated
+/// in, which holds each nominal's declaring module.
 pub fn rootHoldsFunction(
     allocator: Allocator,
-    program_root: checked.LoweringModuleView,
-    imports: []const checked.ImportedModuleView,
-    artifact: *const checked.CheckedModuleArtifact,
-    request: checked.RootRequest,
+    modules: []const *const checked.CheckedModuleArtifact,
+    program: lir.CheckedPipeline.CheckedModuleSet,
+    root: Root,
 ) Allocator.Error!bool {
-    if (artifact.compile_time_roots.root(request.compile_time_root.?).kind == .callable_binding) return true;
+    const artifact = modules[root.module];
+    if (artifact.compile_time_roots.root(root.root).kind == .callable_binding) return true;
     const Pending = struct { key: [32]u8, types: checked.CheckedTypeStoreView, ty: checked.CheckedTypeId };
     const Seen = struct { key: [32]u8, ty: checked.CheckedTypeId };
     var seen = std.AutoHashMapUnmanaged(Seen, void).empty;
@@ -466,7 +467,7 @@ pub fn rootHoldsFunction(
     const own_key = artifact.key.digest().bytes;
     // The root's checked type is its wrapper's function type; its value is
     // the wrapper's result.
-    switch (own_types.payload(request.checked_type)) {
+    switch (own_types.payload(root.request.checked_type)) {
         .function => |function| try pending.append(allocator, .{ .key = own_key, .types = own_types, .ty = function.ret }),
         .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => base.invariant("compile-time finalization invariant violated: a compile-time root's checked type is not a function type", .{}),
     }
@@ -512,9 +513,9 @@ pub fn rootHoldsFunction(
                     },
                     .local_declaration => |declaration_id| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = item.types.nominalDeclarationById(declaration_id).backing }),
                     .imported_declaration => |imported| {
-                        const declaring = typesOf(program_root, imports, imported.artifact) orelse
+                        const declaring = program.moduleByKey(imported.artifact) orelse
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
-                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
+                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring.checked_types, .ty = declaring.checked_types.nominalDeclarationById(imported.declaration).backing });
                     },
                     // A nominal published as a box payload capability is
                     // declared in its module like any other: its value is
@@ -527,13 +528,11 @@ pub fn rootHoldsFunction(
                     // The capability names its nominal in the declaring
                     // module's own names.
                     .imported_box_payload_capability => |imported| {
-                        const declaring = typesOf(program_root, imports, imported.artifact) orelse
+                        const declaring = program.moduleByKey(imported.artifact) orelse
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
-                        const capabilities = capabilitiesOf(program_root, imports, imported.artifact) orelse
-                            base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
-                        const declaration = declaring.nominalDeclaration(capabilities.boxPayloadCapability(imported.capability).nominal) orelse
+                        const declaration = declaring.checked_types.nominalDeclaration(declaring.interface_capabilities.boxPayloadCapability(imported.capability).nominal) orelse
                             base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
-                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaration.backing });
+                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring.checked_types, .ty = declaration.backing });
                     },
                     .opaque_without_backing => {},
                 }
@@ -541,28 +540,6 @@ pub fn rootHoldsFunction(
         }
     }
     return false;
-}
-
-fn typesOf(root: checked.LoweringModuleView, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?checked.CheckedTypeStoreView {
-    if (root.module.key.digest().eql(key)) return root.module.typesView();
-    for (root.relation_modules) |relation| {
-        if (relation.key.digest().eql(key)) return relation.checked_types;
-    }
-    for (imports) |import| {
-        if (import.key.digest().eql(key)) return import.checked_types;
-    }
-    return null;
-}
-
-fn capabilitiesOf(root: checked.LoweringModuleView, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?*const checked.ModuleInterfaceCapabilities {
-    if (root.module.key.digest().eql(key)) return &root.module.interface_capabilities;
-    for (root.relation_modules) |relation| {
-        if (relation.key.digest().eql(key)) return relation.interface_capabilities;
-    }
-    for (imports) |import| {
-        if (import.key.digest().eql(key)) return import.interface_capabilities;
-    }
-    return null;
 }
 
 test "CTFE root classification resolves nominal backings throughout the checked program" {
@@ -598,9 +575,10 @@ test "CTFE root classification resolves nominal backings throughout the checked 
         const request = consumer.root_requests.compile_time_requests[0];
         // A nominal can be supplied by the ownership anchor, a platform
         // relation, or an ordinary import. None needs a pending CTFE root.
-        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, checked.loweringView(holder), &.{checked.importedView(consumer)}, consumer, request));
-        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, checked.loweringViewWithRelations(consumer, &.{checked.importedView(holder)}), &.{}, consumer, request));
-        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, checked.loweringView(consumer), &.{checked.importedView(holder)}, consumer, request));
+        const root: Root = .{ .module = 0, .root = request.compile_time_root.?, .request = request };
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringView(holder), .imports = &.{checked.importedView(consumer)} }, root));
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringViewWithRelations(consumer, &.{checked.importedView(holder)}) }, root));
+        try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringView(consumer), .imports = &.{checked.importedView(holder)} }, root));
     }
 }
 

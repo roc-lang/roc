@@ -203,6 +203,7 @@ pub const Store = struct {
                     .infinite_recursion,
                     .anonymous_recursion,
                     .polymorphic_recursion,
+                    .local_type_escape,
                     .row_label_conflict,
                     .polymorphic_value,
                     .polymorphic_var_annotation,

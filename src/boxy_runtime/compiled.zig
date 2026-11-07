@@ -398,8 +398,14 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
                 }
                 const data = utils.allocateWithRefcount(to_elem.size * len, to_elem.alignment, to_elem.flags.contains_refcounted, ops);
                 target.* = .{ .bytes = data, .length = len, .capacity_or_alloc_ptr = RocList.encodeCapacity(len) };
+                // A list of zero-sized elements has no bytes (`zstList`):
+                // each element reads none, so any address stands for it.
+                const elements: [*]u8 = source.bytes orelse elements: {
+                    if (from_elem.size != 0) invariant(ops, "a list of sized elements has no bytes");
+                    break :elements data;
+                };
                 for (0..len) |index| {
-                    stack.push(.{ .from = from_elem, .to = to_elem, .src = source.bytes.? + index * from_elem.size, .dst = data + index * to_elem.size }, ops);
+                    stack.push(.{ .from = from_elem, .to = to_elem, .src = elements + index * from_elem.size, .dst = data + index * to_elem.size }, ops);
                 }
             },
             .box, .recursive_box => {
@@ -863,12 +869,23 @@ pub const InProcessState = struct {
     }
 
     fn note(self: *InProcessState, desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) void {
+        // A crash leaves the thread without unwinding it, so it happens only
+        // once the lock is released: other threads composing still take it.
+        if (!self.noteLocked(desc, ty, vars)) crashOutOfMemory(self);
+    }
+
+    /// False when memory ran out, leaving the origins as they were.
+    fn noteLocked(self: *InProcessState, desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) bool {
         while (!self.lock.tryLock()) std.atomic.spinLoopHint();
         defer self.lock.unlock();
-        const entry = self.origins.getOrPut(self.allocator, desc) catch crashOutOfMemory(self);
-        if (entry.found_existing and entry.value_ptr.ty <= ty) return;
-        const owned = self.arena.allocator().dupe(*const TypeDesc, vars) catch crashOutOfMemory(self);
+        const entry = self.origins.getOrPut(self.allocator, desc) catch return false;
+        if (entry.found_existing and entry.value_ptr.ty <= ty) return true;
+        const owned = self.arena.allocator().dupe(*const TypeDesc, vars) catch {
+            if (!entry.found_existing) self.origins.removeByPtr(entry.key_ptr);
+            return false;
+        };
         entry.value_ptr.* = .{ .ty = ty, .vars = owned };
+        return true;
     }
 
     fn crashOutOfMemory(self: *InProcessState) noreturn {
@@ -922,10 +939,15 @@ pub const InProcessState = struct {
 
     fn alloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self = fromOps(ops);
+        // The crash comes after the lock is released, as in `note`.
+        return self.allocLocked(length, alignment, @returnAddress()) orelse
+            builtins.in_process_host.ops().crash("out of memory composing a Boxy descriptor");
+    }
+
+    fn allocLocked(self: *InProcessState, length: usize, alignment: usize, ret_addr: usize) ?[*]u8 {
         while (!self.lock.tryLock()) std.atomic.spinLoopHint();
         defer self.lock.unlock();
-        return self.arena.allocator().rawAlloc(length, .fromByteUnits(alignment), @returnAddress()) orelse
-            builtins.in_process_host.ops().crash("out of memory composing a Boxy descriptor");
+        return self.arena.allocator().rawAlloc(length, .fromByteUnits(alignment), ret_addr);
     }
 
     /// Arena memory is released with the state.

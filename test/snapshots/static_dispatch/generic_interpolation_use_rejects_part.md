@@ -121,7 +121,7 @@ NO CHANGE
 						(e-literal (string "")))))))
 	(d-let
 		(p-assign (ident "ok"))
-		(e-call (constraint-fn-var 296)
+		(e-call (constraint-fn-var 298)
 			(e-lookup-local
 				(p-assign (ident "greet")))
 			(e-string
@@ -130,7 +130,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "bad"))
-		(e-call (constraint-fn-var 306)
+		(e-call (constraint-fn-var 310)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-typed-int (value "42") (type "U64")))
 		(annotation
