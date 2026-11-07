@@ -254,8 +254,8 @@ pub const Output = struct {
 
 /// A worker's identity: what it lowers.
 pub const WorkerKey = union(enum) {
-    /// A procedure template.
-    template: struct { module: ModuleIndex, template: checked_names.CheckedProcedureTemplateId },
+    /// A procedure template, lowered at `binding`.
+    template: struct { module: ModuleIndex, template: checked_names.CheckedProcedureTemplateId, binding: TemplateBinding = .generic },
     /// A function value of type `to` calling one of type `from`, which differ
     /// in the storage of record fields (design.md "Field Kinds"); both are
     /// in the variable space of the worker `outer`, whose descriptors the
@@ -315,6 +315,17 @@ pub const WorkerKey = union(enum) {
     convert: struct { module: ModuleIndex, from: TypeId, to: TypeId },
 };
 
+/// What a template worker's scheme variables are bound to while its body is
+/// lowered (design.md "Pre-Specialized List(U8) Workers").
+pub const TemplateBinding = enum(u8) {
+    /// Every scheme variable is a type variable: the template's one generic
+    /// worker.
+    generic,
+    /// The list item variable of a `List` template (`Program.listItemSlot`)
+    /// is `U8`; every other scheme variable is a type variable.
+    list_u8,
+};
+
 /// Why a dictionary slot's method crashes.
 pub const CrashDictionary = enum { checked_error, unreachable_value };
 
@@ -359,6 +370,12 @@ pub const Worker = struct {
     /// indexed by, and that checked list's length.
     checked_slots: []const u32 = &.{},
     checked_scheme_count: u32 = 0,
+    /// For a template worker lowered at `TemplateBinding.list_u8`, and for
+    /// every lambda worker whose scope chain such a worker roots: the
+    /// position among `scheme_vars` of the list item variable, which the body
+    /// binds to `U8`. Its descriptor stays an input, filled with `U8`'s, so
+    /// the worker's inputs are the generic worker's.
+    list_u8_slot: ?u32 = null,
     /// Evidence parameters that are runtime dictionaries, in hidden
     /// dictionary order (indices into the template's params).
     dictionary_params: []const u32,
@@ -454,6 +471,18 @@ pub fn templateWorkerIdentity(link_name: [32]u8, template: checked_names.Checked
     var hasher = base.TypeDigestHasher.init();
     hasher.update("roc.boxy.worker.v1");
     hasher.update("template");
+    hasher.update(&link_name);
+    hasher.update(std.mem.asBytes(&@as(u32, @backingInt(template))));
+    return .{ .bytes = hasher.finalResult() };
+}
+
+/// The content identity of the `List(U8)` worker of module `link_name`'s
+/// template `template` (`TemplateBinding.list_u8`), distinct from its
+/// generic worker's and the same in every object of the link.
+pub fn listU8TemplateWorkerIdentity(link_name: [32]u8, template: checked_names.CheckedProcedureTemplateId) LIR.ProcIdentity {
+    var hasher = base.TypeDigestHasher.init();
+    hasher.update("roc.boxy.worker.v1");
+    hasher.update("template_list_u8");
     hasher.update(&link_name);
     hasher.update(std.mem.asBytes(&@as(u32, @backingInt(template))));
     return .{ .bytes = hasher.finalResult() };
@@ -602,6 +631,11 @@ pub const Program = struct {
     type_contents: collections.DenseMapUnmanaged(TypeId, [32]u8) = .empty,
     /// The Builtin module, found on first use (`builtinModule`).
     builtin_module: ?ModuleIndex = null,
+    /// The templates the Builtin module registers as methods of `List`,
+    /// collected on first use (`isListMethod`).
+    list_methods: ?std.AutoHashMapUnmanaged(TemplateKey, void) = null,
+    /// `listItemSlot` of each template asked about.
+    list_item_slots: std.AutoHashMapUnmanaged(TemplateKey, ?u32) = .empty,
     /// The program-local source file of each module, by module index.
     source_files: []u32 = &.{},
     lowering_module_ids: []LIR.LoweringModuleId = &.{},
@@ -761,7 +795,10 @@ pub const Program = struct {
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.boxy.worker.v1");
         switch (key) {
-            .template => |template| return templateWorkerIdentity(self.modules.linkName(template.module), template.template),
+            .template => |template| return switch (template.binding) {
+                .generic => templateWorkerIdentity(self.modules.linkName(template.module), template.template),
+                .list_u8 => listU8TemplateWorkerIdentity(self.modules.linkName(template.module), template.template),
+            },
             .lambda => |lambda| {
                 hasher.update("lambda");
                 hasher.update(&self.modules.linkName(lambda.module));
@@ -1059,6 +1096,8 @@ pub const Program = struct {
         self.worker_ids.deinit(self.allocator);
         self.worklist.deinit(self.allocator);
         self.type_contents.deinit(self.allocator);
+        if (self.list_methods) |*methods| methods.deinit(self.allocator);
+        self.list_item_slots.deinit(self.allocator);
         self.by_module_idx.deinit(self.allocator);
         self.exported_bindings.deinit(self.allocator);
         self.callable_eval_by_pattern.deinit(self.allocator);
@@ -1226,6 +1265,157 @@ pub const Program = struct {
         return id;
     }
 
+    /// The `List(U8)` worker of a `List` template (design.md "Pre-Specialized
+    /// List(U8) Workers"), queued for lowering, or bound to the interface its
+    /// own object solved when another module's object defines it.
+    pub fn listU8TemplateWorker(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
+        const id = try self.listU8TemplateScope(module_index, template_id);
+        if (!self.worker(id).queued) {
+            self.worker(id).queued = true;
+            if (self.worker(id).imported) {
+                self.bindImportedInterface(id);
+            } else {
+                try self.worklist.append(self.allocator, id);
+            }
+        }
+        return id;
+    }
+
+    /// The `List(U8)` worker of a `List` template: the generic worker's
+    /// scope, inputs, and dictionaries, with the list item variable bound
+    /// to `U8` in its signature and body.
+    fn listU8TemplateScope(self: *Program, module_index: ModuleIndex, template_id: checked_names.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id, .binding = .list_u8 } };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const generic_id = try self.templateScope(module_index, template_id);
+        const slot = (try self.listItemSlot(generic_id)) orelse invariant("a List(U8) worker was requested for a template with no list item variable");
+        const generic = self.worker(generic_id).*;
+        const view = self.module(module_index);
+        const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
+        const bound = try self.arena.allocator().alloc(TypeId, generic.scheme_vars.len);
+        for (bound, 0..) |*entry, index| entry.* = try self.store.variable(@intCast(index));
+        bound[slot] = try self.store.primitive(.u8);
+        const env: types.Env = .{ .module = module_index, .vars = generic.scheme_vars, .bound = bound };
+        const fn_ty = try self.converter().convert(module_index, template.checked_fn_root, env);
+        const signature = switch (self.store.get(fn_ty)) {
+            .function => |function| function,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a procedure template's checked root is not a function type"),
+        };
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        const identity = self.workerIdentity(key);
+        const proc = if (generic.imported) try self.addImportedProc(identity, module_index, .roc) else try self.result.store.addProcSpec(.{
+            .name = self.result.store.freshSyntheticSymbol(),
+            .identity = identity,
+            .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
+            .args = .empty(),
+            .ret_layout = .zst,
+        }, base.SourceLoc.none);
+        var u8_worker = generic;
+        u8_worker.key = key;
+        u8_worker.proc = proc;
+        u8_worker.params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args));
+        u8_worker.ret = signature.ret;
+        u8_worker.list_u8_slot = slot;
+        u8_worker.queued = false;
+        u8_worker.lowered = generic.imported;
+        u8_worker.needs = null;
+        try self.workers.append(self.allocator, u8_worker);
+        try self.worker_ids.put(self.allocator, key, id);
+        if (generic.imported) try self.declareImportedTemplateSignature(id);
+        return id;
+    }
+
+    /// The position among the scheme variables of generic template worker
+    /// `id` of its list item variable, or null when the template has no
+    /// `List(U8)` worker (design.md "Pre-Specialized List(U8) Workers"):
+    /// the template must be a method the Builtin module registers for
+    /// `List`, have a checked body (a provided low-level operation is
+    /// emitted at every direct call instead), and take as its first
+    /// parameter `List(item)` for a scheme variable `item` that is not
+    /// sealed.
+    pub fn listItemSlot(self: *Program, id: WorkerId) Allocator.Error!?u32 {
+        const target = self.worker(id).*;
+        const key = switch (target.key) {
+            .template => |key| key,
+            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => return null,
+        };
+        const template_key: TemplateKey = .{ .module = key.module, .template = key.template };
+        if (self.list_item_slots.get(template_key)) |known| return known;
+        const slot = try self.computeListItemSlot(template_key, target);
+        try self.list_item_slots.put(self.allocator, template_key, slot);
+        return slot;
+    }
+
+    fn computeListItemSlot(self: *Program, key: TemplateKey, target: Worker) Allocator.Error!?u32 {
+        const view = self.module(key.module);
+        if (view.view.module_env.module_role != .builtin) return null;
+        const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+        if (template.provided_low_level != null) return null;
+        switch (template.body) {
+            .checked_body => {},
+            .intrinsic_wrapper, .unimplemented, .entry_wrapper => return null,
+        }
+        if (!try self.isListMethod(key)) return null;
+        if (target.params.len == 0) return null;
+        const item = switch (self.store.get(target.params[0])) {
+            .list => |item| item,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => return null,
+        };
+        return switch (self.store.get(item)) {
+            .variable => |index| index,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => null,
+        };
+    }
+
+    /// Whether the Builtin module's method registry names template `key`
+    /// as a method of `List`.
+    fn isListMethod(self: *Program, key: TemplateKey) Allocator.Error!bool {
+        if (self.list_methods == null) {
+            var methods: std.AutoHashMapUnmanaged(TemplateKey, void) = .empty;
+            errdefer methods.deinit(self.allocator);
+            const builtin = self.builtinModule();
+            for (builtin.view.method_registry.entries) |entry| {
+                switch (entry.key.owner) {
+                    .builtin => |owner| if (owner != .list) continue,
+                    .nominal => continue,
+                }
+                const method = entry.target orelse continue;
+                const ref = switch (method.kind) {
+                    .procedure => |procedure| procedure.template,
+                    .local_proc, .structural => continue,
+                };
+                const owner_view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
+                try methods.put(self.allocator, .{ .module = owner_view.index, .template = ref.template }, {});
+            }
+            self.list_methods = methods;
+        }
+        return self.list_methods.?.contains(key);
+    }
+
+    /// The worker a direct call of template worker `callee` at the
+    /// instantiation `bound` (one type per scheme variable) targets: the
+    /// template's `List(U8)` worker when its list item variable takes
+    /// exactly `U8`, and `callee` itself otherwise (design.md
+    /// "Pre-Specialized List(U8) Workers").
+    pub fn directCallTarget(self: *Program, callee: WorkerId, bound: []const TypeId) Allocator.Error!WorkerId {
+        const target = self.worker(callee).*;
+        const key = switch (target.key) {
+            .template => |key| key,
+            .lambda, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => return callee,
+        };
+        switch (key.binding) {
+            .generic => {},
+            .list_u8 => return callee,
+        }
+        const slot = (try self.listItemSlot(callee)) orelse return callee;
+        if (bound.len != target.scheme_vars.len) invariant("a call's instantiation differs from its target's scheme");
+        switch (self.store.get(bound[slot])) {
+            .primitive => |primitive| if (primitive != .u8) return callee,
+            .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => return callee,
+        }
+        return try self.listU8TemplateWorker(key.module, key.template);
+    }
+
     /// The entries of a use's checked substitution `subst` (indexed by the
     /// template's checked scheme variables) for the scheme variables of
     /// template worker `id`: the sealed variables' entries are dropped, since
@@ -1260,7 +1450,21 @@ pub const Program = struct {
         const outer_worker = self.worker(outer).*;
         const key: WorkerKey = .{ .lambda = .{ .module = outer_worker.module, .expr = lambda_expr, .outer = outer, .captured_scheme = if (own) |scheme| scheme.per_call == false and (try self.isLocalProc(outer_worker.module, lambda_expr)) else false } };
         if (self.worker_ids.get(key)) |existing| return existing;
-        const signature = switch (self.store.get(fn_ty)) {
+        const scheme_vars = if (own) |scheme| try std.mem.concat(self.arena.allocator(), checked.CheckedTypeId, &.{ outer_worker.scheme_vars, scheme.scheme_vars }) else outer_worker.scheme_vars;
+        // A lambda of a `List(U8)` worker's scope binds the item variable
+        // to `U8` as that worker does, in its signature and captures as in
+        // its body.
+        var lambda_ty = fn_ty;
+        const stored_capture_types = try self.arena.allocator().dupe(TypeId, capture_types);
+        if (outer_worker.list_u8_slot) |slot| {
+            const bound = try self.allocator.alloc(TypeId, scheme_vars.len);
+            defer self.allocator.free(bound);
+            for (bound, 0..) |*entry, index| entry.* = try self.store.variable(@intCast(index));
+            bound[slot] = try self.store.primitive(.u8);
+            lambda_ty = try self.substitute(self.allocator, fn_ty, bound);
+            for (stored_capture_types) |*capture_ty| capture_ty.* = try self.substitute(self.allocator, capture_ty.*, bound);
+        }
+        const signature = switch (self.store.get(lambda_ty)) {
             .function => |function| function,
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a lambda's type is not a function type"),
         };
@@ -1280,12 +1484,13 @@ pub const Program = struct {
             .key = key,
             .proc = proc,
             .module = outer_worker.module,
-            .scheme_vars = if (own) |scheme| try std.mem.concat(self.arena.allocator(), checked.CheckedTypeId, &.{ outer_worker.scheme_vars, scheme.scheme_vars }) else outer_worker.scheme_vars,
+            .scheme_vars = scheme_vars,
+            .list_u8_slot = outer_worker.list_u8_slot,
             .dictionary_params = &.{},
             .params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args)),
             .ret = signature.ret,
             .captures = try self.arena.allocator().dupe(checked.CheckedCapture, captures),
-            .capture_types = try self.arena.allocator().dupe(TypeId, capture_types),
+            .capture_types = stored_capture_types,
             .dict_scopes = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const u32, &.{ &.{scheme.dictionaries}, outer_worker.dict_scopes }) else outer_worker.dict_scopes,
             .dict_scope_params = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const static_dispatch.EvidenceParamRecord, &.{ &.{scheme.params}, outer_worker.dict_scope_params }) else outer_worker.dict_scope_params,
             .own_descs = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.scheme_vars.len) else 0) else 0,
@@ -2965,10 +3170,14 @@ fn perfNameOf(program: *Program, a: Allocator, names: []?[]const u8, id: WorkerI
         .template => |key| blk: {
             const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
             const name_store = view.nameStore();
+            const suffix: []const u8 = switch (key.binding) {
+                .generic => "",
+                .list_u8 => "@U8",
+            };
             break :blk if (name_store.procBase(template.proc_base).export_name) |export_name|
-                .{ .module = moduleUnlessPrefixed(module_name, name_store.exportNameText(export_name)), .text = name_store.exportNameText(export_name) }
+                .{ .module = moduleUnlessPrefixed(module_name, name_store.exportNameText(export_name)), .text = name_store.exportNameText(export_name), .suffix = suffix }
             else
-                .{ .module = module_name, .text = "template", .number = @backingInt(key.template) };
+                .{ .module = module_name, .text = "template", .number = @backingInt(key.template), .suffix = suffix };
         },
         .lambda => |key| .{ .owner = try perfNameOf(program, a, names, key.outer), .text = "lambda@", .number = @backingInt(key.expr) },
         .method_entry => |target| .{ .owner = try perfNameOf(program, a, names, target), .text = "entry" },
@@ -3217,8 +3426,14 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     const view = program.module(key.module);
                     const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
                     const names = view.nameStore();
-                    const export_name = names.procBase(template.proc_base).export_name orelse break :blk "boxy.template";
-                    break :blk names.exportNameText(export_name);
+                    const export_name = names.procBase(template.proc_base).export_name orelse break :blk switch (key.binding) {
+                        .generic => "boxy.template",
+                        .list_u8 => "boxy.template@U8",
+                    };
+                    break :blk switch (key.binding) {
+                        .generic => names.exportNameText(export_name),
+                        .list_u8 => try std.fmt.allocPrint(program.arena.allocator(), "{s}@U8", .{names.exportNameText(export_name)}),
+                    };
                 },
                 inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| "boxy." ++ @tagName(kind),
             };
@@ -3250,6 +3465,10 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
             if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
             _ = try program.methodEntryWorker(worker);
+            // A `List` template's `List(U8)` worker is lowered with it:
+            // every importer's direct calls at `U8` name it by symbol
+            // (design.md "Pre-Specialized List(U8) Workers").
+            if (try program.listItemSlot(worker) != null) _ = try program.listU8TemplateWorker(view.index, @fromBackingInt(@intCast(index)));
         }
         for (view.view.method_registry.entries) |entry| {
             const target = entry.target orelse continue;

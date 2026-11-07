@@ -723,7 +723,7 @@ const MetadataReader = struct {
     }
     fn worker(self: *MetadataReader) error{InvalidMetadata}!void {
         while (true) switch (try self.tag(Tag)) {
-            .template, .default => {
+            .template, .template_list_u8, .default => {
                 try self.module();
                 _ = try self.word();
                 return;
@@ -965,6 +965,8 @@ const Tag = enum(u8) {
     structural_map,
     crash_dictionary,
     codec,
+    /// A template's `List(U8)` worker (`lower.TemplateBinding.list_u8`).
+    template_list_u8,
 };
 
 fn appendWord(allocator: Allocator, list: *std.ArrayList(u8), value: u32) Allocator.Error!void {
@@ -1170,7 +1172,7 @@ const Encoder = struct {
         const kind: Tag = @fromBackingInt(@intCast(input.byte()));
         try self.tag(kind);
         switch (kind) {
-            .template, .default => {
+            .template, .template_list_u8, .default => {
                 try self.module(input.module());
                 try self.word(input.word());
             },
@@ -1238,7 +1240,10 @@ const Encoder = struct {
         const record = program.worker(id).*;
         switch (record.key) {
             .template => |key| {
-                try self.tag(.template);
+                try self.tag(switch (key.binding) {
+                    .generic => .template,
+                    .list_u8 => .template_list_u8,
+                });
                 try self.module(key.module);
                 try self.word(@backingInt(key.template));
             },
@@ -1459,6 +1464,10 @@ const Decoder = struct {
             .template => {
                 const module_index = self.module();
                 return try program.templateWorker(module_index, @fromBackingInt(self.word()));
+            },
+            .template_list_u8 => {
+                const module_index = self.module();
+                return try program.listU8TemplateWorker(module_index, @fromBackingInt(self.word()));
             },
             .lambda => {
                 const expr: ExprId = @fromBackingInt(self.word());
