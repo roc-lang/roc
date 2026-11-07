@@ -209,18 +209,7 @@ test "scheme use evidence resolves Builtin Iter min and max through exact raw wh
     var artifact_owns_module = false;
     errdefer if (!artifact_owns_module) builtin_module.deinit();
 
-    const blob = compiled_builtins.builtin_artifact_bin[0..];
-    const serialized_bytes = try checked_artifact.CheckedModuleArtifact.splitVersionTrailer(blob);
-    const backing: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
-        @alignCast(blob[0..serialized_bytes.len]);
-    const serialized: *const checked_artifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
-    try serialized.validate(backing.len);
-    var artifact = serialized.deserializeStatic(
-        backing,
-        gpa,
-        .{ .static_builtin = builtin_module.env },
-    );
-    try artifact.attachSealedTypes(gpa, std.testing.io);
+    var artifact = try checked_artifact.openBakedBuiltin(gpa, std.testing.io, builtin_module.env, compiled_builtins.builtin_artifact_bin[0..]);
     artifact_owns_module = true;
     defer artifact.deinit(gpa);
 

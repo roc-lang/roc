@@ -1016,20 +1016,16 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
 
     var inference_arena = base.SingleThreadArena.init(allocator);
     defer inference_arena.deinit();
-    var root_artifact = try check.CheckedArtifact.publishFromTypedModule(
-        allocator,
-        &typed_cir_modules,
-        0,
-        .{
-            .module_env_storage = .{ .checked_source = checked_module.module_env },
-            .io = @as(std.Io, undefined),
-            .inference = try check.InferenceOutput.fromChecker(inference_arena.allocator(), &checked_module.solver.?, null),
-            .imports = &publish_imports,
-            .explicit_roots = &explicit_roots,
-            .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
-        },
-    );
+    var root_artifact = try check.CheckedArtifact.openCheckedModule(allocator, .{
+        .module_idx = 0,
+        .module_env_storage = .{ .checked_source = checked_module.module_env },
+        .io = @as(std.Io, undefined),
+        .imports = &publish_imports,
+        .explicit_roots = &explicit_roots,
+        .outputs = .{ .checked = try check.InferenceOutput.fromChecker(inference_arena.allocator(), &checked_module.solver.?, null) },
+    });
     errdefer root_artifact.deinitRetainingModuleEnv(allocator);
+    try check.CheckedArtifact.evaluateOpenedModule(allocator, &root_artifact, eval.CompileTimeFinalization.finalizer(), &publish_imports, &.{}, null);
 
     var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
     const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32, .{});

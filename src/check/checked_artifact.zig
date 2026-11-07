@@ -578,16 +578,6 @@ pub const CheckingContextIdentity = struct {
     /// must not share a cache entry.
     validation: can.Can.Validation = .checking,
 
-    pub const Serialized = extern struct {
-        imports: SerializedSlice(ImportIdentity) = .{},
-        platform_requirement_context: artifact_serialize.SerializedOptional(PlatformRequirementContextKey) = .{},
-        platform_app_relation: artifact_serialize.SerializedOptional(PlatformAppRelationKey) = .{},
-        validation: artifact_serialize.SerializedScalar(can.Can.Validation, .checking) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(CheckingContextIdentity, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
     pub fn fromModule(
         allocator: Allocator,
         module_env: *const ModuleEnv,
@@ -756,22 +746,40 @@ fn appendDispatchImportKeys(
 }
 
 /// Public `PublishInputs` declaration.
-pub const PublishInputs = struct {
+/// What opening a checked module (`openCheckedModule`) reads beside its
+/// `ModuleEnv`.
+pub const OpenInputs = struct {
     module_env_storage: ModuleEnvStorage,
+    /// The module's index in the module set it was checked in.
+    module_idx: u32,
     /// Waits on the module's key slots when another thread is computing a key.
     io: std.Io,
     imports: []const PublishImportArtifact = &.{},
     available_artifacts: []const ImportedModuleView = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
-    compile_time_finalizer: CompileTimeFinalizer,
-    /// Prepared metadata may serve frontend imports; evaluation and cache publication wait.
-    evaluation_phase: enum { immediate, post_frontend } = .immediate,
-    problem_store: ?*problem.Store = null,
     validation: can.Can.Validation = .checking,
-    /// What checking the module output beside its solved source. Publication
-    /// keeps a copy.
-    inference: InferenceOutput,
+    /// The modules the module's analyses resolve. Null resolves exactly
+    /// `imports` and `available_artifacts`.
+    resolver: ?ModuleResolver = null,
+    outputs: Outputs,
+
+    /// Where the module's inference and evaluation outputs come from.
+    pub const Outputs = union(enum) {
+        /// Checking just completed: the module keeps a copy of this
+        /// inference output, and its evaluation output starts with an entry
+        /// awaiting evaluation for every compile-time root and constant
+        /// template (`evaluateOpenedModule` evaluates them).
+        checked: InferenceOutput,
+        /// A cache entry or the baked Builtin blob: both outputs alias
+        /// `backing`, which starts with their `Serialized` form. The module
+        /// owns `backing` unless it is borrowed: static data, or a cache
+        /// entry the module's environment storage owns.
+        stored: struct {
+            backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+            backing_borrowed: bool,
+        },
+    };
 };
 
 /// Public `CompileTimeFinalizer` declaration.
@@ -5086,9 +5094,6 @@ pub const CheckedTypeStore = struct {
     /// module whose backing a creation instantiated here, by declaring
     /// module and declaration. Read and written under the creation lock.
     projected_declarations: std.AutoHashMapUnmanaged(ProjectedDeclarationKey, ProjectedDeclaration) = .empty,
-    /// True for a store reconstructed from a serialized buffer (pools point into
-    /// buffer-owned memory and must not be freed).
-    serialized: bool = false,
 
     const SchemeRootKey = struct { root: CheckedTypeId, domain: CheckedTypeSchemeDomain };
     const ProjectedImportKey = struct { module: [32]u8, ty: CheckedTypeId };
@@ -5123,34 +5128,11 @@ pub const CheckedTypeStore = struct {
         return @hasField(@FieldType(CheckedTypeStore, @tagName(column)), "published_len");
     }
 
-    /// Give a column that aliases a relocated buffer storage of its own
-    /// before it grows.
+    /// Give a column that borrows its items storage of its own before it
+    /// grows.
     fn ownColumn(self: *CheckedTypeStore, allocator: Allocator, comptime column: Column) Allocator.Error!void {
         if (comptime isPublishedColumn(column)) try @field(self, @tagName(column)).own(allocator);
     }
-
-    /// Build-only projection state that is never serialized; null on a
-    /// frozen store.
-    pub const serde_transient_fields = [_][]const u8{
-        "template_use_active",
-        "structural_root_heads",
-        "structural_root_entries",
-        "identity_origins",
-        "synthetic_variable_roots",
-        "synthesized_keys",
-        "key_names",
-        "projected_imports",
-        "projected_declarations",
-        "scheme_by_root",
-        "sealed_env",
-        "sealed_keys",
-        "var_name_ids",
-        "writer_mutex",
-        "creation_active",
-        "committed_roots",
-        "published_counts",
-        "capability_source",
-    };
 
     /// The module's interface capabilities when a consumer has demanded
     /// them.
@@ -6006,69 +5988,10 @@ pub const CheckedTypeStore = struct {
         self.var_name_ids.deinit(allocator);
         if (self.synthesized_keys) |keys| keys.destroy();
         inline for (@typeInfo(Column).@"enum".field_names) |field_name| {
-            const column = @field(Column, field_name);
-            if (comptime isPublishedColumn(column)) {
-                @field(self, field_name).deinit(allocator);
-            } else if (!self.serialized) {
-                @field(self, field_name).deinit(allocator);
-            }
+            @field(self, field_name).deinit(allocator);
         }
         self.* = .{};
     }
-
-    /// Relocatable serialized form. Every field is a `SafeList`-equivalent POD
-    /// slice (or nested `NameInterner.Serialized`), so the store relocates with a
-    /// fixed number of base-pointer fixups independent of stored data size.
-    pub const Serialized = extern struct {
-        roots: SerializedSlice(CheckedTypeRoot) = .{},
-        schemes: SerializedSlice(CheckedTypeScheme) = .{},
-        payloads: SerializedSlice(StoredCheckedTypePayload) = .{},
-        alias_row_pool: SerializedSlice(StoredAlias) = .{},
-        nominal_row_pool: SerializedSlice(StoredNominal) = .{},
-        nominal_declarations: SerializedSlice(CheckedNominalDeclaration) = .{},
-        builtin_nominal_declarations: artifact_serialize.SerializedScalar(BuiltinNominalDeclarationIndex, empty_builtin_nominal_declarations) = .{},
-        type_id_pool: SerializedSlice(CheckedTypeId) = .{},
-        record_field_pool: SerializedSlice(CheckedRecordField) = .{},
-        declared_field_pool: SerializedSlice(CheckedDeclaredField) = .{},
-        nominal_record_field_pool: SerializedSlice(CheckedNominalRecordField) = .{},
-        constraint_pool: SerializedSlice(CheckedStaticDispatchConstraint) = .{},
-        tag_pool: SerializedSlice(StoredTag) = .{},
-        var_name_bytes: SerializedSlice(u8) = .{},
-        var_name_ends: SerializedSlice(u32) = .{},
-        sealed_names: SerializedSlice(sealed_type_view.SealedNameRow) = .{},
-        sealed_origins: SerializedSlice(sealed_type_view.SealedOriginRow) = .{},
-        sealed_nominals: SerializedSlice(sealed_type_view.SealedNominalRow) = .{},
-        sealed_var_facts: SerializedSlice(sealed_type_view.SealedVarFacts) = .{},
-
-        comptime {
-            // One fixup per `SerializedSlice` field, independent of stored
-            // data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 18);
-        }
-
-        const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
-
-        /// Serialize the types the store held when it was published: types
-        /// created later on demand are never part of a cache entry.
-        pub fn serialize(self: *Serialized, store: *const CheckedTypeStore, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            var published = store.*;
-            if (store.published_counts) |counts| {
-                inline for (@typeInfo(Column).@"enum".field_names, 0..) |field_name, index| {
-                    if (comptime isPublishedColumn(@field(Column, field_name))) {
-                        const List = @FieldType(CheckedTypeStore, field_name);
-                        @field(published, field_name) = List.borrowing(@field(store, field_name).items()[0..counts[index]]);
-                    }
-                }
-            }
-            try Serde.serialize(self, &published, gpa, writer);
-        }
-
-        pub fn deserialize(self: *const Serialized, base_addr: usize) CheckedTypeStore {
-            var store = Serde.deserialize(self, base_addr);
-            store.markPublished();
-            return store;
-        }
-    };
 
     /// Record which types the store holds once it is published. A store is
     /// published before any other thread reads it, so the backings growth
@@ -24375,7 +24298,7 @@ pub const PlatformPairing = struct {
                 "checking_context_identity",
                 // Runtime ownership, not checked data.
                 "serialized_backing",
-                "serialized_backing_is_static",
+                "serialized_backing_borrowed",
                 "pairing_arena",
                 "pairing",
                 "reopened_arena",
@@ -24467,7 +24390,7 @@ pub fn pairCheckedPlatform(
 
     var result = platform.*;
     result.serialized_backing = null;
-    result.serialized_backing_is_static = false;
+    result.serialized_backing_borrowed = false;
     result.pairing_arena = arena;
     result.pairing = pairing;
     // Every read of the pairing's types and names goes to the platform's
@@ -31257,20 +31180,20 @@ fn constOwnerOrder(a: ConstOwner, b: ConstOwner) std.math.Order {
 pub const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
     /// Hash of the module's source inputs: the one `key` input not otherwise
-    /// held by the artifact.
+    /// held by the module.
     source_hash: [32]u8,
+    /// The names the module's checked data names. Never cached: opening the
+    /// module creates it.
     canonical_names: canonical.CanonicalNameStore,
     module_identity: ModuleIdentity,
     checking_context_identity: CheckingContextIdentity,
     direct_import_module_keys: []CheckedModuleArtifactKey = &.{},
-    /// The modules the module's dispatch resolution searches for method
-    /// targets and procedure schemes, in search order: every module its
-    /// publication saw that a platform relation or direct import does not
-    /// supersede, then the platform relation's modules, then the direct
-    /// imports.
+    /// The module's canonical IR and sealed solver store.
     module_env: ModuleEnvStorage,
-    /// The module's types. Empty in a paired artifact, which reads its
-    /// platform's (`typeStore`).
+    /// The module's synthesized-type store, which also holds the columns
+    /// that read its sealed solver store. Never cached: opening the module
+    /// creates it. Empty in a paired module, which reads its platform's
+    /// (`typeStore`).
     checked_types: CheckedTypeStore = .{},
     /// What inference output beside the solved source, its checking outcome
     /// included.
@@ -31281,22 +31204,21 @@ pub const CheckedModuleArtifact = struct {
     /// reopened to evaluate roots no earlier compilation demanded (see
     /// `reopenForEvaluation`). Process-local, like `pairing_arena`.
     reopened_arena: ?*base.SingleThreadArena = null,
-    /// 16-byte-aligned buffer backing a relocated (frozen) artifact loaded from
-    /// the disk cache or the compiler's static builtin data. When set, every
-    /// sub-store's slices alias this buffer, so `deinit` handles this buffer plus
-    /// the injected `module_env` storage and must NOT run the per-sub-store frees
-    /// (which would free into the buffer or double-free). `null` for freshly
-    /// published artifacts, which own their sub-store allocations individually.
+    /// 16-byte-aligned buffer holding the stored outputs (`Serialized`) a
+    /// module loaded from the disk cache or the compiler's static builtin
+    /// data was opened with: its `inference` and `evaluation` alias it.
+    /// `null` for a module opened right after checking, which owns both.
     serialized_backing: ?[]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 = null,
-    serialized_backing_is_static: bool = false,
+    /// Whether something else owns `serialized_backing`: static data, or a
+    /// cache entry the module's environment storage owns.
+    serialized_backing_borrowed: bool = false,
     /// Owns a paired artifact's evaluation output.
     pairing_arena: ?*base.SingleThreadArena = null,
     /// The platform/app pairing a paired artifact reads its platform
     /// through. Process-local.
     pairing: ?*PlatformPairing = null,
     /// The module's body facts, computed on first demand. Never serialized:
-    /// publication creates them and `attachSealedTypes` creates them for a
-    /// deserialized artifact.
+    /// opening the module creates them.
     body_analyses: ?*BodyAnalyses = null,
     /// The module's analyses of its own tables and the modules it reaches,
     /// computed on first demand. Never serialized; created wherever
@@ -31417,26 +31339,6 @@ pub const CheckedModuleArtifact = struct {
     /// paired artifact's own (`PlatformPairing.valueRefs`).
     pub fn valueRefs(self: *const CheckedModuleArtifact) Allocator.Error!*const ResolvedValueRefTable {
         return importedView(self).valueRefs();
-    }
-
-    /// Give a deserialized artifact its module's sealed source types and fresh
-    /// key slots, which `io` waits on. Keys are never serialized, so every
-    /// slot starts empty.
-    pub fn attachSealedTypes(self: *CheckedModuleArtifact, gpa: Allocator, io: std.Io) Allocator.Error!void {
-        const env = self.moduleEnvConst();
-        const keys = try sealed_type_keys.SealedTypeKeys.create(gpa, io, env);
-        errdefer keys.destroy();
-        const synthesized = try SynthesizedTypeKeys.create(gpa, io, self.checked_types.roots.items().len);
-        errdefer synthesized.destroy();
-        self.body_analyses = try BodyAnalyses.create(gpa, io, env, env.promoted_local_procedures.items.items);
-        errdefer {
-            self.body_analyses.?.destroy();
-            self.body_analyses = null;
-        }
-        self.module_analyses = try ModuleAnalyses.create(gpa, io, null);
-        self.checked_types.attachSealedTypes(env, keys, synthesized);
-        self.attachCapabilitySource();
-        self.openToAnalyses();
     }
 
     /// Point the artifact's types at its module analyses, which compute
@@ -31672,203 +31574,83 @@ pub const CheckedModuleArtifact = struct {
         return false;
     }
 
-    /// Extern-compatible inline mirror of `ModuleIdentity`. `ModuleIdentity`
-    /// itself is relocation-invariant POD but its `kind` is an ordinary tagged
-    /// union, which an `extern struct` cannot embed directly, so the kind is
-    /// stored as `ModuleEnv.ModuleKind.Serialized` (a POD `(tag, payload)`
-    /// pair). Carries no relocatable pointers.
-    pub const ModuleIdentitySerialized = extern struct {
-        stable_hash: [32]u8,
-        module_idx: u32,
-        module_name: canonical.ModuleNameId,
-        display_module_name: canonical.ModuleNameId,
-        kind: ModuleEnv.ModuleKind.Serialized,
-
-        pub fn encode(identity: ModuleIdentity) ModuleIdentitySerialized {
-            return .{
-                .stable_hash = identity.stable_hash,
-                .module_idx = identity.module_idx,
-                .module_name = identity.module_name,
-                .display_module_name = identity.display_module_name,
-                .kind = ModuleEnv.ModuleKind.Serialized.encode(identity.kind),
-            };
-        }
-
-        pub fn decode(self: ModuleIdentitySerialized) ModuleIdentity {
-            return .{
-                .stable_hash = self.stable_hash,
-                .module_idx = self.module_idx,
-                .module_name = self.module_name,
-                .display_module_name = self.display_module_name,
-                .kind = self.kind.decode(),
-            };
-        }
-    };
-
-    /// Relocatable serialized form of a whole `CheckedModuleArtifact`. Each
-    /// sub-store contributes its own `Serialized` form in a fixed field order;
-    /// the buffer write order matches this field order. `module_env` is NOT
-    /// serialized here (transform E): the env relocates as its own blob and is
-    /// injected by the caller at `deserialize` time. `key`, `source_hash`, and
-    /// `module_identity` are relocation-invariant POD stored inline.
+    /// A checked module's stored outputs: the inference output and the
+    /// evaluation output, which are what a cache entry and the baked Builtin
+    /// blob hold beside the module's `ModuleEnv`. Every other part of the
+    /// live module is a function of these, the `ModuleEnv` and the module's
+    /// imports, and is recreated when the outputs are loaded
+    /// (`openCheckedModule`).
     pub const Serialized = extern struct {
         // No field defaults: `Serialized` is only ever produced by `serialize`,
-        // which sets every field. Some nested `Serialized` forms (those carrying
-        // a `NameInterner`/`SafeList` header) are not default-constructible, so a
-        // uniform "no defaults" rule keeps this struct valid.
-        key: CheckedModuleArtifactKey,
-        source_hash: [32]u8,
-        module_identity: ModuleIdentitySerialized,
-        direct_import_module_keys: SerializedSlice(CheckedModuleArtifactKey),
-        canonical_names: canonical.CanonicalNameStore.Serialized,
-        checking_context_identity: CheckingContextIdentity.Serialized,
-        checked_types: CheckedTypeStore.Serialized,
+        // which sets every field.
         inference: InferenceOutput.Serialized,
         evaluation: EvaluationOutput.Serialized,
 
         pub const root_contract: collections.serde_validation.RootContract = .{
             .Owner = CheckedModuleArtifact,
             .owner_only_fields = &.{
-                "module_env", // Written as the checked-cache env blob and injected during artifact deserialize.
-                "serialized_backing", // Runtime ownership for relocated cache/static bytes, not checked data.
-                "pairing_arena", // Runtime ownership of a paired artifact's own columns.
-                "pairing", // The platform/app pairing a paired artifact reads through; process-local.
-                "reopened_arena", // Runtime ownership for a reopened evaluation output, not checked data.
-                "serialized_backing_is_static", // Runtime ownership mode for `serialized_backing`.
-                "body_analyses", // Body facts computed on first demand; never serialized.
-                "module_analyses", // Module analyses computed on first demand; never serialized.
+                // Recreated from the `ModuleEnv` and the imports on load.
+                "key",
+                "source_hash",
+                "canonical_names",
+                "module_identity",
+                "checking_context_identity",
+                "direct_import_module_keys",
+                "checked_types",
+                // Written as the entry's own `ModuleEnv` body.
+                "module_env",
+                // Runtime ownership, not checked data.
+                "serialized_backing",
+                "serialized_backing_borrowed",
+                "pairing_arena",
+                "pairing",
+                "reopened_arena",
+                "body_analyses",
+                "module_analyses",
             },
         };
 
         comptime {
-            // The TRUE total relocation fixup count: 1 (`direct_import_module_keys`)
-            // + the recursive sum of every sub-store, including the `SafeList`/
-            // interner base pointers (`canonical_names` = 21 via its
-            // interners; `checked_types` = 18, one per column).
-            // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
-            // compile time, independent of stored data size. Bodies are the module's
-            // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 109);
+            // The inference output's and the evaluation output's slices;
+            // fixed at compile time, independent of stored data size.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 63);
+            // A cache entry holds the `ModuleEnv`, the inference output and
+            // the evaluation output, and nothing else.
+            const fields = @typeInfo(Serialized).@"struct".field_names;
+            std.debug.assert(fields.len == 2);
+            std.debug.assert(artifact_serialize.comptimeStrEq(fields[0], "inference"));
+            std.debug.assert(artifact_serialize.comptimeStrEq(fields[1], "evaluation"));
         }
 
-        /// Every field but the inline POD `key`, `source_hash`, and
-        /// `module_identity`: the sub-stores, in buffer write order.
-        const sub_store_fields = @typeInfo(Serialized).@"struct".field_names[3..];
-
-        comptime {
-            std.debug.assert(artifact_serialize.comptimeStrEq(@typeInfo(Serialized).@"struct".field_names[0], "key"));
-            std.debug.assert(artifact_serialize.comptimeStrEq(@typeInfo(Serialized).@"struct".field_names[1], "source_hash"));
-            std.debug.assert(artifact_serialize.comptimeStrEq(@typeInfo(Serialized).@"struct".field_names[2], "module_identity"));
-        }
-
-        /// Append every sub-store's bytes to `writer` in field order, recording
-        /// each one's relocatable offsets. `module_env` is intentionally not
-        /// written (transform E); its bytes live in a separate env blob.
+        /// Append the module's inference and evaluation outputs to `writer`.
         pub fn serialize(
             self: *Serialized,
             artifact: *const CheckedModuleArtifact,
             gpa: Allocator,
             writer: *CompactWriter,
         ) Allocator.Error!void {
-            if (artifact.pairing != null) checkedArtifactInvariant("a paired artifact cannot be cached as a module", .{});
-            if (artifact.evaluation.state != .finalized) checkedArtifactInvariant("cannot serialize prepared checked module", .{});
-            self.key = artifact.key;
-            self.source_hash = artifact.source_hash;
-            self.module_identity = ModuleIdentitySerialized.encode(artifact.module_identity);
-            inline for (sub_store_fields) |name| {
-                // `SerializedSlice.serialize` takes its slice by value; every other
-                // sub-store form takes a pointer to the store.
-                const SourceParam = @typeInfo(@TypeOf(@FieldType(Serialized, name).serialize)).@"fn".param_types[1].?;
-                if (@typeInfo(SourceParam).pointer.size == .one) {
-                    try @field(self, name).serialize(&@field(artifact, name), gpa, writer);
-                } else {
-                    try @field(self, name).serialize(@field(artifact, name), gpa, writer);
-                }
-            }
+            if (artifact.pairing != null) checkedArtifactInvariant("a paired module cannot be cached as a module", .{});
+            if (artifact.evaluation.state != .finalized) checkedArtifactInvariant("cannot serialize a module whose evaluation is unfinished", .{});
+            try self.inference.serialize(&artifact.inference, gpa, writer);
+            try self.evaluation.serialize(&artifact.evaluation, gpa, writer);
         }
 
-        /// Materialize a frozen artifact from its relocated `backing` buffer (whose
-        /// start IS this `Serialized` header). The artifact is SELF-DESCRIBING: it
-        /// stores `backing` in `serialized_backing`, so a single `deinit` frees the
-        /// buffer (and the injected env) correctly for every caller—no per-call-site
-        /// teardown contract. `module_env` is supplied by the caller (transform E): the
-        /// env blob is relocated/owned separately and injected here, never serialized.
-        /// `gpa` is retained only by the sub-stores that keep an allocator for their
-        /// build-only fields (`canonical_names`, `const_store`).
-        /// L-10 whole-artifact validation pass. Bounds-check every relocatable
-        /// marker's `(offset, len)` against the `backing`-buffer length BEFORE
-        /// `deserialize` materializes any aliasing slice, so a truncated or corrupt
-        /// blob (builtin trailer / disk cache) fails cleanly instead of producing
-        /// dangling out-of-bounds slices. Callers run this immediately after casting
-        /// the buffer to `*const Serialized` and before `deserialize`.
+        /// Bounds-check every relocatable marker's `(offset, len)` against
+        /// the `backing`-buffer length before anything aliases it, so a
+        /// truncated or corrupt blob (builtin trailer / disk cache) fails
+        /// cleanly instead of producing dangling out-of-bounds slices.
         pub fn validate(self: *const Serialized, backing_len: usize) error{CorruptArtifact}!void {
             if (backing_len < @sizeOf(Serialized)) return error.CorruptArtifact;
             try artifact_serialize.validateSerialized(Serialized, self, backing_len);
             try self.evaluation.validateContents(@intFromPtr(self));
-        }
-
-        /// A deserialized artifact reads its source types once
-        /// `attachSealedTypes` gives it key slots.
-        pub fn deserialize(
-            self: *const Serialized,
-            backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-            gpa: Allocator,
-            module_env: ModuleEnvStorage,
-        ) CheckedModuleArtifact {
-            return self.deserializeWithBacking(backing, gpa, module_env, false);
-        }
-
-        pub fn deserializeStatic(
-            self: *const Serialized,
-            backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-            gpa: Allocator,
-            module_env: ModuleEnvStorage,
-        ) CheckedModuleArtifact {
-            return self.deserializeWithBacking(backing, gpa, module_env, true);
-        }
-
-        fn deserializeWithBacking(
-            self: *const Serialized,
-            backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-            gpa: Allocator,
-            module_env: ModuleEnvStorage,
-            backing_is_static: bool,
-        ) CheckedModuleArtifact {
-            const base_addr = @intFromPtr(backing.ptr);
-            // Every artifact field is either inline POD, a sub-store filled
-            // below, or one of the owner-only fields set here
-            // (`assertBidirectionalFieldSet` pins that partition).
-            var artifact: CheckedModuleArtifact = undefined;
-            artifact.key = self.key;
-            artifact.source_hash = self.source_hash;
-            artifact.module_identity = self.module_identity.decode();
-            artifact.module_env = module_env;
-            artifact.serialized_backing = backing;
-            artifact.serialized_backing_is_static = backing_is_static;
-            artifact.pairing_arena = null;
-            artifact.pairing = null;
-            artifact.reopened_arena = null;
-            artifact.body_analyses = null;
-            artifact.module_analyses = null;
-            inline for (sub_store_fields) |name| {
-                // Stores that retain an allocator for their build-only fields
-                // take it as a second `deserialize` parameter.
-                const params = @typeInfo(@TypeOf(@FieldType(Serialized, name).deserialize)).@"fn".param_types;
-                @field(artifact, name) = if (params.len == 3)
-                    @field(self, name).deserialize(base_addr, gpa)
-                else
-                    @field(self, name).deserialize(base_addr);
-            }
-            artifact.checked_types.sealed_env = null;
-            artifact.checked_types.sealed_keys = null;
-            return artifact;
+            try self.inference.deserialize(@intFromPtr(self)).validate();
         }
     };
 
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 124;
+    const serialized_layout_version: u32 = 125;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -31950,6 +31732,8 @@ pub const CheckedModuleArtifact = struct {
             arena.deinit();
             owner.destroy(arena);
             self.reopened_arena = null;
+        } else if (self.pairing_arena == null and self.serialized_backing == null) {
+            self.evaluation.deinit(allocator);
         }
         if (self.pairing_arena) |arena| {
             const owner = arena.child_allocator;
@@ -31961,54 +31745,25 @@ pub const CheckedModuleArtifact = struct {
             return;
         }
         if (self.serialized_backing) |backing| {
-            // Frozen artifact: every sub-store aliases `backing`, so running the
-            // per-sub-store frees would free into the buffer (and the unconditional
-            // `direct_import_module_keys` free below points into it too). Free
-            // only the buffer and the injected env storage, mirroring how a
-            // `cached_entry`/`static_builtin`-backed module is torn down.
-            if (deinit_module_env) {
-                self.module_env.deinit();
-            } else {
-                self.module_env = undefined;
-            }
-            // Synthesized types created on demand live in columns the type
-            // store copied out of the buffer, and names interned on demand
-            // in interners the name store copied out of it; every other
-            // column still aliases the buffer.
-            self.checked_types.deinit(allocator);
-            self.canonical_names.deinit();
-            if (!self.serialized_backing_is_static) {
-                // `deserialize` allocated `backing` with the gpa it recorded in
-                // `canonical_names.allocator`, which a reopened artifact's arena
-                // took over, and every teardown site passes that allocator back
-                // here. Assert the coupling so a caller freeing the frozen buffer
-                // with a different allocator trips in Debug rather than
-                // corrupting an unrelated heap.
+            // The inference and evaluation outputs alias the stored
+            // outputs' buffer, which the module frees unless it borrows it.
+            if (!self.serialized_backing_borrowed) {
                 std.debug.assert(allocator.ptr == owning.ptr and allocator.vtable == owning.vtable);
                 allocator.free(backing);
             }
-            self.* = undefined;
-            return;
+        } else {
+            self.inference.deinit(allocator);
         }
-        const fields = Serialized.sub_store_fields;
-        comptime var index = fields.len;
-        inline while (index > 0) {
-            index -= 1;
-            const name = fields[index];
-            const Store = @FieldType(CheckedModuleArtifact, name);
-            if (comptime @typeInfo(Store) == .pointer) {
-                allocator.free(@field(self, name));
-            } else if (comptime @typeInfo(@TypeOf(Store.deinit)).@"fn".param_types.len == 1) {
-                @field(self, name).deinit();
-            } else {
-                @field(self, name).deinit(allocator);
-            }
-        }
+        self.checked_types.deinit(allocator);
+        self.canonical_names.deinit();
+        self.checking_context_identity.deinit(allocator);
+        allocator.free(self.direct_import_module_keys);
         if (deinit_module_env) {
             self.module_env.deinit();
         } else {
             self.module_env = undefined;
         }
+        self.* = undefined;
     }
 
     pub fn verifyReadyForCompileTimeLowering(self: *const CheckedModuleArtifact) Allocator.Error!void {
@@ -33861,25 +33616,55 @@ pub fn checkedModuleKeyFromModuleEnv(
     module_env: *const ModuleEnv,
     inputs: CheckedModuleKeyInputs,
 ) Allocator.Error!CheckedModuleArtifactKey {
-    var checking_context_identity = try CheckingContextIdentity.fromModule(
-        allocator,
-        module_env,
-        inputs.imports,
-        inputs.platform_requirement_context,
-        inputs.validation,
-    );
-    defer checking_context_identity.deinit(allocator);
-
-    const direct_import_module_keys = try directImportArtifactKeysFromModule(allocator, module_env, inputs.imports);
-    defer allocator.free(direct_import_module_keys);
-
-    return CheckedModuleArtifactKey.computeFromIdentityHash(
-        hashModuleSourceInputs(module_env),
-        computeStableModuleIdentityHash(module_env),
-        checking_context_identity,
-        direct_import_module_keys,
-    );
+    var identity = try CheckedModuleIdentity.compute(allocator, module_env, inputs);
+    defer identity.deinit(allocator);
+    return identity.key;
 }
+
+/// A checked module's identity: its key and what the key is computed from
+/// beside the module's identity hash. A function of the module's source
+/// inputs, its direct imports' keys and its checking context, computed by the
+/// one function both a cache probe and opening the module call.
+pub const CheckedModuleIdentity = struct {
+    key: CheckedModuleArtifactKey,
+    source_hash: [32]u8,
+    checking_context_identity: CheckingContextIdentity,
+    direct_import_module_keys: []CheckedModuleArtifactKey,
+
+    pub fn compute(
+        allocator: Allocator,
+        module_env: *const ModuleEnv,
+        inputs: CheckedModuleKeyInputs,
+    ) Allocator.Error!CheckedModuleIdentity {
+        var checking_context_identity = try CheckingContextIdentity.fromModule(
+            allocator,
+            module_env,
+            inputs.imports,
+            inputs.platform_requirement_context,
+            inputs.validation,
+        );
+        errdefer checking_context_identity.deinit(allocator);
+        const direct_import_module_keys = try directImportArtifactKeysFromModule(allocator, module_env, inputs.imports);
+        const source_hash = hashModuleSourceInputs(module_env);
+        return .{
+            .key = CheckedModuleArtifactKey.computeFromIdentityHash(
+                source_hash,
+                computeStableModuleIdentityHash(module_env),
+                checking_context_identity,
+                direct_import_module_keys,
+            ),
+            .source_hash = source_hash,
+            .checking_context_identity = checking_context_identity,
+            .direct_import_module_keys = direct_import_module_keys,
+        };
+    }
+
+    pub fn deinit(self: *CheckedModuleIdentity, allocator: Allocator) void {
+        self.checking_context_identity.deinit(allocator);
+        allocator.free(self.direct_import_module_keys);
+        self.* = undefined;
+    }
+};
 
 /// Inference admission is deliberately separate from artifact identity. The
 /// producer-owned checking scope supplies dependency facts and owner equality;
@@ -34193,22 +33978,27 @@ fn valuelessRootTypes(selected_hoisted_roots: []const hoist_roots.SelectedHoiste
     return .{ .empty_record = empty_record, .validation_scheme = validation_scheme };
 }
 
-/// Public `publishFromTypedModule` function.
-pub fn publishFromTypedModule(
+/// Open the live checked module of `inputs.module_env_storage`, whose type
+/// store checking sealed: its identity, name store, synthesized-type store
+/// and analyses over its `ModuleEnv` and imports, with its inference and
+/// evaluation outputs. Every embedder opens a module this way, right after
+/// checking it and when loading its stored outputs; the module computes
+/// every other fact on demand.
+pub fn openCheckedModule(
     allocator: Allocator,
-    modules: *const TypedCIR.Modules,
-    module_idx: u32,
-    inputs: PublishInputs,
-) CompileTimeFinalizer.Error!CheckedModuleArtifact {
-    const module = modules.module(module_idx);
-    const module_env = module.moduleEnvConst();
+    inputs: OpenInputs,
+) Allocator.Error!CheckedModuleArtifact {
+    const module_env = inputs.module_env_storage.envConst();
     if (std.debug.runtime_safety and !module_env.types.isSealed()) {
-        base.invariant("a checked artifact was published from a module whose type store checking never sealed", .{});
+        base.invariant("a checked module was opened from a module whose type store checking never sealed", .{});
     }
+    const module_idx = inputs.module_idx;
+    var module_data = TypedCIR.ModuleData.readOnly(module_env);
+    const module = TypedCIR.Module.readOnly(allocator, module_idx, &module_data);
     const idents = module.identStoreConst();
 
     var canonical_names = canonical.CanonicalNameStore.init(allocator);
-    // The artifact owns the name store and the type store once it is formed:
+    // The module owns the name store and the type store once it is formed:
     // its slots grow them from then on.
     var stores_moved = false;
     errdefer if (!stores_moved) canonical_names.deinit();
@@ -34221,32 +34011,20 @@ pub fn publishFromTypedModule(
         .display_module_name = display_module_name,
         .kind = module_env.module_kind,
     };
-    // Intern this module's content identity up front so later publication
-    // steps (e.g. interface capability collection) can resolve it by lookup.
+    // Intern this module's content identity up front so the module's
+    // analyses (e.g. interface capability collection) resolve it by lookup.
     _ = try canonical_names.internModuleIdentity(&module_identity.stable_hash);
 
     try internLoweringVisibleNames(module_env, &canonical_names);
     _ = try canonical_names.internTagLabel("#Missing");
     _ = try canonical_names.internTagLabel("#Present");
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(
-        allocator,
-        module_env,
-        inputs.imports,
-        inputs.platform_requirement_context,
-        inputs.validation,
-    );
-    errdefer checking_context_identity.deinit(allocator);
-
-    const direct_import_module_keys = try directImportArtifactKeysFromModule(allocator, module_env, inputs.imports);
-    errdefer allocator.free(direct_import_module_keys);
-    const source_hash = hashModuleSourceInputs(module_env);
-    const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
-        source_hash,
-        module_identity,
-        checking_context_identity,
-        direct_import_module_keys,
-    );
+    var identity = try CheckedModuleIdentity.compute(allocator, module_env, .{
+        .imports = inputs.imports,
+        .platform_requirement_context = inputs.platform_requirement_context,
+        .validation = inputs.validation,
+    });
+    errdefer identity.deinit(allocator);
 
     try internProvidedExportNames(module_env, &canonical_names);
     try internHostedSymbolNames(module_env, &canonical_names);
@@ -34261,11 +34039,15 @@ pub fn publishFromTypedModule(
     var module_analyses_owned = true;
     errdefer if (module_analyses_owned) module_analyses.destroy();
     try module_analyses.attachExplicitRoots(inputs.explicit_roots);
-    // Publication reads the nominal representations of the types of every
-    // module it imports or resolves against.
+    // The module's types read the nominal representations of the types of
+    // every module it imports or resolves against.
     for (inputs.imports) |import| _ = try import.view.checked_types.interfaceCapabilities();
     for (inputs.available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities();
-    try module_analyses.attachImportViews(inputs.imports, inputs.available_artifacts);
+    if (inputs.resolver) |resolver| {
+        module_analyses.attachResolver(resolver);
+    } else {
+        try module_analyses.attachImportViews(inputs.imports, inputs.available_artifacts);
+    }
 
     // Omitted defaults name their fields and origin modules through the
     // module's names.
@@ -34277,30 +34059,44 @@ pub fn publishFromTypedModule(
     const sealed_keys = try sealed_type_keys.SealedTypeKeys.create(allocator, inputs.io, module_env);
     var sealed_keys_owned = true;
     errdefer if (sealed_keys_owned) sealed_keys.destroy();
-    var checked_type_store = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key.digest(), inputs.imports, inputs.available_artifacts, module_index, selected_hoisted_roots, promoted_local_procedures, sealed_keys);
+    var checked_type_store = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, identity.key.digest(), inputs.imports, inputs.available_artifacts, module_index, selected_hoisted_roots, promoted_local_procedures, sealed_keys);
     errdefer if (!stores_moved) checked_type_store.deinit(allocator);
-    const checked_types = &checked_type_store;
-    var inference = try inputs.inference.dupe(allocator);
-    errdefer inference.deinit(allocator);
+    checked_type_store.markPublished();
+    checked_type_store.releaseSuperseded(allocator);
 
-    checked_types.markPublished();
-    checked_types.releaseSuperseded(allocator);
+    var inference: InferenceOutput = .{};
+    var serialized_backing: ?[]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 = null;
+    var serialized_backing_borrowed = false;
+    var stored_evaluation: ?EvaluationOutput = null;
+    switch (inputs.outputs) {
+        .checked => |checked| inference = try checked.dupe(allocator),
+        .stored => |stored| {
+            const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(stored.backing.ptr));
+            inference = serialized.inference.deserialize(@intFromPtr(stored.backing.ptr));
+            stored_evaluation = serialized.evaluation.deserialize(@intFromPtr(stored.backing.ptr), allocator);
+            serialized_backing = stored.backing;
+            serialized_backing_borrowed = stored.backing_borrowed;
+        },
+    }
+    errdefer if (serialized_backing == null) inference.deinit(allocator);
 
     var artifact = CheckedModuleArtifact{
-        .key = artifact_key,
-        .source_hash = source_hash,
+        .key = identity.key,
+        .source_hash = identity.source_hash,
         .canonical_names = canonical_names,
         .module_identity = module_identity,
-        .checking_context_identity = checking_context_identity,
-        .direct_import_module_keys = direct_import_module_keys,
+        .checking_context_identity = identity.checking_context_identity,
+        .direct_import_module_keys = identity.direct_import_module_keys,
         .module_env = inputs.module_env_storage,
-        .checked_types = checked_types.*,
+        .checked_types = checked_type_store,
         .inference = inference,
         .evaluation = EvaluationOutput.init(allocator),
+        .serialized_backing = serialized_backing,
+        .serialized_backing_borrowed = serialized_backing_borrowed,
         .body_analyses = analyses,
         .module_analyses = module_analyses,
     };
-    // The artifact owns the key slots from here on, and its views name its
+    // The module owns the key slots from here on, and its views name its
     // own name store (`typesView`). It owns the body analyses once it is
     // returned.
     sealed_keys_owned = false;
@@ -34316,26 +34112,58 @@ pub fn publishFromTypedModule(
         artifact.canonical_names.deinit();
     }
     artifact.openToAnalyses();
-    errdefer artifact.evaluation.deinit(allocator);
-    // The evaluation output starts with an entry for every compile-time root
-    // and constant template, which the module's checked tables hold.
-    artifact.evaluation = try preparedEvaluationOutput(allocator, try artifact.checkedTables());
-
-    if (inputs.evaluation_phase == .immediate) {
-        try inputs.compile_time_finalizer.run(
-            allocator,
-            &artifact,
-            inputs.imports,
-            inputs.available_artifacts,
-            &.{},
-            inputs.problem_store,
-        );
-        artifact.evaluation.state = .finalized;
-        try artifact.verifyComplete();
-    }
+    artifact.evaluation = switch (inputs.outputs) {
+        .stored => stored_evaluation.?,
+        // The evaluation output starts with an entry for every compile-time
+        // root and constant template, which the module's checked tables hold.
+        .checked => try preparedEvaluationOutput(allocator, try artifact.checkedTables()),
+    };
     analyses_owned = false;
     module_analyses_owned = false;
     return artifact;
+}
+
+/// Evaluate every compile-time root of `artifact`, a module opened right
+/// after checking, and finish its evaluation output.
+pub fn evaluateOpenedModule(
+    allocator: Allocator,
+    artifact: *CheckedModuleArtifact,
+    compile_time_finalizer: CompileTimeFinalizer,
+    imports: []const PublishImportArtifact,
+    available_artifacts: []const ImportedModuleView,
+    problem_store: ?*problem.Store,
+) CompileTimeFinalizer.Error!void {
+    std.debug.assert(artifact.evaluation.state == .prepared);
+    try compile_time_finalizer.run(allocator, artifact, imports, available_artifacts, &.{}, problem_store);
+    artifact.evaluation.state = .finalized;
+    try artifact.verifyComplete();
+}
+
+/// Why the baked Builtin module cannot be opened.
+pub const OpenBakedBuiltinError = Allocator.Error || error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch, CorruptArtifact };
+
+/// Open the Builtin module `env` from `blob`, its baked stored outputs
+/// followed by their layout-version trailer. Every compile-time root of
+/// Builtin is complete in them, so no embedder evaluates one again.
+pub fn openBakedBuiltin(
+    allocator: Allocator,
+    io: std.Io,
+    env: *ModuleEnv,
+    blob: []const u8,
+) OpenBakedBuiltinError!CheckedModuleArtifact {
+    // A mismatched trailer means the embedded blob is stale relative to this
+    // compiler (a build-system inconsistency), which is rejected rather than
+    // read as a differently-shaped struct.
+    const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(blob);
+    const backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 = @alignCast(@constCast(blob[0..serialized_bytes.len]));
+    const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(backing.ptr);
+    try serialized.validate(backing.len);
+    return openCheckedModule(allocator, .{
+        .module_env_storage = .{ .static_builtin = env },
+        .module_idx = 0,
+        .io = io,
+        .outputs = .{ .stored = .{ .backing = backing, .backing_borrowed = true } },
+    });
 }
 
 /// A freshly published module's evaluation output, awaiting evaluation: an
@@ -34387,14 +34215,7 @@ fn expectProvidedExportKind(
 
     // The baked builtin artifact is the published form of the builtin module
     // `test_env` checked against, so it serves as the real direct import.
-    const blob = compiled_builtins.builtin_artifact_bin[0..];
-    const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(blob);
-    const backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
-        @alignCast(blob[0..serialized_bytes.len]);
-    const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
-    try serialized.validate(backing.len);
-    var builtin_artifact = serialized.deserializeStatic(backing, allocator, .{ .static_builtin = test_env.builtin_module.env });
-    try builtin_artifact.attachSealedTypes(allocator, std.testing.io);
+    var builtin_artifact = try openBakedBuiltin(allocator, std.testing.io, test_env.builtin_module.env, compiled_builtins.builtin_artifact_bin[0..]);
     defer builtin_artifact.deinitRetainingModuleEnv(allocator);
 
     const sources = [_]TypedCIR.Modules.SourceModule{
@@ -34409,26 +34230,14 @@ fn expectProvidedExportKind(
         .view = importedView(&builtin_artifact),
     }};
 
-    const NoFinalization = struct {
-        fn finalize(
-            _: ?*anyopaque,
-            _: Allocator,
-            _: *CheckedModuleArtifact,
-            _: []const PublishImportArtifact,
-            _: []const ImportedModuleView,
-            _: []const ImportedModuleView,
-            _: ?*problem.Store,
-        ) CompileTimeFinalizer.Error!void {}
-    };
     // Prepared metadata is enough: the root and export tables are published
     // before any compile-time evaluation runs.
-    var artifact = try publishFromTypedModule(allocator, &modules, 1, .{
+    var artifact = try openCheckedModule(allocator, .{
+        .module_idx = 1,
         .io = std.testing.io,
         .module_env_storage = .{ .checked_source = test_env.module_env },
         .imports = &imports,
-        .compile_time_finalizer = .{ .finalize = &NoFinalization.finalize },
-        .evaluation_phase = .post_frontend,
-        .inference = .{},
+        .outputs = .{ .checked = .{} },
     });
     defer artifact.deinitRetainingModuleEnv(allocator);
 
@@ -34462,8 +34271,7 @@ fn unionFieldCount(comptime Union: type) usize {
 }
 
 test "compile-time finalization route is explicit and non-optional" {
-    try std.testing.expect(@hasField(PublishInputs, "compile_time_finalizer"));
-    try std.testing.expect(@FieldType(PublishInputs, "compile_time_finalizer") == CompileTimeFinalizer);
+    try std.testing.expect(@typeInfo(@TypeOf(evaluateOpenedModule)).@"fn".param_types[2].? == CompileTimeFinalizer);
     try std.testing.expect(@hasField(CompileTimeFinalizer, "finalize"));
     try std.testing.expect(@hasField(CompileTimeFinalizer, "context"));
 
@@ -35488,32 +35296,7 @@ test "lowering visibility follows recursive public API and type-owner dependenci
     }
 }
 
-test "CheckingContextIdentity serialize/deserialize round-trip (slices + optionals)" {
-    const gpa = std.testing.allocator;
-    const imports = try gpa.alloc(ImportIdentity, 2);
-    defer gpa.free(imports);
-    artifact_serialize.poisonSlice(ImportIdentity, imports, 0x5A);
-    artifact_serialize.zeroSlicePadding(ImportIdentity, imports);
-    var prc: PlatformRequirementContextKey = undefined;
-    @memset(std.mem.asBytes(&prc), 0x77);
-    // Canonicalize padding to match the deterministic serializer.
-    collections.CompactWriter.zeroValuePadding(PlatformRequirementContextKey, @as([*]u8, @ptrCast(&prc)));
-
-    const ident = CheckingContextIdentity{
-        .imports = imports,
-        .platform_requirement_context = prc, // present
-        .platform_app_relation = null, // absent
-    };
-
-    const rt = try artifact_serialize.roundTripForTest(gpa, CheckingContextIdentity, &ident);
-    defer gpa.free(rt.buffer);
-    try artifact_serialize.expectSlicesByteEqual(ImportIdentity, ident.imports, rt.loaded.imports);
-    try std.testing.expect(rt.loaded.platform_requirement_context != null);
-    try std.testing.expectEqualSlices(u8, std.mem.asBytes(&prc), std.mem.asBytes(&rt.loaded.platform_requirement_context.?));
-    try std.testing.expectEqual(@as(?PlatformAppRelationKey, null), rt.loaded.platform_app_relation);
-}
-
-test "issue 11290: builtin backing declarations survive serialization with shared formals" {
+test "issue 11290: builtin backing declarations share their formals" {
     const gpa = std.testing.allocator;
     var names = canonical.CanonicalNameStore.init(gpa);
     defer names.deinit();
@@ -35550,9 +35333,7 @@ test "issue 11290: builtin backing declarations survive serialization with share
     try std.testing.expectEqual(@as(usize, 2), store.nominal_declarations.items().len);
 
     store.markPublished();
-    const rt = try artifact_serialize.roundTripForTest(gpa, CheckedTypeStore, &store);
-    defer gpa.free(rt.buffer);
-    for ([_]CheckedTypeStoreView{ store.view(), rt.loaded.view() }) |view| {
+    for ([_]CheckedTypeStoreView{store.view()}) |view| {
         for ([_]CheckedBuiltinNominal{ .dict, .set }) |owner| {
             const declaration = view.builtinNominalDeclaration(owner).?;
             const nominal = view.payload(declaration.declaration_root).nominal;
@@ -35563,290 +35344,6 @@ test "issue 11290: builtin backing declarations survive serialization with share
         }
         try std.testing.expect(view.builtinNominalDeclaration(.list) == null);
     }
-}
-
-test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, ranges" {
-    const gpa = std.testing.allocator;
-    const CW = collections.CompactWriter;
-
-    var store = CheckedTypeStore{};
-    defer store.deinit(gpa);
-
-    // Five payload ids derived from the current pool position rather than
-    // hardcoded placeholder indices.
-    const a: CheckedTypeId = type_ids.fromSynthesized(store.payloads.items().len);
-    const b: CheckedTypeId = type_ids.fromSynthesized(store.payloads.items().len + 1);
-    const c: CheckedTypeId = type_ids.fromSynthesized(store.payloads.items().len + 2);
-    const d: CheckedTypeId = type_ids.fromSynthesized(store.payloads.items().len + 3);
-    const e: CheckedTypeId = type_ids.fromSynthesized(store.payloads.items().len + 4);
-
-    // Build via the commit path so the pools are populated correctly.
-    // 0: a flex with a name + a constraint.
-    const flex_name = try gpa.dupe(u8, "elem");
-    const constraints = try gpa.dupe(CheckedStaticDispatchConstraint, &.{.{
-        .fn_name = @fromBackingInt(@intCast(7)),
-        .fn_ty = a,
-        .origin = .{ .desugared_binop = .{ .negated = false } },
-    }});
-    const flex_stored = try store.commitPayload(gpa, .{ .flex = .{
-        .name = flex_name,
-        .constraints = constraints,
-        .numeric_default_phase = .mono_specialization,
-        .row_default = null,
-    } });
-    try store.roots.append(gpa, .{ .id = a });
-    try store.payloads.append(gpa, flex_stored);
-
-    // 1: a tag_union with one tag carrying args [a].
-    const tag_args = try gpa.dupe(CheckedTypeId, &.{a});
-    const tags = try gpa.alloc(CheckedTag, 1);
-    tags[0] = .{ .name = @fromBackingInt(@intCast(3)), .args = tag_args };
-    const tu_stored = try store.commitPayload(gpa, .{ .tag_union = .{ .tags = tags, .ext = a } });
-    try store.roots.append(gpa, .{ .id = b });
-    try store.payloads.append(gpa, tu_stored);
-
-    const alias_owner: ModuleId = .{ .bytes = @as([32]u8, @splat(0xA1)) };
-    const alias_args = try gpa.dupe(CheckedTypeId, &.{ a, b });
-    const alias_stored = try store.commitPayload(gpa, .{ .alias = .{
-        .name = @fromBackingInt(@intCast(11)),
-        .origin_module = @fromBackingInt(@intCast(12)),
-        .owner_module = alias_owner,
-        .source_decl = 13,
-        .builtin_origin = false,
-        .backing = b,
-        .args = alias_args,
-    } });
-    try store.roots.append(gpa, .{ .id = c });
-    try store.payloads.append(gpa, alias_stored);
-
-    const nominal_owner: ModuleId = .{ .bytes = @as([32]u8, @splat(0xB2)) };
-    const nominal_args = try gpa.dupe(CheckedTypeId, &.{c});
-    const nominal_padding = try gpa.dupe(CheckedTypeId, &.{a});
-    const nominal_declaration_id: CheckedNominalDeclarationId = @fromBackingInt(@intCast(@as(u32, @intCast(store.nominal_declarations.items().len))));
-    const nominal_stored = try store.commitPayload(gpa, .{ .nominal = .{
-        .name = @fromBackingInt(@intCast(14)),
-        .origin_module = @fromBackingInt(@intCast(15)),
-        .owner_module = nominal_owner,
-        .source_decl = 16,
-        .builtin = null,
-        .is_opaque = true,
-        .representation = .{ .local_declaration = nominal_declaration_id },
-        .args = nominal_args,
-        .padding_field_types = nominal_padding,
-    } });
-    try store.roots.append(gpa, .{ .id = d });
-    try store.payloads.append(gpa, nominal_stored);
-
-    // 4: a record with one field of each published kind (design.md "Field
-    // Kinds (All-Dynamic Optional Fields)"): required, optional, defaulted.
-    const record_fields = try gpa.alloc(CheckedRecordField, 3);
-    record_fields[0] = .{ .name = @fromBackingInt(@intCast(21)), .ty = a };
-    record_fields[1] = .{ .name = @fromBackingInt(@intCast(22)), .ty = a, .kind = .optional };
-    record_fields[2] = .{ .name = @fromBackingInt(@intCast(23)), .ty = a, .kind = .defaultedFromParts(@fromBackingInt(@intCast(12)), 77) };
-    const record_stored = try store.commitPayload(gpa, .{ .record = .{ .fields = record_fields, .ext = a } });
-    try store.roots.append(gpa, .{ .id = e });
-    try store.payloads.append(gpa, record_stored);
-
-    // A scheme with generalized vars [a, b].
-    const gv = try store.appendPool(gpa, CheckedTypeId, &.{ a, b });
-    const scheme_id = try store.internScheme(gpa, .synthetic, a);
-    store.schemes.items()[0].gv_start = gv.start;
-    store.schemes.items()[0].gv_len = gv.len;
-    // A source scheme is named by its root, a source variable, and holds no
-    // row; asking again names the same one.
-    const source_root: CheckedTypeId = @fromBackingInt(3);
-    const source_scheme = try store.internScheme(gpa, .source, source_root);
-    try std.testing.expect(source_scheme != scheme_id);
-    try std.testing.expectEqual(@backingInt(source_root), @backingInt(source_scheme));
-    try std.testing.expectEqual(source_scheme, try store.internScheme(gpa, .source, source_root));
-    try std.testing.expectEqual(scheme_id, try store.internScheme(gpa, .synthetic, a));
-    try std.testing.expectEqual(@as(usize, 1), store.schemes.items().len);
-
-    // A nominal declaration with formal args [c], backing c, padding fields [a], and a
-    // declared record sequence [{field}, {_ : a}].
-    const fa = try store.appendPool(gpa, CheckedTypeId, &.{c});
-    const pf = try store.appendPool(gpa, CheckedTypeId, &.{a});
-    const field_name: canonical.RecordFieldLabelId = @fromBackingInt(@intCast(4));
-    const df = try store.appendPool(gpa, CheckedDeclaredField, &.{
-        .{ .named = field_name },
-        .{ .padding = 0 },
-    });
-    const rf = try store.appendPool(gpa, CheckedNominalRecordField, &.{ .{ .named = field_name }, .{ .padding = a } });
-    try store.nominal_declarations.append(gpa, .{
-        .id = nominal_declaration_id,
-        .nominal = .{ .module = @as(canonical.ModuleIdentityId, @fromBackingInt(@intCast(15))), .source_decl = 16 },
-        .source_statement = 16,
-        .declaration_root = d,
-        .backing = c,
-        .fa_start = fa.start,
-        .fa_len = fa.len,
-        .pf_start = pf.start,
-        .pf_len = pf.len,
-        .df_start = df.start,
-        .df_len = df.len,
-        .rf_start = rf.start,
-        .rf_len = rf.len,
-    });
-
-    // Serialize → aligned buffer → deserialize.
-    var arena = base.SingleThreadArena.init(gpa);
-    defer arena.deinit();
-    const aa = arena.allocator();
-    var writer = CW.init();
-    const hdr = try writer.appendAlloc(aa, CheckedTypeStore.Serialized);
-    store.markPublished();
-    try hdr.serialize(&store, aa, &writer);
-
-    const buffer = try gpa.alignedAlloc(u8, CW.SERIALIZATION_ALIGNMENT, writer.total_bytes);
-    defer gpa.free(buffer);
-    _ = try writer.writeToBuffer(buffer);
-
-    const ser: *const CheckedTypeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var loaded = ser.deserialize(@intFromPtr(buffer.ptr));
-    defer loaded.deinit(gpa);
-
-    for (store.schemes.items()) |scheme| {
-        try std.testing.expectEqualDeep(scheme, loaded.scheme(scheme.id));
-        try std.testing.expectEqualDeep(scheme, loaded.view().scheme(scheme.id));
-    }
-
-    // Flex name + constraint survive.
-    const flex = loaded.payload(a).flex;
-    try std.testing.expectEqualStrings("elem", flex.name.?);
-    try std.testing.expectEqual(@as(usize, 1), flex.constraints.len());
-    try std.testing.expectEqual(a, flex.constraints.get(0).fn_ty);
-    try std.testing.expectEqual(NumericDefaultPhase.mono_specialization, flex.numeric_default_phase.?);
-
-    // Tag union: tag args resolve through the tag handle.
-    const tu = loaded.payload(b).tag_union;
-    try std.testing.expectEqual(@as(usize, 1), tu.tags.len());
-    try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, tu.tags.get(0).args);
-    try std.testing.expectEqual(a, tu.ext);
-
-    // Alias and nominal owners survive independently from source-origin ids.
-    const alias = loaded.payload(c).alias;
-    try std.testing.expectEqualSlices(u8, &alias_owner.bytes, &alias.owner_module.bytes);
-    try std.testing.expectEqual(@as(canonical.ModuleIdentityId, @fromBackingInt(@intCast(12))), alias.origin_module);
-    try std.testing.expectEqualSlices(CheckedTypeId, &.{ a, b }, alias.args);
-    try std.testing.expectEqual(b, alias.backing);
-
-    const nominal = loaded.payload(d).nominal;
-    try std.testing.expectEqualSlices(u8, &nominal_owner.bytes, &nominal.owner_module.bytes);
-    try std.testing.expectEqual(@as(canonical.ModuleIdentityId, @fromBackingInt(@intCast(15))), nominal.origin_module);
-    try std.testing.expectEqualSlices(CheckedTypeId, &.{c}, nominal.args);
-    try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, nominal.padding_field_types);
-
-    // Record fields keep their published kind axis through the round-trip:
-    // required, optional, and defaulted (with its default identity).
-    const record = loaded.payload(e).record;
-    try std.testing.expectEqual(@as(usize, 3), record.fields.len());
-    try std.testing.expectEqual(a, record.ext);
-    try std.testing.expectEqual(CheckedFieldKind.Tag.required, record.fields.get(0).kind.tag);
-    try std.testing.expectEqual(CheckedFieldKind.Tag.optional, record.fields.get(1).kind.tag);
-    try std.testing.expectEqual(a, record.fields.get(1).ty);
-    try std.testing.expectEqual(CheckedFieldKind.Tag.defaulted, record.fields.get(2).kind.tag);
-    try std.testing.expectEqual(@as(canonical.ModuleIdentityId, @fromBackingInt(@intCast(12))), record.fields.get(2).kind.default.origin().?);
-    try std.testing.expectEqual(@as(u32, 77), record.fields.get(2).kind.default.expr_node);
-
-    // Scheme generalized vars + decl formal args.
-    try std.testing.expectEqualSlices(CheckedTypeId, &.{ a, b }, loaded.schemes.items()[0].generalizedVars(&loaded));
-    try std.testing.expectEqualSlices(CheckedTypeId, &.{c}, loaded.nominal_declarations.items()[0].formalArgs(&loaded));
-    try std.testing.expectEqual(c, loaded.nominal_declarations.items()[0].backing);
-    try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, loaded.nominal_declarations.items()[0].paddingFieldTypes(&loaded));
-    try std.testing.expectEqualSlices(CheckedDeclaredField, &.{ .{ .named = field_name }, .{ .padding = 0 } }, loaded.nominal_declarations.items()[0].declaredFields(&loaded));
-    const declared_fields = loaded.nominal_declarations.items()[0].declaredRecordFields(&loaded);
-    try std.testing.expectEqual(@as(usize, 2), declared_fields.len);
-    try std.testing.expectEqual(field_name, declared_fields[0].named);
-    try std.testing.expectEqual(a, declared_fields[1].padding);
-
-    // The view exposes the same data.
-    const v = loaded.view();
-    try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, v.payload(b).tag_union.tags.get(0).args);
-    try std.testing.expectEqualSlices(u8, &alias_owner.bytes, &v.payload(c).alias.owner_module.bytes);
-    try std.testing.expectEqualSlices(u8, &nominal_owner.bytes, &v.payload(d).nominal.owner_module.bytes);
-    try std.testing.expectEqual(@as(usize, 2), v.nominalDeclarationById(loaded.nominal_declarations.items()[0].id).declaredRecordFields(v).len);
-}
-
-test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and sub-store data" {
-    const gpa = std.testing.allocator;
-
-    // Source-owned sub-stores with a couple of entries each. Everything else is
-    // an empty default container, which still serializes/relocates correctly.
-    var const_store_src = ConstStore.init(gpa);
-    defer const_store_src.deinit();
-    const c0 = try const_store_src.append(.{ .scalar = .{ .u64 = 7 } });
-    const c1 = try const_store_src.append(.{ .scalar = .{ .i32 = -3 } });
-
-    var checked_types_src = CheckedTypeStore{};
-    defer checked_types_src.deinit(gpa);
-    try checked_types_src.roots.append(gpa, .{ .id = @fromBackingInt(@intCast(@as(u32, @intCast(checked_types_src.roots.items().len)))) });
-    try checked_types_src.roots.append(gpa, .{ .id = @fromBackingInt(@intCast(@as(u32, @intCast(checked_types_src.roots.items().len)))) });
-    try checked_types_src.payloads.append(gpa, .empty_record);
-    try checked_types_src.payloads.append(gpa, .empty_tag_union);
-
-    var canonical_names_src = canonical.CanonicalNameStore.init(gpa);
-    defer canonical_names_src.deinit();
-
-    const identity = ModuleIdentity{
-        .stable_hash = @as([32]u8, @splat(0x42)),
-        .module_idx = 9,
-        .module_name = @fromBackingInt(@intCast(1)),
-        .display_module_name = @fromBackingInt(@intCast(2)),
-        .kind = .module,
-    };
-    var key = CheckedModuleArtifactKey{};
-    @memset(&key.bytes, 0xEE);
-
-    checked_types_src.markPublished();
-    canonical_names_src.markPublished();
-    const artifact = CheckedModuleArtifact{
-        .key = key,
-        .source_hash = @as([32]u8, @splat(0x5c)),
-        .canonical_names = canonical_names_src,
-        .module_identity = identity,
-        .checking_context_identity = .{},
-        .module_env = undefined, // transform E: env is never serialized
-        .checked_types = checked_types_src,
-        .evaluation = .{ .const_store = const_store_src },
-    };
-
-    var arena = base.SingleThreadArena.init(gpa);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    var writer = CompactWriter.init();
-    const hdr = try writer.appendAlloc(aa, CheckedModuleArtifact.Serialized);
-    try hdr.serialize(&artifact, aa, &writer);
-
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
-    _ = try writer.writeToBuffer(buffer);
-
-    const ser: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    // The deserialized artifact is SELF-DESCRIBING: it owns `buffer` via
-    // `serialized_backing`, so a single `deinit` frees it. This also exercises the
-    // frozen-deinit path under the testing allocator (no double-free / no leak—the
-    // contract that a stray `.deinit()` on a frozen artifact is always correct).
-    // `deinitRetainingModuleEnv` because `module_env` here is an injected placeholder.
-    var loaded = ser.deserialize(buffer, gpa, undefined);
-    defer loaded.deinitRetainingModuleEnv(gpa);
-
-    // POD inline fields survive byte-identically.
-    try std.testing.expectEqualSlices(u8, &key.bytes, &loaded.key.bytes);
-    try std.testing.expectEqualSlices(u8, &artifact.source_hash, &loaded.source_hash);
-    try std.testing.expectEqualSlices(u8, &identity.stable_hash, &loaded.module_identity.stable_hash);
-    try std.testing.expectEqual(identity.module_idx, loaded.module_identity.module_idx);
-    try std.testing.expectEqual(identity.module_name, loaded.module_identity.module_name);
-    try std.testing.expectEqual(ModuleEnv.ModuleKind.module, loaded.module_identity.kind);
-
-    // const_store entries survive.
-    try std.testing.expectEqual(@as(u64, 7), loaded.evaluation.const_store.get(c0).scalar.u64);
-    try std.testing.expectEqual(@as(i32, -3), loaded.evaluation.const_store.get(c1).scalar.i32);
-
-    // checked_types roots survive.
-    try std.testing.expectEqual(@as(usize, 2), loaded.checked_types.roots.items().len);
-    try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(1)), loaded.checked_types.roots.items()[1].id);
-    try std.testing.expectEqual(StoredCheckedTypePayload.empty_record, loaded.checked_types.payloads.items()[0]);
-    try std.testing.expectEqual(StoredCheckedTypePayload.empty_tag_union, loaded.checked_types.payloads.items()[1]);
 }
 
 test "module source input hash uses explicit file dependency state" {
@@ -35991,14 +35488,7 @@ test "publishing a module releases each resource exactly once under allocation f
     );
     var artifact_owns_module = false;
     errdefer if (!artifact_owns_module) builtin_module.deinit();
-    const blob = compiled_builtins.builtin_artifact_bin[0..];
-    const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(blob);
-    const backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
-        @alignCast(blob[0..serialized_bytes.len]);
-    const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
-    try serialized.validate(backing.len);
-    var builtin_artifact = serialized.deserializeStatic(backing, gpa, .{ .static_builtin = builtin_module.env });
-    try builtin_artifact.attachSealedTypes(gpa, std.testing.io);
+    var builtin_artifact = try openBakedBuiltin(gpa, std.testing.io, builtin_module.env, compiled_builtins.builtin_artifact_bin[0..]);
     artifact_owns_module = true;
     defer builtin_artifact.deinit(gpa);
 
@@ -36043,28 +35533,28 @@ test "publishing a module releases each resource exactly once under allocation f
     const Attempt = struct {
         fn run(
             failing: Allocator,
-            typed_modules: *const TypedCIR.Modules,
             module_env: *ModuleEnv,
             direct: []const PublishImportArtifact,
             views: []const ImportedModuleView,
             finalize: CompileTimeFinalizer,
         ) CompileTimeFinalizer.Error!void {
-            var artifact = try publishFromTypedModule(failing, typed_modules, 1, .{
+            var artifact = try openCheckedModule(failing, .{
+                .module_idx = 1,
                 .io = std.testing.io,
                 .module_env_storage = .{ .checked_source = module_env },
                 .imports = direct,
                 .available_artifacts = views,
-                .compile_time_finalizer = finalize,
-                .inference = .{},
+                .outputs = .{ .checked = .{} },
             });
-            artifact.deinitRetainingModuleEnv(failing);
+            defer artifact.deinitRetainingModuleEnv(failing);
+            try evaluateOpenedModule(failing, &artifact, finalize, direct, views, null);
         }
     };
     // SafeAllocator's in-place growth depends on neighboring allocations.
     // Keep its ownership checks, but force deterministic allocation points
     // when sweeping publication failures.
     var no_resize = std.testing.FailingAllocator.init(gpa, .{ .resize_fail_index = 0 });
-    try std.testing.checkAllAllocationFailures(no_resize.allocator(), Attempt.run, .{ &modules, env.module_env, &imports, &available, finalizer });
+    try std.testing.checkAllAllocationFailures(no_resize.allocator(), Attempt.run, .{ env.module_env, &imports, &available, finalizer });
 }
 
 test "issue 11128 source scheme publication names each source root once" {
@@ -36547,13 +36037,4 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     try std.testing.expect(store.payload(row.ext) == .flex);
     const source_key = try canonical_type_keys.fromVar(allocator, module.typeStoreConst(), module.moduleEnvConst(), function.ret);
     try std.testing.expectEqualSlices(u8, &source_key.bytes, &(try store.rootKey(root)).bytes);
-
-    store.markPublished();
-    var roundtrip = try artifact_serialize.roundTripForTest(allocator, CheckedTypeStore, &store);
-    defer allocator.free(roundtrip.buffer);
-    roundtrip.loaded.attachSealedTypes(module.moduleEnvConst(), test_keys, try SynthesizedTypeKeys.create(allocator, std.testing.io, roundtrip.loaded.roots.items().len));
-    defer roundtrip.loaded.synthesized_keys.?.destroy();
-    const loaded_alias = roundtrip.loaded.payload(root).alias;
-    try std.testing.expectEqual(@as(usize, 1), loaded_alias.args.len);
-    try std.testing.expectEqual(row.ext, roundtrip.loaded.payload(loaded_alias.backing).tag_union.ext);
 }

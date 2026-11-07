@@ -95,9 +95,9 @@ const ParsedResult = messages.ParsedResult;
 const CanonicalizedResult = messages.CanonicalizedResult;
 
 /// Operational errors returned before the frontend can be considered complete.
-pub const CoordinatorError = messages.WorkerOperationError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, Canceled };
+pub const CoordinatorError = messages.WorkerOperationError || compile_package.CompileTimeError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, Canceled };
 const TypeCheckWorkerError = Allocator.Error || compile_package.TypeCheckModuleError;
-const CheckedModuleCacheRunError = CoordinatorError || eval.BuiltinModules.InitError || Allocator.Error || std.Thread.SpawnError || Coordinator.AppDiscoveryError || compile_package.PublishError || PatternExtractionRegionStatsError || error{
+const CheckedModuleCacheRunError = CoordinatorError || eval.BuiltinModules.InitError || Allocator.Error || std.Thread.SpawnError || Coordinator.AppDiscoveryError || compile_package.CompileTimeError || PatternExtractionRegionStatsError || error{
     UnsupportedBuiltinAnnotationOnly,
     BuiltinLowLevelAnnotationMustBeFunction,
     LowLevelOperationsNotFound,
@@ -2294,8 +2294,6 @@ pub const Coordinator = struct {
     total_typecheck_ns: u64,
     total_typecheck_diag_ns: u64,
     ctfe_timing: eval.CompileTimeFinalization.Timing,
-    /// Compile-time evaluation performed inside individual module checks.
-    module_ctfe_timing: eval.CompileTimeFinalization.Timing,
     /// Wall time spent in `finishCheckedProgram`.
     program_finalization_ns: u64 = 0,
     /// Whether per-module compile-time lowering collects fine-grained timings.
@@ -2417,7 +2415,6 @@ pub const Coordinator = struct {
             .total_typecheck_ns = 0,
             .total_typecheck_diag_ns = 0,
             .ctfe_timing = eval.CompileTimeFinalization.Timing.init(roc_ctx.std_io),
-            .module_ctfe_timing = eval.CompileTimeFinalization.Timing.init(roc_ctx.std_io),
             .cache_hits = 0,
             .cache_misses = 0,
             .canonicalized_cache_hits = 0,
@@ -2532,7 +2529,6 @@ pub const Coordinator = struct {
         self.detailed_lowering_timing = enabled;
         if (enabled) {
             self.ctfe_timing.lowering.enableDetailedMonotypeBody();
-            self.module_ctfe_timing.lowering.enableDetailedMonotypeBody();
         }
     }
 
@@ -3055,7 +3051,7 @@ pub const Coordinator = struct {
         return self.findRootModule(.app) != null or self.findRootModule(.default_app) != null;
     }
 
-    fn prepareExecutableArtifacts(self: *Coordinator) compile_package.PublishError!void {
+    fn prepareExecutableArtifacts(self: *Coordinator) compile_package.CompileTimeError!void {
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return;
         const platform_root = self.findRootModule(.platform) orelse return;
         const app = app_root.mod.checkedArtifact().?;
@@ -3179,7 +3175,6 @@ pub const Coordinator = struct {
     pub fn getTimingInfo(self: *const Coordinator) compile_package.TimingInfo {
         var all_compile_time = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
         all_compile_time.addSnapshot(self.ctfe_timing.snapshot());
-        all_compile_time.addSnapshot(self.module_ctfe_timing.snapshot());
         var slowest_type_checks: compile_package.SlowestTypeChecks = .{};
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
@@ -3196,7 +3191,6 @@ pub const Coordinator = struct {
             .canonicalize_diagnostics_ns = self.total_canonicalize_diag_ns,
             .type_checking_ns = self.total_typecheck_ns,
             .check_diagnostics_ns = self.total_typecheck_diag_ns,
-            .module_compile_time_evaluation_ns = self.module_ctfe_timing.snapshot().total_ns,
             .program_finalization_ns = self.program_finalization_ns,
             .compile_time_evaluation = self.ctfe_timing.snapshot(),
             .compile_time_counters = all_compile_time.snapshot(),
@@ -4883,13 +4877,21 @@ pub const Coordinator = struct {
         );
     }
 
+    /// What opening a module from its cache entry reads beside the entry:
+    /// what opening it after checking reads.
+    const CachedModuleInputs = struct {
+        module_idx: u32,
+        imports: []const check.CheckedArtifact.PublishImportArtifact,
+        available_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+        platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
+        explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
+    };
+
     fn tryLoadCachedCheckedModule(
         self: *Coordinator,
         pkg: *PackageState,
         mod: *ModuleState,
-        imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
-        platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
-        explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
+        inputs: CachedModuleInputs,
     ) bool {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
@@ -4898,13 +4900,13 @@ pub const Coordinator = struct {
         // The canonicalize task read this module's file imports, so its
         // source-input identity is complete and the key below is exact.
         std.debug.assert(current_env.fileDependenciesSettled());
-        if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
-        const cache_key = self.checkedModuleCacheKey(current_env, imported_artifacts, platform_requirement_context, mod.validation) catch {
+        if (!resolvedDirectImportsHaveCheckedOutput(current_env, inputs.imports)) return false;
+        const cache_key = self.checkedModuleCacheKey(current_env, inputs.imports, inputs.platform_requirement_context, mod.validation) catch {
             manager.stats.recordMiss();
             return false;
         };
 
-        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env, explicit_roots);
+        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env, inputs);
     }
 
     /// True when `mod` is the registered platform's root module.
@@ -4913,16 +4915,16 @@ pub const Coordinator = struct {
         return candidate.mod == mod;
     }
 
-    /// Relocate a reusable checked artifact and its source environment in place
-    /// inside the loaded cache entry. Cache misses or invalidations leave the
-    /// module unchanged.
+    /// Relocate a reusable cache entry's environment and outputs in place
+    /// inside the loaded entry and open the module over them. Cache misses or
+    /// invalidations leave the module unchanged.
     fn installCachedCheckedArtifact(
         self: *Coordinator,
         pkg: *PackageState,
         mod: *ModuleState,
         cache_key: check.CheckedArtifact.CheckedModuleArtifactKey,
         current_env: *ModuleEnv,
-        explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
+        inputs: CachedModuleInputs,
     ) bool {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
@@ -5003,27 +5005,23 @@ pub const Coordinator = struct {
         // package-qualified name comes from the module being installed.
         cached_env.qualified_module_name = mod.qualified_name;
 
-        const artifact_serialized: *const check.CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
-        // L-10: bounds-check every relocatable marker against the body before any
-        // sub-store aliases it. A corrupt/truncated cache body is treated as a cache
-        // miss.
-        artifact_serialized.validate(artifact_buffer.len) catch {
+        const outputs_serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
+        // Bounds-check every relocatable marker against the body before any
+        // output aliases it. A corrupt/truncated cache body is treated as a
+        // cache miss.
+        outputs_serialized.validate(artifact_buffer.len) catch {
             manager.stats.recordInvalidation();
             return false;
         };
-        if (!std.mem.eql(u8, &artifact_serialized.key.bytes, &cache_key.bytes)) {
-            manager.stats.recordInvalidation();
-            return false;
-        }
         // An output only a 64-bit address space produces is no output of a
         // 32-bit compilation's evaluation, which evaluates the module again.
-        if (!artifact_serialized.evaluation.address_space.value.serves(self.compileTimeAddressSpace())) {
+        if (!outputs_serialized.evaluation.address_space.value.serves(self.compileTimeAddressSpace())) {
             manager.stats.recordMiss();
             return false;
         }
 
-        // Reserve everything publication needs, so nothing after the artifact
-        // takes ownership of the entry and source can fail.
+        // Reserve everything installing the module needs, so nothing after
+        // the module takes ownership of the entry and source can fail.
         const artifact_ptr = module_alloc.create(CheckedModuleArtifact) catch {
             manager.stats.recordInvalidation();
             return false;
@@ -5042,50 +5040,13 @@ pub const Coordinator = struct {
         };
         const semantic = &(mod.semantic orelse
             coordinatorInvariant("checked cache install for module '{s}' without semantic state", .{mod.name}));
-        const sealed_keys = check.CheckedArtifact.SealedTypeKeys.create(module_alloc, self.roc_ctx.std_io, cached_env) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
-        var sealed_keys_owned = true;
-        defer if (sealed_keys_owned) sealed_keys.destroy();
-        const synthesized_keys = check.CheckedArtifact.SynthesizedTypeKeys.create(module_alloc, self.roc_ctx.std_io, @intCast(artifact_serialized.checked_types.roots.len)) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
-        var synthesized_keys_owned = true;
-        defer if (synthesized_keys_owned) synthesized_keys.destroy();
-        const body_analyses = check.CheckedArtifact.BodyAnalyses.create(
-            module_alloc,
-            self.roc_ctx.std_io,
-            cached_env,
-            cached_env.promoted_local_procedures.items.items,
-        ) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
-        var body_analyses_owned = true;
-        defer if (body_analyses_owned) body_analyses.destroy();
-        const module_analyses = check.CheckedArtifact.ModuleAnalyses.create(module_alloc, self.roc_ctx.std_io, null) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
-        var module_analyses_owned = true;
-        defer if (module_analyses_owned) module_analyses.destroy();
-        module_analyses.attachExplicitRoots(explicit_roots) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
 
-        // Transform E: the artifact's sub-stores alias `artifact_buffer` and the
-        // freshly relocated env is injected as its storage. Cross-artifact
-        // references are content-addressed `CheckedModuleArtifactKey`s already baked
-        // into the blob; a cache hit implies matching imports (the key incorporates
-        // `direct_import_module_keys`), so they resolve against the current build's
-        // `available_artifacts` DAG exactly as a freshly published artifact would.
-        artifact_ptr.* = artifact_serialized.deserializeStatic(
-            artifact_buffer,
-            module_alloc,
-            .{ .cached_entry = .{
+        // The module is opened from the relocated env and the entry's
+        // inference and evaluation outputs exactly as checking opens it,
+        // against the same imports; its environment storage owns the entry
+        // the outputs alias.
+        artifact_ptr.* = check.CheckedArtifact.openCheckedModule(module_alloc, .{
+            .module_env_storage = .{ .cached_entry = .{
                 .env = cached_env,
                 .entry = switch (cache_data) {
                     .mapped => |mapped| mapped.region,
@@ -5097,17 +5058,20 @@ pub const Coordinator = struct {
                 },
                 .source = source,
             } },
-        );
-        module_analyses.attachResolver(self.moduleResolver());
-        artifact_ptr.checked_types.attachSealedTypes(cached_env, sealed_keys, synthesized_keys);
-        artifact_ptr.body_analyses = body_analyses;
-        artifact_ptr.module_analyses = module_analyses;
-        artifact_ptr.attachCapabilitySource();
-        artifact_ptr.openToAnalyses();
-        sealed_keys_owned = false;
-        synthesized_keys_owned = false;
-        body_analyses_owned = false;
-        module_analyses_owned = false;
+            .module_idx = inputs.module_idx,
+            .io = self.roc_ctx.std_io,
+            .imports = inputs.imports,
+            .available_artifacts = inputs.available_artifacts,
+            .platform_requirement_context = inputs.platform_requirement_context,
+            .explicit_roots = inputs.explicit_roots,
+            .validation = mod.validation,
+            .resolver = self.moduleResolver(),
+            .outputs = .{ .stored = .{ .backing = artifact_buffer, .backing_borrowed = true } },
+        }) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        std.debug.assert(std.mem.eql(u8, &artifact_ptr.key.bytes, &cache_key.bytes));
         entry_owned = false;
         source_owned = false;
         cached_env_owned = false;
@@ -5929,20 +5893,6 @@ pub const Coordinator = struct {
         const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
         errdefer task_payload_alloc.free(explicit_roots);
 
-        // The checked-cache key needs only the direct imports, so the probe
-        // runs before the availability walk, which only checking consumes.
-        // Earlier-stage diagnostics are a function of the same source the
-        // cache key names, so they never prevent reuse. A stored entry is one
-        // whose checking and evaluation reported nothing further.
-        mod.pre_check_report_count = mod.reports.items.len;
-        if (self.tryLoadCachedCheckedModule(pkg, mod, imported_artifacts, platform_requirement_context, explicit_roots)) {
-            task_payload_alloc.free(imported_envs);
-            task_payload_alloc.free(imported_artifacts);
-            task_payload_alloc.free(explicit_roots);
-            try self.finishCachedModule(pkg, mod);
-            return;
-        }
-
         var platform_requirement_imported_envs: []const *ModuleEnv = &.{};
         var platform_requirement_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact = &.{};
         defer {
@@ -5980,6 +5930,26 @@ pub const Coordinator = struct {
         }
         const available_artifacts = try self.collectTypecheckAvailableArtifactViewsSeeded(task_payload_alloc, imported_artifacts, platform_seed_list.items);
         errdefer task_payload_alloc.free(available_artifacts);
+        // A cache hit opens the module against exactly what checking it
+        // opens it against: its imports and the modules available to it.
+        // Earlier-stage diagnostics are a function of the same source the
+        // cache key names, so they never prevent reuse. A stored entry is one
+        // whose checking and evaluation reported nothing further.
+        mod.pre_check_report_count = mod.reports.items.len;
+        if (self.tryLoadCachedCheckedModule(pkg, mod, .{
+            .module_idx = check.TypedCIR.Modules.rootModuleIdx(mod.moduleEnv().?, imported_envs),
+            .imports = imported_artifacts,
+            .available_artifacts = available_artifacts,
+            .platform_requirement_context = platform_requirement_context,
+            .explicit_roots = explicit_roots,
+        })) {
+            task_payload_alloc.free(imported_envs);
+            task_payload_alloc.free(imported_artifacts);
+            task_payload_alloc.free(explicit_roots);
+            task_payload_alloc.free(available_artifacts);
+            try self.finishCachedModule(pkg, mod);
+            return;
+        }
 
         const platform_requirement_owner_envs: []const *const ModuleEnv = if (platform_surface != null)
             try buildPlatformRequirementOwnerEnvs(
@@ -7417,26 +7387,12 @@ pub const Coordinator = struct {
                 .module_id = task.module_id,
                 .module_name = task.module_name,
             } },
-            error.EmptyCode,
-            error.Internal,
-            error.RuntimeError,
-            error.LockedMemoryLimitExceeded,
-            error.MmapFailed,
-            error.MprotectFailed,
-            error.SystemResources,
-            error.ThreadQuotaExceeded,
-            error.Unexpected,
-            error.UnsupportedPlatform,
-            error.UnwindRegistrationFailed,
-            error.VirtualAllocFailed,
-            error.VirtualProtectFailed,
-            => |e| WorkerResult{ .operation_failed = .{
+            error.Internal => |e| WorkerResult{ .operation_failed = .{
                 .package_name = task.package_name,
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .cause = .{ .type_check = e },
             } },
-            error.Canceled => coordinatorInvariant("a module's type check canceled compile-time evaluation it was given no cancel request for", .{}),
         };
     }
 
@@ -7459,12 +7415,6 @@ pub const Coordinator = struct {
         // Keep those allocations with the published result instead of the
         // task-local scratch arena, which is reset after the worker task.
         const check_alloc = result_alloc;
-        var local_ctfe_timing = eval.CompileTimeFinalization.Timing.init(self.roc_ctx.std_io);
-        if (self.detailed_lowering_timing) local_ctfe_timing.lowering.enableDetailedMonotypeBody();
-        const ctfe_timing = &local_ctfe_timing;
-        var ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
-        ctfe_options.strategy = self.specialization_strategy;
-        ctfe_options.address_space = self.compileTimeAddressSpace();
         // Import resolution runs inside the type-check task and records its
         // own diagnostics on the env, after the canonicalize task already
         // reported the ones canonicalization recorded.
@@ -7483,7 +7433,6 @@ pub const Coordinator = struct {
             task.validation,
             task.source_pin_validation,
             self.roc_ctx.std_io,
-            ctfe_options,
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
             if (self.cache_entry_dirs.inference) |directory| .{ .manager = self.cache_manager.?, .directory = directory } else null,
@@ -7498,10 +7447,7 @@ pub const Coordinator = struct {
             }
         }
 
-        const check_and_publish_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
-        const local_ctfe = local_ctfe_timing.snapshot();
-        self.module_ctfe_timing.addSnapshot(local_ctfe);
-        const type_check_ns = check_and_publish_ns -| local_ctfe.total_ns;
+        const type_check_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
 
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = result_alloc;
@@ -10821,6 +10767,9 @@ const CheckingCommand = enum {
     /// A build that also requests one of the app's constants by name, as a
     /// target configuration or a REPL does.
     build_with_explicit_root,
+    /// `roc test`: the root checked without its entrypoint contract, and no
+    /// executable roots.
+    test_command,
 };
 
 /// One inference cache entry: its file name, which its key names, and its
@@ -10872,6 +10821,10 @@ fn inferenceEntriesAfter(
     try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
     switch (command) {
         .check, .build => {},
+        .test_command => {
+            const pkg = coord.getPackage(coord.root_package_name.?).?;
+            pkg.modules.items[pkg.root_module_id.?].validation = .explicit_roots;
+        },
         .build_with_explicit_root => {
             var packages = coord.packages.iterator();
             while (packages.next()) |entry| {
@@ -10887,7 +10840,7 @@ fn inferenceEntriesAfter(
     try coord.coordinatorLoop();
     if (coord.hasUserErrors()) return reportCheckingErrors(&coord);
     switch (command) {
-        .check => {},
+        .check, .test_command => {},
         .build, .build_with_explicit_root => {
             try coord.finishCheckedProgram(.executable_artifacts);
             if (coord.hasUserErrors()) return reportCheckingErrors(&coord);
@@ -10929,6 +10882,17 @@ fn reportCheckingErrors(coord: *Coordinator) error{TestUnexpectedResult} {
     return error.TestUnexpectedResult;
 }
 
+/// Whether `a` and `b` hold the same entry bytes, whatever their names.
+fn expectSameInferenceBytes(a: []const InferenceEntry, b: []const InferenceEntry) error{TestExpectedEqual}!void {
+    try std.testing.expectEqual(a.len, b.len);
+    for (a) |entry| {
+        const found = for (b) |other| {
+            if (std.mem.eql(u8, entry.bytes, other.bytes)) break true;
+        } else false;
+        if (!found) return error.TestExpectedEqual;
+    }
+}
+
 fn expectSameInferenceEntries(expected: []const InferenceEntry, actual: []const InferenceEntry) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(expected.len, actual.len);
     for (expected, actual) |want, got| {
@@ -10950,6 +10914,12 @@ fn sharedInferenceEntryCount(a: []const InferenceEntry, b: []const InferenceEntr
 }
 
 test "a module's inference entry does not depend on the command or on modules it does not import" {
+    // The checker's recorded output, value-reference resolution and the
+    // compile-time root candidates included, is a function of the module
+    // and of its direct imports' checked outputs alone: `check`, `build`,
+    // `test` and a REPL-style explicit root request write byte-identical
+    // entries, and so do two workspaces for every module that does not
+    // import the module they differ in.
     const allocator = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -11001,13 +10971,13 @@ test "a module's inference entry does not depend on the command or on modules it
             ,
         });
     }
-    for ([_][]const u8{ "check", "build", "explicit", "other" }) |dir| try tmp_dir.dir.createDirPath(std.testing.io, dir);
+    for ([_][]const u8{ "check", "build", "explicit", "other", "test" }) |dir| try tmp_dir.dir.createDirPath(std.testing.io, dir);
     const first_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "first/app/main.roc", allocator);
     defer allocator.free(first_app);
     const second_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "second/app/main.roc", allocator);
     defer allocator.free(second_app);
-    var cache_dirs: [4][:0]u8 = undefined;
-    for (&cache_dirs, [_][]const u8{ "check", "build", "explicit", "other" }) |*cache_dir, dir| {
+    var cache_dirs: [5][:0]u8 = undefined;
+    for (&cache_dirs, [_][]const u8{ "check", "build", "explicit", "other", "test" }) |*cache_dir, dir| {
         cache_dir.* = try tmp_dir.dir.realPathFileAlloc(std.testing.io, dir, allocator);
     }
     defer for (cache_dirs) |cache_dir| allocator.free(cache_dir);
@@ -11023,6 +10993,13 @@ test "a module's inference entry does not depend on the command or on modules it
     try std.testing.expect(checked.len >= 5); // The app, A, B, the platform root and Echo.
     try expectSameInferenceEntries(checked, built);
     try expectSameInferenceEntries(checked, explicit);
+    // `roc test` checks the root without its entrypoint contract, which is
+    // part of the root's checking context and so of its entry's name; the
+    // root supplies every requirement, so its checked output is the same.
+    const tested = try inferenceEntriesAfter(allocator, cache_dirs[4], first_app, .test_command);
+    defer freeInferenceEntries(allocator, tested);
+    try expectSameInferenceBytes(checked, tested);
+    try std.testing.expect(sharedInferenceEntryCount(checked, tested) == checked.len - 1);
 
     // A workspace whose B differs: B's entry changes, and so may its
     // importer's; every other module's entry is the same.
@@ -12843,11 +12820,11 @@ test "Coordinator type-check operational errors remain operation errors" {
     defer coord.deinit();
     const pkg = try coord.ensurePackage(package_identity.synthetic_app_identity, "/test/app");
     const module_id = try pkg.ensureModule(allocator, "App", "/test/app/App.roc");
-    try std.testing.expectError(error.UnsupportedPlatform, coord.handleResult(.{ .operation_failed = .{
+    try std.testing.expectError(error.Internal, coord.handleResult(.{ .operation_failed = .{
         .package_name = pkg.name,
         .module_id = module_id,
         .module_name = "App",
-        .cause = .{ .type_check = error.UnsupportedPlatform },
+        .cause = .{ .type_check = error.Internal },
     } }));
     try std.testing.expectEqual(@as(usize, 1), pkg.getModule(module_id).?.reports.items.len);
     try std.testing.expect(!coord.frontend_complete);

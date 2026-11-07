@@ -1399,28 +1399,30 @@ pub fn parseProgram(
 
     var inference_arena = base.SingleThreadArena.init(allocator);
     defer inference_arena.deinit();
-    var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(
+    var checked_artifact = try check.CheckedArtifact.openCheckedModule(allocator, .{
+        .module_idx = 0,
+        .module_env_storage = .{ .checked_source = main_checked.module_env },
+        .io = options.io,
+        .imports = publish_imports,
+        .available_artifacts = available_artifacts,
+        .explicit_roots = explicit_roots,
+        .outputs = .{ .checked = try check.InferenceOutput.fromChecker(inference_arena.allocator(), main_checked.checker, null) },
+    });
+    errdefer checked_artifact.deinit(allocator);
+    try check.CheckedArtifact.evaluateOpenedModule(
         allocator,
-        &typed_cir_modules,
-        0,
-        .{
-            .inference = try check.InferenceOutput.fromChecker(inference_arena.allocator(), main_checked.checker, null),
-            .module_env_storage = .{ .checked_source = main_checked.module_env },
-            .io = options.io,
-            .imports = publish_imports,
-            .available_artifacts = available_artifacts,
-            .explicit_roots = explicit_roots,
-            .compile_time_finalizer = if (options.ctfe_options) |ctfe_options|
-                CompileTimeFinalization.finalizerWithOptions(ctfe_options)
-            else
-                CompileTimeFinalization.finalizer(),
-            .problem_store = switch (options.problem_reporting) {
-                .ignore_comptime_problems => null,
-                .report_comptime_problems => &main_checked.checker.problems,
-            },
+        &checked_artifact,
+        if (options.ctfe_options) |ctfe_options|
+            CompileTimeFinalization.finalizerWithOptions(ctfe_options)
+        else
+            CompileTimeFinalization.finalizer(),
+        publish_imports,
+        available_artifacts,
+        switch (options.problem_reporting) {
+            .ignore_comptime_problems => null,
+            .report_comptime_problems => &main_checked.checker.problems,
         },
     );
-    errdefer checked_artifact.deinit(allocator);
     main_checked.published_owns_module_env = true;
     main_checked.owned_source = null;
 
@@ -1952,23 +1954,21 @@ fn publishImportArtifacts(
 
             var inference_arena = base.SingleThreadArena.init(allocator);
             defer inference_arena.deinit();
-            const artifact = try check.CheckedArtifact.publishFromTypedModule(
-                allocator,
-                typed_cir_modules,
-                module_idx,
-                .{
-                    .inference = try check.InferenceOutput.fromChecker(inference_arena.allocator(), extra_modules[extra_i].checker, null),
-                    .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
-                    .io = io,
-                    .imports = published_keys.items,
-                    .available_artifacts = available_artifacts,
-                    .compile_time_finalizer = CompileTimeFinalization.finalizer(),
-                    .problem_store = switch (problem_reporting) {
-                        .ignore_comptime_problems => null,
-                        .report_comptime_problems => &extra_modules[extra_i].checker.problems,
-                    },
-                },
-            );
+            var artifact = try check.CheckedArtifact.openCheckedModule(allocator, .{
+                .module_idx = module_idx,
+                .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
+                .io = io,
+                .imports = published_keys.items,
+                .available_artifacts = available_artifacts,
+                .outputs = .{ .checked = try check.InferenceOutput.fromChecker(inference_arena.allocator(), extra_modules[extra_i].checker, null) },
+            });
+            {
+                errdefer artifact.deinitRetainingModuleEnv(allocator);
+                try check.CheckedArtifact.evaluateOpenedModule(allocator, &artifact, CompileTimeFinalization.finalizer(), published_keys.items, available_artifacts, switch (problem_reporting) {
+                    .ignore_comptime_problems => null,
+                    .report_comptime_problems => &extra_modules[extra_i].checker.problems,
+                });
+            }
             extra_modules[extra_i].published_owns_module_env = true;
             extra_modules[extra_i].owned_source = null;
 

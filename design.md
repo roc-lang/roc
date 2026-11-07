@@ -2307,8 +2307,9 @@ unit-link identities, never by filesystem placement. Distinct modules sharing a
 unit-link identity are disambiguated by full content identity. Replay binds
 these identities to the current compilation's source environments and paths.
 
-A checked module's cache entry stores its checking output and finalized
-compile-time constants together. Its identity covers the module's source and
+A checked module's cache entry stores its `ModuleEnv`, its inference output
+and its evaluation output with the finalized compile-time constants, and
+nothing else. Its identity covers the module's source and
 resolved dependencies, checking context and compatibility policy. Identical
 inputs share the entry across checkouts, independently of their source paths.
 An edit that changes this identity misses the entry and evaluates the new
@@ -4196,12 +4197,18 @@ the entry. There is no previous entry to consult, no value identity, no
 fingerprint of a definition, no reuse of evaluated values across edits, no
 literal-values file and no discovery manifest.
 
-A checked entry holds exactly the live data of the checked module ("The Live
+A checked entry holds exactly three parts of the checked module ("The Live
 Checked Module"): the serialized `ModuleEnv` including the sealed solver
-store, the inference output, and the evaluation output. Derived facts (canonical
-type keys, evidence, synthesized templates, demand vectors, layouts) are never
-cached; after a hit, each is recomputed on its first demand through its slot
-("On-Demand Analyses And Write-Once Slots"). An entry is written only when a
+store, the inference output, and the evaluation output
+(`CheckedModule.Serialized` holds the last two). A hit opens the module from
+them through the same function that opens it after checking
+(`openCheckedModule`), against the same imports: its identity and key, its
+name store and its synthesized-type store are recreated, never read from the
+entry. Derived facts (canonical type keys, evidence, synthesized templates,
+demand vectors, layouts) are never cached; after a hit, each is recomputed on
+its first demand through its slot ("On-Demand Analyses And Write-Once
+Slots"). The baked Builtin module is the same three parts: its `ModuleEnv`
+and its inference and evaluation outputs (`openBakedBuiltin`). An entry is written only when a
 cache is enabled; a `--no-cache` build serializes nothing.
 
 A platform/app pairing entry is keyed by the content hashes of the platform's
@@ -4507,15 +4514,17 @@ them. Keeping different compiler builds' caches apart is the job of the cache
 directory alone: every cache lives under `compat-<id>`, which already names
 the build more finely than any key could. The checking context identity includes import-name
 hashes, resolved import ids, platform requirement context, and validation
-mode. It names nothing a command chooses: the root requests a command makes
+mode, and is computed with the id by one function
+(`CheckedModuleIdentity.compute`), which both a cache probe and opening the
+module call. It names nothing a command chooses: the root requests a command makes
 of a module by name select among the module's checked compile-time root
 candidates when its root requests are read (`ModuleAnalyses.explicit_roots`),
 so `check`, `build`, `test` and a REPL share one checked entry. A reusable platform module has no app relation in this identity.
 Generated code has a separate identity that includes the exact platform/app
 relation; specialization keys use that identity while
 local checked references retain their immutable module owner. The checked
-module cache stores only the live data of the checked module, every part of
-which is a deterministic output of those inputs; nothing in an entry is a
+module cache stores only the module's `ModuleEnv`, inference output and
+evaluation output, each a deterministic output of those inputs; nothing in an entry is a
 cache-id input of its own. A cache miss recomputes the entry from the
 module's checked inputs; no other entry is consulted.
 
@@ -5384,7 +5393,7 @@ lists that one creator at a time grows while every other thread reads them
 without a lock (`collections.PublishedList`): a reader loads a column's
 published length, then its backing, and growth copies the column into a new
 backing and keeps the old one alive; replaced backings are freed only when
-the store is published, before any other thread reads it, and with the
+the module is opened, before any other thread reads the store, and with the
 module. An item a reader can name never moves or changes. Once other threads can read the
 store, a creation holds the store's creation lock
 (`CheckedTypeStore.beginCreation`, `finishCreation`) from its first append
@@ -5394,10 +5403,12 @@ Representations"), waits on no slot while holding it, and lets an id it
 created reach another thread only after it ends; creation's in-workspace
 memos are read and written only under that lock. Synthesized
 key slots never move (`collections.StableList`), and the key index answers
-over the roots complete when it is asked, growing as roots are created. A
-cache entry holds exactly the types the store held when the module was
-published (`markPublished`); a type created later is created again by the
-first consumer that needs it after a cache hit. Synthesized ids follow
+over the roots complete when it is asked, growing as roots are created. No
+cache entry holds the store: opening a module (`openCheckedModule`) creates
+the types its sealed solver store's readers need, from the module's
+`ModuleEnv` and imports, whether checking just completed or a cache entry
+was loaded, and every other type is created again by the first consumer
+that needs it. Synthesized ids follow
 creation order, so no consumer orders anything that reaches output by a
 synthesized id.
 
@@ -5417,8 +5428,9 @@ imported type, dispatch resolution). Each interner then interns as one
 writer at a time under its own lock (`NameInterner.insertShared`), which
 it holds for no wait, while readers read its columns and probing table
 without a lock (a grown table replaces the current one and the old one
-stays alive). A cache entry holds exactly the names the store held at that
-point. A procedure's base is no name: it is its kind and the source it
+stays alive). No cache entry holds the name store: opening the module
+interns the names its types and its lowering-visible declarations use. A
+procedure's base is no name: it is its kind and the source it
 comes from (`ProcBase`), a function of the module's checked data, so no
 store interns one. The store's own label
 rank caches hold the ranks of exactly those names; a reader that ranks
@@ -5707,7 +5719,7 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   (`interfaceCapabilities`: one per instance, a declaration of the module
   at one list of argument types, with its instantiated backing and padding
   types, which the computation creates; computed for every local nominal type
-  its cache entry holds, and grown for the types each
+  the store holds when the module is opened, and grown for the types each
   later creation makes before that creation ends, "Nominal
   Representations" below), and the module's dispatch
   resolution, which the module's dispatch reader (`CheckedDispatch`)
@@ -5794,8 +5806,8 @@ variables occur and another over any other variables, and every other type
 is compared by its structure, a nominal by its declaration and arguments
 alone (`CheckedNominalEquality.declaration_args`). Every instance has
 exactly one capability. The capabilities are computed on first demand for
-every type the store holds then, which is exactly the set its cache entry
-holds, because every slot demands its module's capabilities before it
+every type the store holds then, which is exactly the set opening the
+module created, because every slot demands its module's capabilities before it
 creates a type there; those synthesized types are settled in id
 order, then the source types checking reached, in variable order, then the
 types the capabilities created. A type created later is settled by the
@@ -5817,7 +5829,7 @@ digest or key, or prints them, and the types a capability creates are
 synthesized types, which no consumer orders output by either. A consumer
 that reads a module's nominal representations (Monotype and Boxy lowering
 of every module they read, glue, compile-time root graphs, the
-publication of every module that imports it, a platform/app pairing)
+opening of every module that imports it, a platform/app pairing)
 demands the module's interface capabilities first.
 
 A slot (`collections.OnceSlot`) is a state word with three states: empty,
@@ -5862,8 +5874,8 @@ ordered after its importers, nothing waits for demand to flow top-down, and
 the read path takes no lock.
 
 No slot's result depends on whether, when or on which thread another slot
-was computed. Recording a checked module creates every type and interns
-every name its cache entry holds before any slot of the module can run: the
+was computed. Opening a checked module creates every type and interns
+every name the opening needs before any slot of the module can run: the
 type store and name store are then sealed for shared reading, the interface capabilities get their source
 (`attachCapabilitySource`), and only then are the module's analyses opened
 (`CheckedModule.openToAnalyses`). Each slot claim of a module's analyses
@@ -5873,20 +5885,20 @@ and every literal slot demands the module's interface capabilities before it
 claims, and a creation demands those of every module whose types it copies,
 so every slot reads each nominal type at the representation its
 capabilities give it. A pairing's images are synthesized types of its
-platform's store, created after the platform was published, so the
-platform's cache entry never holds one, and the pairing's own entry holds
+platform's store, created after the platform was opened, so no
+cache entry holds one, and the pairing's own entry holds
 only its evaluation output. An image is a function of its source type and
 the pairing's formal map alone: which types the platform's slots had created
 when the pairing was created decides only which images its lock-free column
 memoizes, never what an image is.
 
 An analysis that reads modules other than its own finds them through the
-`ModuleResolver` its consumer passes: publication's imports, a build's
+`ModuleResolver` its consumer passes: the module's imports, a build's
 coordinator, or a list of available modules. Dispatch resolution, which
 every reader of the module reaches through one reader, finds them through
-the resolver the module was opened with: the build coordinator's for a
-loaded module (`ModuleAnalyses.attachResolver`), a copy of the views its
-publication resolved against for a published one
+the resolver the module was opened with: the build coordinator's when the
+coordinator opens it from a cache entry (`ModuleAnalyses.attachResolver`),
+otherwise a copy of the views it was opened against
 (`ModuleAnalyses.attachImportViews`). Every resolver resolves every
 module of the build, so the result does not depend on which consumer
 computed it.
@@ -6000,7 +6012,11 @@ The checked boundary has exactly the live data of "The Live Checked Module",
 and these shapes are forbidden:
 
 - a frozen copy of a checked module (`CheckedModuleArtifact`) or a pass that
-  builds one (`publishFromTypedModule`);
+  builds one (`publishFromTypedModule`), or any way to make a checked module
+  other than opening it (`openCheckedModule`);
+- a checked cache payload beside the `ModuleEnv` other than the inference
+  output and the evaluation output (`CheckedModule.Serialized`), such as a
+  serialized synthesized-type store, name store or checking-context identity;
 - a copy of the solver store (`CheckedTypeStore`) or of bodies
   (`CheckedBodyStore`);
 - template, binding or constant closures, a lowering-visibility closure, or a

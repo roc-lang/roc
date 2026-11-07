@@ -47,7 +47,7 @@ pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ Expect
 /// Errors that can occur while initializing build inputs.
 pub const InitError = Allocator.Error || BuiltinModules.InitError;
 /// Errors that can occur while compiling discovered modules.
-pub const CompileDiscoveredError = coordinator_mod.CoordinatorError || BuildError || compile_package.PublishError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound };
+pub const CompileDiscoveredError = coordinator_mod.CoordinatorError || BuildError || compile_package.CompileTimeError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound };
 /// Errors that can occur while building a root module.
 pub const BuildRootError = BuildError || CompileDiscoveredError;
 /// Errors that can occur while building with an explicit main module.

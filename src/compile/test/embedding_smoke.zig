@@ -62,7 +62,7 @@ test "embedding API: distinct provides aliases retain their names and image ordi
 
 const EmbeddingSequenceError = eval.BuiltinModules.InitError || std.Thread.SpawnError ||
     Coordinator.AppDiscoveryError || @import("../coordinator.zig").CoordinatorError ||
-    @import("../compile_package.zig").PublishError || lir.CheckedPipeline.LowerResourceError ||
+    @import("../compile_package.zig").CompileTimeError || lir.CheckedPipeline.LowerResourceError ||
     lir.LirImage.ViewError || eval.LirInterpreter.Error ||
     error{ EntrypointNotFound, TestUnexpectedResult, TestExpectedEqual };
 

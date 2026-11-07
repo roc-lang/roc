@@ -590,8 +590,6 @@ const ViewTestError = @import("test/TestEnv.zig").TestEnvError || error{ Corrupt
 fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
     const TestEnv = @import("test/TestEnv.zig");
     const compiled_builtins = @import("compiled_builtins");
-    const CompactWriter = collections.CompactWriter;
-    const CheckedModuleArtifact = checked_artifact.CheckedModuleArtifact;
     const allocator = std.testing.allocator;
 
     var test_env = try TestEnv.init("SealedTypeViewTest", source);
@@ -599,14 +597,7 @@ fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
     try test_env.assertNoErrors();
     try std.testing.expect(test_env.module_env.types.isSealed());
 
-    const blob = compiled_builtins.builtin_artifact_bin[0..];
-    const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(blob);
-    const backing: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
-        @alignCast(blob[0..serialized_bytes.len]);
-    const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
-    try serialized.validate(backing.len);
-    var builtin_artifact = serialized.deserializeStatic(backing, allocator, .{ .static_builtin = test_env.builtin_module.env });
-    try builtin_artifact.attachSealedTypes(allocator, std.testing.io);
+    var builtin_artifact = try checked_artifact.openBakedBuiltin(allocator, std.testing.io, test_env.builtin_module.env, compiled_builtins.builtin_artifact_bin[0..]);
     defer builtin_artifact.deinitRetainingModuleEnv(allocator);
 
     const sources = [_]TypedCIR.Modules.SourceModule{

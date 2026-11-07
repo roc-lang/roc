@@ -18196,12 +18196,11 @@ fn makeReporter(ctx: *CliCtx, op_label: []const u8, timings_flag: bool) progress
 /// in the breakdown once type checking completes.
 /// Module-level work runs on several worker threads at once, so each row is
 /// that work's time summed across threads rather than a slice of wall time.
-fn frontEndBreakdown(timing: anytype) [4]progress.SubTiming {
+fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
     return .{
         .{ .name = "Parsing (summed)", .ns = timing.tokenize_parse_ns },
         .{ .name = "Name Resolution (summed)", .ns = timing.canonicalize_ns + timing.canonicalize_diagnostics_ns },
         .{ .name = "Type Inference (summed)", .ns = timing.type_checking_ns + timing.check_diagnostics_ns },
-        .{ .name = "Module Compile-Time Eval (summed)", .ns = timing.module_compile_time_evaluation_ns },
     };
 }
 
@@ -19097,7 +19096,6 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             .canonicalize_diagnostics_ns = @as(u64, 0),
             .type_checking_ns = @as(u64, 0),
             .check_diagnostics_ns = @as(u64, 0),
-            .module_compile_time_evaluation_ns = @as(u64, 0),
             .program_finalization_ns = shared_input.total_ns,
             .compile_time_evaluation = shared_input,
             .compile_time_counters = shared_input,

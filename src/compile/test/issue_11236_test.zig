@@ -169,7 +169,7 @@ fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArt
     try std.testing.expectEqual(@as(usize, 1), exported_valid);
 }
 
-test "issue 11236: rejection survives exports and serialization without callable wrappers" {
+test "issue 11236: rejection survives exports and stored outputs without callable wrappers" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -249,10 +249,22 @@ test "issue 11236: rejection survives exports and serialization without callable
     try header.serialize(artifact, arena.allocator(), &writer);
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     _ = try writer.writeToBuffer(buffer);
-    const serialized: *const Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var loaded = serialized.deserialize(buffer, gpa, artifact.module_env);
+    // `Bad` imports only Builtin, which its module set holds first.
+    std.debug.assert(artifact.direct_import_module_keys.len == 1);
+    const builtin_key = artifact.direct_import_module_keys[0];
+    const imports = [_]check.CheckedArtifact.PublishImportArtifact{.{
+        .module_idx = 0,
+        .key = builtin_key,
+        .view = build.moduleResolver().resolve(builtin_key.digest()).?,
+    }};
+    var loaded = try check.CheckedArtifact.openCheckedModule(gpa, .{
+        .module_env_storage = artifact.module_env,
+        .module_idx = artifact.module_identity.module_idx,
+        .io = io,
+        .imports = &imports,
+        .resolver = build.moduleResolver(),
+        .outputs = .{ .stored = .{ .backing = buffer, .backing_borrowed = false } },
+    });
     defer loaded.deinitRetainingModuleEnv(gpa);
-    try loaded.attachSealedTypes(gpa, io);
-    loaded.module_analyses.?.attachResolver(build.moduleResolver());
     try expectRejectedBinding(&loaded);
 }

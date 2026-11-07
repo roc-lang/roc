@@ -162,18 +162,14 @@ fn serializeBuiltinArtifact(
     // The baked artifact serves either strategy's programs and no
     // compilation reopens it, so its evaluation completes every root.
     const finalizer_options: comptime_finalizer.Options = .{ .complete_baked_module = true };
-    var artifact = try check.CheckedArtifact.publishFromTypedModule(
-        gpa,
-        &typed_modules,
-        0,
-        .{
-            .module_env_storage = .{ .checked_source = builtin_env },
-            .io = io,
-            .compile_time_finalizer = comptime_finalizer.finalizerWithOptions(&finalizer_options),
-            .inference = inference.*,
-        },
-    );
+    var artifact = try check.CheckedArtifact.openCheckedModule(gpa, .{
+        .module_idx = 0,
+        .module_env_storage = .{ .checked_source = builtin_env },
+        .io = io,
+        .outputs = .{ .checked = inference.* },
+    });
     defer artifact.deinitRetainingModuleEnv(gpa);
+    try check.CheckedArtifact.evaluateOpenedModule(gpa, &artifact, comptime_finalizer.finalizerWithOptions(&finalizer_options), &.{}, &.{}, null);
 
     var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();

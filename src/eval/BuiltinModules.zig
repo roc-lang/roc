@@ -8,7 +8,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const can = @import("can");
 const check = @import("check");
-const collections = @import("collections");
 const builtin_static = can.BuiltinStatic;
 
 const CIR = can.CIR;
@@ -16,32 +15,15 @@ const Allocator = std.mem.Allocator;
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinModuleView = builtin_static.BuiltinModuleView;
 const BuiltinIndices = CIR.BuiltinIndices;
-const CompactWriter = collections.CompactWriter;
 const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
 
-/// The builtin compiler's baked artifact for `env` (the embedded builtin
-/// module), with the evaluation output it baked: every compile-time root of
-/// Builtin is already complete, so no embedder evaluates one again. Every
-/// thread that reads the artifact's key slots waits on them through `io`.
-pub fn bakedArtifact(allocator: Allocator, io: std.Io, env: *can.ModuleEnv) error{ OutOfMemory, CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch, CorruptArtifact }!CheckedModuleArtifact {
-    // The baked blob is the serialized artifact followed by a layout-version
-    // trailer. Validate and strip it before relocating: a mismatch means the
-    // embedded blob is stale relative to this compiler (a build-system
-    // inconsistency), which we reject rather than relocate into a differently-
-    // shaped struct.
-    const artifact_blob = compiled_builtins.builtin_artifact_bin[0..];
-    const serialized_bytes = try CheckedModuleArtifact.splitVersionTrailer(artifact_blob);
-    const artifact_buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
-        @alignCast(artifact_blob[0..serialized_bytes.len]);
-
-    const serialized: *const CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
-    // L-10: bounds-check every relocatable marker against the buffer before any
-    // sub-store aliases it, so a corrupt/truncated baked blob fails cleanly.
-    try serialized.validate(artifact_buffer.len);
-    var checked_artifact = serialized.deserializeStatic(artifact_buffer, allocator, .{ .static_builtin = env });
-    errdefer checked_artifact.deinitRetainingModuleEnv(allocator);
-    try checked_artifact.attachSealedTypes(allocator, io);
-    return checked_artifact;
+/// The Builtin module `env` (the embedded builtin module), opened with the
+/// inference and evaluation outputs the builtin compiler baked: every
+/// compile-time root of Builtin is already complete, so no embedder
+/// evaluates one again. Every thread that reads the module's key slots waits
+/// on them through `io`.
+pub fn bakedArtifact(allocator: Allocator, io: std.Io, env: *can.ModuleEnv) check.CheckedArtifact.OpenBakedBuiltinError!CheckedModuleArtifact {
+    return check.CheckedArtifact.openBakedBuiltin(allocator, io, env, compiled_builtins.builtin_artifact_bin[0..]);
 }
 
 /// Centralized container for all builtin modules
@@ -52,11 +34,11 @@ pub const BuiltinModules = struct {
     /// compiler executable's static data.
     builtin_module: BuiltinModuleView,
     builtin_indices: BuiltinIndices,
-    /// Self-describing frozen artifact whose sub-stores alias static embedded
-    /// bytes. `deinit` tears down only the env wrapper, never the static backing.
+    /// The live Builtin module, whose inference and evaluation outputs alias
+    /// static embedded bytes. `deinit` never frees that static backing.
     checked_artifact: CheckedModuleArtifact,
 
-    pub const InitError = Allocator.Error || error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch, CorruptArtifact, StaleEmbeddedBuiltins, CorruptEmbeddedBuiltins };
+    pub const InitError = check.CheckedArtifact.OpenBakedBuiltinError || error{ StaleEmbeddedBuiltins, CorruptEmbeddedBuiltins };
 
     /// Initialize builtin handles over the baked static ModuleEnv and artifact.
     /// Every thread that reads the builtin artifact's key slots waits on them
