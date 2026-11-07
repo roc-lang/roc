@@ -10880,16 +10880,6 @@ fn reportCheckingErrors(coord: *Coordinator) error{TestUnexpectedResult} {
     return error.TestUnexpectedResult;
 }
 
-/// Whether `a` and `b` hold the same entry bytes, whatever their names.
-fn expectSameInferenceBytes(a: []const InferenceEntry, b: []const InferenceEntry) error{TestExpectedEqual}!void {
-    try std.testing.expectEqual(a.len, b.len);
-    for (a) |entry| {
-        const found = for (b) |other| {
-            if (std.mem.eql(u8, entry.bytes, other.bytes)) break true;
-        } else false;
-        if (!found) return error.TestExpectedEqual;
-    }
-}
 
 fn expectSameInferenceEntries(expected: []const InferenceEntry, actual: []const InferenceEntry) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(expected.len, actual.len);
@@ -10914,10 +10904,11 @@ fn sharedInferenceEntryCount(a: []const InferenceEntry, b: []const InferenceEntr
 test "a module's inference entry does not depend on the command or on modules it does not import" {
     // The checker's recorded output, value-reference resolution and the
     // compile-time root candidates included, is a function of the module
-    // and of its direct imports' checked outputs alone: `check`, `build`,
-    // `test` and a REPL-style explicit root request write byte-identical
-    // entries, and so do two workspaces for every module that does not
-    // import the module they differ in.
+    // and of its direct imports' checked outputs alone: `check`, `build`
+    // and a REPL-style explicit root request write byte-identical entries,
+    // `test` does for every module but the root it checks without its
+    // entrypoint contract, and two workspaces do for every module that does
+    // not import the module they differ in.
     const allocator = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -10992,12 +10983,13 @@ test "a module's inference entry does not depend on the command or on modules it
     try expectSameInferenceEntries(checked, built);
     try expectSameInferenceEntries(checked, explicit);
     // `roc test` checks the root without its entrypoint contract, which is
-    // part of the root's checking context and so of its entry's name; the
-    // root supplies every requirement, so its checked output is the same.
+    // an input of the root's checking context (`Can.Validation`) and so of
+    // its entry: every other module's entry is the same file with the same
+    // bytes.
     const tested = try inferenceEntriesAfter(allocator, cache_dirs[4], first_app, .test_command);
     defer freeInferenceEntries(allocator, tested);
-    try expectSameInferenceBytes(checked, tested);
-    try std.testing.expect(sharedInferenceEntryCount(checked, tested) == checked.len - 1);
+    try std.testing.expectEqual(checked.len, tested.len);
+    try std.testing.expectEqual(checked.len - 1, sharedInferenceEntryCount(checked, tested));
 
     // A workspace whose B differs: B's entry changes, and so may its
     // importer's; every other module's entry is the same.
