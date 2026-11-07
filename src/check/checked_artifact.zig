@@ -24784,26 +24784,173 @@ const NominalFormalReach = struct {
 /// Give every procedure template its sealed scheme-variable slots
 /// (`CheckedProcedureTemplate.sealed_slots`).
 fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView, templates: *CheckedProcedureTemplateTable) Allocator.Error!void {
-    var walk = SealedSchemeVarWalk.init(allocator, checked_types);
+    var walk = SealedSchemeSlots.init(allocator, checked_types);
     defer walk.deinit();
     var slots: std.ArrayList(u32) = .empty;
     errdefer slots.deinit(allocator);
     for (templates.templates.items) |*template| {
         const start: u32 = @intCast(slots.items.len);
         const evidence_params = templates.templateEvidenceParams(template);
-        for (templates.templateSchemeVars(template), 0..) |variable, slot| {
-            if (try walk.sealed(variable, template.checked_fn_root, evidence_params)) try slots.append(allocator, @intCast(slot));
-        }
+        try walk.append(templates.templateSchemeVars(template), template.checked_fn_root, evidence_params, &slots);
         template.sealed_slots = .{ .start = start, .len = @intCast(slots.items.len - start) };
     }
     allocator.free(templates.sealed_slots_pool);
     templates.sealed_slots_pool = try slots.toOwnedSlice(allocator);
 }
 
+/// Compute every sealed scheme-variable slot of one template together. A type
+/// can occur on both a coercible result path and an externally involved path;
+/// the visited key therefore includes the traversal mode.
+const SealedSchemeSlots = struct {
+    allocator: Allocator,
+    types: CheckedTypeStoreView,
+    candidates: collections.DenseMapUnmanaged(CheckedTypeId, bool) = .empty,
+    seen: collections.DenseMapUnmanaged(CheckedTypeId, u8) = .empty,
+    pending: std.ArrayList(Step) = .empty,
+    expanded: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
+
+    const Mode = enum(u3) { argument, ordinary, result };
+    const Step = struct { ty: CheckedTypeId, mode: Mode };
+
+    fn init(allocator: Allocator, checked_types: CheckedTypeStoreView) SealedSchemeSlots {
+        return .{ .allocator = allocator, .types = checked_types };
+    }
+
+    fn deinit(self: *SealedSchemeSlots) void {
+        self.candidates.deinit(self.allocator);
+        self.seen.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
+    }
+
+    fn append(
+        self: *SealedSchemeSlots,
+        variables: []const CheckedTypeId,
+        fn_root: CheckedTypeId,
+        evidence_params: []const static_dispatch.EvidenceParamRecord,
+        slots: *std.ArrayList(u32),
+    ) Allocator.Error!void {
+        self.candidates.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
+        self.pending.clearRetainingCapacity();
+        if (builtin.is_test) self.expanded = 0;
+        for (variables) |variable| {
+            const payload = self.types.payload(variable);
+            const bounded = switch (payload) {
+                .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
+                .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+            };
+            if (bounded) try self.candidates.put(self.allocator, variable, true);
+        }
+        var remaining = self.candidates.count();
+        if (remaining == 0) return;
+
+        var root = fn_root;
+        const signature = while (true) switch (self.types.payload(root)) {
+            .alias => |alias| root = alias.backing,
+            .function => |found| break found,
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return,
+        };
+        // LIFO: inspect arguments, then evidence, before walking the result.
+        // A small external occurrence can disqualify every candidate without
+        // traversing an unrelated, arbitrarily large result graph.
+        try self.push(signature.ret, .result);
+        for (evidence_params) |param| try self.push(param.callable_ty, .ordinary);
+        try self.pushSlice(signature.args, .argument);
+        while (self.pending.pop()) |step| {
+            if (builtin.is_test) self.expanded += 1;
+            // Candidates are flex leaves. An ordinary or argument occurrence
+            // disqualifies every scheme slot naming this exact variable.
+            if (self.candidates.getPtr(step.ty)) |eligible| {
+                if (step.mode != .result and eligible.*) {
+                    eligible.* = false;
+                    remaining -= 1;
+                    if (remaining == 0) return;
+                }
+                continue;
+            }
+            const payload = self.types.payload(step.ty);
+            switch (step.mode) {
+                .argument, .ordinary => {
+                    if (step.mode == .argument) switch (payload) {
+                        .nominal => |nominal| switch (nominal.representation) {
+                            .local_box_payload_capability, .imported_box_payload_capability => return,
+                            .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
+                        },
+                        .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+                    };
+                    try self.pushChildren(payload, step.mode);
+                },
+                .result => switch (payload) {
+                    .alias => |alias| try self.push(alias.backing, .result),
+                    .tag_union => |tag_union| {
+                        for (0..tag_union.tags.len()) |tag_index| try self.pushSlice(tag_union.tags.get(tag_index).args, .result);
+                        try self.push(tag_union.ext, .result);
+                    },
+                    .nominal => |nominal| switch (nominal.representation) {
+                        .builtin => |builtin_nominal| if (builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
+                            try self.push(nominal.args[0], .ordinary);
+                            try self.push(nominal.args[1], .result);
+                        } else {
+                            try self.pushSlice(nominal.args, .ordinary);
+                        },
+                        .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => try self.pushSlice(nominal.args, .ordinary),
+                    },
+                    .record, .tuple, .function => try self.push(step.ty, .ordinary),
+                    .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
+                },
+            }
+        }
+        // The map records facts about variables, not slot numbers. Retain
+        // original order and every slot even when two slots name one variable.
+        for (variables, 0..) |variable, slot| {
+            if (self.candidates.get(variable) orelse false) try slots.append(self.allocator, @intCast(slot));
+        }
+    }
+
+    fn push(self: *SealedSchemeSlots, ty: CheckedTypeId, mode: Mode) Allocator.Error!void {
+        const entry = try self.seen.getOrPut(self.allocator, ty);
+        if (!entry.found_existing) entry.value_ptr.* = 0;
+        const bit = @as(u8, 1) << @backingInt(mode);
+        if (entry.value_ptr.* & bit != 0) return;
+        entry.value_ptr.* |= bit;
+        try self.pending.append(self.allocator, .{ .ty = ty, .mode = mode });
+    }
+
+    fn pushSlice(self: *SealedSchemeSlots, ids: []const CheckedTypeId, mode: Mode) Allocator.Error!void {
+        for (ids) |id| try self.push(id, mode);
+    }
+
+    fn pushChildren(self: *SealedSchemeSlots, payload: CheckedTypePayload, mode: Mode) Allocator.Error!void {
+        switch (payload) {
+            .alias => |alias| {
+                try self.pushSlice(alias.args, mode);
+                try self.push(alias.backing, mode);
+            },
+            .record => |record| {
+                for (0..record.fields.len()) |index| try self.push(record.fields.get(index).ty, mode);
+                try self.push(record.ext, mode);
+            },
+            .tuple => |items| try self.pushSlice(items, mode),
+            .tag_union => |tag_union| {
+                for (0..tag_union.tags.len()) |index| try self.pushSlice(tag_union.tags.get(index).args, mode);
+                try self.push(tag_union.ext, mode);
+            },
+            .function => |inner| {
+                try self.pushSlice(inner.args, mode);
+                try self.push(inner.ret, mode);
+            },
+            .nominal => |nominal| try self.pushSlice(nominal.args, mode),
+            .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+        }
+    }
+};
+
+/// Independent scalar oracle, compiled only for tests. Kept unchanged from
+/// the original per-variable implementation to check the batched producer.
 /// Whether a procedure template's scheme variable is SEALED (design.md
 /// "Sealed Result Rows"), over one module's checked types. The walks share
 /// scratch the walk owns, so a query allocates only to grow it.
-pub const SealedSchemeVarWalk = struct {
+pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
     allocator: Allocator,
     types: CheckedTypeStoreView,
     pending: std.ArrayList(CheckedTypeId) = .empty,
@@ -24976,7 +25123,7 @@ pub const SealedSchemeVarWalk = struct {
             .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
         }
     }
-};
+} else void;
 
 /// Computes every local procedure template's demand vector: for each
 /// quantified variable of its scheme, the most its body asks of the type a
@@ -36824,4 +36971,331 @@ test "root eligibility shared type DAG is expanded once across all roots" {
     try std.testing.expect(!try traversal.visit(.{ .walk = .value_graph, .id = type_ids.fromSynthesized(63) }));
     for (0..64) |index| try std.testing.expect(!try traversal.visit(.{ .walk = .value_graph, .id = type_ids.fromSynthesized(@intCast(index)) }));
     try std.testing.expectEqual(@as(usize, 64), traversal.nodes.items.len);
+}
+
+const SealedSlotsFixture = struct {
+    store: CheckedTypeStore = .{},
+    const allocator = std.testing.allocator;
+
+    fn deinit(self: *SealedSlotsFixture) void {
+        self.store.deinit(allocator);
+    }
+
+    /// Commit explicit synthetic graph rows, allowing forward edges in cycle
+    /// tests without asking structural interning to traverse unfinished rows.
+    fn add(self: *SealedSlotsFixture, payload: CheckedTypePayloadBuild) Allocator.Error!CheckedTypeId {
+        var owned = payload;
+        const stored = self.store.commitPayload(allocator, owned) catch |err| {
+            deinitCheckedTypePayloadBuild(allocator, &owned);
+            return err;
+        };
+        const id = type_ids.fromSynthesized(self.store.payloads.items.len);
+        try self.store.payloads.append(allocator, stored);
+        return id;
+    }
+
+    fn variable(self: *SealedSlotsFixture) Allocator.Error!CheckedTypeId {
+        return self.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union } });
+    }
+
+    fn function(self: *SealedSlotsFixture, args: []const CheckedTypeId, ret: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        return self.add(.{ .function = .{ .kind = .pure, .args = try allocator.dupe(CheckedTypeId, args), .ret = ret } });
+    }
+
+    fn tuple(self: *SealedSlotsFixture, items: []const CheckedTypeId) Allocator.Error!CheckedTypeId {
+        return self.add(.{ .tuple = try allocator.dupe(CheckedTypeId, items) });
+    }
+
+    fn record(self: *SealedSlotsFixture, value: CheckedTypeId, ext: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const fields = try allocator.alloc(CheckedRecordField, 1);
+        fields[0] = .{ .name = @fromBackingInt(0), .ty = value };
+        return self.add(.{ .record = .{ .fields = fields, .ext = ext } });
+    }
+
+    fn tag(self: *SealedSlotsFixture, args: []const CheckedTypeId, ext: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const tags = try allocator.alloc(CheckedTag, 1);
+        const copied = allocator.dupe(CheckedTypeId, args) catch |err| {
+            allocator.free(tags);
+            return err;
+        };
+        tags[0] = .{ .name = @fromBackingInt(0), .args = copied };
+        return self.add(.{ .tag_union = .{ .tags = tags, .ext = ext } });
+    }
+
+    fn alias(self: *SealedSlotsFixture, args: []const CheckedTypeId, backing: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        return self.add(.{ .alias = .{
+            .name = @fromBackingInt(0),
+            .origin_module = @fromBackingInt(0),
+            .owner_module = testCheckedModuleKey(1).digest(),
+            .backing = backing,
+            .args = try allocator.dupe(CheckedTypeId, args),
+        } });
+    }
+
+    fn nominal(self: *SealedSlotsFixture, representation: CheckedNominalRepresentationRef, args: []const CheckedTypeId) Allocator.Error!CheckedTypeId {
+        return self.add(.{ .nominal = .{
+            .name = @fromBackingInt(0),
+            .origin_module = @fromBackingInt(0),
+            .owner_module = testCheckedModuleKey(1).digest(),
+            .source_decl = 0,
+            .builtin = if (representation == .builtin) representation.builtin else null,
+            .is_opaque = false,
+            .representation = representation,
+            .args = try allocator.dupe(CheckedTypeId, args),
+        } });
+    }
+
+    fn evidence(callable: CheckedTypeId, dispatcher: CheckedTypeId) static_dispatch.EvidenceParamRecord {
+        return .{ .method = @fromBackingInt(0), .dispatcher_ty = dispatcher, .callable_ty = callable, .slot = null };
+    }
+
+    fn expectSlots(self: *SealedSlotsFixture, variables: []const CheckedTypeId, root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord, expected: []const u32) !void {
+        var scalar = SealedSchemeVarWalk.init(allocator, self.store.view());
+        defer scalar.deinit();
+        var scalar_slots: std.ArrayList(u32) = .empty;
+        defer scalar_slots.deinit(allocator);
+        for (variables, 0..) |variable_id, slot| {
+            if (try scalar.sealed(variable_id, root, evidence_params)) try scalar_slots.append(allocator, @intCast(slot));
+        }
+        try std.testing.expectEqualSlices(u32, expected, scalar_slots.items);
+        var batch = SealedSchemeSlots.init(allocator, self.store.view());
+        defer batch.deinit();
+        var actual: std.ArrayList(u32) = .empty;
+        defer actual.deinit(allocator);
+        // Publication appends to a shared pool. Preserve the previous row.
+        try actual.append(allocator, 99);
+        try batch.append(variables, root, evidence_params, &actual);
+        try std.testing.expectEqual(@as(u32, 99), actual.items[0]);
+        try std.testing.expectEqualSlices(u32, scalar_slots.items, actual.items[1..]);
+    }
+};
+
+test "sealed slot batching preserves bounded eligibility and duplicate slot order" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const unit = try f.add(.empty_record);
+    const a = try f.variable();
+    const b = try f.variable();
+    const rigid = try f.add(.{ .rigid = .{ .bounded_row_ext = true, .row_default = .empty_tag_union } });
+    const unbounded = try f.add(.{ .flex = .{ .row_default = .empty_tag_union } });
+    const record_row = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_record } });
+    const numeric = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .numeric_default_phase = .mono_specialization } });
+    const callable = try f.function(&.{unit}, unit);
+    const constraints = [_]CheckedStaticDispatchConstraint{.{ .fn_name = @fromBackingInt(0), .fn_ty = callable, .origin = .method_call }};
+    const constrained = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
+    const discharged = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .row_default_discharges_constraints = true, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
+    const variables = [_]CheckedTypeId{ b, a, b, rigid, unbounded, record_row, numeric, constrained, discharged };
+    try f.expectSlots(&variables, callable, &.{}, &.{ 0, 1, 2, 8 });
+    try f.expectSlots(&variables, try f.function(&.{a}, unit), &.{}, &.{ 0, 2, 8 });
+    try f.expectSlots(&variables, unit, &.{}, &.{});
+}
+
+test "sealed slot batching separates full and result reach for aliases Try and containers" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const unit = try f.add(.empty_record);
+    const empty = try f.add(.empty_tag_union);
+    const a = try f.variable();
+    const b = try f.variable();
+    const c = try f.variable();
+    const variables = [_]CheckedTypeId{ a, b, c };
+    const row = try f.tag(&.{b}, a);
+    try f.expectSlots(&variables, try f.function(&.{unit}, row), &.{}, &.{ 0, 1, 2 });
+    // Result aliases expose only backing. Full paths expose args AND backing.
+    const alias = try f.alias(&.{c}, row);
+    try f.expectSlots(&variables, try f.function(&.{unit}, alias), &.{}, &.{ 0, 1, 2 });
+    try f.expectSlots(&variables, try f.function(&.{alias}, alias), &.{}, &.{});
+    // A candidate need not occur positively in the result. Alias arguments
+    // are ignored there even when the backing never mentions the candidate.
+    const only_argument = try f.alias(&.{a}, unit);
+    try f.expectSlots(&variables, try f.function(&.{unit}, only_argument), &.{}, &.{ 0, 1, 2 });
+    try f.expectSlots(&variables, try f.function(&.{only_argument}, unit), &.{}, &.{ 1, 2 });
+    const alias_evidence = [_]static_dispatch.EvidenceParamRecord{SealedSlotsFixture.evidence(only_argument, unit)};
+    try f.expectSlots(&variables, try f.function(&.{unit}, unit), &alias_evidence, &.{ 1, 2 });
+    const try_result = try f.nominal(.{ .builtin = .try_ }, &.{ a, b });
+    try f.expectSlots(&variables, try f.function(&.{unit}, try_result), &.{}, &.{ 1, 2 });
+    const success_row = try f.tag(&.{}, a);
+    const error_row = try f.tag(&.{}, b);
+    try f.expectSlots(&variables, try f.function(&.{unit}, try f.nominal(.{ .builtin = .try_ }, &.{ success_row, error_row })), &.{}, &.{ 1, 2 });
+    // The Try exception applies only at exactly two arguments.
+    for ([_][]const CheckedTypeId{ &.{a}, &.{ a, b, c } }, [_][]const u32{ &.{ 1, 2 }, &.{} }) |args, expected| {
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.nominal(.{ .builtin = .try_ }, args)), &.{}, expected);
+    }
+    const containers = [_]CheckedTypeId{
+        try f.record(a, unit),
+        try f.tuple(&.{a}),
+        try f.function(&.{a}, unit),
+        try f.nominal(.{ .builtin = .list }, &.{a}),
+        try f.nominal(.{ .builtin = .box }, &.{a}),
+        try f.nominal(.opaque_without_backing, &.{a}),
+    };
+    for (containers) |container| {
+        try f.expectSlots(&variables, try f.function(&.{unit}, container), &.{}, &.{ 1, 2 });
+        // One row can be reached both directly and beneath a forbidden container.
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.tag(&.{ container, a }, empty)), &.{}, &.{ 1, 2 });
+    }
+    const record_of_row = try f.record(row, unit);
+    for ([_][]const CheckedTypeId{ &.{ row, record_of_row }, &.{ record_of_row, row } }) |paths| {
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.tag(paths, empty)), &.{}, &.{2});
+    }
+    const callback = try f.function(&.{a}, unit);
+    try f.expectSlots(&variables, try f.function(&.{callback}, row), &.{}, &.{ 1, 2 });
+    const evidence_params = [_]static_dispatch.EvidenceParamRecord{SealedSlotsFixture.evidence(try f.function(&.{unit}, b), c)};
+    // Only callable_ty is searched; dispatcher_ty alone does not disqualify c.
+    try f.expectSlots(&variables, try f.function(&.{unit}, row), &evidence_params, &.{ 0, 2 });
+    const aliased_function = try f.alias(&.{a}, try f.function(&.{unit}, row));
+    try f.expectSlots(&variables, aliased_function, &.{}, &.{ 0, 1, 2 });
+}
+
+test "sealed slot batching restricts hidden callable veto to arguments" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const unit = try f.add(.empty_record);
+    const a = try f.variable();
+    const b = try f.variable();
+    const representations = [_]CheckedNominalRepresentationRef{
+        .{ .local_box_payload_capability = .{ .capability = @fromBackingInt(0) } },
+        .{ .imported_box_payload_capability = .{ .artifact = testCheckedModuleKey(2).digest(), .capability = @fromBackingInt(0) } },
+    };
+    for (representations) |representation| {
+        const hidden = try f.nominal(representation, &.{});
+        const evidence_params = [_]static_dispatch.EvidenceParamRecord{SealedSlotsFixture.evidence(hidden, unit)};
+        try f.expectSlots(&.{ a, b }, try f.function(&.{unit}, hidden), &evidence_params, &.{ 0, 1 });
+        // Ordinary/result visits must not suppress the argument-mode veto.
+        try f.expectSlots(&.{ a, b }, try f.function(&.{hidden}, hidden), &evidence_params, &.{});
+        const nested = try f.record(hidden, unit);
+        try f.expectSlots(&.{ a, b }, try f.function(&.{nested}, a), &.{}, &.{});
+        const mentions_a = try f.nominal(representation, &.{a});
+        try f.expectSlots(&.{ a, b }, try f.function(&.{unit}, mentions_a), &.{}, &.{1});
+        const vetoed = try f.function(&.{ a, hidden }, b);
+        const eligible = try f.function(&.{unit}, b);
+        var batch = SealedSchemeSlots.init(SealedSlotsFixture.allocator, f.store.view());
+        defer batch.deinit();
+        var slots: std.ArrayList(u32) = .empty;
+        defer slots.deinit(SealedSlotsFixture.allocator);
+        try batch.append(&.{ a, b }, vetoed, &.{}, &slots);
+        try std.testing.expectEqual(@as(usize, 0), slots.items.len);
+        // A veto can leave pending argument work. The next template must not
+        // inherit that work, candidate decisions, or visited modes.
+        try batch.append(&.{ a, b }, eligible, &.{}, &slots);
+        try std.testing.expectEqualSlices(u32, &.{ 0, 1 }, slots.items);
+    }
+}
+
+test "sealed slot batching handles recursive graphs in both reach modes" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const a = try f.variable();
+    const b = try f.variable();
+    const c = try f.variable();
+    const left = type_ids.fromSynthesized(f.store.payloads.items.len);
+    const right = type_ids.fromSynthesized(f.store.payloads.items.len + 1);
+    try std.testing.expectEqual(left, try f.tag(&.{right}, a));
+    try std.testing.expectEqual(right, try f.tag(&.{left}, b));
+    try f.expectSlots(&.{ a, b, c }, try f.function(&.{}, left), &.{}, &.{ 0, 1, 2 });
+    try f.expectSlots(&.{ a, b, c }, try f.function(&.{right}, left), &.{}, &.{2});
+    const evidence_params = [_]static_dispatch.EvidenceParamRecord{SealedSlotsFixture.evidence(right, c)};
+    try f.expectSlots(&.{ a, b, c }, try f.function(&.{}, left), &evidence_params, &.{2});
+}
+
+test "sealed slot batching visits shared type graphs independently of candidate count" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const allocator = SealedSlotsFixture.allocator;
+    const unit = try f.add(.empty_record);
+    const empty = try f.add(.empty_tag_union);
+    var variables: [32]CheckedTypeId = undefined;
+    for (&variables) |*variable| variable.* = try f.variable();
+    var graph = unit;
+    for (0..64) |_| graph = try f.tuple(&.{ graph, graph });
+    const result = try f.tag(&variables, empty);
+    const root = try f.function(&.{ graph, graph }, result);
+    const blocked = try f.function(&variables, result);
+    var batch = SealedSchemeSlots.init(allocator, f.store.view());
+    defer batch.deinit();
+    var slots: std.ArrayList(u32) = .empty;
+    defer slots.deinit(allocator);
+    try batch.append(variables[0..1], root, &.{}, &slots);
+    try std.testing.expectEqualSlices(u32, &.{0}, slots.items);
+    const one_candidate_visits = batch.expanded;
+    slots.clearRetainingCapacity();
+    try batch.append(&variables, root, &.{}, &slots);
+    try std.testing.expectEqual(@as(usize, 32), slots.items.len);
+    for (slots.items, 0..) |slot, index| try std.testing.expectEqual(@as(u32, @intCast(index)), slot);
+    try std.testing.expectEqual(one_candidate_visits, batch.expanded);
+    // 65 argument nodes and 34 result nodes, despite duplicate edges/roots.
+    try std.testing.expectEqual(@as(usize, 99), batch.expanded);
+    try f.expectSlots(&variables, root, &.{}, slots.items);
+    slots.clearRetainingCapacity();
+    try batch.append(&variables, blocked, &.{}, &slots);
+    try std.testing.expectEqual(@as(usize, 0), slots.items.len);
+    try batch.append(&variables, root, &.{}, &slots);
+    try std.testing.expectEqual(@as(usize, 32), slots.items.len);
+    slots.clearRetainingCapacity();
+    try batch.append(&.{unit}, root, &.{}, &slots);
+    try std.testing.expectEqual(@as(usize, 0), batch.expanded);
+    try std.testing.expectEqual(@as(usize, 0), slots.items.len);
+}
+
+test "sealed slot batching stops at disqualifying arguments before unrelated results" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const allocator = SealedSlotsFixture.allocator;
+    const unit = try f.add(.empty_record);
+    const variable = try f.variable();
+    const callback = try f.function(&.{variable}, unit);
+    for ([_]usize{ 16, 128, 1024 }) |depth| {
+        var result = unit;
+        for (0..depth) |_| result = try f.tuple(&.{ result, result });
+        const root = try f.function(&.{callback}, result);
+        var batch = SealedSchemeSlots.init(allocator, f.store.view());
+        defer batch.deinit();
+        var slots: std.ArrayList(u32) = .empty;
+        defer slots.deinit(allocator);
+        // Two output slots still name just one distinct candidate. The one
+        // callback occurrence disqualifies both before result traversal starts.
+        try batch.append(&.{ variable, variable }, root, &.{}, &slots);
+        try std.testing.expectEqual(@as(usize, 0), slots.items.len);
+        try std.testing.expectEqual(@as(usize, 3), batch.expanded);
+        try f.expectSlots(&.{ variable, variable }, root, &.{}, &.{});
+    }
+}
+
+test "sealed slot batching releases scratch and partial output under allocation failure" {
+    // Build the immutable graph before introducing allocation failures. The
+    // sweep tests only the batch and its output pool, not fixture construction.
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const unit = try f.add(.empty_record);
+    const empty = try f.add(.empty_tag_union);
+    var variables: [24]CheckedTypeId = undefined;
+    for (&variables) |*variable| variable.* = try f.variable();
+    var graph = unit;
+    for (0..64) |_| graph = try f.tuple(&.{ graph, graph });
+    const result = try f.tag(&variables, empty);
+    const root = try f.function(&.{graph}, result);
+    const blocked = try f.function(&variables, result);
+    const hidden = try f.nominal(.{ .local_box_payload_capability = .{ .capability = @fromBackingInt(0) } }, &.{});
+    const vetoed = try f.function(&.{ variables[0], hidden }, result);
+    const Attempt = struct {
+        fn run(failing: Allocator, view: CheckedTypeStoreView, vars: []const CheckedTypeId, eligible_root: CheckedTypeId, blocked_root: CheckedTypeId, vetoed_root: CheckedTypeId) !void {
+            var batch = SealedSchemeSlots.init(failing, view);
+            defer batch.deinit();
+            var slots: std.ArrayList(u32) = .empty;
+            defer slots.deinit(failing);
+            try slots.append(failing, 99);
+            try batch.append(vars, blocked_root, &.{}, &slots);
+            try batch.append(vars, vetoed_root, &.{}, &slots);
+            try std.testing.expectEqualSlices(u32, &.{99}, slots.items);
+            // Output growth can fail after several slot indices were appended.
+            try batch.append(vars, eligible_root, &.{}, &slots);
+            try std.testing.expectEqual(vars.len + 1, slots.items.len);
+            try std.testing.expectEqual(@as(u32, 99), slots.items[0]);
+            for (slots.items[1..], 0..) |slot, index| try std.testing.expectEqual(@as(u32, @intCast(index)), slot);
+        }
+    };
+    // As in the publication OOM regression, disallow allocator-dependent
+    // in-place growth so the sweep has deterministic allocation points.
+    var no_resize = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(no_resize.allocator(), Attempt.run, .{ f.store.view(), variables[0..], root, blocked, vetoed });
 }

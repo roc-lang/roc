@@ -13807,7 +13807,7 @@ that is bounded, whose row default is the empty row, and whose constraints
 closing the row discharges (`variableSealsToRowDefault`), and that nothing
 the worker exchanges with code outside it involves. The checked artifact
 records each procedure template's sealed slots when it is built
-(`CheckedProcedureTemplate.sealed_slots`, by `SealedSchemeVarWalk` over the
+(`CheckedProcedureTemplate.sealed_slots`, by `SealedSchemeSlots` over the
 template's own module's checked types), and every Boxy lowering reads them
 there. A sealed variable is bound to the empty row when its worker is lowered and takes no hidden
 descriptor, so `parse` is a static worker returning
@@ -13827,16 +13827,34 @@ result's coercion reach (the direct result row, a tag payload row under it,
 or the error row of a `Try` result): in an argument, including a callback
 parameter's row that polarity also opens, or under a record, list, box,
 function, or other named type's argument in the result
-(`SealedSchemeVarWalk.occursOutsideResultReach`). It also keeps its descriptor when a
+(the result-reach traversal of `SealedSchemeSlots`). It also keeps its descriptor when a
 callable the worker receives from its caller could involve it, since such a
 callable carries the caller's instantiation: a `where` requirement whose
 interface mentions the variable (the dictionary's methods), or any
 parameter holding a nominal over a callable payload, whose callable's
 interface its methods hide from the signature
-(`SealedSchemeVarWalk.argumentsHoldCallablePayload`). A bounded flex that unification
+(the argument traversal of `SealedSchemeSlots`). A bounded flex that unification
 tied to a rigid or a closed row is not a flex, so genuine row polymorphism
 (`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
 hidden descriptors.
+
+Publication computes all of a template's sealed slots together. It first
+collects the bounded candidates, then traverses its current immutable checked
+types with three explicit modes: arguments, ordinary reach, and result-coercion
+reach. Arguments and evidence callable types expose every type edge; result
+reach follows only the coercion paths above. Only argument reach can veto all
+candidates because of a nominal with a callable payload. A type reached in one
+mode remains visitable in another: sharing or recursion must not hide an
+externally involved occurrence. Each `(type, mode)` is expanded at most once
+per template. Scratch is cleared between templates, including after a veto.
+Argument reach runs before evidence and result reach. Once every distinct
+candidate has a disqualifying occurrence, traversal stops without visiting
+unrelated types. Duplicate scheme slots do not increase the candidate count.
+The output follows the original scheme-variable slot order, retaining every
+slot when several slots name one variable. A candidate need not occur in the
+result to qualify; it must have no disqualifying occurrence. The computation
+reads the single solved environment and current checked metadata, and publishes
+the same `sealed_slots` column without changing cache identities or formats.
 
 Sealing removes the one dependency a worker's representation had on its
 callers, so widening becomes a CONVERSION at the instantiation that widens:
