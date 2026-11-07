@@ -14284,6 +14284,18 @@ This is the invariant the per-module Boxy cache (Caching Under `.boxy`) rests
 on, and it is the reason modules can be lowered independently and in
 parallel.
 
+Unit lowering finishes the closure of those module-definition workers and
+publishes their export inventory in `seedUnitWorkers`, before lowering command
+roots. Test and REPL roots, platform entrypoint wrappers, and requested static
+initializers keep their own explicit entrypoint/data references. Workers created
+only for those roots are local to the unit; being a lambda or method-entry worker
+does not make a test helper part of the module's external interface. A root can
+reuse a worker already published by the definition closure without changing its
+export status. This boundary uses the completed lowering worklist, not another
+body traversal or a guess from generated symbols. Instrumentation may change a
+public worker's calling contract, which importers must still consume and hash;
+private test workers must not change that interface fingerprint.
+
 #### Caching Under `.boxy`
 
 With `--specialize=no`, every command writes what `roc check` writes, and

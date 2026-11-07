@@ -2752,14 +2752,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
     }
 
-    if (program.moduleUnit() != null and !input.compile_time) {
-        for (program.workers.items) |worker| {
-            if (worker.imported or !Program.exportableKind(worker.key)) continue;
-            program.result.store.getProcSpecPtr(worker.proc).exported = true;
-            try program.result.exported_procs.append(allocator, worker.proc);
-        }
-    }
-
     if (input.proc_debug_names) {
         for (program.workers.items) |worker| {
             // A template's worker carries its procedure's source name.
@@ -2794,7 +2786,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 /// each template and its dictionary entry (a template is a function value
 /// wherever another module names it, and a method wherever one dispatches
 /// to it), and each `??` default expression (design.md "Per-Module
-/// Output").
+/// Output"). Finish this closure and publish its exports before lowering
+/// command roots, whose private helpers are not an interface for importers.
 fn seedUnitWorkers(program: *Program) Allocator.Error!void {
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;
@@ -2821,6 +2814,11 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         }
     }
     try program.drain();
+    for (program.workers.items) |worker| {
+        if (worker.imported or !Program.exportableKind(worker.key)) continue;
+        program.result.store.getProcSpecPtr(worker.proc).exported = true;
+        try program.result.exported_procs.append(program.allocator, worker.proc);
+    }
 }
 
 /// Whether checking rejected `template`'s signature: it has no type to lower

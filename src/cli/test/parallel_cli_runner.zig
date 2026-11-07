@@ -674,6 +674,7 @@ const CustomCase = enum {
     issue_11678_dev_cache_boxy_tables,
     boxy_caches_nothing_after_checking,
     boxy_tests_reuse_primed_builtins,
+    boxy_test_private_exports,
     boxy_build_and_run_cache_what_check_caches,
     boxy_compile_time_objects,
     boxy_module_object_cache,
@@ -3688,6 +3689,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: dev builds whose code reaches the Boxy runtime are identical whatever the dev cache holds, including another app's packs", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_dev_cache_boxy_tables } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy tests reuse the primed builtins object", .skip = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) .never else .{ .always = "native unit-image tests require Linux x86_64" }, .body = .{ .custom = .boxy_tests_reuse_primed_builtins } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy test-private workers preserve importer cache identity", .skip = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64) .never else .{ .always = "native unit-image tests require Linux x86_64" }, .body = .{ .custom = .boxy_test_private_exports } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no caches nothing after checking", .timeout_ms = 600_000, .body = .{ .custom = .boxy_caches_nothing_after_checking } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no compile-time evaluation links cached module objects", .timeout_ms = 600_000, .body = .{ .custom = .boxy_compile_time_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build and run leave the cache check leaves", .timeout_ms = 600_000, .body = .{ .custom = .boxy_build_and_run_cache_what_check_caches } },
@@ -6236,6 +6238,7 @@ fn runCustomCase(
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_dev_cache_boxy_tables => customIssue11678DevCacheBoxyTables(io, allocator, &env, &timer, timeout_ms),
         .boxy_tests_reuse_primed_builtins => customBoxyTestsReusePrimedBuiltins(io, allocator, &env, &timer, timeout_ms),
+        .boxy_test_private_exports => customBoxyTestPrivateExports(io, allocator, &env, &timer, timeout_ms),
         .boxy_caches_nothing_after_checking => customBoxyCachesNothingAfterChecking(io, allocator, &env, &timer, timeout_ms),
         .boxy_build_and_run_cache_what_check_caches => customBoxyBuildAndRunCacheWhatCheckCaches(io, allocator, &env, &timer, timeout_ms),
         .boxy_compile_time_objects => customBoxyCompileTimeObjects(io, allocator, &env, &timer, timeout_ms),
@@ -10462,6 +10465,45 @@ fn customBoxyTestOutcomes(io: std.Io, allocator: Allocator, env: *const CaseEnv,
     };
     for (cases) |case| {
         if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--specialize=no" }, .roc_file = case.roc_file, .exit = case.exit, .contains = case.contains })) |failure| return failure;
+    }
+    return null;
+}
+
+/// Private test closures must not change a dependency's public interface and
+/// invalidate an expect-free importer's ordinary object prepared during CTFE.
+fn customBoxyTestPrivateExports(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const cache_root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "test_private_exports_cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "cache path allocation failed: {}", .{err});
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "cache environment allocation failed: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        isolated.env_map.put(key, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "cache environment setup failed: {}", .{err});
+    }
+    for (0..2) |phase| {
+        if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = &.{ "test", "--opt=dev", "--specialize=no", "--jobs=1" },
+            .roc_file = "test/cli/boxy_test_private_exports/Main.roc",
+            .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }},
+        })) |failure| return failure;
+        const entries = cacheInventory(io, allocator, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "cache inventory failed: {}", .{err});
+        var objects: usize = 0;
+        for (entries) |entry| {
+            if (entry.family == .boxy_object) objects += 1;
+        }
+        // Builtin, ordinary/instrumented Library, Relay, and Main. Main's
+        // CTFE seed demands Relay's ordinary code before tests run. Library's
+        // test-private nested closures must not invalidate that code, while
+        // its public escaping callback and inline expect still work.
+        if (objects != 5) return customFailure(allocator, timer, "phase {d} created {d} native objects; expected 5 with Relay reused across CTFE and tests", .{ phase, objects });
     }
     return null;
 }
