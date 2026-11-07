@@ -4081,7 +4081,7 @@ const RootCompletionState = struct {
             .imported, .hosted => return .{ .complete = true },
             .platform_required => |required| {
                 if (!artifactMatches(required.artifact, self.module.key)) return .{ .complete = true };
-                const required_binding = self.module.platform_required_bindings.lookupByBindingId(@backingInt(required.procedure_binding)) orelse
+                const required_binding = self.module.platformRequiredBindings().lookupByBindingId(@backingInt(required.procedure_binding)) orelse
                     finalizationInvariant("platform-required procedure dependency referenced a missing binding");
                 switch (required_binding.value_use) {
                     .procedure_value => |procedure_use| binding = procedure_use.procedure.binding,

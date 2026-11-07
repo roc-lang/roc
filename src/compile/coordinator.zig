@@ -1262,7 +1262,7 @@ const PreparedModuleGraph = struct {
 
     fn edgeCount(self: PreparedModuleGraph, node: usize) usize {
         const artifact = self.entries[node].mod.checkedArtifact().?;
-        return artifact.direct_import_module_keys.len + artifact.platform_required_bindings.bindings.len;
+        return artifact.direct_import_module_keys.len + artifact.platformRequiredBindings().bindings.len;
     }
 
     fn edge(self: PreparedModuleGraph, node: usize, edge_index: usize) ?usize {
@@ -1271,7 +1271,7 @@ const PreparedModuleGraph = struct {
         const key = if (edge_index < imports.len)
             imports[edge_index].bytes
         else
-            artifact.platform_required_bindings.bindings[edge_index - imports.len].app_value.artifact.bytes;
+            artifact.platformRequiredBindings().bindings[edge_index - imports.len].app_value.artifact.bytes;
         return self.by_key.get(key);
     }
 };
@@ -2951,7 +2951,7 @@ pub const Coordinator = struct {
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         key: check.CheckedArtifact.ModuleId,
     ) bool {
-        for (root_artifact.platform_required_bindings.bindings) |binding| {
+        for (root_artifact.platformRequiredBindings().bindings) |binding| {
             if (std.mem.eql(u8, &binding.app_value.artifact.bytes, &key.bytes)) return true;
         }
         return false;
@@ -3288,7 +3288,7 @@ pub const Coordinator = struct {
         var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
         errdefer views.deinit(allocator);
 
-        for (root_artifact.platform_required_bindings.bindings) |binding| {
+        for (root_artifact.platformRequiredBindings().bindings) |binding| {
             const artifact = self.checkedArtifactByKey(binding.app_value.artifact) orelse base.invariant("compile.coordinator.collectRelationArtifactViews missing app artifact for platform relation", .{});
             try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
         }
@@ -9331,7 +9331,7 @@ test "platform requirement relation specializes identity reached through app ali
         if (root.kind == .hoisted_constant) platform_hoisted_constants += 1;
     }
     try std.testing.expect(platform_hoisted_constants > 0);
-    const relations = platform_artifact.platform_requirement_relations.relations;
+    const relations = platform_artifact.platformRequirementRelations().relations;
     try std.testing.expectEqual(@as(usize, 1), relations.len);
 
     const relation = relations[0];
@@ -9525,7 +9525,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     try std.testing.expectEqual(@as(u32, 1), coord.platform_root_publish_count);
 
     const platform_artifact = (try coord.executableRootCheckedArtifact());
-    const relations = platform_artifact.platform_requirement_relations.relations;
+    const relations = platform_artifact.platformRequirementRelations().relations;
     try std.testing.expectEqual(@as(usize, 1), relations.len);
     try std.testing.expect(platform_artifact.typeStore().payload(relations[0].requested_source_ty_payload) != .pending);
 }

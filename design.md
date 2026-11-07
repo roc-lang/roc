@@ -5716,7 +5716,9 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   app and every module it resolves against before it creates any type. A
   pairing's own slots (`PlatformPairing`) are its requirement relations and
   required bindings (`relationTables`, which project each requirement's
-  solved app type into the platform's store under its creation lock), its
+  solved app type into the platform's store under its creation lock; the
+  pairing's creation demands it and the paired module reads its relations
+  and bindings from it, holding no copy), its
   resolved value references (`valueRefs`: each requirement lookup classified
   by its binding, the lookups of requirements the app rejected retired, and
   each call of a bound procedure requirement given its direct target; it

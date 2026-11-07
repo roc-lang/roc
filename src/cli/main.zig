@@ -1759,7 +1759,7 @@ fn updatePlatformAppRelationIdentity(
     // identity hashed alongside this.
     updateHashBytes(hasher, "platform-app-relations-v2");
 
-    const relations = root_artifact.platform_requirement_relations.relations;
+    const relations = root_artifact.platformRequirementRelations().relations;
     updateHashU32(hasher, @intCast(relations.len));
     for (relations) |relation| {
         updateHashU32(hasher, @backingInt(relation.declaration));
@@ -1767,7 +1767,7 @@ fn updatePlatformAppRelationIdentity(
         updateHashU32(hasher, @backingInt(relation.value_kind));
     }
 
-    const bindings = root_artifact.platform_required_bindings.bindings;
+    const bindings = root_artifact.platformRequiredBindings().bindings;
     updateHashU32(hasher, @intCast(bindings.len));
     for (bindings) |binding| {
         updateHashU32(hasher, @backingInt(binding.declaration));
@@ -1776,7 +1776,7 @@ fn updatePlatformAppRelationIdentity(
         updateHashU32(hasher, @backingInt(std.meta.activeTag(binding.value_use)));
     }
 
-    const checked_error_requires = root_artifact.platform_required_bindings.checked_error_requires;
+    const checked_error_requires = root_artifact.platformRequiredBindings().checked_error_requires;
     updateHashU32(hasher, @intCast(checked_error_requires.len));
     for (checked_error_requires) |requires_idx| updateHashU32(hasher, requires_idx);
 }

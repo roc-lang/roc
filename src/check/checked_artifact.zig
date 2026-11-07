@@ -24457,8 +24457,6 @@ pub const PlatformPairing = struct {
                 "checking_context_identity",
                 // Computed by the pairing on demand.
                 "resolved_value_refs",
-                "platform_requirement_relations",
-                "platform_required_bindings",
                 // Runtime ownership, not checked data.
                 "serialized_backing",
                 "serialized_backing_is_static",
@@ -24563,9 +24561,7 @@ pub fn pairCheckedPlatform(
     result.checking_context_identity.platform_app_relation = relation.key;
     // The pairing's bodies read the classified references and its views
     // the required bindings, so they are demanded here.
-    const relation_tables = try pairing.relationTables();
-    result.platform_requirement_relations = relation_tables.relations;
-    result.platform_required_bindings = relation_tables.bindings;
+    _ = try pairing.relationTables();
     result.resolved_value_refs = (try pairing.valueRefs()).*;
     result.body_analyses = try BodyAnalyses.create(thread_safe, io, platform.moduleEnvConst(), platform.checked_procedure_templates.promoted);
     errdefer result.body_analyses.?.destroy();
@@ -31332,8 +31328,6 @@ pub const CheckedModuleArtifact = struct {
     entry_wrappers: EntryWrapperTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
-    platform_requirement_relations: PlatformRequirementRelationTable = .{},
-    platform_required_bindings: PlatformRequiredBindingTable,
     compile_time_roots: CompileTimeRootTable,
     top_level_values: TopLevelValueTable,
     hoisted_constants: HoistedConstTable,
@@ -31405,6 +31399,20 @@ pub const CheckedModuleArtifact = struct {
     pub fn nameStore(self: *const CheckedModuleArtifact) *const canonical.CanonicalNameStore {
         if (self.pairing) |pairing| return &pairing.platform.canonical_names;
         return &self.canonical_names;
+    }
+
+    /// The requirement relations of a platform/app pairing, its pairing's
+    /// slot (empty for any other module).
+    pub fn platformRequirementRelations(self: *const CheckedModuleArtifact) *const PlatformRequirementRelationTable {
+        const pairing = self.pairing orelse return &empty_platform_requirement_relations;
+        return &(pairing.relation_tables.peek() orelse checkedArtifactInvariant("a pairing's relation tables were read before its creation computed them", .{})).relations;
+    }
+
+    /// The platform-required bindings of a platform/app pairing, its
+    /// pairing's slot (empty for any other module).
+    pub fn platformRequiredBindings(self: *const CheckedModuleArtifact) *const PlatformRequiredBindingTable {
+        const pairing = self.pairing orelse return &empty_platform_required_bindings;
+        return &(pairing.relation_tables.peek() orelse checkedArtifactInvariant("a pairing's relation tables were read before its creation computed them", .{})).bindings;
     }
 
     /// The module's platform requirement declarations.
@@ -31822,8 +31830,6 @@ pub const CheckedModuleArtifact = struct {
                 "serialized_backing", // Runtime ownership for relocated cache/static bytes, not checked data.
                 "pairing_arena", // Runtime ownership of a paired artifact's own columns.
                 "pairing", // The platform/app pairing a paired artifact reads through; process-local.
-                "platform_requirement_relations", // Computed by a pairing; empty in every published module.
-                "platform_required_bindings", // Computed by a pairing; empty in every published module.
                 "reopened_arena", // Runtime ownership for a reopened evaluation output, not checked data.
                 "serialized_backing_is_static", // Runtime ownership mode for `serialized_backing`.
                 "body_analyses", // Body facts computed on first demand; never serialized.
@@ -31938,8 +31944,6 @@ pub const CheckedModuleArtifact = struct {
             artifact.serialized_backing_is_static = backing_is_static;
             artifact.pairing_arena = null;
             artifact.pairing = null;
-            artifact.platform_requirement_relations = .{};
-            artifact.platform_required_bindings = .{};
             artifact.reopened_arena = null;
             artifact.body_analyses = null;
             artifact.module_analyses = null;
@@ -32437,7 +32441,7 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        for (self.platform_requirement_relations.relations, 0..) |relation, i| {
+        for (self.platformRequirementRelations().relations, 0..) |relation, i| {
             std.debug.assert(@backingInt(relation.id) == i);
             std.debug.assert(relation.module_idx == self.module_identity.module_idx);
             const declaration = self.platformRequiredDeclarations().lookupByDeclarationId(relation.declaration) orelse {
@@ -32458,7 +32462,7 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        for (self.platform_required_bindings.bindings, 0..) |binding, i| {
+        for (self.platformRequiredBindings().bindings, 0..) |binding, i| {
             std.debug.assert(@backingInt(binding.id) == i);
             std.debug.assert(binding.module_idx == self.module_identity.module_idx);
             _ = self.platformRequiredDeclarations().lookupByRequiredIndex(binding.requires_idx) orelse {
@@ -32467,7 +32471,7 @@ pub const CheckedModuleArtifact = struct {
                     .{i},
                 );
             };
-            const relation = self.platform_requirement_relations.lookupByRelationId(binding.checked_relation) orelse {
+            const relation = self.platformRequirementRelations().lookupByRelationId(binding.checked_relation) orelse {
                 base.invariant(
                     "checked artifact invariant violated: platform required binding {d} has no checked relation",
                     .{i},
@@ -32476,14 +32480,14 @@ pub const CheckedModuleArtifact = struct {
             validatePlatformBindingRelation(binding.declaration, binding.requires_idx, binding.app_value, std.meta.activeTag(binding.value_use), relation, i);
             verifyPlatformRequiredValueUse(self, binding);
         }
-        for (self.platform_required_bindings.checked_error_requires) |requires_idx| {
+        for (self.platformRequiredBindings().checked_error_requires) |requires_idx| {
             _ = self.platformRequiredDeclarations().lookupByRequiredIndex(requires_idx) orelse {
                 base.invariant(
                     "checked artifact invariant violated: platform checked-error requirement {d} has no declaration",
                     .{requires_idx},
                 );
             };
-            if (self.platform_required_bindings.lookupByRequiredIndex(requires_idx) != null) {
+            if (self.platformRequiredBindings().lookupByRequiredIndex(requires_idx) != null) {
                 base.invariant(
                     "checked artifact invariant violated: platform requirement {d} is both bound and a checked error",
                     .{requires_idx},
@@ -32638,7 +32642,7 @@ fn verifyPlatformRequiredValueUse(self: *const CheckedModuleArtifact, binding: P
             .platform_required => |required| {
                 std.debug.assert(std.meta.eql(required.artifact.bytes, binding.app_value.artifact.bytes));
                 std.debug.assert(required.app_value.pattern == binding.app_value.pattern);
-                if (self.platform_required_bindings.relationClosure(binding).interface_capabilities.len == 0) {
+                if (self.platformRequiredBindings().relationClosure(binding).interface_capabilities.len == 0) {
                     base.invariant(
                         "checked artifact invariant violated: platform-required procedure use has no relation template closure",
                         .{},
@@ -32816,6 +32820,8 @@ pub const ImportedModuleView = struct {
 };
 
 const empty_root_requests: RootRequestTable = .{};
+const empty_platform_requirement_relations: PlatformRequirementRelationTable = .{};
+const empty_platform_required_bindings: PlatformRequiredBindingTable = .{};
 const empty_checking_context_identity: CheckingContextIdentity = .{};
 const empty_top_level_values: TopLevelValueTable = .{};
 
@@ -32844,7 +32850,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .resolved_value_refs = &artifact.resolved_value_refs,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
-        .platform_required_bindings = &artifact.platform_required_bindings,
+        .platform_required_bindings = artifact.platformRequiredBindings(),
         .checking_context_identity = &artifact.checking_context_identity,
         .top_level_values = &artifact.top_level_values,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
@@ -34314,8 +34320,6 @@ pub fn publishFromTypedModule(
         .entry_wrappers = entry_wrappers,
         .top_level_procedure_bindings = top_level_procedure_bindings,
         .callable_eval_templates = callable_eval_templates,
-        .platform_requirement_relations = .{},
-        .platform_required_bindings = platform_required_bindings,
         .compile_time_roots = compile_time_roots,
         .top_level_values = top_level_values,
         .hoisted_constants = hoisted_constants,
@@ -34550,7 +34554,8 @@ test "checked module owns post-check inputs at the checked boundary" {
     try std.testing.expect(!@hasField(CheckedModuleArtifact, "hosted_bindings"));
     try std.testing.expect(!@hasField(CheckedModuleArtifact, "checked_const_bodies"));
     try std.testing.expect(!@hasField(CheckedModuleArtifact, "intrinsic_wrappers"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_bindings"));
+    try std.testing.expect(!@hasField(CheckedModuleArtifact, "platform_required_bindings"));
+    try std.testing.expect(!@hasField(CheckedModuleArtifact, "platform_requirement_relations"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "compile_time_roots"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_values"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "const_templates"));
@@ -35017,7 +35022,6 @@ test "relation projection preserves anonymous row identity and provenance" {
         .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
         .top_level_procedure_bindings = .{},
-        .platform_required_bindings = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
         .hoisted_constants = .{},
@@ -35262,7 +35266,6 @@ test "artifact views are read-only projections" {
         .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
         .top_level_procedure_bindings = .{},
-        .platform_required_bindings = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
         .hoisted_constants = .{},
@@ -35404,7 +35407,6 @@ fn testVisibilityImportedView(
         .resolved_value_refs = undefined,
         .static_dispatch_plans = undefined,
         .top_level_procedure_bindings = undefined,
-        .platform_required_bindings = undefined,
         .callable_eval_templates = undefined,
         .hoisted_constants = undefined,
         .const_templates = undefined,
@@ -35832,7 +35834,6 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
         .top_level_procedure_bindings = .{},
-        .platform_required_bindings = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
         .hoisted_constants = .{},
