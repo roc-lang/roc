@@ -30296,6 +30296,17 @@ the list of instruction sets lives only in `isa.zig`. Code that runs generated
 code in-process asks `isa.host`, never `RocTarget.detectNative`, which maps an
 architecture without a code generator to one that has one.
 
+The shared driver also serves every word size, and defines a name for each
+register width by the kind of value, in `backend/dev/widths.zig`: `word_width`
+for a target word (pointers, lengths, sizes, addresses), `wide64_width` for a
+value that is 64 bits on every target (U64, I64, F64 bits, an i128 or Dec
+half), and `scalar_width` for an integer of up to 8 bytes held in one register
+whose width follows its layout. A width follows the kind of value, never an
+immediate's numeric value: a small U64 is still 64 bits. A 32-bit instruction
+set's `RegisterWidth` has no `w64` member, so `wide64_width`, `scalar_width`
+and a stray `.w64` are compile errors on it until the driver routes those
+values through register pairs.
+
 An explicit reference-count statement on a stack value computes the value's
 address directly into the helper's first argument register and loads an
 incref's count directly into the second; neither passes through a frame slot.
