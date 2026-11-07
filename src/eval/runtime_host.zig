@@ -25,6 +25,7 @@ const AllocationProfile = struct {
     sites: std.AutoHashMapUnmanaged([16]usize, Counts) = .empty,
 };
 
+/// Set the live root frame bounding allocation stack walks when profiling is enabled.
 pub fn beginAllocationProfile(self: *RuntimeHostEnv, frame: usize) void {
     if (dev_diagnostics.isSet(.profile_allocations)) self.allocation_profile.entry_frame = frame;
 }
@@ -50,6 +51,8 @@ fn profileAllocation(self: *RuntimeHostEnv, bytes: usize, frame: usize) void {
     entry.value_ptr.bytes += bytes;
 }
 
+/// Print accumulated allocation counts and bytes by stack, labeled with `root`,
+/// when allocation profiling is enabled. Retains the recorded counts.
 pub fn dumpAllocationProfile(self: *RuntimeHostEnv, root: usize) void {
     if (comptime !dev_diagnostics.available) return;
     if (!dev_diagnostics.isSet(.profile_allocations)) return;

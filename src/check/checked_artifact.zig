@@ -37230,15 +37230,23 @@ test "root eligibility shared type DAG is expanded once across all roots" {
 
 const SealedSlotsFixture = struct {
     store: CheckedTypeStore = .{},
+    names: canonical.CanonicalNameStore = canonical.CanonicalNameStore.init(std.testing.allocator),
     const allocator = std.testing.allocator;
 
     fn deinit(self: *SealedSlotsFixture) void {
         self.store.deinit(allocator);
+        self.names.deinit();
+    }
+
+    fn origin(self: *SealedSlotsFixture) Allocator.Error!canonical.ModuleIdentityId {
+        const identity = testCheckedModuleKey(1).digest();
+        return self.names.internModuleIdentity(&identity.bytes);
     }
 
     /// Commit explicit synthetic graph rows, allowing forward edges in cycle
     /// tests without asking structural interning to traverse unfinished rows.
     fn add(self: *SealedSlotsFixture, payload: CheckedTypePayloadBuild) Allocator.Error!CheckedTypeId {
+        self.store.key_names = &self.names;
         var owned = payload;
         const stored = self.store.commitPayload(allocator, owned) catch |err| {
             deinitCheckedTypePayloadBuild(allocator, &owned);
@@ -37262,25 +37270,29 @@ const SealedSlotsFixture = struct {
     }
 
     fn record(self: *SealedSlotsFixture, value: CheckedTypeId, ext: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const name = try self.names.internRecordFieldLabel("value");
         const fields = try allocator.alloc(CheckedRecordField, 1);
-        fields[0] = .{ .name = @fromBackingInt(0), .ty = value };
+        fields[0] = .{ .name = name, .ty = value };
         return self.add(.{ .record = .{ .fields = fields, .ext = ext } });
     }
 
     fn tag(self: *SealedSlotsFixture, args: []const CheckedTypeId, ext: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const name = try self.names.internTagLabel("Tag");
         const tags = try allocator.alloc(CheckedTag, 1);
         const copied = allocator.dupe(CheckedTypeId, args) catch |err| {
             allocator.free(tags);
             return err;
         };
-        tags[0] = .{ .name = @fromBackingInt(0), .args = copied };
+        tags[0] = .{ .name = name, .args = copied };
         return self.add(.{ .tag_union = .{ .tags = tags, .ext = ext } });
     }
 
     fn alias(self: *SealedSlotsFixture, args: []const CheckedTypeId, backing: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const name = try self.names.internTypeName("Alias");
+        const origin_module = try self.origin();
         return self.add(.{ .alias = .{
-            .name = @fromBackingInt(0),
-            .origin_module = @fromBackingInt(0),
+            .name = name,
+            .origin_module = origin_module,
             .owner_module = testCheckedModuleKey(1).digest(),
             .backing = backing,
             .args = try allocator.dupe(CheckedTypeId, args),
@@ -37288,9 +37300,11 @@ const SealedSlotsFixture = struct {
     }
 
     fn nominal(self: *SealedSlotsFixture, representation: CheckedNominalRepresentationRef, args: []const CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const name = try self.names.internTypeName("Nominal");
+        const origin_module = try self.origin();
         return self.add(.{ .nominal = .{
-            .name = @fromBackingInt(0),
-            .origin_module = @fromBackingInt(0),
+            .name = name,
+            .origin_module = origin_module,
             .owner_module = testCheckedModuleKey(1).digest(),
             .source_decl = 0,
             .builtin = if (representation == .builtin) representation.builtin else null,
@@ -37300,11 +37314,11 @@ const SealedSlotsFixture = struct {
         } });
     }
 
-    fn evidence(callable: CheckedTypeId, dispatcher: CheckedTypeId) static_dispatch.EvidenceParamRecord {
-        return .{ .method = @fromBackingInt(0), .dispatcher_ty = dispatcher, .callable_ty = callable, .slot = null };
+    fn evidence(self: *SealedSlotsFixture, callable: CheckedTypeId, dispatcher: CheckedTypeId) Allocator.Error!static_dispatch.EvidenceParamRecord {
+        return .{ .method = try self.names.internMethodName("apply"), .dispatcher_ty = dispatcher, .callable_ty = callable, .slot = null };
     }
 
-    fn expectSlots(self: *SealedSlotsFixture, variables: []const CheckedTypeId, root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord, expected: []const u32) !void {
+    fn expectSlots(self: *SealedSlotsFixture, variables: []const CheckedTypeId, root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord, expected: []const u32) (Allocator.Error || error{TestExpectedEqual})!void {
         var scalar = SealedSchemeVarWalk.init(allocator, self.store.view());
         defer scalar.deinit();
         var scalar_slots: std.ArrayList(u32) = .empty;
@@ -37336,7 +37350,7 @@ test "sealed slot batching preserves bounded eligibility and duplicate slot orde
     const record_row = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_record } });
     const numeric = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .numeric_default_phase = .mono_specialization } });
     const callable = try f.function(&.{unit}, unit);
-    const constraints = [_]CheckedStaticDispatchConstraint{.{ .fn_name = @fromBackingInt(0), .fn_ty = callable, .origin = .method_call }};
+    const constraints = [_]CheckedStaticDispatchConstraint{.{ .fn_name = try f.names.internMethodName("apply"), .fn_ty = callable, .origin = .method_call }};
     const constrained = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
     const discharged = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .row_default_discharges_constraints = true, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
     const variables = [_]CheckedTypeId{ b, a, b, rigid, unbounded, record_row, numeric, constrained, discharged };
@@ -37365,7 +37379,7 @@ test "sealed slot batching separates full and result reach for aliases Try and c
     const only_argument = try f.alias(&.{a}, unit);
     try f.expectSlots(&variables, try f.function(&.{unit}, only_argument), &.{}, &.{ 0, 1, 2 });
     try f.expectSlots(&variables, try f.function(&.{only_argument}, unit), &.{}, &.{ 1, 2 });
-    const alias_evidence = [_]static_dispatch.EvidenceParamRecord{SealedSlotsFixture.evidence(only_argument, unit)};
+    const alias_evidence = [_]static_dispatch.EvidenceParamRecord{try f.evidence(only_argument, unit)};
     try f.expectSlots(&variables, try f.function(&.{unit}, unit), &alias_evidence, &.{ 1, 2 });
     const try_result = try f.nominal(.{ .builtin = .try_ }, &.{ a, b });
     try f.expectSlots(&variables, try f.function(&.{unit}, try_result), &.{}, &.{ 1, 2 });
@@ -37395,7 +37409,7 @@ test "sealed slot batching separates full and result reach for aliases Try and c
     }
     const callback = try f.function(&.{a}, unit);
     try f.expectSlots(&variables, try f.function(&.{callback}, row), &.{}, &.{ 1, 2 });
-    const evidence_params = [_]static_dispatch.EvidenceParamRecord{SealedSlotsFixture.evidence(try f.function(&.{unit}, b), c)};
+    const evidence_params = [_]static_dispatch.EvidenceParamRecord{try f.evidence(try f.function(&.{unit}, b), c)};
     // Only callable_ty is searched; dispatcher_ty alone does not disqualify c.
     try f.expectSlots(&variables, try f.function(&.{unit}, row), &evidence_params, &.{ 0, 2 });
     const aliased_function = try f.alias(&.{a}, try f.function(&.{unit}, row));
@@ -37408,13 +37422,15 @@ test "sealed slot batching restricts hidden callable veto to arguments" {
     const unit = try f.add(.empty_record);
     const a = try f.variable();
     const b = try f.variable();
+    // Both scalar and batch walks inspect only these representation tags;
+    // they never resolve a capability entry or read its id.
     const representations = [_]CheckedNominalRepresentationRef{
-        .{ .local_box_payload_capability = .{ .capability = @fromBackingInt(0) } },
-        .{ .imported_box_payload_capability = .{ .artifact = testCheckedModuleKey(2).digest(), .capability = @fromBackingInt(0) } },
+        .{ .local_box_payload_capability = .{ .capability = undefined } },
+        .{ .imported_box_payload_capability = .{ .artifact = testCheckedModuleKey(2).digest(), .capability = undefined } },
     };
     for (representations) |representation| {
         const hidden = try f.nominal(representation, &.{});
-        const evidence_params = [_]static_dispatch.EvidenceParamRecord{SealedSlotsFixture.evidence(hidden, unit)};
+        const evidence_params = [_]static_dispatch.EvidenceParamRecord{try f.evidence(hidden, unit)};
         try f.expectSlots(&.{ a, b }, try f.function(&.{unit}, hidden), &evidence_params, &.{ 0, 1 });
         // Ordinary/result visits must not suppress the argument-mode veto.
         try f.expectSlots(&.{ a, b }, try f.function(&.{hidden}, hidden), &evidence_params, &.{});
@@ -37449,7 +37465,7 @@ test "sealed slot batching handles recursive graphs in both reach modes" {
     try std.testing.expectEqual(right, try f.tag(&.{left}, b));
     try f.expectSlots(&.{ a, b, c }, try f.function(&.{}, left), &.{}, &.{ 0, 1, 2 });
     try f.expectSlots(&.{ a, b, c }, try f.function(&.{right}, left), &.{}, &.{2});
-    const evidence_params = [_]static_dispatch.EvidenceParamRecord{SealedSlotsFixture.evidence(right, c)};
+    const evidence_params = [_]static_dispatch.EvidenceParamRecord{try f.evidence(right, c)};
     try f.expectSlots(&.{ a, b, c }, try f.function(&.{}, left), &evidence_params, &.{2});
 }
 
@@ -37530,10 +37546,11 @@ test "sealed slot batching releases scratch and partial output under allocation 
     const result = try f.tag(&variables, empty);
     const root = try f.function(&.{graph}, result);
     const blocked = try f.function(&variables, result);
-    const hidden = try f.nominal(.{ .local_box_payload_capability = .{ .capability = @fromBackingInt(0) } }, &.{});
+    // Argument-mode veto reads the representation tag, never its capability id.
+    const hidden = try f.nominal(.{ .local_box_payload_capability = .{ .capability = undefined } }, &.{});
     const vetoed = try f.function(&.{ variables[0], hidden }, result);
     const Attempt = struct {
-        fn run(failing: Allocator, view: CheckedTypeStoreView, vars: []const CheckedTypeId, eligible_root: CheckedTypeId, blocked_root: CheckedTypeId, vetoed_root: CheckedTypeId) !void {
+        fn run(failing: Allocator, view: CheckedTypeStoreView, vars: []const CheckedTypeId, eligible_root: CheckedTypeId, blocked_root: CheckedTypeId, vetoed_root: CheckedTypeId) (Allocator.Error || error{TestExpectedEqual})!void {
             var batch = SealedSchemeSlots.init(failing, view);
             defer batch.deinit();
             var slots: std.ArrayList(u32) = .empty;

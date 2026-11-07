@@ -34,6 +34,7 @@ pub const Context = struct {
     }
 };
 
+/// Byte prefix identifying the checked-module cache envelope format.
 pub const checked_module_cache_magic = "roc-mod-cache-v13";
 
 // The envelope identifies the typing-addressed entry and its full finalized
@@ -42,6 +43,8 @@ pub const checked_module_cache_magic = "roc-mod-cache-v13";
 // and expected lengths against loaded bytes; never hash or recursively scan the
 // payload for integrity. Atomic replacement leaves readers' mappings intact.
 const checked_module_cache_header_fields_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 32 + 32 + 8;
+
+/// Header size including padding that aligns the first serialized body.
 pub const checked_module_cache_header_len: usize = std.mem.alignForward(usize, checked_module_cache_header_fields_len, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits());
 
 /// Zero bytes between an env body of `env_len` bytes and the artifact body.
@@ -49,6 +52,7 @@ pub fn checkedModuleCacheEnvPadding(env_len: usize) usize {
     return std.mem.alignForward(usize, env_len, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) - env_len;
 }
 
+/// Zero-filled buffer for writing alignment padding between serialized bodies.
 pub const checked_module_cache_zero_padding: [CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()]u8 = @splat(0);
 
 /// The cache entry kinds written in the checked-module envelope.
@@ -87,6 +91,9 @@ pub fn writeCheckedModuleCacheHeader(
     writeTypedHeader(entry, dest, key, key, env_len, 0, artifact_len, pin_validation_hash);
 }
 
+/// Write the envelope header with separate storage and completed-module keys.
+/// `dest` must hold the full header; the caller writes the aligned env, metadata
+/// and artifact bodies after it.
 pub fn writeTypedHeader(
     comptime entry: CheckedEnvelopeEntry,
     dest: []u8,
@@ -117,6 +124,9 @@ pub fn writeTypedHeader(
     @memset(dest[offset..checked_module_cache_header_len], 0);
 }
 
+/// Validate the envelope version, storage key and body lengths, returning slices
+/// borrowed from `bytes`. Returns null for an incompatible or malformed envelope
+/// without inspecting body contents.
 pub fn decodeCheckedCacheEnvelope(
     comptime entry: CheckedEnvelopeEntry,
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
@@ -172,6 +182,8 @@ pub fn decodeCheckedCacheEnvelope(
     };
 }
 
+/// Decode a checked-module envelope and require its env and artifact bodies to
+/// hold their serialized headers. Returned body slices borrow `bytes`.
 pub fn decodeCheckedModuleCacheEntry(key: CheckedArtifact.CheckedModuleArtifactKey, bytes: []const u8) ?CheckedModuleCacheBodies {
     const bodies = decodeCheckedCacheEnvelope(.checked_module, key, bytes) orelse return null;
     if (bodies.env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;

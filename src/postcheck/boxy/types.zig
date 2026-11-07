@@ -24,7 +24,6 @@ const boxy_runtime = @import("boxy_runtime");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
-const static_dispatch = check.StaticDispatchRegistry;
 const names = check.CheckedNames;
 
 /// Dense index of a checked module in one lowering.
@@ -51,7 +50,7 @@ pub const ModuleView = struct {
     }
 };
 
-/// Exact error reachability within one Boxy lowering's published checked
+/// Exact error reachability within one Boxy lowering's immutable checked
 /// modules. The module index and checked ID together identify an immutable
 /// node. Program.run installs all module views before lowering; its body
 /// and template consumers only read those views. Conversion and stored-value
@@ -1971,15 +1970,16 @@ fn hasErrorUnmemoized(allocator: Allocator, modules: *const Modules, module: Mod
     return false;
 }
 
-/// Test views expose only the checked type store, which is all this analysis
-/// reads. The caller owns both the view array and the stores.
-fn errorTestModules(views: []ModuleView, stores: []const *const checked.CheckedTypeStore) Modules {
-    for (views, stores, 0..) |*view, store, index| {
-        view.* = undefined;
-        view.index = @fromBackingInt(@intCast(index));
-        view.view.checked_types = store.view();
-    }
-    return .{ .allocator = std.testing.allocator, .views = .{ .items = views, .capacity = 0 } };
+/// Register a distinct fixture module through the real module-ID producer.
+/// Only identity and checked types are consumed by these reachability tests.
+fn addErrorTestModule(modules: *Modules, store: *const checked.CheckedTypeStore) Allocator.Error!ModuleIndex {
+    var identity: [32]u8 = @splat(0);
+    std.mem.writeInt(u64, identity[0..8], @intCast(modules.views.items.len), .little);
+    var view: checked.ImportedModuleView = undefined;
+    view.key = .{ .bytes = identity };
+    view.module_identity.stable_hash = identity;
+    view.checked_types = store.view();
+    return try modules.add(view);
 }
 
 test "Boxy error reachability separates modules and preserves proofs across append-only publication" {
@@ -1991,12 +1991,14 @@ test "Boxy error reachability separates modules and preserves proofs across appe
     const bad = try first.appendSyntheticPayloadRoot(a, .err);
     const good = try second.appendSyntheticPayloadRoot(a, .empty_record);
     try std.testing.expectEqual(bad, good); // IDs alone cannot identify a node.
-    var views: [2]ModuleView = undefined;
-    const modules = errorTestModules(&views, &.{ &first, &second });
+    var modules = Modules{ .allocator = a };
+    defer modules.deinit();
+    const first_module = try addErrorTestModule(&modules, &first);
+    const second_module = try addErrorTestModule(&modules, &second);
     const errors = try ErrorTypes.create(a, &modules);
     defer errors.destroy();
-    try std.testing.expect(try errors.hasError(@fromBackingInt(0), bad));
-    try std.testing.expect(!try errors.hasError(@fromBackingInt(1), good));
+    try std.testing.expect(try errors.hasError(first_module, bad));
+    try std.testing.expect(!try errors.hasError(second_module, good));
     // Force the synthetic pools to grow. Refresh the published slice view
     // after the producer finishes; existing IDs still denote the same nodes.
     for (0..128) |_| {
@@ -2004,9 +2006,9 @@ test "Boxy error reachability separates modules and preserves proofs across appe
         try second.fillSyntheticTypeRoot(a, fresh, .empty_record);
     }
     const new_bad = try second.appendSyntheticPayloadRoot(a, .err);
-    views[1].view.checked_types = second.view();
-    try std.testing.expect(!try errors.hasError(@fromBackingInt(1), good));
-    try std.testing.expect(try errors.hasError(@fromBackingInt(1), new_bad));
+    modules.views.items[@backingInt(second_module)].view.checked_types = second.view();
+    try std.testing.expect(!try errors.hasError(second_module, good));
+    try std.testing.expect(try errors.hasError(second_module, new_bad));
     try std.testing.expectEqual(@as(usize, 4), errors.stats().queries);
     try std.testing.expectEqual(@as(usize, 3), errors.stats().unique_expanded_nodes);
 }
@@ -2027,9 +2029,9 @@ test "Boxy error reachability matches old traversal for late-positive cycles and
             try store.fillSyntheticTypeRoot(a, id, .{ .tuple = items });
         }
     }
-    var views: [1]ModuleView = undefined;
-    const modules = errorTestModules(&views, &.{&store});
-    const module: ModuleIndex = @fromBackingInt(0);
+    var modules = Modules{ .allocator = a };
+    defer modules.deinit();
+    const module = try addErrorTestModule(&modules, &store);
     for (0..2) |order| {
         const errors = try ErrorTypes.create(a, &modules);
         defer errors.destroy();
@@ -2114,11 +2116,11 @@ test "Boxy error reachability preserves value-error edges and field-kind semanti
     tags[0] = .{ .name = tag, .args = try a.dupe(checked.CheckedTypeId, &.{bad}) };
     const tag_bad = try store.appendSyntheticPayloadRoot(a, .{ .tag_union = .{ .tags = tags, .ext = empty_tags } });
     const tag_ext_bad = try store.appendSyntheticPayloadRoot(a, .{ .tag_union = .{ .tags = &.{}, .ext = bad } });
-    var views: [1]ModuleView = undefined;
-    const modules = errorTestModules(&views, &.{&store});
+    var modules = Modules{ .allocator = a };
+    defer modules.deinit();
+    const module = try addErrorTestModule(&modules, &store);
     const errors = try ErrorTypes.create(a, &modules);
     defer errors.destroy();
-    const module: ModuleIndex = @fromBackingInt(0);
     for ([_]checked.CheckedTypeId{ good, empty_tags, pending, flex, rigid, alias_good, nominal_good, kind_only }) |id| {
         try std.testing.expect(!try hasErrorUnmemoized(a, &modules, module, id));
         try std.testing.expect(!try errors.hasError(module, id));
@@ -2129,10 +2131,10 @@ test "Boxy error reachability preserves value-error edges and field-kind semanti
     }
 }
 
-fn errorTypesAllocationCase(allocator: Allocator, modules: *const Modules, roots: []const checked.CheckedTypeId) !void {
+fn errorTypesAllocationCase(allocator: Allocator, modules: *const Modules, module: ModuleIndex, roots: []const checked.CheckedTypeId) (Allocator.Error || error{TestUnexpectedResult})!void {
     const errors = try ErrorTypes.create(allocator, modules);
     defer errors.destroy();
-    for (roots) |root| try std.testing.expect(try errors.hasError(@fromBackingInt(0), root));
+    for (roots) |root| try std.testing.expect(try errors.hasError(module, root));
 }
 
 test "Boxy error reachability propagates OOM and retries without stale proofs" {
@@ -2144,23 +2146,24 @@ test "Boxy error reachability propagates OOM and retries without stale proofs" {
     const second = try store.reserveSyntheticTypeRoot(a);
     try store.fillSyntheticTypeRoot(a, first, .{ .tuple = try a.dupe(checked.CheckedTypeId, &.{ second, bad }) });
     try store.fillSyntheticTypeRoot(a, second, .{ .tuple = try a.dupe(checked.CheckedTypeId, &.{first}) });
-    var views: [1]ModuleView = undefined;
-    const modules = errorTestModules(&views, &.{&store});
-    try std.testing.checkAllAllocationFailures(a, errorTypesAllocationCase, .{ &modules, @as([]const checked.CheckedTypeId, &.{ first, second, bad }) });
+    var modules = Modules{ .allocator = a };
+    defer modules.deinit();
+    const module = try addErrorTestModule(&modules, &store);
+    try std.testing.checkAllAllocationFailures(a, errorTypesAllocationCase, .{ &modules, module, @as([]const checked.CheckedTypeId, &.{ first, second, bad }) });
     // Fail during edge expansion after retaining a completed leaf proof.
     var failing = std.testing.FailingAllocator.init(a, .{});
     const errors = try ErrorTypes.create(failing.allocator(), &modules);
     defer errors.destroy();
-    try std.testing.expect(try errors.hasError(@fromBackingInt(0), bad));
+    try std.testing.expect(try errors.hasError(module, bad));
     failing.fail_index = failing.alloc_index;
     failing.resize_fail_index = failing.resize_index;
-    try std.testing.expectError(error.OutOfMemory, errors.hasError(@fromBackingInt(0), first));
+    try std.testing.expectError(error.OutOfMemory, errors.hasError(module, first));
     try std.testing.expectEqual(@as(usize, 1), errors.stats().unique_expanded_nodes);
-    try std.testing.expect(try errors.hasError(@fromBackingInt(0), bad));
+    try std.testing.expect(try errors.hasError(module, bad));
     failing.fail_index = std.math.maxInt(usize);
     failing.resize_fail_index = std.math.maxInt(usize);
-    try std.testing.expect(try errors.hasError(@fromBackingInt(0), first));
-    try std.testing.expect(try errors.hasError(@fromBackingInt(0), second));
+    try std.testing.expect(try errors.hasError(module, first));
+    try std.testing.expect(try errors.hasError(module, second));
     try std.testing.expectEqual(@as(usize, 3), errors.stats().unique_expanded_nodes);
 }
 
@@ -2176,13 +2179,14 @@ test "Boxy error reachability work stays bounded by shared graph nodes" {
             try store.fillSyntheticTypeRoot(a, id, .{ .tuple = try a.dupe(checked.CheckedTypeId, &.{ child, child }) });
         }
         try store.fillSyntheticTypeRoot(a, ids[count - 1], .empty_record);
-        var views: [1]ModuleView = undefined;
-        const modules = errorTestModules(&views, &.{&store});
+        var modules = Modules{ .allocator = a };
+        defer modules.deinit();
+        const module = try addErrorTestModule(&modules, &store);
         const errors = try ErrorTypes.create(a, &modules);
         defer errors.destroy();
-        try std.testing.expect(!try errors.hasError(@fromBackingInt(0), ids[0]));
+        try std.testing.expect(!try errors.hasError(module, ids[0]));
         const capacity = errors.stats().retained_array_capacity_bytes;
-        for (0..3) |_| for (ids) |id| try std.testing.expect(!try errors.hasError(@fromBackingInt(0), id));
+        for (0..3) |_| for (ids) |id| try std.testing.expect(!try errors.hasError(module, id));
         try std.testing.expectEqual(count, errors.stats().unique_expanded_nodes);
         try std.testing.expectEqual(count * 3 + 1, errors.stats().queries);
         try std.testing.expectEqual(capacity, errors.stats().retained_array_capacity_bytes);

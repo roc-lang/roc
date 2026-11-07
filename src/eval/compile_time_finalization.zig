@@ -1577,7 +1577,7 @@ const BoxyLinkedImages = struct {
         const symbols = view.symbols();
         try self.exports.ensureUnusedCapacity(self.allocator, @intCast(view.exports().len));
         if (candidate.function_owner) |owner| {
-            const metadata = lir.CheckedPipeline.BoxyFunctionMetadata.MetadataView.init(self.function_metadata.get(owner).?) catch unreachable;
+            const metadata = lir.CheckedPipeline.BoxyFunctionMetadata.MetadataView.init(self.function_metadata.get(owner).?) catch unreachable; // cache admission validated this retained metadata before registering the image
             // Cache admission checked these indices against the image. Reserve
             // before publishing any addresses so allocation failure leaves no
             // pointers into an image that is about to be unloaded.
@@ -2104,7 +2104,7 @@ const ModuleEvaluation = struct {
         std.debug.assert(self.state == .waiting and self.build == null);
         if (self.phase == .classify) try self.classify(evaluations.allocator, shared);
         switch (self.phase) {
-            .classify => unreachable,
+            .classify => unreachable, // classify above advances the phase before a preparation stage is submitted
             .functions, .function_failures => try self.startFunctions(shared, evaluations),
             .ordinary => try self.startOrdinary(shared, evaluations),
         }
@@ -2265,7 +2265,7 @@ const ModuleEvaluation = struct {
         }
         try runBuilt(evaluations.allocator, shared, build);
         switch (self.phase) {
-            .classify => unreachable,
+            .classify => unreachable, // only a preparation stage submitted by start can complete here
             .ordinary => return self.finish(shared, evaluations),
             .function_failures => self.phase = .ordinary,
             .functions => {
@@ -5627,7 +5627,10 @@ const StaticSlotEnvironment = struct {
                 source_entry.layout_idx = plan.ret_layout;
                 source_entry.representation_of = null;
                 source_entry.compile_time_root.?.role.value.plan = plan.plan;
-                break :converted try FrozenRootTranscode.transcodeValueSlot(self.allocator, &lowered.lir_result, source_entry, source, @fromBackingInt(0), &lowered.lir_result, slot);
+                const source_symbol: static_data_exports.StaticDataSymbolId = for (source, 0..) |source_export, source_index| {
+                    if (source_export.value_id == slot) break @fromBackingInt(@intCast(source_index));
+                } else finalizationInvariant("the frozen root graph has no export for its value slot");
+                break :converted try FrozenRootTranscode.transcodeValueSlot(self.allocator, &lowered.lir_result, source_entry, source, source_symbol, &lowered.lir_result, slot);
             };
             try self.installExports(lowered, slot, exports, functions);
             try lir.ComptimeValueGuards.completeSuccessfulSlot(&lowered.lir_result, slot);

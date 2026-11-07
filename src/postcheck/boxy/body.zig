@@ -660,7 +660,7 @@ pub const Builder = struct {
         switch (self.program.store.get(structural)) {
             .record => |record| if (record.ext != null) return .none,
             .tuple => {},
-            else => return .none,
+            .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => return .none,
         }
         const components = try self.structComponentTypes(structural);
         defer self.allocator.free(components);
@@ -669,7 +669,7 @@ pub const Builder = struct {
         return shape;
     }
 
-    /// Ownership fields of a complete product, in its semantic order. Leading
+    /// Ownership fields of a complete product, in field-index order. Leading
     /// ABI words are opaque, non-owning fields; offsets still come from the
     /// producer's record descriptor, never from this ownership row.
     fn productShapeFields(self: *Builder, leading: usize, components: []const TypeId) Allocator.Error!LIR.StmtRowId(LIR.ProductShape) {
@@ -1108,7 +1108,7 @@ pub const Builder = struct {
         return try self.indexOperand(.{ .tag_index = .{ .desc = desc, .name = name } });
     }
 
-    /// The semantic index of the field `name` of the record `ty`'s
+    /// The label-order index of the field `name` of the record `ty`'s
     /// descriptor (through nominal wrappers), as an index operand.
     pub fn fieldIndex(self: *Builder, ty: TypeId, name: types.NameId) Allocator.Error!LIR.DynIndex {
         return try self.indexOperand(.{ .field_index = .{ .desc = try self.descWord(ty), .name = name } });
@@ -1170,7 +1170,7 @@ pub const Builder = struct {
         return try self.materialize(.{ .recipe = try self.recipes.intern(.{ .names_block = .{ .desc = desc } }) });
     }
 
-    /// Rebuild `src`, of type `from`, into `target`, of type `to`, by their
+    /// Convert `src`, of type `from`, into `target`, of type `to`, by their
     /// coercion plan.
     pub fn emitAdapt(self: *Builder, target: LocalId, src: LocalId, from: TypeId, to: TypeId) Allocator.Error!void {
         try self.emitDyn(target, .{ .adapt = .{ .src = src, .plan = try self.adaptPlan(from, to) } });
@@ -9139,7 +9139,7 @@ pub const Builder = struct {
         if (try self.closed(ty)) {
             const base_layout = self.store.getLocal(base_local).layout_idx;
             if (base_layout == .zst) {
-                // A zero-sized product has no physical fields. Its field is
+                // A zero-sized product has no stored fields. Its field is
                 // the same zero-bit value, independent of how the base was
                 // produced (including an immutable constant read).
                 if (self.store.getLocal(target).layout_idx != .zst) invariant("a zero-sized record has a field with storage");

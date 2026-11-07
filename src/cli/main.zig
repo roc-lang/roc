@@ -14467,7 +14467,10 @@ fn runInterpreterTestRoots(
                     .order = run.root.order,
                     .region = failure_region,
                     .detail_origin = if (failure_detail == null) .none else .execution,
-                    .reusable = err != error.OutOfMemory,
+                    .reusable = switch (err) {
+                        error.OutOfMemory => false,
+                        error.Crash, error.DivisionByZero, error.ExpectErr, error.InvalidHostedFunctionSignature, error.RuntimeError, error.UnsupportedHostedFunction => true,
+                    },
                     .transcript = transcript,
                     .failure_detail = failure_detail,
                     .failure_detail_visibility = .always,
@@ -15129,7 +15132,7 @@ fn exerciseCliOutcomeOwnership(
     planned: *CliTestPlanModule,
     sources: *const CliTestSourceModuleMap,
     operation: CliOutcomeOwnershipTest,
-) !void {
+) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const testing = std.testing;
     var io_state = Io.create(testing.io);
     var ctx = CliCtx.init(allocator, testing.allocator, &io_state, .test_cmd);
@@ -15216,7 +15219,7 @@ fn exerciseCliOutcomeOwnership(
     if (operation == .publication) try publishCliTestOutcomes(&ctx, &manager, planned, results, sources);
 }
 
-fn checkCliOutcomeOwnership(operation: CliOutcomeOwnershipTest) !void {
+fn checkCliOutcomeOwnership(operation: CliOutcomeOwnershipTest) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult, SwallowedOutOfMemoryError, NondeterministicMemoryUsage, MemoryLeakDetected })!void {
     const allocator = std.testing.allocator;
     const source = "expect {}\nexpect {}\n";
     var env = try ModuleEnv.init(allocator, source);

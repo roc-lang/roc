@@ -3823,8 +3823,8 @@ test "a generated worker's identity is its content, whatever lowering reaches it
     var identities: [2][4]LIR.ProcIdentity = undefined;
     var record_ids: [2]TypeId = undefined;
     for (0..2) |round| {
-        // An identity reads the program's input, store, result and workers;
-        // every other field stays unread.
+        // Initialize the owners used by module registration, worker
+        // production and identity generation; unrelated state stays unread.
         var program: Program = undefined;
         program.allocator = allocator;
         program.input = .{ .modules = undefined, .roots = undefined, .target_usize = .u64, .unit = unit };
@@ -3832,6 +3832,18 @@ test "a generated worker's identity is its content, whatever lowering reaches it
         defer program.store.deinit();
         program.result = try LirProgram.Result.init(allocator, .u64);
         defer program.result.deinit();
+        program.modules = .{ .allocator = allocator };
+        defer program.modules.deinit();
+        var module_view: checked.ImportedModuleView = undefined;
+        module_view.key = .{ .bytes = @splat(7) };
+        module_view.module_identity.stable_hash = @splat(7);
+        const module_index = try program.modules.add(module_view);
+        program.arena = std.heap.ArenaAllocator.init(allocator);
+        defer program.arena.deinit();
+        program.worker_ids = .empty;
+        defer program.worker_ids.deinit(allocator);
+        program.worklist = .empty;
+        defer program.worklist.deinit(allocator);
         program.workers = .empty;
         defer program.workers.deinit(allocator);
         program.type_contents = .empty;
@@ -3845,15 +3857,9 @@ test "a generated worker's identity is its content, whatever lowering reaches it
         const record = try store.intern(.{ .record = .{ .fields = &.{.{ .name = name_x, .ty = number, .kind = .inline_slot }}, .ext = null } });
         record_ids[round] = record;
         const function = try store.intern(.{ .function = .{ .args = &.{record}, .ret = number, .effectful = false } });
-        // The adapter's and literal thunk's target, a template every unit
-        // names alike.
-        const ret = try program.result.store.addCFStmt(.{ .ret = .{ .value = try program.result.store.addLocal(.{ .layout_idx = .u8 }) } }, .test_fixture);
-        const proc = try program.result.store.addProcSpec(.{ .name = .fromRaw(0), .identity = LIR.ProcIdentity.forTest(7), .args = .empty(), .body = ret, .ret_layout = .u8 }, .none);
-        var target: Worker = undefined;
-        target.proc = proc;
-        try program.workers.append(allocator, target);
-        const target_id: WorkerId = @fromBackingInt(0);
-        const module_index: ModuleIndex = @fromBackingInt(0);
+        // Both lowerings obtain the same target identity from the worker
+        // producer; its WorkerId belongs to this lowering's inventory.
+        const target_id = try program.structuralWorker(module_index, .to_hash);
         identities[round] = .{
             try program.generatedWorkerIdentity(.{ .structural = .is_eq }, module_index, round, &.{}),
             try program.generatedWorkerIdentity(.{ .structural = .to_hash }, module_index, round + 1, &.{}),
@@ -3879,23 +3885,27 @@ test "Boxy error reachability Program owns one lazy memo and releases it before 
     defer checked_types.deinit(allocator);
     const bad = try checked_types.appendSyntheticPayloadRoot(allocator, .err);
     const root = try checked_types.appendSyntheticPayloadRoot(allocator, .{ .tuple = try allocator.dupe(checked.CheckedTypeId, &.{bad}) });
-    var views: [1]types.ModuleView = undefined;
-    views[0].view.checked_types = checked_types.view();
+    var view: checked.ImportedModuleView = undefined;
+    view.key = .{ .bytes = @splat(1) };
+    view.module_identity.stable_hash = @splat(1);
+    view.checked_types = checked_types.view();
     // Exercise the actual consumer API and lowering's completion cleanup;
     // unrelated worker/LIR state is never accessed by either operation.
     var program: Program = undefined;
     program.allocator = allocator;
-    program.modules = .{ .allocator = allocator, .views = .{ .items = &views, .capacity = 0 } };
+    program.modules = .{ .allocator = allocator };
+    defer program.modules.deinit();
+    const module = try program.modules.add(view);
     program.error_types = null;
     defer program.releaseErrorTypes();
     try std.testing.expect(program.error_types == null);
     // Even a lowering that never queried errors can finish without a memo.
     program.finishErrorTypes();
     try std.testing.expect(program.error_types == null);
-    try std.testing.expect(try program.hasError(@fromBackingInt(0), root));
+    try std.testing.expect(try program.hasError(module, root));
     const errors = program.error_types.?;
-    try std.testing.expect(try program.hasError(@fromBackingInt(0), root));
-    try std.testing.expect(try program.hasError(@fromBackingInt(0), bad));
+    try std.testing.expect(try program.hasError(module, root));
+    try std.testing.expect(try program.hasError(module, bad));
     try std.testing.expectEqual(errors, program.error_types.?);
     try std.testing.expectEqual(@as(usize, 3), errors.stats().queries);
     try std.testing.expectEqual(@as(usize, 2), errors.stats().unique_expanded_nodes);

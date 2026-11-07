@@ -415,7 +415,7 @@ pub const Retained = struct {
 
         // The table's producer supplies every immutable input and capture
         // edge. Its scope is data, including override callables, not a type
-        // from which the receiving body can recover the original overrides.
+        // from which the receiving body reads the recorded overrides.
         const table: ?[*]u8 = if (has_table) @ptrCast(@constCast(readWord(capture + offsets[shape.values.len]))) else null;
         const bound = try allocator.alloc(TypeId, shape.descs);
         defer allocator.free(bound);
@@ -566,13 +566,14 @@ pub const MetadataView = struct {
         pub fn next(self: *FunctionIterator) ?CompiledFunction {
             if (self.left == 0) return null;
             self.left -= 1;
-            const identity: LIR.ProcIdentity = .{ .bytes = (self.input.take(32) catch unreachable)[0..32].* };
-            const symbol = self.input.word() catch unreachable;
-            const values = self.input.word() catch unreachable;
-            _ = self.input.takeProduct(values, 4) catch unreachable;
-            _ = self.input.take(13) catch unreachable;
-            const len = self.input.word() catch unreachable;
-            _ = self.input.take(len) catch unreachable;
+            const identity_bytes = self.input.take(32) catch unreachable; // MetadataView.init validated every function identity
+            const identity: LIR.ProcIdentity = .{ .bytes = identity_bytes[0..32].* };
+            const symbol = self.input.word() catch unreachable; // MetadataView.init validated every function symbol word
+            const values = self.input.word() catch unreachable; // MetadataView.init validated every capture-type count
+            _ = self.input.takeProduct(values, 4) catch unreachable; // MetadataView.init validated the complete capture-type span
+            _ = self.input.take(13) catch unreachable; // MetadataView.init validated the three counts and composed flag
+            const len = self.input.word() catch unreachable; // MetadataView.init validated every worker recipe length
+            _ = self.input.take(len) catch unreachable; // MetadataView.init validated the complete worker recipe
             return .{ .identity = identity, .symbol = symbol };
         }
     };
@@ -1636,6 +1637,24 @@ pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
     return .{ .worker = worker, .bound = bound, .inputs = try captureOperands(arena, words, inputs), .capture_descs = try captureOperands(arena, words, capture_descs) };
 }
 
+test "function unit metadata validates List U8 template tag and its single module reference" {
+    try std.testing.expectEqual(@as(u8, 11), @backingInt(Tag.callable_eval_entry));
+    try std.testing.expectEqual(@as(u8, 12), @backingInt(Tag.template_list_u8));
+    // A List(U8) template recipe has one module and a template ordinal.
+    // Unlike the callable-entry recipe, it has no second module reference.
+    var bytes = [_]u8{ 12, 0, 0, 0, 0, 23, 0, 0, 0 };
+    var reader = MetadataReader{ .bytes = &bytes, .modules = 1 };
+    try reader.worker();
+    try std.testing.expectEqual(@as(usize, 0), reader.remaining());
+    for (0..bytes.len) |len| {
+        var truncated = MetadataReader{ .bytes = bytes[0..len], .modules = 1 };
+        try std.testing.expectError(error.InvalidMetadata, truncated.worker());
+    }
+    bytes[1] = 1;
+    var invalid = MetadataReader{ .bytes = &bytes, .modules = 1 };
+    try std.testing.expectError(error.InvalidMetadata, invalid.worker());
+}
+
 test "function unit metadata validates both callable eval entry module references" {
     var bytes = [_]u8{ @backingInt(Tag.callable_eval_entry), 0, 0, 0, 0, 1, 0, 0, 0, 23, 0, 0, 0 };
     var reader = MetadataReader{ .bytes = &bytes, .modules = 2 };
@@ -1903,7 +1922,7 @@ fn decodeOperand(decoder: *Decoder) Allocator.Error!Tables.Operand {
 
 /// Serialize the selected cyclic graph, then return only independent bytes.
 /// Both temporary graphs are gone before the caller reads the result.
-fn selectedCaptureMetadataForTest(allocator: Allocator, retained: *Retained) ![]const u8 {
+fn selectedCaptureMetadataForTest(allocator: Allocator, retained: *Retained) (Allocator.Error || error{TestExpectedEqual})![]const u8 {
     var scratch = std.heap.ArenaAllocator.init(allocator);
     defer scratch.deinit();
     var graph = CaptureGraphBuilder{ .retained = retained, .scratch = scratch.allocator() };
@@ -1929,16 +1948,19 @@ fn selectedCaptureMetadataForTest(allocator: Allocator, retained: *Retained) ![]
     return try encoder.finish();
 }
 
-fn captureSerializationScratchCase(allocator: Allocator) !void {
+fn captureSerializationScratchCase(allocator: Allocator) (Allocator.Error || error{ InvalidMetadata, TestExpectedEqual })!void {
     const setup = std.testing.allocator;
     // The test installs explicit producer records; no runtime code or
     // checked module is needed to encode this graph.
     var program: Program = undefined;
-    program.allocator = allocator;
-    var views: [1]types.ModuleView = undefined;
-    views[0].key = .{ .bytes = @splat(9) };
-    views[0].link_name = @splat(9);
-    program.modules = .{ .allocator = setup, .views = .{ .items = &views, .capacity = 0 } };
+    program.allocator = setup;
+    program.input = .{ .modules = undefined, .roots = undefined, .target_usize = .u64 };
+    program.modules = .{ .allocator = setup };
+    defer program.modules.deinit();
+    var view: checked.ImportedModuleView = undefined;
+    view.key = .{ .bytes = @splat(9) };
+    view.module_identity.stable_hash = @splat(9);
+    const module = try program.modules.add(view);
     program.arena = std.heap.ArenaAllocator.init(setup);
     defer program.arena.deinit();
     program.store = types.Store.init(setup);
@@ -1949,12 +1971,12 @@ fn captureSerializationScratchCase(allocator: Allocator) !void {
     defer program.static_descs.deinit();
     program.workers = .empty;
     defer program.workers.deinit(setup);
-    var worker: lower.Worker = undefined;
-    worker.key = .{ .crash_dictionary = .checked_error };
-    worker.module = @fromBackingInt(0);
-    try program.workers.append(setup, worker);
-    const worker_id: WorkerId = @fromBackingInt(0);
-    const identity = LIR.ProcIdentity.forTest(37);
+    program.worker_ids = .empty;
+    defer program.worker_ids.deinit(setup);
+    program.worklist = .empty;
+    defer program.worklist.deinit(setup);
+    const worker_id = try program.crashDictionaryWorker(module, .checked_error);
+    const identity = program.result.store.getProcSpec(program.worker(worker_id).proc).identity;
     var retained = Retained{ .allocator = allocator, .program = &program };
     defer retained.workers.deinit(setup);
     try retained.workers.put(setup, identity, worker_id);
@@ -1980,6 +2002,8 @@ fn captureSerializationScratchCase(allocator: Allocator) !void {
     try producer.captured_records.ensureUnusedCapacity(setup, 1);
     producer.captured_records.appendAssumeCapacity(.{ .leading = 2, .elems = try setup.dupe(StaticDescs.CaptureWord, &.{desc}) });
 
+    // Failure injection covers serialization, after producer setup completes.
+    program.allocator = allocator;
     for (0..3) |_| {
         const bytes = encodeMetadata(&retained, &program.result, &.{}) catch |err| {
             try std.testing.expectEqual(@as(usize, 0), program.arena.queryCapacity());

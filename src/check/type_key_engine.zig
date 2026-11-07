@@ -40,6 +40,8 @@ pub fn listRetainedBytes(list: anytype) usize {
     return list.capacity * @sizeOf(@TypeOf(list.items[0]));
 }
 
+/// Requested allocation bytes held by a dense map's columns and allocated sparse
+/// chunks, including spare capacity but excluding allocator bookkeeping.
 pub fn denseRetainedBytes(map: anytype) usize {
     var bytes = listRetainedBytes(map.sparse_chunks) + listRetainedBytes(map.active_keys) + listRetainedBytes(map.values);
     for (map.sparse_chunks.items) |chunk| if (chunk) |ptr| {
@@ -48,6 +50,8 @@ pub fn denseRetainedBytes(map: anytype) usize {
     return bytes;
 }
 
+/// Requested allocation bytes held by a stack's entries, page directory and
+/// allocated pages, including spare capacity but excluding allocator bookkeeping.
 pub fn stackRetainedBytes(stack: anytype) usize {
     var bytes = listRetainedBytes(stack.entries) + listRetainedBytes(stack.pages);
     for (stack.pages.items) |page| if (page) |ptr| {
@@ -71,6 +75,7 @@ pub fn hashRetainedBytes(comptime K: type, comptime V: type, map: anytype) usize
     return std.mem.alignForward(usize, vals_start + cap * @sizeOf(V), @max(@alignOf(Header), key_align, val_align));
 }
 
+/// Retained allocation bytes grouped by key-engine data and reusable scratch.
 pub const RetainedBytes = struct {
     descriptions: usize = 0,
     class_index: usize = 0,

@@ -358,12 +358,12 @@ const StaticInitializerMachine = struct {
                         break :blk value;
                     },
                     .callable => |proc| try self.freezeCallable(proc, if (values.len == 0) null else values[0], .none, definition.layout_idx),
-                    else => try self.assembleStored(definition.layout_idx, switch (parts.kind) {
+                    .product, .list, .box, .tag => try self.assembleStored(definition.layout_idx, switch (parts.kind) {
                         .product => .product,
                         .list => .{ .list = self.layouts().builtinListAbi(definition.layout_idx).elem_layout_idx orelse .zst },
                         .box => .{ .box = self.layouts().builtinBoxAbi(definition.layout_idx).elem_layout_idx orelse .zst },
                         .tag => |variant| .{ .tag = .{ .variant = variant, .payload_layout = self.tagPayloadLayout(definition.layout_idx, variant) } },
-                        .word, .callable => unreachable,
+                        .word, .callable => unreachable, // the outer switch handles scalar words and callables separately
                     }, values),
                 };
                 self.static_active[raw] = false;
@@ -2305,6 +2305,20 @@ test "static data declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
+/// Add one completed test value and return the ID allocated by its store.
+fn addCompletedValueForTest(program: *lir.Program.Result, layout_idx: layout.Idx, kind: @FieldType(lir.Program.StaticDataParts, "kind"), children: []const lir.LIR.StaticDataId) Allocator.Error!lir.LIR.StaticDataId {
+    const allocator = std.testing.allocator;
+    const owned = try allocator.dupe(lir.LIR.StaticDataId, children);
+    errdefer allocator.free(owned);
+    const id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
+    try program.static_data_values.append(allocator, .{
+        .initializer = null,
+        .layout_idx = layout_idx,
+        .parts = .{ .kind = kind, .children = owned },
+    });
+    return id;
+}
+
 // These inputs have no initializer procedures. Their only possible
 // representation is data, including the pointers between nested values.
 test "completed value parts encode shared nested lists and callables at both target widths" {
@@ -2333,32 +2347,24 @@ test "completed value parts encode shared nested lists and callables at both tar
             .ret_layout = .zst,
             .abi = .roc,
         }, .none);
-        const layouts = [_]layout.Idx{ .opaque_ptr, item_layout, outer_layout, callable_layout };
-        const kinds = [_]@FieldType(lir.Program.StaticDataParts, "kind"){ .{ .word = 7 }, .list, .list, .{ .callable = proc } };
-        const children = [_][]const lir.LIR.StaticDataId{
-            &.{}, &.{@fromBackingInt(0)}, &.{ @fromBackingInt(1), @fromBackingInt(1) }, &.{@fromBackingInt(2)},
-        };
-        for (layouts, kinds, children) |idx, kind, ids| {
-            try program.static_data_values.append(allocator, .{
-                .initializer = null,
-                .layout_idx = idx,
-                .parts = .{ .kind = kind, .children = try allocator.dupe(lir.LIR.StaticDataId, ids) },
-            });
-        }
+        const word_id = try addCompletedValueForTest(program, .opaque_ptr, .{ .word = 7 }, &.{});
+        const inner_id = try addCompletedValueForTest(program, item_layout, .list, &.{word_id});
+        const outer_id = try addCompletedValueForTest(program, outer_layout, .list, &.{ inner_id, inner_id });
+        const callable_id = try addCompletedValueForTest(program, callable_layout, .{ .callable = proc }, &.{outer_id});
         var machine = try StaticInitializerMachine.init(allocator, &lowered, .{}, width);
         defer machine.deinit();
-        const callable = try machine.evaluateStatic(@fromBackingInt(3));
+        const callable = try machine.evaluateStatic(callable_id);
         // Two list backings and one callable; repeated inner lists share
         // their backing instead of duplicating it.
         try std.testing.expectEqual(@as(usize, 3), machine.allocations.items.len);
-        const outer = machine.static_roots[2].?;
+        const outer = machine.static_roots[@backingInt(outer_id)].?;
         const outer_backing = machine.allocations.items[@backingInt(outer.relocations.items[0].target.allocation)].payload;
         try std.testing.expectEqual(@as(usize, 2), outer_backing.relocations.items.len);
         try std.testing.expectEqual(outer_backing.relocations.items[0].target.allocation, outer_backing.relocations.items[1].target.allocation);
         const captured = machine.allocations.items[@backingInt(callable.relocations.items[0].target.allocation)].payload;
         try std.testing.expectEqual(proc, captured.relocations.items[0].target.procedure);
         try std.testing.expectEqual(builtins.erased_callable.capture_offset, captured.relocations.items[1].offset);
-        try std.testing.expectEqual(callable, try machine.evaluateStatic(@fromBackingInt(3)));
+        try std.testing.expectEqual(callable, try machine.evaluateStatic(callable_id));
         try std.testing.expectEqual(@as(usize, 3), machine.allocations.items.len);
     }
 }
@@ -2376,19 +2382,11 @@ test "completed value parts encode a field's explicit box in immutable storage" 
         const program = &lowered.lir_result;
         const boxed_layout = try program.layouts.insertBox(.opaque_ptr);
         const record_layout = try program.layouts.putStructFields(&.{.{ .index = 0, .layout = boxed_layout }});
-        try program.static_data_values.append(allocator, .{
-            .initializer = null,
-            .layout_idx = .opaque_ptr,
-            .parts = .{ .kind = .{ .word = 23 }, .children = try allocator.alloc(lir.LIR.StaticDataId, 0) },
-        });
-        try program.static_data_values.append(allocator, .{
-            .initializer = null,
-            .layout_idx = record_layout,
-            .parts = .{ .kind = .product, .children = try allocator.dupe(lir.LIR.StaticDataId, &.{@fromBackingInt(0)}) },
-        });
+        const word_id = try addCompletedValueForTest(program, .opaque_ptr, .{ .word = 23 }, &.{});
+        const record_id = try addCompletedValueForTest(program, record_layout, .product, &.{word_id});
         var machine = try StaticInitializerMachine.init(allocator, &lowered, .{}, width);
         defer machine.deinit();
-        const value = try machine.evaluateStatic(@fromBackingInt(1));
+        const value = try machine.evaluateStatic(record_id);
         try std.testing.expectEqual(@as(usize, 1), machine.allocations.items.len);
         try std.testing.expectEqual(@as(usize, 1), value.relocations.items.len);
         const backing = machine.allocations.items[@backingInt(value.relocations.items[0].target.allocation)].payload;

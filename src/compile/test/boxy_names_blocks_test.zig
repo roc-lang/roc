@@ -17,7 +17,7 @@ const constructor =
 fn staticDataHolds(lowered: *const lir.CheckedPipeline.LoweredProgram, text: []const u8) bool {
     const frozen = lowered.frozen_static_data orelse return false;
     for (frozen.exports) |item| {
-        if (std.mem.indexOf(u8, item.bytes, text) != null) return true;
+        if (std.mem.find(u8, item.bytes, text) != null) return true;
     }
     return false;
 }

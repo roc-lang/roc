@@ -1435,7 +1435,7 @@ pub const StaticDescs = struct {
         return found orelse types.invariant("a variant position is asked of a union without that tag");
     }
 
-    /// The semantic index of the field `name` of the closed record `ty`
+    /// The label-order index of the field `name` of the closed record `ty`
     /// (through nominal wrappers): its rank among the record's fields.
     pub fn fieldPosition(self: *StaticDescs, ty: TypeId, name: NameId) Allocator.Error!u32 {
         const record_ty = try self.peelNominals(ty);
@@ -1449,7 +1449,7 @@ pub const StaticDescs = struct {
         types.invariant("a field position is asked of a record without that field");
     }
 
-    /// The semantic index of each memory slot of the closed record or tuple
+    /// The storage index of each memory slot of the closed record or tuple
     /// `ty`'s descriptor, in memory order, as `fillFields` lays its entries
     /// out. Caller frees.
     fn memoryOrder(self: *StaticDescs, ty: TypeId) Allocator.Error![]u32 {
@@ -1509,10 +1509,10 @@ pub const StaticDescs = struct {
             null,
         );
         const bytes = @constCast(self.exports.items[node].bytes);
-        for (result_order, 0..) |semantic, slot| {
+        for (result_order, 0..) |field_index, slot| {
             // A padding slot ranks past every named field; its entry is unread.
-            if (semantic >= result_fields.len) continue;
-            const name = result_fields[semantic].name;
+            if (field_index >= result_fields.len) continue;
+            const name = result_fields[field_index].name;
             const entry: u32 = if (std.mem.findScalar(NameId, names, name)) |position|
                 desc_format.update_value_flag | @as(u32, @intCast(position))
             else blk: {
@@ -1657,7 +1657,7 @@ pub const StaticDescs = struct {
 
     /// The fields of a record or tuple descriptor in memory order, as
     /// `fillFields` emits them: `storage` holds each field's stored type by
-    /// semantic index, `names` the record's fields (null for a tuple).
+    /// storage index, `names` the record's fields (null for a tuple).
     fn fieldShapes(self: *StaticDescs, committed_layout: layout.Layout, storage: []const TypeId, scope_id: ScopeId, names: ?[]const types.Field, declared: ?[]const u32) Allocator.Error![]const FieldShape {
         const layouts = self.layouts.layouts;
         const fields = try self.allocator.alloc(FieldShape, storage.len);
@@ -2203,9 +2203,29 @@ test "override scopes are interned by content and restricted to a type's reach" 
     try fixture.init(.u64);
     defer fixture.deinit();
     const store = &fixture.store;
+    const checked = @import("check").CheckedModule;
+    const allocator = std.testing.allocator;
+    var declarations: checked.CheckedTypeStore = .{};
+    defer declarations.deinit(allocator);
+    var declaration_ids: [2]checked.CheckedNominalDeclarationId = undefined;
+    for (&declaration_ids) |*id| {
+        id.* = @fromBackingInt(@intCast(declarations.nominal_declarations.items.len));
+        // These opaque nominals are compared by identity only. No backing,
+        // declaration root, source statement, or name metadata is inspected.
+        var declaration: checked.CheckedNominalDeclaration = undefined;
+        declaration.id = id.*;
+        try declarations.nominal_declarations.append(allocator, declaration);
+    }
+    const module: types.ModuleIndex = @fromBackingInt(@intCast(fixture.modules.views.items.len));
+    // Scope traversal never opens a backing for these has_backing=false nodes.
+    // Only the module index and its declaration table belong to this fixture.
+    var view: types.ModuleView = undefined;
+    view.index = module;
+    view.view.checked_types = declarations.view();
+    try fixture.modules.views.append(allocator, view);
     const name = try store.internName("Local");
     const local = try store.intern(.{ .nominal = .{
-        .decl = .{ .module = @fromBackingInt(0), .decl = @fromBackingInt(0) },
+        .decl = .{ .module = module, .decl = declaration_ids[0] },
         .args = &.{},
         .name = name,
         .is_opaque = true,
@@ -2213,7 +2233,7 @@ test "override scopes are interned by content and restricted to a type's reach" 
         .has_backing = false,
     } });
     const other = try store.intern(.{ .nominal = .{
-        .decl = .{ .module = @fromBackingInt(0), .decl = @fromBackingInt(1) },
+        .decl = .{ .module = module, .decl = declaration_ids[1] },
         .args = &.{},
         .name = name,
         .is_opaque = true,

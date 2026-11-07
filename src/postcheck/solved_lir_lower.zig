@@ -20,7 +20,6 @@ const ComptimeScalarValues = @import("comptime_scalar_values.zig");
 const CompletedErasedMembers = @import("completed_erased_members.zig").CompletedErasedMembers;
 const match_tree = @import("match_tree.zig");
 const Mono = @import("monotype/ast.zig");
-const postcheck_values = @import("comptime_scalar_values.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
 const SolvedInline = @import("solved_inline.zig");
 const proc_identity = @import("proc_identity.zig");
@@ -6081,13 +6080,13 @@ const Lowerer = struct {
         ty: Type.TypeId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
-        // A use may require another physical representation. The completed
+        // A use may require a different layout. The completed
         // data writer converts it once; the read never executes a conversion.
         const root_ty = try self.lowerExprTy(value.initializer);
         if (root_ty != ty and !try self.comptimeReadSharesRoot(root_ty, ty)) {
             const root = self.solved.lifted.getComptimeValueRoot(value.root);
-            const canonical = try self.comptimeValueSlot(root, root_ty, try self.layoutOfType(root_ty));
-            const slot = try self.comptimeRepresentationSlot(canonical, ty, self.result.store.getLocal(target).layout_idx, .value);
+            const source_slot = try self.comptimeValueSlot(root, root_ty, try self.layoutOfType(root_ty));
+            const slot = try self.comptimeRepresentationSlot(source_slot, ty, self.result.store.getLocal(target).layout_idx, .value);
             return try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
                 .value = .{ .static_data = .{ .id = slot } },
@@ -6099,7 +6098,7 @@ const Lowerer = struct {
 
     const ComptimeRepresentation = struct { source: LIR.StaticDataId, ty: Type.TypeId, layout_idx: layout.Idx, storage: LirProgram.CaptureSlotStorage };
 
-    /// A second representation is explicitly linked to the one canonical
+    /// A second representation is explicitly linked to the root's original
     /// producer slot. Source lookup stays unambiguous; failure is shared.
     fn comptimeRepresentationSlot(self: *Lowerer, source: LIR.StaticDataId, ty: Type.TypeId, layout_idx: layout.Idx, storage: LirProgram.CaptureSlotStorage) Common.LowerError!LIR.StaticDataId {
         const key = ComptimeRepresentation{ .source = source, .ty = ty, .layout_idx = layout_idx, .storage = storage };
@@ -6150,7 +6149,7 @@ const Lowerer = struct {
         const root = self.solved.lifted.getComptimeValueRoot(value.root);
         const layout_idx = try self.layoutOfType(ty);
         // Recursive storage requires an immutable box around the completed
-        // value. Publish that representation into its own slot, rather than
+        // value. Store that representation in its own slot, rather than
         // allocating a new box each time the root is read.
         const destination_layout = self.result.store.getLocal(target).layout_idx;
         if (destination_layout != layout_idx) {
@@ -6185,8 +6184,8 @@ const Lowerer = struct {
                 } }, where.source());
             };
         };
-        const canonical = try self.comptimeValueSlot(root, ty, layout_idx);
-        const id = if (destination_layout == layout_idx) canonical else try self.comptimeRepresentationSlot(canonical, ty, destination_layout, .recursive_box);
+        const source_slot = try self.comptimeValueSlot(root, ty, layout_idx);
+        const id = if (destination_layout == layout_idx) source_slot else try self.comptimeRepresentationSlot(source_slot, ty, destination_layout, .recursive_box);
         return try self.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .static_data = .{

@@ -572,10 +572,12 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         static_data,
         lowered.lir_result.store.getProcSpecs(),
         unit.target,
-    ) catch |err| {
-        if (err == error.OutOfMemory) return error.OutOfMemory;
-        std.log.err("Native compilation of module {s} failed: {}", .{ module_name, err });
-        return error.NativeCompilationFailed;
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            std.log.err("Native compilation of module {s} failed: {}", .{ module_name, err });
+            return error.NativeCompilationFailed;
+        },
     };
     errdefer pieces.deinit();
     // The image goes into the unit's cache entry, which later fast dev links
@@ -583,10 +585,12 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     // pieces; a build with neither has no use for it.
     const image: ?Image = if (producesImage(unit.target) and (unit.cache_manager != null or !unit.want_pieces)) image: {
         var code_locations: []const u8 = &.{};
-        const bytes = object_compiler.buildUnitImage(pieces, unit.target, .every_procedure, &code_locations) catch |err| {
-            if (err == error.OutOfMemory) return error.OutOfMemory;
-            std.log.err("Building the unit image of module {s} failed: {}", .{ module_name, err });
-            return error.NativeCompilationFailed;
+        const bytes = object_compiler.buildUnitImage(pieces, unit.target, .every_procedure, &code_locations) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                std.log.err("Building the unit image of module {s} failed: {}", .{ module_name, err });
+                return error.NativeCompilationFailed;
+            },
         };
         break :image .{ .bytes = bytes, .code_locations = code_locations, .owner = .owned };
     } else null;
@@ -609,7 +613,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     const function_metadata: []const u8 = if (unit.config.boxy_function_unit != null) metadata: {
         var compiled: std.ArrayList(lir.CheckedPipeline.BoxyFunctionMetadata.CompiledFunction) = .empty;
         defer compiled.deinit(gpa);
-        const view = backend.dev.UnitImage.View.init(image.?.bytes) catch unreachable;
+        const view = backend.dev.UnitImage.View.init(image.?.bytes) catch unreachable; // buildUnitImage just emitted these bytes from the compiled pieces
         var symbols: std.StringHashMapUnmanaged(u32) = .empty;
         defer symbols.deinit(gpa);
         for (view.symbols(), 0..) |symbol, index| if (symbol.type == @backingInt(backend.dev.UnitImage.SymbolType.func)) {
@@ -618,10 +622,10 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         for (pieces.set.excerpts) |excerpt| switch (excerpt.kind) {
             .proc => |identity| {
                 var name: [lir.LIR.ProcIdentity.symbol_name_len]u8 = undefined;
-                const symbol = symbols.get(identity.writeSymbolName(&name)) orelse unreachable;
+                const symbol = symbols.get(identity.writeSymbolName(&name)) orelse unreachable; // every procedure excerpt is emitted as a function symbol by buildUnitImage
                 try compiled.append(gpa, .{ .identity = identity, .symbol = symbol });
             },
-            else => {},
+            .rc_helper, .entrypoint, .message_pool_run, .branch_island => {},
         };
         break :metadata try lir.CheckedPipeline.BoxyFunctionMetadata.encodeMetadata(lowered.boxy_functions.?, &lowered.lir_result, compiled.items);
     } else &.{};

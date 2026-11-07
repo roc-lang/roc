@@ -265,7 +265,7 @@ test "native callable packets preserve active bytes across inline and heap trans
     defer env.deinit();
     const saved = host.enter(env.getOps(), null);
     defer host.leave(saved);
-    for ([_]usize{ 1, 31, 32, 33, 97 }) |len| {
+    for ([_]usize{ 1, 31, 32, 33, 97 }, [_]u8{ 1, 2, 3, 4, 5 }) |len, expected| {
         var cell: Pending = .{};
         var source: [97]u8 = undefined;
         @memset(source[0..len], @intCast(len));
@@ -276,14 +276,6 @@ test "native callable packets preserve active bytes across inline and heap trans
         @memset(&source, 0); // Deferral owns the bytes, not the source address.
         var result = [_]u8{0};
         drive(&cell, &result);
-        const expected: u8 = switch (len) {
-            1 => 1,
-            31 => 2,
-            32 => 3,
-            33 => 4,
-            97 => 5,
-            else => unreachable,
-        };
         try std.testing.expectEqual(expected, result[0]);
         try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
         try std.testing.expectEqual(@as(?erased.CallableFnPtr, null), cell.callable);

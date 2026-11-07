@@ -11,6 +11,7 @@ const LIR = core.LIR;
 const Program = core.Program;
 const Allocator = std.mem.Allocator;
 
+/// A completed numeric value that LIR can represent as an immediate literal.
 pub const ScalarLiteral = union(enum) {
     i64_literal: struct {
         value: i64,
@@ -33,6 +34,8 @@ pub const ScalarLiteral = union(enum) {
     }
 };
 
+/// Completed numeric literals and owned short-string bytes indexed by module
+/// and compile-time producer, for reads that need no aggregate construction.
 pub const CompletedScalarValues = struct {
     entries: Map,
     /// The completed successful roots whose value is a string too short to

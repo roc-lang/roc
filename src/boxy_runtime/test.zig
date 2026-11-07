@@ -641,10 +641,9 @@ test "tag construction by discriminant reaches every variant of structural and n
         const union_desc = env.descs.tagUnion(variants[0..count]);
         const nominal = env.descs.nominal(union_desc, null, false);
         for ([_]*const TypeDesc{ union_desc, nominal }) |desc| {
-            for (names[0..count], 0..) |tag_name, index| {
+            for (0..count) |index| {
                 // Composition sorts the variants, so a tag's discriminant
                 // is its name's rank.
-                _ = tag_name;
                 const value: i64 = @intCast(index + 1);
                 var slot: Slot = .{};
                 compiled.buildTag(desc, @intCast(index), slot.ptr(), &.{@ptrCast(&value)}, ops);
@@ -1025,7 +1024,7 @@ test "frame runs place each local at its alignment and report the run end" {
 fn occurrences(haystack: []const u8, needle: []const u8) usize {
     var count: usize = 0;
     var start: usize = 0;
-    while (std.mem.indexOfPos(u8, haystack, start, needle)) |at| {
+    while (std.mem.findPos(u8, haystack, start, needle)) |at| {
         count += 1;
         start = at + needle.len;
     }

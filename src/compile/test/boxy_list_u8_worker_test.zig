@@ -32,7 +32,7 @@ fn nameIs(name: []const u8, expected: []const u8) bool {
 }
 
 /// The debug names of the procedures `proc`'s body calls directly.
-fn calledNames(store: *const lir.LirStore, proc: lir.LIR.LirProcSpec, out: *std.ArrayList([]const u8)) !void {
+fn calledNames(store: *const lir.LirStore, proc: lir.LIR.LirProcSpec, out: *std.ArrayList([]const u8)) std.mem.Allocator.Error!void {
     var pending: std.ArrayList(lir.LIR.CFStmtId) = .empty;
     defer pending.deinit(std.testing.allocator);
     var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);

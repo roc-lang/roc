@@ -18199,11 +18199,12 @@ test "ARC dynamic product takes independently stored fields and preserves aliase
         const param = try d.value(record_desc, .param);
         const field = try d.value(field_desc, .frame);
         const result = try d.value(field_desc, .result);
-        d.f.store.getLocalPtr(param).product = try d.f.store.addStmtRow(LIR.ProductShape, .{
+        const product = try d.f.store.addStmtRow(LIR.ProductShape, .{
             .layouts = try d.f.store.addU32Span(&.{ @backingInt(d.dynamic), @backingInt(d.dynamic) }),
             .slots = try d.f.store.addU32Span(&.{ 0, 1, 2 }),
             .descriptors = try d.f.span(&.{ field_desc, field_desc }),
         });
+        d.f.store.getLocalPtr(param).product = product;
         const ret = try d.f.ret(if (keep_record) param else result);
         const append = try d.f.assignLowLevel(result, &.{field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), ret);
         const read = try d.f.assignRefField(field, param, 0, append);

@@ -64,7 +64,7 @@ pub const Recipe = union(enum) {
     /// The discriminant of the tag `name` under the tag union the
     /// descriptor `desc` describes: an integer word.
     tag_index: struct { desc: Operand, name: NameId },
-    /// The semantic index of the field `name` of the record the descriptor
+    /// The label-order index of the field `name` of the record the descriptor
     /// `desc` describes: an integer word.
     field_index: struct { desc: Operand, name: NameId },
     /// The update plan of a record update from a base the descriptor
@@ -207,7 +207,7 @@ pub const Recipes = struct {
         return switch (self.items.items[@backingInt(self.resolve(id))]) {
             .content => |recipe| recipe,
             .reserved => null,
-            .same => unreachable,
+            .same => unreachable, // resolve follows every alias and returns only reserved or content entries
         };
     }
 
@@ -914,7 +914,8 @@ test "recipes are interned by content, reserved ones included" {
     try std.testing.expectEqual(@as(u32, 4), needs.wordCount());
     try std.testing.expectEqual(@as(usize, 5), needs.recipes.len);
     try std.testing.expectEqual(@as(?RecipeId, null), needs.slotRecipe(1));
-    try std.testing.expectEqual(@as(?RecipeId, @fromBackingInt(0)), needs.slotRecipe(2));
+    const table_recipe = needs.slotRecipe(2) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(table_recipe));
     try std.testing.expectEqual(@as(?RecipeId, @fromBackingInt(3)), needs.slotRecipe(3));
     try std.testing.expectEqual(@as(u32, 0), needs.recipes[1].input);
     try std.testing.expectEqual(@as(RecipeId, @fromBackingInt(3)), needs.recipes[4].callable.captures[0].recipe);
@@ -952,6 +953,7 @@ test "a cyclic group has the same words whichever member its evaluation enters b
     // The evaluation reads a callable's worker for its procedure alone.
     var entry: lower.Worker = undefined;
     entry.proc = proc;
+    const entry_id: WorkerId = @fromBackingInt(@intCast(program.workers.items.len));
     try program.workers.append(allocator, entry);
 
     // A dictionary capturing a table whose input is that dictionary.
@@ -959,7 +961,7 @@ test "a cyclic group has the same words whichever member its evaluation enters b
     defer recipes.deinit();
     const callable = try recipes.reserve();
     const table = try recipes.intern(.{ .table = .{ .worker = @fromBackingInt(1), .inputs = &.{.{ .recipe = callable }} } });
-    try recipes.set(callable, .{ .callable = .{ .entry = @fromBackingInt(0), .captures = &.{.{ .recipe = table }} } });
+    try recipes.set(callable, .{ .callable = .{ .entry = entry_id, .captures = &.{.{ .recipe = table }} } });
 
     var from_callable = Evaluation.init(&program, .{ .building = &recipes }, &.{}, 0);
     defer from_callable.deinit();

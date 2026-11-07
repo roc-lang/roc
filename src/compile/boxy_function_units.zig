@@ -127,7 +127,7 @@ pub const Cache = struct {
             base.dev_diagnostics.countTestWork(.ctfe_function_metadata_bytes, built.function_metadata.len);
         }
         const built = switch (entry.outcome) {
-            .pending => unreachable,
+            .pending => unreachable, // the pending branch above either stores a completed outcome or returns its failure
             .failed => |err| return err,
             .done => |built| built,
         };

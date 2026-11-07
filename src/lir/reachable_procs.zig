@@ -1245,13 +1245,14 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
         .ret_layout = .zst,
     }, .none);
     try result.root_procs.appendSlice(allocator, &.{ procs[0], procs[1] });
+    const callable_slot: LIR.StaticDataId = @fromBackingInt(@intCast(result.static_data_values.items.len));
     try result.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = .opaque_ptr,
         .parts = .{ .kind = .{ .callable = procs[2] }, .children = try allocator.alloc(LIR.StaticDataId, 0) },
     });
     var exports = [_]LirProgram.StaticDataExport{.{
-        .value_id = @fromBackingInt(0),
+        .value_id = callable_slot,
         .symbol_name = "callable",
         .bytes = &.{},
         .alignment = 1,

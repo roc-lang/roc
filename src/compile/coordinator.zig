@@ -1586,7 +1586,7 @@ const BoxyObjects = struct {
         var prepared: usize = 0;
         errdefer for (units[0..prepared]) |unit| gpa.free(unit.views);
         for (objects.objects, units) |object, *unit| {
-            const artifact = self.coordinator.checkedArtifactByKey(.{ .bytes = object.module }) orelse unreachable;
+            const artifact = self.coordinator.checkedArtifactByKey(.{ .bytes = object.module }) orelse unreachable; // objectSet collected these units from the loaded checked import closure
             unit.* = (try self.prepare(artifact)).unit;
             prepared += 1;
             const ordinary = self.records.get(object.module).?;
@@ -10586,7 +10586,7 @@ test "typing reuse work counters distinguish checking from republication" {
     try std.testing.expectEqualSlices([32]u8, edited.artifact_keys, edited_warm.artifact_keys);
 }
 
-fn expectFullCheckedWorkHits(facts: *const CompiledBuildFacts) !void {
+fn expectFullCheckedWorkHits(facts: *const CompiledBuildFacts) error{TestExpectedEqual}!void {
     try std.testing.expectEqualStrings("", facts.reports);
     const work = facts.checking_work;
     try std.testing.expectEqual(@as(u64, 0), work.fresh_checks);
@@ -13194,7 +13194,7 @@ test "post-check publication store OOM drains accepted writers before returning"
 /// Exercise the real coordinator queues with both workers occupied. Only the
 /// wake queue uses the failing allocator, armed after all fixture setup, so
 /// failure deterministically occurs at notification growth, without sleeps.
-fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) !void {
+fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) (Allocator.Error || std.Thread.SpawnError || channel.ChannelError || error{ SkipZigTest, TestUnexpectedResult, TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
     if (comptime !threads_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const previous_lanes = thread_lanes;

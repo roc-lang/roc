@@ -170,7 +170,7 @@ test "checked reachability positive witnesses need no unrelated expansion" {
     try std.testing.expectEqual(@as(usize, 3), graph.visits);
 }
 
-fn allocationCase(allocator: Allocator) !void {
+fn allocationCase(allocator: Allocator) (Allocator.Error || error{TestUnexpectedResult})!void {
     var graph = TestGraph{ .edges = &.{ &.{ 1, 2 }, &.{0}, &.{} }, .positive = &.{ false, false, true } };
     var walk = AnyReachable(u8, TestGraph).init(allocator, &graph);
     defer walk.deinit();
