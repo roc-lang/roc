@@ -1294,8 +1294,8 @@ test "function unit metadata rejects truncated records and invalid type and modu
     try bytes.appendNTimes(allocator, 42, 32);
     try Write.word(&bytes, 1); // one type
     try bytes.append(allocator, @backingInt(std.meta.Tag(types.Node).empty_record));
-    try Write.word(&bytes, 1); // one noted type
-    try Write.word(&bytes, 7); // producer-local id
+    try Write.word(&bytes, 1); // one producer table
+    try Write.word(&bytes, 1); // one descriptor input
     const origin_ref = bytes.items.len;
     try Write.word(&bytes, 0);
     try Write.word(&bytes, 1); // one callable
@@ -1306,6 +1306,7 @@ test "function unit metadata rejects truncated records and invalid type and modu
     try Write.word(&bytes, 0);
     try Write.word(&bytes, 0); // descriptors
     try Write.word(&bytes, 0); // dictionaries
+    try Write.word(&bytes, 0); // table words
     try bytes.append(allocator, 0); // composed
     try Write.word(&bytes, 6); // structural worker: tag + module + operation
     try bytes.append(allocator, @backingInt(Tag.structural));
