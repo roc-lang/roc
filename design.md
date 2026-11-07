@@ -5040,6 +5040,17 @@ payload capability each local nominal type was given. With those columns a
 reader renders a source type (`SealedTypeView`) without allocating, interning
 or resolving anything.
 
+Sealing also releases checker-only buffers: instantiation worklists and their
+nested-walk pools, thawed freeze anchors, detach worklists, scan hints,
+speculation trails, descriptor free lists, constraint-growth bookkeeping,
+and the raw dispatch-relation merge journal. Checking has already published
+selected relation merges into `ModuleEnv`; that published list stays alive.
+These buffers are reset to empty owners so later destruction is safe. The
+solved columns, nominal declarations, derived-map selections, stable variable
+ids, and borrowed slices into the solved pools remain owned by the sealed
+store until its last consumer is done. No serialized layout changes at this
+boundary, and releasing checker buffers neither allocates nor walks types.
+
 There is no second representation of any of this. No pass copies types,
 bodies, templates, names, plans or roots into another table after checking.
 Lowering, compile-time evaluation, glue, bump and the LSP read the live data
