@@ -293,7 +293,7 @@ pub const CanonicalNameStore = struct {
     /// True for a store reconstructed from a serialized buffer: its interners
     /// point into buffer-owned memory and must not be freed.
     serialized: bool = false,
-    /// The names the store held when its module was published
+    /// The names the store held when its module was opened
     /// (`markPublished`), which are the names it serializes; null while it is
     /// built. Once it is set, other threads read the store while module
     /// analyses intern names into it (`NameInterner.insertShared`), and a

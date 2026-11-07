@@ -11603,7 +11603,7 @@ pub const LocalProcedureBinding = struct {
     /// instead of introducing a checked function body.
     is_alias: bool = false,
     /// Final callable lookup reached through the alias's explicit RHS edges.
-    /// Publication compresses these identity edges once; type substitutions
+    /// Resolution compresses these identity edges once; type substitutions
     /// remain owned by the individual checked scheme scopes.
     alias_target: ?ResolvedValueRefId = null,
     binder: CIR.Pattern.Idx,
@@ -14407,7 +14407,7 @@ const EvidencePass = struct {
                 .value_use, .shared_value_use => {
                     // Re-checks can record the same binding use twice. A
                     // different scheme at this site is a producer bug, not
-                    // another candidate from which publication may choose.
+                    // another candidate from which the checked tables may choose.
                     const entry = try out.value_use_by_node.getOrPut(record.node_idx);
                     if (entry.found_existing) {
                         const previous = module_env.scheme_uses.items.items[entry.value_ptr.*];
@@ -15108,7 +15108,7 @@ const EvidencePass = struct {
                 request.dispatcher_ty,
                 request.constraint_fn_var,
                 null,
-                if (src.target_selected_by_checking) request.selection else .publication,
+                if (src.target_selected_by_checking) request.selection else .after_checking,
                 policy,
             ) },
         };
@@ -15445,7 +15445,7 @@ const EvidencePass = struct {
         };
         return switch (try self.lookupMethodTargetAcrossViews(owner, method) orelse return null) {
             .rejected => .{ .resolved = .checked_error },
-            .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var, .publication),
+            .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var, .after_checking),
         };
     }
 
@@ -15487,7 +15487,7 @@ const EvidencePass = struct {
 
         // Not an evidence param of any enclosing callable, so no edge pins
         // it, and checking resolved no default for it: a dispatcher checking
-        // defaults is unified with its default owner before publication
+        // defaults is unified with its default owner before the checked tables
         // (`flexConstraintCompatibility`), after validating the owner's
         // method against the dispatch's callable. A still-flex dispatcher
         // here is one no value ever reaches (a parameter of a function value
@@ -15648,7 +15648,7 @@ const EvidencePass = struct {
     /// Build the evidence node for `target`. A checker-recorded dispatch-target
     /// record is the exact evidence selected at the discharge edge; compiler-
     /// generated edges that have no record derive evidence from the target
-    /// schema and concrete callable relation. Generated codec publication
+    /// schema and concrete callable relation. The generated codec derivation
     /// supplies the frozen contract callable identity explicitly; its source
     /// variable remains only the durable key for any recorded nested evidence.
     /// How a method target was selected, which decides whether a checked
@@ -15657,13 +15657,13 @@ const EvidencePass = struct {
     /// records the instantiation it performed. A `derivation` target was
     /// chosen by a generated codec deriving over a type's fields: there is no
     /// dispatch edge behind it, so no such record was ever written. A
-    /// `publication` target was chosen by publication rather than checking:
+    /// `after_checking` target was chosen by the checked module's analyses rather than by checking:
     /// the numeric default owner of a dispatcher no edge pins, or the target
     /// of a literal conversion checking left to each specialization.
     /// A `builtin_literal` target converts a source literal on a builtin
     /// number or `Str`, which checking discharges as a primitive with no
     /// callable instantiation.
-    const MethodTargetSelection = enum { dispatch_edge, derivation, publication, builtin_literal };
+    const MethodTargetSelection = enum { dispatch_edge, derivation, after_checking, builtin_literal };
 
     const LiteralKind = types.StaticDispatchConstraint.LiteralKind;
 
@@ -15942,7 +15942,7 @@ const EvidencePass = struct {
 
         // Without a record this node carries no substitution. A dispatch edge
         // the checker discharged records one whenever the target's scheme has
-        // variables; a target publication selected was never instantiated by
+        // variables; a target the checked module's analyses selected was never instantiated by
         // checking, so its node says the substitution derives from the
         // callable.
         if (target.kind == .procedure and constraint_fn_var != null and selection == .dispatch_edge and
@@ -15951,7 +15951,7 @@ const EvidencePass = struct {
             checkedModuleInvariant("polymorphic procedure target evidence had no checked instantiation record", .{});
         }
         const instantiation: static_dispatch.EvidenceTargetInstantiation = switch (selection) {
-            .publication, .builtin_literal => .{ .derived_from_callable = callable_ty orelse
+            .after_checking, .builtin_literal => .{ .derived_from_callable = callable_ty orelse
                 checkedModuleInvariant("target evidence checking never instantiated had no checked callable", .{}) },
             .dispatch_edge, .derivation => if (callable_ty) |callable| .{ .callable = callable } else .monomorphic,
         };
@@ -17320,7 +17320,7 @@ const CheckedTemplateRefCollector = struct {
     module: TypedCIR.Module,
     checked_types: *const CheckedSourceTypes,
     bodies: CheckedBodies,
-    /// Diagnostic errors as publication knows them before total dispatch
+    /// Diagnostic errors as the checked tables know them before total dispatch
     /// resolution (`body_analyses.DiagnosticMode.ordinary`).
     diagnostics: *const body_analyses.NodeBits,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
@@ -19787,7 +19787,7 @@ pub const PlatformAppRelation = struct {
     checked_error_requires: []const u32,
     /// Borrowed app-store roots in the checker's canonical identity-slot order.
     /// The app module owns these roots and each binding's template closure;
-    /// it must outlive the relation and publication that consume them.
+    /// it must outlive the relation and pairing that consume them.
     identity_solutions_app: []const CheckedTypeId,
 
     pub fn deinit(self: *PlatformAppRelation, allocator: Allocator) void {
@@ -30724,7 +30724,7 @@ pub const ConstTemplateTable = struct {
                 // module is opened; there is never a value to fill in later.
                 .eval_template, .unimplemented => {},
                 .reserved => base.invariant(
-                    "checked module invariant violated: constant template {d} was not sealed before publication",
+                    "checked module invariant violated: constant template {d} was not sealed before the module was opened",
                     .{i},
                 ),
             }
@@ -35241,9 +35241,9 @@ test "provided procedure remains a runtime root" {
     });
 }
 
-test "published procedure body with an unset record field frees its checked copy" {
+test "checked procedure body with an unset record field frees its checked copy" {
     // The checked-body copier heap-allocates a record's unset-label slice
-    // (`copyUnsetFieldLabels`); publication must free it alongside the
+    // (`copyUnsetFieldLabels`); the module must free it alongside the
     // record's fields. std.testing.allocator fails this test on a leak.
     const source =
         \\platform ""
@@ -35652,8 +35652,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x6A, 0x25, 0x6D, 0x29, 0x36, 0x50, 0x85, 0x89, 0x80, 0x28, 0xA2, 0xC4, 0xB7, 0x3F, 0x9F, 0x15,
-        0xBA, 0x9B, 0xA1, 0x8E, 0x0A, 0xF5, 0xE9, 0xD9, 0xB0, 0xE7, 0x1E, 0x32, 0x78, 0x15, 0x02, 0xEB,
+        0x8F, 0xD0, 0x5D, 0x61, 0xFA, 0x08, 0x58, 0xDE, 0x77, 0xAE, 0xD0, 0x24, 0x4E, 0xFB, 0x73, 0x8D,
+        0xEF, 0x10, 0x4C, 0x3A, 0x47, 0x3D, 0xF1, 0xDF, 0x97, 0x4E, 0x04, 0x3F, 0xFF, 0xB2, 0x99, 0x9F,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModule.SERIALIZED_VERSION_HASH);
 }
@@ -35711,7 +35711,7 @@ test "closed direct evidence excludes specialization-dependent nested recipes" {
     try std.testing.expect(!try directEvidenceIsClosed(std.testing.allocator, &nodes, &refs, evidence_5, &states));
 }
 
-test "publishing a module releases each resource exactly once under allocation failure" {
+test "opening a module releases each resource exactly once under allocation failure" {
     const TestEnv = @import("test/TestEnv.zig");
     const compiled_builtins = @import("compiled_builtins");
     const gpa = std.testing.allocator;

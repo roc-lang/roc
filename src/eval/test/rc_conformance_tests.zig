@@ -1300,7 +1300,7 @@ fn assertCaseChecks(allocator: Allocator, case: Case) SweepError!void {
 /// Compile and run one case with the observer watching every low-level op.
 fn runCase(allocator: Allocator, case: Case) SweepError!void {
     // `compileAllocationProgram` is the only public entry that lowers with
-    // wrapper inlining, and it does not take a pre-published Builtin, so cases
+    // wrapper inlining, and it does not take a pre-opened Builtin, so cases
     // pay for loading one only when they need that lowering.
     var wrapper_compiled = if (case.inline_wrappers)
         try helpers.compileProgram(allocator, std.testing.io, case.source_kind, case.source, &.{}, helpers.allocation_test_lower_options)

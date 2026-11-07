@@ -3275,7 +3275,7 @@ pub const Coordinator = struct {
         errdefer views.deinit(allocator);
 
         for (root_module.platformRequiredBindings().bindings) |binding| {
-            const checked = self.checkedModuleByKey(binding.app_value.module) orelse base.invariant("compile.coordinator.collectRelationModuleViews missing app artifact for platform relation", .{});
+            const checked = self.checkedModuleByKey(binding.app_value.module) orelse base.invariant("compile.coordinator.collectRelationModuleViews missing app module for platform relation", .{});
             try appendImportedModuleViewIfMissing(&views, allocator, root_module.key, checked);
         }
 

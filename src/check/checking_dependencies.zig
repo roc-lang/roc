@@ -62,7 +62,7 @@ pub const Scope = struct {
         return entry.value_ptr.*;
     }
 
-    /// Add an already-published dependency at its explicit position in the
+    /// Add an already-checked dependency at its explicit position in the
     /// checking scope. Missing producer data is an invariant, never a full-key
     /// substitute or an inferred public signature.
     pub fn appendDependency(self: *Scope, env: *const ModuleEnv) Allocator.Error!void {

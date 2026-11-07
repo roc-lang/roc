@@ -230,7 +230,7 @@ pub const ModuleAnalyses = struct {
     /// the importing compilation's resolver, or one over the opening's
     /// import views (`owned_import_views`).
     resolver: ?checked_module.ModuleResolver = null,
-    /// A copy of the import views publication resolved against, which
+    /// A copy of the import views the module was opened against, which
     /// `resolver` resolves through for as long as the module lives.
     owned_import_views: ?*checked_module.CheckedImportViews = null,
     /// The modules dispatch resolution searches and resolves types in
@@ -285,8 +285,8 @@ pub const ModuleAnalyses = struct {
         self.resolver = resolver;
     }
 
-    /// Give the analyses a resolver over a copy of the views publication
-    /// resolved against: its direct imports and the modules available to it.
+    /// Give the analyses a resolver over a copy of the views the module was
+    /// opened against: its direct imports and the modules available to it.
     pub fn attachImportViews(
         self: *ModuleAnalyses,
         imports: []const checked_module.CheckedImport,
