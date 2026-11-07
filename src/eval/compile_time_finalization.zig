@@ -4947,8 +4947,7 @@ fn evalDevLiteralRoot(
     plan: LirProgram.LiteralRootPlan,
     native: *DevProgram,
 ) FinalizeError!bool {
-    var host_allocator_impl = ThreadSafeAllocator.init(allocator);
-    const host_allocator = host_allocator_impl.allocator();
+    const host_allocator = native.root_allocator.allocator();
     const entry_offset = native.entry_offsets.get(plan.proc) orelse
         finalizationInvariant("native program omitted a literal root entry wrapper");
     const size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(plan.ret_layout));
@@ -5096,6 +5095,8 @@ const DevRootResult = enum {
     host_oom,
 };
 
+/// Every use of `child` behind one lock, for an allocator several threads
+/// share that is not thread-safe itself.
 const ThreadSafeAllocator = struct {
     child: Allocator,
     mutex: std.atomic.Mutex = .unlocked,
@@ -5966,8 +5967,13 @@ const DevProgram = struct {
     /// The bytes the program's erased callables reserve before their
     /// captures (`LirProgram.Result.erased_capture_prefix`).
     capture_prefix: u32,
+    /// `allocator` as the program's running code reaches it. Its roots run
+    /// on several threads at once, where their compile-time hosts and
+    /// `composition` both allocate, so every such allocation takes this one
+    /// lock and `allocator` need not be thread-safe.
+    root_allocator: *ThreadSafeAllocator,
     /// What a `.boxy` program's code composes while it runs, current on
-    /// each thread that runs it.
+    /// each thread that runs it. It allocates through `root_allocator`.
     composition: ?*BoxyInProcessState,
     /// The objects a linked program's code calls into.
     linked_images: ?*BoxyLinkedImages,
@@ -6108,6 +6114,11 @@ const DevProgram = struct {
         };
         if (options.timing) |timing| timing.finish(code_generation_started_ns, .code_generation);
 
+        const root_allocator = try allocator.create(ThreadSafeAllocator);
+        errdefer allocator.destroy(root_allocator);
+        root_allocator.* = ThreadSafeAllocator.init(allocator);
+        const composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(root_allocator.allocator()) else null;
+
         return .{
             .allocator = allocator,
             .static_strings = static_strings,
@@ -6118,7 +6129,8 @@ const DevProgram = struct {
             .entry_offsets = entry_offsets,
             .excerpts = artifacts,
             .capture_prefix = lowered.lir_result.erased_capture_prefix,
-            .composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null,
+            .root_allocator = root_allocator,
+            .composition = composition,
             .linked_images = options.boxy_linked_images,
             .image_selection = image_selection,
             .lir_store = &lowered.lir_result.store,
@@ -6264,6 +6276,7 @@ const DevProgram = struct {
     fn deinit(self: *DevProgram) void {
         self.image_selection.deinit(self.allocator);
         if (self.composition) |composition| composition.destroy();
+        self.allocator.destroy(self.root_allocator);
         self.entry_offsets.deinit();
         self.executable.deinit();
         self.splice.deinit();
@@ -6307,8 +6320,7 @@ fn evalDevProgramRoots(
     const_roots: []const LirProgram.ConstRootPlan,
     native: *DevProgram,
 ) FinalizeError!bool {
-    var host_allocator_impl = ThreadSafeAllocator.init(allocator);
-    const host_allocator = host_allocator_impl.allocator();
+    const host_allocator = native.root_allocator.allocator();
 
     var jobs = try allocator.alloc(DevRootJob, const_roots.len);
     var jobs_len: usize = 0;

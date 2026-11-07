@@ -24263,7 +24263,10 @@ the bytes handed to Roc, so reallocation reads the old length from the header
 and deallocation is free; the host keeps no per-pointer table, whose cost would
 grow with the allocations a root has ever held rather than with the ones it
 holds. Host events and failure state stay root-local until deterministic
-replay.
+replay. The root-local arenas and the program's composition state
+(`InProcessState`) draw their memory from the finalizer's allocator, which
+need not be thread-safe, through one lock the program owns, so roots running
+at once on different threads never reach that allocator concurrently.
 
 #### Compile-Time Failure Sites
 
