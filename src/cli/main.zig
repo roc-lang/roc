@@ -15653,9 +15653,13 @@ fn prepareUnitImageTests(
     for (visible) |artifact| if (artifact.platform_type_inputs.requirements.len != 0) try paired.append(ctx.gpa, artifact);
     var test_modules: std.ArrayList(*const Artifact) = .empty;
     defer test_modules.deinit(ctx.gpa);
-    // A root unit exists only to export the paired modules' wrappers.
+    // A root unit exists only to export the paired modules' wrappers. A
+    // module whose every outcome is reused ("Test outcome files") runs no
+    // root, so nothing needs its unit; the units of the modules that do run
+    // bring their imports' units with them.
     var paired_roots = false;
     for (test_plan.modules) |planned| {
+        if (planned.runCount() == 0) continue;
         if (planned.artifact.platform_type_inputs.requirements.len != 0) {
             const is_paired = for (paired.items) |artifact| {
                 if (artifact == planned.artifact) break true;

@@ -13821,8 +13821,10 @@ A *worker* is the one LIR procedure lowered for a checked procedure template,
 a nested lambda or closure expression, a generated structural codec
 derivation, or an entry wrapper. Worker identity is the template or expression
 identity; a template is never lowered twice, whatever the number of its uses
-or instantiations. A worker is lowered at its checked definition type, in
-which its scheme's quantified variables appear as type variables.
+or instantiations, with one declared, bounded exception: a `List` template
+also has a `List(U8)` worker (Pre-Specialized List(U8) Workers). A worker is
+lowered at its checked definition type, in which its scheme's quantified
+variables appear as type variables.
 
 A worker's hidden inputs are, in order:
 
@@ -14025,6 +14027,52 @@ box operations use the same descriptor operands as a `run_low_level` expression;
 closed operations use their committed layouts. Function values and erased calls
 retain the wrapper and its ordinary calling convention. This is direct lowering
 of a declared primitive, not general body inlining or specialization.
+
+#### Pre-Specialized List(U8) Workers
+
+Byte lists are the one instantiation pre-specialized under `.boxy`. A
+monomorphic `List(U8)` call into a generic `List` worker would read the item's
+size from its descriptor, copy single bytes through it, and build each `Try`
+result through the descriptor of the result type, which dominates byte-oriented
+programs. So every `List` template has, besides its generic worker, a second
+worker lowered with its list item variable bound to `U8`
+(`TemplateBinding.list_u8`). No other type and no other template gets one,
+and nothing requests one on demand: this is not a specialization mechanism.
+
+- A template has a `List(U8)` worker exactly when the Builtin module's method
+  registry names it as a method of `List`, its body is a checked body (a
+  template with `provided_low_level` already emits its operation at every
+  direct call), and its first parameter's type is `List(item)` for a scheme
+  variable `item` that is not sealed. That `item` is the template's LIST ITEM
+  VARIABLE (`Program.listItemSlot`). The rule reads the registry and the
+  converted signature; it never reads a name or scans a body. Templates with
+  other scheme variables (`map : List(a), (a -> b) -> List(b)`) bind only
+  the item variable; the rest stay variables of the worker.
+- The worker's body, signature, and the lambdas its scope roots are lowered
+  with the item variable bound to the `U8` type (`Worker.list_u8_slot`), so
+  every value of the item type, and every type over it (`Try(item, e)`,
+  `List(item)`), is closed and lowers as monomorphic code does. Its hidden
+  inputs are the generic worker's in the same order: the item variable's
+  descriptor stays an input, which callers fill with `U8`'s descriptor and
+  the body never reads, and its dictionaries (`is_eq` on items) and literal
+  arguments are supplied as for the generic worker. Call sites, dictionaries,
+  and table recipes therefore need nothing of their own.
+- A direct call of a generic `List` template whose instantiation binds the
+  list item variable to exactly `U8` calls the `List(U8)` worker
+  (`Program.directCallTarget`), with the hidden inputs computed for the generic
+  worker. Every other instantiation, including a variable the caller's own
+  instantiation will make `U8`, calls the generic worker. A function value of
+  the template (`List.get` used as a value, or a dictionary method) is the
+  generic worker's: only direct calls are redirected.
+- The worker's identity is a content identity of its own
+  (`listU8TemplateWorkerIdentity`), distinct from the generic worker's and the
+  same in every object of the link; its readable name is the template's with
+  `@U8` appended (`Builtin.List.get@U8`). Stored-function and table-needs
+  metadata name it with its own worker tag (`template_list_u8`).
+- The Builtin module's unit lowers and exports the `List(U8)` workers of all
+  its `List` templates with the generic workers (Per-Module Output), in
+  template order, since its importers are lowered independently and reach
+  them by symbol. The link drops those nothing calls.
 
 #### Type Descriptors
 
@@ -14734,7 +14782,9 @@ Nothing a module emits depends on a module that imports it:
   rows (Sealed Result Rows), so no caller's instantiation reaches a body;
   every template's body and its dictionary entry are emitted, since another
   module may call a template or pack it as a function value, and the
-  entries of its registered methods and its `??` defaults with them; the
+  entries of its registered methods and its `??` defaults with them, and
+  for the Builtin module the `List(U8)` workers of its `List` templates
+  (Pre-Specialized List(U8) Workers); the
   wrappers of its `expect` and REPL roots are not, since nothing reaches them
   but a test plan's or a REPL's own roots, and each of those lowers as one
   program whose roots may name modules no unit lowers;

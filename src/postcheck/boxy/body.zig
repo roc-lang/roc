@@ -567,6 +567,10 @@ pub const Builder = struct {
         const worker = program.worker(id);
         const bound = try program.arena.allocator().alloc(TypeId, worker.scheme_vars.len);
         for (bound, 0..) |*slot, index| slot.* = try program.store.variable(@intCast(index));
+        // A `List(U8)` worker's body, and its lambdas', is lowered with the
+        // list item variable bound to `U8` (design.md "Pre-Specialized
+        // List(U8) Workers"): every value of the item type is static.
+        if (worker.list_u8_slot) |slot| bound[slot] = try program.store.primitive(.u8);
         return .{
             .program = program,
             .allocator = program.allocator,
@@ -7333,13 +7337,16 @@ pub const Builder = struct {
                 return try self.pushValue(try self.adaptValue(value, ret, result_ty));
             }
         }
-        try self.argsAtParams(explicit, arg_types, callee, bound, null);
+        // A `List` template called at `U8` calls its `List(U8)` worker, whose
+        // inputs are the generic worker's.
+        const direct = try self.program.directCallTarget(callee, bound);
+        try self.argsAtParams(explicit, arg_types, direct, bound, null);
         // The callee's one hidden argument: its type table at the hidden
         // words.
-        const args = try self.callArgs(explicit, callee, hidden_words);
+        const args = try self.callArgs(explicit, direct, hidden_words);
         defer self.allocator.free(args);
         const target = try self.localOf(ret, .frame);
-        const proc = self.program.worker(callee).proc;
+        const proc = self.program.worker(direct).proc;
         try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = proc, .args = try self.store.addLocalSpan(args), .next = undefined } });
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
     }
@@ -10070,10 +10077,11 @@ pub const Builder = struct {
                     .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                 };
                 defer self.allocator.free(instance.hidden);
-                const all = try self.callArgs(args, callee, instance.hidden);
+                const worker_id = try self.program.directCallTarget(callee, instance.bound);
+                const all = try self.callArgs(args, worker_id, instance.hidden);
                 defer self.allocator.free(all);
                 const target = try self.localOf(instance.ret, .frame);
-                try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(callee).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
+                try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(worker_id).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
                 return try self.adaptValue(target, instance.ret, result_ty);
             },
             .evidence_dependent => |dependent| {

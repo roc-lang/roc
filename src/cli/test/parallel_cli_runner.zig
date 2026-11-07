@@ -10508,6 +10508,9 @@ fn customBoxyTestOutcomes(io: std.Io, allocator: Allocator, env: *const CaseEnv,
         .{ .roc_file = "test/cli/BoxyLiteralThroughProcedureAlias.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} },
         .{ .roc_file = "test/cli/BoxyRowAtBoolFails.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "BoxyRowAtBoolFails.roc:17:1" } } },
         .{ .roc_file = "test/cli/BoxyNominalBoxFieldFails.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "BoxyNominalBoxFieldFails.roc:25:1" } } },
+        // Monomorphic `List(U8)` operations call the pre-specialized
+        // `List(U8)` workers (design.md "Pre-Specialized List(U8) Workers").
+        .{ .roc_file = "test/cli/BoxyListU8Ops.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 21 tests" }, .{ .stream = .stderr, .text = "20 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "BoxyListU8Ops.roc:47:1" }, .{ .stream = .stderr, .text = "[dbg] [200, 201, 202]" } } },
     };
     for (cases) |case| {
         if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--specialize=no" }, .roc_file = case.roc_file, .exit = case.exit, .contains = case.contains })) |failure| return failure;
