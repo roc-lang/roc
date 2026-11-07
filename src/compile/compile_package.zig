@@ -15,6 +15,38 @@ const CheckedModules = check.TypedCIR.Modules;
 const Can = can.Can;
 const ModuleEnv = can.ModuleEnv;
 const AST = parse.AST;
+
+/// Completed frontend work, counted at its execution sites independently of clocks.
+pub const CheckingWork = struct {
+    fresh_checks: u64 = 0,
+    typing_hits: u64 = 0,
+    artifact_hits: u64 = 0,
+    publications: u64 = 0,
+    /// checkFile includes checking-interface publication and sealing.
+    fresh_check_ns: u64 = 0,
+    /// Checked-artifact publication; the coordinator subtracts local CTFE.
+    publication_ns: u64 = 0,
+
+    pub fn add(self: *CheckingWork, other: CheckingWork) void {
+        inline for (@typeInfo(CheckingWork).@"struct".field_names) |field| {
+            @field(self, field) += @field(other, field);
+        }
+    }
+};
+
+const CheckingTimer = struct {
+    const freestanding = @import("builtin").os.tag == .freestanding;
+    started: if (freestanding) void else std.Io.Timestamp,
+
+    fn start(io: std.Io) CheckingTimer {
+        return .{ .started = if (freestanding) {} else std.Io.Timestamp.now(io, .awake) };
+    }
+
+    fn read(self: CheckingTimer, io: std.Io) u64 {
+        if (comptime freestanding) return 0;
+        return @intCast(@max(0, self.started.untilNow(io, .awake).nanoseconds));
+    }
+};
 /// Deserialize BuiltinIndices from the binary data generated at build time
 /// Timing information for different phases
 pub const TimingInfo = struct {
@@ -22,6 +54,7 @@ pub const TimingInfo = struct {
     canonicalize_ns: u64 = 0,
     canonicalize_diagnostics_ns: u64 = 0,
     type_checking_ns: u64 = 0,
+    checking_work: CheckingWork = .{},
     check_diagnostics_ns: u64 = 0,
     /// Compile-time evaluation run inside individual module checks, summed
     /// across the worker threads that ran those checks.
@@ -173,6 +206,7 @@ const checked_cache_entry = @import("checked_cache_entry.zig");
 
 /// Owned output from type checking before the coordinator takes publication.
 pub const TypeCheckOutput = struct {
+    checking_work: CheckingWork = .{},
     typing_metadata: ?checked_cache_entry.Metadata = null,
     typing_reused: bool = false,
     checker: Check,
@@ -558,10 +592,17 @@ pub fn typeCheckModule(
     // until after platform requirements are checked, so numeric literals can be
     // constrained by platform types (e.g., I64) before defaulting to Dec.
     // TODO: re-enable defer_numeric_defaults once ModuleEnv has the field
+    var work: CheckingWork = .{};
     if (restored) |metadata| {
         try metadata.install(&checker, &typing_context.?.scope);
         env.types.seal();
-    } else try checker.checkFile();
+        work.typing_hits += 1;
+    } else {
+        const timer = CheckingTimer.start(io);
+        try checker.checkFile();
+        work.fresh_check_ns = timer.read(io);
+        work.fresh_checks += 1;
+    }
 
     const typing_metadata = if (typing_context) |context|
         try checked_cache_entry.captureMetadata(artifact_alloc, &checker, &context.scope)
@@ -575,6 +616,7 @@ pub fn typeCheckModule(
         base.invariant("compile.typeCheckModule received an imported module environment without its checked artifact", .{});
     }
 
+    const publication_timer = CheckingTimer.start(io);
     var checked_artifact = try publishCheckedArtifactFromCheckedModule(
         artifact_alloc,
         env,
@@ -593,8 +635,11 @@ pub fn typeCheckModule(
         },
     );
     errdefer checked_artifact.deinit(artifact_alloc);
+    work.publication_ns = publication_timer.read(io);
+    work.publications += 1;
 
     return .{
+        .checking_work = work,
         .checker = checker,
         .publication = checked_artifact,
         .typing_metadata = typing_metadata,

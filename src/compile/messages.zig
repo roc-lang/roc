@@ -367,7 +367,8 @@ pub const TypeCheckedResult = struct {
     semantic: *OwnedSemanticModuleData,
     /// Any reports generated during type checking
     reports: std.ArrayList(Report),
-    /// Timing: nanoseconds spent type checking
+    checking_work: @import("compile_package.zig").CheckingWork = .{},
+    /// Checking, restoration and publication time, excluding local CTFE.
     type_check_ns: u64,
     /// Timing: nanoseconds spent on diagnostics
     check_diagnostics_ns: u64,

@@ -549,6 +549,7 @@ pub const ModuleState = struct {
     /// Work performed for this module during its current checking task.
     inference_runs: u32 = 0,
     checking_cache_hits: u32 = 0,
+    checking_work: compile_package.CheckingWork = .{},
     checking_interfaces_built: u32 = 0,
     checked_artifacts_published: u32 = 0,
     /// Module name (e.g., "Main", "Foo")
@@ -3107,11 +3108,13 @@ pub const Coordinator = struct {
         all_compile_time.addSnapshot(self.ctfe_timing.snapshot());
         all_compile_time.addSnapshot(self.module_ctfe_timing.snapshot());
         var slowest_type_checks: compile_package.SlowestTypeChecks = .{};
+        var checking_work: compile_package.CheckingWork = .{};
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
             const label = self.packageTimingLabel(pkg.name);
             for (pkg.modules.items) |*mod| {
+                checking_work.add(mod.checking_work);
                 if (mod.type_check_ns == 0) continue;
                 slowest_type_checks.offer(label, mod.name, mod.type_check_ns);
             }
@@ -3121,6 +3124,7 @@ pub const Coordinator = struct {
             .canonicalize_ns = self.total_canonicalize_ns,
             .canonicalize_diagnostics_ns = self.total_canonicalize_diag_ns,
             .type_checking_ns = self.total_typecheck_ns,
+            .checking_work = checking_work,
             .check_diagnostics_ns = self.total_typecheck_diag_ns,
             .module_compile_time_evaluation_ns = self.module_ctfe_timing.snapshot().total_ns,
             .program_finalization_ns = self.program_finalization_ns,
@@ -5216,6 +5220,7 @@ pub const Coordinator = struct {
 
     fn finishCachedModule(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) Allocator.Error!void {
         mod.checking_cache_hits += 1;
+        mod.checking_work.artifact_hits += 1;
         const module_time = mod.compile_time_ns;
         if (module_time < self.module_time_min_ns) self.module_time_min_ns = module_time;
         if (module_time > self.module_time_max_ns) self.module_time_max_ns = module_time;
@@ -6078,6 +6083,7 @@ pub const Coordinator = struct {
 
         // Update timing
         self.total_typecheck_ns += result.type_check_ns;
+        mod.checking_work.add(result.checking_work);
         self.total_typecheck_diag_ns += result.check_diagnostics_ns;
         mod.compile_time_ns += result.type_check_ns + result.check_diagnostics_ns;
         mod.type_check_ns = result.type_check_ns + result.check_diagnostics_ns;
@@ -7430,6 +7436,8 @@ pub const Coordinator = struct {
         const local_ctfe = local_ctfe_timing.snapshot();
         self.module_ctfe_timing.addSnapshot(local_ctfe);
         const type_check_ns = check_and_publish_ns -| local_ctfe.total_ns;
+        var checking_work = typecheck_output.checking_work;
+        checking_work.publication_ns -|= local_ctfe.total_ns;
 
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = result_alloc;
@@ -7487,6 +7495,7 @@ pub const Coordinator = struct {
                 .semantic = semantic,
                 .reports = reports,
                 .type_check_ns = type_check_ns,
+                .checking_work = checking_work,
                 .check_diagnostics_ns = diagnostics_ns,
             },
         };
@@ -7696,6 +7705,7 @@ fn compileAppWithCheckedModuleCache(
 /// reports, rendered in a deterministic order, and every checked artifact key
 /// it published.
 const CompiledBuildFacts = struct {
+    checking_work: compile_package.CheckingWork,
     build: compile_build.BuildEnv.BuildStats,
     cache: CacheStats,
     /// Every report the build produced, each prefixed with the package and
@@ -7723,6 +7733,8 @@ const ModuleCheckingFacts = struct {
     name: []const u8,
     inference_runs: u32,
     interfaces_built: u32,
+    work: compile_package.CheckingWork,
+    checking_digest: ?[32]u8,
 };
 
 fn lessThanBytes(_: void, a: [32]u8, b: [32]u8) bool {
@@ -7862,6 +7874,8 @@ fn compileAppFactsWithWorkers(
                 .name = name,
                 .inference_runs = mod.inference_runs,
                 .interfaces_built = mod.checking_interfaces_built,
+                .work = mod.checking_work,
+                .checking_digest = if (mod.moduleEnv()) |env| if (env.checking_dependency.published) env.checking_dependency.digest else null else null,
             });
         }
     }
@@ -7872,6 +7886,7 @@ fn compileAppFactsWithWorkers(
         .build = coord.getBuildStats(),
         .cache = cache_manager.stats,
         .reports = owned_reports,
+        .checking_work = coord.getTimingInfo().checking_work,
         .artifact_keys = try keys.toOwnedSlice(allocator),
         .artifact_digests = try digests.toOwnedSlice(allocator),
         .checking = try checking.toOwnedSlice(allocator),
@@ -10437,6 +10452,129 @@ test "canonicalized module cache entry survives a change to an imported module" 
     // The changed module's checked entry misses, and so does its importer's,
     // because a checked key folds in its imports' checked keys.
     try std.testing.expect(second.build.cache_misses > 0);
+}
+
+test "typing reuse work counters distinguish checking from republication" {
+    if (comptime is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+    try writeFileImportFixture(&tmp_dir, "typing_work",
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import Middle
+        \\main! = |_args| { _ = Middle.read({})
+        \\    Ok({}) }
+    );
+    const history =
+        \\Trail(place) : { back : List(place), forward : List(place) }
+        \\History := [].{
+        \\    Trail(place) : Trail(place)
+        \\    empty : () -> Trail(place)
+        \\    empty = || { back: [], forward: [] }
+        \\    back : Trail(place), place -> [None, Some({ history : Trail(place), place : place })]
+        \\    back = |history, current| match history.back.last() {
+        \\        Ok(place) => Some({ history: { back: history.back.drop_last(1), forward: history.forward.append(current) }, place })
+        \\        Err(_) => None
+        \\    }
+        \\}
+        \\
+    ;
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "typing_work/app/History.roc",
+        .data = history ++ "expect History.back(History.empty(), 1.I64) == None\n",
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "typing_work/app/Caller.roc",
+        .data =
+        \\import History
+        \\Caller := [].{ read : {} -> Bool
+        \\    read = |_| saved }
+        \\saved = History.back(History.empty(), 1.I64) == None
+        ,
+    });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "typing_work/app/Middle.roc",
+        .data =
+        \\import Caller
+        \\Middle := [].{ read : {} -> Bool
+        \\    read = |arg| Caller.read(arg) }
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "typing_work/app/main.roc", allocator);
+    defer allocator.free(app_path);
+    var cold = try compileAppFacts(allocator, cache_dir, app_path);
+    defer cold.deinit(allocator);
+    try std.testing.expectEqualStrings("", cold.reports);
+    try std.testing.expectEqual(cold.build.modules_compiled, cold.checking_work.fresh_checks);
+    try std.testing.expectEqual(cold.checking_work.fresh_checks, cold.checking_work.publications);
+    try std.testing.expectEqual(@as(u64, 0), cold.checking_work.typing_hits);
+
+    var warm = try compileAppFacts(allocator, cache_dir, app_path);
+    defer warm.deinit(allocator);
+    try expectFullCheckedWorkHits(&warm);
+
+    // Only a test literal changes; the import-facing polymorphic types do not.
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "typing_work/app/History.roc",
+        .data = history ++ "expect History.back(History.empty(), 2.I64) == None\n",
+    });
+    var edited = try compileAppFacts(allocator, cache_dir, app_path);
+    defer edited.deinit(allocator);
+    try std.testing.expectEqualStrings("", edited.reports);
+    const work = edited.checking_work;
+    try std.testing.expectEqual(@as(u64, 1), work.fresh_checks);
+    try std.testing.expect(work.typing_hits >= 2);
+    try std.testing.expectEqual(work.fresh_checks + work.typing_hits, work.publications);
+    for ([_][]const u8{ "History", "Caller", "Middle" }) |name| {
+        const before = for (cold.checking) |facts| {
+            if (std.mem.eql(u8, facts.name, name)) break facts;
+        } else return error.TestUnexpectedResult;
+        const after = for (edited.checking) |facts| {
+            if (std.mem.eql(u8, facts.name, name)) break facts;
+        } else return error.TestUnexpectedResult;
+        try std.testing.expectEqualSlices(u8, &before.checking_digest.?, &after.checking_digest.?);
+        try std.testing.expectEqual(@as(u64, 1), after.work.publications);
+        if (std.mem.eql(u8, name, "History")) {
+            try std.testing.expectEqual(@as(u32, 1), after.inference_runs);
+            try std.testing.expectEqual(@as(u64, 1), after.work.fresh_checks);
+        } else {
+            try std.testing.expectEqual(@as(u32, 0), after.inference_runs);
+            try std.testing.expectEqual(@as(u32, 0), after.interfaces_built);
+            try std.testing.expectEqual(@as(u64, 0), after.work.fresh_checks);
+            try std.testing.expectEqual(@as(u64, 0), after.work.fresh_check_ns);
+            try std.testing.expectEqual(@as(u64, 1), after.work.typing_hits);
+        }
+    }
+    try std.testing.expectEqual(cold.artifact_keys.len, edited.artifact_keys.len);
+    var keys_changed = false;
+    for (cold.artifact_keys, edited.artifact_keys) |before, after| {
+        if (!std.mem.eql(u8, &before, &after)) keys_changed = true;
+    }
+    try std.testing.expect(keys_changed);
+    var fresh = try compileAppFacts(allocator, null, app_path);
+    defer fresh.deinit(allocator);
+    try std.testing.expectEqualStrings(fresh.reports, edited.reports);
+    try std.testing.expectEqualSlices([32]u8, fresh.artifact_keys, edited.artifact_keys);
+    try std.testing.expectEqualSlices([32]u8, fresh.artifact_digests, edited.artifact_digests);
+
+    var edited_warm = try compileAppFacts(allocator, cache_dir, app_path);
+    defer edited_warm.deinit(allocator);
+    try expectFullCheckedWorkHits(&edited_warm);
+    try std.testing.expectEqualSlices([32]u8, edited.artifact_keys, edited_warm.artifact_keys);
+}
+
+fn expectFullCheckedWorkHits(facts: *const CompiledBuildFacts) !void {
+    try std.testing.expectEqualStrings("", facts.reports);
+    const work = facts.checking_work;
+    try std.testing.expectEqual(@as(u64, 0), work.fresh_checks);
+    try std.testing.expectEqual(@as(u64, 0), work.typing_hits);
+    try std.testing.expectEqual(@as(u64, 0), work.publications);
+    try std.testing.expectEqual(@as(u64, 0), work.fresh_check_ns);
+    try std.testing.expectEqual(@as(u64, 0), work.publication_ns);
+    try std.testing.expectEqual(facts.build.modules_total, work.artifact_hits);
 }
 
 test "checked cache dependency edits preserve fresh-build results" {
