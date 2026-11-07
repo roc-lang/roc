@@ -60962,7 +60962,7 @@ fn checkFlexVarConstraintCompatibility(
 
             const method_var = try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, .{ .dispatch_target = .{
                 .node_idx = if (constraintIntroExpr(constraint)) |expr| @backingInt(expr) else 0,
-                        .constraint_fn_var = constraint.fn_var,
+                .constraint_fn_var = constraint.fn_var,
             } });
 
             // The mismatch is reported below, after the rollback, against the
