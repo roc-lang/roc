@@ -6046,7 +6046,7 @@ lowering in its worker's workspace and never added to the checked module:
 The checked boundary has exactly the live data of "The Live Checked Module",
 and these shapes are forbidden:
 
-- a frozen copy of a checked module (`CheckedModule`) or a pass that
+- a frozen copy of a checked module (`CheckedModuleArtifact`) or a pass that
   builds one (`publishFromTypedModule`), or any way to make a checked module
   other than opening it (`openCheckedModule`);
 - a checked cache payload beside the `ModuleEnv` other than the inference
