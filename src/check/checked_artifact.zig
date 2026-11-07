@@ -35407,6 +35407,7 @@ fn testVisibilityImportedView(
         .resolved_value_refs = undefined,
         .static_dispatch_plans = undefined,
         .top_level_procedure_bindings = undefined,
+        .platform_required_bindings = undefined,
         .callable_eval_templates = undefined,
         .hoisted_constants = undefined,
         .const_templates = undefined,
