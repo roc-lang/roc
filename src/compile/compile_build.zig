@@ -55,7 +55,6 @@ pub const BuildWithMainError = BuildError || CompileDiscoveredError;
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
-const Can = can.Can;
 const SemanticModuleData = compile_package.SemanticModuleData;
 const CheckedModuleData = compile_package.CheckedModuleData;
 const ModuleTimingInfo = compile_package.TimingInfo;
