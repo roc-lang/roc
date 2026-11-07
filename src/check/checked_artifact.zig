@@ -36812,13 +36812,13 @@ test "root eligibility shared type DAG is expanded once across all roots" {
     defer store.deinit(allocator);
     try store.payloads.append(allocator, try store.commitPayload(allocator, .empty_record));
     for (1..64) |index| {
-        const previous: CheckedTypeId = @fromBackingInt(@intCast(index - 1));
+        const previous: CheckedTypeId = type_ids.fromSynthesized(@intCast(index - 1));
         try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{ previous, previous }) }));
     }
     var context = NonConcreteRootScan{ .checked_types = &store };
     var traversal = NonConcreteRootTraversal.init(allocator, &context);
     defer traversal.deinit();
-    try std.testing.expect(!try traversal.visit(.{ .walk = .value_graph, .id = @fromBackingInt(63) }));
-    for (0..64) |index| try std.testing.expect(!try traversal.visit(.{ .walk = .value_graph, .id = @fromBackingInt(@intCast(index)) }));
+    try std.testing.expect(!try traversal.visit(.{ .walk = .value_graph, .id = type_ids.fromSynthesized(63) }));
+    for (0..64) |index| try std.testing.expect(!try traversal.visit(.{ .walk = .value_graph, .id = type_ids.fromSynthesized(@intCast(index)) }));
     try std.testing.expectEqual(@as(usize, 64), traversal.nodes.items.len);
 }
