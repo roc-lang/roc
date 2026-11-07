@@ -10,20 +10,11 @@ const LocalId = LIR.LocalId;
 const LocalSpan = LIR.LocalSpan;
 const DynOp = LIR.DynOp;
 
-/// Whether this operation composes immortal metadata. Its local operands are
-/// the site cache key; all other inputs are fixed by the statement itself.
-pub fn isComposition(op: DynOp) bool {
-    return switch (op) {
-        .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_compose, .dict_patch, .dict_record => true,
-        .frame_alloc, .desc_note, .dict_method, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => false,
-    };
-}
-
 /// How an operation treats the ownership of its target and value operands
 /// (see `LIR.DynOp`).
 pub const Ownership = union(enum) {
-    /// No reference-counted value is read or produced: descriptor, name, and
-    /// dictionary composition, `frame_alloc`, and `tag_discriminant_of`.
+    /// No reference-counted value is read or produced: `frame_alloc` and
+    /// `tag_discriminant_of`.
     none,
     /// The target borrows from `source` (a component address or a load of a
     /// component's bytes).
@@ -45,31 +36,8 @@ pub const Ownership = union(enum) {
 pub fn ownership(op: DynOp) Ownership {
     return switch (op) {
         .frame_alloc,
-        .desc_list,
-        .desc_box,
-        .desc_record,
-        .desc_declared_record,
-        .desc_tuple,
-        .desc_presence_slot,
-        .desc_tag_union,
-        .desc_args,
-        .desc_nominal,
-        .desc_recursive_box,
-        .desc_recursive_open,
-        .desc_recursive_close,
-        .desc_note,
         .tag_discriminant_of,
         => .none,
-        // A dictionary is an immortal erased callable built from its
-        // captures, which it holds as an aggregate holds its fields.
-        .dict_compose => .construct,
-        // A dictionary record copies the words of its callables, which are
-        // immortal, into an immortal record of its own.
-        .dict_record => .borrow_operands,
-        // A patch writes an immortal dictionary into another one.
-        .dict_patch => .borrow_operands,
-        // A dictionary's callables are immortal; the target borrows from it.
-        .dict_method => |method| .{ .borrow_component = method.dict },
         // A table's words are static data, which the target holds as a
         // static-data literal read holds its value: a fresh owned unit of
         // image data. The table itself holds no unit.
@@ -110,56 +78,6 @@ pub const Operands = struct {
         var result: Operands = .{};
         switch (op) {
             .frame_alloc => {},
-            .desc_list => |desc| result.single(desc.elem),
-            .desc_box => |desc| result.single(desc.payload),
-            .desc_record => |desc| {
-                if (desc.ext) |ext| result.single(ext);
-                result.span(desc.names);
-                result.span(desc.descs);
-            },
-            .desc_declared_record => |desc| {
-                result.span(desc.names);
-                result.span(desc.descs);
-            },
-            .desc_tuple => |desc| result.span(desc.elems),
-            .desc_presence_slot => |desc| {
-                result.single(desc.missing);
-                result.single(desc.present);
-                result.single(desc.payload);
-            },
-            .desc_tag_union => |desc| {
-                if (desc.ext) |ext| result.single(ext);
-                result.span(desc.names);
-                result.span(desc.payloads);
-            },
-            .desc_args => |desc| result.span(desc.elems),
-            .desc_nominal => |desc| {
-                result.single(desc.backing);
-                result.single(desc.name);
-                if (desc.methods) |methods| result.single(methods);
-            },
-            .desc_recursive_box => |desc| result.single(desc.payload),
-            .desc_recursive_open => |desc| {
-                result.single(desc.key);
-                result.span(desc.vars);
-            },
-            .desc_recursive_close => |desc| {
-                result.single(desc.shell);
-                result.single(desc.desc);
-                result.single(desc.key);
-                result.span(desc.vars);
-            },
-            .desc_note => |desc| {
-                result.single(desc.desc);
-                result.span(desc.vars);
-            },
-            .dict_compose => |dict| result.span(dict.captures),
-            .dict_patch => |patch| {
-                result.single(patch.dict);
-                result.single(patch.value);
-            },
-            .dict_record => |dict| result.span(dict.methods),
-            .dict_method => |method| result.single(method.dict),
             .table_entry => |entry| result.single(entry.table),
             .copy => |copy| {
                 result.single(copy.src);
@@ -292,28 +210,11 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
         .box => |box| try out.append(allocator, box.payload),
         .slot_alloc => {},
         .slot_store => |slot| try out.appendSlice(allocator, &.{ slot.slot, slot.value }),
-        .dict_compose => |dict| try appendSpan(store, allocator, dict.captures, out),
         .closure => |closure| {
             try out.append(allocator, closure.capture);
             if (closure.reuse) |reuse| try out.append(allocator, reuse);
         },
-        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .adapt => unreachable, // only construct operations consume value operands
-    }
-}
-
-/// The value operands a `borrow_operands` operation reads, in order.
-pub fn borrowedValues(store: *const LirStore, allocator: std.mem.Allocator, op: DynOp, out: *std.ArrayList(LocalId)) std.mem.Allocator.Error!void {
-    switch (op) {
-        .tag_discriminant => |tag| try out.append(allocator, tag.base),
-        .eq => |eq| try out.appendSlice(allocator, &.{ eq.lhs, eq.rhs }),
-        .hash => |hash| try out.appendSlice(allocator, &.{ hash.hasher, hash.value }),
-        .inspect => |inspect| try out.append(allocator, inspect.value),
-        .adapt => |adapt| try out.append(allocator, adapt.src),
-        .dict_record => |dict| try appendSpan(store, allocator, dict.methods, out),
-        .dict_patch => |patch| try out.appendSlice(allocator, &.{ patch.dict, patch.value }),
-        // The table is static data, no value.
-        .table_entry => {},
-        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_compose, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
+        .frame_alloc, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .adapt => unreachable, // only construct operations consume value operands
     }
 }
 
@@ -353,50 +254,6 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
     };
     return switch (op) {
         .frame_alloc => op,
-        .desc_list => |desc| .{ .desc_list = .{ .elem = try Remap.one(context, desc.elem) } },
-        .desc_box => |desc| .{ .desc_box = .{ .payload = try Remap.one(context, desc.payload) } },
-        .desc_record => |desc| .{ .desc_record = .{
-            .names = try Remap.span(store, context, desc.names),
-            .descs = try Remap.span(store, context, desc.descs),
-            .ext = try Remap.opt(context, desc.ext),
-        } },
-        .desc_declared_record => |desc| .{ .desc_declared_record = .{
-            .names = try Remap.span(store, context, desc.names),
-            .descs = try Remap.span(store, context, desc.descs),
-            .padding = desc.padding,
-        } },
-        .desc_tuple => |desc| .{ .desc_tuple = .{ .elems = try Remap.span(store, context, desc.elems) } },
-        .desc_presence_slot => |desc| .{ .desc_presence_slot = .{
-            .missing = try Remap.one(context, desc.missing),
-            .present = try Remap.one(context, desc.present),
-            .payload = try Remap.one(context, desc.payload),
-        } },
-        .desc_tag_union => |desc| .{ .desc_tag_union = .{
-            .names = try Remap.span(store, context, desc.names),
-            .payload_counts = desc.payload_counts,
-            .payloads = try Remap.span(store, context, desc.payloads),
-            .ext = try Remap.opt(context, desc.ext),
-        } },
-        .desc_args => |desc| .{ .desc_args = .{ .elems = try Remap.span(store, context, desc.elems) } },
-        .desc_nominal => |desc| .{ .desc_nominal = .{
-            .backing = try Remap.one(context, desc.backing),
-            .name = try Remap.one(context, desc.name),
-            .methods = try Remap.opt(context, desc.methods),
-            .inspect_opaque = desc.inspect_opaque,
-        } },
-        .desc_recursive_box => |desc| .{ .desc_recursive_box = .{ .payload = try Remap.one(context, desc.payload) } },
-        .desc_recursive_open => |desc| .{ .desc_recursive_open = .{ .key = try Remap.one(context, desc.key), .vars = try Remap.span(store, context, desc.vars) } },
-        .desc_recursive_close => |desc| .{ .desc_recursive_close = .{
-            .shell = try Remap.one(context, desc.shell),
-            .desc = try Remap.one(context, desc.desc),
-            .key = try Remap.one(context, desc.key),
-            .vars = try Remap.span(store, context, desc.vars),
-        } },
-        .desc_note => |desc| .{ .desc_note = .{ .desc = try Remap.one(context, desc.desc), .ty = desc.ty, .vars = try Remap.span(store, context, desc.vars) } },
-        .dict_compose => |dict| .{ .dict_compose = .{ .worker = dict.worker, .captures = try Remap.span(store, context, dict.captures) } },
-        .dict_patch => |patch| .{ .dict_patch = .{ .dict = try Remap.one(context, patch.dict), .index = patch.index, .value = try Remap.one(context, patch.value) } },
-        .dict_record => |dict| .{ .dict_record = .{ .methods = try Remap.span(store, context, dict.methods) } },
-        .dict_method => |method| .{ .dict_method = .{ .dict = try Remap.one(context, method.dict), .index = method.index } },
         .table_entry => |entry| .{ .table_entry = .{ .table = try Remap.one(context, entry.table), .index = entry.index } },
         .copy => |copy| .{ .copy = .{ .src = try Remap.one(context, copy.src), .desc = try Remap.one(context, copy.desc) } },
         .field_addr => |field| .{ .field_addr = .{ .base = try Remap.one(context, field.base), .desc = try Remap.one(context, field.desc), .field_index = field.field_index } },
@@ -440,39 +297,16 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
     };
 }
 
-test "a composed declared-order record's labels and descriptors are its operands" {
+test "every operand of a record construction is visited in order" {
     var store = LirStore.init(std.testing.allocator);
     defer store.deinit();
-    const a: LocalId = @fromBackingInt(1);
-    const b: LocalId = @fromBackingInt(2);
-    const c: LocalId = @fromBackingInt(3);
-    const op: DynOp = .{ .desc_declared_record = .{
-        .names = try store.addLocalSpan(&.{a}),
-        .descs = try store.addLocalSpan(&.{ b, c }),
-        .padding = try store.addU32Span(&.{1}),
-    } };
+    const desc: LocalId = @fromBackingInt(1);
+    const a: LocalId = @fromBackingInt(2);
+    const b: LocalId = @fromBackingInt(3);
+    const op: DynOp = .{ .record = .{ .desc = desc, .fields = try store.addLocalSpan(&.{ a, b }) } };
     var out: std.ArrayList(LocalId) = .empty;
     defer out.deinit(std.testing.allocator);
     try Operands.of(op).appendAll(&store, std.testing.allocator, &out);
-    try std.testing.expectEqualSlices(LocalId, &.{ a, b, c }, out.items);
-    try std.testing.expectEqual(Ownership.none, ownership(op));
-    try std.testing.expect(isComposition(op));
-}
-
-test "every operand of a composed record is visited in order" {
-    var store = LirStore.init(std.testing.allocator);
-    defer store.deinit();
-    const a: LocalId = @fromBackingInt(1);
-    const b: LocalId = @fromBackingInt(2);
-    const c: LocalId = @fromBackingInt(3);
-    const d: LocalId = @fromBackingInt(4);
-    const op: DynOp = .{ .desc_record = .{
-        .names = try store.addLocalSpan(&.{ a, b }),
-        .descs = try store.addLocalSpan(&.{ c, d }),
-    } };
-    var out: std.ArrayList(LocalId) = .empty;
-    defer out.deinit(std.testing.allocator);
-    try Operands.of(op).appendAll(&store, std.testing.allocator, &out);
-    try std.testing.expectEqualSlices(LocalId, &.{ a, b, c, d }, out.items);
-    try std.testing.expectEqual(Ownership.none, ownership(op));
+    try std.testing.expectEqualSlices(LocalId, &.{ desc, a, b }, out.items);
+    try std.testing.expectEqual(Ownership.construct, ownership(op));
 }

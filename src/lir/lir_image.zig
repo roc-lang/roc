@@ -62,7 +62,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v59: composition statements name mutable static cache slots.
 /// v60: active-tag payload addresses no longer carry a tag-name operand.
 /// v61: dynamic operations include type table reads (`table_entry`).
-pub const FORMAT_VERSION: u32 = 61;
+/// v62: no dynamic operation composes descriptors or dictionaries, and no
+///      statement names a composition cache slot.
+pub const FORMAT_VERSION: u32 = 62;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -1344,13 +1346,13 @@ test "LIR image preserves the specialized runtime contract and rejects incompati
     try std.testing.expectError(error.InvalidLirImage, viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, allocator));
 }
 
-test "boxy composition slots survive LirImage transport with their initial state" {
+test "mutable static data survives LirImage transport with its initial state" {
     const a = std.testing.allocator;
     const memory = try a.alignedAlloc(u8, .@"16", 4096);
     defer a.free(memory);
     var fixed = std.heap.FixedBufferAllocator.init(memory);
     const graph = [_]Program.StaticDataExport{.{
-        .symbol_name = "roc__boxy_site_test_0",
+        .symbol_name = "roc__mutable_test_0",
         .value_id = null,
         .bytes = &@as([8]u8, @splat(0)),
         .alignment = 8,

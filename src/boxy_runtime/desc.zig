@@ -11,6 +11,13 @@
 //! restating the format.
 
 const std = @import("std");
+const builtins = @import("builtins");
+const shape = @import("layout_shape");
+
+const SortKey = shape.SortKey;
+const RocStr = builtins.str.RocStr;
+
+const pointer_size: u32 = @sizeOf(usize);
 
 /// What a descriptor describes, and so which of its fields are meaningful.
 pub const Kind = enum(u8) {
@@ -344,6 +351,89 @@ pub const Methods = extern struct {
         return externLayout(Methods, width);
     }
 };
+
+// Leaf descriptors.
+
+/// A descriptor of no components: its kind, scalar, shape, and whether its
+/// value holds a reference count.
+pub fn leaf(kind: Kind, scalar: Scalar, size: u32, alignment: u32, sort_key: SortKey, contains_refcounted: bool) TypeDesc {
+    return .{
+        .size = size,
+        .alignment = alignment,
+        .kind = kind,
+        .scalar = scalar,
+        .sort_key = @backingInt(sort_key),
+        .flags = .{ .contains_refcounted = contains_refcounted },
+        .count = 0,
+        .discriminant_offset = 0,
+        .discriminant_size = 0,
+        .child = null,
+        .entries = null,
+        .name = null,
+        .methods = null,
+    };
+}
+
+const zst_leaf: TypeDesc = leaf(.zst, .u8, 0, 1, .align_1, false);
+const str_leaf: TypeDesc = leaf(.str, .u8, RocStr.word_count * pointer_size, pointer_size, .pointer, true);
+const erased_callable_leaf: TypeDesc = leaf(.erased_callable, .u8, pointer_size, pointer_size, .pointer, true);
+const bool_leaf: TypeDesc = blk: {
+    var bool_desc = leaf(.bool, .u8, 1, 1, .align_1, false);
+    bool_desc.count = 2;
+    bool_desc.discriminant_size = 1;
+    break :blk bool_desc;
+};
+
+fn scalarSize(scalar: Scalar) u32 {
+    return switch (scalar) {
+        .u8, .i8 => 1,
+        .u16, .i16 => 2,
+        .u32, .i32, .f32 => 4,
+        .u64, .i64, .f64 => 8,
+        .u128, .i128, .dec => 16,
+        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => 16,
+        .opaque_ptr => pointer_size,
+    };
+}
+
+const scalar_leaves = blk: {
+    const scalars = @typeInfo(Scalar).@"enum".field_names;
+    var leaves: [scalars.len]TypeDesc = undefined;
+    for (&leaves, 0..) |*slot, index| {
+        const scalar: Scalar = @fromBackingInt(index);
+        const size = scalarSize(scalar);
+        const sort_key: SortKey = if (scalar == .opaque_ptr) .pointer else SortKey.fromAlignBytes(size);
+        slot.* = leaf(.scalar, scalar, size, size, sort_key, false);
+    }
+    break :blk leaves;
+};
+
+/// The zero-sized descriptor: the empty record, the empty tuple, a
+/// payload-free variant's payload.
+pub fn zstDesc() *const TypeDesc {
+    return &zst_leaf;
+}
+
+/// The descriptor of `Str`.
+pub fn strDesc() *const TypeDesc {
+    return &str_leaf;
+}
+
+/// The descriptor of `Bool`.
+pub fn boolDesc() *const TypeDesc {
+    return &bool_leaf;
+}
+
+/// The descriptor every function value shares.
+pub fn erasedCallableDesc() *const TypeDesc {
+    return &erased_callable_leaf;
+}
+
+/// A scalar's descriptor. A SIMD vector's carries no `to_inspect`; the
+/// compiler emits vector descriptors with theirs.
+pub fn scalarDesc(scalar: Scalar) *const TypeDesc {
+    return &scalar_leaves[@backingInt(scalar)];
+}
 
 /// A target pointer width.
 pub const PointerWidth = enum {

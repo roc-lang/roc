@@ -128,7 +128,7 @@ fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLi
                     try std.testing.expectEqual((constructed orelse return error.TestUnexpectedResult), call.args.?);
                     try std.testing.expectEqual(lir.LIR.DynStorage.frame, (store.localDyn(call.args.?) orelse return error.TestUnexpectedResult).storage);
                 },
-                .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_compose, .dict_record, .dict_method, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => {},
+                .frame_alloc, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => {},
             };
             try lir.BodyClone.appendSuccessors(store, &work, id, std.testing.allocator);
         }
@@ -168,7 +168,12 @@ fn inspectEntries(store: *const lir.LirStore, _: *const layout.Store) harness.Lo
         var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
         defer visited.deinit();
         try pending.append(std.testing.allocator, proc.body.?);
-        var arg_descs: usize = 0;
+        // The descriptor each record the body builds is built with, and the
+        // argument blocks of its erased calls.
+        var record_descs = collections.DenseMap(lir.LIR.LocalId, lir.LIR.LocalId).init(std.testing.allocator);
+        defer record_descs.deinit();
+        var call_args: std.ArrayList(lir.LIR.LocalId) = .empty;
+        defer call_args.deinit(std.testing.allocator);
         const params = store.getLocalSpan(proc.args);
         // An erased worker's last parameter is the erased ABI's reuse input.
         const reuse_params: usize = @intFromBool(proc.erased_reuse_arg != null);
@@ -181,19 +186,24 @@ fn inspectEntries(store: *const lir.LirStore, _: *const layout.Store) harness.Lo
             const stmt = store.getCFStmt(id);
             if (stmt == .incref and stmt.incref.value == param) retains_param = true;
             if (stmt == .dyn) switch (store.stmtRow(stmt.dyn.data)) {
-                .desc_args => arg_descs += 1,
+                .record => |record| try record_descs.put(stmt.dyn.target.?, record.desc),
                 .field_addr => |field| if (field.base == param) {
                     extracts_param = true;
                 },
-                .call_erased => |call| if (param != null and call.args == param and store.localDyn(param.?) != null) {
-                    forwards_param = true;
+                .call_erased => |call| {
+                    if (call.args) |args| try call_args.append(std.testing.allocator, args);
+                    if (param != null and call.args == param and store.localDyn(param.?) != null) forwards_param = true;
                 },
-                .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_compose, .dict_record, .dict_method, .table_entry, .copy, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => {},
+                .frame_alloc, .table_entry, .copy, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => {},
             };
             try lir.BodyClone.appendSuccessors(store, &pending, id, std.testing.allocator);
         }
         if (same or reversed) {
-            try std.testing.expectEqual(@as(usize, if (same) 1 else 2), arg_descs);
+            // The distinct descriptors of the argument records it builds.
+            var arg_descs = collections.DenseMap(lir.LIR.LocalId, void).init(std.testing.allocator);
+            defer arg_descs.deinit();
+            for (call_args.items) |args| if (record_descs.get(args)) |desc| try arg_descs.put(desc, {});
+            try std.testing.expectEqual(@as(usize, if (same) 1 else 2), arg_descs.count());
             if (same) shared = true else ordered = true;
         }
         if (proc.abi == .erased_record and forwards_param) {
@@ -232,15 +242,14 @@ test "boxy worker reads dynamic nominal backing descriptors from its type table"
                     var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
                     defer visited.deinit();
                     try pending.append(std.testing.allocator, proc.body.?);
+                    var table_reads: usize = 0;
                     while (pending.pop()) |id| {
                         if ((try visited.getOrPut(id)).found_existing) continue;
                         const stmt = store.getCFStmt(id);
-                        if (stmt == .dyn) {
-                            const op = store.stmtRow(stmt.dyn.data);
-                            try std.testing.expect(op != .desc_nominal and op != .desc_tag_union);
-                        }
+                        if (stmt == .dyn and store.stmtRow(stmt.dyn.data) == .table_entry) table_reads += 1;
                         try lir.BodyClone.appendSuccessors(store, &pending, id, std.testing.allocator);
                     }
+                    try std.testing.expect(table_reads != 0);
                 }
                 try std.testing.expect(found);
             }

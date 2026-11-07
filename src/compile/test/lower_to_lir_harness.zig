@@ -172,7 +172,6 @@ pub const LirLoweringOptions = struct {
     shared_comptime_reads: bool = false,
 
     specialization_strategy: base.SpecializationStrategy = .lss,
-    boxy_composition_sites: bool = true,
     /// Number of coordinator workers available to post-check lowering.
     /// The default retains the harness's existing single-threaded behavior.
     specialization_workers: usize = 1,
@@ -1304,7 +1303,6 @@ fn lowerAppPathToLir(
     const lower_target: lir.CheckedPipeline.TargetConfig = .{
         .comptime_value_reads = opts.shared_comptime_reads,
         .specialization_strategy = opts.specialization_strategy,
-        .boxy_composition_sites = opts.boxy_composition_sites,
         .target_usize = opts.target_usize,
         .inline_mode = opts.inline_mode,
         .spec_constr_clone_inlining = opts.spec_constr_clone_inlining,

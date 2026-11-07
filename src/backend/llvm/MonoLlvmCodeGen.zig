@@ -4150,8 +4150,7 @@ pub const MonoLlvmCodeGen = struct {
                     // A dictionary's entry is called through the address
                     // its composition takes.
                     .dyn => |dyn_stmt| switch (self.store.stmtRow(dyn_stmt.data)) {
-                        .dict_compose => |compose| needs[@backingInt(compose.worker)] = true,
-                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
+                        .frame_alloc, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
                     },
                     .init_uninitialized, .assign_ref, .assign_call_erased, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
                 }
@@ -4421,11 +4420,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitSlotLifetimeMarkers(stmt_id);
         switch (stmt) {
             .dyn => |dyn_stmt| {
-                const op = self.store.stmtRow(dyn_stmt.data);
-                if (dyn_stmt.composition_cache) |cache|
-                    try self.emitCachedComposition(dyn_stmt.target.?, op, cache)
-                else
-                    try self.emitDyn(dyn_stmt.target, op);
+                try self.emitDyn(dyn_stmt.target, self.store.stmtRow(dyn_stmt.data));
                 try work.append(wa, .{ .node = dyn_stmt.next });
             },
             .assign_ref => |assign| {
@@ -11739,7 +11734,7 @@ pub const MonoLlvmCodeGen = struct {
     // ── `.boxy` dynamic values (design.md "Dynamic Values In LIR") ──
     //
     // A dynamic local's slot holds the address of its bytes, which its
-    // descriptor describes. Descriptor, name, and dictionary locals hold one
+    // descriptor describes. Descriptor, name, and type table locals hold one
     // pointer-sized word. Every operation the descriptor decides is a call to
     // a Boxy runtime `roc_desc_*` entry point, declared with its C signature:
     // a `u32` is an `i32`, a `bool` argument is widened to an `i32`, and a
@@ -11750,36 +11745,10 @@ pub const MonoLlvmCodeGen = struct {
     const BoxyListOp = boxy_runtime.compiled.ListOp;
     const desc_size_offset: u32 = @offsetOf(BoxyTypeDesc, "size");
 
-    /// The layouts of the Boxy runtime's `extern` structs on a target whose
-    /// words are `word` bytes: `compose.FieldInput`, `compose.VariantInput`,
-    /// and `compiled.ListOpRequest`.
+    /// The layout of the Boxy runtime's `compiled.ListOpRequest` on a target
+    /// whose words are `word` bytes.
     const BoxyAbi = struct {
         word: u32,
-
-        fn fieldInputSize(self: BoxyAbi) u32 {
-            return 2 * self.word;
-        }
-        fn fieldInputDesc(self: BoxyAbi) u32 {
-            return self.word;
-        }
-        fn declaredFieldInputSize(self: BoxyAbi) u32 {
-            return std.mem.alignForward(u32, self.declaredFieldInputIsPadding() + 4, self.word);
-        }
-        fn declaredFieldInputDesc(self: BoxyAbi) u32 {
-            return self.word;
-        }
-        fn declaredFieldInputIsPadding(self: BoxyAbi) u32 {
-            return 2 * self.word;
-        }
-        fn variantInputSize(self: BoxyAbi) u32 {
-            return 3 * self.word;
-        }
-        fn variantInputPayloadCount(self: BoxyAbi) u32 {
-            return self.word;
-        }
-        fn variantInputPayloads(self: BoxyAbi) u32 {
-            return 2 * self.word;
-        }
 
         /// A request's `op` and `unique_args` are at 0 and 4, and its
         /// pointer fields follow from 8, in this order.
@@ -11797,15 +11766,7 @@ pub const MonoLlvmCodeGen = struct {
 
         comptime {
             const host: BoxyAbi = .{ .word = @sizeOf(usize) };
-            const FieldInput = boxy_runtime.compose.FieldInput;
-            const DeclaredFieldInput = boxy_runtime.compose.DeclaredFieldInput;
-            const VariantInput = boxy_runtime.compose.VariantInput;
             const Request = boxy_runtime.compiled.ListOpRequest;
-            std.debug.assert(host.fieldInputSize() == @sizeOf(FieldInput) and @offsetOf(FieldInput, "name") == 0 and host.fieldInputDesc() == @offsetOf(FieldInput, "desc"));
-            std.debug.assert(host.declaredFieldInputSize() == @sizeOf(DeclaredFieldInput) and @offsetOf(DeclaredFieldInput, "name") == 0);
-            std.debug.assert(host.declaredFieldInputDesc() == @offsetOf(DeclaredFieldInput, "desc") and host.declaredFieldInputIsPadding() == @offsetOf(DeclaredFieldInput, "is_padding"));
-            std.debug.assert(host.variantInputSize() == @sizeOf(VariantInput) and @offsetOf(VariantInput, "name") == 0);
-            std.debug.assert(host.variantInputPayloadCount() == @offsetOf(VariantInput, "payload_count") and host.variantInputPayloads() == @offsetOf(VariantInput, "payloads"));
             std.debug.assert(@offsetOf(Request, "op") == 0 and @offsetOf(Request, "unique_args") == 4);
             for (@typeInfo(RequestPointer).@"enum".field_names) |name| {
                 std.debug.assert(host.requestPointer(@field(RequestPointer, name)) == @offsetOf(Request, name));
@@ -12055,72 +12016,6 @@ pub const MonoLlvmCodeGen = struct {
         try self.materializeLocalIfDeferred(local);
     }
 
-    /// A descriptor or dictionary composition that owns a site cache
-    /// (design.md "Runtime"): the site's published entry is acquire-loaded,
-    /// and when every operand word equals the entry's, the entry's result is
-    /// the composition's without entering the runtime. A miss composes
-    /// through the runtime and publishes the result, except for a
-    /// recursive-open operation that returned an unfinished placeholder,
-    /// which stays private until recursive-close finishes it.
-    fn emitCachedComposition(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LIR.DynOp, cache: lir.LIR.StaticDataId) Error!void {
-        try lir.DynOps.Operands.of(op).each(self.store, self, materializeDynOperand);
-        var operands: std.ArrayList(LocalId) = .empty;
-        defer operands.deinit(self.allocator);
-        try lir.DynOps.Operands.of(op).appendAll(self.store, self.allocator, &operands);
-        const builder, const wip = try self.builderAndWip();
-        const ptr_ty = try self.ptrType();
-        const usize_ty = self.ptrSizedIntType();
-        const word = self.targetWordSize();
-        const ptr_align = self.targetPointerAlignment();
-        const words = try self.allocator.alloc(LlvmBuilder.Value, operands.items.len);
-        defer self.allocator.free(words);
-        for (words, operands.items) |*value, operand| value.* = try self.wordValue(operand);
-        const site = try self.staticDataGlobal(cache, word);
-        const entry = wip.loadAtomic(.normal, ptr_ty, site, .system, .acquire, ptr_align, "site_entry") catch return error.OutOfMemory;
-
-        const miss = wip.block(0, "site_miss") catch return error.OutOfMemory;
-        const hit = wip.block(0, "site_hit") catch return error.OutOfMemory;
-        const done = wip.block(0, "site_done") catch return error.OutOfMemory;
-        const empty = wip.icmp(.eq, entry, builder.nullValue(ptr_ty) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const checks = try self.allocator.alloc(LlvmBuilder.Function.Block.Index, words.len);
-        defer self.allocator.free(checks);
-        for (checks) |*check| check.* = wip.block(0, "site_check") catch return error.OutOfMemory;
-        _ = wip.brCond(empty, miss, if (words.len == 0) hit else checks[0], .none) catch return error.OutOfMemory;
-        // The entry's operand words follow its result word.
-        for (words, checks, 0..) |value, check, index| {
-            wip.cursor = .{ .block = check };
-            const expected = wip.load(.normal, ptr_ty, try self.offsetPtr(entry, @intCast((index + 1) * word)), ptr_align, "") catch return error.OutOfMemory;
-            const same = wip.icmp(.eq, value, expected, "") catch return error.OutOfMemory;
-            _ = wip.brCond(same, if (index + 1 == words.len) hit else checks[index + 1], miss, .none) catch return error.OutOfMemory;
-        }
-
-        wip.cursor = .{ .block = hit };
-        try self.bindWord(target, wip.load(.normal, ptr_ty, entry, ptr_align, "") catch return error.OutOfMemory);
-        _ = wip.br(done) catch return error.OutOfMemory;
-
-        wip.cursor = .{ .block = miss };
-        try self.emitDyn(target, op);
-        const composed = try self.wordValue(target);
-        if (op == .desc_recursive_open) {
-            const publish = wip.block(0, "site_publish") catch return error.OutOfMemory;
-            const size = try self.loadDescField(composed, desc_size_offset);
-            const open = wip.icmp(.eq, size, try self.intValue(usize_ty, std.math.maxInt(u32)), "") catch return error.OutOfMemory;
-            _ = wip.brCond(open, done, publish, .none) catch return error.OutOfMemory;
-            wip.cursor = .{ .block = publish };
-        }
-        const operand_words = try self.allocEntryBlockSlot(usize_ty, @intCast(@max(words.len, 1)), ptr_align, "site_words");
-        for (words, 0..) |value, index| try self.storePointer(try self.offsetPtr(operand_words, @intCast(index * word)), value);
-        _ = try self.callBoxyRuntime("roc_desc_site_publish", .void, &.{ ptr_ty, .i32, ptr_ty, usize_ty }, &.{
-            site,
-            try self.intValue(.i32, words.len),
-            operand_words,
-            wip.cast(.ptrtoint, composed, usize_ty, "") catch return error.OutOfMemory,
-        });
-        _ = wip.br(done) catch return error.OutOfMemory;
-
-        wip.cursor = .{ .block = done };
-    }
-
     fn emitDyn(self: *MonoLlvmCodeGen, target_or_null: ?LocalId, op: lir.LIR.DynOp) Error!void {
         try lir.DynOps.Operands.of(op).each(self.store, self, materializeDynOperand);
         if (op == .frame_alloc) return self.emitDynFrameAlloc();
@@ -12129,129 +12024,6 @@ pub const MonoLlvmCodeGen = struct {
         const ptr_ty = try self.ptrType();
         switch (op) {
             .frame_alloc => unreachable, // handled above
-            .desc_list => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_list", ptr_ty, &.{ptr_ty}, &.{try self.wordValue(d.elem)})),
-            .desc_box => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_box", ptr_ty, &.{ptr_ty}, &.{try self.wordValue(d.payload)})),
-            .desc_recursive_box => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_recursive_box", ptr_ty, &.{ptr_ty}, &.{try self.wordValue(d.payload)})),
-            .desc_recursive_open => |d| {
-                const vars = try self.dynLocalArray(d.vars, .words);
-                try self.bindWord(target, try self.callBoxyRuntime("roc_desc_recursive_open", ptr_ty, &.{ ptr_ty, .i32, ptr_ty }, &.{ try self.wordValue(d.key), try self.intValue(.i32, d.vars.len), vars }));
-            },
-            .desc_recursive_close => |d| {
-                const vars = try self.dynLocalArray(d.vars, .words);
-                try self.bindWord(target, try self.callBoxyRuntime("roc_desc_recursive_close", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty }, &.{ try self.wordValue(d.shell), try self.wordValue(d.desc), try self.wordValue(d.key), try self.intValue(.i32, d.vars.len), vars }));
-            },
-            .desc_note => invariant("a compile-time descriptor note reached LLVM code generation", .{}),
-            .desc_presence_slot => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_presence_slot", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{ try self.wordValue(d.missing), try self.wordValue(d.present), try self.wordValue(d.payload) })),
-            .desc_record => |d| {
-                const names = self.store.getLocalSpan(d.names);
-                const descs = self.store.getLocalSpan(d.descs);
-                if (names.len != descs.len) llvmInvariantFmt("desc_record has {d} names for {d} descriptors", .{ names.len, descs.len });
-                const abi = self.boxyAbi();
-                const fields = try self.dynInputArray(abi.fieldInputSize(), names.len);
-                for (0..names.len) |i| {
-                    const entry: u32 = @intCast(i * abi.fieldInputSize());
-                    try self.storePointer(try self.offsetPtr(fields, entry), try self.wordValue(GuardedList.at(names, i)));
-                    try self.storePointer(try self.offsetPtr(fields, entry + abi.fieldInputDesc()), try self.wordValue(GuardedList.at(descs, i)));
-                }
-                const count = try self.intValue(.i32, names.len);
-                const desc = if (d.ext) |ext|
-                    try self.callBoxyRuntime("roc_desc_record_extended", ptr_ty, &.{ .i32, ptr_ty, ptr_ty }, &.{ count, fields, try self.wordValue(ext) })
-                else
-                    try self.callBoxyRuntime("roc_desc_record", ptr_ty, &.{ .i32, ptr_ty }, &.{ count, fields });
-                try self.bindWord(target, desc);
-            },
-            .desc_declared_record => |d| {
-                const names = self.store.getLocalSpan(d.names);
-                const descs = self.store.getLocalSpan(d.descs);
-                const padding = self.store.getU32Span(d.padding);
-                if (names.len + padding.len != descs.len) llvmInvariantFmt("desc_declared_record has {d} names and {d} padding fields for {d} descriptors", .{ names.len, padding.len, descs.len });
-                const abi = self.boxyAbi();
-                const fields = try self.dynInputArray(abi.declaredFieldInputSize(), descs.len);
-                var next_name: usize = 0;
-                var next_padding: usize = 0;
-                for (0..descs.len) |i| {
-                    const entry: u32 = @intCast(i * abi.declaredFieldInputSize());
-                    const is_padding = next_padding < padding.len and GuardedList.at(padding, next_padding) == i;
-                    if (is_padding) {
-                        next_padding += 1;
-                        const no_name = (self.builder orelse return error.CompilationFailed).nullConst(ptr_ty) catch return error.OutOfMemory;
-                        try self.storePointer(try self.offsetPtr(fields, entry), no_name.toValue());
-                    } else {
-                        try self.storePointer(try self.offsetPtr(fields, entry), try self.wordValue(GuardedList.at(names, next_name)));
-                        next_name += 1;
-                    }
-                    try self.storePointer(try self.offsetPtr(fields, entry + abi.declaredFieldInputDesc()), try self.wordValue(GuardedList.at(descs, i)));
-                    _ = wip.store(.normal, try self.intValue(.i32, @intFromBool(is_padding)), try self.offsetPtr(fields, entry + abi.declaredFieldInputIsPadding()), LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
-                }
-                try self.bindWord(target, try self.callBoxyRuntime("roc_desc_declared_record", ptr_ty, &.{ .i32, ptr_ty }, &.{ try self.intValue(.i32, descs.len), fields }));
-            },
-            .desc_tuple => |d| {
-                const elems = try self.dynLocalArray(d.elems, .words);
-                try self.bindWord(target, try self.callBoxyRuntime("roc_desc_tuple", ptr_ty, &.{ .i32, ptr_ty }, &.{ try self.intValue(.i32, d.elems.len), elems }));
-            },
-            .desc_args => |d| {
-                const elems = try self.dynLocalArray(d.elems, .words);
-                try self.bindWord(target, try self.callBoxyRuntime("roc_desc_args", ptr_ty, &.{ .i32, ptr_ty }, &.{ try self.intValue(.i32, d.elems.len), elems }));
-            },
-            .desc_tag_union => |d| {
-                const names = self.store.getLocalSpan(d.names);
-                const counts = self.store.getU32Span(d.payload_counts);
-                if (names.len != counts.len) llvmInvariantFmt("desc_tag_union has {d} names for {d} payload counts", .{ names.len, counts.len });
-                const payloads = try self.dynLocalArray(d.payloads, .words);
-                const abi = self.boxyAbi();
-                const variants = try self.dynInputArray(abi.variantInputSize(), names.len);
-                const word = self.targetWordSize();
-                var next: u32 = 0;
-                for (0..names.len) |i| {
-                    const payload_count = GuardedList.at(counts, i);
-                    const entry: u32 = @intCast(i * abi.variantInputSize());
-                    try self.storePointer(try self.offsetPtr(variants, entry), try self.wordValue(GuardedList.at(names, i)));
-                    _ = wip.store(.normal, try self.intValue(.i32, payload_count), try self.offsetPtr(variants, entry + abi.variantInputPayloadCount()), LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
-                    try self.storePointer(try self.offsetPtr(variants, entry + abi.variantInputPayloads()), try self.offsetPtr(payloads, next * word));
-                    next += payload_count;
-                }
-                if (next != d.payloads.len) llvmInvariantFmt("desc_tag_union payload counts cover {d} of its {d} payloads", .{ next, d.payloads.len });
-                const count = try self.intValue(.i32, names.len);
-                const desc = if (d.ext) |ext|
-                    try self.callBoxyRuntime("roc_desc_tag_union_extended", ptr_ty, &.{ .i32, ptr_ty, ptr_ty }, &.{ count, variants, try self.wordValue(ext) })
-                else
-                    try self.callBoxyRuntime("roc_desc_tag_union", ptr_ty, &.{ .i32, ptr_ty }, &.{ count, variants });
-                try self.bindWord(target, desc);
-            },
-            .desc_nominal => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_nominal", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i32 }, &.{
-                try self.wordValue(d.backing),
-                try self.wordValue(d.name),
-                if (d.methods) |methods| try self.wordValue(methods) else try self.nullPtr(),
-                try self.intValue(.i32, @intFromBool(d.inspect_opaque)),
-            })),
-            .dict_compose => |d| {
-                const worker = self.proc_registry.get(@backingInt(d.worker)) orelse return error.CompilationFailed;
-                const captures = try self.dynLocalArray(d.captures, .words);
-                // Generated code reserves no bytes before an erased callable's
-                // captures.
-                try self.bindWord(target, try self.callBoxyRuntime("roc_desc_dict_compose", ptr_ty, &.{ ptr_ty, .i32, .i32, ptr_ty }, &.{
-                    worker.toValue(builder),
-                    try self.intValue(.i32, 0),
-                    try self.intValue(.i32, d.captures.len),
-                    captures,
-                }));
-            },
-            // Generated code reserves no bytes before an erased callable's
-            // captures.
-            .dict_patch => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_dict_patch", ptr_ty, &.{ ptr_ty, .i32, .i32, ptr_ty }, &.{
-                try self.wordValue(d.dict),
-                try self.intValue(.i32, 0),
-                try self.intValue(.i32, d.index),
-                try self.wordValue(d.value),
-            })),
-            .dict_record => |d| {
-                const methods = try self.dynLocalArray(d.methods, .words);
-                try self.bindWord(target, try self.callBoxyRuntime("roc_desc_dict_record", ptr_ty, &.{ .i32, ptr_ty }, &.{ try self.intValue(.i32, d.methods.len), methods }));
-            },
-            .dict_method => |d| {
-                const dict = try self.wordValue(d.dict);
-                try self.bindWord(target, try self.loadPointer(try self.offsetPtr(dict, d.index * self.targetWordSize())));
-            },
             .table_entry => |entry| {
                 const table = try self.wordValue(entry.table);
                 try self.bindWord(target, try self.loadPointer(try self.offsetPtr(table, lir.LIR.tableEntryOffset(entry.index, self.targetWordSize()))));

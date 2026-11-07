@@ -55,7 +55,6 @@ pub const StaticDescs = struct {
     /// names each one's node.
     extra_nodes: u32 = 0,
     /// The key word of each recursive member type composed at runtime.
-    recursion_keys: collections.DenseMapUnmanaged(TypeId, LIR.StaticDataId) = .empty,
     /// Each static dictionary, by its procedure and capture words.
     dictionaries: std.StringHashMapUnmanaged(Reserved) = .empty,
     /// The override scopes descriptors are emitted in (`ScopeId`); scope
@@ -132,7 +131,6 @@ pub const StaticDescs = struct {
         self.exports.deinit(self.allocator);
         self.desc_slots.deinit(self.allocator);
         self.name_slots.deinit(self.allocator);
-        self.recursion_keys.deinit(self.allocator);
         freeKeys(self.allocator, &self.dictionaries);
         for (self.scopes.items) |entries| self.allocator.free(entries);
         self.scopes.deinit(self.allocator);
@@ -233,13 +231,6 @@ pub const StaticDescs = struct {
         return reserved.slot;
     }
 
-    /// The static-data slot holding the descriptor of a pointer-sized word
-    /// with no reference-counted content (a descriptor, or an immortal
-    /// dictionary, stored in a dynamic capture record).
-    pub fn opaqueWordSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
-        return (try self.opaqueWord()).slot;
-    }
-
     fn opaqueWord(self: *StaticDescs) Allocator.Error!Reserved {
         if (self.opaque_word) |reserved| return reserved;
         const desc_layout = desc_format.TypeDesc.layout(self.width);
@@ -252,15 +243,6 @@ pub const StaticDescs = struct {
         bytes[desc_layout.of(.sort_key)] = @backingInt(layout.SortKey.pointer);
         self.opaque_word = reserved;
         return reserved;
-    }
-
-    /// The static-data slot holding the descriptor of the closed type `ty`
-    /// in the override scope `scope`, which supplies the overrides of the
-    /// nominal types in its reach that no static descriptor holds on its own.
-    pub fn scopedDescriptorSlot(self: *StaticDescs, ty: TypeId, scope: ScopeId) Allocator.Error!LIR.StaticDataId {
-        const reserved = try self.reserveDescriptor(.{ .ty = ty, .recursive_box = false, .scope = try self.restrictScope(scope, ty) });
-        try self.drain();
-        return reserved.slot;
     }
 
     /// The override scope of `entries`, which name distinct nominal types.
@@ -466,32 +448,6 @@ pub const StaticDescs = struct {
             .table, .node => |node| .{ .node = node, .addend = 0 },
             .zero => null,
         };
-    }
-
-    /// The static-data slot pointing at the word that names the open
-    /// recursive member type `ty` in the runtime's interning of its composed
-    /// descriptors. The word holds `ty`'s id, so no two members' words are
-    /// identical data.
-    pub fn recursionKeySlot(self: *StaticDescs, ty: TypeId) Allocator.Error!LIR.StaticDataId {
-        if (self.recursion_keys.get(ty)) |slot| return slot;
-        const reserved = try self.addSlotWithNode(8, 4);
-        const bytes = @constCast(self.exports.items[reserved.node].bytes);
-        writeU32(bytes, 0, recursion_key_mark);
-        writeU32(bytes, 4, @backingInt(ty));
-        try self.recursion_keys.put(self.allocator, ty, reserved.slot);
-        return reserved.slot;
-    }
-
-    const recursion_key_mark: u32 = 0x5245_4359;
-
-    /// A fresh program-owned composition slot, named by worker and site rather
-    /// than by its initial zero bytes. No two sites share mutable state.
-    pub fn compositionSlot(self: *StaticDescs, identity: LIR.ProcIdentity, site: u32) Allocator.Error!LIR.StaticDataId {
-        const slot = try self.addSlot();
-        const name = try std.fmt.allocPrint(self.allocator, "roc__boxy_site_{s}_{d}", .{ &std.fmt.bytesToHex(identity.bytes, .lower), site });
-        const node = try self.addExport(name, self.ptrSize(), self.ptrSize(), slot);
-        self.exports.items[node].is_mutable = true;
-        return slot;
     }
 
     /// The static dictionary of `proc` capturing `words`: an immortal callable

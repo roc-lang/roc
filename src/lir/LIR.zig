@@ -1314,10 +1314,10 @@ pub fn tableEntryOffset(index: u32, ptr_bytes: u32) u32 {
 /// One operation of a `CFStmt.dyn` statement, stored out of line (design.md
 /// "Dynamic Values In LIR", "Type Descriptors", "Dictionaries").
 ///
-/// Descriptor, name, and dictionary operands are locals of `opaque_ptr`
-/// layout: a static descriptor or name is a `static_data` read, and a
-/// composed one is the target of a composition operation. Descriptors and
-/// names are immortal and never reference counted.
+/// Descriptor, name, and type table operands are locals of `opaque_ptr`
+/// layout: a `static_data` read, or a word of the procedure's type table
+/// (`table_entry`). Descriptors, names, and tables are immortal static data
+/// and never reference counted.
 ///
 /// Ownership: an operation that defines a `view` target borrows the target
 /// from its `base` operand, as an `assign_ref` of a component does; `copy`
@@ -1326,83 +1326,13 @@ pub fn tableEntryOffset(index: u32, ptr_bytes: u32) u32 {
 /// into the target, as `assign_struct`, `assign_tag`, and `assign_list` do;
 /// `eq`, `hash`, `inspect`, and `tag_discriminant` borrow their value
 /// operands; `call_erased` consumes `args` and borrows `closure`, or
-/// consumes one unit of it when the call is owned (`reuse_closure`);
-/// `dict_compose` and `dict_record` hold their operands as an aggregate
-/// holds its fields; `dict_patch` borrows its immortal operands.
+/// consumes one unit of it when the call is owned (`reuse_closure`).
 pub const DynOp = union(enum) {
     /// Allocate the procedure's dynamic frame region and set the address of
     /// every `frame` dynamic local. Exactly one per procedure with such
     /// locals, after every operation its descriptors depend on and before any
     /// use of those locals. Has no target.
     frame_alloc,
-
-    // -- Descriptor composition (targets: `opaque_ptr`) --
-
-    desc_list: struct { elem: LocalId },
-    desc_box: struct { payload: LocalId },
-    /// A structural record of the named fields; `names` and `descs` are
-    /// parallel, in any order (the runtime orders by name). `ext`, for an
-    /// open row, is the descriptor of the row's remainder, whose fields
-    /// join the named ones.
-    desc_record: struct { names: LocalSpan, descs: LocalSpan, ext: ?LocalId = null },
-    /// A padded nominal's backing record, laid out in declared order. `descs`
-    /// has every field in that order, `padding` the positions in it of the
-    /// unnamed fields, ascending, and `names` the labels of the others in
-    /// their order.
-    desc_declared_record: struct { names: LocalSpan, descs: LocalSpan, padding: U32Span },
-    desc_tuple: struct { elems: LocalSpan },
-    /// An optional record field's presence slot over `payload`: the tag
-    /// union `[missing, present(payload)]`, marked as a presence slot.
-    desc_presence_slot: struct { missing: LocalId, present: LocalId, payload: LocalId },
-    /// A tag union. `names` has one entry per variant; `payload_counts`
-    /// (parallel) says how many of `payloads`, in order, belong to it.
-    /// `ext`, for an open row, is the descriptor of the row's remainder,
-    /// whose variants join the named ones.
-    desc_tag_union: struct { names: LocalSpan, payload_counts: U32Span, payloads: LocalSpan, ext: ?LocalId = null },
-    /// The packed erased-call argument record of `elems`, in declaration
-    /// order (`layout.erased_call_abi.plan`).
-    desc_args: struct { elems: LocalSpan },
-    /// A nominal type over `backing`. `methods` is null or a local holding a
-    /// `Methods` record of override callables.
-    desc_nominal: struct { backing: LocalId, name: LocalId, methods: ?LocalId, inspect_opaque: bool },
-    /// The box a recursive type's committed layout puts around a component
-    /// that leads back into the type, over the component's descriptor.
-    desc_recursive_box: struct { payload: LocalId },
-    /// Begin composing the descriptor of a member of a recursive type: the
-    /// descriptor interned under `key` (a static word naming the member's
-    /// type) and the descriptors `vars` of its type variables, when an
-    /// earlier composition finished it, and otherwise a placeholder that the
-    /// member's components refer to, only through `desc_recursive_box`,
-    /// until `desc_recursive_close` fills it.
-    desc_recursive_open: struct { key: LocalId, vars: LocalSpan },
-    /// Fill the placeholder `shell` (a `desc_recursive_open` target) with the
-    /// member's composed descriptor `desc` and intern it under `key` and
-    /// `vars`, unless the open found it finished. Target: `shell`'s value.
-    desc_recursive_close: struct { shell: LocalId, desc: LocalId, key: LocalId, vars: LocalSpan },
-    /// Record that `desc` describes the program's type `ty` with its type
-    /// variables described by `vars`, so that compile-time evaluation can
-    /// name the type of a descriptor a stored function value captured
-    /// (design.md "Stored Function Values"). Only a compile-time program
-    /// that stores function values has one. Target: `desc`'s value.
-    desc_note: struct { desc: LocalId, ty: u32, vars: LocalSpan },
-
-    // -- Dictionaries (targets: `opaque_ptr`, except `dict_method`) --
-
-    /// A dictionary callable composed at runtime: an immortal erased callable
-    /// of `worker` capturing `captures` (descriptors and dictionaries, in the
-    /// worker's capture order), interned by worker and capture identities.
-    dict_compose: struct { worker: LirProcSpecId, captures: LocalSpan },
-    /// Fill capture word `index` of `dict`, a `dict_compose` result that held
-    /// a null word there, with `value`, a dictionary that captures `dict`: a
-    /// recursive requirement's dictionaries capture one another. The word
-    /// isn't part of `dict`'s identity, and the same composition always fills
-    /// it with the same value. Target: `dict`.
-    dict_patch: struct { dict: LocalId, index: u32, value: LocalId },
-    /// A dictionary record of several method callables, interned.
-    dict_record: struct { methods: LocalSpan },
-    /// The callable of method `index` of a dictionary record. Target:
-    /// `erased_callable`, borrowed from the immortal dictionary.
-    dict_method: struct { dict: LocalId, index: u32 },
 
     // -- Type tables --
 
@@ -1642,13 +1572,11 @@ pub const CFStmt = union(enum) {
         /// Source region of the `?` expression, for failure reporting.
         region: base.Region,
     },
-    /// An operation on dynamic values, descriptors, or dictionaries
+    /// An operation on dynamic values, descriptors, or type tables
     /// (`DynOp`). `target` is null only for `frame_alloc`.
     dyn: struct {
         target: ?LocalId,
         data: StmtRowId(DynOp),
-        /// Distinct zero-initialized writable static slot for this composition.
-        composition_cache: ?StaticDataId = null,
         next: CFStmtId,
     },
     /// Compiler-generated impossible execution path. This is terminal.

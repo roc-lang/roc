@@ -4,10 +4,6 @@
 //! Compiled code carries no `RocOps`, so these reach the host through
 //! `in_process_host.ops()`: in a platform build the process-wide table over
 //! the host's runtime symbols, in-process the ops the current thread entered.
-//! Composition interns in `compiled.descriptorCache()` and allocates the
-//! immortal descriptors and dictionaries through `compiled.immortalOps()`:
-//! the process's in a platform build, the current program's
-//! (`compiled.InProcessState`) in the compiler's process.
 //! Array operands are a count and a pointer to `extern` items; value operands
 //! are the addresses of the values' bytes. `static_lib.zig` exports these
 //! under their own names, and the dev backend calls them by address when it
@@ -15,7 +11,6 @@
 
 const builtins = @import("builtins");
 const desc_mod = @import("desc.zig");
-const compose = @import("compose.zig");
 const walk = @import("walk.zig");
 const compiled = @import("compiled.zig");
 
@@ -24,18 +19,9 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const TypeDesc = desc_mod.TypeDesc;
 const Name = desc_mod.Name;
-const Methods = desc_mod.Methods;
 
 fn ops() *RocOps {
     return builtins.in_process_host.ops();
-}
-
-fn cache() *compose.Cache {
-    return compiled.descriptorCache();
-}
-
-fn composeOps() *RocOps {
-    return compiled.immortalOps();
 }
 
 fn items(comptime T: type, count: u32, ptr: ?[*]const T) []const T {
@@ -45,11 +31,6 @@ fn items(comptime T: type, count: u32, ptr: ?[*]const T) []const T {
 
 fn valuePtr(ptr: ?[*]u8) [*]u8 {
     return ptr orelse walk.zeroSizedPtr();
-}
-
-/// Publish a completed composition after the generated site's comparisons miss.
-pub fn roc_desc_site_publish(site: *compose.CompositionSite, count: u32, operands: ?[*]const usize, result: usize) callconv(.c) void {
-    site.publish(cache(), composeOps(), items(usize, count, operands), result);
 }
 
 /// The end of a run of `count` dynamic locals of type `desc` placed after
@@ -83,76 +64,6 @@ fn frameRunStart(offset: usize, desc: *const TypeDesc) usize {
 /// The bytes between consecutive locals of type `desc` in a run.
 fn frameStride(desc: *const TypeDesc) usize {
     return frameRunStart(desc.size, desc);
-}
-
-/// The C-ABI form of `compose.list`.
-pub fn roc_desc_list(elem: *const TypeDesc) callconv(.c) *const TypeDesc {
-    return compose.list(cache(), composeOps(), elem);
-}
-
-/// The C-ABI form of `compose.presenceSlot`.
-pub fn roc_desc_presence_slot(missing: *const Name, present: *const Name, payload: *const TypeDesc) callconv(.c) *const TypeDesc {
-    return compose.presenceSlot(cache(), composeOps(), missing, present, payload);
-}
-
-/// The C-ABI form of `compose.box`.
-pub fn roc_desc_box(payload: *const TypeDesc) callconv(.c) *const TypeDesc {
-    return compose.box(cache(), composeOps(), payload);
-}
-
-/// The C-ABI form of `compose.recursiveBox`.
-pub fn roc_desc_recursive_box(payload: *const TypeDesc) callconv(.c) *const TypeDesc {
-    return compose.recursiveBox(cache(), composeOps(), payload);
-}
-
-/// The C-ABI form of `compose.recursiveOpen`.
-pub fn roc_desc_recursive_open(key: *const u8, count: u32, vars: ?[*]const *const TypeDesc) callconv(.c) *const TypeDesc {
-    return compose.recursiveOpen(cache(), composeOps(), key, items(*const TypeDesc, count, vars));
-}
-
-/// The C-ABI form of `compose.recursiveClose`.
-pub fn roc_desc_recursive_close(shell: *const TypeDesc, desc: *const TypeDesc, key: *const u8, count: u32, vars: ?[*]const *const TypeDesc) callconv(.c) *const TypeDesc {
-    return compose.recursiveClose(cache(), composeOps(), shell, desc, key, items(*const TypeDesc, count, vars));
-}
-
-/// The C-ABI form of `compose.record`.
-pub fn roc_desc_record(count: u32, fields: ?[*]const compose.FieldInput) callconv(.c) *const TypeDesc {
-    return compose.record(cache(), composeOps(), items(compose.FieldInput, count, fields));
-}
-
-/// The C-ABI form of `compose.recordExtended`.
-pub fn roc_desc_record_extended(count: u32, fields: ?[*]const compose.FieldInput, ext: *const TypeDesc) callconv(.c) *const TypeDesc {
-    return compose.recordExtended(cache(), composeOps(), items(compose.FieldInput, count, fields), ext);
-}
-
-/// The C-ABI form of `compose.tagUnionExtended`.
-pub fn roc_desc_tag_union_extended(count: u32, variants: ?[*]const compose.VariantInput, ext: *const TypeDesc) callconv(.c) *const TypeDesc {
-    return compose.tagUnionExtended(cache(), composeOps(), items(compose.VariantInput, count, variants), ext);
-}
-
-/// The C-ABI form of `compose.declaredRecord`.
-pub fn roc_desc_declared_record(count: u32, fields: ?[*]const compose.DeclaredFieldInput) callconv(.c) *const TypeDesc {
-    return compose.declaredRecord(cache(), composeOps(), items(compose.DeclaredFieldInput, count, fields));
-}
-
-/// The C-ABI form of `compose.tuple`.
-pub fn roc_desc_tuple(count: u32, elems: ?[*]const *const TypeDesc) callconv(.c) *const TypeDesc {
-    return compose.tuple(cache(), composeOps(), items(*const TypeDesc, count, elems));
-}
-
-/// The C-ABI form of `compose.tagUnion`.
-pub fn roc_desc_tag_union(count: u32, variants: ?[*]const compose.VariantInput) callconv(.c) *const TypeDesc {
-    return compose.tagUnion(cache(), composeOps(), items(compose.VariantInput, count, variants));
-}
-
-/// The C-ABI form of `compose.args`.
-pub fn roc_desc_args(count: u32, descs: ?[*]const *const TypeDesc) callconv(.c) *const TypeDesc {
-    return compose.args(cache(), composeOps(), items(*const TypeDesc, count, descs));
-}
-
-/// The C-ABI form of `compose.nominal`.
-pub fn roc_desc_nominal(backing: *const TypeDesc, name: ?*const Name, methods: ?*const Methods, inspect_opaque: bool) callconv(.c) *const TypeDesc {
-    return compose.nominal(cache(), composeOps(), backing, name, methods, inspect_opaque);
 }
 
 /// The C-ABI form of `compiled.adapt`.
@@ -274,32 +185,6 @@ pub fn roc_desc_slot_alloc(desc: *const TypeDesc, dst: *usize) callconv(.c) void
 /// The C-ABI form of `compiled.storeSlot`.
 pub fn roc_desc_slot_store(desc: *const TypeDesc, slot: *const usize, value: ?[*]u8, dst: *usize) callconv(.c) void {
     compiled.storeSlot(desc, slot, valuePtr(value), dst);
-}
-
-/// The C-ABI form of `compiled.noteDesc`.
-pub fn roc_desc_note(desc: *const TypeDesc, ty: u32, count: u32, vars: ?[*]const *const TypeDesc) callconv(.c) *const TypeDesc {
-    if (comptime builtins.host_abi.host_role == .platform) {
-        compose.invariant(ops(), "a compile-time descriptor note reached a program");
-    } else {
-        compiled.noteDesc(desc, ty, items(*const TypeDesc, count, vars));
-        return desc;
-    }
-}
-
-/// A dictionary callable of the erased-record entry `callable_fn` capturing
-/// `captures` after `capture_prefix` reserved bytes.
-pub fn roc_desc_dict_compose(callable_fn: builtins.erased_callable.CallableFnPtr, capture_prefix: u32, count: u32, captures: ?[*]const usize) callconv(.c) [*]u8 {
-    return compiled.dictCompose(callable_fn, capture_prefix, items(usize, count, captures), composeOps());
-}
-
-/// The C-ABI form of `compiled.dictPatch`.
-pub fn roc_desc_dict_patch(dict: [*]u8, capture_prefix: u32, index: u32, value: usize) callconv(.c) [*]u8 {
-    return compiled.dictPatch(dict, capture_prefix, index, value);
-}
-
-/// The C-ABI form of `compiled.dictRecord`.
-pub fn roc_desc_dict_record(count: u32, methods: ?[*]const usize) callconv(.c) [*]const usize {
-    return compiled.dictRecord(items(usize, count, methods), composeOps());
 }
 
 /// The C-ABI form of `compiled.listOp`.

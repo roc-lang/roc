@@ -41,7 +41,6 @@ const CFStmtId = LIR.CFStmtId;
 const TypeId = types.TypeId;
 const ModuleIndex = types.ModuleIndex;
 const Program = lower.Program;
-const Layouts = @import("layouts.zig").Layouts;
 const StaticDescs = @import("static_descs.zig").StaticDescs;
 const Tables = @import("tables.zig");
 const WorkerId = lower.WorkerId;
@@ -273,10 +272,6 @@ pub const LoopExit = struct { join: LIR.JoinPointId, reached: bool };
 /// A value a pattern tests, with the value's type.
 pub const PatternItem = struct { pattern: PatternId, value: LocalId, ty: TypeId };
 
-/// The key and variable descriptors a recursive member's placeholder was
-/// opened with, which its close repeats.
-const OpenMember = struct { key: LocalId, vars: LIR.LocalSpan };
-
 /// A scheme alias's scope as one use instantiates it: the checked evidence
 /// parameters its dictionaries stand for, those dictionaries, and the
 /// environment it extends.
@@ -388,17 +383,6 @@ const AliasChain = struct {
     call_fn: ?TypeId,
 };
 
-const ArgsDescKey = struct { descs: []const LocalId };
-
-const ArgsDescContext = struct {
-    pub fn hash(_: @This(), key: ArgsDescKey) u64 {
-        return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(key.descs));
-    }
-    pub fn eql(_: @This(), a: ArgsDescKey, b: ArgsDescKey) bool {
-        return std.mem.eql(LocalId, a.descs, b.descs);
-    }
-};
-
 const StaticWordContext = struct {
     pub fn hash(_: @This(), word: StaticDescs.CaptureWord) u64 {
         var hasher = std.hash.Wyhash.init(0);
@@ -412,7 +396,6 @@ const StaticWordContext = struct {
 
 /// Lowers one worker's checked body to LIR.
 pub const Builder = struct {
-    composition_site_count: u32 = 0,
     program: *Program,
     allocator: Allocator,
     worker_id: WorkerId,
@@ -460,9 +443,6 @@ pub const Builder = struct {
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
     foreign_scopes: ?usize = null,
     type_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
-    /// Complete argument layouts already emitted in this entry chain. Keys
-    /// name the exact ordered descriptor locals, not an approximation of types.
-    args_descs: std.HashMapUnmanaged(ArgsDescKey, LocalId, ArgsDescContext, std.hash_map.default_max_load_percentage) = .empty,
 
     /// The recipes of the hidden words this body reads (`tables.zig`).
     recipes: Tables.Recipes,
@@ -496,15 +476,6 @@ pub const Builder = struct {
     /// The compile-time root whose entry wrapper this body is: its own
     /// hoisted expression computes its value here rather than reading it.
     own_root: ?checked.ComptimeRootId = null,
-    /// The recursive components whose members' descriptors this body has
-    /// begun composing.
-    opened_components: std.AutoHashMapUnmanaged(u32, void) = .empty,
-    /// The recursive members whose placeholder descriptor this body has
-    /// opened and not yet closed.
-    open_members: collections.DenseMapUnmanaged(TypeId, OpenMember) = .empty,
-    /// The recursion box over each descriptor local that has one.
-    recursive_boxes: collections.DenseMapUnmanaged(LocalId, LocalId) = .empty,
-    opaque_word_desc: ?LocalId = null,
     /// Expressions whose value is built at a row coercion's destination
     /// type rather than their own (design.md "Row Coercion Primitive"), as
     /// their parents read them: for a row-coerced result, the destination of
@@ -614,9 +585,6 @@ pub const Builder = struct {
         self.declared_captures.deinit(self.allocator);
         self.root_thunks.deinit(self.allocator);
         self.type_descs.deinit(self.allocator);
-        var args_keys = self.args_descs.keyIterator();
-        while (args_keys.next()) |key| self.allocator.free(key.descs);
-        self.args_descs.deinit(self.allocator);
         self.recipes.deinit();
         self.recipe_locals.deinit(self.allocator);
         self.static_word_locals.deinit(self.allocator);
@@ -626,9 +594,6 @@ pub const Builder = struct {
         self.reads_inputs.deinit(self.allocator);
         if (self.fold) |*fold| fold.deinit();
         self.entry_locals.deinit(self.allocator);
-        self.opened_components.deinit(self.allocator);
-        self.open_members.deinit(self.allocator);
-        self.recursive_boxes.deinit(self.allocator);
         self.name_locals.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
         self.join_infos.deinit(self.allocator);
@@ -792,15 +757,8 @@ pub const Builder = struct {
 
     /// Replace `hole` with `stmt`.
     pub fn fill(self: *Builder, hole: CFStmtId, stmt: LIR.CFStmt, kind: LIR.OriginKind) Allocator.Error!void {
-        var emitted = stmt;
-        if (self.program.input.composition_sites and emitted == .dyn and lir_core.DynOps.isComposition(self.store.stmtRow(emitted.dyn.data))) {
-            std.debug.assert(emitted.dyn.composition_cache == null);
-            const site = self.composition_site_count;
-            self.composition_site_count = std.math.add(u32, site, 1) catch return error.OutOfMemory;
-            emitted.dyn.composition_cache = try self.program.static_descs.compositionSlot(self.store.getProcSpec(self.currentWorker().proc).identity, site);
-        }
-        try self.store.replaceCFStmt(hole, emitted, self.origin(kind));
-        self.store.noteStmtShapes(emitted);
+        try self.store.replaceCFStmt(hole, stmt, self.origin(kind));
+        self.store.noteStmtShapes(stmt);
     }
 
     /// The hole the next statement goes into. Code after a diverging
@@ -1064,33 +1022,6 @@ pub const Builder = struct {
         return local;
     }
 
-    /// The descriptor a composition of `parent` stores for its inline
-    /// component `edge`: the component's own, or the recursion box around it
-    /// in a slot `parent`'s committed layout boxes.
-    fn slotDesc(self: *Builder, parent: TypeId, edge: Layouts.InlineEdge) Allocator.Error!LocalId {
-        const child = self.type_descs.get(edge.child).?;
-        if (try self.program.layouts.boxedEdge(parent, edge)) {
-            if (self.recursive_boxes.get(child)) |existing| return existing;
-            const boxed = try self.closedLocal(.opaque_ptr);
-            try self.emitEntry(.{ .dyn = .{ .target = boxed, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_recursive_box = .{ .payload = child } }), .next = undefined } });
-            try self.recursive_boxes.put(self.allocator, child, boxed);
-            return boxed;
-        }
-        if (self.open_members.contains(edge.child)) invariant("a descriptor composition stores an open recursive member outside a boxed slot");
-        return child;
-    }
-
-    /// A descriptor needing no component descriptors: a static descriptor,
-    /// or a scope variable's hidden parameter.
-    pub fn leafDesc(self: *Builder, ty: TypeId) Allocator.Error!?LocalId {
-        const store = &self.program.store;
-        if (try self.closed(ty) and !try self.program.composedInBody(ty)) return try self.staticDesc(ty);
-        return switch (store.get(ty)) {
-            .variable => |index| try self.varDesc(index),
-            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => null,
-        };
-    }
-
     pub fn staticDesc(self: *Builder, ty: TypeId) Allocator.Error!LocalId {
         if (self.type_descs.get(ty)) |existing| return existing;
         const slot = try self.program.static_descs.descriptorSlot(ty);
@@ -1107,145 +1038,6 @@ pub const Builder = struct {
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
         try self.name_locals.put(self.allocator, name, local);
         return local;
-    }
-
-    /// The types whose descriptors compose `ty`'s. Caller frees.
-    pub fn descComponents(self: *Builder, ty: TypeId) Allocator.Error![]TypeId {
-        var out: std.ArrayList(TypeId) = .empty;
-        errdefer out.deinit(self.allocator);
-        try self.program.appendDescriptorComponents(ty, &out, self.allocator);
-        return try out.toOwnedSlice(self.allocator);
-    }
-
-    /// Emit the composition of `ty`'s descriptor from its components'.
-    pub fn composeDesc(self: *Builder, ty: TypeId) Allocator.Error!LocalId {
-        const store = &self.program.store;
-        const local = try self.closedLocal(.opaque_ptr);
-        if (self.program.layouts.presenceSlotPayload(ty)) |payload| {
-            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_presence_slot = .{
-                .missing = try self.nameDesc(try store.internName(@import("layouts.zig").missing_label)),
-                .present = try self.nameDesc(try store.internName(@import("layouts.zig").present_label)),
-                .payload = try self.slotDesc(ty, .{ .child = payload, .slot = .payload }),
-            } }), .next = undefined } });
-            return local;
-        }
-        const op: LIR.DynOp = switch (store.get(ty)) {
-            // A list or box points at its component, so an open recursive
-            // member's placeholder stands in for it directly.
-            .list => |elem| .{ .desc_list = .{ .elem = self.type_descs.get(elem).? } },
-            .box => |payload| .{ .desc_box = .{ .payload = self.type_descs.get(payload).? } },
-            .tuple => |items_span| blk: {
-                const items = try self.allocator.dupe(TypeId, store.span(items_span));
-                defer self.allocator.free(items);
-                const descs = try self.allocator.alloc(LocalId, items.len);
-                defer self.allocator.free(descs);
-                for (items, descs) |item, *desc| desc.* = try self.slotDesc(ty, .{ .child = item, .slot = .field });
-                break :blk .{ .desc_tuple = .{ .elems = try self.store.addLocalSpan(descs) } };
-            },
-            .record => |record| blk: {
-                if (record.declared) |declared| break :blk try self.declaredRecordDesc(ty, record, declared);
-                const fields = try self.allocator.dupe(types.Field, store.fieldSpan(record.fields));
-                defer self.allocator.free(fields);
-                const names = try self.allocator.alloc(LocalId, fields.len);
-                defer self.allocator.free(names);
-                const descs = try self.allocator.alloc(LocalId, fields.len);
-                defer self.allocator.free(descs);
-                for (fields, names, descs) |field, *name, *desc| {
-                    name.* = try self.nameDesc(field.name);
-                    desc.* = try self.slotDesc(ty, .{ .child = try self.program.layouts.fieldStorage(field), .slot = .field });
-                }
-                break :blk .{ .desc_record = .{
-                    .names = try self.store.addLocalSpan(names),
-                    .descs = try self.store.addLocalSpan(descs),
-                    .ext = if (record.ext) |ext| self.type_descs.get(ext).? else null,
-                } };
-            },
-            .tag_union => |tag_union| blk: {
-                const tags = try self.allocator.dupe(types.Tag, store.tagSpan(tag_union.tags));
-                defer self.allocator.free(tags);
-                var names: std.ArrayList(LocalId) = .empty;
-                defer names.deinit(self.allocator);
-                var counts: std.ArrayList(u32) = .empty;
-                defer counts.deinit(self.allocator);
-                var payloads: std.ArrayList(LocalId) = .empty;
-                defer payloads.deinit(self.allocator);
-                for (tags) |tag| {
-                    try names.append(self.allocator, try self.nameDesc(tag.name));
-                    const tag_payloads = try self.allocator.dupe(TypeId, store.span(tag.payloads));
-                    defer self.allocator.free(tag_payloads);
-                    try counts.append(self.allocator, @intCast(tag_payloads.len));
-                    for (tag_payloads) |payload| try payloads.append(self.allocator, try self.slotDesc(ty, .{
-                        .child = payload,
-                        .slot = if (tag_payloads.len == 1) .payload else .field,
-                    }));
-                }
-                break :blk .{ .desc_tag_union = .{
-                    .names = try self.store.addLocalSpan(names.items),
-                    .payload_counts = try self.store.addU32Span(counts.items),
-                    .payloads = try self.store.addLocalSpan(payloads.items),
-                    .ext = if (tag_union.ext) |ext| self.type_descs.get(ext).? else null,
-                } };
-            },
-            .nominal => |nominal| blk: {
-                if (nominal.builtin == .bool) invariant("Bool is never an open type");
-                break :blk .{ .desc_nominal = .{
-                    .backing = try self.slotDesc(ty, .{ .child = try self.program.converter().backing(ty), .slot = .backing }),
-                    .name = try self.nameDesc(nominal.name),
-                    .methods = try self.composedMethods(ty),
-                    .inspect_opaque = nominal.is_opaque,
-                } };
-            },
-            .primitive, .empty_record, .function, .variable => unreachable, // `leafDesc` answers these
-        };
-        try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, op), .next = undefined } });
-        return local;
-    }
-
-    /// The composition of the padded nominal backing `ty`, in declared order.
-    fn declaredRecordDesc(self: *Builder, ty: TypeId, record: types.Record, declared: types.DeclaredOrder) Allocator.Error!LIR.DynOp {
-        if (record.ext != null) invariant("a padded nominal's record row is closed");
-        const store = &self.program.store;
-        const storage = try self.program.layouts.recordStorage(record);
-        defer self.allocator.free(storage);
-        const slots = store.declaredSlots(declared);
-        const descs = try self.allocator.alloc(LocalId, slots.len);
-        defer self.allocator.free(descs);
-        var names: std.ArrayList(LocalId) = .empty;
-        defer names.deinit(self.allocator);
-        var padding: std.ArrayList(u32) = .empty;
-        defer padding.deinit(self.allocator);
-        for (slots, descs, 0..) |slot, *desc, position| {
-            desc.* = try self.slotDesc(ty, .{ .child = storage[slot], .slot = .field });
-            if (slot < record.fields.len) {
-                try names.append(self.allocator, try self.nameDesc(store.fieldSpan(record.fields)[slot].name));
-            } else {
-                try padding.append(self.allocator, @intCast(position));
-            }
-        }
-        return .{ .desc_declared_record = .{
-            .names = try self.store.addLocalSpan(names.items),
-            .descs = try self.store.addLocalSpan(descs),
-            .padding = try self.store.addU32Span(padding.items),
-        } };
-    }
-
-    /// The `Methods` record of the nominal type `ty`'s overrides
-    /// (`overrideWords`), composed in the entry chain, or null when it has
-    /// none.
-    pub fn composedMethods(self: *Builder, ty: TypeId) Allocator.Error!?LocalId {
-        const words = try self.overrideWords(ty) orelse return null;
-        var callables: [3]LocalId = undefined;
-        for (words, &callables) |maybe, *callable| {
-            if (maybe) |word| {
-                callable.* = try self.materialize(word);
-            } else {
-                callable.* = try self.closedLocal(.opaque_ptr);
-                try self.emitEntry(.{ .assign_literal = .{ .target = callable.*, .value = .{ .static_data = .{ .id = try self.program.static_descs.nullWordSlot() } }, .next = undefined } });
-            }
-        }
-        const methods = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .dyn = .{ .target = methods, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_record = .{ .methods = try self.store.addLocalSpan(&callables) } }), .next = undefined } });
-        return methods;
     }
 
     // -- Words --
@@ -1582,17 +1374,6 @@ pub const Builder = struct {
     pub fn varDesc(self: *Builder, index: usize) Allocator.Error!LocalId {
         if (index >= self.var_descs.len) invariant("a scope variable's descriptor is not among its worker's inputs");
         return try self.inputLocal(@intCast(index));
-    }
-
-    /// The immortal callable of `entry` over the capture locals `captures`,
-    /// composed in the entry chain.
-    pub fn composeCallable(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!LocalId {
-        const local = try self.closedLocal(try self.erasedLayout());
-        try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_compose = .{
-            .worker = self.program.worker(entry).proc,
-            .captures = try self.store.addLocalSpan(captures),
-        } }), .next = undefined } });
-        return local;
     }
 
     // -- Body --
@@ -2293,18 +2074,17 @@ pub const Builder = struct {
     /// (`Program.perCall`): the table, which this reads first, then the
     /// explicit arguments.
     pub fn ownScopeArgs(self: *Builder, worker: lower.Worker, dict_count: usize) Allocator.Error!LocalId {
-        const word = try self.opaqueWordDesc();
-        const full_desc = try self.closedLocal(.opaque_ptr);
-        const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = full_desc, .storage = .param } });
-        const prefix_desc = try self.composedArgsDesc(&.{word});
+        // The record is read through its own descriptor, which the table
+        // determines; the table is read through the descriptor of just the
+        // leading word first.
+        const desc_hole = try self.closedLocal(.opaque_ptr);
+        const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc_hole, .storage = .param } });
+        const prefix_desc = try self.argsDesc(1, &.{});
         const table = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .dyn = .{ .target = table, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = prefix_desc, .field_index = 0 } }), .next = undefined } });
         try self.beginTable(table, dict_count);
-        const elems = try self.allocator.alloc(LocalId, 1 + worker.params.len);
-        defer self.allocator.free(elems);
-        elems[0] = word;
-        for (elems[1..], worker.params) |*elem, param_ty| elem.* = try self.descOf(param_ty);
-        try self.emitEntry(.{ .dyn = .{ .target = full_desc, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_args = .{ .elems = try self.store.addLocalSpan(elems) } }), .next = undefined } });
+        const full_desc = try self.argsDesc(1, try self.descWords(worker.params));
+        try self.emitEntry(.{ .assign_ref = .{ .target = desc_hole, .op = LIR.RefOp.local(full_desc), .next = undefined } });
         return record;
     }
 
@@ -2747,8 +2527,8 @@ pub const Builder = struct {
     }
 
     /// The packed erased-call argument record of `params`: a declared-order
-    /// struct when every parameter type is closed, a dynamic record composed
-    /// with `desc_args` otherwise.
+    /// struct when every parameter type is closed, a dynamic record read
+    /// through its argument record descriptor (`argsDesc`) otherwise.
     pub fn argsRecordLocal(self: *Builder, params: []const TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
         if (try self.allClosed(params)) return self.closedLocal(try self.argsRecordLayout(params));
         const desc = try self.argsRecordDesc(params);
@@ -2770,27 +2550,14 @@ pub const Builder = struct {
     }
 
     pub fn argsRecordDesc(self: *Builder, params: []const TypeId) Allocator.Error!LocalId {
-        const descs = try self.allocator.alloc(LocalId, params.len);
-        defer self.allocator.free(descs);
-        for (descs, params) |*desc, param| desc.* = try self.descOf(param);
-        return self.composedArgsDesc(descs);
+        return try self.argsDesc(0, try self.descWords(params));
     }
 
-    /// Reuse an exact argument-layout computation in this worker's entry.
-    fn composedArgsDesc(self: *Builder, descs: []const LocalId) Allocator.Error!LocalId {
-        // Only completed descriptor graphs are immutable. A composition
-        // emitted while a recursive member is open is not shared across its
-        // close, which can change the layout it describes.
-        const finalized = self.open_members.count() == 0;
-        if (finalized) if (self.args_descs.get(.{ .descs = descs })) |existing| return existing;
-        const local = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_args = .{ .elems = try self.store.addLocalSpan(descs) } }), .next = undefined } });
-        if (finalized) {
-            const key = try self.allocator.dupe(LocalId, descs);
-            errdefer self.allocator.free(key);
-            try self.args_descs.put(self.allocator, .{ .descs = key }, local);
-        }
-        return local;
+    /// The local holding the descriptor of an erased call's packed argument
+    /// record: `leading` pointer-sized words, then values of the types
+    /// whose descriptors `elems` are (`Tables.Recipe.args_desc`).
+    fn argsDesc(self: *Builder, leading: u32, elems: []const Word) Allocator.Error!LocalId {
+        return try self.materialize(.{ .recipe = try self.recipes.intern(.{ .args_desc = .{ .leading = leading, .elems = elems } }) });
     }
 
     /// Argument `index` of an argument record, as a borrowed read.
@@ -3899,9 +3666,8 @@ pub const Builder = struct {
         }
     }
 
-    /// A word holding null, which no reference counting reads. A recursive
-    /// dictionary's placeholder is one, which keeps that dictionary composed:
-    /// `dict_patch` fills it at runtime.
+    /// A word holding null, which no reference counting reads: the static
+    /// word `zero`.
     fn nullWord(self: *Builder) Allocator.Error!LocalId {
         const local = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = try self.program.static_descs.nullWordSlot() } }, .next = undefined } });
@@ -5193,12 +4959,7 @@ pub const Builder = struct {
             const target = try self.callErased(closure, args[0], ret);
             return self.pushValue(try self.adaptValue(target, ret, result_ty));
         }
-        const word = try self.opaqueWordDesc();
-        const elems = try self.allocator.alloc(LocalId, words.len + params.len);
-        defer self.allocator.free(elems);
-        @memset(elems[0..words.len], word);
-        for (elems[words.len..], params) |*elem, param_ty| elem.* = try self.descOf(param_ty);
-        const desc = try self.composedArgsDesc(elems);
+        const desc = try self.argsDesc(@intCast(words.len), try self.descWords(params));
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = .frame } });
         const fields = try std.mem.concat(self.allocator, LocalId, &.{ words, args });
         defer self.allocator.free(fields);
@@ -6118,13 +5879,6 @@ pub const Builder = struct {
         try self.push(.{ .finish_erased_call = .{ .fn_ty = try self.valueType(call.func), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
         try self.pushExprsReversed(call.args);
         try self.push(.{ .expr = call.func });
-    }
-
-    /// The hidden descriptor arguments of a call whose target's scheme
-    /// variables `subst` instantiates (checked types of this body's module,
-    /// in the target's `scheme_vars` order), followed by its dictionaries.
-    pub fn hiddenArgs(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, edge: checked.LiteralEdge) Allocator.Error![]Word {
-        return try self.hiddenArgsAt(callee, subst, evidence, null, edge);
     }
 
     /// The hidden arguments of a call of `callee` whose function type at the
@@ -7361,7 +7115,7 @@ pub const Builder = struct {
                         // must remain an explicit operation.
                         if (dyn.desc != self.store.localDyn(result).?.desc) return false;
                     },
-                    .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_compose, .dict_record, .dict_method, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => return false,
+                    .frame_alloc, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => return false,
                 }
                 op.target = result;
             },
@@ -8065,25 +7819,12 @@ pub const Builder = struct {
     /// allocation's capture capacity word, the descriptor and dictionary
     /// words, then the captured values.
     pub fn dynamicCaptureDesc(self: *Builder, capture_types: []const TypeId, word_count: usize) Allocator.Error!LocalId {
-        const word = try self.opaqueWordDesc();
-        const descs = try self.allocator.alloc(LocalId, capture_record_leading_words + word_count + capture_types.len);
-        defer self.allocator.free(descs);
-        @memset(descs[0 .. capture_record_leading_words + word_count], word);
-        for (descs[capture_record_leading_words + word_count ..], capture_types) |*desc, ty| desc.* = try self.descOf(ty);
-        return self.composedArgsDesc(descs);
+        return try self.argsDesc(@intCast(capture_record_leading_words + word_count), try self.descWords(capture_types));
     }
 
     /// The words before a dynamic capture record's descriptor and
     /// dictionary words: its descriptor and its capture capacity.
     pub const capture_record_leading_words = 2;
-
-    pub fn opaqueWordDesc(self: *Builder) Allocator.Error!LocalId {
-        if (self.opaque_word_desc) |local| return local;
-        const local = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = try self.program.static_descs.opaqueWordSlot() } }, .next = undefined } });
-        self.opaque_word_desc = local;
-        return local;
-    }
 
     /// A function value whose captures include values of open types: the
     /// capture record is built in the dynamic frame region and moved into

@@ -453,36 +453,6 @@ const Printer = struct {
     fn writeDynOp(self: *Printer, op: LIR.DynOp, writer: *std.Io.Writer) Error!void {
         try writer.print("dyn.{s}", .{@tagName(op)});
         switch (op) {
-            .desc_declared_record => |desc| {
-                try writer.writeAll(" names(");
-                try self.writeLocals(desc.names, writer);
-                try writer.writeAll(") descs(");
-                try self.writeLocals(desc.descs, writer);
-                try writer.writeAll(") padding(");
-                const padding = self.store.getU32Span(desc.padding);
-                for (0..padding.len) |i| {
-                    if (i > 0) try writer.writeAll(", ");
-                    try writer.print("{d}", .{GuardedList.at(padding, i)});
-                }
-                try writer.writeAll(")");
-                return;
-            },
-            .desc_tag_union => |desc| {
-                try writer.writeAll(" names(");
-                try self.writeLocals(desc.names, writer);
-                try writer.writeAll(") counts(");
-                const counts = self.store.getU32Span(desc.payload_counts);
-                for (0..counts.len) |i| {
-                    if (i > 0) try writer.writeAll(", ");
-                    try writer.print("{d}", .{GuardedList.at(counts, i)});
-                }
-                try writer.writeAll(") payloads(");
-                try self.writeLocals(desc.payloads, writer);
-                try writer.writeAll(")");
-                if (desc.ext) |ext| try writer.print(" ext(l{d})", .{@backingInt(ext)});
-                return;
-            },
-            .dict_compose => |dict| try writer.print(" p{d}", .{@backingInt(dict.worker)}),
             .closure => |closure| {
                 try writer.print(" p{d}", .{@backingInt(closure.proc)});
                 if (closure.reuse != null and closure.reuse_unique) try writer.writeAll(" reuse_unique");
@@ -492,12 +462,10 @@ const Printer = struct {
                 if (call.deferred) try writer.writeAll(" deferred");
                 if (call.drive != .none) try writer.print(" drive={s}", .{@tagName(call.drive)});
             },
-            .dict_method => |method| try writer.print(" #{d}", .{method.index}),
             .table_entry => |entry| try writer.print(" #{d}", .{entry.index}),
             .field_addr => |field| try writer.print(" #{d}", .{field.field_index}),
             .tag_payload_addr => |payload| try writer.print(" #{d}", .{payload.payload_index}),
-            .desc_nominal => |nominal| if (nominal.inspect_opaque) try writer.writeAll(" opaque"),
-            .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_args, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .copy, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .view, .adapt => {},
+            .frame_alloc, .copy, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .view, .adapt => {},
         }
         const operands = DynOps.Operands.of(op);
         for (operands.singles[0..operands.single_count]) |local| try writer.print(" l{d}", .{@backingInt(local)});
