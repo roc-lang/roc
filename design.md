@@ -24686,11 +24686,11 @@ const ConstValue = union(enum) {
     pending,
     zst,
     scalar: ConstScalar,
-    string: ConstBlobView,
+    string: ConstStr,
     list: union(enum) {
         nodes: Span(ConstNodeId),
         scalar_bytes: struct {
-            bytes: ConstBlobView,
+            bytes: ConstBlobDataId,
             len: u32,
             item: ConstPackedScalar,
         },
@@ -24718,17 +24718,17 @@ The serialized store uses POD `StoredValue` ranges into the flat pools. The
 public read form reconstructed by `ConstStore.get` is `ConstValue`; its list,
 tuple, record, and tag-payload fields are slices.
 
-`ConstStr` is a view into checked-module string backing data:
+`ConstStr` names an interned blob holding exactly the string's bytes:
 
 ```zig
-const ConstStr = struct {
-    data: ConstStrDataId,
-    offset: u32,
-    len: u32,
-};
+const ConstStr = ConstBlobDataId;
 ```
 
-`ConstBlobView` is an `(interned blob id, byte offset, byte length)` view.
+A stored string or packed list is a whole blob, never a view into a longer
+one. How evaluation's allocations shared bytes (a seamless slice, or a string
+that kept a longer allocation's capacity) is runtime representation and does
+not enter `ConstStore`; the writer stores each string's own bytes, and equal
+contents share a blob because interning is by content.
 Strings and packed scalar lists intern into the same exact-content namespace.
 Packed multi-byte scalars use little-endian checked-value bytes;
 this is target-independent `ConstStore` data, not a captured host allocation or

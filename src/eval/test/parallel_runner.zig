@@ -225,7 +225,7 @@ fn constF32ListMatches(
         .empty => expected.len == 0,
         .packed_bytes => |scalar_bytes| blk: {
             if (scalar_bytes.element != .f32 or scalar_bytes.len != expected.len) break :blk false;
-            const bytes = store.blobBytes(scalar_bytes.bytes);
+            const bytes = store.blobData(scalar_bytes.bytes);
             if (bytes.len != expected.len * @sizeOf(u32)) break :blk false;
             for (expected, 0..) |bits, i| {
                 if (std.mem.readInt(u32, bytes[i * 4 ..][0..4], .little) != bits) break :blk false;
@@ -251,7 +251,7 @@ fn constF64ListMatches(
         .empty => expected.len == 0,
         .packed_bytes => |scalar_bytes| blk: {
             if (scalar_bytes.element != .f64 or scalar_bytes.len != expected.len) break :blk false;
-            const bytes = store.blobBytes(scalar_bytes.bytes);
+            const bytes = store.blobData(scalar_bytes.bytes);
             if (bytes.len != expected.len * @sizeOf(u64)) break :blk false;
             for (expected, 0..) |bits, i| {
                 if (std.mem.readInt(u64, bytes[i * 8 ..][0..8], .little) != bits) break :blk false;

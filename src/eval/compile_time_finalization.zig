@@ -6664,24 +6664,14 @@ fn appendCrashConst(
     module: *checked.CheckedModule,
     message: []const u8,
 ) Allocator.Error!checked.ConstNodeId {
-    const data = try module.evaluation.const_store.addBlobData(message);
-    return try module.evaluation.const_store.append(.{ .crash = .{
-        .data = data,
-        .offset = 0,
-        .len = @intCast(message.len),
-    } });
+    return try module.evaluation.const_store.append(.{ .crash = try module.evaluation.const_store.addBlobData(message) });
 }
 
 fn appendCheckedErrorConst(
     module: *checked.CheckedModule,
     message: []const u8,
 ) Allocator.Error!checked.ConstNodeId {
-    const data = try module.evaluation.const_store.addBlobData(message);
-    return try module.evaluation.const_store.append(.{ .checked_error = .{
-        .data = data,
-        .offset = 0,
-        .len = @intCast(message.len),
-    } });
+    return try module.evaluation.const_store.append(.{ .checked_error = try module.evaluation.const_store.addBlobData(message) });
 }
 
 fn reportCompileTimeExpectFailures(

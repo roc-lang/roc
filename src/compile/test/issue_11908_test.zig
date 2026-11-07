@@ -72,7 +72,7 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
         const packed_list = value.list.packed_bytes;
         try std.testing.expectEqual(scalar, packed_list.element.?);
         try std.testing.expectEqual(expected.len / scalar.byteWidth(), packed_list.len);
-        try std.testing.expectEqualSlices(u8, expected, checked.evaluation.const_store.blobBytes(packed_list.bytes));
+        try std.testing.expectEqualSlices(u8, expected, checked.evaluation.const_store.blobData(packed_list.bytes));
     }
     try std.testing.expectEqual(@as(usize, 1), constants);
     // Inspect the program used for the initial evaluation, before the checked

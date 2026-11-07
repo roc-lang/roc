@@ -2581,8 +2581,10 @@ pub const ProgramBuilder = struct {
         return try self.addStringView(text, 0, @intCast(text.len));
     }
 
-    /// Restore a view, copying each owner-relative checked blob at most once.
-    pub fn addConstBlobView(self: *ProgramBuilder, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
+    /// Restore a checked blob as a literal, copying each owner-relative
+    /// checked blob at most once.
+    pub fn addConstBlobView(self: *ProgramBuilder, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8) std.mem.Allocator.Error!StringLiteralId {
+        const len = std.math.cast(u32, bytes.len) orelse return error.OutOfMemory;
         const key = ConstBlobKey{ .module_bytes = module_bytes, .data = data };
         const owner = self.const_blob_backings.get(key) orelse blk: {
             const created = try SharedLiteralBacking.init(self.allocator, bytes);
@@ -2592,9 +2594,8 @@ pub const ProgramBuilder = struct {
             };
             break :blk created;
         };
-        if (@as(u64, offset) + len > owner.bytes.len) Common.invariant("constant blob view exceeded its backing");
         const id: StringLiteralId = @fromBackingInt(@intCast(@as(u32, @intCast(self.string_literals.len()))));
-        try self.string_literals.append(self.allocator, .{ .backing = owner.bytes, .shared = owner, .offset = offset, .len = len });
+        try self.string_literals.append(self.allocator, .{ .backing = owner.bytes, .shared = owner, .offset = 0, .len = len });
         owner.retain();
         return id;
     }
@@ -2913,8 +2914,8 @@ test "restored constant blob views share storage across IR ownership transfers" 
     var program = ProgramBuilder.init(gpa);
     var program_alive = true;
     defer if (program_alive) program.deinit();
-    const a = try program.addConstBlobView(@splat(0), data, "abcdefgh", 0, 4);
-    const b = try program.addConstBlobView(@splat(0), data, "abcdefgh", 2, 6);
+    const a = try program.addConstBlobView(@splat(0), data, "abcdefgh");
+    const b = try program.addConstBlobView(@splat(0), data, "abcdefgh");
     const first = program.string_literals.get(@backingInt(a));
     const second = program.string_literals.get(@backingInt(b));
     try std.testing.expectEqual(first.backing.ptr, second.backing.ptr);
@@ -2922,7 +2923,7 @@ test "restored constant blob views share storage across IR ownership transfers" 
     defer cloned.deinit(gpa);
     program.deinit();
     program_alive = false;
-    try std.testing.expectEqualStrings("cdefgh", cloned.text());
+    try std.testing.expectEqualStrings("abcdefgh", cloned.text());
 }
 
 test "final Monotype capture identities preserve direct aliases" {
