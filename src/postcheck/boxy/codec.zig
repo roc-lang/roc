@@ -636,6 +636,34 @@ fn planNames(program: *Program, family_index: u32) Allocator.Error!void {
 
 // -- Pieces --
 
+/// Mix what piece `index`'s worker is a function of into `hasher`, in terms
+/// every lowering shares: its kind, its family's derivation, its operands
+/// by content, and its signature's and captures' types
+/// (`Program.generatedWorkerIdentity`).
+pub fn hashPieceContent(program: *Program, hasher: *base.TypeDigestHasher, index: u32) Allocator.Error!void {
+    const piece = program.codec.pieces.items[index];
+    hasher.update(&[_]u8{@backingInt(piece.kind)});
+    hasher.update(std.mem.asBytes(&pieceFamilyRoot(program, piece)));
+    switch (pieceOperands(piece.kind)) {
+        .none => {},
+        .types => {
+            hasher.update(&try program.typeContent(@fromBackingInt(piece.a)));
+            hasher.update(&try program.typeContent(@fromBackingInt(piece.b)));
+        },
+        .type_and_name => {
+            hasher.update(&try program.typeContent(@fromBackingInt(piece.a)));
+            const text = program.store.nameText(@fromBackingInt(piece.b));
+            hasher.update(std.mem.asBytes(&@as(u64, text.len)));
+            hasher.update(text);
+        },
+        .type_and_word => {
+            hasher.update(&try program.typeContent(@fromBackingInt(piece.a)));
+            hasher.update(std.mem.asBytes(&piece.b));
+        },
+    }
+    try program.hashTypes(hasher, program.codec.piece_captures.items[index]);
+}
+
 /// The worker of `piece`, created on first request.
 fn pieceWorker(program: *Program, module: ModuleIndex, piece: Piece, params: []const TypeId, ret: TypeId, captures: []const TypeId, erased: bool) Allocator.Error!WorkerId {
     const scheme_vars: []const checked.CheckedTypeId = if (piece.family == no_family) &.{} else program.codec.families.items[piece.family].env.vars;
@@ -649,7 +677,7 @@ fn pieceWorker(program: *Program, module: ModuleIndex, piece: Piece, params: []c
     const id: WorkerId = @fromBackingInt(@intCast(program.workers.items.len));
     const proc = try program.result.store.addProcSpec(.{
         .name = program.result.store.freshSyntheticSymbol(),
-        .identity = program.programLocalIdentity("boxy.codec", @backingInt(id)),
+        .identity = try program.generatedWorkerIdentity(key, module, @backingInt(id), try std.mem.concat(arena, TypeId, &.{ params, &.{ret} })),
         .emission_unit = .isolated,
         .args = .empty(),
         .ret_layout = .zst,

@@ -383,6 +383,21 @@ pub const Worker = struct {
     }
 };
 
+fn hashWord(hasher: *base.TypeDigestHasher, value: u32) void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, value, .little);
+    hasher.update(&bytes);
+}
+
+/// Mix `bytes` into `hasher` after their length, so no two splits of a key
+/// into fields hash alike.
+fn hashLengthPrefixed(hasher: *base.TypeDigestHasher, bytes: []const u8) void {
+    var len: [8]u8 = undefined;
+    std.mem.writeInt(u64, &len, bytes.len, .little);
+    hasher.update(&len);
+    hasher.update(bytes);
+}
+
 /// The content identity of the template worker of module `link_name`'s
 /// template `template` (`Program.workerIdentity`), a function of the checked
 /// module alone: what names the worker in every object of the link.
@@ -533,6 +548,8 @@ pub const Program = struct {
     workers: std.ArrayList(Worker) = .empty,
     worker_ids: std.AutoHashMapUnmanaged(WorkerKey, WorkerId) = .empty,
     worklist: std.ArrayList(WorkerId) = .empty,
+    /// Each type's content digest (`typeContent`), once computed.
+    type_contents: collections.DenseMapUnmanaged(TypeId, [32]u8) = .empty,
     /// The Builtin module, found on first use (`builtinModule`).
     builtin_module: ?ModuleIndex = null,
     /// The program-local source file of each module, by module index.
@@ -660,6 +677,141 @@ pub const Program = struct {
         return local.derived("boxy.unit", &self.modules.linkName(self.modules.views.items[0].index));
     }
 
+    /// The identity of `key`'s worker, of a kind the lowering that reaches it
+    /// defines rather than a module's object (an adapter, a structural
+    /// method or map, a crash dictionary, a literal thunk, a codec piece, or
+    /// a row conversion). In a module unit it is a digest of what the
+    /// worker's code is a function of: its role, its types by content, the
+    /// workers it calls by identity, and, for a kind a program has one of
+    /// per module, its module by link name. Every unit lowering the same
+    /// worker therefore defines one procedure, which a link keeps once. In a
+    /// program it is local to the program, as `raw` names it there.
+    /// `signature` is the worker's parameter and result types where its key
+    /// does not determine them (a codec piece's), and empty otherwise.
+    pub fn generatedWorkerIdentity(self: *Program, key: WorkerKey, module_index: ModuleIndex, raw: u64, signature: []const TypeId) Allocator.Error!LIR.ProcIdentity {
+        const role: []const u8 = switch (key) {
+            .adapter => "boxy.adapter",
+            .structural => "boxy.structural",
+            .structural_map => "boxy.structural_map",
+            .crash_dictionary => "boxy.crash_dictionary",
+            .literal_thunk => "boxy.literal_thunk",
+            .codec => "boxy.codec",
+            .convert => "boxy.convert",
+            .template, .lambda, .default, .method_entry, .root, .static_data, .root_slot => invariant("a worker a module's object defines has no generated identity"),
+        };
+        if (self.moduleUnit() == null) return LIR.ProcIdentity.programLocal(role, raw);
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.boxy.generated_worker.v1");
+        hashLengthPrefixed(&hasher, role);
+        switch (key) {
+            .adapter => |adapter| {
+                hasher.update(&self.worker(adapter.outer).identityBytes(self));
+                hasher.update(&try self.typeContent(adapter.from));
+                hasher.update(&try self.typeContent(adapter.to));
+            },
+            .structural => |method| hasher.update(&[_]u8{@backingInt(method)}),
+            .structural_map => |map| {
+                hashLengthPrefixed(&hasher, self.store.nameText(map.name));
+                hashWord(&hasher, map.payload_index);
+                hashWord(&hasher, map.arity);
+                hasher.update(&[_]u8{@intFromBool(map.effectful)});
+            },
+            .crash_dictionary => |kind| hasher.update(&[_]u8{@backingInt(kind)}),
+            .literal_thunk => |thunk| {
+                hasher.update(&self.worker(thunk.target).identityBytes(self));
+                hasher.update(&try self.typeContent(thunk.bound));
+                hashWord(&hasher, thunk.literal_requirement);
+            },
+            .codec => |index| {
+                // A piece belongs to its module's codec family.
+                hasher.update(&self.modules.linkName(module_index));
+                try Codec.hashPieceContent(self, &hasher, index);
+            },
+            .convert => |convert| {
+                hasher.update(&self.modules.linkName(convert.module));
+                hasher.update(&try self.typeContent(convert.from));
+                hasher.update(&try self.typeContent(convert.to));
+            },
+            .template, .lambda, .default, .method_entry, .root, .static_data, .root_slot => unreachable, // rejected above
+        }
+        try self.hashTypes(&hasher, signature);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// The content digest of `ty`, the same in every lowering: its
+    /// structure, its labels by text, a nominal type by its declaration's
+    /// module link name and position, and a variable by its index.
+    pub fn typeContent(self: *Program, ty: TypeId) Allocator.Error![32]u8 {
+        if (self.type_contents.get(ty)) |known| return known;
+        const store = &self.store;
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.boxy.type_content.v1");
+        const node = store.get(ty);
+        hasher.update(&[_]u8{@backingInt(std.meta.activeTag(node))});
+        switch (node) {
+            .primitive => |primitive| hasher.update(&[_]u8{@backingInt(primitive)}),
+            .empty_record => {},
+            .record => |record| {
+                const fields = store.fieldSpan(record.fields);
+                hashWord(&hasher, @intCast(fields.len));
+                for (fields) |field| {
+                    hashLengthPrefixed(&hasher, store.nameText(field.name));
+                    hasher.update(&try self.typeContent(field.ty));
+                    hasher.update(&[_]u8{@backingInt(field.kind)});
+                    hashWord(&hasher, field.slot_variable);
+                }
+                try self.hashOptionalType(&hasher, record.ext);
+                if (record.declared) |declared| {
+                    hasher.update(&[_]u8{1});
+                    try self.hashTypes(&hasher, store.span(declared.padding));
+                    const slots = store.declaredSlots(declared);
+                    hashWord(&hasher, @intCast(slots.len));
+                    for (slots) |slot| hashWord(&hasher, slot);
+                } else hasher.update(&[_]u8{0});
+            },
+            .tuple => |items| try self.hashTypes(&hasher, store.span(items)),
+            .tag_union => |tag_union| {
+                const tags = store.tagSpan(tag_union.tags);
+                hashWord(&hasher, @intCast(tags.len));
+                for (tags) |tag| {
+                    hashLengthPrefixed(&hasher, store.nameText(tag.name));
+                    try self.hashTypes(&hasher, store.span(tag.payloads));
+                }
+                try self.hashOptionalType(&hasher, tag_union.ext);
+            },
+            .list, .box => |child| hasher.update(&try self.typeContent(child)),
+            .nominal => |nominal| {
+                hasher.update(&self.modules.linkName(nominal.decl.module));
+                hashWord(&hasher, @backingInt(nominal.decl.decl));
+                try self.hashTypes(&hasher, store.nominalArgs(nominal));
+                hashLengthPrefixed(&hasher, store.nameText(nominal.name));
+                hasher.update(&[_]u8{ @intFromBool(nominal.is_opaque), if (nominal.builtin) |builtin| @as(u8, @backingInt(builtin)) + 1 else 0, @intFromBool(nominal.has_backing) });
+            },
+            .function => |function| {
+                try self.hashTypes(&hasher, store.span(function.args));
+                hasher.update(&try self.typeContent(function.ret));
+                hasher.update(&[_]u8{@intFromBool(function.effectful)});
+            },
+            .variable => |index| hashWord(&hasher, index),
+        }
+        const digest = hasher.finalResult();
+        try self.type_contents.put(self.allocator, ty, digest);
+        return digest;
+    }
+
+    /// Mix the content digests of `tys` into `hasher`, after their count.
+    pub fn hashTypes(self: *Program, hasher: *base.TypeDigestHasher, tys: []const TypeId) Allocator.Error!void {
+        hashWord(hasher, @intCast(tys.len));
+        for (tys) |ty| hasher.update(&try self.typeContent(ty));
+    }
+
+    fn hashOptionalType(self: *Program, hasher: *base.TypeDigestHasher, ty: ?TypeId) Allocator.Error!void {
+        if (ty) |present| {
+            hasher.update(&[_]u8{1});
+            hasher.update(&try self.typeContent(present));
+        } else hasher.update(&[_]u8{0});
+    }
+
     /// The module unit this lowering emits, or null for a program.
     pub fn moduleUnit(self: *const Program) ?ModuleUnit {
         return switch (self.input.unit) {
@@ -771,6 +923,7 @@ pub const Program = struct {
         self.workers.deinit(self.allocator);
         self.worker_ids.deinit(self.allocator);
         self.worklist.deinit(self.allocator);
+        self.type_contents.deinit(self.allocator);
         self.by_module_idx.deinit(self.allocator);
         self.exported_bindings.deinit(self.allocator);
         self.callable_eval_by_pattern.deinit(self.allocator);
@@ -1970,7 +2123,7 @@ pub const Program = struct {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = self.programLocalIdentity("boxy.adapter", @backingInt(id)),
+            .identity = try self.generatedWorkerIdentity(key, outer_worker.module, @backingInt(id), &.{}),
             .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
@@ -2166,7 +2319,7 @@ pub const Program = struct {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = self.programLocalIdentity("boxy.convert", @backingInt(id)),
+            .identity = try self.generatedWorkerIdentity(key, module_index, @backingInt(id), &.{}),
             .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
             .args = .empty(),
             .ret_layout = .zst,
@@ -2288,7 +2441,13 @@ pub const Program = struct {
 
     fn addErasedWorker(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, role: []const u8) Allocator.Error!WorkerId {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
-        return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, self.programLocalIdentity(role, @backingInt(id)));
+        const identity = switch (key) {
+            // Only a compile-time program reads a root's slot.
+            .root_slot => self.programLocalIdentity(role, @backingInt(id)),
+            .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .codec, .convert => try self.generatedWorkerIdentity(key, module_index, @backingInt(id), &.{}),
+            .template, .lambda, .default, .method_entry, .root, .static_data => invariant("a worker a module's object defines is no generated erased worker"),
+        };
+        return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, identity);
     }
 
     fn addErasedWorkerWithIdentity(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, identity: LIR.ProcIdentity) Allocator.Error!WorkerId {
@@ -3156,3 +3315,59 @@ const HostBoundaryGraph = struct {
         try out.append(program.allocator, .{ .node = ret, .position = @intCast(args.len), .layout = try program.layouts.layoutOf(ret) });
     }
 };
+
+test "a generated worker's identity is its content, whatever lowering reaches it" {
+    const allocator = std.testing.allocator;
+    const unit: Unit = .{ .module = .{ .imports = undefined, .root = false, .names = undefined } };
+    var identities: [2][4]LIR.ProcIdentity = undefined;
+    var record_ids: [2]TypeId = undefined;
+    for (0..2) |round| {
+        // An identity reads the program's input, store, result and workers;
+        // every other field stays unread.
+        var program: Program = undefined;
+        program.allocator = allocator;
+        program.input = .{ .modules = undefined, .roots = undefined, .target_usize = .u64, .unit = unit };
+        program.store = types.Store.init(allocator);
+        defer program.store.deinit();
+        program.result = try LirProgram.Result.init(allocator, .u64);
+        defer program.result.deinit();
+        program.workers = .empty;
+        defer program.workers.deinit(allocator);
+        program.type_contents = .empty;
+        defer program.type_contents.deinit(allocator);
+        const store = &program.store;
+        const number = try store.primitive(.u64);
+        // The second lowering interns another type first, so the same
+        // types get other ids there.
+        if (round == 1) _ = try store.intern(.{ .tuple = &.{ number, number } });
+        const name_x = try store.internName("x");
+        const record = try store.intern(.{ .record = .{ .fields = &.{.{ .name = name_x, .ty = number, .kind = .inline_slot }}, .ext = null } });
+        record_ids[round] = record;
+        const function = try store.intern(.{ .function = .{ .args = &.{record}, .ret = number, .effectful = false } });
+        // The adapter's and literal thunk's target, a template every unit
+        // names alike.
+        const ret = try program.result.store.addCFStmt(.{ .ret = .{ .value = try program.result.store.addLocal(.{ .layout_idx = .u8 }) } }, .test_fixture);
+        const proc = try program.result.store.addProcSpec(.{ .name = .fromRaw(0), .identity = LIR.ProcIdentity.forTest(7), .args = .empty(), .body = ret, .ret_layout = .u8 }, .none);
+        var target: Worker = undefined;
+        target.proc = proc;
+        try program.workers.append(allocator, target);
+        const target_id: WorkerId = @fromBackingInt(0);
+        const module_index: ModuleIndex = @fromBackingInt(0);
+        identities[round] = .{
+            try program.generatedWorkerIdentity(.{ .structural = .is_eq }, module_index, round, &.{}),
+            try program.generatedWorkerIdentity(.{ .structural = .to_hash }, module_index, round + 1, &.{}),
+            try program.generatedWorkerIdentity(.{ .adapter = .{ .outer = target_id, .from = function, .to = function } }, module_index, round + 2, &.{}),
+            try program.generatedWorkerIdentity(.{ .literal_thunk = .{ .target = target_id, .bound = record, .literal_requirement = 1 } }, module_index, round + 3, &.{}),
+        };
+        // A program's own worker is local to the program.
+        program.input.unit = .program;
+        const local = try program.generatedWorkerIdentity(.{ .structural = .is_eq }, module_index, round, &.{});
+        try std.testing.expect(!std.meta.eql(identities[round][0], local));
+    }
+    try std.testing.expect(record_ids[0] != record_ids[1]);
+    for (identities[0], identities[1]) |first, second| try std.testing.expectEqual(first, second);
+    // Workers of different content have different identities.
+    for (identities[0], 0..) |identity, index| {
+        for (identities[0][index + 1 ..]) |other| try std.testing.expect(!std.meta.eql(identity, other));
+    }
+}

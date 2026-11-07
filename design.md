@@ -14871,14 +14871,22 @@ references, which index the image, and its line entries, which name its
 source-file table. The composed object is a function of the units alone:
 they are taken in the order of their source-file tables, and host-visible
 constants in name order, so the order units finish in changes nothing in
-it. A worker a unit exports is named by content identity. Every other
-procedure of a unit (conversions, adapters, structural and codec workers,
-literal thunks, roots, static-data initializers and the rest) is numbered
-within its own lowering and named under the unit's link name
-(`Program.programLocalIdentity`), since pieces of different units meet in one
-program and composition treats one identity as one procedure: an edge to a
-procedure lands on the definition composition keeps, so two different
-procedures under one identity would run each other's code.
+it. A worker a unit exports is named by content identity, and so is every
+worker a unit lowers because something it reaches needs one rather than
+because a module defines it: a conversion, an adapter, a structural method
+or map, a crash dictionary, a literal thunk, or a codec piece
+(`Program.generatedWorkerIdentity`), a digest of its role, its types by
+content, the workers it calls by identity, and, for a conversion or codec
+piece, its module by link name. Two units lowering the same such worker
+therefore define one procedure, and composition keeps its first definition:
+an edge to a procedure lands on the definition composition keeps, so an
+identity must name one function, which a digest of the worker's content
+does. The procedures that serve only their own lowering (roots, static-data
+initializers, hosted externs) are numbered within it and named under the
+unit's link name (`Program.programLocalIdentity`). A link that places whole
+unit images (the fast dev link, the wasm link, and `roc test`'s loaded
+images) keeps every unit's copy of such a worker its own calls reach, and
+binds a symbol two images define to one of them.
 `ROC_VERIFY_BOXY_OBJECT_REUSE` compares a restored unit's encoded pieces
 with a rebuilt unit's exactly as it compared objects.
 
