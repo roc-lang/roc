@@ -5707,7 +5707,6 @@ fn addBoxyRuntimeObject(
     runtime_module.addImport("layout_shape", shape_module);
     value_rules_module.addImport("builtins", builtins_module);
     runtime_module.addImport("value_rules", value_rules_module);
-    runtime_module.addImport("raw_pages", roc_modules.raw_pages);
     const obj = b.addObject(.{
         .name = name,
         .root_module = b.createModule(.{

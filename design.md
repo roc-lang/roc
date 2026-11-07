@@ -13919,8 +13919,8 @@ A direct call to a known template reads the checked site evidence of the use
 - the node's `subst` names, for each quantified variable of the target scheme
   in `scheme_vars` order, the checked type the variable was copied to at this
   edge. The lowerer passes the descriptor of that checked type: a static
-  descriptor when the type is closed, otherwise a composed descriptor built
-  from the enclosing worker's hidden descriptor parameters. A sealed variable
+  descriptor when the type is closed, otherwise a word of the enclosing
+  worker's type table, which its instantiations determine. A sealed variable
   of the target scheme (Sealed Result Rows) takes no descriptor; where the
   edge copied it to a wider row, the call's result is converted from the
   callee's result at the sealed row to the call's own type. The call's
@@ -13996,11 +13996,8 @@ count followed by that many `u32` memory-slot indices, in ascending order.
 These name exactly its non-padding fields whose descriptors contain
 references. Retain and release walk these slots directly, preserving their
 existing traversal order. Static descriptor emission derives the slots from
-the committed field layouts; composition derives them from its immutable
-component descriptors. A recursive placeholder is only reached through a
-pointer descriptor whose reference-containing flag is already final, so
-closing the placeholder cannot change the selected slots. Debug walkers
-verify the list against all fields; release walkers do not rescan them.
+the committed field layouts. Debug walkers verify the list against all
+fields; release walkers do not rescan them.
 The trailer shares the field table's allocation and static-data node. It
 adds four bytes per selected field and four bytes per reference-containing
 record/tuple layout, and adds nothing to the descriptor header or to
@@ -14013,75 +14010,46 @@ child needs no push/pop pair. Pending list and box releases stay below their
 children and the children of nested records on the work stack. This uses the
 existing slot table and adds no descriptor metadata or compiler analysis.
 
-Descriptors come from two sources and nowhere else:
+Every descriptor is static data. The lowerer interns a descriptor for every
+closed type a program needs, keyed by the type's committed layout and
+name-bearing structure, and emits each as ordinary static data with
+relocations to the descriptors and method callables it references. Static
+descriptors are constants of the program like any other static data; they
+take part in content naming and dev-image placement exactly as other
+constants do, and no runtime table, registration, or sidecar numbers them.
+Nothing composes, interns, or allocates a descriptor at run time.
 
-- *Static descriptors.* The lowerer interns a descriptor for every closed
-  checked type a body needs, keyed by the type's committed layout and
-  name-bearing structure, and emits each as ordinary static data with
-  relocations to the descriptors and method callables it references. Static
-  descriptors are constants of the program like any other static data; they
-  take part in content naming and dev-image placement exactly as other
-  constants do, and no runtime table, registration, or sidecar numbers them.
-- *Composed descriptors.* When a body needs the descriptor of a type that
-  mentions one of its type variables, the lowerer emits a composition
-  statement whose operands are static descriptors and hidden descriptor
-  parameters: `desc_list(item)`, `desc_box(payload)`, `desc_record(fields)`,
-  `desc_declared_record(fields)`, `desc_tag_union(variants)`,
-  `desc_nominal(declaration, args)`,
-  `desc_erased_callable`. The runtime composes the layout with the shared
-  layout code and interns the result in an immortal cache keyed by
-  constructor and operand identities, so a composition executed again
-  returns the same pointer and allocates nothing. A platform build's cache
-  is process-global; in the compiler's own process each program has its own
-  (below), since the operand identities are addresses in the program's code
-  and static data.
+A body needs descriptors of types that mention its type variables too. Every
+descriptor a body reads is a word: a static descriptor of a closed type, one
+of the worker's inputs, or a word of its type table, which the lowering fills
+at compile time by evaluating the descriptor's recipe at each instantiation
+the program reaches ("Type Tables"). An erased call's argument record and a
+dynamic capture record are described the same way (`Tables.Recipe.args_desc`).
+The lowerer reads each word in the worker's entry block, once per activation.
 
-A recursive type composes through placeholders. The lowerer finds the
-type's recursive component in the graph of descriptor components (record
-fields, tuple items, tag payloads, nominal backings, list items, box
-payloads) and breaks the cycle at exactly its pointer slots: the slots the
-shared layout store boxes, and the list items and box payloads leading back
-into the component, which are pointers already. The store boxes a slot only
+A recursive type's static descriptor is laid out from its committed layout,
+whose slots on the type's size cycle are boxed: the store boxes a slot only
 for a cycle of its size edges, the components a type stores inside itself
-(record fields, tuple items, tag payloads, nominal backings): a struct slot
-or a non-struct tag payload leading back into such a cycle is boxed, while a
-type recursive only through a list or box has no boxed slot, since the list
-or box already points at it. The lowerer places those size-edge components
-separately (`Layouts.sizeComponent`) and boxes exactly the same slots. Each
-member a pointer slot points at is opened first (`desc_recursive_open`, keyed by a
-static word naming the member and the descriptors of its variables), which
-yields the finished descriptor when an earlier composition interned it and a
-placeholder otherwise. The boxed slots compose as `desc_recursive_box` over
-the placeholder, a list or box composes over the placeholder directly, and
-neither reads anything from it; once the member's own composition is done
-`desc_recursive_close` fills the placeholder and interns it. A composed recursive type therefore has the layout its closed instances
-commit. A type written over variables can also close into a recursive type only
-once the variables have types: `[Leaf(a), Next(b)]` with `b` a nominal over
-`[Leaf(U64), Next(b)]` is that nominal's backing, though nothing in the written
-type says so, and a value of the nominal reaches such a parameter unconverted.
-Composing a record, tuple, or tag union therefore searches its components along
-size edges for a member with its structure behind recursion boxes, and yields
-that member, so a closed type has one layout however it was composed. Component addressing and construction see through recursion boxes: a
-field or payload address is the boxed value's, and building a value boxes
-the components its descriptor's slots box. A `Box` a type states itself,
-including through nominal wrappers, is the component's own representation and
-never a recursion box; value slots and static descriptors read this one rule
-(`Layouts.isRecursionBox`).
-
-Every descriptor a body needs is a word: a static descriptor of a closed
-type, one of the worker's inputs, or a word of its type table ("Type
-Tables"). The lowerer reads each in the worker's entry block, once per
-activation. Argument-block descriptors are composed there from those words,
-and share one entry-chain result for an identical ordered list of descriptor
-locals. This interning is local to lowering one worker and only records
-compositions emitted after all opened recursive members have closed. A
-composition emitted while a member is open is not shared across its close.
-There is no new ownership pass or persistent cache key.
+(record fields, tuple items, tag payloads, nominal backings), while a type
+recursive only through a list or box has no boxed slot, since the list or box
+already points at it. A boxed slot's descriptor is a recursion box over the
+member it leads back to, and descriptors reach one another through
+relocations, so the member's descriptor is the same static data wherever it
+appears. A type written over variables can close into a recursive type only
+once the variables have types (`[Leaf(a), Next(b)]` with `b` a nominal over
+`[Leaf(U64), Next(b)]` is that nominal's backing); its descriptor recipe is
+evaluated at the closed type, so it has the closed type's one layout.
+Component addressing and construction see through recursion boxes: a field
+or payload address is the boxed value's, and building a value boxes the
+components its descriptor's slots box. A `Box` a type states itself,
+including through nominal wrappers, is the component's own representation
+and never a recursion box; value slots and static descriptors read this one
+rule (`Layouts.isRecursionBox`).
 
 A nominal whose overrides are instantiated at types that mention the nominal
 (a method generic in its receiver) holds its own descriptor through its
-`Methods` record, so it composes as a recursive member too: its placeholder
-stands for it while its methods compose, and closing it fills the placeholder.
+`Methods` record: the descriptor and the override callables that capture it
+are one group of recipes that lead back to one another, evaluated together.
 
 A type declared in a function body may name the body's type variables in its
 backing. Its occurrences are instantiated at those variables' types as well as
@@ -14098,10 +14066,8 @@ is described by a recipe of the body even when it is closed. The override is
 the local procedure's function value at the method's interface, an immortal
 callable, since the descriptor holding it lives for the program's lifetime.
 
-A closed type is otherwise never composed: the lowerer emits its static
-descriptor. Two descriptors of the same type may therefore be distinct
-pointers (one static,
-one composed from static parts at a different site); no consumer compares
+Two descriptors of the same type may be distinct static data (one without
+override scope, one carrying a body's overrides); no consumer compares
 descriptors by identity, and equality, hashing, and inspection are defined on
 values through descriptors, never on descriptors.
 
@@ -14280,32 +14246,24 @@ A dictionary's callable is the target method's worker together with the
 hidden arguments the worker needs, bound as captures: the descriptors for the
 target scheme's variables under the edge's `subst`, and the dictionaries for
 the target scheme's own evidence parameters under the edge's nested evidence.
-A dictionary whose target and captures are all static is emitted as static,
-immortal data, interned by procedure and capture words: its callable is a
-static-data node of the same shape a composed callable has, with a static
-refcount, and its slot's value points at the callable's payload. A local's
-static content (a static descriptor, a static dictionary, or the null word of
-an unread literal argument) is what decides this, so a closed type's dictionary
-is static in a generic body too. One whose captures mention the enclosing
-worker's hidden parameters is composed at runtime, hoisted to entry like a
-descriptor, and interned in the same immortal cache keyed by the target worker
-and its capture identities, so composition allocates nothing after the first
-evaluation. A compile-time program with stored functions composes every
-dictionary, because reading a function value back resolves its captured
-descriptors through what the program's compositions noted.
+Every dictionary is static, immortal data, interned by procedure and capture
+words: its callable is a static-data node with a static refcount, capturing
+its entry's type table, and its slot's value points at the callable's
+payload. A dictionary of closed types is static data where the body reads it,
+in a generic body too; one whose captures mention the enclosing worker's
+hidden inputs is a word of that worker's type table, evaluated at each of the
+worker's instantiations ("Type Tables").
 
 A method whose scheme requires itself has a dictionary that captures itself,
 directly or through other dictionaries: resolving a requirement can reach a
 target instance already on the path from the root (`Program.dictionaryTree`),
 and the checker keeps those instances finite. Static dictionaries reserve every
 callable before filling any, so a capture relocates to its target like a
-recursive descriptor's. At runtime, the target a back edge returns to composes
-first, with a null word in each capture slot whose dictionary reaches it, so
-those slots are no part of its identity; `dict_patch` then fills them. Equal
-compositions fill a slot with the same dictionary.
+recursive descriptor's, and a type table's recipes that lead back to one
+another are evaluated as one group the same way.
 A stored function value's types are closed, so a dictionary that captures
-itself is stored as its target and types alone and composed again on restore,
-which keeps the constant graph acyclic.
+itself is stored as its target and types alone and built again as static data
+on restore, which keeps the constant graph acyclic.
 
 Compiler-derived structural evidence (equality, hashing, inspection) is a
 callable over the dispatcher's descriptor: the dictionary for `[a.is_eq]` with
@@ -14573,108 +14531,31 @@ generic body is a direct extern call at the hosted declaration's own type.
 `Box(function)` is the erased callable above; `RocBox(RocUnknown)` is opaque
 and is only retained, moved, returned, or shallow-dropped. The erased callable
 is already an allocation of its own, so `Box(function)` has the callable's
-layout and descriptor: composing the descriptor of a box whose payload
-describes an erased callable yields the payload's descriptor, boxing a
-callable is the callable, and a collapsed box's payload address is the box's
-own. A provided data export is built by an initializer worker of its own
+layout and descriptor: the descriptor of a box whose payload describes an
+erased callable is the payload's descriptor, boxing a callable is the
+callable, and a collapsed box's payload address is the box's own. A provided data export is built by an initializer worker of its own
 (`WorkerKey.static_data`) that restores the stored constant at its checked
 type, which static data materialization evaluates as it does under `.lss`.
 
 #### Runtime
 
-The Boxy runtime is the descriptor machinery and nothing else: descriptor
-composition with the shared layout code and its immortal interning cache,
-descriptor-guided copy, incref, decref, equality, hashing, and inspection, the
-shared capture drop, and the program's name table. It has no procedure
+The Boxy runtime reads descriptors and nothing else: descriptor-guided copy,
+incref, decref, equality, hashing, inspection, and representation
+adaptation, component addressing and construction, the list operations that
+take an item descriptor, and the shared capture drop. It composes,
+interns, and allocates no descriptor or dictionary, and holds no state of its
+own: no cache, no lock, no atomic, and no thread-local. It has no procedure
 registry, no sidecar, no descriptor numbering, no deferred or pending calls,
-and no table a backend must renumber. Static descriptors, static dictionaries,
-static callables, and the name table are static data of the program.
-Composed descriptors and dictionaries, and the cache interning them, are
-immortal to the program composing them: in a platform build they come from
-process-lifetime pages, not from the host's allocator, which owns only the
-values a program releases. In the compiler's own process, where programs come
-and go (compile-time evaluation levels, test and run images, glue plugins),
-each program's runner owns an `InProcessState` holding what that program
-composes and makes it current on every thread running the program's code;
-the interning keys are addresses in the program's code and static data, which
-the process reuses once the program is gone, so the state is destroyed with
-the program and never shared between programs.
+and no table a backend must renumber. Static descriptors, static
+dictionaries, static callables, type tables, and the name table are static
+data of the program, immutable, so the runtime and the code calling it share
+nothing mutable between threads or between programs in one process.
 
-Temporary composition keys, field-order buffers, and traversal stacks do not
-escape the composition operation. In-process execution allocates these from
-the reclaiming SMP allocator (the wasm allocator in the freestanding compiler)
-and frees them when the operation finishes;
-platform runtimes retain their existing host allocation/free operations.
-Published descriptors and copied interning keys still use program-lifetime
-storage. Repeated cache hits must not retain temporary buffers in that storage.
-
-A generic body receives its signature's composite descriptors from its caller
-and composes any remaining descriptors and dictionaries on every call, so a
-cache hit remains a hot path, and compile-time workers compose concurrently. The interning table is therefore read without
-its lock: a reader loads the current table and probes it from the key's
-hashed slot to the first empty one. That is sound because a table is only
-ever added to, never changed or compacted; an entry stores its value
-last, after its key, so a reader that sees the value sees the key it was
-stored under, and one that sees an empty slot treats it as a miss; and
-growth builds a new table, copies every entry into it, and installs it
-whole, leaving the replaced table alive for the readers still probing it.
-A reader that misses, whether the entry is absent or another thread is
-adding it, takes the lock, probes the current table again, and interns on a
-true miss. Only insertion and growth hold the lock. Keys are a few words of
-constructor tags and operand addresses, hashed by mixing each word.
-
-Where the consumer is the interpreter, the native dev backend, or the LLVM
-backend, each descriptor or dictionary composition statement also owns a
-one-entry site cache in zero-initialized writable static data; the wasm dev
-backend reads no sites, so its lowering emits no slots and every composition
-it runs reaches the interner. The
-lowerer assigns its slot
-and stable worker/site identity; LIR cloning and compaction preserve that
-reference. Mutable slots are never content-deduplicated or pooled between
-program images. Dev run images place them on separate writable pages outside
-the code and read-only data sections and outside the retained static pool. An
-LLVM object names a site by the symbol of the zero-fill definition in the
-program's static data, never by a private constant copy of its initial bytes.
-Saved objects and LirImages carry the initial zero bytes, never runtime pointers.
-Each interpreter owns its own instances of these slots, with
-the lifetime of its composition arena.
-
-Every consumer with sites acquire-loads a site's pointer to an immutable
-snapshot of the last operand pointers and result. If every operand matches,
-it uses that result without entering the runtime or probing the interner. The
-constructor, worker, arities and other non-local arguments are fixed by the
-site; the local operand sequence is its complete varying key. A miss composes
-normally, then release-stores a complete snapshot pointer. An atomic store
-of one pointer means no reader can observe a partially replaced operand/result
-pair, even with several writers. Snapshots are themselves interned by result
-and operand sequence in the program's immortal table, so alternating previously
-seen instantiations does not allocate on each replacement. A replaced snapshot
-stays alive for racing readers until the program is destroyed. The native dev
-backend and the LLVM backend emit the load and the operand comparisons inline
-at the site, so a hit costs a few loads and compares, and only a miss enters
-the runtime (`roc_desc_site_publish`).
-
-A snapshot belongs to the program whose immortal table interned it. A cached
-module object is loaded once per compile-time evaluation and shared by every
-program of that evaluation, so its sites would otherwise hand a later program
-snapshots of a state that died with an earlier one. The evaluation therefore
-returns each reused object's zero-filled data, where its sites live, to zero
-before a program that can reach it runs (`BoxyLinkedImages.resetMutableData`).
-On unit-image hosts, the program carries the complete transitive image-import
-closure of its emitted code and data references. Only those images are marked
-used and reset; newly loaded images are already zeroed. Unreached images may
-retain old snapshots but cannot execute until a later program resets them.
-Other hosts reset every loaded object. Evaluation is serial; image registration,
-loading and reset share a lock, and each program owns an immutable snapshot of
-its code ranges, so parallel program construction cannot invalidate an executing
-program's tables.
-
-A recursive-open operation can return a private, unfinished placeholder. It
-stores no site snapshot until it returns a completed descriptor from the
-interner; recursive-close always finishes its placeholder before storing one.
-Thus the site cache never exposes an unfinished recursive descriptor to another
-execution. Monomorphic sites take the inline path after their first completed
-composition, while polymorphic sites use the ordinary interner on a mismatch.
+Traversal stacks and other temporary buffers do not escape the operation
+that allocates them. In-process execution allocates these from the
+reclaiming SMP allocator (the wasm allocator in the freestanding compiler)
+and frees them when the operation finishes; platform runtimes use their
+host allocation and free operations.
 
 #### Lowering Implementation Constraints
 
@@ -19137,11 +19018,11 @@ The `.boxy` builder components are:
   call targets, function-value uses, dictionary targets, and codec
   derivations, then emits one private LIR procedure per worker plus root
   metadata for host-shaped wrappers
-- the descriptor builder consumes checked types and the hidden parameters in
-  scope, then emits static descriptor data and entry-block composition
-  statements
+- the descriptor builder consumes checked types and the hidden inputs in
+  scope, then emits static descriptor data and the recipes of the worker's
+  type table words
 - the dictionary builder consumes checked site evidence, then emits static
-  dictionary data and entry-block composition statements
+  dictionary data and the recipes of the worker's type table words
 - the body builder consumes checked expressions, patterns, and statements with
   committed layouts and the descriptors in scope, then emits LIR locals,
   control flow, and dynamic-value statements
@@ -19321,9 +19202,9 @@ so a literal, a field read, a pattern, or a codec treats it as it treats any
 record. A padding type may mention the declaration's type variables, so it is a
 component of the node like a field: it counts toward the type's closedness and
 its variables are substituted with the rest. A closed type commits through
-`Graph.declaredOrder`. A generic body composes the descriptor with
-`desc_declared_record`, which calls the runtime's `roc_desc_declared_record`,
-so the shared layout code gives both the same offsets. An explicit constructor
+`Graph.declaredOrder`. A generic body reads the descriptor from its type
+table, which the lowering evaluates at the closed type, so both have the
+offsets of the one committed layout. An explicit constructor
 builds its operand at this type rather than at the operand's record row. A
 padded record of no named fields is still such a record: it has storage, where
 the empty record has none.
@@ -23259,7 +23140,7 @@ outside the statement graph.
 
 The wasm backend has no pass that closes a local set over descriptor
 metadata. A descriptor local is bound by the site that emits it—a hidden
-descriptor parameter, an entry-block composition statement, a capture
+descriptor parameter, a type table read, a static-data read, a capture
 read—because each of those sites already reads the explicit LIR descriptor
 data that names it. Nothing searches the store for locals that some site
 might want, so each procedure's own binding cost is a function of its own
@@ -23755,7 +23636,7 @@ implementations, the compiler's Boxy runtime, the loaded images' exports,
 and, for a hosted symbol, a stub that crashes exactly as a hosted call in an
 in-process test does. It then calls the planned roots' wrappers, found by module
 and source root index through the test-root tables, with the existing
-bool-root runner, its workers in one `BoxyInProcessState`.
+bool-root runner.
 
 ### Command-level execution
 

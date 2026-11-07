@@ -1,4 +1,4 @@
-//! The Boxy runtime: type descriptors, their composition and interning, and
+//! The Boxy runtime: the type descriptor format, and
 //! the descriptor-guided copy, incref, decref, equality, hashing, and
 //! inspection walkers (design.md "`.boxy` Runtime Lowering").
 //!
@@ -9,7 +9,6 @@
 //! without libc and without the rest of the compiler.
 
 pub const desc = @import("desc.zig");
-pub const compose = @import("compose.zig");
 pub const walk = @import("walk.zig");
 pub const exports = @import("exports.zig");
 pub const compiled = @import("compiled.zig");
@@ -29,7 +28,6 @@ pub const Flags = desc.Flags;
 pub const PointerWidth = desc.PointerWidth;
 pub const ExternLayout = desc.ExternLayout;
 
-pub const Cache = compose.Cache;
 pub const Value = walk.Value;
 
 test "boxy runtime tests" {

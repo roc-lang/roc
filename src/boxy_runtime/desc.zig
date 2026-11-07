@@ -4,11 +4,11 @@
 //! operations a generic body cannot inline (design.md "Type Descriptors").
 //! Descriptors are immutable and immortal. The compiler emits static
 //! descriptors as readonly data with relocations for the target's pointer
-//! width; the runtime composes descriptors in the same format at the native
-//! width. Every struct here is therefore an `extern struct` whose pointer
-//! fields are native pointers, and `ExternLayout` gives the byte offsets of
-//! each field for either pointer width so the compiler emits bytes without
-//! restating the format.
+//! width, and the runtime reads them as these structs at the native width.
+//! Every struct here is therefore an `extern struct` whose pointer fields are
+//! native pointers, and `ExternLayout` gives the byte offsets of each field
+//! for either pointer width so the compiler emits bytes without restating the
+//! format.
 
 const std = @import("std");
 const builtins = @import("builtins");
@@ -130,7 +130,7 @@ pub const Name = extern struct {
 };
 
 /// A name's content digest: 32 bytes as four words, so a comparison is four
-/// word compares and a composition key embeds it as four key words.
+/// word compares.
 pub const NameId = [4]u64;
 
 /// The `NameId` of the 32-byte digest `digest`.
@@ -289,7 +289,7 @@ pub const TypeDesc = extern struct {
             2 => std.mem.readInt(u16, at[0..2], .little),
             4 => std.mem.readInt(u32, at[0..4], .little),
             8 => @intCast(std.mem.readInt(u64, at[0..8], .little)),
-            else => unreachable, // composition and the compiler only produce 0, 1, 2, 4, or 8
+            else => unreachable, // the compiler only produces 0, 1, 2, 4, or 8
         };
     }
 

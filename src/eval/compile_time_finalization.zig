@@ -21,7 +21,6 @@ const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
 const ConstStoreWriter = @import("const_store_writer.zig");
 const NativeRootExport = @import("native_root_export.zig");
-const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const FrozenRootTranscode = @import("frozen_root_transcode.zig");
 const CompileTimeHost = @import("compile_time_host.zig");
 const checked_root_graph = @import("checked_root_graph.zig");
@@ -4730,9 +4729,7 @@ fn evalDevLiteralRoot(
     var root_call: DevRootCall = .{ .host = &host, .executable = &native.executable, .entry_offset = entry_offset, .ret = ret_buf.ptr };
     var crash_boundary = host.enterCrashBoundary();
     const entered = builtins.in_process_host.enter(host.ops(), null);
-    const composition = native.enterComposition();
     const ran = crash_boundary.run(DevRootCall, &root_call, DevRootCall.call);
-    DevProgram.leaveComposition(composition);
     builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
     _ = try ran;
@@ -5732,9 +5729,6 @@ const DevProgram = struct {
     /// The bytes the program's erased callables reserve before their
     /// captures (`LirProgram.Result.erased_capture_prefix`).
     capture_prefix: u32,
-    /// What a `.boxy` program's code composes while it runs, current on
-    /// each thread that runs it.
-    composition: ?*BoxyInProcessState,
     /// The objects a linked program's code calls into.
     linked_images: ?*BoxyLinkedImages,
     image_selection: BoxyLinkedImages.Selection,
@@ -5884,22 +5878,10 @@ const DevProgram = struct {
             .entry_offsets = entry_offsets,
             .excerpts = artifacts,
             .capture_prefix = lowered.lir_result.erased_capture_prefix,
-            .composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null,
             .linked_images = options.boxy_linked_images,
             .image_selection = image_selection,
             .lir_store = &lowered.lir_result.store,
         };
-    }
-
-    /// Make the program's composition state current on this thread while
-    /// its code runs here.
-    fn enterComposition(self: *const DevProgram) ?BoxyInProcessState.Entered {
-        const composition = self.composition orelse return null;
-        return composition.enter();
-    }
-
-    fn leaveComposition(entered: ?BoxyInProcessState.Entered) void {
-        if (entered) |composition| BoxyInProcessState.leave(composition);
     }
 
     fn compileProcedures(allocator: Allocator, codegen: *backend.HostLirCodeGen, demand: []const lir.LIR.LirProcSpecId, static_helpers: []const @import("layout").RcHelperKey, options: Options) Allocator.Error!NativeProcCompiler.Retained {
@@ -6029,7 +6011,6 @@ const DevProgram = struct {
 
     fn deinit(self: *DevProgram) void {
         self.image_selection.deinit(self.allocator);
-        if (self.composition) |composition| composition.destroy();
         self.entry_offsets.deinit();
         self.executable.deinit();
         self.splice.deinit();
@@ -6319,9 +6300,7 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     var root_call: DevRootCall = .{ .host = &job.host, .executable = &context.program.executable, .entry_offset = job.entry_offset, .ret = job.ret_buf.ptr };
     var crash_boundary = job.host.enterCrashBoundary();
     const entered = builtins.in_process_host.enter(job.host.ops(), null);
-    const composition = context.program.enterComposition();
     const ran = crash_boundary.run(DevRootCall, &root_call, DevRootCall.call);
-    DevProgram.leaveComposition(composition);
     builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
 

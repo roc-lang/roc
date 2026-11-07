@@ -14,7 +14,6 @@ const builtins = @import("builtins");
 const value_rules = @import("value_rules");
 const shape = @import("layout_shape");
 const desc_mod = @import("desc.zig");
-const compose = @import("compose.zig");
 
 const RocOps = builtins.host_abi.RocOps;
 const RocStr = builtins.str.RocStr;
@@ -29,8 +28,6 @@ const inspect_rules = value_rules.inspect;
 const TypeDesc = desc_mod.TypeDesc;
 const Name = desc_mod.Name;
 const Field = desc_mod.Field;
-
-const invariant = compose.invariant;
 
 /// A value of the type its descriptor describes, at an address.
 pub const Value = struct {
@@ -429,7 +426,7 @@ fn callIsEq(callable: [*]u8, lhs: Value, rhs: Value, ops: *RocOps) bool {
 fn callToHash(callable: [*]u8, value: Value, hasher: u64, ops: *RocOps) u64 {
     var measure: shape.StructMeasure = .{};
     const value_offset = measure.place(argShape(value.desc));
-    const hasher_offset = measure.place(argShape(compose.scalarDesc(.u64)));
+    const hasher_offset = measure.place(argShape(desc_mod.scalarDesc(.u64)));
     var buffer: ArgsBuffer = .{};
     defer buffer.deinit(ops);
     const args = buffer.get(measure.finish().size, ops);
@@ -710,7 +707,7 @@ const InspectCtx = struct {
             .record => .{ .record = value },
             .tuple => .{ .tuple = value },
             .tag_union => if (d.flags.presence_slot) .{ .presence_slot = value } else .{ .tag_union = value },
-            // A box of a function is the callable itself (`compose.box`).
+            // A box of a function is the callable itself (design.md "Function Values").
             .erased_callable => if (d.child) |function| .{ .box = .at(function, value.ptr) } else .function,
             .nominal => .{ .nominal = .{
                 .override = if (override(d, .to_inspect) != null) value else null,
@@ -886,4 +883,11 @@ pub fn inspect(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) RocStr {
         },
     };
     return out.str;
+}
+
+/// A violated compiler invariant. Builds with runtime safety crash through
+/// `ops` naming it; optimized builds treat the path as unreachable.
+pub fn invariant(ops: *RocOps, comptime message: []const u8) noreturn {
+    if (std.debug.runtime_safety) ops.crash("boxy runtime invariant violated: " ++ message);
+    unreachable; // only builds without runtime safety reach this, where design.md makes a violated invariant undefined
 }

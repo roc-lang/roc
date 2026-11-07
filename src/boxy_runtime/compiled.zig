@@ -1,14 +1,13 @@
 //! The descriptor operations compiled code performs through the runtime
 //! rather than inline: component addresses found by name or through a
-//! nominal's backing, value construction, dictionaries, and the list
-//! operations a `.boxy` generic body emits with an element descriptor
-//! (design.md "Dynamic Values In LIR", "Dictionaries"). `exports.zig` exposes
+//! nominal's backing, value construction, representation adaptation, and the
+//! list operations a `.boxy` generic body emits with an element descriptor
+//! (design.md "Dynamic Values In LIR"). `exports.zig` exposes
 //! each as a `roc_desc_*` C entry point.
 
 const std = @import("std");
 const builtins = @import("builtins");
 const desc_mod = @import("desc.zig");
-const compose = @import("compose.zig");
 const walk = @import("walk.zig");
 
 const RocOps = builtins.host_abi.RocOps;
@@ -23,7 +22,7 @@ const Name = desc_mod.Name;
 const Field = desc_mod.Field;
 const Variant = desc_mod.Variant;
 
-const invariant = compose.invariant;
+const invariant = walk.invariant;
 
 /// A nominal shares its backing's layout; field and tag lookups read the
 /// backing's entries.
@@ -97,7 +96,7 @@ fn writeDiscriminant(desc: *const TypeDesc, bytes: [*]u8, discriminant: u32) voi
         2 => std.mem.writeInt(u16, at[0..2], @intCast(discriminant), .little),
         4 => std.mem.writeInt(u32, at[0..4], discriminant, .little),
         8 => std.mem.writeInt(u64, at[0..8], discriminant, .little),
-        else => unreachable, // composition and the compiler only produce 0, 1, 2, 4, or 8
+        else => unreachable, // the compiler only produces 0, 1, 2, 4, or 8
     }
 }
 
@@ -153,7 +152,7 @@ pub fn listElemAddr(elem: *const TypeDesc, roc_list: *const RocList, index: u64)
 /// The payload of a box whose payload `desc` describes. A box of a
 /// zero-sized payload holds no allocation.
 pub fn boxPayloadAddr(desc: *const TypeDesc, box: *const usize) [*]u8 {
-    // A box of a function is the callable itself (`compose.box`).
+    // A box of a function is the callable itself (design.md "Function Values").
     if (desc.kind == .erased_callable) return @ptrCast(@constCast(box));
     const word = box.* & ~utils.DATA_PTR_TAG_MASK;
     if (desc.size == 0 or word == 0) return walk.zeroSizedPtr();
@@ -251,7 +250,7 @@ pub fn buildList(elem: *const TypeDesc, dst: *RocList, elems: []const [*]const u
 
 /// Write a box holding the payload `desc` describes to `dst`.
 pub fn buildBox(desc: *const TypeDesc, dst: *usize, payload: [*]const u8, ops: *RocOps) void {
-    // A box of a function is the callable itself (`compose.box`), which
+    // A box of a function is the callable itself (design.md "Function Values"), which
     // the box takes over.
     if (desc.kind == .erased_callable) {
         dst.* = @as(*align(1) const usize, @ptrCast(payload)).*;
@@ -431,79 +430,9 @@ fn targetVariant(to: *const TypeDesc, source: *const Variant, ops: *RocOps) *con
     return found orelse invariant(ops, "a re-tagged variant is not in its destination's row");
 }
 
-// Dictionaries.
-
-/// A platform's dictionary callables and dictionary records, interned by
-/// constructor and operand words. Both are immortal.
-var dictionary_cache: compose.Cache = .{};
-
-const dict_compose_tag: u64 = 1;
-const dict_record_tag: u64 = 2;
-
 /// Bytes before a static callable's payload: alignment padding, then the
 /// refcount word immediately before the payload.
 pub const static_callable_header: usize = erased_callable.capture_alignment;
-
-/// An immortal erased callable whose function is `callable_fn` (a worker's
-/// erased-record entry) and whose capture bytes are `capture_prefix` zero
-/// bytes followed by `captures`, one word each, interned by function,
-/// prefix, and captures.
-pub fn dictCompose(callable_fn: erased_callable.CallableFnPtr, capture_prefix: u32, captures: []const usize, immortal_ops: *RocOps) [*]u8 {
-    var key_buffer: [16]u64 = undefined;
-    var scratch: ?[*]u64 = null;
-    const key_len = 3 + captures.len;
-    const key: []u64 = if (key_len <= key_buffer.len) key_buffer[0..key_len] else blk: {
-        const words = compose.scratchAlloc(u64, key_len, immortal_ops).ptr;
-        scratch = words;
-        break :blk words[0..key_len];
-    };
-    defer if (scratch) |words| compose.scratchFree(u64, words[0..key_len], immortal_ops);
-    key[0] = dict_compose_tag;
-    key[1] = @intFromPtr(callable_fn);
-    key[2] = capture_prefix;
-    for (captures, key[3..]) |capture, *word| word.* = capture;
-    if (dictionaryCache().lookup(key)) |existing| return @ptrCast(@constCast(existing));
-
-    const capture_size = capture_prefix + captures.len * @sizeOf(usize);
-    const payload_size = erased_callable.payloadSize(capture_size);
-    const bytes: [*]u8 = compose.immortalBytes(immortal_ops, static_callable_header + payload_size, erased_callable.payload_alignment);
-    const data = bytes + static_callable_header;
-    @as(*isize, @ptrCast(@alignCast(data - @sizeOf(isize)))).* = utils.REFCOUNT_STATIC_DATA;
-    erased_callable.payloadPtr(data).* = .{ .callable_fn_ptr = callable_fn, .on_drop = null };
-    const capture_bytes = data + erased_callable.capture_offset;
-    @memset(capture_bytes[0..capture_prefix], 0);
-    const words: [*]align(1) usize = @ptrCast(capture_bytes + capture_prefix);
-    for (captures, 0..) |capture, index| words[index] = capture;
-    return @ptrCast(@constCast(dictionaryCache().intern(key, @ptrCast(@alignCast(data)), immortal_ops)));
-}
-
-/// Fill capture word `index` of `dict` (a `dictCompose` result that held a
-/// null word there) with `value`.
-pub fn dictPatch(dict: [*]u8, capture_prefix: u32, index: u32, value: usize) [*]u8 {
-    const words: [*]align(1) usize = @ptrCast(dict + erased_callable.capture_offset + capture_prefix);
-    words[index] = value;
-    return dict;
-}
-
-/// An immortal record of method callables, interned by its callables.
-pub fn dictRecord(methods: []const usize, immortal_ops: *RocOps) [*]const usize {
-    var key_buffer: [16]u64 = undefined;
-    var scratch: ?[*]u64 = null;
-    const key_len = 1 + methods.len;
-    const key: []u64 = if (key_len <= key_buffer.len) key_buffer[0..key_len] else blk: {
-        const words = compose.scratchAlloc(u64, key_len, immortal_ops).ptr;
-        scratch = words;
-        break :blk words[0..key_len];
-    };
-    defer if (scratch) |words| compose.scratchFree(u64, words[0..key_len], immortal_ops);
-    key[0] = dict_record_tag;
-    for (methods, key[1..]) |method, *word| word.* = method;
-    if (dictionaryCache().lookup(key)) |existing| return @ptrCast(@alignCast(existing));
-
-    const record: [*]usize = @ptrCast(@alignCast(compose.immortalBytes(immortal_ops, @max(methods.len, 1) * @sizeOf(usize), @alignOf(usize))));
-    @memcpy(record[0..methods.len], methods);
-    return @ptrCast(@alignCast(dictionaryCache().intern(key, @ptrCast(@alignCast(record)), immortal_ops)));
-}
 
 // List operations through an element descriptor.
 
@@ -771,179 +700,3 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
             list.listReverse(a, e.alignment, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &list.copy_fallback, ops)),
     }
 }
-
-// Composition state.
-
-/// Where composed descriptors and dictionaries are allocated. They are
-/// immortal to the code composing them. A platform's runtime allocates them
-/// through its host, whose allocations live as long as the process. In the
-/// compiler's process they live as long as the program composing them: its
-/// `InProcessState`, current on the thread while the program's code runs.
-pub fn immortalOps() *RocOps {
-    if (comptime builtins.host_abi.host_role == .platform) return builtins.in_process_host.ops();
-    return &InProcessState.current().ops;
-}
-
-/// The interning table descriptor composition fills: the process's in a
-/// platform build, the current program's in the compiler's process.
-pub fn descriptorCache() *compose.Cache {
-    if (comptime builtins.host_abi.host_role == .platform) return &compose.process_cache;
-    return &InProcessState.current().descriptors;
-}
-
-/// The interning table dictionary composition fills, chosen as
-/// `descriptorCache` is.
-fn dictionaryCache() *compose.Cache {
-    if (comptime builtins.host_abi.host_role == .platform) return &dictionary_cache;
-    return &InProcessState.current().dictionaries;
-}
-
-/// What one program's code composes while it runs in the compiler's own
-/// process: its descriptors, dictionary callables, and dictionary records,
-/// with their interning tables and the memory holding them. The tables key
-/// on addresses in the program's code and static data, which the process
-/// reuses once the program is gone, so the state lives exactly as long as
-/// the program: whoever runs the program creates one, makes it current on
-/// every thread that runs the program's code (`enter`), and destroys it
-/// after the program. Threads running the program's code at once share it.
-/// Record where `desc` came from in the compile-time program composing it
-/// (`LIR.DynOp.desc_note`).
-pub fn noteDesc(desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) void {
-    InProcessState.current().note(desc, ty, vars);
-}
-
-/// The compositions of one compile-time program running in this process.
-pub const InProcessState = struct {
-    allocator: std.mem.Allocator,
-    lock: std.atomic.Mutex = .unlocked,
-    arena: std.heap.ArenaAllocator,
-    /// Composition allocates through these ops: arena memory, with a crash
-    /// delivered to the evaluation entered on the composing thread.
-    ops: RocOps,
-    descriptors: compose.Cache = .{},
-    dictionaries: compose.Cache = .{},
-    /// Where each descriptor a compile-time program noted came from
-    /// (`noteDesc`), by address.
-    origins: std.AutoHashMapUnmanaged(*const TypeDesc, DescOrigin) = .empty,
-
-    threadlocal var current_state: ?*InProcessState = null;
-
-    /// The program type a descriptor describes, and the descriptors of that
-    /// type's variables. Types with one descriptor are the same to the code
-    /// reading it, so the lowest id stands for them all, whichever thread
-    /// noted it first.
-    pub const DescOrigin = struct {
-        ty: u32,
-        vars: []const *const TypeDesc,
-    };
-
-    /// What `enter` displaced; `leave` restores it.
-    pub const Entered = struct {
-        saved: ?*InProcessState,
-    };
-
-    pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!*InProcessState {
-        comptime assertInProcess("create");
-        const self = try allocator.create(InProcessState);
-        self.* = .{
-            .allocator = allocator,
-            .arena = .init(allocator),
-            .ops = .{
-                .env = @ptrCast(self),
-                .roc_alloc = &alloc,
-                .roc_dealloc = &dealloc,
-                .roc_realloc = &realloc,
-                .roc_dbg = &dbg,
-                .roc_expect_failed = &expectFailed,
-                .roc_crashed = &crashed,
-                .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
-            },
-        };
-        return self;
-    }
-
-    fn note(self: *InProcessState, desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) void {
-        while (!self.lock.tryLock()) std.atomic.spinLoopHint();
-        defer self.lock.unlock();
-        const entry = self.origins.getOrPut(self.allocator, desc) catch crashOutOfMemory(self);
-        if (entry.found_existing and entry.value_ptr.ty <= ty) return;
-        const owned = self.arena.allocator().dupe(*const TypeDesc, vars) catch crashOutOfMemory(self);
-        entry.value_ptr.* = .{ .ty = ty, .vars = owned };
-    }
-
-    fn crashOutOfMemory(self: *InProcessState) noreturn {
-        self.ops.crash("out of memory recording a descriptor's type");
-    }
-
-    /// Where `desc` came from, when the program noted it.
-    pub fn origin(self: *InProcessState, desc: *const TypeDesc) ?DescOrigin {
-        return self.origins.get(desc);
-    }
-
-    /// Release everything the program composed. Nothing of the program may
-    /// run afterwards.
-    pub fn destroy(self: *InProcessState) void {
-        const allocator = self.allocator;
-        self.origins.deinit(allocator);
-        self.arena.deinit();
-        allocator.destroy(self);
-    }
-
-    /// Make this the state of every composition on this thread until
-    /// `leave`. A program that runs another program nests: the inner one
-    /// enters, runs, and leaves, restoring the outer one.
-    pub fn enter(self: *InProcessState) Entered {
-        comptime assertInProcess("enter");
-        const entered = Entered{ .saved = current_state };
-        current_state = self;
-        return entered;
-    }
-
-    /// Restore what `enter` displaced.
-    pub fn leave(entered: Entered) void {
-        comptime assertInProcess("leave");
-        current_state = entered.saved;
-    }
-
-    fn current() *InProcessState {
-        comptime assertInProcess("current");
-        return current_state orelse invariant(builtins.in_process_host.ops(), "a program composed on a thread that entered no program's composition state");
-    }
-
-    fn assertInProcess(comptime operation: []const u8) void {
-        if (builtins.host_abi.host_role == .platform) {
-            @compileError("InProcessState." ++ operation ++ " touches thread-local storage, which a platform build must never do");
-        }
-    }
-
-    fn fromOps(ops: *RocOps) *InProcessState {
-        return @ptrCast(@alignCast(ops.env));
-    }
-
-    fn alloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
-        const self = fromOps(ops);
-        while (!self.lock.tryLock()) std.atomic.spinLoopHint();
-        defer self.lock.unlock();
-        return self.arena.allocator().rawAlloc(length, .fromByteUnits(alignment), @returnAddress()) orelse
-            builtins.in_process_host.ops().crash("out of memory composing a Boxy descriptor");
-    }
-
-    /// Arena memory is released with the state.
-    fn dealloc(_: *RocOps, _: *anyopaque, _: usize) callconv(.c) void {}
-
-    fn realloc(_: *RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {
-        invariant(builtins.in_process_host.ops(), "descriptor composition reallocated immortal memory");
-    }
-
-    fn dbg(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-        builtins.in_process_host.ops().dbg(bytes[0..len]);
-    }
-
-    fn expectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-        builtins.in_process_host.ops().expectFailed(bytes[0..len]);
-    }
-
-    fn crashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-        builtins.in_process_host.ops().crash(bytes[0..len]);
-    }
-};
