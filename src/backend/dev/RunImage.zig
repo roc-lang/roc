@@ -1319,6 +1319,29 @@ test "static pool reuse requires identical bytes outside pointer slots" {
     try std.testing.expectEqualSlices(u8, &first_bytes, try first.view.dataSymbolBytes(try poolTestSymbol(&first.view, "roc__s")));
 }
 
+test "static pool plan places address cycles locally and pools what reaches none" {
+    const slot = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    // a -> b -> a is a cycle; c -> a reaches it; d stands alone.
+    const to_b = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "roc__b" }};
+    const to_a = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "roc__a" }};
+    const exports = [_]StaticDataExport{
+        .{ .symbol_name = "roc__a", .bytes = &slot, .alignment = 8, .relocations = &to_b },
+        .{ .symbol_name = "roc__b", .bytes = &slot, .alignment = 8, .relocations = &to_a },
+        .{ .symbol_name = "roc__c", .bytes = &slot, .alignment = 8, .relocations = &to_a },
+        .{ .symbol_name = "roc__d", .bytes = "alone", .alignment = 1 },
+    };
+    var plan = try StaticDataPool.Plan.init(std.testing.allocator, &exports, true);
+    defer plan.deinit();
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false, true }, plan.poolable);
+    // Both cycle members come before the export pointing into the cycle.
+    var seen_c = false;
+    for (plan.order) |i| {
+        if (i == 2) seen_c = true;
+        if (i < 2) try std.testing.expect(!seen_c);
+    }
+    for (plan.placements) |placement| try std.testing.expect(placement == .local);
+}
+
 test "static pool reuse stays within code-to-data displacement range" {
     const exports = [_]StaticDataExport{.{ .symbol_name = "roc__s", .bytes = "reachable", .alignment = 1 }};
     const page_size = std.heap.page_size_min;
