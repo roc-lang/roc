@@ -729,7 +729,10 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             // The str concat wrapper is pinned for the same reason: its small-into-
             // small path is a few word operations that only pay off in registers
             // at the call site, and every other case is already a call to its
-            // noinline out-of-line half.
+            // noinline out-of-line half. The str append wrapper, which generated
+            // renderings join their pieces with, is not pinned: it is only the
+            // call to that out-of-line half, so it gets the hint like any other
+            // linked builtin, and a copy of it at a site is a call for a call.
             const inlinehint_kind = externs.LLVMGetEnumAttributeKindForName("inlinehint", "inlinehint".len);
             const inlinehint_attr = externs.LLVMCreateEnumAttribute(externs.LLVMGetModuleContext(builtins_module), inlinehint_kind, 0);
             const alwaysinline_kind = externs.LLVMGetEnumAttributeKindForName("alwaysinline", "alwaysinline".len);
