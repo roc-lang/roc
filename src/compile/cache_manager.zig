@@ -239,17 +239,21 @@ pub const CacheManager = struct {
         return .{ .stage = stage, .len = size };
     }
 
-    pub fn readStagedPart(self: *Self, part: StagedPart, allocator: Allocator) ?[]u8 {
-        const bytes = self.roc_ctx.readFile(part.stage.path, allocator) catch {
+    /// Finish the already-staged prefix and publish that same file. The caller
+    /// still owns `part` and discards it after success or failure.
+    pub fn finishStagedPart(self: *Self, part: StagedPart, header: []const u8, tail: CoreCtx.FileStream, final_size: usize, name: []const u8) void {
+        self.roc_ctx.completeStagedFile(part.stage.path, header, part.len, tail) catch |err| {
+            self.verboseLog(self.allocator, "Failed to complete checked cache entry for {s}: {}\n", .{ name, err });
             self.recordStoreFailure();
-            return null;
+            return;
         };
-        if (bytes.len != part.len) {
-            allocator.free(bytes);
+        var stage = part.stage;
+        stage.publish() catch |err| {
+            self.verboseLog(self.allocator, "Failed to publish checked cache entry for {s}: {}\n", .{ name, err });
             self.recordStoreFailure();
-            return null;
-        }
-        return bytes;
+            return;
+        };
+        self.recordStoreFor(.checked, final_size);
     }
 
     pub fn discardStagedPart(self: *Self, part: StagedPart) void {

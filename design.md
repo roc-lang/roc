@@ -2283,7 +2283,12 @@ so different checkout paths share them. Publication atomically replaces complete
 entries; readers keep their open mapping. Concurrent different implementations
 with the same typing inputs may replace each other's finalized snapshot. The
 header makes the losing implementation a typing-only hit, never a stale constant
-hit. One finalized snapshot is retained, not an implementation history. Only
+hit. A pending entry reserves its header and writes its solved environment and
+checking metadata once, before releasing solver types. Finalization appends the
+checked artifact to that same private file, fills its header, closes it, and
+atomically publishes it. It never rereads or recopies the staged environment.
+An interrupted or failed completion leaves only an unpublished staging file.
+One finalized snapshot is retained, not an implementation history. Only
 entries whose checking and evaluation add no diagnostics are published. No
 source-location pointer selects an older module
 for transplantation, and no per-program literal bundle or root-validation

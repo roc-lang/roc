@@ -542,6 +542,12 @@ pub const LocalImportEdge = struct {
     module_id: ModuleId,
 };
 
+/// A complete checking prefix awaiting its finalized artifact tail.
+const StagedCheckedEntry = struct {
+    part: CacheManager.StagedPart,
+    env_len: usize,
+};
+
 /// State of a single module within a package
 pub const ModuleState = struct {
     typing_storage_key: ?CheckedArtifact.CheckedModuleArtifactKey = null,
@@ -587,12 +593,12 @@ pub const ModuleState = struct {
     reopened_unevaluated: ?usize = null,
     /// Whether this module's solver type store was released once checking
     /// finished (`Coordinator.release_checked_solver_types`). Its checked cache
-    /// entry can then be published only from `staged_checked_env`.
+    /// entry can then be published only from `staged_checked_entry`.
     solver_types_released: bool = false,
     /// The `ModuleEnv` part of this module's checked cache entry, written while
     /// its solver types were still live. Published with the rest of the entry
     /// once evaluation completes, or discarded.
-    staged_checked_env: ?CacheManager.StagedPart = null,
+    staged_checked_entry: ?StagedCheckedEntry = null,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
     /// Current compilation phase
@@ -2962,7 +2968,7 @@ pub const Coordinator = struct {
                 };
                 // Evaluation may still add reports; final publication checks
                 // this condition again and discards any ineligible staged part.
-                if (mod.hasOnlyPreCheckReports()) self.stageCheckedModuleEnv(mod, artifact);
+                if (mod.hasOnlyPreCheckReports()) self.stageCheckedModuleEntry(mod, artifact);
                 env.types.deinit();
                 env.types = try @import("types").Store.init(env.gpa);
                 mod.solver_types_released = true;
@@ -2970,15 +2976,17 @@ pub const Coordinator = struct {
         }
     }
 
-    /// Write `mod`'s `ModuleEnv` cache part to a staging file.
-    fn stageCheckedModuleEnv(self: *Coordinator, mod: *ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
+    /// Write the final entry's header reservation, environment and checking
+    /// metadata once. Evaluation later appends the artifact to this same file.
+    fn stageCheckedModuleEntry(self: *Coordinator, mod: *ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
-        const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
+        const storage_key = mod.typing_storage_key orelse return;
+        const metadata = mod.typing_metadata orelse return;
+        const entries_dir = self.cache_entry_dirs.checked orelse {
             manager.recordStoreFailure();
             return;
         };
-        defer manager.allocator.free(entries_dir);
         var arena = base.SingleThreadArena.init(manager.allocator);
         defer arena.deinit();
         var env_writer = CompactWriter.init();
@@ -2986,22 +2994,22 @@ pub const Coordinator = struct {
             manager.recordStoreFailure();
             return;
         };
-        const Part = struct {
+        const Prefix = struct {
             env: *const CompactWriter,
-
+            metadata: []const u8,
             fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
-                const part: *const @This() = @ptrCast(@alignCast(raw));
-                try part.env.writeTo(destination);
+                const prefix: *const @This() = @ptrCast(@alignCast(raw));
+                try destination.writeAll(&@as([checked_module_cache_header_len]u8, @splat(0)));
+                try prefix.env.writeTo(destination);
+                try destination.writeAll(checked_module_cache_zero_padding[0..checkedModuleCacheEnvPadding(prefix.env.total_bytes)]);
+                try destination.writeAll(prefix.metadata);
+                try destination.writeAll(checked_module_cache_zero_padding[0..checkedModuleCacheEnvPadding(prefix.metadata.len)]);
             }
         };
-        const part = Part{ .env = &env_writer };
-        mod.staged_checked_env = manager.stageCheckedPart(
-            artifact.key.bytes,
-            .{ .context = &part, .write = Part.write },
-            env_writer.total_bytes,
-            entries_dir,
-            artifact.moduleEnvConst().module_name,
-        );
+        const prefix = Prefix{ .env = &env_writer, .metadata = metadata.bytes };
+        const prefix_len = checked_module_cache_header_len + env_writer.total_bytes + checkedModuleCacheEnvPadding(env_writer.total_bytes) + metadata.bytes.len + checkedModuleCacheEnvPadding(metadata.bytes.len);
+        const part = manager.stageCheckedPart(storage_key.bytes, .{ .context = &prefix, .write = Prefix.write }, prefix_len, entries_dir, artifact.moduleEnvConst().module_name) orelse return;
+        mod.staged_checked_entry = .{ .part = part, .env_len = env_writer.total_bytes };
     }
 
     /// Delete the staged cache parts of modules whose entries were never
@@ -3011,9 +3019,9 @@ pub const Coordinator = struct {
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             for (entry.value_ptr.*.modules.items) |*mod| {
-                const part = mod.staged_checked_env orelse continue;
-                mod.staged_checked_env = null;
-                manager.discardStagedPart(part);
+                const part = mod.staged_checked_entry orelse continue;
+                mod.staged_checked_entry = null;
+                manager.discardStagedPart(part.part);
             }
         }
     }
@@ -3038,7 +3046,10 @@ pub const Coordinator = struct {
                     // No evaluator is needed to finish this parametric module.
                     // App checking and runtime roots still share one program.
                     var stores = std.ArrayList(PendingStore).empty;
-                    defer stores.deinit(self.gpa);
+                    defer {
+                        for (stores.items) |*store| store.deinit();
+                        stores.deinit(self.gpa);
+                    }
                     try self.commitPreparedModule(platform_root.mod, &stores);
                     try self.writePendingStores(stores.items);
                 } else {
@@ -3908,7 +3919,10 @@ pub const Coordinator = struct {
             }
         }
         var stores = std.ArrayList(PendingStore).empty;
-        defer stores.deinit(self.gpa);
+        defer {
+            for (stores.items) |*store| store.deinit();
+            stores.deinit(self.gpa);
+        }
         for (entries.items) |entry| try self.commitPreparedModule(entry.mod, &stores);
         try self.writePendingStores(stores.items);
         try unfinalized.commit();
@@ -4043,11 +4057,17 @@ pub const Coordinator = struct {
         coordinator: *Coordinator,
         mod: *ModuleState,
         artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        staged_env: ?CacheManager.StagedPart,
+        staged_entry: ?StagedCheckedEntry,
         fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
             const self: *PendingStore = @ptrCast(@alignCast(context));
-            self.coordinator.storeCheckedModuleInCache(self.mod, self.artifact, self.staged_env);
+            const staged = self.staged_entry;
+            self.staged_entry = null;
+            self.coordinator.storeCheckedModuleInCache(self.mod, self.artifact, staged);
             return null;
+        }
+        fn deinit(self: *PendingStore) void {
+            if (self.staged_entry) |entry| self.coordinator.cache_manager.?.discardStagedPart(entry.part);
+            self.staged_entry = null;
         }
     };
 
@@ -4106,20 +4126,21 @@ pub const Coordinator = struct {
         if (mod.hasOnlyPreCheckReports() and evaluated_more) {
             if (artifact.pairing_arena == null) {
                 if (self.cacheEnabled()) {
-                    const staged_env = mod.staged_checked_env;
-                    mod.staged_checked_env = null;
+                    const staged_entry = mod.staged_checked_entry;
+                    mod.staged_checked_entry = null;
+                    errdefer if (staged_entry) |entry| self.cache_manager.?.discardStagedPart(entry.part);
                     try stores.append(self.gpa, .{
                         .coordinator = self,
                         .mod = mod,
                         .artifact = artifact,
-                        .staged_env = staged_env,
+                        .staged_entry = staged_entry,
                     });
                 }
             } else self.storePlatformPairingInCache(artifact);
         }
-        if (mod.staged_checked_env) |part| {
-            mod.staged_checked_env = null;
-            if (self.cache_manager) |manager| manager.discardStagedPart(part);
+        if (mod.staged_checked_entry) |part| {
+            mod.staged_checked_entry = null;
+            if (self.cache_manager) |manager| manager.discardStagedPart(part.part);
         }
         state.deinit();
         mod.pending_evaluation = null;
@@ -4820,18 +4841,18 @@ pub const Coordinator = struct {
         return header.install(platform, arena);
     }
 
-    /// Write `artifact`'s checked entry. `staged_env` is the module's staged
-    /// source environment, taken from the module by the caller; this reads
+    /// Write `artifact`'s checked entry. `staged_entry` is its already-written
+    /// prefix, taken from the module by the caller; this reads
     /// nothing else of the module's mutable state, so it runs on any thread.
-    fn storeCheckedModuleInCache(self: *Coordinator, mod: *const ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, staged_env: ?CacheManager.StagedPart) void {
+    fn storeCheckedModuleInCache(self: *Coordinator, mod: *const ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, staged_entry: ?StagedCheckedEntry) void {
         const manager = self.cache_manager orelse return;
-        defer if (staged_env) |part| manager.discardStagedPart(part);
+        defer if (staged_entry) |part| manager.discardStagedPart(part.part);
         if (!manager.config.enabled) return;
         const storage_key = mod.typing_storage_key orelse return;
         const metadata = mod.typing_metadata orelse return;
         // A released solver type store survives only in its staged part; a
         // staging failure was already counted when it happened.
-        if (mod.solver_types_released and staged_env == null) return;
+        if (mod.solver_types_released and staged_entry == null) return;
 
         const entries_dir = self.cache_entry_dirs.checked orelse {
             manager.recordStoreFailure();
@@ -4846,14 +4867,9 @@ pub const Coordinator = struct {
         const arena_alloc = arena.allocator();
 
         var env_writer = CompactWriter.init();
-        const env_bytes: ?[]const u8 = if (staged_env) |part|
-            manager.readStagedPart(part, arena_alloc) orelse return
-        else bytes: {
-            serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena_alloc) catch {
-                manager.recordStoreFailure();
-                return;
-            };
-            break :bytes null;
+        if (staged_entry == null) serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena_alloc) catch {
+            manager.recordStoreFailure();
+            return;
         };
 
         var artifact_writer = CompactWriter.init();
@@ -4862,7 +4878,7 @@ pub const Coordinator = struct {
             return;
         };
 
-        const env_len = if (env_bytes) |bytes| bytes.len else env_writer.total_bytes;
+        const env_len = if (staged_entry) |entry| entry.env_len else env_writer.total_bytes;
         const artifact_len = artifact_writer.total_bytes;
 
         var header: [checked_module_cache_header_len]u8 = undefined;
@@ -4876,9 +4892,19 @@ pub const Coordinator = struct {
             artifact_len,
             canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version),
         );
+        if (staged_entry) |entry| {
+            const Tail = struct {
+                fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
+                    const writer: *const CompactWriter = @ptrCast(@alignCast(raw));
+                    try writer.writeTo(destination);
+                }
+            };
+            manager.finishStagedPart(entry.part, &header, .{ .context = &artifact_writer, .write = Tail.write }, entry.part.len + artifact_len, artifact.moduleEnvConst().module_name);
+            return;
+        }
+
         const Entry = struct {
             header: []const u8,
-            env_bytes: ?[]const u8,
             env: *const CompactWriter,
             env_padding: []const u8,
             metadata: []const u8,
@@ -4888,7 +4914,7 @@ pub const Coordinator = struct {
             fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
                 const entry: *const @This() = @ptrCast(@alignCast(raw));
                 try destination.writeAll(entry.header);
-                if (entry.env_bytes) |bytes| try destination.writeAll(bytes) else try entry.env.writeTo(destination);
+                try entry.env.writeTo(destination);
                 try destination.writeAll(entry.env_padding);
                 try destination.writeAll(entry.metadata);
                 try destination.writeAll(entry.metadata_padding);
@@ -4897,7 +4923,7 @@ pub const Coordinator = struct {
         };
         const env_padding = checked_module_cache_zero_padding[0..checkedModuleCacheEnvPadding(env_len)];
         const metadata_padding = checked_module_cache_zero_padding[0..checkedModuleCacheEnvPadding(metadata.bytes.len)];
-        const entry = Entry{ .header = &header, .env_bytes = env_bytes, .env = &env_writer, .env_padding = env_padding, .artifact = &artifact_writer, .metadata = metadata.bytes, .metadata_padding = metadata_padding };
+        const entry = Entry{ .header = &header, .env = &env_writer, .env_padding = env_padding, .artifact = &artifact_writer, .metadata = metadata.bytes, .metadata_padding = metadata_padding };
         manager.storeStream(
             storage_key.bytes,
             .{ .context = &entry, .write = Entry.write },
