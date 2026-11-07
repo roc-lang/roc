@@ -8737,6 +8737,7 @@ fn writeSealedWasmObject(
         return err;
     };
     defer sealed_module.deinit();
+    sealed_public_definitions = try std.mem.concat(ctx.arena, []const u8, &.{ sealed_public_definitions, &.{shim_symbols.roc_hot_reload_generation} });
     try sealed_module.sealRocObject(sealed_public_definitions, allowed_undefined_functions);
     try sealed_module.verifyNoLinkObjectContract();
     try sealed_module.patchRelocatableSymbolFlags(composed_bytes);
@@ -9575,9 +9576,9 @@ fn appendUniqueSharedLibraryExport(
     try symbols.append(symbol);
 }
 
-/// Symbols a shared-library link must export: app-provided symbols plus host
-/// input exports, so the final library exposes its explicit public ABI on every
-/// target. Empty for non-shared output.
+/// Symbols a shared-library link must export: app-provided symbols,
+/// `roc_hot_reload_generation`, and host input exports, so the final library
+/// exposes its explicit public ABI on every target. Empty for non-shared output.
 fn sharedLibraryExports(
     ctx: *CliCtx,
     link_type: roc_target.OutputKind,
@@ -9590,12 +9591,13 @@ fn sharedLibraryExports(
     var seen = std.StringHashMap(void).init(ctx.arena);
     var symbols = try std.array_list.Managed([]const u8).initCapacity(
         ctx.arena,
-        app_export_symbols.len + host_export_symbols.len,
+        app_export_symbols.len + host_export_symbols.len + 1,
     );
 
     for (app_export_symbols) |symbol| {
         try appendUniqueSharedLibraryExport(&seen, &symbols, symbol);
     }
+    try appendUniqueSharedLibraryExport(&seen, &symbols, shim_symbols.roc_hot_reload_generation);
     for (host_export_symbols) |symbol| {
         try appendUniqueSharedLibraryExport(&seen, &symbols, symbol);
     }
@@ -9789,6 +9791,7 @@ fn compileLlvmAppObject(
         codegen.optimize_for_size = llvmOptimizationLevel(args.opt) == .size;
         codegen.stack_checks = stack_checks;
         codegen.debug_producer = "roc " ++ @import("compiler_version").compiler_version;
+        codegen.emit_hot_reload_generation_stub = true;
         defer codegen.deinit();
 
         const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);
@@ -11485,7 +11488,11 @@ const WasmFastLink = struct {
         }
         unit_views[library.images.len] = backend.wasm.WasmUnitImage.View.init(units.root_image) catch base.invariant("roc build invariant violated: the root wasm unit image does not read", .{});
         const accessors = [_][]const u8{ shim_symbols.roc_wasm_stack_pointer, shim_symbols.roc_wasm_set_stack_pointer };
-        const app_public = try fast_dev_link.sortedUnion(ctx.arena, &.{ units.app_export_symbols, if (self.target.cpuLevel() == .v1) &accessors else &.{} });
+        const app_public = try fast_dev_link.sortedUnion(ctx.arena, &.{
+            units.app_export_symbols,
+            &.{shim_symbols.roc_hot_reload_generation},
+            if (self.target.cpuLevel() == .v1) &accessors else &.{},
+        });
         const inputs: wasm_link.Inputs = .{
             .host = host,
             .support = support,
@@ -11763,7 +11770,7 @@ const FastDevLink = struct {
                 .platform_files_dir = link_inputs.platform_files_dir,
                 .link_items = link_items.items,
                 .bundle_hash = build_env.getPlatformBundleHash(),
-                .provides = try fast_dev_link.sortedUnion(ctx.arena, &.{provides}),
+                .provides = try fast_dev_link.sortedUnion(ctx.arena, &.{ provides, &.{shim_symbols.roc_hot_reload_generation} }),
                 .keep = try fast_dev_link.sortedUnion(ctx.arena, &.{ symbols.hosted, &host_symbols.runtime_symbols, support_imports }),
                 .host_required = try fast_dev_link.sortedUnion(ctx.arena, &.{ symbols.hosted, &host_symbols.runtime_symbols, support_imports }),
                 .shared = shared,
@@ -12408,6 +12415,7 @@ fn linkNativeBuild(
         if (link_type == .shared) {
             var seen = std.StringHashMap(void).init(ctx.arena);
             for (facts.app_export_symbols) |name| try appendUniqueSharedLibraryExport(&seen, &exports, name);
+            try appendUniqueSharedLibraryExport(&seen, &exports, shim_symbols.roc_hot_reload_generation);
             for (inspected.exports) |name| try appendUniqueSharedLibraryExport(&seen, &exports, name);
         }
         inspection_ns = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - inspection_started.nanoseconds);

@@ -444,6 +444,7 @@ pub const ModuleType = enum {
             },
             .ipc => .{
                 .root = "src/ipc/mod.zig",
+                .deps = &.{.base},
                 .tests = .{ .unit = .{ .aggregators = &.{"ipc tests"} } },
                 .available = .native,
             },
