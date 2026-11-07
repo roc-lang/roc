@@ -12809,7 +12809,7 @@ const Builder = struct {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .pending => Common.invariant("pending ConstStore node reached stored list selection"),
             .zst, .scalar => {},
-            .str => |str| if (str.len != 0) return false,
+            .str => |str| if (view.const_store.strBytes(str).len != 0) return false,
             .list => |list| switch (list) {
                 .empty => {},
                 .nodes => |children| if (children.len != 0) return false,
@@ -20685,7 +20685,7 @@ const BodyDraftStore = struct {
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
             const id = if (literal.const_blob) |blob|
-                try program.addConstBlobView(blob.module_bytes, blob.data, blob.bytes, literal.offset, literal.len)
+                try program.addConstBlobView(blob.module_bytes, blob.data, blob.bytes)
             else blk: {
                 const draft_backing = self.stringBytes(literal.backing);
                 const backing = literal_backing.?;
@@ -24331,9 +24331,10 @@ const BodyContext = struct {
         return try self.draft.addStringLiteral(text);
     }
 
-    fn addConstBlobView(self: *BodyContext, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8, offset: u32, len: u32) Allocator.Error!DraftStringLiteralId {
+    fn addConstBlobView(self: *BodyContext, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8) Allocator.Error!DraftStringLiteralId {
         const id: DraftStringLiteralId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.string_literals.items.len))));
-        try self.draft.string_literals.append(self.allocator, .{ .backing = .empty(), .const_blob = .{ .module_bytes = module_bytes, .data = data, .bytes = bytes }, .offset = offset, .len = len });
+        const len = std.math.cast(u32, bytes.len) orelse return error.OutOfMemory;
+        try self.draft.string_literals.append(self.allocator, .{ .backing = .empty(), .const_blob = .{ .module_bytes = module_bytes, .data = data, .bytes = bytes }, .offset = 0, .len = len });
         return id;
     }
 
@@ -48109,20 +48110,14 @@ const BodyContext = struct {
                     .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
                     .zst => .unit,
                     .scalar => |scalar| restoreScalar(BodyExprData, scalar),
-                    .str => |str| .{ .str_lit = try self.addStringView(
+                    .str => |str| .{ .str_lit = try self.addStringLiteral(
                         store_view.const_store.strBytes(str),
-                        0,
-                        str.len,
                     ) },
-                    .crash => |str| .{ .crash = try self.addStringView(
-                        store_view.const_store.blobData(str.data),
-                        str.offset,
-                        str.len,
+                    .crash => |str| .{ .crash = try self.addStringLiteral(
+                        store_view.const_store.strBytes(str),
                     ) },
-                    .checked_error => |str| .{ .checked_error = try self.addStringView(
-                        store_view.const_store.blobData(str.data),
-                        str.offset,
-                        str.len,
+                    .checked_error => |str| .{ .checked_error = try self.addStringLiteral(
+                        store_view.const_store.strBytes(str),
                     ) },
                     .list => |list| switch (list) {
                         .nodes => .{ .list = try self.addExprSpan(lowered_children) },
@@ -48130,10 +48125,8 @@ const BodyContext = struct {
                         .packed_bytes => |packed_list| .{ .bytes_lit = .{
                             .literal = try self.addConstBlobView(
                                 store_view.key.bytes,
-                                packed_list.bytes.data,
-                                store_view.const_store.blobData(packed_list.bytes.data),
-                                packed_list.bytes.offset,
-                                packed_list.bytes.len,
+                                packed_list.bytes,
+                                store_view.const_store.blobData(packed_list.bytes),
                             ),
                             .len = packed_list.len,
                             .element = packed_list.element,
@@ -69874,20 +69867,14 @@ fn constRestoreData(
         .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
         .zst => .unit,
         .scalar => |scalar| restoreScalar(@TypeOf(restorer.*).ConstExprData, scalar),
-        .str => |str| .{ .str_lit = try emit.addStringView(
+        .str => |str| .{ .str_lit = try emit.addStringLiteral(
             store_view.const_store.strBytes(str),
-            0,
-            str.len,
         ) },
-        .crash => |str| .{ .crash = try emit.addStringView(
-            store_view.const_store.blobData(str.data),
-            str.offset,
-            str.len,
+        .crash => |str| .{ .crash = try emit.addStringLiteral(
+            store_view.const_store.strBytes(str),
         ) },
-        .checked_error => |str| .{ .checked_error = try emit.addStringView(
-            store_view.const_store.blobData(str.data),
-            str.offset,
-            str.len,
+        .checked_error => |str| .{ .checked_error = try emit.addStringLiteral(
+            store_view.const_store.strBytes(str),
         ) },
         .box => .{ .low_level = .{
             .op = .box_box,
@@ -69899,10 +69886,8 @@ fn constRestoreData(
             .packed_bytes => |packed_list| .{ .bytes_lit = .{
                 .literal = try emit.addConstBlobView(
                     store_view.key.bytes,
-                    packed_list.bytes.data,
-                    store_view.const_store.blobData(packed_list.bytes.data),
-                    packed_list.bytes.offset,
-                    packed_list.bytes.len,
+                    packed_list.bytes,
+                    store_view.const_store.blobData(packed_list.bytes),
                 ),
                 .len = packed_list.len,
                 .element = packed_list.element,
@@ -70185,7 +70170,7 @@ fn monotypeBackingAuthority(authority: check.ConstStore.TypeBackingAuthority) Ty
 fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-        .str => |str| str.len,
+        .str => |str| @intCast(view.const_store.strBytes(str).len),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
 }
