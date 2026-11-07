@@ -2800,6 +2800,103 @@ pub const Program = struct {
     }
 };
 
+/// Record the readable name of every worker of `program` under its
+/// procedure's symbol, for the perf map (`base.dev_diagnostics.perf_map`).
+fn recordPerfNames(program: *Program) Allocator.Error!void {
+    var arena = std.heap.ArenaAllocator.init(program.allocator);
+    defer arena.deinit();
+    const names = try arena.allocator().alloc(?[]const u8, program.workers.items.len);
+    @memset(names, null);
+    var symbol: [LIR.ProcIdentity.symbol_name_len]u8 = undefined;
+    for (program.workers.items, 0..) |worker, index| {
+        const name = try perfNameOf(program, arena.allocator(), names, @fromBackingInt(@intCast(index)));
+        const identity = program.result.store.getProcSpec(worker.proc).identity;
+        base.dev_diagnostics.notePerfName(identity.writeSymbolName(&symbol), name);
+    }
+}
+
+/// The readable name of worker `id`: a template's `<Module>.<def>`, and
+/// every other worker named by what it is and, where it has one, the
+/// worker it belongs to (`perfNameLabel`). `names` memoizes each worker's.
+fn perfNameOf(program: *Program, a: Allocator, names: []?[]const u8, id: WorkerId) Allocator.Error![]const u8 {
+    if (names[@backingInt(id)]) |known| return known;
+    const worker = program.worker(id).*;
+    const view = program.module(worker.module);
+    const module_name = view.nameStore().moduleNameText(view.view.module_identity.module_name);
+    const label: PerfNameLabel = switch (worker.key) {
+        .template => |key| blk: {
+            const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+            const name_store = view.nameStore();
+            break :blk if (name_store.procBase(template.proc_base).export_name) |export_name|
+                .{ .module = moduleUnlessPrefixed(module_name, name_store.exportNameText(export_name)), .text = name_store.exportNameText(export_name) }
+            else
+                .{ .module = module_name, .text = "template", .number = @backingInt(key.template) };
+        },
+        .lambda => |key| .{ .owner = try perfNameOf(program, a, names, key.outer), .text = "lambda@", .number = @backingInt(key.expr) },
+        .method_entry => |target| .{ .owner = try perfNameOf(program, a, names, target), .text = "entry" },
+        .default => |key| .{ .module = module_name, .text = "default@", .number = @backingInt(key.expr) },
+        .adapter => |key| .{ .owner = try perfNameOf(program, a, names, key.outer), .text = "adapter" },
+        .literal_thunk => |key| .{ .owner = try perfNameOf(program, a, names, key.target), .text = "literal_thunk", .number = key.literal_requirement },
+        .structural => |method| .{ .text = "structural.", .suffix = @tagName(method) },
+        .structural_map => |map| .{ .text = "structural_map.", .suffix = program.store.nameText(map.name) },
+        .crash_dictionary => |kind| .{ .text = "crash_dictionary.", .suffix = @tagName(kind) },
+        .codec => |index| .{ .module = module_name, .text = "codec.", .suffix = @tagName(program.codec.pieces.items[index].kind) },
+        .convert => .{ .module = module_name, .text = "convert" },
+        .root => |index| .{ .text = "root", .number = index },
+        .static_data => |index| .{ .text = "static_data", .number = index },
+        .root_slot => |key| .{ .module = module_name, .text = "root_slot", .number = @backingInt(key.root) },
+    };
+    const name = try perfNameLabel(a, label);
+    names[@backingInt(id)] = name;
+    return name;
+}
+
+/// The parts of a worker's readable name: `<owner or module>.<text><suffix
+/// or number>`, the owner or module omitted where a worker has neither.
+const PerfNameLabel = struct {
+    owner: ?[]const u8 = null,
+    module: ?[]const u8 = null,
+    text: []const u8,
+    suffix: []const u8 = "",
+    number: ?u32 = null,
+};
+
+/// `module`, to prefix the export name `text` with, or null when `text`
+/// already begins with `<module>.`.
+fn moduleUnlessPrefixed(module: []const u8, text: []const u8) ?[]const u8 {
+    const prefixed = text.len > module.len and std.mem.startsWith(u8, text, module) and text[module.len] == '.';
+    return if (prefixed) null else module;
+}
+
+fn perfNameLabel(a: Allocator, label: PerfNameLabel) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    if (label.owner orelse label.module) |prefix| {
+        try out.appendSlice(a, prefix);
+        try out.append(a, '.');
+    }
+    try out.appendSlice(a, label.text);
+    try out.appendSlice(a, label.suffix);
+    if (label.number) |number| try out.print(a, "{d}", .{number});
+    return out.items;
+}
+
+test "a worker's readable name is its owner or module, then what it is" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("Pdf.render", try perfNameLabel(a, .{ .module = "Pdf", .text = "render" }));
+    try std.testing.expectEqualStrings("Pdf.render.lambda@42", try perfNameLabel(a, .{ .owner = "Pdf.render", .text = "lambda@", .number = 42 }));
+    try std.testing.expectEqualStrings("Pdf.render.entry", try perfNameLabel(a, .{ .owner = "Pdf.render", .text = "entry" }));
+    try std.testing.expectEqualStrings("structural.is_eq", try perfNameLabel(a, .{ .text = "structural.", .suffix = "is_eq" }));
+    try std.testing.expectEqualStrings("Pdf.codec.record_body", try perfNameLabel(a, .{ .module = "Pdf", .text = "codec.", .suffix = "record_body" }));
+}
+
+test "an export name that already begins with its module is not prefixed again" {
+    try std.testing.expect(moduleUnlessPrefixed("Builtin", "Builtin.Num.U8.plus") == null);
+    try std.testing.expectEqualStrings("Pdf", moduleUnlessPrefixed("Pdf", "render").?);
+    try std.testing.expectEqualStrings("Pdf", moduleUnlessPrefixed("Pdf", "Pdfs.render").?);
+}
+
 /// The items of `pool` that `span` names.
 pub fn poolSlice(comptime T: type, pool: []const T, span: anytype) []const T {
     return pool[span.start..][0..span.len];
@@ -3017,6 +3114,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             }
         }
     }
+
+    if (base.dev_diagnostics.isSet(.perf_map)) try recordPerfNames(program);
 
     if (input.proc_debug_names) {
         for (program.workers.items) |worker| {

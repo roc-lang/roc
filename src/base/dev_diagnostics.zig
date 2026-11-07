@@ -50,7 +50,9 @@ pub const Var = enum {
     dump_wasm_unit_images,
     /// Append `<start> <size> <name>` for every function of each unit image
     /// the compiler loads into its own process (`roc test`'s and compile-time
-    /// evaluation's) to `/tmp/perf-<pid>.map`, so `perf` names them.
+    /// evaluation's) to `/tmp/perf-<pid>.map`, so `perf` names them: by the
+    /// readable name a lowering of the process recorded (`notePerfName`),
+    /// otherwise by symbol.
     perf_map,
 
     /// The variable's name in the environment.
@@ -130,6 +132,57 @@ fn Cached(comptime variable: Var) type {
             return value.load(.monotonic);
         }
     };
+}
+
+/// The readable name of each procedure a lowering of this process named, by
+/// the procedure's symbol, which the perf map (`perf_map`) writes in place of
+/// the symbol. Lowering and the images the map covers share the process.
+const perf_names = struct {
+    var mutex: std.atomic.Mutex = .unlocked;
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    var by_symbol: std.StringHashMapUnmanaged([]const u8) = .empty;
+
+    fn lock() void {
+        while (!mutex.tryLock()) std.atomic.spinLoopHint();
+    }
+};
+
+/// Record `name` as the readable name of the procedure whose symbol is
+/// `symbol`, when `perf_map` is set. A symbol keeps the first name it gets;
+/// a failure to allocate leaves it unnamed.
+pub fn notePerfName(symbol: []const u8, name: []const u8) void {
+    if (!isSet(.perf_map)) return;
+    recordPerfName(symbol, name);
+}
+
+fn recordPerfName(symbol: []const u8, name: []const u8) void {
+    perf_names.lock();
+    defer perf_names.mutex.unlock();
+    const a = perf_names.arena.allocator();
+    if (perf_names.by_symbol.contains(symbol)) return;
+    const owned_symbol = a.dupe(u8, symbol) catch return;
+    const owned_name = a.dupe(u8, name) catch return;
+    perf_names.by_symbol.put(a, owned_symbol, owned_name) catch return;
+}
+
+/// The readable name a lowering recorded for the procedure whose symbol is
+/// `symbol`, if any. Only `perf_map` touches the table.
+pub fn perfName(symbol: []const u8) ?[]const u8 {
+    if (!isSet(.perf_map)) return null;
+    return lookupPerfName(symbol);
+}
+
+fn lookupPerfName(symbol: []const u8) ?[]const u8 {
+    perf_names.lock();
+    defer perf_names.mutex.unlock();
+    return perf_names.by_symbol.get(symbol);
+}
+
+test "a procedure keeps the first readable name recorded for its symbol" {
+    recordPerfName("roc__ptest_symbol_one", "Pdf.render");
+    recordPerfName("roc__ptest_symbol_one", "Pdf.other");
+    try std.testing.expectEqualStrings("Pdf.render", lookupPerfName("roc__ptest_symbol_one").?);
+    try std.testing.expect(lookupPerfName("roc__ptest_symbol_two") == null);
 }
 
 /// Called only by owners of Boxy-only work, never by the specialized path.

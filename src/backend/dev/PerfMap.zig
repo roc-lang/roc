@@ -3,10 +3,13 @@
 //! calls into (`UnitImageLoader`). `perf` names a sample in such code by the
 //! lines of `/tmp/perf-<pid>.map`, one `<start hex> <size hex> <name>` per
 //! function, which this appends when the developer diagnostic
-//! `ROC_PERF_MAP` is set (`base.dev_diagnostics`).
+//! `ROC_PERF_MAP` is set (`base.dev_diagnostics`). A procedure is named by
+//! the readable name a lowering of this process recorded for it
+//! (`dev_diagnostics.notePerfName`), and otherwise by its symbol.
 
 const std = @import("std");
 const builtin = @import("builtin");
+const dev_diagnostics = @import("base").dev_diagnostics;
 const UnitImage = @import("UnitImage.zig");
 
 /// Whether this host writes perf maps: `perf` reads them on Linux.
@@ -34,7 +37,9 @@ pub fn appendImage(gpa: std.mem.Allocator, view: UnitImage.View, context: anytyp
         if (symbol.type != @backingInt(UnitImage.SymbolType.func) or symbol.size == 0) continue;
         const name = view.name(symbol.name);
         if (name.len == 0) continue;
-        writeLine(&lines, gpa, address_of(context, symbol), symbol.size, name) catch return;
+        // A procedure a lowering of this process named is written by its
+        // readable name, any other function by its symbol.
+        writeLine(&lines, gpa, address_of(context, symbol), symbol.size, dev_diagnostics.perfName(name) orelse name) catch return;
     }
     if (lines.items.len == 0) return;
     var path_buffer: [64]u8 = undefined;
