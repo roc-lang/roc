@@ -15744,7 +15744,7 @@ it too. Each consumer reads its own representation into the shared
   rendering's and is not reserved, and neither are a list's item separators,
   whose count is the list's runtime length; nothing is rendered ahead of
   time to measure it. A rendering of one piece (a payload-less variant, an
-  empty record or tuple, an empty-element list) is a plain append. `str_reserve`
+  empty record or tuple, a list of an uninhabited item type) is a plain append. `str_reserve`
   grows a string to exactly the requested length and an append grows it
   geometrically, so a nested reservation that outgrows the slack reallocates
   once and the appends after it restore geometric slack; the first

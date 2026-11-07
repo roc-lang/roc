@@ -207,15 +207,11 @@ fn testLowLevelOps(store: *const LirStore, body: CFStmtId, buffer: []LowLevelOp)
     var current = body;
     while (true) {
         const stmt = store.getCFStmtImmediate(current);
-        switch (stmt.*) {
-            .assign_low_level => |s| {
-                buffer[count] = s.op;
-                count += 1;
-                current = s.next;
-            },
-            .ret => return buffer[0..count],
-            else => return error.TestUnexpectedResult,
-        }
+        if (stmt.* == .ret) return buffer[0..count];
+        if (stmt.* != .assign_low_level) return error.TestUnexpectedResult;
+        buffer[count] = stmt.assign_low_level.op;
+        count += 1;
+        current = stmt.assign_low_level.next;
     }
 }
 
