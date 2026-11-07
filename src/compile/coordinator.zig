@@ -8860,7 +8860,7 @@ test "a wasm32 build after a native build re-evaluates only the module whose eva
     var wasm32 = try compileInAddressSpace(allocator, cache, app, .u32);
     defer wasm32.deinit(allocator);
     try std.testing.expect(wasm32.has_errors);
-    try std.testing.expect(std.mem.indexOf(u8, wasm32.reports, "ran out of memory") != null);
+    try std.testing.expect(std.mem.find(u8, wasm32.reports, "ran out of memory") != null);
     try std.testing.expect(!wasm32.app_cached);
     try std.testing.expect(wasm32.seed_cached and wasm32.platform_cached);
 

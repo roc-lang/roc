@@ -3607,9 +3607,9 @@ const Lowerer = struct {
                     // A list with items or a string evaluated with room
                     // beyond its contents carries that capacity on its
                     // candidate.
-                    if (candidate.capacity) |capacity| {
+                    if (candidate.capacity != 0) {
                         spare.* = true;
-                        return .{ .done = .{ .reserved = capacity } };
+                        return .{ .done = .{ .reserved = candidate.capacity } };
                     }
                     switch (candidate.value) {
                         .runtime => |runtime| current.value = .{ .expr = runtime },

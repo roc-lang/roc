@@ -17142,7 +17142,7 @@ const DraftStaticDataCandidate = struct {
     storage: Common.StaticDataStorage,
     static_data: DraftStaticDataId,
     value: DraftStaticDataCandidateValue,
-    capacity: ?u64 = null,
+    capacity: u64 = 0,
     fresh_form: bool = false,
 };
 
@@ -47594,7 +47594,7 @@ const BodyContext = struct {
                 .static_data = id,
                 .storage = constStaticDataStorage(store_view, node),
                 .value = value,
-                .capacity = constCandidateCapacity(store_view, node),
+                .capacity = constCandidateCapacity(store_view, node) orelse 0,
                 .fresh_form = try self.builder.constSpineRequestsCapacity(store_view, node),
             } } });
             try self.draft.static_data_candidate_exprs.put(address, candidate_expr);
@@ -47651,7 +47651,7 @@ const BodyContext = struct {
                 .static_data = id,
                 .storage = constStaticDataStorage(store_view, node),
                 .value = value,
-                .capacity = constCandidateCapacity(store_view, node),
+                .capacity = constCandidateCapacity(store_view, node) orelse 0,
                 .fresh_form = try self.builder.constSpineRequestsCapacity(store_view, node),
             } });
         }
@@ -47735,7 +47735,7 @@ const BodyContext = struct {
             .static_data = id,
             .storage = constStaticDataStorage(store_view, node),
             .value = value,
-            .capacity = constCandidateCapacity(store_view, node),
+            .capacity = constCandidateCapacity(store_view, node) orelse 0,
             .fresh_form = try self.builder.constSpineRequestsCapacity(store_view, node),
         } } });
         try self.draft.static_data_candidate_exprs.put(address, candidate_expr);
@@ -47764,7 +47764,7 @@ const BodyContext = struct {
             .static_data = id,
             .storage = constStaticDataStorage(store_view, node),
             .value = value,
-            .capacity = constCandidateCapacity(store_view, node),
+            .capacity = constCandidateCapacity(store_view, node) orelse 0,
             .fresh_form = try self.builder.constSpineRequestsCapacity(store_view, node),
         } });
     }
