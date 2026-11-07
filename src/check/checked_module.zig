@@ -21951,7 +21951,7 @@ pub fn literalEdgeRef(node: u32, index: u32) u64 {
 }
 
 /// The literal kind of a plan with a generated literal operand.
-fn literalKindOfPlan(table: *const static_dispatch.StaticDispatchPlanTable, plan: static_dispatch.StaticDispatchCallPlan) ?LiteralArgumentKind {
+fn literalKindOfPlan(table: *const static_dispatch.StaticDispatchPlanTable, plan: static_dispatch.RecordedDispatchPlan) ?LiteralArgumentKind {
     for (plan.argsSlice(table)) |operand| switch (operand) {
         .generated_numeral => return .numeral,
         .generated_quote => return .quote,
@@ -22334,8 +22334,8 @@ pub fn computeLiteralNodeEdges(allocator: Allocator, dispatch: CheckedDispatch, 
         const template = templates.templates.items[node];
         const start = template.static_dispatch_plans.start;
         for (templates.dispatch_plan_refs[start..][0..template.static_dispatch_plans.len], 0..) |plan_id, i| {
+            const kind = literalKindOfPlan(plans, plans.plans[@backingInt(plan_id)]) orelse continue;
             const plan = try dispatch.plan(plan_id);
-            const kind = literalKindOfPlan(plans, plan) orelse continue;
             switch (plan.resolution) {
                 .evidence_dependent, .direct_parametric => {},
                 .direct_closed, .checked_error, .@"unreachable", .structural => continue,
@@ -22361,8 +22361,8 @@ pub fn computeLiteralNodeEdges(allocator: Allocator, dispatch: CheckedDispatch, 
     } else {
         const span = sites.defaultRefs(TemplateDispatchSites.default_plan_refs);
         for (templates.dispatch_plan_refs[span.start..][0..span.len]) |plan_id| {
+            if (literalKindOfPlan(plans, plans.plans[@backingInt(plan_id)]) == null) continue;
             const plan = try dispatch.plan(plan_id);
-            if (literalKindOfPlan(plans, plan) == null) continue;
             switch (plan.resolution) {
                 .evidence_dependent, .direct_parametric => checkedModuleInvariant("a defaulted field expression's literal has no scheme to carry its obligation", .{}),
                 .direct_closed, .checked_error, .@"unreachable", .structural => {},
