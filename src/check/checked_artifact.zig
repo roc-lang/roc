@@ -1633,6 +1633,9 @@ const CompileTimeRequestScheduler = struct {
             .literal => {},
             .node => |id| switch (self.static_dispatch_plans.evidenceNode(id).target.kind) {
                 .procedure => |procedure| try self.collectTemplateDependencies(procedure.template),
+                .callable_binding => |binding| if (binding.module.eql(self.artifact_key.digest())) {
+                    try self.addRootDependency(self.callable_eval_templates.get(binding.template).root);
+                },
                 .local_proc, .structural => {},
             },
             .use => |expr| {
@@ -11203,7 +11206,7 @@ pub const TopLevelProcedureBindingRef = enum(u32) { _ };
 /// Id for a top-level procedure binding.
 pub const TopLevelProcedureBindingId = TopLevelProcedureBindingRef;
 /// Public `CallableEvalTemplateId` declaration.
-pub const CallableEvalTemplateId = enum(u32) { _ };
+pub const CallableEvalTemplateId = checked_ids.CallableEvalTemplateId;
 
 /// Public `DirectProcedureBinding` declaration.
 pub const DirectProcedureBinding = struct {
@@ -14256,7 +14259,7 @@ const EvidencePass = struct {
                 };
                 const evidence_var: Var = @fromBackingInt(@intCast(source_call.evidence_var));
                 switch (target.kind) {
-                    .procedure, .local_proc => {
+                    .procedure, .local_proc, .callable_binding => {
                         const node_id = try self.evidenceNodeForTarget(
                             target,
                             call.dispatcher_ty,
@@ -14322,7 +14325,7 @@ const EvidencePass = struct {
                         }
                         const node = self.evidence_nodes.items[raw_node];
                         switch (node.target.kind) {
-                            .procedure, .local_proc => {},
+                            .procedure, .local_proc, .callable_binding => {},
                             .structural => checkedArtifactInvariant(
                                 "checked generated codec callable resolution named a structural target",
                                 .{},
@@ -15330,7 +15333,7 @@ const EvidencePass = struct {
                 }
                 break :blk .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
             },
-            .procedure, .local_proc => .{ .node = .{
+            .procedure, .local_proc, .callable_binding => .{ .node = .{
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
                 .constraint_fn_var = constraint_fn_var,
@@ -15349,7 +15352,7 @@ const EvidencePass = struct {
     fn procedureEvidenceView(self: *EvidencePass, target: static_dispatch.MethodTarget) ProcedureEvidenceView {
         const procedure = switch (target.kind) {
             .procedure => |procedure| procedure,
-            .local_proc, .structural => checkedArtifactInvariant("procedure evidence view requested for a non-procedure target", .{}),
+            .local_proc, .structural, .callable_binding => checkedArtifactInvariant("procedure evidence view requested for a non-procedure target", .{}),
         };
         const target_key = procedure.template.artifact;
         const table: *const CheckedProcedureTemplateTable = imported: {
@@ -15604,7 +15607,7 @@ const EvidencePass = struct {
 
         const procedure_schema: ?ProcedureEvidenceSchema = switch (target.kind) {
             .procedure => self.procedureEvidenceSchema(target),
-            .local_proc, .structural => null,
+            .local_proc, .structural, .callable_binding => null,
         };
         if (target.alias != null) {
             // The dispatch edge instantiated the alias's scheme, whose
@@ -16028,7 +16031,7 @@ const EvidencePass = struct {
                         !self.procedureEvidenceView(self.evidence_nodes.items[@backingInt(id)].target).template.callable_determines_scheme,
                     .from_target, .requires_record => true,
                 },
-                .local_proc, .structural => true,
+                .local_proc, .structural, .callable_binding => true,
             },
             .constraint, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => true,
         };
@@ -20587,7 +20590,9 @@ fn directEvidenceEnter(
             states[raw_node] = .parametric;
             return .{ .decided = false };
         },
-        .procedure => {},
+        // A stored top-level value is the one value every specialization
+        // calls.
+        .procedure, .callable_binding => {},
         .structural => checkedArtifactInvariant("direct evidence closure contained a structural target", .{}),
     }
     switch (node.nested) {
@@ -20977,8 +20982,9 @@ fn publishLiteralArgumentRoots(
                     }),
                     // A method declared in a function body is called through
                     // its function value, whose scheme its construction or
-                    // use instantiates.
-                    .local_proc, .structural => {},
+                    // use instantiates; a computed callable is a monomorphic
+                    // value, which instantiates nothing.
+                    .local_proc, .structural, .callable_binding => {},
                 }
                 switch (node.nested) {
                     .resolved => try self.entries(self.plans.nestedEvidence(node)),
@@ -21022,7 +21028,7 @@ fn publishLiteralArgumentRoots(
             const alias = node.target.alias orelse checkedArtifactInvariant("an alias-instantiated target has no alias binding", .{});
             switch (node.target.kind) {
                 .procedure => {},
-                .local_proc, .structural => checkedArtifactInvariant("an alias-instantiated target is not a procedure", .{}),
+                .local_proc, .structural, .callable_binding => checkedArtifactInvariant("an alias-instantiated target is not a procedure", .{}),
             }
             // The module that declares the alias binding composes the
             // chain; the procedure it reaches may be another module's.
@@ -21757,7 +21763,7 @@ fn checkedDispatchPlanNeedsRelation(
                 .graph_participating, .intrinsic => true,
                 .procedure, .low_level => false,
             },
-            .local_proc => false,
+            .local_proc, .callable_binding => false,
             .structural => checkedArtifactInvariant("direct checked call targeted a structural derivation", .{}),
         },
         .direct_pending => checkedArtifactInvariant("unfinalized direct call reached template classification", .{}),
@@ -21863,6 +21869,7 @@ fn projectResolvedDispatchTargetCallable(
 ) Allocator.Error!CheckedTypeId {
     const target_key = switch (target.kind) {
         .local_proc => return target.callable_ty,
+        .callable_binding => |binding| binding.module,
         .structural => checkedArtifactInvariant("structural method registry result was published as a direct callable target", .{}),
         .procedure => |procedure| procedure.template.artifact,
     };
@@ -25373,7 +25380,7 @@ const TemplateDemandPass = struct {
         if (node.target.alias != null) return null;
         const procedure = switch (node.target.kind) {
             .procedure => |procedure| procedure,
-            .local_proc, .structural => return null,
+            .local_proc, .structural, .callable_binding => return null,
         };
         switch (procedure.runtime_target) {
             .procedure, .low_level => {},
@@ -31341,7 +31348,7 @@ pub const CheckedModuleArtifact = struct {
             const entry_target = entry.target orelse continue;
             const procedure = switch (entry_target.kind) {
                 .procedure => |procedure| procedure,
-                .local_proc, .structural => continue,
+                .local_proc, .structural, .callable_binding => continue,
             };
             // A method bound to another module's procedure
             // (`method = Other.function`) names that module's template, which
@@ -33392,13 +33399,16 @@ fn publicationDefaultExprs(
 }
 
 /// Public `publishFromTypedModule` function.
-/// Resolves a method bound by reference (`method = f`) for
+/// Resolves a method binding that is no procedure of its own for
 /// `MethodRegistry.fromModule`, from the resolved value references and
-/// procedure bindings publication already holds: the method's value is
-/// followed through exact procedure aliases, in this module and the modules
-/// they forward into, to the procedure it reaches. This is the chain Monotype
-/// and Boxy compose an alias-bound method's instantiation along (design.md
-/// "Procedure Aliases").
+/// procedure bindings publication already holds. A binding by reference
+/// (`method = f`) is followed through exact procedure aliases, in this module
+/// and the modules they forward into, to the procedure it reaches: the chain
+/// Monotype and Boxy compose an alias-bound method's instantiation along. A
+/// top-level binding whose value no procedure stands behind (`method =
+/// make()`, or a reference to such a binding) is its own callable-eval
+/// template, whose compile-time root evaluates the method's function value
+/// (design.md "Procedure Aliases").
 const MethodBindingTargets = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -33406,6 +33416,7 @@ const MethodBindingTargets = struct {
     names: *const canonical.CanonicalNameStore,
     module_index: *const ModuleIndex,
     resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_values: *const TopLevelValueTable,
     procedure_bindings: *const TopLevelProcedureBindingTable,
     callable_eval_templates: *const CallableEvalTemplateTable,
     templates: *const CheckedProcedureTemplateTable,
@@ -33423,6 +33434,7 @@ const MethodBindingTargets = struct {
 
     pub fn methodBindingTarget(
         self: *MethodBindingTargets,
+        binding: ModuleEnv.MethodBinding,
         binding_expr: CIR.Expr.Idx,
         method_owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?static_dispatch.ReferencedMethodTarget {
@@ -33435,7 +33447,7 @@ const MethodBindingTargets = struct {
             const ref_id = refs.lookupIdByExpr(expr) orelse {
                 // The binding's value is not a reference.
                 if (view != null) checkedArtifactInvariant("a forwarded procedure alias lookup had no resolved reference", .{});
-                return null;
+                return self.computedCallableTarget(binding);
             };
             const use: ProcedureUseTemplate = switch (refs.records[@backingInt(ref_id)].ref) {
                 .local_proc => |local| {
@@ -33476,19 +33488,45 @@ const MethodBindingTargets = struct {
                     };
                     return self.procedureTarget(body.view, direct.proc_value, template, use, method_owner);
                 },
-                // An alias of a computed callable is not a forward: the
-                // method's value is evaluated, not a procedure.
+                // A reference to a computed callable is not a forward: the
+                // method's own value is that callable, evaluated.
                 .callable_eval_template => |template_id| {
                     const template = if (body.view) |imported|
                         imported.callable_eval_templates.templates[@backingInt(template_id)]
                     else
                         self.callable_eval_templates.get(template_id);
-                    expr = template.forwarded_lookup orelse return null;
+                    expr = template.forwarded_lookup orelse return self.computedCallableTarget(binding);
                     view = body.view;
                 },
                 .checked_error => return .rejected,
             }
         }
+    }
+
+    /// The method's own callable-eval template, for a top-level binding whose
+    /// callable no procedure stands behind. Checking forwards a top-level
+    /// binding only to a directly callable procedure, so a binding reached
+    /// here has no forward. A binding that is not function-typed, or one in
+    /// a function body, is an associated value, not a method target
+    /// (design.md "Methods Never Capture").
+    fn computedCallableTarget(self: *const MethodBindingTargets, binding: ModuleEnv.MethodBinding) ?static_dispatch.ReferencedMethodTarget {
+        if (self.module.nodeTag(binding.type_node_idx) != .def) return null;
+        const top_level = self.top_level_values.lookupByDef(binding.def_idx) orelse return null;
+        const procedure_binding = switch (top_level.value) {
+            .procedure_binding => |procedure_binding| procedure_binding,
+            .const_ref => return null,
+        };
+        const template_id = switch (self.procedure_bindings.get(procedure_binding).body) {
+            .callable_eval_template => |template_id| template_id,
+            .direct_template => checkedArtifactInvariant("a method binding with its own procedure template reached computed-callable resolution", .{}),
+            .checked_error => return .rejected,
+        };
+        const template = self.callable_eval_templates.get(template_id);
+        if (template.forwarded_lookup != null) checkedArtifactInvariant("a forwarding procedure alias reached computed-callable resolution", .{});
+        return .{ .target = .{
+            .kind = .{ .callable_binding = .{ .module = self.artifact_key.digest(), .template = template_id } },
+            .callable = .{ .template_root = template.checked_fn_root },
+        } };
     }
 
     /// The target of the procedure `template`, owned by `view` (null for this
@@ -33892,6 +33930,7 @@ pub fn publishFromTypedModule(
         .names = &canonical_names,
         .module_index = module_index,
         .resolved_value_refs = &resolved_value_refs,
+        .top_level_values = &top_level_values,
         .procedure_bindings = &top_level_procedure_bindings,
         .callable_eval_templates = &callable_eval_templates,
         .templates = &checked_procedure_templates,
@@ -35971,8 +36010,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xB0, 0x6F, 0x3B, 0x76, 0x49, 0x3F, 0xBD, 0x66, 0xCF, 0xD4, 0xB5, 0x42, 0x67, 0x09, 0x39, 0x7D,
-        0xB6, 0x97, 0x0C, 0x1D, 0x21, 0x10, 0x39, 0x99, 0xCE, 0x6D, 0x54, 0x11, 0x74, 0x14, 0x31, 0x35,
+        0x0C, 0xBE, 0x9F, 0xE6, 0xE6, 0x3B, 0xFE, 0x1B, 0xEC, 0x73, 0x72, 0x4A, 0x6F, 0x0E, 0x83, 0x6B,
+        0x27, 0x79, 0xFA, 0x8D, 0xBA, 0x76, 0x01, 0x2B, 0x48, 0x79, 0x3F, 0xDA, 0xDF, 0xB0, 0xB7, 0x82,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

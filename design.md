@@ -5960,7 +5960,11 @@ A method of a type declared in a function body never captures a value of that
 function body. A method is an associated binding that is a local procedure (a
 lambda or closure, or a chain of local bindings reaching one); any other
 associated binding is a value of the function body like any other local
-binding, and may refer to its values. A method's right-hand side may refer to
+binding, and may refer to its values; a dispatch that selects it is rejected
+at its resolution (`local_value_method`), since nothing dispatches to a value
+of a body. A top-level associated binding has no body to be a value of: one
+bound to a computed callable is a method (see "Procedure Aliases"). A
+method's right-hand side may refer to
 top-level names, its own
 parameters and the names it binds itself, other methods, and local functions
 that capture nothing; a reference to any other name bound in an enclosing
@@ -11453,7 +11457,10 @@ declared in a function body that checking did not promote is a local procedure
 whose declaration context is enclosing type variables: inspection calls an
 override from rendering workers, specialized generic code, and erased
 descriptor slots, none of which hold that context, so such a method is not an
-inspect override. `Wrap(a) -> Str` qualifies, and so do an unannotated method
+inspect override. A top-level method bound to a computed callable (see
+"Procedure Aliases") has no such context: its stored value is restored
+wherever inspection calls it, so it is an override when its instance
+qualifies. `Wrap(a) -> Str` qualifies, and so do an unannotated method
 whose argument is a record its owner's backing matches (`|c| "N(${c.count.to_str()})"`
 for an owner backed by `{ count : U64 }`) and an unannotated method whose
 result is a string literal: its declared result is a variable constrained by
@@ -17260,9 +17267,27 @@ decision. The target names the procedure's template, whose module owns the
 target's data, its callable type included; the alias records the module that
 declares it, which is where composition starts. A chain that reaches a
 binding checking rejected makes the method a rejected declaration (see
-"Methods Never Capture"). A chain that reaches a constant or a computed
-callable reaches no procedure, so the binding is an associated value, not a
-method target.
+"Methods Never Capture"). A chain that reaches a constant reaches no
+procedure, so the binding is an associated value, not a method target.
+
+A top-level method binding whose callable no procedure stands behind
+(`to_inspect = make()`, or a reference to such a binding, which checking
+never forwards) is a method whose value is computed: the registry's target is
+the binding's own callable-eval template (`MethodTargetKind.callable_binding`),
+whose compile-time root evaluates the function value. The binding is a value,
+so it is monomorphic: the target carries no scheme, no evidence, and no
+alias, and its callable type is the template's root in the declaring module's
+store. A dispatch calls the value exactly as a call of the binding by name
+does: Monotype restores the stored value at the call (a value call, which a
+capture-free value makes a call of a known function), or lowers the root's
+wrapper body in place where this program evaluated no root; Boxy restores it
+through `restore_callable_eval` and makes an erased call. The root is ordered
+before its readers as any read is: Monotype's producer graph records the
+restore, and Boxy's checked root graph reads the root at the dispatch. Such a
+method is an inspect override when its instance qualifies, since a stored
+top-level value needs no declaration context. A Boxy descriptor whose type's
+method requirements resolve to such a value is composed in a body, never
+emitted as static data.
 
 ### Static Dispatch In Monotype
 

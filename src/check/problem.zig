@@ -43,6 +43,7 @@ pub const UndeterminedCodecType = types.UndeterminedCodecType;
 pub const UndeterminedType = types.UndeterminedType;
 pub const UnresolvedDispatcher = types.UnresolvedDispatcher;
 pub const RecursiveDispatch = types.RecursiveDispatch;
+pub const LocalValueMethod = types.LocalValueMethod;
 
 // Number errors
 pub const NumberDoesNotFit = types.NumberDoesNotFit;

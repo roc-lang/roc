@@ -427,7 +427,18 @@ pub const NominalOverride = union(enum) {
     /// function value, at the method's interface `interface`, which only a
     /// body the declaring body encloses can build.
     local: struct { module: ModuleIndex, binding: checked.LocalProcedureBinding, interface: TypeId },
+    /// A method bound to a computed callable: the function value its
+    /// compile-time root evaluated, at the method's interface `interface`.
+    callable_eval: struct { binding: CallableEvalBinding, interface: TypeId },
 };
+
+/// A callable-eval binding of module `module`: a function-valued top-level
+/// binding whose compile-time root evaluates its callable.
+pub const CallableEvalBinding = struct { module: ModuleIndex, template: checked.CallableEvalTemplateId };
+
+/// A nominal type by its declaring module and its declaration there, in that
+/// module's names.
+const ComputedCallableOwner = struct { module: ModuleIndex, identity: check.CanonicalNames.ModuleIdentityId, decl: u32 };
 
 /// A dispatch requirement resolved from its dispatcher's type: the method
 /// named `method` (of module `module`'s names) on `dispatcher`, at the
@@ -452,6 +463,9 @@ pub const RequirementResolution = union(enum) {
     crash: CrashDictionary,
     /// The dictionary a body's scope holds for scope variable `index`.
     scope_variable: u32,
+    /// The function value of a method bound to a computed callable, which
+    /// its compile-time root evaluated.
+    callable_eval: CallableEvalBinding,
     /// A derived codec or map, which checking selects with its plan at the
     /// dispatch it serves: a requirement resolved from a type alone only
     /// names it.
@@ -568,6 +582,10 @@ pub const Program = struct {
     nominal_overrides: collections.DenseMapUnmanaged(TypeId, NominalOverrides) = .empty,
     /// `composedInBody` of each type asked about.
     composed_in_body: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
+    /// The nominal types that declare a method bound to a computed callable
+    /// (`MethodTargetKind.callable_binding`), whose function value only a
+    /// body restores.
+    computed_callable_owners: std.AutoHashMapUnmanaged(ComputedCallableOwner, void) = .empty,
     /// The nested procedure site of each lambda and closure expression.
     sites_by_expr: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
     /// Modules by their stable identity hash.
@@ -817,6 +835,7 @@ pub const Program = struct {
         self.sites_by_expr.deinit(self.allocator);
         self.nominal_overrides.deinit(self.allocator);
         self.composed_in_body.deinit(self.allocator);
+        self.computed_callable_owners.deinit(self.allocator);
         self.omitted_defaults.deinit(self.allocator);
         self.codec.deinit(self.allocator);
         self.arena.deinit();
@@ -838,6 +857,11 @@ pub const Program = struct {
 
     pub fn moduleByKey(self: *const Program, key: checked.ModuleId) *const types.ModuleView {
         return self.modules.byKey(key);
+    }
+
+    /// The callable-eval binding a method bound to a computed callable names.
+    pub fn callableEvalBinding(self: *const Program, binding: static_dispatch.CallableBindingTarget) CallableEvalBinding {
+        return .{ .module = self.moduleByKey(binding.module).index, .template = binding.template };
     }
 
     pub fn moduleByIdx(self: *const Program, idx: u32) *const types.ModuleView {
@@ -1451,6 +1475,19 @@ pub const Program = struct {
         return done.get(root).?;
     }
 
+    /// Whether the nominal type `nominal` declares a method bound to a
+    /// computed callable.
+    fn declaresComputedCallableMethod(self: *Program, nominal: types.Nominal) bool {
+        if (self.computed_callable_owners.count() == 0) return false;
+        const view = self.module(nominal.decl.module);
+        const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+        return self.computed_callable_owners.contains(.{
+            .module = nominal.decl.module,
+            .identity = declaration.nominal.module,
+            .decl = declaration.nominal.source_decl,
+        });
+    }
+
     /// The override method entries a nominal type's descriptor carries, in
     /// `Methods` order (`is_eq`, `to_hash`, `to_inspect`): each method's
     /// dictionary entry and the types its scheme takes at `nominal_ty`.
@@ -1469,7 +1506,7 @@ pub const Program = struct {
                     const template = switch (found) {
                         .target => |target| switch (target.kind) {
                             .procedure => |procedure| procedure.template,
-                            .local_proc, .structural => invariant("a SIMD vector's to_inspect is a Builtin procedure"),
+                            .local_proc, .structural, .callable_binding => invariant("a SIMD vector's to_inspect is a Builtin procedure"),
                         },
                         .rejected => invariant("Builtin's SIMD vector to_inspect is rejected"),
                     };
@@ -1518,6 +1555,13 @@ pub const Program = struct {
                         slot.* = .{ .local = .{
                             .module = nominal.decl.module,
                             .binding = .{ .binder = local.binder, .expr = local.expr, .dispatch_scope = local.dispatch_scope },
+                            .interface = try self.overrideInterface(method_index, nominal_ty),
+                        } };
+                        continue;
+                    },
+                    .callable_binding => |binding| {
+                        slot.* = .{ .callable_eval = .{
+                            .binding = self.callableEvalBinding(binding),
                             .interface = try self.overrideInterface(method_index, nominal_ty),
                         } };
                         continue;
@@ -1599,8 +1643,13 @@ pub const Program = struct {
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .nominal => |nominal| {
                     for (try self.nominalOverrides(ty)) |maybe| {
-                        if (maybe) |override| if (override == .local) break :walk true;
+                        if (maybe) |override| if (override == .local or override == .callable_eval) break :walk true;
                     }
+                    // An override's requirement on a method bound to a
+                    // computed callable resolves to that callable's value
+                    // (`RequirementResolution.callable_eval`), which only a
+                    // body restores.
+                    if (self.declaresComputedCallableMethod(nominal)) break :walk true;
                     try pending.appendSlice(self.allocator, store.nominalArgs(nominal));
                     if (nominal.has_backing) try pending.append(self.allocator, try self.converter().backing(ty));
                 },
@@ -1722,7 +1771,7 @@ pub const Program = struct {
             const resolution = try self.program.resolveRequirement(requirement);
             switch (resolution) {
                 .target => |target| try self.enter(requirement, target, try self.program.targetAt(target, requirement.callable)),
-                .structural, .crash, .scope_variable, .derived => _ = try self.add(.{ .requirement = requirement, .kind = .{ .resolved = resolution } }),
+                .structural, .crash, .scope_variable, .derived, .callable_eval => _ = try self.add(.{ .requirement = requirement, .kind = .{ .resolved = resolution } }),
             }
         }
 
@@ -1821,7 +1870,7 @@ pub const Program = struct {
                 const callable = try self.converter().convert(module_index, param.callable_ty, env);
                 const method_target = switch (try self.resolveRequirement(.{ .module = module_index, .method = param.method, .structural = param.structural, .dispatcher = dispatcher, .callable = callable })) {
                     .target => |method_target| method_target,
-                    .structural, .crash, .scope_variable, .derived => continue,
+                    .structural, .crash, .scope_variable, .derived, .callable_eval => continue,
                 };
                 // The method's own type at the requirement's callable: its
                 // variables the callable determines take those types, the
@@ -1902,6 +1951,7 @@ pub const Program = struct {
                 .target => |target| switch (target.kind) {
                     .procedure => |procedure| return .{ .target = try self.templateRefWorker(procedure.template) },
                     .structural => |kind| return structuralResolution(kind, requirement.dispatcher),
+                    .callable_binding => |binding| return .{ .callable_eval = self.callableEvalBinding(binding) },
                     .local_proc => invariant("a method a local procedure implements belongs to a type declared in a function body, which no type-resolved requirement outside that body names"),
                 },
             };
@@ -2558,6 +2608,10 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                         .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
                     }
                 },
+                .callable_binding => switch (entry.key.owner) {
+                    .nominal => |owner| try program.computed_callable_owners.put(allocator, .{ .module = view.index, .identity = owner.module, .decl = owner.source_decl }, {}),
+                    .builtin => invariant("a builtin type declares a method bound to a computed callable"),
+                },
                 .procedure, .structural => {},
             }
         }
@@ -2717,7 +2771,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
             const target = entry.target orelse continue;
             const template = switch (target.kind) {
                 .procedure => |procedure| procedure.template,
-                .local_proc, .structural => continue,
+                .local_proc, .structural, .callable_binding => continue,
             };
             const owner = program.moduleByKey(.{ .bytes = template.artifact.bytes });
             if (try templateRejected(program, owner, owner.view.checked_procedure_templates.get(template.template))) continue;

@@ -893,7 +893,7 @@ fn writeMethodTarget(
             writeBytes(hasher, &site.bytes);
             return;
         },
-        .local_proc, .structural => {},
+        .local_proc, .structural, .callable_binding => {},
     }
     writeU32(hasher, target.module_idx);
     writeU32(hasher, @backingInt(target.def_idx));
@@ -911,6 +911,10 @@ fn writeMethodTarget(
         .local_proc => |local| {
             writeU32(hasher, @backingInt(local.binder));
             writeU32(hasher, @backingInt(local.expr));
+        },
+        .callable_binding => |binding| {
+            writeBytes(hasher, &binding.module.bytes);
+            writeU32(hasher, @backingInt(binding.template));
         },
         .structural => |kind| writeU8(hasher, @backingInt(kind)),
     }

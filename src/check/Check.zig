@@ -46749,6 +46749,35 @@ fn rejectRecursiveStaticDispatch(
     try self.markStaticDispatchRejected(constraint);
 }
 
+/// Whether a selected method binding is an associated value of a type
+/// declared in a function body that is not a local procedure (a lambda, a
+/// closure, or a chain of local bindings reaching one). A rejected
+/// declaration counts as a local procedure: its dispatches are checked errors
+/// of their own.
+fn localValueMethodBinding(self: *Self, method_lookup: StaticDispatchMethodBinding) Allocator.Error!bool {
+    if (!method_lookup.is_this_module) return false;
+    if (self.cir.store.nodes.get(method_lookup.binding.type_node_idx).tag != .statement_decl) return false;
+    return (try self.localProcedureTargetPattern(method_lookup.env, method_lookup.binding)) == null;
+}
+
+fn rejectLocalValueMethodDispatch(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    failure_expr: ?CIR.Expr.Idx,
+) Allocator.Error!void {
+    _ = try self.problems.appendProblem(.{ .static_dispatch = .{
+        .local_value_method = .{
+            .dispatcher_snapshot = try self.snapshotVarForError(dispatcher_var),
+            .fn_var = constraint.fn_var,
+            .method_name = constraint.fn_name,
+        },
+    } });
+    try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
+    try self.markStaticDispatchRejected(constraint);
+}
+
 /// Copy the selected method target for a new raw dispatch edge and record its
 /// nested evidence plus canonical state. The cache-aware resolver guarantees
 /// this is called exactly once per edge.
@@ -48893,6 +48922,14 @@ fn resolveDispatchTargetMethodVar(
         const existing = self.dispatch_target_instantiations.items[raw_index];
         std.debug.assert(existing.parent_constraint_fn_var == parent_constraint_fn_var);
         return existing.method_var;
+    }
+
+    // A method of a type declared in a function body is a local procedure;
+    // an associated binding of such a type that is none is a value of the
+    // body, which no dispatch calls (design.md "Methods Never Capture").
+    if (try self.localValueMethodBinding(method_lookup)) {
+        try self.rejectLocalValueMethodDispatch(dispatcher_var, constraint, env, failure_expr);
+        return null;
     }
 
     const dispatch_expr = failure_expr orelse constraintIntroExpr(constraint);
