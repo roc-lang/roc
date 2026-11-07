@@ -1258,6 +1258,7 @@ pub const BuildEnv = struct {
 
         // Start workers (for multi-threaded mode)
         try coord.start();
+        try coord.demandImportedModuleAnalysesOnWorker(&self.builtin_modules.checked_module);
 
         // Queue initial parse task
         if (takeDiscoveredParse(&self.discovered_root_parse)) |parsed| {

@@ -3437,11 +3437,16 @@ pub const Coordinator = struct {
                 };
                 self.workers.appendAssumeCapacity(th);
             }
-            // Every module checked or opened reads Builtin's export rows and
-            // public API dependencies, so a worker computes them while the
-            // first modules are parsed.
-            try self.enqueueTask(.{ .imported_module_analyses = &self.builtin_modules.checked_module });
         }
+    }
+
+    /// Have a worker demand the analyses of `checked`, a module with no
+    /// type-check task that checking or opening every module importing it
+    /// reads (Builtin), while the coordinator's first modules are parsed.
+    /// Without workers its first reader demands them.
+    pub fn demandImportedModuleAnalysesOnWorker(self: *Coordinator, checked: *const CheckedModule) Allocator.Error!void {
+        if (!self.hasWorkers()) return;
+        try self.enqueueTask(.{ .imported_module_analyses = checked });
     }
 
     /// Shutdown workers and wait for them to complete.
