@@ -5432,10 +5432,11 @@ the same imported type (importing module and imported id) projected again.
 A type that reaches no identity variable is one type wherever it occurs, so a
 consumer that needs one entry per type asks the module's view for the one id
 its key index holds for the type's key (`canonicalId`) or compares two ids
-with `sameType`. Each type's canonical id is recorded in an atomic
-slot of its own once the walk deciding whether it reaches an identity
-variable has, so a repeated request is one load. A type that reaches an identity variable is identified by
-its id alone, because its key names its variables only by position. Whether
+with `sameType`. Each type's canonical id is recorded in an atomic slot of
+its own once the walk deciding whether it reaches an identity variable has
+run, so a repeated request is one load. A type that reaches an identity
+variable is identified by its id alone, because its key names its variables
+only by position. Whether
 a type reaches an identity variable is found by walking the types it reaches,
 never through its key.
 
