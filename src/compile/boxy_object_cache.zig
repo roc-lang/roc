@@ -21,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 15;
+pub const format_version: u32 = 16;
 
 const magic = "RBXO";
 
@@ -189,7 +189,9 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     errdefer bytes.deinit(allocator);
     try bytes.appendSlice(allocator, magic);
     try appendU32(&bytes, allocator, format_version);
-    const exports_start = bytes.items.len;
+    // Completeness admission reads this length from the already-loaded bytes.
+    const length_at = bytes.items.len;
+    try appendU64(&bytes, allocator, 0);
     try appendU32(&bytes, allocator, @intCast(entry.exports.len));
     for (entry.exports) |record| {
         try bytes.appendSlice(allocator, &record.identity);
@@ -205,7 +207,6 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
         try appendU32(&bytes, allocator, @intCast(record.table_needs.len));
         try bytes.appendSlice(allocator, record.table_needs);
     }
-    try bytes.appendSlice(allocator, &exportsDigest(bytes.items[exports_start..]));
     for ([_][]const []const u8{ entry.hosted_symbols, entry.link_root_symbols, entry.app_export_symbols }) |symbols| {
         try appendU32(&bytes, allocator, @intCast(symbols.len));
         for (symbols) |symbol| {
@@ -238,6 +239,7 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
         try bytes.appendNTimes(allocator, 0, std.mem.alignForward(usize, bytes.items.len, image_alignment) - bytes.items.len);
         try bytes.appendSlice(allocator, entry.image);
     }
+    std.mem.writeInt(u64, bytes.items[length_at..][0..8], @intCast(bytes.items.len), .little);
     return try bytes.toOwnedSlice(allocator);
 }
 
@@ -249,16 +251,6 @@ pub fn functionUnitKey(ordinary: Key) Key {
     hasher.update("roc-boxy-function-unit-v2");
     hasher.update(&ordinary.bytes);
     return .{ .bytes = hasher.finalResult() };
-}
-
-/// The digest of an entry's encoded export records, which follows them, so
-/// altered records (needs lists among them) make the entry a miss rather
-/// than reach an importer's lowering.
-fn exportsDigest(records: []const u8) [32]u8 {
-    var hasher = base.Sha256.init(.{});
-    hasher.update("roc-boxy-object-exports-v1");
-    hasher.update(records);
-    return hasher.finalResult();
 }
 
 /// The bytes of an export record with no return conditions: its identity,
@@ -303,7 +295,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     const found_magic = try reader.take(magic.len);
     if (!std.mem.eql(u8, found_magic, magic)) return error.InvalidEntry;
     if (try reader.word32() != format_version) return error.InvalidEntry;
-    const exports_start = reader.at;
+    if (try reader.word64() != bytes.len) return error.InvalidEntry;
     const export_count = try reader.word32();
     if (export_count > (bytes.len - reader.at) / min_export_record_size) return error.InvalidEntry;
     const exports = try allocator.alloc(ExportRecord, export_count);
@@ -337,10 +329,6 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         record.table_needs = needs;
         decoded_exports += 1;
     }
-    // The export records are read only after their digest checks: an
-    // importer decodes their needs lists as bytes this compiler wrote.
-    const expected_digest = exportsDigest(bytes[exports_start..reader.at]);
-    if (!std.mem.eql(u8, &expected_digest, try reader.take(expected_digest.len))) return error.InvalidEntry;
     const hosted_symbols = try decodeSymbols(allocator, &reader);
     errdefer freeSymbols(allocator, hosted_symbols);
     const link_root_symbols = try decodeSymbols(allocator, &reader);
@@ -592,7 +580,7 @@ test "a Boxy object entry round-trips through its bytes" {
     altered[0] = 'X';
     try std.testing.expectError(error.InvalidEntry, decode(allocator, altered));
 
-    // So is one whose export records' needs lists were altered.
+    // Needs lists round-trip with the rest of their export record.
     const needs_entry: Entry = .{
         .exports = &.{.{ .identity = @splat(3), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{}, .table_needs = "a needs list" }},
         .hosted_symbols = &.{},
@@ -601,9 +589,11 @@ test "a Boxy object entry round-trips through its bytes" {
     const needs_bytes = try encode(allocator, needs_entry);
     defer allocator.free(needs_bytes);
     const needs_decoded = try decode(allocator, needs_bytes);
-    deinitEntry(allocator, needs_decoded);
-    const needs_at = std.mem.find(u8, needs_bytes, "a needs list") orelse return error.TestUnexpectedResult;
-    needs_bytes[needs_at] = 'A';
+    defer deinitEntry(allocator, needs_decoded);
+    try std.testing.expectEqualDeep(needs_entry.exports, needs_decoded.exports);
+
+    // A size mismatch is rejected without reading or hashing the payload.
+    std.mem.writeInt(u64, needs_bytes[8..16], @intCast(needs_bytes.len + 1), .little);
     try std.testing.expectError(error.InvalidEntry, decode(allocator, needs_bytes));
 }
 
@@ -627,7 +617,7 @@ test "a count larger than the bytes behind it is a miss, not an allocation" {
     const gpa = std.testing.allocator;
     const encoded = try encode(gpa, .{ .exports = &.{}, .hosted_symbols = &.{}, .pieces = "pieces" });
     defer gpa.free(encoded);
-    const count_offset = magic.len + @sizeOf(u32);
+    const count_offset = magic.len + @sizeOf(u32) + @sizeOf(u64);
     for ([_]usize{ count_offset, count_offset + @sizeOf(u32) }) |offset| {
         const damaged = try gpa.dupe(u8, encoded);
         defer gpa.free(damaged);

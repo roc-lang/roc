@@ -619,7 +619,7 @@ pub fn encodeMetadata(retained: *Retained, result: *LirProgram.Result, compiled:
         try encoder.typeSpan(shape.values);
         try encoder.word(shape.descs);
         try encoder.word(shape.dicts);
-        try encoder.word(if (record.needs) |needs| needs.wordCount() else 0);
+        try encoder.word(if (shape.descs + shape.dicts == 0) 0 else (record.needs orelse invariant("a captured function table has no declared needs")).wordCount());
         try encoder.bytes.append(allocator, @intFromBool(shape.composed));
         const size_at = encoder.bytes.items.len;
         try encoder.word(0);

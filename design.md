@@ -14111,11 +14111,12 @@ many tables.
 An imported worker's tables are filled in the importing unit, from the needs
 list the worker's object exports (`ExportRecord.table_needs`), in which types
 and workers are named by their checked identities. The exports digest covers
-it, so an importer of a changed needs list is lowered again. A cached
-object's export records are followed by their digest, which loading checks
-before an importer reads them, so an altered needs list makes the entry a
-miss rather than reach the importer's lowering. In a
-compile-time program that stores function values, each table ends with a
+it, so an importer of a changed needs list is lowered again. This digest
+identifies semantic dependencies; it is not a payload-integrity checksum.
+A cached object's header records its total byte length. Loading compares it
+with the loaded slice's length, without another file-size syscall or hashing
+serialized export records. Complete entries are trusted compiler-produced data.
+In a compile-time program that stores function values, each table ends with a
 producer identity and table ordinal, by which the stored function writer reads a
 function value's table inputs across cached units (design.md "Stored
 Function Values").
@@ -23594,7 +23595,10 @@ overflows, are a function of the program and the compiler build alone, and an
 overflow's reported position is reproducible. The crash boundary is set on the
 evaluation stack (`CrashBoundary.run`), so the escape from a crash or an
 overflow lands there and the root returns to the thread's own stack through
-the switch it entered by. While a root runs there, the fault handler
+the switch it entered by. The guarded callback is explicitly never tail-called:
+the frame holding the recovery point must remain live until the callback returns
+or escapes. Calls into generated code likewise preserve the host entry frame
+recorded for failure walks. While a root runs there, the fault handler
 classifies the thread's faults against the evaluation stack's bounds, and the
 frame-pointer walk ends at the generated code's entry frame on it. The
 interpreter and compiled runtime programs keep their own stack handling.
