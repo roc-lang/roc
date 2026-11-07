@@ -14557,6 +14557,18 @@ keep their declared-order argument-record representation. Caller-side views
 still require independent packing; removing the callee wrapper does not grant
 views an independent lifetime or change the external byte-level ABI.
 
+A complete packed erased-argument block publishes a product ownership shape
+when its layout is dynamic, including any leading non-owning table words.
+Its field indices are the ABI's semantic argument indices. The callee owns
+its contents but borrows the physical buffer from its caller or pending-call
+driver. Explicit arguments are copied into independent representation storage
+before field-take analysis; copying bytes does not retain contents. ARC moves
+or retains each field and releases untouched fields using the existing product
+rules. No operation frees the caller's frame or the driver's argument packet.
+A hidden table is read using its prefix descriptor before the complete block's
+descriptor and product fields are established. Runtime-sized interior views
+continue to borrow and must still be packed independently for deferred calls.
+
 #### Ownership
 
 A dynamic local is a refcount-bearing owned unit to ARC exactly as a list or

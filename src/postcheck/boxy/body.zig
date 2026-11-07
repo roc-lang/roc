@@ -660,26 +660,45 @@ pub const Builder = struct {
         }
         const components = try self.structComponentTypes(structural);
         defer self.allocator.free(components);
-        const field_layouts = try self.allocator.alloc(u32, components.len);
+        const shape = try self.productShapeFields(0, components);
+        try self.product_shapes.put(self.allocator, ty, shape);
+        return shape;
+    }
+
+    /// Ownership fields of a complete product, in its semantic order. Leading
+    /// ABI words are opaque, non-owning fields; offsets still come from the
+    /// producer's record descriptor, never from this ownership row.
+    fn productShapeFields(self: *Builder, leading: usize, components: []const TypeId) Allocator.Error!LIR.StmtRowId(LIR.ProductShape) {
+        const count = leading + components.len;
+        const field_layouts = try self.allocator.alloc(u32, count);
         defer self.allocator.free(field_layouts);
-        const descriptors = try self.allocator.alloc(LocalId, components.len);
+        const descriptors = try self.allocator.alloc(LocalId, count);
         defer self.allocator.free(descriptors);
-        const slots = try self.allocator.alloc(u32, components.len + 1);
+        const slots = try self.allocator.alloc(u32, count + 1);
         defer self.allocator.free(slots);
         slots[0] = 0;
-        for (components, field_layouts, descriptors, 0..) |component, *field_layout, *descriptor, index| {
+        if (leading != 0) {
+            const descriptor = try self.closedLocal(.opaque_ptr);
+            const slot = try self.program.static_descs.opaqueWordSlot();
+            try self.emitEntry(.{ .assign_literal = .{ .target = descriptor, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
+            try self.constant_slots.put(self.allocator, descriptor, slot);
+            for (0..leading) |index| {
+                field_layouts[index] = @backingInt(layout.Idx.opaque_ptr);
+                descriptors[index] = descriptor;
+                slots[index + 1] = slots[index];
+            }
+        }
+        for (components, field_layouts[leading..], descriptors[leading..], leading..) |component, *field_layout, *descriptor, index| {
             const field = if (try self.closed(component)) try self.program.layouts.layoutOf(component) else try self.program.result.layouts.dynamicLayout();
             field_layout.* = @backingInt(field);
             slots[index + 1] = slots[index] + self.program.result.layouts.ownershipSlotCount(field);
             descriptor.* = try self.descOf(component);
         }
-        const shape = try self.store.addStmtRow(LIR.ProductShape, .{
+        return try self.store.addStmtRow(LIR.ProductShape, .{
             .layouts = try self.store.addU32Span(field_layouts),
             .slots = try self.store.addU32Span(slots),
             .descriptors = try self.store.addLocalSpan(descriptors),
         });
-        try self.product_shapes.put(self.allocator, ty, shape);
-        return shape;
     }
 
     /// Whether values of `ty` have one committed layout (see
@@ -1919,11 +1938,10 @@ pub const Builder = struct {
         self.hole = body_start;
         if (lambda.args.len != worker.params.len) invariant("a lambda's arity differs from its type");
         for (lambda.args, worker.params, 0..) |pattern, param_ty, index| {
-            const value = if (own_words != 0) blk: {
-                const local = try self.localOf(param_ty, .view);
-                try self.emitDyn(local, .{ .field_addr = .{ .base = record_param.?, .desc = self.store.localDyn(record_param.?).?.desc, .field_index = .{ .immediate = @intCast(own_words + index) } } });
-                break :blk local;
-            } else try self.erasedParamValue(record_param.?, worker.params, @intCast(index));
+            const value = if (own_words != 0)
+                try self.argsRecordField(record_param.?, @intCast(own_words + index), param_ty)
+            else
+                try self.erasedParamValue(record_param.?, worker.params, @intCast(index));
             try self.bindIrrefutable(pattern, value, param_ty);
         }
         try self.tasks.append(self.allocator, .ret);
@@ -2207,6 +2225,8 @@ pub const Builder = struct {
         try self.beginTable(table, dict_count);
         const full_desc = try self.argsDesc(1, try self.descWords(worker.params));
         try self.emitEntry(.{ .assign_ref = .{ .target = desc_hole, .op = LIR.RefOp.local(full_desc), .next = undefined } });
+        const product = try self.productShapeFields(1, worker.params);
+        self.store.getLocalPtr(record).product = product;
         return record;
     }
 
@@ -2652,7 +2672,8 @@ pub const Builder = struct {
     pub fn argsRecordLocal(self: *Builder, params: []const TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
         if (try self.allClosed(params)) return self.closedLocal(try self.argsRecordLayout(params));
         const desc = try self.argsRecordDesc(params);
-        return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage } });
+        const product = try self.productShapeFields(0, params);
+        return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage }, .product = product });
     }
 
     pub fn allClosed(self: *Builder, tys: []const TypeId) Allocator.Error!bool {
@@ -2680,13 +2701,12 @@ pub const Builder = struct {
         return try self.materialize(.{ .recipe = try self.recipes.intern(.{ .args_desc = .{ .leading = leading, .elems = elems } }) });
     }
 
-    /// Argument `index` of an argument record, as a borrowed read.
+    /// Copy argument `index` into independent storage. The ABI transfers the
+    /// contents, not ownership of the caller's argument buffer. ARC decides
+    /// whether this complete field moves, is retained, or remains borrowed.
     pub fn argsRecordField(self: *Builder, record: LocalId, index: u32, param_ty: TypeId) Allocator.Error!LocalId {
-        if (self.store.localDyn(record)) |dyn| {
-            const local = try self.localOf(param_ty, .view);
-            try self.emitDyn(local, .{ .field_addr = .{ .base = record, .desc = dyn.desc, .field_index = .{ .immediate = index } } });
-            return local;
-        }
+        if (self.store.localDyn(record) != null and self.store.getLocal(record).product == .none)
+            invariant("a complete dynamic argument record omitted its product ownership shape");
         const local = try self.localOf(param_ty, .frame);
         if (self.store.getLocal(record).layout_idx == .zst) {
             // A record of zero-sized arguments has no storage to read.
@@ -5085,7 +5105,8 @@ pub const Builder = struct {
             return self.pushValue(try self.adaptValue(target, ret, result_ty));
         }
         const desc = try self.argsDesc(@intCast(words.len), try self.descWords(params));
-        const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = .frame } });
+        const product = try self.productShapeFields(words.len, params);
+        const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = .frame }, .product = product });
         const fields = try std.mem.concat(self.allocator, LocalId, &.{ words, args });
         defer self.allocator.free(fields);
         try self.emitDyn(record, .{ .record = .{ .desc = desc, .fields = try self.store.addLocalSpan(fields) } });

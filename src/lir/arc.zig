@@ -18222,6 +18222,60 @@ test "ARC dynamic product takes independently stored fields and preserves aliase
     }
 }
 
+test "ARC erased argument products take fields and preserve prefix and scalar reads" {
+    for ([_]bool{ false, true }) |keep_record| {
+        var d = try DynFixture.init();
+        defer d.deinit();
+        const table = try d.desc();
+        const record_desc = try d.desc();
+        const field_desc = try d.desc();
+        const word_desc = try d.desc();
+        const scalar_desc = try d.desc();
+        const param = try d.value(record_desc, .param);
+        const field = try d.value(field_desc, .frame);
+        const result = try d.value(field_desc, .result);
+        const prefix = try d.f.local(.opaque_ptr);
+        const scalar = try d.f.local(.u64);
+        const product = try d.f.store.addStmtRow(LIR.ProductShape, .{
+            .layouts = try d.f.store.addU32Span(&.{ @backingInt(layout_mod.Idx.opaque_ptr), @backingInt(layout_mod.Idx.u64), @backingInt(d.dynamic), @backingInt(d.dynamic) }),
+            .slots = try d.f.store.addU32Span(&.{ 0, 0, 0, 1, 2 }),
+            .descriptors = try d.f.span(&.{ word_desc, scalar_desc, field_desc, field_desc }),
+        });
+        d.f.store.getLocalPtr(param).product = product;
+        const ret = try d.f.ret(if (keep_record) param else result);
+        // Independent parameter bytes survive a field take. Neither of these
+        // non-owning reads may require restoring the field that was moved.
+        const read_scalar = try d.f.assignRefField(scalar, param, 1, ret);
+        const read_prefix = try d.f.assignRefField(prefix, param, 0, read_scalar);
+        const append = try d.f.assignLowLevel(result, &.{field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_prefix);
+        const read = try d.f.assignRefField(field, param, 2, append);
+        // Descriptors come from a captured table; the packed record remains
+        // the erased worker's only explicit argument.
+        var body = read;
+        const descriptors = [_]LIR.LocalId{ record_desc, field_desc, word_desc, scalar_desc };
+        var index = descriptors.len;
+        while (index > 0) {
+            index -= 1;
+            body = try d.op(descriptors[index], .{ .table_entry = .{ .table = table, .index = @intCast(index) } }, body);
+        }
+        const proc = try d.proc(&.{ table, param }, body, d.dynamic, if (keep_record) param else result);
+        d.f.store.getProcSpecPtr(proc).abi = .erased_record;
+        d.f.store.getProcSpecPtr(proc).erased_capture_arg = table;
+        try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
+        try testing.expectEqual(@as(usize, if (keep_record) 1 else 0), d.f.countRc(field, .incref));
+        try d.f.expectRc(param, 0, 0, 0);
+        try d.f.expectRc(prefix, 0, 0, 0);
+        try d.f.expectRc(scalar, 0, 0, 0);
+        try d.expectDynamicRcShape();
+        var diag: arc_certify.Diagnostic = .{};
+        const sigs = [_]arc_sig.RcSig{.all_owned};
+        arc_certify.certifyStore(testing.allocator, &d.f.store, &d.f.layouts, .{ .sigs = &sigs }, &.{proc}, &diag) catch |err| {
+            std.debug.print("erased argument product certification failed: {any}\n", .{diag});
+            return err;
+        };
+    }
+}
+
 test "ARC places no reference counts around a callable read from a type table" {
     var d = try DynFixture.init();
     defer d.deinit();
