@@ -36,7 +36,7 @@ fn testRocCrashed(_: *host_abi.RocOps, _: [*]const u8, _: usize) callconv(.c) vo
 const SmokeError = std.process.Args.ToSliceError || std.mem.Allocator.Error ||
     eval.BuiltinModules.InitError || std.Thread.SpawnError ||
     Coordinator.AppDiscoveryError || @import("compile").coordinator.CoordinatorError ||
-    @import("compile").package.PublishError || lir.CheckedPipeline.LowerResourceError ||
+    @import("compile").package.CompileTimeError || lir.CheckedPipeline.LowerResourceError ||
     lir.LirImage.ViewError || eval.LirInterpreter.Error ||
     error{ ExpectedAppPath, EntrypointNotFound, UnexpectedResult };
 
