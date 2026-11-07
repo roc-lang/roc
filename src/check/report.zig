@@ -85,6 +85,7 @@ const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
+const PolymorphicRecursion = problem_mod.PolymorphicRecursion;
 const HostedFunctionNotEffectful = problem_mod.HostedFunctionNotEffectful;
 const HostedTypeVariableNotBoxed = problem_mod.HostedTypeVariableNotBoxed;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
@@ -1114,6 +1115,9 @@ pub const ReportBuilder = struct {
             },
             .hosted_unboxed_function => |data| {
                 return self.buildHostedUnboxedFunctionReport(data);
+            },
+            .polymorphic_recursion => |data| {
+                return self.buildPolymorphicRecursionReport(data);
             },
             .hosted_function_not_effectful => |data| {
                 return self.buildHostedFunctionNotEffectfulReport(data);
@@ -5087,6 +5091,11 @@ pub const ReportBuilder = struct {
                 D.ident(type_name_ident).withAnnotation(.type_variable),
                 D.bytes("passes changing type arguments to its own recursion, so it would need infinitely many instantiations."),
             }, self, &report, &report.headline),
+            .reordered_args => try D.renderSliceInto(&.{
+                D.bytes("The nominal type"),
+                D.ident(type_name_ident).withAnnotation(.type_variable),
+                D.bytes("passes its type arguments to its own recursion in a different order."),
+            }, self, &report, &report.headline),
         }
 
         if (self.getRegionSafe(@fromBackingInt(@backingInt(data.decl_var)))) |region| {
@@ -5121,6 +5130,18 @@ pub const ReportBuilder = struct {
                 D.bytes("inside the declaration of"),
                 D.bytes("Nest(a)").withAnnotation(.inline_code),
                 D.bytes(", would create a different type at every level of the recursion.").withNoPrecedingSpace(),
+            }, self, &report),
+            .reordered_args => try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("A recursive use of a nominal type must pass each of its type parameters through unchanged, like"),
+                D.bytes("Tree(a) := [Leaf(a), Node(Tree(a), Tree(a))]").withAnnotation(.inline_code),
+                D.bytes(", or apply it to a type with no type variables, like").withNoPrecedingSpace(),
+                D.bytes("Chain(a) := [End, Link(a, Chain(Str))]").withAnnotation(.inline_code),
+                D.bytes(". Arguments in a different order, like").withNoPrecedingSpace(),
+                D.bytes("Flip(b, a)").withAnnotation(.inline_code),
+                D.bytes("inside the declaration of"),
+                D.bytes("Flip(a, b)").withAnnotation(.inline_code),
+                D.bytes(", would make each level of the recursion a different type from the one around it.").withNoPrecedingSpace(),
             }, self, &report),
         }
 
@@ -5428,6 +5449,17 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreaks(2);
         try D.renderSlice(details, self, &report);
         return report;
+    }
+
+    fn buildPolymorphicRecursionReport(self: *Self, data: PolymorphicRecursion) Allocator.Error!Report {
+        return self.buildHighlightedRegionReport("Polymorphic Recursion", "This use passes changing types to a recursion.", .runtime_error, data.region, &.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("A function that reaches itself again, directly or through other functions, must pass each of its type variables through unchanged, or use types with no type variables. An argument that wraps a type variable, like"),
+            D.bytes("f([x])").withAnnotation(.inline_code),
+            D.bytes("inside"),
+            D.bytes("f : a -> U64").withAnnotation(.inline_code),
+            D.bytes("would use the function at a different type at every level of the recursion."),
+        });
     }
 
     fn buildHostedUnboxedFunctionReport(self: *Self, data: HostedUnboxedFunction) Allocator.Error!Report {

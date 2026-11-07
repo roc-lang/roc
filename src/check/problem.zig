@@ -93,6 +93,7 @@ pub const PlatformAliasNotFound = types.PlatformAliasNotFound;
 pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
+pub const PolymorphicRecursion = types.PolymorphicRecursion;
 pub const HostedFunctionNotEffectful = types.HostedFunctionNotEffectful;
 pub const HostedTypeVariableNotBoxed = types.HostedTypeVariableNotBoxed;
 pub const HostBoundaryOpenRow = types.HostBoundaryOpenRow;

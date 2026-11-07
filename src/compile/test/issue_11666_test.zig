@@ -69,7 +69,7 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
             try std.testing.expect(bytes == .list and bytes.list == .packed_bytes);
             const expected = try std.fmt.allocPrint(gpa, "w{d}", .{index});
             defer gpa.free(expected);
-            try std.testing.expectEqualStrings(expected, artifact.const_store.blobBytes(bytes.list.packed_bytes.bytes));
+            try std.testing.expectEqualStrings(expected, artifact.const_store.blobData(bytes.list.packed_bytes.bytes));
         }
     }
     try std.testing.expectEqual(@as(usize, 1), constants);

@@ -28,7 +28,7 @@ UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:25:3:27
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:33:3:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:41:3:43
 TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:7
-TYPE MISMATCH - lambda_multi_arg_mismatch.md:15:5:15:9
+TYPE MISMATCH - lambda_multi_arg_mismatch.md:11:5:11:12
 # PROBLEMS
 ~~~clojure
 (reports
@@ -97,11 +97,11 @@ TYPE MISMATCH - lambda_multi_arg_mismatch.md:15:5:15:9
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 15 5) (end 15 9))
+		(region (start 11 5) (end 11 12))
 		(headline
 			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
-			(source-region (file "lambda_multi_arg_mismatch.md") (start 15 5) (end 15 9) (annotation error) (line-text "    True,      # x7: Bool (should be 'a' = U64) - MISMATCH"))
+			(source-region (file "lambda_multi_arg_mismatch.md") (start 11 5) (end 11 12) (annotation error) (line-text "    \"world\",   # x3: Str (should be 'a' = U64) - MISMATCH  "))
 			(line-break)
 			(reflow "The type was determined to be:")
 			(line-break)

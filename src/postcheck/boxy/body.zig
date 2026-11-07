@@ -5312,7 +5312,7 @@ pub const Builder = struct {
                     .empty => try self.finishRestoreList(raw_ty, 0),
                     .packed_bytes => |packed_list| {
                         const local = try self.localOf(raw_ty, .frame);
-                        var bytes = const_store.blobBytes(packed_list.bytes);
+                        var bytes = const_store.blobData(packed_list.bytes);
                         // A product's items are its scalar leaves in field
                         // order, laid out here as its layout stores them.
                         var decoded: ?[]u8 = null;

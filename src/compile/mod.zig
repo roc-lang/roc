@@ -221,9 +221,12 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/boxy_unary_argument_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12734_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12745_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12727_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12717_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12787_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12617_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12682_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12722_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11292_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11295_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11294_test.zig"));

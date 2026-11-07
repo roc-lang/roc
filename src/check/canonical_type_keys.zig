@@ -398,6 +398,14 @@ pub const TypeWriter = struct {
         try out.appendSlice(self.inspector.allocator, self.inspector.identity_variables.items);
     }
 
+    /// Like `appendIdentityVarsFromVar`, enumerating ordinary structure only:
+    /// the method requirements attached to an identity are not followed.
+    pub fn appendIdentityVarsFromVarIgnoringConstraints(self: *TypeWriter, var_: Var, out: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
+        self.inspector.walk_identity_constraints = false;
+        defer self.inspector.walk_identity_constraints = true;
+        try self.appendIdentityVarsFromVar(var_, out);
+    }
+
     /// Like `appendIdentityVarsFromVar`, treating every var whose resolved
     /// root is in `opaque_roots` as an opaque leaf (see `opaque_roots`).
     pub fn appendIdentityVarsFromVarWithOpaqueRoots(
