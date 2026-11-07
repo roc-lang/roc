@@ -1,5 +1,5 @@
 //! Generated structural codecs under `.boxy` (design.md "Dictionaries",
-//! "Workers And Hidden Parameters", "Function Values"): the parser and
+//! "Workers And Hidden Inputs", "Function Values"): the parser and
 //! encoder workers of one checked generated-codec derivation, and the
 //! compiler-owned serialization intrinsics they hand to format methods.
 //!
@@ -1266,7 +1266,7 @@ const Gen = struct {
                 const callee = try program_.templateRefWorker(template);
                 // The edge's substitution names each scheme variable's
                 // instantiation, and the target's own evidence is the edge's
-                // nested evidence (design.md "Workers And Hidden Parameters").
+                // nested evidence (design.md "Workers And Hidden Inputs").
                 const target_worker = program_.worker(callee).*;
                 const nested: []const static_dispatch.CheckedEvidence = if (target_worker.dictionary_params.len == 0) &.{} else switch (node.nested) {
                     .resolved => table.nestedEvidence(node),

@@ -300,7 +300,7 @@ pub const Worker = struct {
     proc: LIR.LirProcSpecId,
     module: ModuleIndex,
     /// The checked scheme variables of the worker's scope, in hidden
-    /// descriptor parameter order. A template's sealed variables (design.md
+    /// descriptor order. A template's sealed variables (design.md
     /// "Sealed Result Rows") are omitted: they seal to the empty row.
     scheme_vars: []const checked.CheckedTypeId,
     /// For a template worker: its scheme's kind variables.
@@ -311,7 +311,7 @@ pub const Worker = struct {
     checked_slots: []const u32 = &.{},
     checked_scheme_count: u32 = 0,
     /// Evidence parameters that are runtime dictionaries, in hidden
-    /// dictionary parameter order (indices into the template's params).
+    /// dictionary order (indices into the template's params).
     dictionary_params: []const u32,
     params: []const TypeId,
     ret: TypeId,

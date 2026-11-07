@@ -55,10 +55,10 @@ checked modules
 `.boxy` does not construct or consume lambda sets. It lowers checked CIR plus
 checked types directly to LIR, compiling each procedure template once at its
 definition type: every type keeps the one layout the layout store commits for
-it, a generic body receives one runtime type descriptor per quantified type
-variable and one dictionary per dispatch requirement as hidden arguments, and
-closures are erased callables that capture the descriptors and dictionaries
-their bodies mention. The value shapes that cross the host ABI are exactly the
+it, a generic body reads one runtime type descriptor per quantified type
+variable and one dictionary per dispatch requirement from a type table the
+compiler fills at compile time and passes as one hidden argument, and closures
+are erased callables that capture their worker's type table. The value shapes that cross the host ABI are exactly the
 source ABI shapes, because no type has a second representation.
 
 There is no separate MIR layer in either strategy. There is no separate stored
@@ -7147,7 +7147,7 @@ scheme and is validated at each use with the use's format.
 
 A derived parser or encoder is still finite, shape-specific generated code.
 Boxy lowers one generated-codec worker per checked structural derivation,
-with hidden parameters for the derivation's type variables; each use reaches
+with hidden descriptors for the derivation's type variables; each use reaches
 it through its concrete dispatcher type, callable type, and nested checked
 evidence. The constructor evaluates construction-time methods, builds the explicit
 opaque evidence values, and captures them in the returned runtime callable.
@@ -7209,20 +7209,21 @@ variables when its hidden dictionaries and descriptors are lowered, exactly as
 for a direct call.
 
 Generated workers follow the same rules as source workers: a value of
-variable type is a dynamic local whose descriptor is composed from the
-worker's hidden parameters, and an aggregate's descriptor is composed from its
-children's before the aggregate is constructed. A generated worker returns no
+variable type is a dynamic local whose descriptor is a word of the worker's
+type table, and an aggregate's descriptor, a table word whose recipe names
+its children's types, is read before the aggregate is constructed. A generated worker returns no
 descriptor; its caller knows the result type.
 
 Boxy pattern lowering follows the same order. A binder of variable type is a
-dynamic local whose descriptor is composed from the enclosing worker's hidden
-parameters before its sub-pattern is lowered, so a binder inside a nominal
+dynamic local whose descriptor is a word of the enclosing worker's type table,
+read before its sub-pattern is lowered, so a binder inside a nominal
 pattern over boxed storage (`(Wrapped.(b), _)` with `Wrapped := Box(Str)`) is
 described before use (`test/cli/NominalBoxPatternBinders.roc`).
 
 Compiler-generated operands and callables use the same rule: quote
-conversion, numeral conversion, and generated codec constructors compose the
-descriptors of what they construct from the descriptors in scope, never by
+conversion, numeral conversion, and generated codec constructors read the
+descriptors of what they construct as static descriptors or type table words
+over the types in scope, never by
 inspecting a constructed value or by selecting a descriptor from the
 contextual result type after construction.
 
@@ -10254,7 +10255,7 @@ wrapper; such a value produces nothing, so the join has nothing to relate.
   layout. A dictionary of a method whose signature holds a row its consumers'
   type widens is wrapped in an adapter that converts the method's result the
   same way; the adapter, like the dictionary it wraps, is an immortal
-  composition of the entry chain. The same rule lowers a `?` return and a
+  callable over the entry chain, static data or a type table word. The same rule lowers a `?` return and a
   `return` into the function's result.
 - SpecConstr clones and walks through the child like any wrapper, and treats
   a self call under a widen as NOT a tail call. A widen changes no value, so
@@ -10380,13 +10381,13 @@ wider row of the same body, a call whose instantiation widens a callee's
 sealed result, a function value used at a wider type, and a dictionary whose
 method's result its consumer widens are each converted along the coercion's
 reach (Sealed Result Rows). An open row of a generic body stays dynamic: its
-descriptor is composed from its explicit tags and the descriptor of its row
-variable, and a caller supplies a row variable's descriptor as the residual
-of the actual row (the actual row's tags the open row does not name), so the
-composed layout is the actual row's committed layout. A `where` result
+descriptor is a type table word whose recipe names its explicit tags and its
+row variable, and an instantiation fixes the row variable to the residual of
+the actual row (the actual row's tags the open row does not name), so the
+word's layout is the actual row's committed layout. A `where` result
 opened per use is such an open row. A ground value that flows into an
 open-row destination of a generic body is re-tagged by tag name into the
-destination's descriptor-composed layout (Row Coercion Primitive).
+layout of the destination's descriptor (Row Coercion Primitive).
 
 **One label, two payload types.** A join unites rows that may name one tag
 at two payload types: a value of `[Shared]` forwarded into both
@@ -13705,10 +13706,11 @@ checked dispatch nodes.
 
 `.boxy` is the layout-polymorphic strategy. It compiles every procedure
 template exactly once, at its own checked definition type, and makes
-polymorphism a runtime matter: a generic body receives one *type descriptor*
-per quantified type variable of its scheme and one *dictionary* per dispatch
-requirement of its scheme, and manipulates values of variable type through
-those descriptors. It consumes immutable checked modules directly:
+polymorphism a runtime matter: a generic body reads one *type descriptor* per
+quantified type variable of its scheme and one *dictionary* per dispatch
+requirement of its scheme from its *type table*, static data the compiler
+fills for each instantiation the program reaches, and manipulates values of
+variable type through those descriptors. It consumes immutable checked modules directly:
 
 ```text
 checked modules
@@ -13722,7 +13724,7 @@ Mono decisions, lambda sets, finite callable tag unions, specializations, or
 any program-wide representation table. There is no planning stage: the
 lowerer walks reachable procedure bodies, and everything it needs to know about a
 checked type is a direct structural function of that type and of the hidden
-parameters in scope.
+inputs in scope.
 
 The strategy exists for one reason: build time. Its runtime cost is confined
 to generic bodies and is the cost every non-specializing compiler of a
@@ -13762,16 +13764,19 @@ module's layouts, descriptors, and workers are a function of its own checked
 module and its imports' checked modules alone (Per-Module Output, below), so
 two modules never need to agree on anything a third module decided.
 
-The layout a descriptor composes at runtime for a type is byte-for-byte the
-layout the layout store commits for the same type at compile time. The struct
-field ordering (`layout/field_order.zig`), struct measuring and padding, tag
-union variant ordering, discriminant placement and width, and list, box, and
-string shapes are implemented once, in `src/layout/`, and that same code is
-compiled into the Boxy runtime. A descriptor-composition test compiles a
-corpus of closed types both ways and requires identical size, alignment, sort
-key, field offsets, variant discriminants, and payload offsets.
+A descriptor's layout of a type is byte-for-byte the layout the layout store
+commits for the same type: static descriptor emission lays each descriptor
+out from the committed layout. The struct field ordering
+(`layout/field_order.zig`), struct measuring and padding, tag union variant
+ordering, discriminant placement and width, and list, box, and string shapes
+are implemented once, in `src/layout/`. The same code is compiled into the
+Boxy runtime, which lays out the argument record of an override call with it,
+and into the descriptors tests build (`boxy_runtime.test_descs`). A shape
+equivalence test lays a corpus of closed types out both ways and requires
+identical size, alignment, sort key, field offsets, variant discriminants, and
+payload offsets.
 
-#### Workers And Hidden Parameters
+#### Workers And Hidden Inputs
 
 A *worker* is the one LIR procedure lowered for a checked procedure template,
 a nested lambda or closure expression, a generated structural codec
@@ -13780,31 +13785,32 @@ identity; a template is never lowered twice, whatever the number of its uses
 or instantiations. A worker is lowered at its checked definition type, in
 which its scheme's quantified variables appear as type variables.
 
-A worker's signature is its explicit checked parameters followed by its hidden
-parameters:
+A worker's hidden inputs are, in order:
 
-- one descriptor parameter per quantified variable of its scheme, in the
-  scheme's checked `scheme_vars` order (a field kind variable's describes the
-  field's slot, Field Kinds);
-- one dictionary parameter per evidence parameter of its scheme, in the
-  checked `evidence_params` order the checker records;
+- one descriptor per quantified variable of its scheme, in the scheme's
+  checked `scheme_vars` order (a field kind variable's describes the field's
+  slot, Field Kinds);
+- one dictionary per evidence parameter of its scheme, in the checked
+  `evidence_params` order the checker records;
 - one literal argument per literal requirement of its scheme, in the checked
   `literal_requirements` order ("Literal Arguments").
 
-A generalized local function (a dispatch scope with its own `scheme_vars`
-and `evidence_params`) is a worker with its own hidden parameters in the same
-way. A nested lambda that is not generalized has no scheme of its own: the
+They are the first words of its type table, which a worker with any hidden
+input takes as one hidden argument after its explicit checked parameters
+("Type Tables"). A generalized local function (a dispatch scope with its own
+`scheme_vars` and `evidence_params`) is a worker with its own hidden inputs in
+the same way. A nested lambda that is not generalized has no scheme of its own: the
 descriptors and dictionaries its body mentions belong to the enclosing worker
 and reach it as captures (see Function Values).
 
 A checked parameter or result whose type mentions a type variable in scope is
 *dynamic*. A dynamic parameter is passed as the address of storage the caller
-owns; the callee reads it through the descriptor it composes for that
-parameter's type. A dynamic result is written by the callee into storage whose
+owns; the callee reads it through the descriptor of that parameter's type,
+a word of its type table. A dynamic result is written by the callee into storage whose
 address the caller passes as an additional trailing parameter. A parameter or
 result whose type is closed is an ordinary LIR value with its committed layout,
-passed exactly as `.lss` passes it. Hidden parameters are pointer-sized
-opaque values.
+passed exactly as `.lss` passes it. The type table argument is a
+pointer-sized opaque value.
 
 Ownership follows the ARC conventions of every other procedure: dynamic
 parameters are borrowed or owned exactly as the borrow inference decides for
@@ -13825,15 +13831,15 @@ that is bounded, whose row default is the empty row, and whose constraints
 closing the row discharges (`variableSealsToRowDefault`), and that nothing
 the worker exchanges with code outside it involves. A sealed variable is
 bound to the empty row when its worker is lowered and takes no hidden
-descriptor parameter, so `parse` is a static worker returning
+descriptor, so `parse` is a static worker returning
 `Try(U8, [InvalidU8])`. An evidence parameter whose dispatcher is a sealed
-variable is no dictionary parameter either.
+variable is no dictionary input either.
 
 A platform requirement's identity variable (`[State : state] for main`) is a
 scheme variable of every platform template whose type mentions it, and the
 root program lowers the platform at the app type that variable solved to
 (`solvePlatformIdentities`): every mention converts to that type, so the
-variable is no hidden descriptor parameter of the template's worker either.
+variable is no hidden descriptor of the template's worker either.
 
 Sealing is sound only where every value typed with the variable crosses the
 worker's boundary at a place that knows both rows, which is its result. So a
@@ -13932,15 +13938,19 @@ A direct call to a known template reads the checked site evidence of the use
 
 A call whose target is a type variable's method (a dispatch the checker
 resolved by `constraint`, that is, to one of the enclosing scheme's evidence
-parameters) calls through the enclosing worker's dictionary parameter. A call
+parameters) calls through the enclosing worker's dictionary, an input of its
+type table. A call
 whose target is concrete calls the target's worker directly, with hidden
 arguments from the site evidence as above. A call of a function value is an
 erased call (see Function Values). `from_callable`, `from_scheme`,
 `unreachable_value`, and `checked_error` resolutions lower as the checked
 boundary defines them for every strategy; they never cause a search.
 
-Every hidden argument is therefore a direct read of checked data plus, at most,
-a composition of descriptors or dictionaries already in scope. The lowerer
+Every hidden input a call supplies is therefore a direct read of checked data:
+a static descriptor or dictionary, or a word of the enclosing worker's type
+table whose recipe the lowering evaluates at compile time. The callee's table
+itself is static data when every input is closed, and otherwise a word of the
+enclosing worker's table. The lowerer
 never recovers a substitution by matching types, never searches a type graph
 for where a descriptor could be read from, and never derives one hidden value
 from another by structural inspection of a representation.
@@ -14136,7 +14146,7 @@ is always manipulated by address. Its storage lives in the procedure's
 region's size is the sum of the aligned sizes of the procedure's dynamic
 locals, read from their descriptors, and each dynamic local's address is the
 region base plus its running offset. Because every descriptor a body uses is
-composed at entry, the region's size and every offset are available before the
+read in its entry block, the region's size and every offset are available before the
 first body statement runs. LLVM allocates the region with one dynamically
 sized `alloca` and has the Boxy runtime place the locals in it, one run of
 locals sharing a descriptor per call (`roc_desc_frame_run_size`,
@@ -14269,7 +14279,7 @@ Compiler-derived structural evidence (equality, hashing, inspection) is a
 callable over the dispatcher's descriptor: the dictionary for `[a.is_eq]` with
 a structural resolution is the runtime's descriptor-guided equality closed
 over `a`'s descriptor. Generated structural codec derivations are workers of
-their own, lowered once per checked derivation with hidden parameters for the
+their own, lowered once per checked derivation with hidden descriptors for the
 derivation's type variables, and reached through dictionaries like any other
 target.
 
@@ -14376,10 +14386,10 @@ strategy).
   completed at its bake (`Options.complete_baked_module`), whose `.lss` finalization hands
   these roots to the `.boxy` evaluator.
 
-Lowering gives every worker one hidden parameter per literal requirement of its own
+Lowering gives every worker one hidden input per literal requirement of its own
 scheme, after its dictionaries (`Worker.literal_params`, in literal requirement
-order): an immortal erased callable taking no arguments and producing the
-converted value. The callable is the root's entry wrapper composed as a
+order), a word of its type table: an immortal erased callable taking no
+arguments and producing the converted value. The callable is the root's entry wrapper composed as a
 dictionary entry (`Body.rootThunk`): its body restores the stored value
 (`CompileTimeRootPayload.const_node`), or, where none is stored (the root is
 being evaluated, or holds a function), converts the literal in the frames of
@@ -14448,9 +14458,10 @@ The captures of a compiler-created callable are the captured binders' values,
 followed by its worker's type table, whose inputs are the hidden descriptors
 and dictionaries of the enclosing worker ("Type Tables"). A closure created in
 a generic body thus carries the type knowledge of its creation site, and its
-worker needs no hidden parameters of its own: it reads them from its table. When any
-capture is of variable type, the capture record is a dynamic record composed
-from the captures' descriptors, its first word is the capture record's
+worker takes no hidden argument of its own: it reads its inputs from the
+table it captured. When any capture is of variable type, the capture record
+is a dynamic record whose descriptor is a word of the creating worker's type
+table (`Tables.Recipe.args_desc` over the captures' types), its first word is the capture record's
 descriptor, its second word the capture capacity of the allocation holding it
 (the record's size when the callable is first packed; an allocation repacked
 in place keeps its capacity), and the callable's `on_drop` is the shared
@@ -14473,8 +14484,8 @@ and the runtime then packs afresh.
 
 An erased call passes its arguments as one record in the uniform ABI. When the
 call's argument types are closed, that record has a static layout; when they
-are dynamic, the record is composed from the argument descriptors and built in
-the dynamic frame region. Both sides compute the same layout from the same
+are dynamic, the record's descriptor is a word of the caller's type table over
+the argument types, and the record is built in the dynamic frame region. Both sides compute the same layout from the same
 descriptors, so a closure created at a concrete type and called from a generic
 body, or the reverse, agree on every offset.
 
@@ -14495,7 +14506,7 @@ copy on its own.
 
 An erased entry with exactly one complete argument and no hidden words binds
 that argument directly as its parameter, with the argument's own descriptor.
-It does not compose a one-field wrapper and borrow a view of the field. The
+It does not build a one-field wrapper and borrow a view of the field. The
 incoming ownership unit is the parameter itself; ARC handles its use,
 forwarding, or release normally. This applies to lambda, adapter, method,
 structural, and codec entries. Multiple arguments and blocks with hidden words
@@ -14586,7 +14597,7 @@ Nothing a module emits depends on a module that imports it:
 - its workers are lowered once at their definition types, with sealed result
   rows (Sealed Result Rows), so no caller's instantiation reaches a body;
   every template's body and its dictionary entry are emitted, since another
-  module may call a template or compose it as a function value, and the
+  module may call a template or pack it as a function value, and the
   entries of its registered methods and its `??` defaults with them; the
   wrappers of its `expect` and REPL roots are not, since nothing reaches them
   but a test plan's or a REPL's own roots, and each of those lowers as one
@@ -17419,7 +17430,7 @@ hash runs.
 Boxy lowers such a dispatch from its resolution alone: it evaluates the
 source operands and nothing else; the dispatch selects no method worker,
 records no dictionary use for the enclosing worker, and adds no hidden
-dictionary parameter to it. A dispatch that cannot run has no dispatcher whose
+dictionary input to it. A dispatch that cannot run has no dispatcher whose
 dictionary any caller could supply.
 
 Divergent expressions evaluate their earlier operands. Monotype lowers an
@@ -18922,8 +18933,8 @@ Boxy descriptors preserve checked nominal declared-field entries as explicit
 aggregate metadata. Separately, an unnamed field selects declared-order
 runtime layout; without padding, a nominal record reuses the structural
 backing layout. The ordinary layout store commits the selected policy, and
-the runtime's descriptor composition applies the same policy from the same
-code; boxy does not implement a separate nominal layout algorithm.
+static descriptor emission reads the committed layout; boxy does not
+implement a separate nominal layout algorithm.
 
 A tag union's descriptor records its variants explicitly: each variant records
 the checked tag label and its payload fields. Discriminant assignment, payload
@@ -20194,8 +20205,8 @@ generates constraints per statement:
   `RcSig`: refcounted args owned, captures owned by the callee, result owned.
   Inference does not flow modes through erased callable values.
 - dictionary calls are erased calls and follow the erased-call rule above.
-  Hidden descriptor and dictionary arguments are pointer-sized opaque values
-  that own nothing. Method selection is already encoded in the dictionary;
+  A type table argument and the descriptors and dictionaries read from it are
+  pointer-sized opaque values that own nothing. Method selection is already encoded in the dictionary;
   ARC does not inspect checked method names.
 - `dyn_copy`: the destination becomes an owned unit of the same resource shape
   as the source; the copy transfers nothing by itself, and the `incref` ARC
@@ -20312,8 +20323,8 @@ before solving and never weakened:
   `dev_expr`, and compile-time roots): every refcounted param owned on entry,
   every refcounted return position owned. This is the existing host ABI rule.
   In `.boxy`, host-visible roots are host-shaped wrapper procs. Private boxy
-  workers are not root procs and their hidden descriptor/dictionary parameters
-  solve like ordinary private proc parameters unless another ABI rule pins them.
+  workers are not root procs and their type table parameters solve like
+  ordinary private proc parameters unless another ABI rule pins them.
 - hosted procs: every refcounted arg owned by the host, result owned. This
   keeps the LirImage And Hosted Functions contract unchanged.
 - erased-callable procs (`ProcAbi.erased_callable`): all-owned, as above.
@@ -23069,8 +23080,9 @@ enforces, 1000 parameters (`layout.abi.wasm_max_function_params`). A module
 declaring one more does not load. Roc's own calling convention treats that limit
 the way a native convention treats its registers. A program never reaches it, so
 a program's behavior does not depend on how many parameters lowering added: a
-`.boxy` worker takes hidden descriptors, dictionaries, and literal arguments, and
-a function with 1000 open literals behaves like the same function specialized.
+`.boxy` worker takes one type table however many descriptors, dictionaries,
+and literal arguments it needs, and a function with 1000 open literals behaves
+like the same function specialized.
 
 A Roc-ABI procedure whose signature would pass the limit is declared with the
 first arguments as parameters, then one pointer, then its hidden trailing
@@ -23140,7 +23152,7 @@ outside the statement graph.
 
 The wasm backend has no pass that closes a local set over descriptor
 metadata. A descriptor local is bound by the site that emits it—a hidden
-descriptor parameter, a type table read, a static-data read, a capture
+parameter, a type table read, a static-data read, a capture
 read—because each of those sites already reads the explicit LIR descriptor
 data that names it. Nothing searches the store for locals that some site
 might want, so each procedure's own binding cost is a function of its own
@@ -25024,8 +25036,8 @@ exactly as the calling Roc code represents it. In `.boxy` a hosted worker is
 lowered once, generic in its declaration's variables. A variable slot crosses
 the boundary in the pointer-shaped position the declaration gives it (a
 `Box(a)` is a Roc box pointer whatever `a` is), so the call passes the bytes
-straight through. The worker takes hidden descriptor arguments from its
-caller like any other generic worker, which is what lets it describe a
+straight through. The worker takes its type table from its caller like any
+other generic worker, which is what lets it describe a
 `Box(a)` the host hands back; the extern procedure it calls never takes a
 descriptor argument. A variable slot is never given a stand-in type such as
 `{}`: converting a value to a stand-in would discard it on the way to the
@@ -25574,9 +25586,8 @@ count from the start of the image's code and are resolved when the image is
 composed; the shim registers the table with the process, with that start as
 its base, once the image is loaded, and deregisters it when it destroys the
 loaded image. Every composed image carries its
-own builtins and Boxy runtime, so the runtime state a program composes
-(its descriptor interning, keyed by addresses in that program) is never
-shared between generations. Its constants live in its code blocks at a
+own builtins and Boxy runtime, which hold no state, so nothing of one
+generation's runtime is shared with another's. Its constants live in its code blocks at a
 fixed distance from the code that reads them, so a composed image's static
 data cannot outlive its code separately: the image records that its static
 data must live as long as its code, has no static pool chunk, and an

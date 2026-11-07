@@ -537,7 +537,7 @@ pub const DynStorage = enum(u32) {
     /// The procedure's dynamic frame region. The backend reserves
     /// `desc.size` bytes at `desc.alignment` for the local when it executes
     /// the procedure's `dyn` `frame_alloc` statement, which follows every
-    /// descriptor composition the region's sizes read. Writing such a local
+    /// descriptor read the region's sizes depend on. Writing such a local
     /// (the target of a call or `dyn` operation, a join parameter a jump
     /// assigns, a `set_local` target) writes its bytes there.
     frame,

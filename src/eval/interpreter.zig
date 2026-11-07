@@ -8421,7 +8421,7 @@ pub const Interpreter = struct {
             2 => std.mem.writeInt(u16, at[0..2], @intCast(discriminant), .little),
             4 => std.mem.writeInt(u32, at[0..4], discriminant, .little),
             8 => std.mem.writeInt(u64, at[0..8], discriminant, .little),
-            else => unreachable, // composition and the compiler only produce 0, 1, 2, 4, or 8
+            else => unreachable, // the compiler only produces 0, 1, 2, 4, or 8
         }
     }
 

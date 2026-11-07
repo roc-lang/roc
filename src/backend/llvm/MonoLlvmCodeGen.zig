@@ -14722,9 +14722,8 @@ pub const MonoLlvmCodeGen = struct {
                 const tag = inst.tag;
                 if (builtin.mode == .debug and block_idx != 0) {
                     // A procedure's dynamic frame region is sized by its
-                    // descriptors, so its alloca follows their composition,
-                    // whose site caches branch; a fixed-size alloca belongs
-                    // in the entry block.
+                    // descriptors, so its alloca follows their reads; a
+                    // fixed-size alloca belongs in the entry block.
                     const fixed_size = (tag == .alloca or tag == .@"alloca inalloca") and
                         wip.extraData(LlvmBuilder.Function.Instruction.Alloca, inst.data).len.toConst() != null;
                     if (fixed_size) {

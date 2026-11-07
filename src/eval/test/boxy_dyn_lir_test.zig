@@ -1,5 +1,5 @@
-//! Hand-built `.boxy` LIR programs: dynamic locals, descriptor composition,
-//! dynamic values, dictionaries, and list operations that take an element
+//! Hand-built `.boxy` LIR programs: dynamic locals, type table reads,
+//! dynamic values, dictionaries, and list operations that take an item
 //! descriptor (design.md "`.boxy` Runtime Lowering"). Each runs on the
 //! interpreter, on the LLVM backend, and, where this host has a native code
 //! generator, on the dev backend, all in this process; every backend must
@@ -701,7 +701,7 @@ test "boxy wasm: a generic identity over I64 and Str" {
 }
 
 /// `id : a -> a` reading its descriptor from word 1 of its type table, the
-/// one hidden parameter it takes; word 0 describes another type, so a read
+/// one hidden argument it takes; word 0 describes another type, so a read
 /// of the wrong word returns the wrong bytes.
 const TableIdentityProgram = struct {
     int_proc: LirProcSpecId,

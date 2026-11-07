@@ -4,11 +4,11 @@
 //! A checked type lives in one module's checked type store and names that
 //! module's ids for labels, declarations, and type variables. Boxy lowering
 //! needs one program-wide view of the same types: to intern layouts and
-//! static descriptors for closed types, to compose descriptors for types
-//! that mention a worker's type variables, and to compare the rows a join
-//! makes one. This store converts checked types into interned, structural,
-//! module-independent nodes. A node that mentions a type variable names it by
-//! its position in the converting worker's hidden descriptor parameters, so
+//! static descriptors for closed types, to write the descriptor recipes of
+//! types that mention a worker's type variables, and to compare the rows a
+//! join makes one. This store converts checked types into interned,
+//! structural, module-independent nodes. A node that mentions a type variable
+//! names it by its position in the converting worker's hidden descriptors, so
 //! a node is closed exactly when no `variable` node is reachable from it.
 //!
 //! Nominal types stay nominal: a node names its declaration and its argument
@@ -305,7 +305,7 @@ pub const Node = union(enum) {
     /// under `.boxy`.
     function: struct { args: Span, ret: TypeId, effectful: bool },
     /// Type variable `index` of the converting worker's scope: its
-    /// descriptor is that worker's hidden parameter (or capture) `index`.
+    /// descriptor is that worker's hidden descriptor `index`.
     variable: u32,
 };
 

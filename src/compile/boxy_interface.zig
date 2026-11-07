@@ -262,7 +262,7 @@ pub const Digests = struct {
         };
     }
 
-    /// The name of `ref`'s worker, and the hidden parameters a call to it
+    /// The name of `ref`'s worker, and the hidden inputs a call to it
     /// passes when `artifact` declares it. An imported template's are part of
     /// its own module's interface.
     fn hashTemplateRef(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) void {

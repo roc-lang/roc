@@ -54,7 +54,6 @@ pub const StaticDescs = struct {
     /// How many dictionary callables static callables have captured, which
     /// names each one's node.
     extra_nodes: u32 = 0,
-    /// The key word of each recursive member type composed at runtime.
     /// Each static dictionary, by its procedure and capture words.
     dictionaries: std.StringHashMapUnmanaged(Reserved) = .empty,
     /// The override scopes descriptors are emitted in (`ScopeId`); scope
@@ -451,8 +450,8 @@ pub const StaticDescs = struct {
     }
 
     /// The static dictionary of `proc` capturing `words`: an immortal callable
-    /// node, and the slot whose value points at its payload as a composed
-    /// dictionary's word does.
+    /// node, and the slot whose value points at its payload as a type table's
+    /// dictionary word does.
     pub fn dictionary(self: *StaticDescs, proc: LIR.LirProcSpecId, words: []const CaptureWord) Allocator.Error!Reserved {
         var key: std.ArrayList(u8) = .empty;
         defer key.deinit(self.allocator);
