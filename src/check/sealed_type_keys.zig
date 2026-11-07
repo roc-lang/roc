@@ -25,6 +25,7 @@ const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const Var = types.Var;
 const TypeKeyInfo = canonical_type_keys.TypeKeyInfo;
+const CheckedTypeId = @import("checked_ids.zig").CheckedTypeId;
 
 const KeySlot = collections.OnceSlot(TypeKeyInfo, .sealed_type_key);
 const KeyIndex = std.AutoHashMapUnmanaged([32]u8, Var);
@@ -41,6 +42,11 @@ pub const SealedTypeKeys = struct {
     /// Per variable: 0 while unknown, else 1 + whether a walk found the
     /// variable reaches an identity variable.
     identity: []std.atomic.Value(u8),
+    /// Per variable: its canonical id once recorded, else
+    /// `unknown_canonical`.
+    canonical: []std.atomic.Value(u32),
+
+    const unknown_canonical = std.math.maxInt(u32);
 
     /// Key slots for `env`'s sealed store. `allocator` must be safe to use
     /// from every thread that reads the module's types.
@@ -48,8 +54,11 @@ pub const SealedTypeKeys = struct {
         const keys = try allocator.create(SealedTypeKeys);
         errdefer allocator.destroy(keys);
         const identity = try allocator.alloc(std.atomic.Value(u8), @intCast(env.types.len()));
+        errdefer allocator.free(identity);
         @memset(identity, .init(0));
-        keys.* = .{ .allocator = allocator, .io = io, .env = env, .identity = identity };
+        const canonical_ids = try allocator.alloc(std.atomic.Value(u32), @intCast(env.types.len()));
+        @memset(canonical_ids, .init(unknown_canonical));
+        keys.* = .{ .allocator = allocator, .io = io, .env = env, .identity = identity, .canonical = canonical_ids };
         return keys;
     }
 
@@ -62,6 +71,7 @@ pub const SealedTypeKeys = struct {
         }
         if (self.writer) |*writer| writer.deinit();
         allocator.free(self.identity);
+        allocator.free(self.canonical);
         allocator.destroy(self);
     }
 
@@ -114,6 +124,22 @@ pub const SealedTypeKeys = struct {
         const index: usize = @backingInt(var_);
         std.debug.assert(index < self.identity.len);
         self.identity[index].store(if (value) 2 else 1, .release);
+    }
+
+    /// The canonical id of `var_` a previous request recorded.
+    pub fn knownCanonical(self: *const SealedTypeKeys, var_: Var) ?CheckedTypeId {
+        const index: usize = @backingInt(var_);
+        std.debug.assert(index < self.canonical.len);
+        const raw = self.canonical[index].load(.acquire);
+        if (raw == unknown_canonical) return null;
+        return @fromBackingInt(raw);
+    }
+
+    /// Record the canonical id of `var_`.
+    pub fn recordCanonical(self: *SealedTypeKeys, var_: Var, id: CheckedTypeId) void {
+        const index: usize = @backingInt(var_);
+        std.debug.assert(index < self.canonical.len);
+        self.canonical[index].store(@backingInt(id), .release);
     }
 
     /// The lowest reached checked representative of `view`'s store whose key

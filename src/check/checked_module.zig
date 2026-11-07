@@ -4233,10 +4233,33 @@ pub const CheckedTypeStoreView = struct {
     /// that reaches an identity variable, and otherwise the type `rootForKey`
     /// finds for its key, so every root of one identity-free type shares one
     /// id.
+    /// Each type's answer is recorded once its identity fact is decided, so
+    /// a repeated request is one atomic load.
     pub fn canonicalId(self: CheckedTypeStoreView, id: CheckedTypeId) Allocator.Error!CheckedTypeId {
-        if (try self.rootHasIdentityVariables(id)) return id;
-        return (try self.rootForKey(try self.rootKey(id))) orelse
-            checkedModuleInvariant("an identity-free checked type has no root for its own key", .{});
+        if (self.knownCanonical(id)) |known| return known;
+        const result = if (try self.rootHasIdentityVariables(id))
+            id
+        else
+            (try self.rootForKey(try self.rootKey(id))) orelse
+                checkedModuleInvariant("an identity-free checked type has no root for its own key", .{});
+        if (self.knownIdentity(id) != null) self.recordCanonical(id, result);
+        return result;
+    }
+
+    /// The canonical id of `id` a previous request recorded.
+    fn knownCanonical(self: CheckedTypeStoreView, id: CheckedTypeId) ?CheckedTypeId {
+        if (type_ids.isSynthesized(id)) {
+            const keys = self.synthesized_keys orelse return null;
+            return keys.knownCanonical(type_ids.synthesizedIndex(id));
+        }
+        const keys = self.sealed_keys orelse return null;
+        return keys.knownCanonical(type_ids.asVar(id));
+    }
+
+    fn recordCanonical(self: CheckedTypeStoreView, id: CheckedTypeId, canonical_id: CheckedTypeId) void {
+        if (type_ids.isSynthesized(id)) {
+            if (self.synthesized_keys) |keys| keys.recordCanonical(type_ids.synthesizedIndex(id), canonical_id);
+        } else if (self.sealed_keys) |keys| keys.recordCanonical(type_ids.asVar(id), canonical_id);
     }
 
     /// Whether `left` and `right` are one checked type of this view: the same
@@ -7938,6 +7961,8 @@ pub const CheckedTypeKeys = struct {
 /// reads it. Keys are never serialized: a store loaded from a cache entry
 /// starts with every slot empty.
 pub const SynthesizedTypeKeys = struct {
+    const unknown_canonical = std.math.maxInt(u32);
+
     allocator: Allocator,
     io: std.Io,
     /// One slot per root; a slot never moves once the root exists.
@@ -7945,10 +7970,14 @@ pub const SynthesizedTypeKeys = struct {
     /// Per root: 0 while unknown, else 1 + whether a walk found the root
     /// reaches an identity variable.
     identity: collections.StableList(std.atomic.Value(u8)) = .empty,
+    /// Per root: its canonical id (`CheckedTypeStoreView.canonicalId`) once
+    /// recorded, else `unknown_canonical`.
+    canonical: collections.StableList(std.atomic.Value(u32)) = .empty,
     /// The lowest root of each key among the first `indexed` roots, extended
-    /// on demand to cover roots created since.
+    /// on demand to cover roots created since. Read and extended under
+    /// `index_mutex`; `indexed` is also read without it.
     index: KeyIndex = .empty,
-    indexed: usize = 0,
+    indexed: std.atomic.Value(usize) = .init(0),
     index_mutex: std.Io.Mutex = .init,
     writer_mutex: std.Io.Mutex = .init,
     writer: ?CheckedTypeKeyDigester = null,
@@ -7972,6 +8001,7 @@ pub const SynthesizedTypeKeys = struct {
         if (self.writer) |*writer| writer.deinit();
         self.slots.deinit(allocator);
         self.identity.deinit(allocator);
+        self.canonical.deinit(allocator);
         allocator.destroy(self);
     }
 
@@ -7980,7 +8010,20 @@ pub const SynthesizedTypeKeys = struct {
     fn cover(self: *SynthesizedTypeKeys, count: usize) Allocator.Error!void {
         if (self.slots.count() >= count) return;
         try self.identity.growTo(self.allocator, count, .init(0));
+        try self.canonical.growTo(self.allocator, count, .init(unknown_canonical));
         try self.slots.growTo(self.allocator, count, .empty);
+    }
+
+    fn knownCanonical(self: *const SynthesizedTypeKeys, index: usize) ?CheckedTypeId {
+        std.debug.assert(index < self.canonical.count());
+        const raw = self.canonical.at(index).load(.acquire);
+        if (raw == unknown_canonical) return null;
+        return @fromBackingInt(raw);
+    }
+
+    fn recordCanonical(self: *SynthesizedTypeKeys, index: usize, id: CheckedTypeId) void {
+        std.debug.assert(index < self.canonical.count());
+        self.canonical.at(index).store(@backingInt(id), .release);
     }
 
     fn knownIdentity(self: *const SynthesizedTypeKeys, index: usize) ?bool {
@@ -8104,24 +8147,21 @@ pub const SynthesizedTypeKeys = struct {
     /// the index lock is taken.
     fn rootForKey(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, key: canonical.CanonicalTypeKey, bound: usize) Allocator.Error!?CheckedTypeId {
         const roots = view.rootRows()[0..bound];
-        self.index_mutex.lockUncancelable(self.io);
-        const indexed = self.indexed;
-        self.index_mutex.unlock(self.io);
+        const indexed = self.indexed.load(.acquire);
         if (indexed < bound) {
             for (roots[indexed..]) |row| _ = try self.info(view, row.id);
-            self.index_mutex.lockUncancelable(self.io);
-            defer self.index_mutex.unlock(self.io);
-            while (self.indexed < bound) : (self.indexed += 1) {
-                const row = roots[self.indexed];
-                const info_ = self.slots.at(type_ids.synthesizedIndex(row.id)).peek() orelse
-                    checkedModuleInvariant("a synthesized checked type's key was indexed before it was computed", .{});
-                const entry = try self.index.getOrPut(self.allocator, info_.key.bytes);
-                if (!entry.found_existing) entry.value_ptr.* = row.id;
-            }
         }
         self.index_mutex.lockUncancelable(self.io);
         defer self.index_mutex.unlock(self.io);
-        if (std.debug.runtime_safety and self.indexed < bound) checkedModuleInvariant("a synthesized key index answered over roots it does not cover", .{});
+        var covered = self.indexed.load(.monotonic);
+        while (covered < bound) : (covered += 1) {
+            const row = roots[covered];
+            const info_ = self.slots.at(type_ids.synthesizedIndex(row.id)).peek() orelse
+                checkedModuleInvariant("a synthesized checked type's key was indexed before it was computed", .{});
+            const entry = try self.index.getOrPut(self.allocator, info_.key.bytes);
+            if (!entry.found_existing) entry.value_ptr.* = row.id;
+            self.indexed.store(covered + 1, .release);
+        }
         const found = self.index.get(key.bytes) orelse return null;
         if (type_ids.synthesizedIndex(found) >= bound) return null;
         if (std.debug.runtime_safety) {
