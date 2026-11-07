@@ -25689,7 +25689,10 @@ pointing at it, and a value the host keeps can point into the static data of an
 image that is no longer current. A hot-reload image therefore writes the static
 data entries it needs into one page-aligned static pool chunk at the end of its
 allocation, and records in that chunk each entry whose relocations reach no
-code: its bytes, alignment, symbol offset, and relocations, with a content hash.
+code and no address cycle: its bytes, alignment, symbol offset, and relocations,
+with a content hash. Recursive type descriptors point at one another, so an
+entry on such a cycle has no content independent of its placement; it and
+every entry reaching it are written locally.
 The shim marks a descriptor accepted before any of that image's code runs.
 Once a descriptor is accepted, the compiler parent links its chunk into the
 session's static pool, whose newest chunk the control block names, and never
