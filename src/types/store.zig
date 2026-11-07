@@ -3217,9 +3217,9 @@ test "sealing releases checker-only buffers without allocating" {
         try std.testing.expectEqual(value, store.resolveVar(alias).var_);
         // Every serialized column keeps its storage and length. The full
         // CompactWriter roundtrip below also checks content across sealing.
-        inline for (@typeInfo(Store.Serialized).@"struct".fields) |field| {
-            if (comptime !std.mem.eql(u8, field.name, "gpa")) {
-                try std.testing.expectEqualDeep(@field(retained, field.name), @field(store, field.name));
+        inline for (@typeInfo(Store.Serialized).@"struct".field_names) |field_name| {
+            if (comptime !std.mem.eql(u8, field_name, "gpa")) {
+                try std.testing.expectEqualDeep(@field(retained, field_name), @field(store, field_name));
             }
         }
     }
