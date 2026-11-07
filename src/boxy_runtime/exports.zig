@@ -18,7 +18,7 @@ const RocOps = builtins.host_abi.RocOps;
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const TypeDesc = desc_mod.TypeDesc;
-const Name = desc_mod.Name;
+const AdaptPlan = desc_mod.AdaptPlan;
 
 fn ops() *RocOps {
     return builtins.in_process_host.ops();
@@ -67,8 +67,8 @@ fn frameStride(desc: *const TypeDesc) usize {
 }
 
 /// The C-ABI form of `compiled.adapt`.
-pub fn roc_desc_adapt(from: *const TypeDesc, to: *const TypeDesc, dst: ?[*]u8, src: ?[*]u8) callconv(.c) void {
-    compiled.adapt(from, to, valuePtr(dst), valuePtr(src), ops());
+pub fn roc_desc_adapt(plan: *const AdaptPlan, dst: ?[*]u8, src: ?[*]u8) callconv(.c) void {
+    compiled.adapt(plan, valuePtr(dst), valuePtr(src), ops());
 }
 
 /// The C-ABI form of `walk.copy`.
@@ -122,11 +122,6 @@ pub fn roc_desc_field_addr(desc: *const TypeDesc, base: ?[*]u8, field_index: u32
     return compiled.fieldAddr(desc, valuePtr(base), field_index, ops());
 }
 
-/// The C-ABI form of `compiled.fieldAddrNamed`.
-pub fn roc_desc_field_addr_named(desc: *const TypeDesc, base: ?[*]u8, name: *const Name) callconv(.c) [*]u8 {
-    return compiled.fieldAddrNamed(desc, valuePtr(base), name, ops());
-}
-
 /// The C-ABI form of `compiled.listElemAddr`.
 pub fn roc_desc_list_item_addr(elem: *const TypeDesc, list: *const RocList, index: u64) callconv(.c) [*]u8 {
     return compiled.listElemAddr(elem, list, index);
@@ -142,11 +137,6 @@ pub fn roc_desc_tag_discriminant(desc: *const TypeDesc, base: ?[*]u8) callconv(.
     return compiled.tagDiscriminant(desc, valuePtr(base), ops());
 }
 
-/// The C-ABI form of `compiled.tagDiscriminantOf`.
-pub fn roc_desc_tag_discriminant_of(desc: *const TypeDesc, name: *const Name) callconv(.c) u32 {
-    return compiled.tagDiscriminantOf(desc, name, ops());
-}
-
 /// The C-ABI form of `compiled.tagPayloadAddr`.
 pub fn roc_desc_tag_payload_addr(desc: *const TypeDesc, base: ?[*]u8, payload_index: u32) callconv(.c) [*]u8 {
     return compiled.tagPayloadAddr(desc, valuePtr(base), payload_index, ops());
@@ -158,13 +148,13 @@ pub fn roc_desc_build_record(desc: *const TypeDesc, dst: ?[*]u8, count: u32, fie
 }
 
 /// The C-ABI form of `compiled.updateRecord`.
-pub fn roc_desc_update_record(base_desc: *const TypeDesc, base: ?[*]u8, desc: *const TypeDesc, dst: ?[*]u8, count: u32, names: ?[*]const *const Name, values: ?[*]const [*]const u8) callconv(.c) void {
-    compiled.updateRecord(base_desc, valuePtr(base), desc, valuePtr(dst), items(*const Name, count, names), items([*]const u8, count, values), ops());
+pub fn roc_desc_update_record(base_desc: *const TypeDesc, base: ?[*]u8, desc: *const TypeDesc, dst: ?[*]u8, plan: [*]const u32, count: u32, values: ?[*]const [*]const u8) callconv(.c) void {
+    compiled.updateRecord(base_desc, valuePtr(base), desc, valuePtr(dst), plan, items([*]const u8, count, values), ops());
 }
 
 /// The C-ABI form of `compiled.buildTag`.
-pub fn roc_desc_build_tag(desc: *const TypeDesc, name: *const Name, dst: ?[*]u8, count: u32, payloads: ?[*]const [*]const u8) callconv(.c) void {
-    compiled.buildTag(desc, name, valuePtr(dst), items([*]const u8, count, payloads), ops());
+pub fn roc_desc_build_tag(desc: *const TypeDesc, discriminant: u32, dst: ?[*]u8, count: u32, payloads: ?[*]const [*]const u8) callconv(.c) void {
+    compiled.buildTag(desc, discriminant, valuePtr(dst), items([*]const u8, count, payloads), ops());
 }
 
 /// The C-ABI form of `compiled.buildList`.

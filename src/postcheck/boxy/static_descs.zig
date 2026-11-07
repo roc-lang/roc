@@ -81,6 +81,10 @@ pub const StaticDescs = struct {
     groups: std.StringHashMapUnmanaged([]const CaptureWord) = .empty,
     /// The static-data slot whose value is each word (`wordSlot`).
     word_slots: std.HashMapUnmanaged(CaptureWord, LIR.StaticDataId, WordContext, std.hash_map.default_max_load_percentage) = .empty,
+    /// Each record update plan, by its base, result, and updated fields.
+    update_plans: std.StringHashMapUnmanaged(ExportIndex) = .empty,
+    /// Each coercion plan node, by the descriptors it converts between.
+    adapt_plans: std.AutoHashMapUnmanaged(struct { from: Key, to: Key }, ExportIndex) = .empty,
 
     /// A descriptor's identity: a type, or the recursion box around one, and
     /// the override scope that supplies the overrides of the nominal types
@@ -147,6 +151,8 @@ pub const StaticDescs = struct {
         }
         self.groups.deinit(self.allocator);
         self.word_slots.deinit(self.allocator);
+        freeKeys(self.allocator, &self.update_plans);
+        self.adapt_plans.deinit(self.allocator);
         self.pending.deinit(self.allocator);
     }
 
@@ -430,22 +436,30 @@ pub const StaticDescs = struct {
         var pointers: std.ArrayList(Pointer) = .empty;
         defer pointers.deinit(self.allocator);
         for (words, 0..) |word, index| {
+            const offset = LIR.tableEntryOffset(@intCast(index), self.ptrSize());
+            switch (word) {
+                .int => |value| {
+                    writeU32(bytes, offset, value);
+                    continue;
+                },
+                .desc, .scoped_desc, .callable, .table, .node, .zero => {},
+            }
             const target = try self.wordTarget(word) orelse continue;
-            try pointers.append(self.allocator, .{ .offset = LIR.tableEntryOffset(@intCast(index), self.ptrSize()), .target = target.node, .addend = target.addend });
+            try pointers.append(self.allocator, .{ .offset = offset, .target = target.node, .addend = target.addend });
         }
         try self.setRelocations(node, pointers.items);
         try self.drain();
     }
 
     /// The node a word addresses and the offset into it, or null for a
-    /// null word.
+    /// null word or an integer.
     fn wordTarget(self: *StaticDescs, word: CaptureWord) Allocator.Error!?struct { node: ExportIndex, addend: u32 } {
         return switch (word) {
             .desc => |ty| .{ .node = (try self.reserveDescriptor(.{ .ty = ty, .recursive_box = false })).node, .addend = 0 },
             .scoped_desc => |scoped| .{ .node = (try self.reserveDescriptor(.{ .ty = scoped.ty, .recursive_box = false, .scope = try self.restrictScope(scoped.scope, scoped.ty) })).node, .addend = 0 },
             .callable => |callable| .{ .node = callable, .addend = static_callable_header },
             .table, .node => |node| .{ .node = node, .addend = 0 },
-            .zero => null,
+            .zero, .int => null,
         };
     }
 
@@ -478,11 +492,6 @@ pub const StaticDescs = struct {
         _ = try self.addExport(try LirProgram.staticDataSymbolName(self.allocator, slot), self.ptrSize(), self.ptrSize(), slot);
         self.null_word = slot;
         return slot;
-    }
-
-    /// The static-data slot holding the `Name` of `name`.
-    pub fn nameSlot(self: *StaticDescs, name: NameId) Allocator.Error!LIR.StaticDataId {
-        return (try self.reserveName(name)).slot;
     }
 
     fn ptrSize(self: *const StaticDescs) u32 {
@@ -568,7 +577,7 @@ pub const StaticDescs = struct {
             const callable: ?ExportIndex = if (scoped) |methods_words|
                 if (methods_words[index]) |word| switch (word) {
                     .callable => |node| node,
-                    .desc, .scoped_desc, .table, .node, .zero => types.invariant("an override scope's method is not a callable"),
+                    .desc, .scoped_desc, .table, .node, .zero, .int => types.invariant("an override scope's method is not a callable"),
                 } else null
             else if (overrides[index]) |override| switch (override) {
                 .procedure => |procedure| try self.staticCallable(owner, @intCast(4 + index), procedure),
@@ -587,7 +596,8 @@ pub const StaticDescs = struct {
     /// One word a static callable or a type table holds: a descriptor of a
     /// closed type, one in an override scope, another static callable (a
     /// dictionary or literal thunk), a type table, an argument-record
-    /// descriptor, or a word no body reads.
+    /// descriptor or a plan (`node`), a word no body reads, or a field's or
+    /// variant's position (`int`), which only a type table holds.
     pub const CaptureWord = union(enum) {
         desc: TypeId,
         scoped_desc: struct { ty: TypeId, scope: ScopeId },
@@ -595,6 +605,7 @@ pub const StaticDescs = struct {
         table: ExportIndex,
         node: ExportIndex,
         zero,
+        int: u32,
     };
 
     /// Mix `word` into `hasher`, as `captureWordsEqual` compares words.
@@ -606,6 +617,7 @@ pub const StaticDescs = struct {
             .scoped_desc => |scoped| .{ @backingInt(scoped.ty), @backingInt(scoped.scope) },
             .callable, .table, .node => |node| .{ node, 0 },
             .zero => .{ 0, 0 },
+            .int => |value| .{ value, 0 },
         };
         hasher.update(std.mem.asBytes(&operands));
     }
@@ -799,7 +811,11 @@ pub const StaticDescs = struct {
         const ptr = self.ptrSize();
         const capture_offset = self.staticCallableCaptureOffset();
         var relocation_count: usize = 1;
-        for (words) |word| relocation_count += @intFromBool(word != .zero);
+        for (words) |word| switch (word) {
+            .zero => {},
+            .int => types.invariant("a static callable captures a field's or variant's position"),
+            .desc, .scoped_desc, .callable, .table, .node => relocation_count += 1,
+        };
         const relocations = try self.allocator.alloc(StaticDataRelocation, relocation_count);
         errdefer self.allocator.free(relocations);
         relocations[0] = .{
@@ -1174,6 +1190,541 @@ pub const StaticDescs = struct {
         try pointers.append(self.allocator, .{ .offset = desc_format.TypeDesc.layout(self.width).of(.entries), .target = entries });
     }
 
+    // -- Positions and plans --
+    //
+    // A generic body reaches a field or variant of an open row by the
+    // position the instantiation's type gives it, and converts or updates a
+    // value by a plan built from the two closed types (design.md "Type
+    // Tables", "Coercion Plans"). Names are compared here, at compile time,
+    // and never by the code these words drive.
+
+    /// `ty` with its nominal wrappers peeled, as `compiled.backing` peels a
+    /// descriptor's.
+    fn peelNominals(self: *StaticDescs, ty: TypeId) Allocator.Error!TypeId {
+        var current = ty;
+        while (self.store.get(current) == .nominal) current = try self.layouts.converter.backing(current);
+        return current;
+    }
+
+    /// The discriminant of the tag `name` of the closed tag union `ty`
+    /// (through nominal wrappers): its position among the union's tags,
+    /// which is its variant's position in the union's descriptor.
+    pub fn variantPosition(self: *StaticDescs, ty: TypeId, name: NameId) Allocator.Error!u32 {
+        const union_ty = try self.peelNominals(ty);
+        const tags = switch (self.store.get(union_ty)) {
+            .tag_union => |tag_union| self.store.tagSpan(tag_union.tags),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => types.invariant("a variant position is asked of a type that is not a tag union"),
+        };
+        var found: ?u32 = null;
+        for (tags, 0..) |tag, index| {
+            if (tag.name != name) continue;
+            if (found != null) types.invariant("a variant position is asked of a union holding its tag twice");
+            found = @intCast(index);
+        }
+        return found orelse types.invariant("a variant position is asked of a union without that tag");
+    }
+
+    /// The semantic index of the field `name` of the closed record `ty`
+    /// (through nominal wrappers): its rank among the record's fields.
+    pub fn fieldPosition(self: *StaticDescs, ty: TypeId, name: NameId) Allocator.Error!u32 {
+        const record_ty = try self.peelNominals(ty);
+        const fields = switch (self.store.get(record_ty)) {
+            .record => |record| self.store.fieldSpan(record.fields),
+            .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => types.invariant("a field position is asked of a type that is not a record"),
+        };
+        for (fields, 0..) |field, index| {
+            if (field.name == name) return @intCast(index);
+        }
+        types.invariant("a field position is asked of a record without that field");
+    }
+
+    /// The semantic index of each memory slot of the closed record or tuple
+    /// `ty`'s descriptor, in memory order, as `fillFields` lays its entries
+    /// out. Caller frees.
+    fn memoryOrder(self: *StaticDescs, ty: TypeId) Allocator.Error![]u32 {
+        const layouts = self.layouts.layouts;
+        const committed_layout = layouts.getLayout(try self.layouts.layoutOf(ty));
+        const storage_len: usize, const declared: ?[]const u32 = switch (self.store.get(ty)) {
+            .record => |record| blk: {
+                const storage = try self.layouts.recordStorage(record);
+                defer self.allocator.free(storage);
+                break :blk .{ storage.len, if (record.declared) |order| self.store.declaredSlots(order) else null };
+            },
+            .tuple => |items| .{ self.store.span(items).len, null },
+            .empty_record => .{ 0, null },
+            .primitive, .tag_union, .list, .box, .nominal, .function, .variable => types.invariant("a record plan is asked of a type that is not a record or tuple"),
+        };
+        const order = try self.allocator.alloc(u32, storage_len);
+        errdefer self.allocator.free(order);
+        if (committed_layout.tag == .struct_) {
+            const struct_idx = committed_layout.getStruct().idx;
+            if (layouts.getStructData(struct_idx).fields.count != storage_len) types.invariant("a record's committed layout disagrees with its field count");
+            for (order, 0..) |*index, position| index.* = layouts.getStructField(struct_idx, @intCast(position)).index;
+        } else {
+            for (order, 0..) |*index, position| index.* = if (declared) |slots| slots[position] else @intCast(position);
+        }
+        return order;
+    }
+
+    /// The update plan of a record update whose base has the closed record
+    /// type `base_ty` and whose result has the closed record type
+    /// `result_ty`, the update setting the fields `names` in that order
+    /// (`desc_format.update_value_flag`): a node of one `u32` per memory
+    /// slot of the result's descriptor.
+    pub fn updatePlan(self: *StaticDescs, base_ty: TypeId, result_ty: TypeId, names: []const NameId) Allocator.Error!ExportIndex {
+        const base_record = try self.peelNominals(base_ty);
+        const result_record = try self.peelNominals(result_ty);
+        var key: std.ArrayList(u8) = .empty;
+        defer key.deinit(self.allocator);
+        try appendKeyWord(self.allocator, &key, @backingInt(base_record));
+        try appendKeyWord(self.allocator, &key, @backingInt(result_record));
+        for (names) |name| try appendKeyWord(self.allocator, &key, @backingInt(name));
+        if (self.update_plans.get(key.items)) |existing| return existing;
+
+        const result_fields = switch (self.store.get(result_record)) {
+            .record => |record| try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields)),
+            .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => types.invariant("a record update's result is not a record"),
+        };
+        defer self.allocator.free(result_fields);
+        const result_order = try self.memoryOrder(result_record);
+        defer self.allocator.free(result_order);
+        const base_order = try self.memoryOrder(base_record);
+        defer self.allocator.free(base_order);
+        self.extra_nodes += 1;
+        const node = try self.addExport(
+            try LirProgram.staticDataNodeSymbolName(self.allocator, 0, 16 + self.extra_nodes),
+            @intCast(@max(result_order.len, 1) * @sizeOf(u32)),
+            @alignOf(u32),
+            null,
+        );
+        const bytes = @constCast(self.exports.items[node].bytes);
+        for (result_order, 0..) |semantic, slot| {
+            // A padding slot ranks past every named field; its entry is unread.
+            if (semantic >= result_fields.len) continue;
+            const name = result_fields[semantic].name;
+            const entry: u32 = if (std.mem.findScalar(NameId, names, name)) |position|
+                desc_format.update_value_flag | @as(u32, @intCast(position))
+            else blk: {
+                const base_index = try self.fieldPosition(base_record, name);
+                break :blk @intCast(std.mem.findScalar(u32, base_order, base_index) orelse types.invariant("a record's memory order lacks one of its fields"));
+            };
+            writeU32(bytes, @intCast(slot * @sizeOf(u32)), entry);
+        }
+        const owned_key = try self.allocator.dupe(u8, key.items);
+        errdefer self.allocator.free(owned_key);
+        try self.update_plans.put(self.allocator, owned_key, node);
+        return node;
+    }
+
+    /// One field of a descriptor's structure, as `fillFields` emits it.
+    const FieldShape = struct { field_index: u32, offset: u32, padding: bool, key: Key, name: ?NameId };
+    /// One variant of a tag union descriptor's structure, as `fillVariants`
+    /// emits it.
+    const VariantShape = struct { name: NameId, payload_count: u32, payload: Key };
+
+    /// The structure of descriptor `key` that a coercion plan follows: its
+    /// kind and the descriptors of its components, as `fill` emits them.
+    const Shape = union(enum) {
+        /// A descriptor of no components, which a conversion copies.
+        leaf: desc_format.Kind,
+        bool_,
+        list: Key,
+        box: Key,
+        recursive_box: Key,
+        nominal: Key,
+        record: []const FieldShape,
+        tuple: []const FieldShape,
+        tag_union: struct { presence: bool, variants: []const VariantShape },
+
+        fn kind(self: Shape) desc_format.Kind {
+            return switch (self) {
+                .leaf => |leaf_kind| leaf_kind,
+                .bool_ => .bool,
+                .list => .list,
+                .box => .box,
+                .recursive_box => .recursive_box,
+                .nominal => .nominal,
+                .record => .record,
+                .tuple => .tuple,
+                .tag_union => .tag_union,
+            };
+        }
+
+        fn isPresenceSlot(self: Shape) bool {
+            return switch (self) {
+                .tag_union => |tag_union| tag_union.presence,
+                .leaf, .bool_, .list, .box, .recursive_box, .nominal, .record, .tuple => false,
+            };
+        }
+
+        fn deinit(self: Shape, allocator: Allocator) void {
+            switch (self) {
+                .record, .tuple => |fields| allocator.free(fields),
+                .tag_union => |tag_union| allocator.free(tag_union.variants),
+                .leaf, .bool_, .list, .box, .recursive_box, .nominal => {},
+            }
+        }
+    };
+
+    /// The descriptor key of a component stored at `committed`, in the part
+    /// of `scope_id` its reach names (`componentNode`).
+    fn componentKey(self: *StaticDescs, ty: TypeId, committed: layout.Idx, scope_id: ScopeId) Allocator.Error!Key {
+        return .{
+            .ty = ty,
+            .recursive_box = try self.layouts.isRecursionBox(committed, ty),
+            .scope = try self.restrictScope(scope_id, ty),
+        };
+    }
+
+    /// The structure of descriptor `key` (`Shape`). Caller frees with
+    /// `Shape.deinit`.
+    fn shapeOf(self: *StaticDescs, key: Key) Allocator.Error!Shape {
+        if (key.recursive_box) return .{ .recursive_box = .{ .ty = key.ty, .recursive_box = false, .scope = key.scope } };
+        const ty = key.ty;
+        const scope_id = key.scope;
+        const layouts = self.layouts.layouts;
+        const committed_layout = layouts.getLayout(try self.layouts.layoutOf(ty));
+        return switch (self.store.get(ty)) {
+            .primitive => |primitive| switch (primitive) {
+                .bool => .bool_,
+                .str => .{ .leaf = .str },
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .{ .leaf = .scalar },
+            },
+            .empty_record => .{ .record = &.{} },
+            .function => .{ .leaf = .erased_callable },
+            .list => |elem| blk: {
+                const elem_layout = switch (committed_layout.tag) {
+                    .list => committed_layout.getIdx(),
+                    .scalar, .box, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .hole, .dynamic => try self.layouts.layoutOf(elem),
+                };
+                break :blk .{ .list = try self.componentKey(elem, elem_layout, scope_id) };
+            },
+            .box => |payload| if (self.store.get(payload) == .function) .{ .leaf = .erased_callable } else blk: {
+                const payload_layout = switch (committed_layout.tag) {
+                    .box => committed_layout.getIdx(),
+                    .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .hole, .dynamic => try self.layouts.layoutOf(payload),
+                };
+                break :blk .{ .box = try self.componentKey(payload, payload_layout, scope_id) };
+            },
+            .record => |record| blk: {
+                const names = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
+                defer self.allocator.free(names);
+                const storage = try self.layouts.recordStorage(record);
+                defer self.allocator.free(storage);
+                break :blk .{ .record = try self.fieldShapes(committed_layout, storage, scope_id, names, if (record.declared) |declared| self.store.declaredSlots(declared) else null) };
+            },
+            .tuple => |items_span| blk: {
+                const items = try self.allocator.dupe(TypeId, self.store.span(items_span));
+                defer self.allocator.free(items);
+                break :blk .{ .tuple = try self.fieldShapes(committed_layout, items, scope_id, null, null) };
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = try self.allocator.dupe(types.Tag, self.store.tagSpan(tag_union.tags));
+                defer self.allocator.free(tags);
+                const variants = try self.allocator.alloc(VariantShape, tags.len);
+                errdefer self.allocator.free(variants);
+                const zst = try self.store.emptyRecord();
+                for (tags, variants, 0..) |tag, *variant, index| {
+                    const payloads = try self.allocator.dupe(TypeId, self.store.span(tag.payloads));
+                    defer self.allocator.free(payloads);
+                    const payload_ty = (try self.layouts.tagPayload(payloads)) orelse zst;
+                    const payload_layout = if (committed_layout.tag == .tag_union)
+                        layouts.getTagUnionInfo(committed_layout).variants.get(index).payload_layout
+                    else
+                        try self.layouts.layoutOf(payload_ty);
+                    variant.* = .{ .name = tag.name, .payload_count = @intCast(payloads.len), .payload = try self.componentKey(payload_ty, payload_layout, scope_id) };
+                }
+                break :blk .{ .tag_union = .{ .presence = self.layouts.presenceSlotPayload(ty) != null, .variants = variants } };
+            },
+            .nominal => |nominal| if (nominal.builtin == .bool) .bool_ else blk: {
+                const backing = try self.layouts.converter.backing(ty);
+                break :blk .{ .nominal = .{ .ty = backing, .recursive_box = false, .scope = try self.restrictScope(scope_id, backing) } };
+            },
+            .variable => types.invariant("a type variable reached a coercion plan"),
+        };
+    }
+
+    /// The fields of a record or tuple descriptor in memory order, as
+    /// `fillFields` emits them: `storage` holds each field's stored type by
+    /// semantic index, `names` the record's fields (null for a tuple).
+    fn fieldShapes(self: *StaticDescs, committed_layout: layout.Layout, storage: []const TypeId, scope_id: ScopeId, names: ?[]const types.Field, declared: ?[]const u32) Allocator.Error![]const FieldShape {
+        const layouts = self.layouts.layouts;
+        const fields = try self.allocator.alloc(FieldShape, storage.len);
+        errdefer self.allocator.free(fields);
+        if (committed_layout.tag == .struct_) {
+            const struct_idx = committed_layout.getStruct().idx;
+            if (layouts.getStructData(struct_idx).fields.count != storage.len) types.invariant("a record's committed layout disagrees with its field count");
+            for (fields, 0..) |*shape, position| {
+                const field = layouts.getStructField(struct_idx, @intCast(position));
+                shape.* = .{
+                    .field_index = field.index,
+                    .offset = layouts.getStructFieldOffset(struct_idx, @intCast(position)),
+                    .padding = field.is_padding,
+                    .key = try self.componentKey(storage[field.index], field.layout, scope_id),
+                    .name = if (names) |record_fields| if (field.is_padding) null else record_fields[field.index].name else null,
+                };
+            }
+        } else {
+            // Every field is zero-sized and sits at offset 0.
+            for (fields, 0..) |*shape, position| {
+                const index: u32 = if (declared) |slots| slots[position] else @intCast(position);
+                const padding = if (names) |record_fields| index >= record_fields.len else false;
+                shape.* = .{
+                    .field_index = index,
+                    .offset = 0,
+                    .padding = padding,
+                    .key = try self.componentKey(storage[index], try self.layouts.layoutOf(storage[index]), scope_id),
+                    .name = if (names) |record_fields| if (padding) null else record_fields[index].name else null,
+                };
+            }
+        }
+        return fields;
+    }
+
+    /// The descriptor key a descriptor word names.
+    fn wordKey(self: *StaticDescs, word: CaptureWord) Allocator.Error!Key {
+        return switch (word) {
+            .desc => |ty| .{ .ty = ty, .recursive_box = false },
+            .scoped_desc => |scoped| .{ .ty = scoped.ty, .recursive_box = false, .scope = try self.restrictScope(scoped.scope, scoped.ty) },
+            .callable, .table, .node, .zero, .int => types.invariant("a coercion plan's operand is not a descriptor"),
+        };
+    }
+
+    /// The coercion plan converting a value the descriptor word `from`
+    /// describes to one the descriptor word `to` describes
+    /// (`desc_format.AdaptPlan`).
+    pub fn adaptPlan(self: *StaticDescs, from: CaptureWord, to: CaptureWord) Allocator.Error!ExportIndex {
+        const node = try self.planBetween(try self.wordKey(from), try self.wordKey(to));
+        try self.drain();
+        return node;
+    }
+
+    /// A plan node of `kind`, reserved: `finishPlanNode` gives its pointers.
+    fn reservePlanNode(self: *StaticDescs, kind: desc_format.AdaptKind, count: u32, discriminant: u32) Allocator.Error!ExportIndex {
+        const plan_layout = desc_format.AdaptPlan.layout(self.width);
+        self.extra_nodes += 1;
+        const node = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, 0, 16 + self.extra_nodes), plan_layout.size, plan_layout.alignment, null);
+        const bytes = @constCast(self.exports.items[node].bytes);
+        bytes[plan_layout.of(.kind)] = @backingInt(kind);
+        writeU32(bytes, plan_layout.of(.count), count);
+        writeU32(bytes, plan_layout.of(.discriminant), discriminant);
+        return node;
+    }
+
+    /// Point plan node `node` at its descriptors, child, and entries.
+    fn finishPlanNode(self: *StaticDescs, node: ExportIndex, from: ?Key, to: ?Key, child: ?ExportIndex, entries: ?ExportIndex) Allocator.Error!void {
+        const plan_layout = desc_format.AdaptPlan.layout(self.width);
+        var pointers: std.ArrayList(Pointer) = .empty;
+        defer pointers.deinit(self.allocator);
+        if (from) |key| try pointers.append(self.allocator, .{ .offset = plan_layout.of(.from), .target = (try self.reserveDescriptor(key)).node });
+        if (to) |key| try pointers.append(self.allocator, .{ .offset = plan_layout.of(.to), .target = (try self.reserveDescriptor(key)).node });
+        if (child) |target| try pointers.append(self.allocator, .{ .offset = plan_layout.of(.child), .target = target });
+        if (entries) |target| try pointers.append(self.allocator, .{ .offset = plan_layout.of(.entries), .target = target });
+        try self.setRelocations(node, pointers.items);
+    }
+
+    /// The plan converting descriptor `from`'s values to descriptor `to`'s,
+    /// in the order the conversion checks the two sides: one descriptor
+    /// copies; a presence slot on one side alone wraps or unwraps; a
+    /// nominal on one side alone is its backing; a tag union and Bool
+    /// re-tag by the names `False` and `True`; otherwise the two sides are
+    /// one kind of value, converted component by component. A pair of
+    /// descriptors has one plan node, reserved before its components' plans
+    /// are built, so a recursive type's plan reaches itself.
+    fn planBetween(self: *StaticDescs, from: Key, to: Key) Allocator.Error!ExportIndex {
+        if (self.adapt_plans.get(.{ .from = from, .to = to })) |known| return known;
+        if (from.ty == to.ty and from.recursive_box == to.recursive_box) {
+            const node = try self.reservePlanNode(.copy, 0, 0);
+            try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
+            try self.finishPlanNode(node, null, to, null, null);
+            return node;
+        }
+        const from_shape = try self.shapeOf(from);
+        defer from_shape.deinit(self.allocator);
+        const to_shape = try self.shapeOf(to);
+        defer to_shape.deinit(self.allocator);
+        // A nominal on one side alone shares its backing's representation:
+        // the pair's plan is its backing's.
+        if (!from_shape.isPresenceSlot() and !to_shape.isPresenceSlot()) {
+            if (from_shape == .nominal and to_shape != .nominal) return try self.aliasPlan(from, to, from_shape.nominal, to);
+            if (to_shape == .nominal and from_shape != .nominal) return try self.aliasPlan(from, to, from, to_shape.nominal);
+            if (from_shape == .nominal and to_shape == .nominal) return try self.aliasPlan(from, to, from_shape.nominal, to_shape.nominal);
+        }
+        if (to_shape.isPresenceSlot() and !from_shape.isPresenceSlot()) {
+            // Wrap: `#Present` is the slot's second variant.
+            const present = to_shape.tag_union.variants[1];
+            const node = try self.reservePlanNode(.wrap, 0, 1);
+            try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
+            try self.finishPlanNode(node, null, to, try self.planBetween(from, present.payload), null);
+            return node;
+        }
+        if (from_shape.isPresenceSlot() and !to_shape.isPresenceSlot()) {
+            const present = from_shape.tag_union.variants[1];
+            const node = try self.reservePlanNode(.unwrap, 0, 1);
+            try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
+            try self.finishPlanNode(node, from, null, try self.planBetween(present.payload, to), null);
+            return node;
+        }
+        // Bool is the union `[False, True]` with its discriminant for a
+        // value, and a row holding those tags re-tags to and from it.
+        if (from_shape == .tag_union and to_shape == .bool_) {
+            const sources = from_shape.tag_union.variants;
+            const node = try self.reservePlanNode(.retag, @intCast(sources.len), 0);
+            try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
+            const targets = try self.allocator.alloc(?u32, sources.len);
+            defer self.allocator.free(targets);
+            for (sources, targets) |source, *target| target.* = @intFromBool(std.mem.eql(u8, self.store.nameText(source.name), "True"));
+            try self.finishPlanNode(node, from, to, null, try self.retagEntries(targets, null));
+            return node;
+        }
+        if (from_shape == .bool_ and to_shape == .tag_union) {
+            const node = try self.reservePlanNode(.retag, 2, 0);
+            try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
+            var targets: [2]?u32 = .{ null, null };
+            for (to_shape.tag_union.variants, 0..) |variant, index| {
+                const text = self.store.nameText(variant.name);
+                if (std.mem.eql(u8, text, "False")) targets[0] = @intCast(index);
+                if (std.mem.eql(u8, text, "True")) targets[1] = @intCast(index);
+            }
+            try self.finishPlanNode(node, from, to, null, try self.retagEntries(&targets, null));
+            return node;
+        }
+        if (from_shape.kind() != to_shape.kind()) return try self.mismatchPlan(from, to);
+        switch (to_shape) {
+            .leaf, .bool_ => {
+                const node = try self.reservePlanNode(.copy, 0, 0);
+                try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
+                try self.finishPlanNode(node, null, to, null, null);
+                return node;
+            },
+            .nominal => unreachable, // a nominal on either side was handled above
+            .record, .tuple => |to_fields| {
+                const from_fields = switch (from_shape) {
+                    .record, .tuple => |fields| fields,
+                    .leaf, .bool_, .list, .box, .recursive_box, .nominal, .tag_union => unreachable, // the kinds are equal
+                };
+                var count: u32 = 0;
+                for (to_fields) |field| count += @intFromBool(!field.padding);
+                const node = try self.reservePlanNode(.record, count, 0);
+                try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
+                const field_layout = desc_format.AdaptField.layout(self.width);
+                self.extra_nodes += 1;
+                const entries = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, 0, 16 + self.extra_nodes), @max(count, 1) * field_layout.size, field_layout.alignment, null);
+                var entry_pointers: std.ArrayList(Pointer) = .empty;
+                defer entry_pointers.deinit(self.allocator);
+                var next: u32 = 0;
+                for (to_fields) |to_field| {
+                    if (to_field.padding) continue;
+                    // Fields match by name, tuple elements by position.
+                    const source: ?FieldShape = for (from_fields) |candidate| {
+                        if (candidate.padding) continue;
+                        const same = if (to_shape == .tuple) candidate.field_index == to_field.field_index else candidate.name.? == to_field.name.?;
+                        if (same) break candidate;
+                    } else null;
+                    const base_offset = next * field_layout.size;
+                    writeU32(@constCast(self.exports.items[entries].bytes), base_offset + field_layout.of(.to_offset), to_field.offset);
+                    const plan = if (source) |found| blk: {
+                        writeU32(@constCast(self.exports.items[entries].bytes), base_offset + field_layout.of(.from_offset), found.offset);
+                        break :blk try self.planBetween(found.key, to_field.key);
+                    } else try self.missingPlan(to_field.key);
+                    try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.plan), .target = plan });
+                    next += 1;
+                }
+                try self.setRelocations(entries, entry_pointers.items);
+                try self.finishPlanNode(node, null, to, null, if (count == 0) null else entries);
+                return node;
+            },
+            .tag_union => |to_union| {
+                const sources = from_shape.tag_union.variants;
+                const node = try self.reservePlanNode(.retag, @intCast(sources.len), 0);
+                try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
+                // The destination's variant is the source's by tag name; a
+                // label a joined row holds at several payload types names
+                // the variant whose payload describes the same values.
+                const targets = try self.allocator.alloc(?u32, sources.len);
+                defer self.allocator.free(targets);
+                const payloads = try self.allocator.alloc(?ExportIndex, sources.len);
+                defer self.allocator.free(payloads);
+                for (sources, targets, payloads) |source, *target, *payload| {
+                    target.* = null;
+                    for (to_union.variants, 0..) |candidate, index| {
+                        if (candidate.name != source.name or candidate.payload_count != source.payload_count) continue;
+                        if (target.* != null) types.invariant("a re-tagged variant matches two destination variants");
+                        target.* = @intCast(index);
+                    }
+                    payload.* = if (target.*) |index| if (source.payload_count != 0) try self.planBetween(source.payload, to_union.variants[index].payload) else null else null;
+                }
+                try self.finishPlanNode(node, from, to, null, try self.retagEntries(targets, payloads));
+                return node;
+            },
+            .list => |to_elem| {
+                const node = try self.reservePlanNode(.list, 0, 0);
+                try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
+                try self.finishPlanNode(node, from, to, try self.planBetween(from_shape.list, to_elem), null);
+                return node;
+            },
+            .box, .recursive_box => |to_payload| {
+                const from_payload = switch (from_shape) {
+                    .box, .recursive_box => |payload| payload,
+                    .leaf, .bool_, .list, .nominal, .record, .tuple, .tag_union => unreachable, // the kinds are equal
+                };
+                const node = try self.reservePlanNode(.box, 0, 0);
+                try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
+                try self.finishPlanNode(node, from, to, try self.planBetween(from_payload, to_payload), null);
+                return node;
+            },
+        }
+    }
+
+    /// The plan of the pair `from`, `to`, which is the plan of the pair
+    /// `inner_from`, `inner_to` their nominal wrappers share.
+    fn aliasPlan(self: *StaticDescs, from: Key, to: Key, inner_from: Key, inner_to: Key) Allocator.Error!ExportIndex {
+        const node = try self.planBetween(inner_from, inner_to);
+        try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
+        return node;
+    }
+
+    /// The plan writing `#Missing` for a destination field the source
+    /// lacks, or reaching the conversion's failure where that field is
+    /// required.
+    fn missingPlan(self: *StaticDescs, to: Key) Allocator.Error!ExportIndex {
+        const shape = try self.shapeOf(to);
+        defer shape.deinit(self.allocator);
+        if (!shape.isPresenceSlot()) return try self.mismatchPlan(null, to);
+        // `#Missing` is the slot's first variant.
+        const node = try self.reservePlanNode(.missing, 0, 0);
+        try self.finishPlanNode(node, null, to, null, null);
+        return node;
+    }
+
+    /// The plan of a pair no conversion joins.
+    fn mismatchPlan(self: *StaticDescs, from: ?Key, to: Key) Allocator.Error!ExportIndex {
+        const node = try self.reservePlanNode(.mismatch, 0, 0);
+        if (from) |key| try self.adapt_plans.put(self.allocator, .{ .from = key, .to = to }, node);
+        try self.finishPlanNode(node, null, null, null, null);
+        return node;
+    }
+
+    /// The `AdaptVariant` entries of a re-tag plan: for each source
+    /// variant, the destination's discriminant (null where the destination
+    /// lacks the variant) and its payload's plan.
+    fn retagEntries(self: *StaticDescs, targets: []const ?u32, payloads: ?[]const ?ExportIndex) Allocator.Error!?ExportIndex {
+        if (targets.len == 0) return null;
+        const variant_layout = desc_format.AdaptVariant.layout(self.width);
+        self.extra_nodes += 1;
+        const entries = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, 0, 16 + self.extra_nodes), @as(u32, @intCast(targets.len)) * variant_layout.size, variant_layout.alignment, null);
+        var pointers: std.ArrayList(Pointer) = .empty;
+        defer pointers.deinit(self.allocator);
+        for (targets, 0..) |target, index| {
+            const base_offset = @as(u32, @intCast(index)) * variant_layout.size;
+            writeU32(@constCast(self.exports.items[entries].bytes), base_offset + variant_layout.of(.discriminant), target orelse desc_format.AdaptVariant.absent);
+            const payload = if (payloads) |plans| plans[index] else null;
+            if (payload) |plan| try pointers.append(self.allocator, .{ .offset = base_offset + variant_layout.of(.plan), .target = plan });
+        }
+        try self.setRelocations(entries, pointers.items);
+        return entries;
+    }
+
     /// The slot a node export was created for: node `roc__d{slot}_1`
     /// directly follows its slot's export.
     fn slotOfNode(self: *const StaticDescs, node: ExportIndex) LIR.StaticDataId {
@@ -1197,6 +1748,7 @@ pub fn appendCaptureWordKey(allocator: Allocator, key: *std.ArrayList(u8), word:
         },
         .callable, .table, .node => |node| try appendKeyWord(allocator, key, node),
         .zero => {},
+        .int => |value| try appendKeyWord(allocator, key, value),
     }
 }
 

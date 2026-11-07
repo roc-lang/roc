@@ -65,7 +65,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v62: no dynamic operation composes descriptors or dictionaries, and no
 ///      statement names a composition cache slot.
 /// v63: static data rows carry no mutability flag.
-pub const FORMAT_VERSION: u32 = 63;
+/// v64: dynamic operations name fields and variants by position, and
+///      coercions and record updates by plan, never by name.
+pub const FORMAT_VERSION: u32 = 64;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

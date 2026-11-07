@@ -115,17 +115,11 @@ pub const Name = extern struct {
     /// The content digest, as four little-endian words.
     id: NameId,
     len: u32,
-    /// UTF-8 text, used for ordering and inspection.
+    /// UTF-8 text, which inspection prints.
     bytes: [*]const u8,
 
     pub fn text(self: *const Name) []const u8 {
         return self.bytes[0..self.len];
-    }
-
-    /// Whether two names are one name.
-    pub fn eql(a: *const Name, b: *const Name) bool {
-        if (a == b) return true;
-        return a.id[0] == b.id[0] and a.id[1] == b.id[1] and a.id[2] == b.id[2] and a.id[3] == b.id[3];
     }
 };
 
@@ -191,12 +185,6 @@ test "a name id round-trips through its digest and tells names apart by content"
     // module, are different names.
     try std.testing.expect(!std.meta.eql(nominalId(@splat(1), 0, "Point"), nominalId(@splat(2), 0, "Point")));
     try std.testing.expect(!std.meta.eql(nominalId(@splat(1), 0, "Point"), nominalId(@splat(1), 1, "Point")));
-    const text = "label";
-    const node_a: Name = .{ .id = labelId(text), .len = text.len, .bytes = text.ptr };
-    const node_b: Name = .{ .id = labelId(text), .len = text.len, .bytes = text.ptr };
-    try std.testing.expect(node_a.eql(&node_b));
-    const other: Name = .{ .id = labelId("other"), .len = 5, .bytes = "other" };
-    try std.testing.expect(!node_a.eql(&other));
 }
 
 /// An immutable, immortal description of one type's representation.
@@ -351,6 +339,110 @@ pub const Methods = extern struct {
         return externLayout(Methods, width);
     }
 };
+
+// Coercion plans.
+
+/// What one node of a coercion plan does (`AdaptPlan`).
+pub const AdaptKind = enum(u8) {
+    /// Copy `to.size` bytes and retain what they reference: the two sides
+    /// share one representation.
+    copy,
+    /// Wrap the value as `#Present` of the presence slot `to`: write
+    /// `discriminant`, then convert the payload by `child`.
+    wrap,
+    /// Unwrap the presence slot `from`, whose `#Present` is `discriminant`
+    /// (a `#Missing` value crashes), converting the payload by `child`.
+    unwrap,
+    /// Write the `#Missing` discriminant `discriminant` of the presence slot
+    /// `to` over zeroed bytes: a destination field the source lacks.
+    missing,
+    /// Re-tag: `entries` is `from.count` `AdaptVariant`s, one per source
+    /// discriminant, giving the destination's discriminant under `to` and
+    /// the payload's plan. A Bool side is the union `[False, True]`.
+    retag,
+    /// A record or tuple: `entries` is `count` `AdaptField`s, one per
+    /// destination field that is not padding.
+    record,
+    /// A list: each element converted by `child`, from `from.child` to
+    /// `to.child`.
+    list,
+    /// A box or recursion box: its payload converted by `child`, from
+    /// `from.child` to `to.child`.
+    box,
+    /// The two sides describe different kinds of value; reaching it is a
+    /// compiler bug.
+    mismatch,
+};
+
+/// One node of a coercion plan: how a value `from` describes is rebuilt as
+/// the value `to` describes (design.md "Coercion Plans"). The compiler
+/// builds a plan for each pair of descriptors a coercion converts between,
+/// so the conversion follows indices and offsets only.
+pub const AdaptPlan = extern struct {
+    kind: AdaptKind,
+    /// The number of `entries`.
+    count: u32,
+    /// `wrap`, `unwrap`, `missing`: the presence slot's discriminant.
+    discriminant: u32,
+    from: ?*const TypeDesc,
+    to: ?*const TypeDesc,
+    child: ?*const AdaptPlan,
+    /// `[*]const AdaptField` (record) or `[*]const AdaptVariant` (retag).
+    entries: ?*const anyopaque,
+
+    pub fn fields(self: *const AdaptPlan) []const AdaptField {
+        std.debug.assert(self.kind == .record);
+        if (self.count == 0) return &.{};
+        const first: [*]const AdaptField = @ptrCast(@alignCast(self.entries.?));
+        return first[0..self.count];
+    }
+
+    pub fn variants(self: *const AdaptPlan) []const AdaptVariant {
+        std.debug.assert(self.kind == .retag);
+        if (self.count == 0) return &.{};
+        const first: [*]const AdaptVariant = @ptrCast(@alignCast(self.entries.?));
+        return first[0..self.count];
+    }
+
+    pub fn layout(width: PointerWidth) ExternLayout(AdaptPlan) {
+        return externLayout(AdaptPlan, width);
+    }
+};
+
+/// One destination field of a record plan: the bytes at `from_offset` in
+/// the source become those at `to_offset` in the destination through
+/// `plan`.
+pub const AdaptField = extern struct {
+    to_offset: u32,
+    from_offset: u32,
+    plan: *const AdaptPlan,
+
+    pub fn layout(width: PointerWidth) ExternLayout(AdaptField) {
+        return externLayout(AdaptField, width);
+    }
+};
+
+/// The destination of one source variant of a re-tag plan: `discriminant`
+/// under the destination's union, its payload converted by `plan` (null for
+/// a variant without arguments). `absent` marks a source variant the
+/// destination's row lacks, which no value reaching the conversion holds.
+pub const AdaptVariant = extern struct {
+    discriminant: u32,
+    plan: ?*const AdaptPlan,
+
+    pub const absent: u32 = std.math.maxInt(u32);
+
+    pub fn layout(width: PointerWidth) ExternLayout(AdaptVariant) {
+        return externLayout(AdaptVariant, width);
+    }
+};
+
+/// A record update plan (`DynOp.record_update`) is one `u32` per memory slot
+/// of the result's record descriptor: for a field the update sets, this
+/// flag and the position of its value among the update's values; for any
+/// other field, the memory slot of the base's field it copies. A padding
+/// slot's entry is unread.
+pub const update_value_flag: u32 = 1 << 31;
 
 // Leaf descriptors.
 
@@ -531,6 +623,9 @@ test "descriptor layouts match the native extern layout" {
     try expectNativeLayout(Variant);
     try expectNativeLayout(Methods);
     try expectNativeLayout(Name);
+    try expectNativeLayout(AdaptPlan);
+    try expectNativeLayout(AdaptField);
+    try expectNativeLayout(AdaptVariant);
 }
 
 test "descriptor layouts at both pointer widths" {

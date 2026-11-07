@@ -13,8 +13,7 @@ const DynOp = LIR.DynOp;
 /// How an operation treats the ownership of its target and value operands
 /// (see `LIR.DynOp`).
 pub const Ownership = union(enum) {
-    /// No reference-counted value is read or produced: `frame_alloc` and
-    /// `tag_discriminant_of`.
+    /// No reference-counted value is read or produced: `frame_alloc`.
     none,
     /// The target borrows from `source` (a component address or a load of a
     /// component's bytes).
@@ -35,16 +34,13 @@ pub const Ownership = union(enum) {
 /// How `op` treats the ownership of its operands and target.
 pub fn ownership(op: DynOp) Ownership {
     return switch (op) {
-        .frame_alloc,
-        .tag_discriminant_of,
-        => .none,
+        .frame_alloc => .none,
         // A table's words are static data, which the target holds as a
         // static-data literal read holds its value: a fresh owned unit of
         // image data. The table itself holds no unit.
         .table_entry => .borrow_operands,
         .copy => |copy| .{ .alias = copy.src },
         .field_addr => |field| .{ .borrow_component = field.base },
-        .field_addr_named => |field| .{ .borrow_component = field.base },
         .list_item_addr => |elem| .{ .borrow_component = elem.list },
         .box_payload_addr => |payload| .{ .borrow_component = payload.box },
         .tag_payload_addr => |payload| .{ .borrow_component = payload.base },
@@ -56,8 +52,9 @@ pub fn ownership(op: DynOp) Ownership {
 }
 
 /// The local operands an operation reads, in a fixed order: single operands
-/// first, then the locals of each span. Descriptor and name operands are
-/// included; they are ordinary `opaque_ptr` locals.
+/// first, then the locals of each span. Descriptor and plan operands are
+/// included; they are ordinary `opaque_ptr` locals, and an index operand a
+/// local holds (`LIR.DynIndex`) is an ordinary `u32` local.
 pub const Operands = struct {
     singles: [4]LocalId = undefined,
     single_count: u8 = 0,
@@ -67,6 +64,13 @@ pub const Operands = struct {
     fn single(self: *Operands, local: LocalId) void {
         self.singles[self.single_count] = local;
         self.single_count += 1;
+    }
+
+    fn dynIndex(self: *Operands, value: LIR.DynIndex) void {
+        switch (value) {
+            .immediate => {},
+            .local => |local| self.single(local),
+        }
     }
 
     fn span(self: *Operands, value: LocalSpan) void {
@@ -86,11 +90,7 @@ pub const Operands = struct {
             .field_addr => |field| {
                 result.single(field.base);
                 result.single(field.desc);
-            },
-            .field_addr_named => |field| {
-                result.single(field.base);
-                result.single(field.desc);
-                result.single(field.name);
+                result.dynIndex(field.field_index);
             },
             .list_item_addr => |elem| {
                 result.single(elem.list);
@@ -104,10 +104,6 @@ pub const Operands = struct {
             .tag_discriminant => |tag| {
                 result.single(tag.base);
                 result.single(tag.desc);
-            },
-            .tag_discriminant_of => |tag| {
-                result.single(tag.desc);
-                result.single(tag.name);
             },
             .tag_payload_addr => |payload| {
                 result.single(payload.base);
@@ -127,12 +123,12 @@ pub const Operands = struct {
                 result.single(update.base);
                 result.single(update.base_desc);
                 result.single(update.desc);
-                result.span(update.names);
+                result.single(update.plan);
                 result.span(update.values);
             },
             .tag => |tag| {
                 result.single(tag.desc);
-                result.single(tag.name);
+                result.dynIndex(tag.discriminant);
                 result.span(tag.payloads);
             },
             .list => |list| {
@@ -171,8 +167,7 @@ pub const Operands = struct {
             },
             .adapt => |adapt| {
                 result.single(adapt.src);
-                result.single(adapt.from);
-                result.single(adapt.to);
+                result.single(adapt.plan);
             },
         }
         return result;
@@ -214,7 +209,7 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
             try out.append(allocator, closure.capture);
             if (closure.reuse) |reuse| try out.append(allocator, reuse);
         },
-        .frame_alloc, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .adapt => unreachable, // only construct operations consume value operands
+        .frame_alloc, .table_entry, .copy, .field_addr, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .adapt => unreachable, // only construct operations consume value operands
     }
 }
 
@@ -241,6 +236,12 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         fn opt(ctx: Ctx, local: ?LocalId) Error!?LocalId {
             return if (local) |value| try map(ctx, value) else null;
         }
+        fn dynIndex(ctx: Ctx, value: LIR.DynIndex) Error!LIR.DynIndex {
+            return switch (value) {
+                .immediate => value,
+                .local => |local| .{ .local = try map(ctx, local) },
+            };
+        }
         fn span(s: *LirStore, ctx: Ctx, value: LocalSpan) Error!LocalSpan {
             if (value.len == 0) return value;
             var items: std.ArrayList(LocalId) = .empty;
@@ -256,12 +257,10 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .frame_alloc => op,
         .table_entry => |entry| .{ .table_entry = .{ .table = try Remap.one(context, entry.table), .index = entry.index } },
         .copy => |copy| .{ .copy = .{ .src = try Remap.one(context, copy.src), .desc = try Remap.one(context, copy.desc) } },
-        .field_addr => |field| .{ .field_addr = .{ .base = try Remap.one(context, field.base), .desc = try Remap.one(context, field.desc), .field_index = field.field_index } },
-        .field_addr_named => |field| .{ .field_addr_named = .{ .base = try Remap.one(context, field.base), .desc = try Remap.one(context, field.desc), .name = try Remap.one(context, field.name) } },
+        .field_addr => |field| .{ .field_addr = .{ .base = try Remap.one(context, field.base), .desc = try Remap.one(context, field.desc), .field_index = try Remap.dynIndex(context, field.field_index) } },
         .list_item_addr => |elem| .{ .list_item_addr = .{ .list = try Remap.one(context, elem.list), .elem_desc = try Remap.one(context, elem.elem_desc), .index = try Remap.one(context, elem.index) } },
         .box_payload_addr => |payload| .{ .box_payload_addr = .{ .box = try Remap.one(context, payload.box), .desc = try Remap.one(context, payload.desc) } },
         .tag_discriminant => |tag| .{ .tag_discriminant = .{ .base = try Remap.one(context, tag.base), .desc = try Remap.one(context, tag.desc) } },
-        .tag_discriminant_of => |tag| .{ .tag_discriminant_of = .{ .desc = try Remap.one(context, tag.desc), .name = try Remap.one(context, tag.name) } },
         .tag_payload_addr => |payload| .{ .tag_payload_addr = .{
             .base = try Remap.one(context, payload.base),
             .desc = try Remap.one(context, payload.desc),
@@ -274,10 +273,10 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
             .base = try Remap.one(context, update.base),
             .base_desc = try Remap.one(context, update.base_desc),
             .desc = try Remap.one(context, update.desc),
-            .names = try Remap.span(store, context, update.names),
+            .plan = try Remap.one(context, update.plan),
             .values = try Remap.span(store, context, update.values),
         } },
-        .tag => |tag| .{ .tag = .{ .desc = try Remap.one(context, tag.desc), .name = try Remap.one(context, tag.name), .payloads = try Remap.span(store, context, tag.payloads) } },
+        .tag => |tag| .{ .tag = .{ .desc = try Remap.one(context, tag.desc), .discriminant = try Remap.dynIndex(context, tag.discriminant), .payloads = try Remap.span(store, context, tag.payloads) } },
         .list => |list| .{ .list = .{ .elem_desc = try Remap.one(context, list.elem_desc), .elems = try Remap.span(store, context, list.elems) } },
         .box => |box| .{ .box = .{ .desc = try Remap.one(context, box.desc), .payload = try Remap.one(context, box.payload) } },
         .eq => |eq| .{ .eq = .{ .lhs = try Remap.one(context, eq.lhs), .rhs = try Remap.one(context, eq.rhs), .desc = try Remap.one(context, eq.desc) } },
@@ -293,7 +292,7 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         } },
         .closure => |closure| .{ .closure = .{ .proc = closure.proc, .capture = try Remap.one(context, closure.capture), .reuse = try Remap.opt(context, closure.reuse), .reuse_unique = closure.reuse_unique } },
         .view => |view| .{ .view = .{ .address = try Remap.one(context, view.address), .owner = try Remap.opt(context, view.owner) } },
-        .adapt => |adapt| .{ .adapt = .{ .src = try Remap.one(context, adapt.src), .from = try Remap.one(context, adapt.from), .to = try Remap.one(context, adapt.to) } },
+        .adapt => |adapt| .{ .adapt = .{ .src = try Remap.one(context, adapt.src), .plan = try Remap.one(context, adapt.plan) } },
     };
 }
 

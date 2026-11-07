@@ -494,7 +494,6 @@ pub const Builder = struct {
     /// How many branching statements (terminals and joins) this body has
     /// emitted.
     branch_count: u32 = 0,
-    name_locals: collections.DenseMapUnmanaged(types.NameId, LocalId) = .empty,
     entry_hole: CFStmtId = undefined,
     hole: ?CFStmtId = null,
     join_points: std.ArrayList(LIR.JoinPoint) = .empty,
@@ -594,7 +593,6 @@ pub const Builder = struct {
         self.reads_inputs.deinit(self.allocator);
         if (self.fold) |*fold| fold.deinit();
         self.entry_locals.deinit(self.allocator);
-        self.name_locals.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
         self.join_infos.deinit(self.allocator);
         self.destination_types.deinit(self.allocator);
@@ -1031,13 +1029,74 @@ pub const Builder = struct {
         return local;
     }
 
-    pub fn nameDesc(self: *Builder, name: types.NameId) Allocator.Error!LocalId {
-        if (self.name_locals.get(name)) |existing| return existing;
-        const slot = try self.program.static_descs.nameSlot(name);
-        const local = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = slot } }, .next = undefined } });
-        try self.name_locals.put(self.allocator, name, local);
-        return local;
+    // -- Positions and plans --
+
+    /// The discriminant of the tag `name` under the tag union `ty`'s
+    /// descriptor (through nominal wrappers), as an index operand.
+    pub fn tagIndex(self: *Builder, ty: TypeId, name: types.NameId) Allocator.Error!LIR.DynIndex {
+        return try self.tagIndexIn(try self.descWord(ty), name);
+    }
+
+    /// The discriminant of the tag `name` under the tag union the
+    /// descriptor word `desc` describes, as an index operand.
+    pub fn tagIndexIn(self: *Builder, desc: Word, name: types.NameId) Allocator.Error!LIR.DynIndex {
+        return try self.indexOperand(.{ .tag_index = .{ .desc = desc, .name = name } });
+    }
+
+    /// The semantic index of the field `name` of the record `ty`'s
+    /// descriptor (through nominal wrappers), as an index operand.
+    pub fn fieldIndex(self: *Builder, ty: TypeId, name: types.NameId) Allocator.Error!LIR.DynIndex {
+        return try self.indexOperand(.{ .field_index = .{ .desc = try self.descWord(ty), .name = name } });
+    }
+
+    /// The position recipe `recipe` as an index operand: its value where it
+    /// reads no input, otherwise the `u32` local reading its slot of this
+    /// worker's type table.
+    fn indexOperand(self: *Builder, recipe: Tables.Recipe) Allocator.Error!LIR.DynIndex {
+        const id = try self.recipes.intern(recipe);
+        if (try self.readsInputs(id)) return .{ .local = try self.materialize(.{ .recipe = id }) };
+        return switch (try self.foldWord(id)) {
+            .int => |value| .{ .immediate = value },
+            .desc, .scoped_desc, .callable, .table, .node, .zero => invariant("a position recipe's word is not a position"),
+        };
+    }
+
+    /// Write the index operand `index` to the `u32` local `target`.
+    pub fn assignIndex(self: *Builder, target: LocalId, index: LIR.DynIndex) Allocator.Error!void {
+        switch (index) {
+            .immediate => |value| try self.emitLinear(.{ .assign_literal = .{ .target = target, .value = .{ .i64_literal = .{ .value = value, .layout_idx = .u32 } }, .next = undefined } }),
+            .local => |local| try self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.local(local), .next = undefined } }),
+        }
+    }
+
+    /// A `u32` local holding the index operand `index`.
+    pub fn indexLocal(self: *Builder, index: LIR.DynIndex) Allocator.Error!LocalId {
+        return switch (index) {
+            .local => |local| local,
+            .immediate => blk: {
+                const local = try self.closedLocal(.u32);
+                try self.assignIndex(local, index);
+                break :blk local;
+            },
+        };
+    }
+
+    /// The local holding the coercion plan from `from`'s descriptor to
+    /// `to`'s (`DynOp.adapt`).
+    pub fn adaptPlan(self: *Builder, from: TypeId, to: TypeId) Allocator.Error!LocalId {
+        return try self.adaptPlanIn(try self.descWord(from), try self.descWord(to));
+    }
+
+    /// The local holding the coercion plan between the descriptor words
+    /// `from` and `to`.
+    pub fn adaptPlanIn(self: *Builder, from: Word, to: Word) Allocator.Error!LocalId {
+        return try self.materialize(.{ .recipe = try self.recipes.intern(.{ .adapt_plan = .{ .from = from, .to = to } }) });
+    }
+
+    /// Rebuild `src`, of type `from`, into `target`, of type `to`, by their
+    /// coercion plan.
+    pub fn emitAdapt(self: *Builder, target: LocalId, src: LocalId, from: TypeId, to: TypeId) Allocator.Error!void {
+        try self.emitDyn(target, .{ .adapt = .{ .src = src, .plan = try self.adaptPlan(from, to) } });
     }
 
     // -- Words --
@@ -1224,7 +1283,7 @@ pub const Builder = struct {
         if (self.recipe_locals.get(id)) |known| return known;
         const local = switch (self.recipes.get(id)) {
             .input => |index| return try self.inputLocal(index),
-            .desc, .args_desc, .callable, .table => if (try self.readsInputs(id))
+            .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan => if (try self.readsInputs(id))
                 try self.slotLocal(id)
             else
                 try self.staticWordLocal(try self.foldWord(id)),
@@ -1264,7 +1323,7 @@ pub const Builder = struct {
             switch (recipe) {
                 .input => break :walk true,
                 .desc => |desc| if (!self.program.store.isClosed(desc.ty)) break :walk true,
-                .args_desc, .callable, .table => {},
+                .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan => {},
             }
             operands.clearRetainingCapacity();
             try Tables.appendOperands(self.allocator, &operands, recipe);
@@ -1296,7 +1355,8 @@ pub const Builder = struct {
         try self.slots.append(self.allocator, id);
         const local = try self.closedLocal(switch (self.recipes.get(id)) {
             .callable => try self.erasedLayout(),
-            .desc, .args_desc, .table => .opaque_ptr,
+            .desc, .args_desc, .table, .update_plan, .adapt_plan => .opaque_ptr,
+            .tag_index, .field_index => .u32,
             .input => invariant("an input has no slot of its own"),
         });
         try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .table_entry = .{ .table = table, .index = slot } }), .next = undefined } });
@@ -1314,6 +1374,7 @@ pub const Builder = struct {
                 return local;
             },
             .scoped_desc, .callable, .table, .node => {},
+            .int => invariant("a position word is read as an operand, not from static data"),
         }
         if (self.static_word_locals.get(word)) |known| return known;
         const local = try self.closedLocal(if (word == .callable) try self.erasedLayout() else .opaque_ptr);
@@ -1804,7 +1865,7 @@ pub const Builder = struct {
         for (lambda.args, worker.params, 0..) |pattern, param_ty, index| {
             const value = if (own_words != 0) blk: {
                 const local = try self.localOf(param_ty, .view);
-                try self.emitDyn(local, .{ .field_addr = .{ .base = record_param.?, .desc = self.store.localDyn(record_param.?).?.desc, .field_index = @intCast(own_words + index) } });
+                try self.emitDyn(local, .{ .field_addr = .{ .base = record_param.?, .desc = self.store.localDyn(record_param.?).?.desc, .field_index = .{ .immediate = @intCast(own_words + index) } } });
                 break :blk local;
             } else try self.erasedParamValue(record_param.?, worker.params, @intCast(index));
             try self.bindIrrefutable(pattern, value, param_ty);
@@ -1910,14 +1971,14 @@ pub const Builder = struct {
             .rows => {
                 if (try self.closed(from) and try self.closed(to)) return try self.convertRows(value, from, to);
                 const target = try self.localOf(to, .frame);
-                try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
+                try self.emitAdapt(target, value, from, to);
                 return target;
             },
             // Records hold the difference at any depth, even below a list,
             // so it is rebuilt by descriptors whatever the types.
             .record_order => {
                 const target = try self.localOf(to, .frame);
-                try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
+                try self.emitAdapt(target, value, from, to);
                 return target;
             },
             .function => {
@@ -1937,7 +1998,7 @@ pub const Builder = struct {
     pub fn retagValue(self: *Builder, value: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
         if (try self.closed(from) and try self.closed(to)) return try self.adaptValue(value, from, to);
         const target = try self.localOf(to, .frame);
-        try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
+        try self.emitAdapt(target, value, from, to);
         return target;
     }
 
@@ -2081,7 +2142,7 @@ pub const Builder = struct {
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc_hole, .storage = .param } });
         const prefix_desc = try self.argsDesc(1, &.{});
         const table = try self.closedLocal(.opaque_ptr);
-        try self.emitEntry(.{ .dyn = .{ .target = table, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = prefix_desc, .field_index = 0 } }), .next = undefined } });
+        try self.emitEntry(.{ .dyn = .{ .target = table, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = prefix_desc, .field_index = .{ .immediate = 0 } } }), .next = undefined } });
         try self.beginTable(table, dict_count);
         const full_desc = try self.argsDesc(1, try self.descWords(worker.params));
         try self.emitEntry(.{ .assign_ref = .{ .target = desc_hole, .op = LIR.RefOp.local(full_desc), .next = undefined } });
@@ -2108,7 +2169,7 @@ pub const Builder = struct {
         const values = try self.allocator.alloc(LocalId, worker.capture_types.len + word_count);
         for (0..word_count) |index| {
             const word = try self.closedLocal(.opaque_ptr);
-            try self.emitEntry(.{ .dyn = .{ .target = word, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(capture_record_leading_words + index) } }), .next = undefined } });
+            try self.emitEntry(.{ .dyn = .{ .target = word, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = .{ .immediate = @intCast(capture_record_leading_words + index) } } }), .next = undefined } });
             values[worker.capture_types.len + index] = word;
         }
         // The captured values' types are read from the table, so it is read
@@ -2116,7 +2177,7 @@ pub const Builder = struct {
         if (word_count != 0) try self.beginTable(values[worker.capture_types.len], worker.own_dicts + worker.capturedDictionaryCount());
         for (worker.capture_types, 0..) |ty, index| {
             const local = try self.localOf(ty, .view);
-            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(capture_record_leading_words + word_count + index) } }), .next = undefined } });
+            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = .{ .immediate = @intCast(capture_record_leading_words + word_count + index) } } }), .next = undefined } });
             values[index] = local;
         }
         return values;
@@ -2376,11 +2437,9 @@ pub const Builder = struct {
         const store = &self.program.store;
         const input_desc = try self.varDesc(0);
         const output_desc = try self.varDesc(1);
-        const name = try self.nameDesc(map.name);
         const discriminant = try self.closedLocal(.u32);
         try self.emitDyn(discriminant, .{ .tag_discriminant = .{ .base = input, .desc = input_desc } });
-        const selected = try self.closedLocal(.u32);
-        try self.emitDyn(selected, .{ .tag_discriminant_of = .{ .desc = input_desc, .name = name } });
+        const selected = try self.indexLocal(try self.tagIndexIn(try self.inputWord(0), map.name));
         const is_selected = try self.closedLocal(.bool);
         try self.emitLowLevel(is_selected, .num_is_eq, &.{ discriminant, selected });
         const holes = try self.emitBoolSwitch(is_selected);
@@ -2403,13 +2462,13 @@ pub const Builder = struct {
         } });
         payloads[map.payload_index] = try self.emitErasedCall(transform, transform_ty, &.{payloads[map.payload_index]}, try store.variable(2 + map.arity));
         const mapped = try self.localOf(output_ty, .frame);
-        try self.emitDyn(mapped, .{ .tag = .{ .desc = output_desc, .name = name, .payloads = try self.store.addLocalSpan(payloads) } });
+        try self.emitDyn(mapped, .{ .tag = .{ .desc = output_desc, .discriminant = try self.tagIndexIn(try self.inputWord(1), map.name), .payloads = try self.store.addLocalSpan(payloads) } });
         try self.pushValue(mapped);
         try self.step(.ret);
 
         self.hole = holes.otherwise;
         const unchanged = try self.localOf(output_ty, .frame);
-        try self.emitDyn(unchanged, .{ .adapt = .{ .src = input, .from = try self.descOf(input_ty), .to = output_desc } });
+        try self.emitDyn(unchanged, .{ .adapt = .{ .src = input, .plan = try self.adaptPlanIn(try self.descWord(input_ty), try self.inputWord(1)) } });
         try self.pushValue(unchanged);
         try self.step(.ret);
     }
@@ -2564,7 +2623,7 @@ pub const Builder = struct {
     pub fn argsRecordField(self: *Builder, record: LocalId, index: u32, param_ty: TypeId) Allocator.Error!LocalId {
         if (self.store.localDyn(record)) |dyn| {
             const local = try self.localOf(param_ty, .view);
-            try self.emitDyn(local, .{ .field_addr = .{ .base = record, .desc = dyn.desc, .field_index = index } });
+            try self.emitDyn(local, .{ .field_addr = .{ .base = record, .desc = dyn.desc, .field_index = .{ .immediate = index } } });
             return local;
         }
         const local = try self.localOf(param_ty, .frame);
@@ -3537,9 +3596,8 @@ pub const Builder = struct {
             }
             try self.emitLinear(.{ .assign_literal = .{ .target = expected, .value = .{ .i64_literal = .{ .value = @intCast(ok_variant.index), .layout_idx = .u32 } }, .next = undefined } });
         } else {
-            const desc = try self.descOf(try_ty);
-            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = try_value, .desc = desc } });
-            try self.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = try self.nameDesc(ok_name) } });
+            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = try_value, .desc = try self.descOf(try_ty) } });
+            try self.assignIndex(expected, try self.tagIndex(try_ty, ok_name));
         }
         const is_ok = try self.closedLocal(.bool);
         try self.emitLowLevel(is_ok, .num_is_eq, &.{ actual, expected });
@@ -4706,7 +4764,7 @@ pub const Builder = struct {
         const payload = try self.localOf(tuple_ty, .view);
         try self.emitEntry(.{ .dyn = .{ .target = payload, .data = try self.store.addStmtRow(LIR.DynOp, .{ .box_payload_addr = .{ .box = slot, .desc = try self.descOf(tuple_ty) } }), .next = undefined } });
         const value = try self.localOf(value_ty, .view);
-        try self.emitEntry(.{ .dyn = .{ .target = value, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = payload, .desc = try self.descOf(tuple_ty), .field_index = 0 } }), .next = undefined } });
+        try self.emitEntry(.{ .dyn = .{ .target = value, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = payload, .desc = try self.descOf(tuple_ty), .field_index = .{ .immediate = 0 } } }), .next = undefined } });
         return value;
     }
 
@@ -7115,7 +7173,7 @@ pub const Builder = struct {
                         // must remain an explicit operation.
                         if (dyn.desc != self.store.localDyn(result).?.desc) return false;
                     },
-                    .frame_alloc, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => return false,
+                    .frame_alloc, .table_entry, .copy, .field_addr, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => return false,
                 }
                 op.target = result;
             },
@@ -8036,7 +8094,7 @@ pub const Builder = struct {
                 .variable_slot => blk: {
                     const storage = try self.program.layouts.fieldStorage(fields[position]);
                     const slot_local = try self.localOf(storage, .frame);
-                    try self.emitDyn(slot_local, .{ .adapt = .{ .src = value, .from = try self.descOf(fields[position].ty), .to = try self.descOf(storage) } });
+                    try self.emitAdapt(slot_local, value, fields[position].ty, storage);
                     break :blk slot_local;
                 },
             };
@@ -8056,21 +8114,27 @@ pub const Builder = struct {
             // A record of an open row takes the fields its update names and
             // the rest of its base's, which only its descriptor lists.
             if (record_ty.ext != null) {
-                var names: std.ArrayList(LocalId) = .empty;
+                var names: std.ArrayList(types.NameId) = .empty;
                 defer names.deinit(self.allocator);
                 var updated: std.ArrayList(LocalId) = .empty;
                 defer updated.deinit(self.allocator);
                 for (fields, ordered) |field, value| {
                     const local = value orelse continue;
-                    try names.append(self.allocator, try self.nameDesc(field.name));
+                    try names.append(self.allocator, field.name);
                     try updated.append(self.allocator, local);
                 }
+                const base_ty = try self.valueType(record.ext.?);
+                const plan = try self.materialize(.{ .recipe = try self.recipes.intern(.{ .update_plan = .{
+                    .base = try self.descWord(base_ty),
+                    .result = try self.descWord(ty),
+                    .names = names.items,
+                } }) });
                 const result = try self.localOf(ty, .frame);
                 try self.emitDyn(result, .{ .record_update = .{
                     .base = base_value,
-                    .base_desc = try self.descOf(try self.valueType(record.ext.?)),
+                    .base_desc = try self.descOf(base_ty),
                     .desc = try self.descOf(ty),
-                    .names = try self.store.addLocalSpan(names.items),
+                    .plan = plan,
                     .values = try self.store.addLocalSpan(updated.items),
                 } });
                 return try self.pushValue(result);
@@ -8093,7 +8157,7 @@ pub const Builder = struct {
                 } else {
                     if (base_record.ext == null) invariant("a record update's field is absent from its base");
                     const local = try self.localOf(storage, .view);
-                    try self.emitDyn(local, .{ .field_addr_named = .{ .base = base_value, .desc = try self.descOf(base_ty), .name = try self.nameDesc(field.name) } });
+                    try self.emitDyn(local, .{ .field_addr = .{ .base = base_value, .desc = try self.descOf(base_ty), .field_index = try self.fieldIndex(base_ty, field.name) } });
                     slot.* = local;
                 }
             }
@@ -8160,7 +8224,8 @@ pub const Builder = struct {
     pub fn buildTag(self: *Builder, ty: TypeId, name: types.NameId, values: []const LocalId) Allocator.Error!LocalId {
         if (!try self.closed(ty)) {
             const target = try self.localOf(ty, .frame);
-            try self.emitDyn(target, .{ .tag = .{ .desc = try self.descOf(try self.structuralType(ty)), .name = try self.nameDesc(name), .payloads = try self.store.addLocalSpan(values) } });
+            const union_ty = try self.structuralType(ty);
+            try self.emitDyn(target, .{ .tag = .{ .desc = try self.descOf(union_ty), .discriminant = try self.tagIndex(union_ty, name), .payloads = try self.store.addLocalSpan(values) } });
             return target;
         }
         switch (self.program.store.get(try self.structuralType(ty))) {
@@ -8533,7 +8598,7 @@ pub const Builder = struct {
                                 // not name, read by name.
                                 const rest_ty = try self.patternType(rest);
                                 const rest_value = try self.localOf(rest_ty, .frame);
-                                try self.emitDyn(rest_value, .{ .adapt = .{ .src = item.value, .from = try self.descOf(item.ty), .to = try self.descOf(rest_ty) } });
+                                try self.emitAdapt(rest_value, item.value, item.ty, rest_ty);
                                 try pending.append(self.allocator, .{ .pattern = rest, .value = rest_value, .ty = rest_ty });
                                 continue;
                             },
@@ -8560,7 +8625,7 @@ pub const Builder = struct {
                             if (record.ext == null) invariant("a record pattern's field is absent from its type");
                             const field_ty = try self.patternType(sub);
                             const local = try self.localOf(field_ty, .view);
-                            try self.emitDyn(local, .{ .field_addr_named = .{ .base = item.value, .desc = try self.descOf(ty), .name = try self.nameDesc(name) } });
+                            try self.emitDyn(local, .{ .field_addr = .{ .base = item.value, .desc = try self.descOf(ty), .field_index = try self.fieldIndex(ty, name) } });
                             try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = field_ty });
                         }
                     }
@@ -8738,9 +8803,8 @@ pub const Builder = struct {
             }
             try self.emitLinear(.{ .assign_literal = .{ .target = expected, .value = .{ .i64_literal = .{ .value = @intCast(variant), .layout_idx = .u32 } }, .next = undefined } });
         } else {
-            const desc = try self.descOf(ty);
-            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = desc } });
-            try self.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = try self.nameDesc(name) } });
+            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = try self.descOf(ty) } });
+            try self.assignIndex(expected, try self.tagIndex(ty, name));
         }
         const result = try self.closedLocal(.bool);
         try self.emitLowLevel(result, .num_is_eq, &.{ actual, expected });
@@ -8796,7 +8860,7 @@ pub const Builder = struct {
                 // A field of an open row's remainder: only the record's
                 // descriptor knows where it is.
                 stored = try self.localOf(slot_ty, .view);
-                try self.emitDyn(stored, .{ .field_addr_named = .{ .base = value, .desc = try self.descOf(structural), .name = try self.nameDesc(name) } });
+                try self.emitDyn(stored, .{ .field_addr = .{ .base = value, .desc = try self.descOf(structural), .field_index = try self.fieldIndex(structural, name) } });
             } else {
                 const index = position orelse invariant("a field access's field is absent from its record type");
                 const expected_kind: types.FieldKind = switch (segment.mode) {
@@ -8879,15 +8943,15 @@ pub const Builder = struct {
             return try self.readSlotInto(target, LIR.RefOp.field(base_local, field_index), field_ty, self.structFieldLayout(base_layout, field_index));
         }
         // A field of an open row ranks among the remainder's fields too, so
-        // it is addressed by name.
+        // its position is the instantiation's.
         switch (self.program.store.get(try self.structuralType(ty))) {
             .record => |record| if (record.ext != null) {
                 const name = self.program.store.fieldSpan(record.fields)[field_index].name;
-                return try self.emitDyn(target, .{ .field_addr_named = .{ .base = base_local, .desc = try self.descOf(ty), .name = try self.nameDesc(name) } });
+                return try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .field_index = try self.fieldIndex(ty, name) } });
             },
             .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => {},
         }
-        try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .field_index = field_index } });
+        try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .field_index = .{ .immediate = field_index } } });
     }
 
     /// Test that the dynamic tag union `value` holds tag `name`, and queue
@@ -8900,11 +8964,9 @@ pub const Builder = struct {
             .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag pattern's type is not a tag union"),
         };
         const desc = try self.descOf(ty);
-        const name_local = try self.nameDesc(name);
         const actual = try self.closedLocal(.u32);
         try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = desc } });
-        const expected = try self.closedLocal(.u32);
-        try self.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = name_local } });
+        const expected = try self.indexLocal(try self.tagIndex(ty, name));
         const matches = try self.closedLocal(.bool);
         try self.emitLowLevel(matches, .num_is_eq, &.{ actual, expected });
         try self.branchOrMiss(matches, miss);
@@ -9617,9 +9679,8 @@ pub const Builder = struct {
             }
             try self.emitLinear(.{ .assign_literal = .{ .target = expected, .value = .{ .i64_literal = .{ .value = @intCast(variant.index), .layout_idx = .u32 } }, .next = undefined } });
         } else {
-            const desc = try self.descOf(ty);
-            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = desc } });
-            try self.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = try self.nameDesc(name) } });
+            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = try self.descOf(ty) } });
+            try self.assignIndex(expected, try self.tagIndex(ty, name));
         }
         const matches = try self.closedLocal(.bool);
         try self.emitLowLevel(matches, .num_is_eq, &.{ actual, expected });

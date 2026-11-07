@@ -463,9 +463,16 @@ const Printer = struct {
                 if (call.drive != .none) try writer.print(" drive={s}", .{@tagName(call.drive)});
             },
             .table_entry => |entry| try writer.print(" #{d}", .{entry.index}),
-            .field_addr => |field| try writer.print(" #{d}", .{field.field_index}),
+            .field_addr => |field| switch (field.field_index) {
+                .immediate => |index| try writer.print(" #{d}", .{index}),
+                .local => {},
+            },
+            .tag => |tag| switch (tag.discriminant) {
+                .immediate => |discriminant| try writer.print(" #{d}", .{discriminant}),
+                .local => {},
+            },
             .tag_payload_addr => |payload| try writer.print(" #{d}", .{payload.payload_index}),
-            .frame_alloc, .copy, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .view, .adapt => {},
+            .frame_alloc, .copy, .list_item_addr, .box_payload_addr, .tag_discriminant, .record, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .view, .adapt => {},
         }
         const operands = DynOps.Operands.of(op);
         for (operands.singles[0..operands.single_count]) |local| try writer.print(" l{d}", .{@backingInt(local)});

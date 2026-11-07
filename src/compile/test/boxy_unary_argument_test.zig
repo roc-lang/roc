@@ -128,7 +128,7 @@ fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLi
                     try std.testing.expectEqual((constructed orelse return error.TestUnexpectedResult), call.args.?);
                     try std.testing.expectEqual(lir.LIR.DynStorage.frame, (store.localDyn(call.args.?) orelse return error.TestUnexpectedResult).storage);
                 },
-                .frame_alloc, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => {},
+                .frame_alloc, .table_entry, .copy, .field_addr, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_payload_addr, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => {},
             };
             try lir.BodyClone.appendSuccessors(store, &work, id, std.testing.allocator);
         }
@@ -194,7 +194,7 @@ fn inspectEntries(store: *const lir.LirStore, _: *const layout.Store) harness.Lo
                     if (call.args) |args| try call_args.append(std.testing.allocator, args);
                     if (param != null and call.args == param and store.localDyn(param.?) != null) forwards_param = true;
                 },
-                .frame_alloc, .table_entry, .copy, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => {},
+                .frame_alloc, .table_entry, .copy, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_payload_addr, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .closure, .view, .adapt => {},
             };
             try lir.BodyClone.appendSuccessors(store, &pending, id, std.testing.allocator);
         }

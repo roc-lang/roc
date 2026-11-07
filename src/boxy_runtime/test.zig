@@ -622,7 +622,7 @@ test "list element callbacks and C entry points reach the entered host" {
     try testing.expectEqualStrings("7", rendered.asSlice());
 }
 
-test "tag lookup finds every member of sorted structural and nominal descriptors" {
+test "tag construction by discriminant reaches every variant of structural and nominal descriptors" {
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
@@ -643,12 +643,12 @@ test "tag lookup finds every member of sorted structural and nominal descriptors
         const nominal = env.descs.nominal(union_desc, &name_point, null, false);
         for ([_]*const TypeDesc{ union_desc, nominal }) |desc| {
             for (names[0..count], 0..) |tag_name, index| {
-                // A different address for the same name must work too.
-                const queried_name = tag_name;
+                // Composition sorts the variants, so a tag's discriminant
+                // is its name's rank.
+                _ = tag_name;
                 const value: i64 = @intCast(index + 1);
                 var slot: Slot = .{};
-                compiled.buildTag(desc, &queried_name, slot.ptr(), &.{@ptrCast(&value)}, ops);
-                try testing.expectEqual(@as(u32, @intCast(index)), compiled.tagDiscriminantOf(desc, &queried_name, ops));
+                compiled.buildTag(desc, @intCast(index), slot.ptr(), &.{@ptrCast(&value)}, ops);
                 try testing.expectEqual(@as(u32, @intCast(index)), compiled.tagDiscriminant(desc, slot.ptr(), ops));
                 const result: *const i64 = @ptrCast(@alignCast(compiled.tagPayloadAddr(desc, slot.ptr(), 0, ops)));
                 try testing.expectEqual(value, result.*);
@@ -657,7 +657,12 @@ test "tag lookup finds every member of sorted structural and nominal descriptors
     }
 }
 
-test "adapting re-tags a row holding False and True to and from Bool by name" {
+/// A re-tag plan from `from` to `to` whose entries are `targets`.
+fn retagPlan(from: *const TypeDesc, to: *const TypeDesc, targets: []const desc_mod.AdaptVariant) desc_mod.AdaptPlan {
+    return .{ .kind = .retag, .count = @intCast(targets.len), .discriminant = 0, .from = from, .to = to, .child = null, .entries = targets.ptr };
+}
+
+test "adapting follows a re-tag plan between a row holding False and True and Bool" {
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
@@ -671,35 +676,91 @@ test "adapting re-tags a row holding False and True to and from Bool by name" {
         .{ .name = &name_maybe, .payloads = &.{} },
         .{ .name = &name_true, .payloads = &.{} },
     });
-    const bool_nominal = env.descs.nominal(desc_mod.boolDesc(), &name_point, null, false);
+    const absent = desc_mod.AdaptVariant.absent;
+    const to_false = [_]desc_mod.AdaptVariant{.{ .discriminant = 0, .plan = null }};
+    const to_true = [_]desc_mod.AdaptVariant{.{ .discriminant = 1, .plan = null }};
+    const wider_to_bool = [_]desc_mod.AdaptVariant{ .{ .discriminant = 0, .plan = null }, .{ .discriminant = absent, .plan = null }, .{ .discriminant = 1, .plan = null } };
+    const from_false = retagPlan(just_false, desc_mod.boolDesc(), &to_false);
+    const from_true = retagPlan(just_true, desc_mod.boolDesc(), &to_true);
+    const from_wider = retagPlan(wider, desc_mod.boolDesc(), &wider_to_bool);
 
     // A row's own discriminant is not Bool's byte: its tags sort around others.
-    for ([_]struct { from: *const TypeDesc, tag: *const Name, byte: u8 }{
-        .{ .from = just_false, .tag = &name_false, .byte = 0 },
-        .{ .from = just_true, .tag = &name_true, .byte = 1 },
-        .{ .from = wider, .tag = &name_false, .byte = 0 },
-        .{ .from = wider, .tag = &name_true, .byte = 1 },
+    for ([_]struct { plan: *const desc_mod.AdaptPlan, discriminant: u32, byte: u8 }{
+        .{ .plan = &from_false, .discriminant = 0, .byte = 0 },
+        .{ .plan = &from_true, .discriminant = 0, .byte = 1 },
+        .{ .plan = &from_wider, .discriminant = 0, .byte = 0 },
+        .{ .plan = &from_wider, .discriminant = 2, .byte = 1 },
     }) |case| {
         var source: Slot = .{};
-        compiled.buildTag(case.from, case.tag, source.ptr(), &.{}, ops);
-        for ([_]*const TypeDesc{ desc_mod.boolDesc(), bool_nominal }) |to| {
-            var target: Slot = .{};
-            target.bytes[0] = 0xff;
-            compiled.adapt(case.from, to, target.ptr(), source.ptr(), ops);
-            try testing.expectEqual(case.byte, target.bytes[0]);
-        }
+        compiled.buildTag(case.plan.from.?, case.discriminant, source.ptr(), &.{}, ops);
+        var target: Slot = .{};
+        target.bytes[0] = 0xff;
+        compiled.adapt(case.plan, target.ptr(), source.ptr(), ops);
+        try testing.expectEqual(case.byte, target.bytes[0]);
     }
 
-    for ([_]struct { tag: *const Name, byte: u8 }{
-        .{ .tag = &name_false, .byte = 0 },
-        .{ .tag = &name_true, .byte = 1 },
+    const bool_to_wider = [_]desc_mod.AdaptVariant{ .{ .discriminant = 0, .plan = null }, .{ .discriminant = 2, .plan = null } };
+    const to_wider = retagPlan(desc_mod.boolDesc(), wider, &bool_to_wider);
+    for ([_]struct { discriminant: u32, byte: u8 }{
+        .{ .discriminant = 0, .byte = 0 },
+        .{ .discriminant = 2, .byte = 1 },
     }) |case| {
         var source: Slot = .{};
         source.bytes[0] = case.byte;
         var target: Slot = .{};
-        compiled.adapt(desc_mod.boolDesc(), wider, target.ptr(), source.ptr(), ops);
-        try testing.expectEqual(compiled.tagDiscriminantOf(wider, case.tag, ops), compiled.tagDiscriminant(wider, target.ptr(), ops));
+        compiled.adapt(&to_wider, target.ptr(), source.ptr(), ops);
+        try testing.expectEqual(case.discriminant, compiled.tagDiscriminant(wider, target.ptr(), ops));
     }
+}
+
+test "adapting follows a record plan's offsets and wraps, unwraps, and fills presence slots" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const byte = desc_mod.scalarDesc(.u8);
+    const wide = desc_mod.scalarDesc(.u64);
+    const name_missing = name("#Missing");
+    const name_present = name("#Present");
+    const optional_byte = env.descs.presenceSlot(&name_missing, &name_present, byte);
+    // `{ a : U8, b : U64 }` to `{ a : U8?, b : U64, c : U8? }`, laid out
+    // differently.
+    const from = recordAB(&env, byte, wide);
+    const to = env.descs.record(&.{
+        .{ .name = &name_a, .desc = optional_byte },
+        .{ .name = &name_b, .desc = wide },
+        .{ .name = &name_c, .desc = optional_byte },
+    });
+    const copy_byte: desc_mod.AdaptPlan = .{ .kind = .copy, .count = 0, .discriminant = 0, .from = null, .to = byte, .child = null, .entries = null };
+    const copy_wide: desc_mod.AdaptPlan = .{ .kind = .copy, .count = 0, .discriminant = 0, .from = null, .to = wide, .child = null, .entries = null };
+    const wrap: desc_mod.AdaptPlan = .{ .kind = .wrap, .count = 0, .discriminant = 1, .from = null, .to = optional_byte, .child = &copy_byte, .entries = null };
+    const missing: desc_mod.AdaptPlan = .{ .kind = .missing, .count = 0, .discriminant = 0, .from = null, .to = optional_byte, .child = null, .entries = null };
+    const to_a = to.fieldBySemanticIndex(0);
+    const to_b = to.fieldBySemanticIndex(1);
+    const to_c = to.fieldBySemanticIndex(2);
+    const from_a = from.fieldBySemanticIndex(0);
+    const from_b = from.fieldBySemanticIndex(1);
+    const fields = [_]desc_mod.AdaptField{
+        .{ .to_offset = to_a.offset, .from_offset = from_a.offset, .plan = &wrap },
+        .{ .to_offset = to_b.offset, .from_offset = from_b.offset, .plan = &copy_wide },
+        .{ .to_offset = to_c.offset, .from_offset = 0, .plan = &missing },
+    };
+    const plan: desc_mod.AdaptPlan = .{ .kind = .record, .count = fields.len, .discriminant = 0, .from = from, .to = to, .child = null, .entries = &fields };
+    const a: u8 = 7;
+    const b: u64 = 0x0102030405060708;
+    var source: Slot = .{};
+    compiled.buildRecord(from, source.ptr(), &.{ @ptrCast(&a), @ptrCast(&b) }, ops);
+    var target: Slot = .{ .bytes = @splat(0xa5) };
+    compiled.adapt(&plan, target.ptr(), source.ptr(), ops);
+    try testing.expectEqual(@as(u32, 1), compiled.tagDiscriminant(optional_byte, target.ptr() + to_a.offset, ops));
+    try testing.expectEqual(a, compiled.tagPayloadAddr(optional_byte, target.ptr() + to_a.offset, 0, ops)[0]);
+    try testing.expectEqual(b, @as(*align(1) const u64, @ptrCast(target.ptr() + to_b.offset)).*);
+    try testing.expectEqual(@as(u32, 0), compiled.tagDiscriminant(optional_byte, target.ptr() + to_c.offset, ops));
+
+    // Back: the present slot unwraps to its payload.
+    const unwrap: desc_mod.AdaptPlan = .{ .kind = .unwrap, .count = 0, .discriminant = 1, .from = optional_byte, .to = null, .child = &copy_byte, .entries = null };
+    var unwrapped: Slot = .{};
+    compiled.adapt(&unwrap, unwrapped.ptr(), target.ptr() + to_a.offset, ops);
+    try testing.expectEqual(a, unwrapped.bytes[0]);
 }
 
 test "single-payload tag construction initializes the exact byte image and releases boxed payloads" {
@@ -730,7 +791,7 @@ test "single-payload tag construction initializes the exact byte image and relea
             var source: Slot = .{ .bytes = @splat(0x5a) };
             if (payload == boxed_str) source.write(0, RocStr, bigStr("a boxed payload with independently allocated string bytes", ops));
             var actual: Slot = .{ .bytes = @splat(0xa5) };
-            compiled.buildTag(desc, &names[count - 1], actual.ptr(), &.{source.ptr()}, ops);
+            compiled.buildTag(desc, @intCast(count - 1), actual.ptr(), &.{source.ptr()}, ops);
 
             var expected: Slot = .{ .bytes = @splat(0xa5) };
             @memset(expected.bytes[0..desc.size], 0);
@@ -839,7 +900,7 @@ test "active tag payloads preserve physical ordering, zero size, and recursive b
     const large: u64 = 0x123456789abcdef0;
     const text = bigStr("a recursively boxed payload selected by the active tag", ops);
     var value: Slot = .{};
-    compiled.buildTag(desc, &name_b, value.ptr(), &.{ @ptrCast(&small), walk.zeroSizedPtr(), @ptrCast(&text), @ptrCast(&large) }, ops);
+    compiled.buildTag(desc, 1, value.ptr(), &.{ @ptrCast(&small), walk.zeroSizedPtr(), @ptrCast(&text), @ptrCast(&large) }, ops);
     try testing.expectEqual(small, compiled.tagPayloadAddr(desc, value.ptr(), 0, ops)[0]);
     try testing.expectEqual(value.ptr() + fieldOffset(union_desc.variants()[1].payload, 1), compiled.tagPayloadAddr(desc, value.ptr(), 1, ops));
     const loaded: *const RocStr = @ptrCast(@alignCast(compiled.tagPayloadAddr(desc, value.ptr(), 2, ops)));
@@ -923,10 +984,12 @@ test "record construction and updates preserve boxed fields and initialize all p
     var actual: Slot = .{ .bytes = @splat(0xb6) };
     // Updating another field must share the existing box before releasing
     // the old record; changing the boxed field must move the new string.
-    compiled.updateRecord(desc, base.ptr(), desc, actual.ptr(), &.{&name_a}, &.{@ptrCast(&changed)}, ops);
+    // Memory slots: padding, `b`, `a`, padding.
+    const flag = desc_mod.update_value_flag;
+    compiled.updateRecord(desc, base.ptr(), desc, actual.ptr(), &.{ 0, 1, flag, 0 }, &.{@ptrCast(&changed)}, ops);
     const replacement = bigStr("a replacement heap string in the recursive record field", ops);
     var replaced: Slot = .{ .bytes = @splat(0xc7) };
-    compiled.updateRecord(desc, actual.ptr(), desc, replaced.ptr(), &.{&name_b}, &.{@ptrCast(&replacement)}, ops);
+    compiled.updateRecord(desc, actual.ptr(), desc, replaced.ptr(), &.{ 0, flag, 2, 0 }, &.{@ptrCast(&replacement)}, ops);
     const field_a = record.fieldBySemanticIndex(0);
     const field_b = record.fieldBySemanticIndex(1);
     var expected: Slot = .{ .bytes = @splat(0xc7) };
@@ -957,4 +1020,34 @@ test "frame runs place each local at its alignment and report the run end" {
     try testing.expectEqual(@as(usize, 24), words_end);
     try testing.expectEqual(@as([*]u8, region[8..]), words[0]);
     try testing.expectEqual(@as([*]u8, region[16..]), words[1]);
+}
+
+/// How many times `needle` occurs in `haystack`.
+fn occurrences(haystack: []const u8, needle: []const u8) usize {
+    var count: usize = 0;
+    var start: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, start, needle)) |at| {
+        count += 1;
+        start = at + needle.len;
+    }
+    return count;
+}
+
+test "the runtime reads names only to print them" {
+    // Every operation on values reaches a field or variant by the position
+    // the compiler computed (`compiled.zig`, `exports.zig`); a name's text
+    // is read in one place, inspect's printing of a label (`walk.zig`).
+    for ([_][]const u8{ @embedFile("compiled.zig"), @embedFile("exports.zig") }) |source| {
+        for ([_][]const u8{ "desc_mod.Name", "const Name", ".name", ".text()", ".id[", "std.mem.eql(u8", "std.mem.order(u8" }) |forbidden| {
+            try testing.expectEqual(@as(usize, 0), occurrences(source, forbidden));
+        }
+    }
+    const walk_source = @embedFile("walk.zig");
+    try testing.expectEqual(@as(usize, 1), occurrences(walk_source, ".text()"));
+    try testing.expectEqual(@as(usize, 1), occurrences(walk_source, ".label => |name| out.append(name.text(), ops)"));
+    for ([_][]const u8{ ".id[", "std.mem.eql(u8", "std.mem.order(u8" }) |forbidden| {
+        try testing.expectEqual(@as(usize, 0), occurrences(walk_source, forbidden));
+    }
+    // A name has no equality to compare by.
+    try testing.expect(!@hasDecl(Name, "eql"));
 }

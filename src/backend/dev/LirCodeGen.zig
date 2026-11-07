@@ -17415,6 +17415,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(frame_ptr, self.localSlot(local));
         }
 
+        /// Pass an index operand: its value, or the `u32` local holding it,
+        /// whose slot's low 32 bits the callee reads.
+        fn addIndexArg(self: *Self, builder: *Builder, index: LIR.DynIndex) Allocator.Error!void {
+            switch (index) {
+                .immediate => |value| try builder.addImmArg(value),
+                .local => |local| try self.addWordArg(builder, local),
+            }
+        }
+
         /// Pass the address of a local's bytes: a dynamic local's address, or
         /// a closed local's slot.
         fn addBytesArg(self: *Self, builder: *Builder, local: LocalId) Allocator.Error!void {
@@ -17712,15 +17721,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .field_addr => |f| {
                     try self.addWordArg(&builder, f.desc);
                     try self.addBytesArg(&builder, f.base);
-                    try builder.addImmArg(f.field_index);
+                    try self.addIndexArg(&builder, f.field_index);
                     try self.callBoxyRuntime(&builder, "roc_desc_field_addr");
-                    try self.bindComponentAddress(dst_local);
-                },
-                .field_addr_named => |f| {
-                    try self.addWordArg(&builder, f.desc);
-                    try self.addBytesArg(&builder, f.base);
-                    try self.addWordArg(&builder, f.name);
-                    try self.callBoxyRuntime(&builder, "roc_desc_field_addr_named");
                     try self.bindComponentAddress(dst_local);
                 },
                 .list_item_addr => |e| {
@@ -17742,12 +17744,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_tag_discriminant");
                     try self.bindReturnedScalar(dst_local, 4);
                 },
-                .tag_discriminant_of => |t| {
-                    try self.addWordArg(&builder, t.desc);
-                    try self.addWordArg(&builder, t.name);
-                    try self.callBoxyRuntime(&builder, "roc_desc_tag_discriminant_of");
-                    try self.bindReturnedScalar(dst_local, 4);
-                },
                 .tag_payload_addr => |t| {
                     try self.addWordArg(&builder, t.desc);
                     try self.addBytesArg(&builder, t.base);
@@ -17766,15 +17762,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.finishTarget(dst_local, dst);
                 },
                 .record_update => |u| {
-                    const names = try self.emitLocalArray(u.names, .words);
                     const values = try self.emitLocalArray(u.values, .bytes);
                     const dst = try self.dynTarget(dst_local);
                     try self.addWordArg(&builder, u.base_desc);
                     try self.addBytesArg(&builder, u.base);
                     try self.addWordArg(&builder, u.desc);
                     try addTargetArg(&builder, dst);
+                    try self.addWordArg(&builder, u.plan);
                     try builder.addImmArg(@intCast(self.store.getLocalSpan(u.values).len));
-                    try builder.addLeaArg(frame_ptr, names);
                     try builder.addLeaArg(frame_ptr, values);
                     try self.callBoxyRuntime(&builder, "roc_desc_update_record");
                     try self.finishTarget(dst_local, dst);
@@ -17783,7 +17778,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const payloads = try self.emitLocalArray(t.payloads, .bytes);
                     const dst = try self.dynTarget(dst_local);
                     try self.addWordArg(&builder, t.desc);
-                    try self.addWordArg(&builder, t.name);
+                    try self.addIndexArg(&builder, t.discriminant);
                     try addTargetArg(&builder, dst);
                     try builder.addImmArg(@intCast(self.store.getLocalSpan(t.payloads).len));
                     try builder.addLeaArg(frame_ptr, payloads);
@@ -17854,8 +17849,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .adapt => |a| {
                     const dst = try self.dynTarget(dst_local);
-                    try self.addWordArg(&builder, a.from);
-                    try self.addWordArg(&builder, a.to);
+                    try self.addWordArg(&builder, a.plan);
                     try addTargetArg(&builder, dst);
                     try self.addBytesArg(&builder, a.src);
                     try self.callBoxyRuntime(&builder, "roc_desc_adapt");

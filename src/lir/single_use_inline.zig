@@ -103,7 +103,7 @@ const Inventory = struct {
                 } else if (stmt == .dyn) {
                     const escaping: ?LIR.LirProcSpecId = switch (self.store.stmtRow(stmt.dyn.data)) {
                         .closure => |closure| closure.proc,
-                        .frame_alloc, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .adapt => null,
+                        .frame_alloc, .table_entry, .copy, .field_addr, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .adapt => null,
                     };
                     if (escaping) |proc| {
                         self.escapes[@backingInt(proc)] = true;

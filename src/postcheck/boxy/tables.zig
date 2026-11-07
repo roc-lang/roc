@@ -12,9 +12,12 @@
 //! A worker's needs list says what each word of its table is, as a recipe
 //! over the worker's own inputs. Filling a table evaluates each recipe with
 //! the instantiation's inputs, which are static, so every word is static
-//! data too. Recipes name types by `TypeId` and workers by `WorkerId`, both
-//! local to one lowering; a needs list another unit reads is encoded with
-//! types and workers named by their checked identities.
+//! data too. A word is an address of static data, or a field's or variant's
+//! position at the instantiation (design.md "Type Tables"): a generic body
+//! reaches a component of an open row by position, never by name. Recipes
+//! name types by `TypeId` and workers by `WorkerId`, both local to one
+//! lowering; a needs list another unit reads is encoded with types and
+//! workers named by their checked identities.
 
 const std = @import("std");
 const lir_core = @import("lir_core");
@@ -28,6 +31,7 @@ const Allocator = std.mem.Allocator;
 const LIR = lir_core.LIR;
 const LirProgram = lir_core.Program;
 const TypeId = types.TypeId;
+const NameId = types.NameId;
 const WorkerId = lower.WorkerId;
 const invariant = types.invariant;
 
@@ -56,6 +60,19 @@ pub const Recipe = union(enum) {
     callable: struct { entry: WorkerId, captures: []const Operand },
     /// The table of `worker` at the inputs `inputs`.
     table: struct { worker: WorkerId, inputs: []const Operand },
+    /// The discriminant of the tag `name` under the tag union the
+    /// descriptor `desc` describes: an integer word.
+    tag_index: struct { desc: Operand, name: NameId },
+    /// The semantic index of the field `name` of the record the descriptor
+    /// `desc` describes: an integer word.
+    field_index: struct { desc: Operand, name: NameId },
+    /// The update plan of a record update from a base the descriptor
+    /// `base` describes to a result `result` describes, the update setting
+    /// the fields `names` in that order (`StaticDescs.updatePlan`).
+    update_plan: struct { base: Operand, result: Operand, names: []const NameId },
+    /// The coercion plan from values the descriptor `from` describes to
+    /// values `to` describes (`StaticDescs.adaptPlan`).
+    adapt_plan: struct { from: Operand, to: Operand },
 };
 
 /// What a recipe reads: another recipe of the same worker, or a static word.
@@ -152,7 +169,7 @@ pub const Recipes = struct {
         std.debug.assert(self.items.items[@backingInt(id)] == .reserved);
         switch (recipe) {
             .callable, .table, .desc => {},
-            .input, .args_desc => invariant("a reserved recipe is not a callable, a table, or a descriptor"),
+            .input, .args_desc, .tag_index, .field_index, .update_plan, .adapt_plan => invariant("a reserved recipe is not a callable, a table, or a descriptor"),
         }
         if (self.interned.get(recipe)) |existing| {
             self.items.items[@backingInt(id)] = .{ .same = existing };
@@ -258,6 +275,10 @@ pub const Recipes = struct {
             .args_desc => |args| .{ .args_desc = .{ .leading = args.leading, .elems = try renumber.all(allocator, self, numbers, args.elems) } },
             .callable => |callable| .{ .callable = .{ .entry = callable.entry, .captures = try renumber.all(allocator, self, numbers, callable.captures) } },
             .table => |table| .{ .table = .{ .worker = table.worker, .inputs = try renumber.all(allocator, self, numbers, table.inputs) } },
+            .tag_index => |tag| .{ .tag_index = .{ .desc = renumber.operand(self, numbers, tag.desc), .name = tag.name } },
+            .field_index => |field| .{ .field_index = .{ .desc = renumber.operand(self, numbers, field.desc), .name = field.name } },
+            .update_plan => |update| .{ .update_plan = .{ .base = renumber.operand(self, numbers, update.base), .result = renumber.operand(self, numbers, update.result), .names = try allocator.dupe(NameId, update.names) } },
+            .adapt_plan => |plan| .{ .adapt_plan = .{ .from = renumber.operand(self, numbers, plan.from), .to = renumber.operand(self, numbers, plan.to) } },
         };
         const numbered_slots = try allocator.alloc(RecipeId, slots.len);
         for (numbered_slots, slots) |*out, slot| out.* = @fromBackingInt(numbers[@backingInt(self.resolve(slot))]);
@@ -273,6 +294,8 @@ pub const Recipes = struct {
             .args_desc => |args| .{ .args_desc = .{ .leading = args.leading, .elems = try arena.dupe(Operand, args.elems) } },
             .callable => |callable| .{ .callable = .{ .entry = callable.entry, .captures = try arena.dupe(Operand, callable.captures) } },
             .table => |table| .{ .table = .{ .worker = table.worker, .inputs = try arena.dupe(Operand, table.inputs) } },
+            .tag_index, .field_index, .adapt_plan => recipe,
+            .update_plan => |update| .{ .update_plan = .{ .base = update.base, .result = update.result, .names = try arena.dupe(NameId, update.names) } },
         };
     }
 
@@ -299,6 +322,10 @@ pub fn appendOperands(allocator: Allocator, out: *std.ArrayList(Operand), recipe
         .args_desc => |args| try out.appendSlice(allocator, args.elems),
         .callable => |callable| try out.appendSlice(allocator, callable.captures),
         .table => |table| try out.appendSlice(allocator, table.inputs),
+        .tag_index => |tag| try out.append(allocator, tag.desc),
+        .field_index => |field| try out.append(allocator, field.desc),
+        .update_plan => |update| try out.appendSlice(allocator, &.{ update.base, update.result }),
+        .adapt_plan => |plan| try out.appendSlice(allocator, &.{ plan.from, plan.to }),
     }
 }
 
@@ -507,6 +534,10 @@ pub const Evaluation = struct {
                 defer self.allocator.free(words);
                 break :blk .{ .table = (try program.static_descs.table(table.worker, words)).node };
             },
+            .tag_index => |tag| .{ .int = try program.static_descs.variantPosition(describedType(self.operandWord(tag.desc)), tag.name) },
+            .field_index => |field| .{ .int = try program.static_descs.fieldPosition(describedType(self.operandWord(field.desc)), field.name) },
+            .update_plan => |update| .{ .node = try program.static_descs.updatePlan(describedType(self.operandWord(update.base)), describedType(self.operandWord(update.result)), update.names) },
+            .adapt_plan => |plan| .{ .node = try program.static_descs.adaptPlan(self.operandWord(plan.from), self.operandWord(plan.to)) },
         };
     }
 
@@ -521,7 +552,7 @@ pub const Evaluation = struct {
         return switch (word_) {
             .desc => |ty| ty,
             .scoped_desc => |scoped| scoped.ty,
-            .callable, .table, .node, .zero => invariant("a type table's descriptor word is not a descriptor"),
+            .callable, .table, .node, .zero, .int => invariant("a type table's descriptor word is not a descriptor"),
         };
     }
 
@@ -531,7 +562,7 @@ pub const Evaluation = struct {
         const scope = switch (word_) {
             .scoped_desc => |scoped| scoped.scope,
             .desc => return,
-            .callable, .table, .node, .zero => invariant("a type table's descriptor word is not a descriptor"),
+            .callable, .table, .node, .zero, .int => invariant("a type table's descriptor word is not a descriptor"),
         };
         for (self.program.static_descs.scopeEntries(scope)) |entry| try mergeEntry(self.allocator, entries, entry);
     }
@@ -599,15 +630,15 @@ pub const Evaluation = struct {
         for (order) |member| switch (self.source.get(member)) {
             .callable => |callable| self.words.items[@backingInt(member)] = .{ .callable = try static_descs.reserveCallable(@intCast(callable.captures.len)) },
             .desc, .table => {},
-            .input, .args_desc => invariant("an input or an argument record's descriptor leads back to itself"),
+            .input, .args_desc, .tag_index, .field_index, .update_plan, .adapt_plan => invariant("only callables, descriptors, and tables lead back to themselves"),
         };
         for (order) |member| switch (self.source.get(member)) {
             .desc => |desc| self.words.items[@backingInt(member)] = try self.descWord(desc.ty, desc.scoped),
-            .callable, .table, .input, .args_desc => {},
+            .callable, .table, .input, .args_desc, .tag_index, .field_index, .update_plan, .adapt_plan => {},
         };
         for (order) |member| switch (self.source.get(member)) {
             .table => |table| self.words.items[@backingInt(member)] = try self.evaluateOne(.{ .table = table }),
-            .callable, .desc, .input, .args_desc => {},
+            .callable, .desc, .input, .args_desc, .tag_index, .field_index, .update_plan, .adapt_plan => {},
         };
         for (order) |member| switch (self.source.get(member)) {
             .callable => |callable| {
@@ -615,7 +646,7 @@ pub const Evaluation = struct {
                 defer self.allocator.free(words);
                 try static_descs.fillCallable(self.words.items[@backingInt(member)].?.callable, program.worker(callable.entry).proc, words);
             },
-            .desc, .table, .input, .args_desc => {},
+            .desc, .table, .input, .args_desc, .tag_index, .field_index, .update_plan, .adapt_plan => {},
         };
         const words = try self.allocator.alloc(StaticDescs.CaptureWord, order.len);
         defer self.allocator.free(words);
@@ -687,7 +718,7 @@ pub const Evaluation = struct {
                     try static_descs_file.appendKeyWord(allocator, key, @intCast(table.inputs.len));
                     for (table.inputs) |operand| try self.operandKey(order, operand, key);
                 },
-                .input, .args_desc => invariant("an input or an argument record's descriptor leads back to itself"),
+                .input, .args_desc, .tag_index, .field_index, .update_plan, .adapt_plan => invariant("only callables, descriptors, and tables lead back to themselves"),
             }
         }
     }
@@ -750,6 +781,24 @@ fn hashRecipe(hasher: *std.hash.Wyhash, recipe: Recipe) void {
             hashWord(hasher, @backingInt(table.worker));
             hashOperands(hasher, table.inputs);
         },
+        .tag_index => |tag| {
+            hashOperand(hasher, tag.desc);
+            hashWord(hasher, @backingInt(tag.name));
+        },
+        .field_index => |field| {
+            hashOperand(hasher, field.desc);
+            hashWord(hasher, @backingInt(field.name));
+        },
+        .update_plan => |update| {
+            hashOperand(hasher, update.base);
+            hashOperand(hasher, update.result);
+            hashWord(hasher, @intCast(update.names.len));
+            for (update.names) |name| hashWord(hasher, @backingInt(name));
+        },
+        .adapt_plan => |plan| {
+            hashOperand(hasher, plan.from);
+            hashOperand(hasher, plan.to);
+        },
     }
 }
 
@@ -779,6 +828,10 @@ fn recipesEqual(a: Recipe, b: Recipe) bool {
         .args_desc => |args| args.leading == b.args_desc.leading and operandsEqual(args.elems, b.args_desc.elems),
         .callable => |callable| callable.entry == b.callable.entry and operandsEqual(callable.captures, b.callable.captures),
         .table => |table| table.worker == b.table.worker and operandsEqual(table.inputs, b.table.inputs),
+        .tag_index => |tag| tag.name == b.tag_index.name and operandEqual(tag.desc, b.tag_index.desc),
+        .field_index => |field| field.name == b.field_index.name and operandEqual(field.desc, b.field_index.desc),
+        .update_plan => |update| operandEqual(update.base, b.update_plan.base) and operandEqual(update.result, b.update_plan.result) and std.mem.eql(NameId, update.names, b.update_plan.names),
+        .adapt_plan => |plan| operandEqual(plan.from, b.adapt_plan.from) and operandEqual(plan.to, b.adapt_plan.to),
     };
 }
 
@@ -906,6 +959,100 @@ test "a cyclic group has the same words whichever member its evaluation enters b
     defer from_table.deinit();
     try std.testing.expect(StaticDescs.captureWordsEqual(table_word, try from_table.word(table)));
     try std.testing.expect(StaticDescs.captureWordsEqual(callable_word, try from_table.word(callable)));
+}
+
+test "position and plan recipes evaluate to the instantiation's positions and plans" {
+    const allocator = std.testing.allocator;
+    // An evaluation of these recipes reads the program's allocator, store,
+    // layouts, result, and static data; every other field stays unread.
+    var program: lower.Program = undefined;
+    program.allocator = allocator;
+    program.store = types.Store.init(allocator);
+    defer program.store.deinit();
+    program.modules = .{ .allocator = allocator };
+    defer program.modules.deinit();
+    program.result = try LirProgram.Result.init(allocator, .u64);
+    defer program.result.deinit();
+    program.layouts = .{
+        .allocator = allocator,
+        .store = &program.store,
+        .converter = .{ .store = &program.store, .modules = &program.modules },
+        .layouts = &program.result.layouts,
+    };
+    defer program.layouts.deinit();
+    program.static_descs = StaticDescs.init(allocator, &program.store, &program.layouts, &program.result, .u64);
+    defer program.static_descs.deinit();
+    const store = &program.store;
+    const desc_format = @import("boxy_runtime").desc;
+
+    const number = try store.primitive(.u64);
+    const text = try store.primitive(.str);
+    const a = try store.internName("A");
+    const b = try store.internName("B");
+    const c = try store.internName("C");
+    const narrow = try store.intern(.{ .tag_union = .{ .tags = &.{ .{ .name = a, .payloads = &.{} }, .{ .name = c, .payloads = &.{number} } }, .ext = null } });
+    const wide = try store.intern(.{ .tag_union = .{ .tags = &.{ .{ .name = a, .payloads = &.{} }, .{ .name = b, .payloads = &.{} }, .{ .name = c, .payloads = &.{number} } }, .ext = null } });
+    const x = try store.internName("x");
+    const y = try store.internName("y");
+    const record = try store.intern(.{ .record = .{ .fields = &.{
+        .{ .name = x, .ty = number, .kind = .inline_slot },
+        .{ .name = y, .ty = text, .kind = .inline_slot },
+    }, .ext = null } });
+
+    var recipes = Recipes.init(allocator);
+    defer recipes.deinit();
+    const input = try recipes.intern(.{ .input = 0 });
+    // A position over a static descriptor, and one over the worker's
+    // variable, whose instantiation is the wider union.
+    const static_tag = try recipes.intern(.{ .tag_index = .{ .desc = .{ .static = .{ .desc = narrow } }, .name = c } });
+    const input_tag = try recipes.intern(.{ .tag_index = .{ .desc = .{ .recipe = input }, .name = c } });
+    const field = try recipes.intern(.{ .field_index = .{ .desc = .{ .static = .{ .desc = record } }, .name = y } });
+    const update = try recipes.intern(.{ .update_plan = .{ .base = .{ .static = .{ .desc = record } }, .result = .{ .static = .{ .desc = record } }, .names = &.{y} } });
+    const widen = try recipes.intern(.{ .adapt_plan = .{ .from = .{ .static = .{ .desc = narrow } }, .to = .{ .recipe = input } } });
+
+    var evaluation = Evaluation.init(&program, .{ .building = &recipes }, &.{.{ .desc = wide }}, 1);
+    defer evaluation.deinit();
+    try std.testing.expectEqual(@as(u32, 1), (try evaluation.word(static_tag)).int);
+    try std.testing.expectEqual(@as(u32, 2), (try evaluation.word(input_tag)).int);
+    try std.testing.expectEqual(@as(u32, 1), (try evaluation.word(field)).int);
+
+    // The update takes `y` from its first value and copies `x` from the
+    // base's slot for it.
+    const update_node = program.static_descs.exports.items[(try evaluation.word(update)).node];
+    const record_layout = program.result.layouts.getLayout(try program.layouts.layoutOf(record));
+    const struct_idx = record_layout.getStruct().idx;
+    for (0..2) |slot| {
+        const entry = std.mem.readInt(u32, update_node.bytes[slot * 4 ..][0..4], .little);
+        const semantic = program.result.layouts.getStructField(struct_idx, @intCast(slot)).index;
+        if (semantic == 1) {
+            try std.testing.expectEqual(desc_format.update_value_flag, entry);
+        } else {
+            try std.testing.expectEqual(@as(u32, @intCast(slot)), entry);
+        }
+    }
+
+    // Widening `[A, C(U64)]` to `[A, B, C(U64)]` re-tags A to 0 and C to 2,
+    // copying C's payload.
+    const plan_node = program.static_descs.exports.items[(try evaluation.word(widen)).node];
+    const plan_layout = desc_format.AdaptPlan.layout(.u64);
+    try std.testing.expectEqual(@as(u8, @backingInt(desc_format.AdaptKind.retag)), plan_node.bytes[plan_layout.of(.kind)]);
+    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, plan_node.bytes[plan_layout.of(.count)..][0..4], .little));
+    const entries_node = for (plan_node.relocations) |relocation| {
+        if (relocation.offset == plan_layout.of(.entries)) break program.static_descs.exports.items[@backingInt(relocation.target.data_symbol)];
+    } else return error.TestUnexpectedResult;
+    const variant_layout = desc_format.AdaptVariant.layout(.u64);
+    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, entries_node.bytes[variant_layout.of(.discriminant)..][0..4], .little));
+    try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, entries_node.bytes[variant_layout.size + variant_layout.of(.discriminant) ..][0..4], .little));
+    // A has no payload plan; C's is a copy.
+    try std.testing.expectEqual(@as(usize, 1), entries_node.relocations.len);
+    try std.testing.expectEqual(variant_layout.size + variant_layout.of(.plan), entries_node.relocations[0].offset);
+    const payload_plan = program.static_descs.exports.items[@backingInt(entries_node.relocations[0].target.data_symbol)];
+    try std.testing.expectEqual(@as(u8, @backingInt(desc_format.AdaptKind.copy)), payload_plan.bytes[plan_layout.of(.kind)]);
+
+    // A recipe over no input folds where it is lowered: a static position.
+    var fold = Evaluation.init(&program, .{ .building = &recipes }, &.{}, 0);
+    defer fold.deinit();
+    try std.testing.expectEqual(@as(u32, 1), (try fold.word(static_tag)).int);
 }
 
 test "table words sit at consecutive pointer-sized offsets" {

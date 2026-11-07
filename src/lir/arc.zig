@@ -18259,7 +18259,7 @@ test "ARC dyn field view returned through a copy is retained and its base releas
     const result = try d.value(field_desc, .result);
     const ret = try d.f.ret(result);
     const copy = try d.op(result, .{ .copy = .{ .src = view, .desc = field_desc } }, ret);
-    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = 0 } }, copy);
+    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = .{ .immediate = 0 } } }, copy);
     const proc = try d.proc(&.{ desc, field_desc, param }, read, d.dynamic, result);
     try d.run(&.{proc});
     // The field borrows from the record until one retain gives the result
@@ -18290,7 +18290,7 @@ test "ARC dyn field views supply ownership to consuming low-level operations" {
         .args = try d.f.span(&.{ view, view, elem_desc }),
         .next = ret,
     } }, .test_fixture);
-    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = 0 } }, concat);
+    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = .{ .immediate = 0 } } }, concat);
     const proc = try d.proc(&.{ desc, field_desc, elem_desc, param }, read, d.dynamic, result);
     try d.run(&.{proc});
     try d.f.expectRc(view, 2, 0, 0);

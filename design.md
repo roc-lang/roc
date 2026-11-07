@@ -10246,8 +10246,8 @@ wrapper; such a value produces nothing, so the join has nothing to relate.
   differ it is converted into the destination along the coercion's reach
   (Sealed Result Rows): between two closed types by a static row conversion
   of the enclosing module, and into a destination whose row a type variable
-  of the body opens by the descriptor-driven `adapt`, whose destination
-  discriminant is the one the tag's name has under the destination's
+  of the body opens by the plan-driven `adapt` (Coercion Plans), whose
+  destination discriminant is the one the tag has under the destination's
   descriptor. Either walk descends only into reached positions—tag payloads
   and nominal backings. Records, lists, boxes, and function values are
   outside the reach by the checker's rule and copy as they are. The
@@ -13889,9 +13889,10 @@ records, lists, boxes, and function values are identical on both sides by
 the checker's rule. The reach never recurses (nominal rows are declared and
 aliases cannot be recursive), so every conversion worker is finite. A
 conversion whose destination row a type variable of the body opens is the
-descriptor-driven `adapt` (Dynamic Values In LIR), which re-tags by name
-under the destination's descriptor, and `Bool`, the union `[False, True]`
-whose descriptor holds no variant table, takes part by the same names. Either
+plan-driven `adapt` (Coercion Plans), whose plan re-tags each source
+discriminant to the one its tag has under the destination's descriptor, and
+`Bool`, the union `[False, True]` whose descriptor holds no variant table,
+takes part by the plan's entries for those two tags. Either
 conversion is elided when the two
 types are one or commit one layout, since a reached row's source tags are a
 subset of its destination's and equal variant counts mean equal tag sets.
@@ -13992,17 +13993,19 @@ TypeDesc {
 }
 ```
 
-Names are interned program-wide name ids. Tag and field lookups by name are
-what make open rows work in generic code: a body generic over `{ x : a }r` or
-`[A(a)]e` does not know the row's full shape, so the discriminant a tag name
-has under the actual type, and the offset a field name has, come from the
-descriptor at runtime.
+A body generic over `{ x : a }r` or `[A(a)]e` does not know the row's full
+shape, so the discriminant tag `A` has under the actual type, and the index
+field `x` has, are not fixed when the body is lowered. They are fixed when its
+type table is filled, because a table is built per instantiation: the
+position of a tag or field in an open row is a table word (`tag_index`,
+`field_index` recipes, "Type Tables"), computed at compile time from the
+instantiation's closed type, and an immediate operand where the type is
+closed. No code compares a field or tag name at runtime; names are read only
+to print a value (`dyn_inspect`), never to find a component of one.
 
-Tag descriptors store variants in strict byte-wise name order (the same order
-that assigns discriminants). Runtime tag-name lookup uses binary search of that
-existing order. Immediately before searching, Debug builds assert that the
-names are strictly sorted; release builds do not walk the variants to validate
-this compiler invariant.
+Tag descriptors store variants in strict byte-wise name order, the order that
+assigns discriminants, so a variant's discriminant indexes the descriptor's
+variant table directly.
 
 A reference-containing record or tuple's field table ends with a `u32`
 count followed by that many `u32` memory-slot indices, in ascending order.
@@ -14101,7 +14104,12 @@ reads that the inputs determine (`postcheck/boxy/tables.zig`): the descriptor
 of a type over the worker's variables, carrying the override callables of the
 nominal types in its reach that only this body can build; a dictionary or
 literal thunk, an immortal callable capturing its entry's table; an argument
-record's descriptor; and the table of each worker the body calls or packs.
+record's descriptor; the table of each worker the body calls or packs; the
+discriminant of a tag or the semantic index of a field under a descriptor
+(`tag_index`, `field_index`), an integer word read into a `u32` local; and a
+record update's or a coercion's plan (`update_plan`, `adapt_plan`). A
+position or plan whose descriptor reads no input is static: a position is an
+immediate operand, a plan static data the body reads directly.
 The worker's needs list says what each word is, as a recipe over its inputs.
 It is fixed when the worker's body is lowered, holds only the recipes its
 slots reach, and names them in the order a walk from the slots reaches them.
@@ -14196,21 +14204,23 @@ descriptor explicitly as an operand:
 
 - `dyn_copy(dst, src, desc)` copies `desc.size` bytes; reference counting is
   separate, through `incref`/`decref` as for every other local.
-- `dyn_field_addr(dst, base, desc, field_index)` and
-  `dyn_field_addr_named(dst, base, desc, name)` yield a field's address in a
-  record; `dyn_list_item_addr(dst, list, item_desc, index)` an item's;
-  `dyn_box_payload_addr(dst, box, desc)` a box payload's.
-- `dyn_tag_discriminant(dst, base, desc)` reads a tag union's discriminant;
-  `dyn_tag_discriminant_of(dst, desc, name)` is the discriminant a tag name
-  has under the descriptor, so a match arm compares two runtime values;
+- `dyn_field_addr(dst, base, desc, field_index)` yields a field's address in
+  a record, by its semantic index: an immediate, or a `u32` local holding a
+  `field_index` table word where an open row leaves the index to the
+  instantiation (`LIR.DynIndex`); `dyn_list_item_addr(dst, list, item_desc,
+  index)` an item's; `dyn_box_payload_addr(dst, box, desc)` a box
+  payload's.
+- `dyn_tag_discriminant(dst, base, desc)` reads a tag union's discriminant,
+  which a match arm compares with the arm's tag's discriminant: an immediate
+  or a `tag_index` table word.
   `dyn_tag_payload_addr(dst, base, desc, payload_index)` yields a payload
   address from the active variant. Its producer has established the payload's
   type through a matched arm or known constructor. The runtime reads the
-  stored discriminant and directly indexes the descriptor's variant table;
-  it does not search for the tag name again. Nominal unwrapping, recursion
-  boxes, and zero-sized payload addressing remain explicit descriptor rules.
-  No lookup is speculated into an unexecuted branch.
-  `dyn_tag_write(base, desc, name)` writes a discriminant.
+  stored discriminant and directly indexes the descriptor's variant table.
+  Nominal unwrapping, recursion boxes, and zero-sized payload addressing
+  remain explicit descriptor rules.
+- `dyn_tag(dst, desc, discriminant, payloads)` builds the variant at
+  `discriminant`, an index operand as `dyn_field_addr`'s is.
 - `dyn_eq`, `dyn_hash`, and `dyn_inspect` call the descriptor-guided runtime
   walkers, which honor nominal method overrides recorded in the descriptor.
 - The list low-level operations a generic body emits pass the item
@@ -14218,10 +14228,15 @@ descriptor explicitly as an operand:
   builtin list runtime is already layout-polymorphic (item width,
   alignment, and refcount callbacks are runtime arguments), so no second set
   of list builtins exists.
-- `dyn_record_update(dst, base, base_desc, desc, names, values)` builds an
-  updated record of an open row: each named field takes its new value and
-  every other field the base's field of the same name, which only the base's
-  descriptor lists. `base` and the values are consumed.
+- `dyn_record_update(dst, base, base_desc, desc, plan, values)` builds an
+  updated record of an open row by its update plan: one `u32` per memory slot
+  of the result's descriptor, naming the update's value the field takes or
+  the base's memory slot it copies (`update_plan` recipe,
+  `boxy_runtime.desc.update_value_flag`). The plan is built at table-fill
+  time from the two closed record types, whose fields only the instantiation
+  lists. `base` and the values are consumed.
+- `dyn_adapt(dst, src, plan)` rebuilds a value by a coercion plan
+  ("Coercion Plans").
 - `dyn_slot_alloc(dst, desc)` allocates a recursive value's slot, a zeroed
   `Box` whose payload `desc` describes, and `dyn_slot_store(dst, slot, value,
   desc)` moves the built value into it ("Recursive values" above).
@@ -14241,10 +14256,34 @@ dynamic statements appear only where a type variable is involved, so a generic
 body is ordinary LIR with a dynamic island per variable-typed value.
 
 Pattern matching in a generic body follows the same statements: a tag pattern
-on a dynamic union compares the read discriminant with the name's
-discriminant under the descriptor, then addresses the payload by name; a
-record pattern addresses fields by checked field index or name; a bound binder of
-variable type is a dynamic local written with `dyn_copy`.
+on a dynamic union compares the read discriminant with the tag's
+discriminant (an immediate or a `tag_index` table word), then addresses the
+payload by its index; a record pattern addresses fields by checked field
+index or a `field_index` table word; a bound binder of variable type is a
+dynamic local written with `dyn_copy`.
+
+#### Coercion Plans
+
+`dyn_adapt` converts a value between two descriptors of one type whose
+storage differs: record fields of different kinds (a presence slot on one
+side), rows a destination widens, Bool and a row holding `False` and `True`,
+and declared-order records. The conversion is a coercion plan
+(`boxy_runtime.desc.AdaptPlan`), static data per pair of descriptors the
+compiler builds when it fills the table of the body that converts (an
+`adapt_plan` recipe; a closed pair's plan is static data the body reads
+directly). A plan node copies a value both sides represent alike, wraps it as
+`#Present` or unwraps a presence slot, writes `#Missing` for a destination
+field the source lacks, re-tags by a table from each source discriminant to
+the destination's discriminant and the payload's plan, moves each record
+field from its source offset to its destination offset through the field's
+plan, or rebuilds a list's items or a box's payload by its element's plan.
+Matching fields and tags by name, a joined row's label by name and payload
+count, and Bool's tags by `False` and `True` happen once, when the plan is
+built; the runtime follows offsets and discriminants only. A pair of
+descriptors has one plan node, reserved before its components' plans, so a
+recursive type's plan reaches itself. A plan entry for a source variant the
+destination lacks, or a node for two kinds no conversion joins, records that
+no value reaching the conversion holds it.
 
 #### Dictionaries
 
@@ -19227,8 +19266,8 @@ A structural record can lift into a padded nominal, and a padded nominal can
 reach a parameter written as its record row, open or closed, because a generic
 function has one body, which reads the record by the structural rule. The two
 types are one value in two memory orders, so where a value crosses between them
-it is rebuilt by the descriptor-driven `adapt` (Dynamic Values In LIR), which
-matches fields by name at any depth: `StorageDifference.record_order` on a
+it is rebuilt by the plan-driven `adapt` (Coercion Plans), whose plan moves
+each field by offset at any depth: `StorageDifference.record_order` on a
 result or a read, and the check of each explicit argument at a direct call. A
 function value converts by an adapter around it, like one a row widening reaches.
 

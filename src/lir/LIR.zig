@@ -1314,10 +1314,11 @@ pub fn tableEntryOffset(index: u32, ptr_bytes: u32) u32 {
 /// One operation of a `CFStmt.dyn` statement, stored out of line (design.md
 /// "Dynamic Values In LIR", "Type Descriptors", "Dictionaries").
 ///
-/// Descriptor, name, and type table operands are locals of `opaque_ptr`
+/// Descriptor, plan, and type table operands are locals of `opaque_ptr`
 /// layout: a `static_data` read, or a word of the procedure's type table
-/// (`table_entry`). Descriptors, names, and tables are immortal static data
-/// and never reference counted.
+/// (`table_entry`). Descriptors, plans, and tables are immortal static data
+/// and never reference counted. A field or variant is named by its position
+/// (`DynIndex`), never by its name.
 ///
 /// Ownership: an operation that defines a `view` target borrows the target
 /// from its `base` operand, as an `assign_ref` of a component does; `copy`
@@ -1339,8 +1340,10 @@ pub const DynOp = union(enum) {
     /// Word `index` of the type table at `table` (an `opaque_ptr` local),
     /// read at `tableEntryOffset(index, pointer width)`. A table is
     /// immutable static data, so every read of a word yields the same value:
-    /// a descriptor or another table (target `opaque_ptr`), or an immortal
-    /// dictionary or literal thunk (target `erased_callable`). The target
+    /// a descriptor, a plan, or another table (target `opaque_ptr`), an
+    /// immortal dictionary or literal thunk (target `erased_callable`), or a
+    /// field's or variant's position (target `u32`, the word's low 32 bits
+    /// on a little-endian target, whatever its pointer width). The target
     /// holds the word as a `static_data` literal read holds its value: image
     /// data, whose reference counting `immortal_locals` elides.
     table_entry: struct { table: LocalId, index: u32 },
@@ -1350,12 +1353,10 @@ pub const DynOp = union(enum) {
     /// Copy `desc.size` bytes from `src` to the target. Reference counts are
     /// separate (`incref`/`decref` of the target as of any alias).
     copy: struct { src: LocalId, desc: LocalId },
-    /// Field `field_index` of the record or tuple `base` described by
-    /// `desc`. The target is a `view` dynamic local, or a closed local the
-    /// field's bytes are loaded into.
-    field_addr: struct { base: LocalId, desc: LocalId, field_index: u32 },
-    /// The field named `name` of the record `base` described by `desc`.
-    field_addr_named: struct { base: LocalId, desc: LocalId, name: LocalId },
+    /// Field `field_index` (its semantic index) of the record or tuple
+    /// `base` described by `desc`. The target is a `view` dynamic local, or
+    /// a closed local the field's bytes are loaded into.
+    field_addr: struct { base: LocalId, desc: LocalId, field_index: DynIndex },
     /// Element `index` (a `u64` local) of the list `list`, whose elements
     /// `elem_desc` describes. The caller has checked the bound.
     list_item_addr: struct { list: LocalId, elem_desc: LocalId, index: LocalId },
@@ -1363,8 +1364,6 @@ pub const DynOp = union(enum) {
     box_payload_addr: struct { box: LocalId, desc: LocalId },
     /// The discriminant (target: `u32`) of the tag union `base`.
     tag_discriminant: struct { base: LocalId, desc: LocalId },
-    /// The discriminant (target: `u32`) tag `name` has under `desc`.
-    tag_discriminant_of: struct { desc: LocalId, name: LocalId },
     /// Payload `payload_index` of the active tag in `base`, selected by its
     /// stored discriminant. The producer has established that this tag holds
     /// the target's payload type (a matched arm or a known constructor).
@@ -1373,12 +1372,14 @@ pub const DynOp = union(enum) {
     /// semantic index order.
     record: struct { desc: LocalId, fields: LocalSpan },
     /// Build the record `desc` describes from the record `base`, which
-    /// `base_desc` describes: each field named in `names` takes the
-    /// corresponding one of `values`, and every other field `base`'s field
-    /// of the same name. `base` and `values` are consumed.
-    record_update: struct { base: LocalId, base_desc: LocalId, desc: LocalId, names: LocalSpan, values: LocalSpan },
-    /// Build tag `name` of the tag union `desc` describes from `payloads`.
-    tag: struct { desc: LocalId, name: LocalId, payloads: LocalSpan },
+    /// `base_desc` describes, by the update plan `plan` (an `opaque_ptr`
+    /// local; `boxy_runtime.desc.update_value_flag`): each field the plan
+    /// gives a value takes that one of `values`, and every other field the
+    /// base's field the plan names. `base` and `values` are consumed.
+    record_update: struct { base: LocalId, base_desc: LocalId, desc: LocalId, plan: LocalId, values: LocalSpan },
+    /// Build the variant whose discriminant is `discriminant` of the tag
+    /// union `desc` describes from `payloads`.
+    tag: struct { desc: LocalId, discriminant: DynIndex, payloads: LocalSpan },
     /// Build a list of `elems`, whose elements `elem_desc` describes.
     list: struct { elem_desc: LocalId, elems: LocalSpan },
     /// Box `payload`, which `desc` describes.
@@ -1447,15 +1448,25 @@ pub const DynOp = union(enum) {
     /// argument for its capture record), or the address when the procedure
     /// holds no unit of them.
     view: struct { address: LocalId, owner: ?LocalId = null },
-    /// The value `src` (borrowed), which `from` describes, rebuilt as the
-    /// owned value `to` describes. The descriptors describe one type whose
-    /// record fields may differ in storage (design.md "Field Kinds"): a
-    /// field `to` stores in a presence slot is wrapped `#Present`, and a
-    /// presence slot `to` stores inline is unwrapped; the program crashes
-    /// when that slot is `#Missing`. A tag row `to` widens is re-tagged by
-    /// name under `to` (design.md "Sealed Result Rows"); a conversion
-    /// between two closed types is a static conversion worker instead.
-    adapt: struct { src: LocalId, from: LocalId, to: LocalId },
+    /// The value `src` (borrowed) rebuilt as an owned value by the coercion
+    /// plan `plan` (an `opaque_ptr` local; `boxy_runtime.desc.AdaptPlan`),
+    /// which converts between two descriptors of one type whose record
+    /// fields may differ in storage (design.md "Field Kinds"): a field the
+    /// destination stores in a presence slot is wrapped `#Present`, and a
+    /// presence slot it stores inline is unwrapped; the program crashes
+    /// when that slot is `#Missing`. A tag row the destination widens is
+    /// re-tagged by the plan's discriminants (design.md "Sealed Result
+    /// Rows"); a conversion between two closed types is a static conversion
+    /// worker instead.
+    adapt: struct { src: LocalId, plan: LocalId },
+};
+
+/// An integer operand of a dynamic operation: a value lowering knows, or a
+/// `u32` local holding a type table word (design.md "Type Tables"), for a
+/// position a generic body's instantiation fixes.
+pub const DynIndex = union(enum) {
+    immediate: u32,
+    local: LocalId,
 };
 
 /// The fields of `CFStmt.decref_if_initialized` other than its condition,

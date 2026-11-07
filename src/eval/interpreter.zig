@@ -8052,11 +8052,20 @@ pub const Interpreter = struct {
         return @ptrFromInt(word);
     }
 
-    /// The name an `opaque_ptr` name local holds.
-    fn nameAt(self: *LirInterpreter, frame: *const Frame, name_local: LocalId) Error!*const boxy.Name {
-        const word = try self.localWord(frame, name_local);
-        if (word == 0) return self.invariantFailedError("LIR/interpreter invariant violated: name local {d} is null", .{@backingInt(name_local)});
+    /// The static data an `opaque_ptr` plan local addresses.
+    fn planAt(self: *LirInterpreter, frame: *const Frame, comptime T: type, plan_local: LocalId) Error!*const T {
+        const word = try self.localWord(frame, plan_local);
+        if (word == 0) return self.invariantFailedError("LIR/interpreter invariant violated: plan local {d} is null", .{@backingInt(plan_local)});
         return @ptrFromInt(word);
+    }
+
+    /// The value of an index operand: the immediate, or the `u32` local
+    /// holding it.
+    fn indexAt(self: *LirInterpreter, frame: *const Frame, index: LIR.DynIndex) Error!u32 {
+        return switch (index) {
+            .immediate => |value| value,
+            .local => |local| (try self.getLocalChecked(frame, local)).read(u32),
+        };
     }
 
     /// The descriptor of dynamic local `local`.
@@ -8372,15 +8381,15 @@ pub const Interpreter = struct {
         return record.fieldBySemanticIndex(semantic_index);
     }
 
-    fn variantNamed(self: *LirInterpreter, desc: *const TypeDesc, name: *const boxy.Name) Error!struct { union_desc: *const TypeDesc, variant: *const boxy.Variant } {
+    fn variantAt(self: *LirInterpreter, desc: *const TypeDesc, discriminant: u32) Error!struct { union_desc: *const TypeDesc, variant: *const boxy.Variant } {
         const union_desc = backingDesc(desc);
         if (union_desc.kind != .tag_union) {
             return self.invariantFailedError("LIR/interpreter invariant violated: tag of a {s} descriptor", .{@tagName(union_desc.kind)});
         }
-        for (union_desc.variants()) |*variant| {
-            if (variant.name.eql(name)) return .{ .union_desc = union_desc, .variant = variant };
+        if (discriminant >= union_desc.count) {
+            return self.invariantFailedError("LIR/interpreter invariant violated: discriminant {d} of a {d}-variant union", .{ discriminant, union_desc.count });
         }
-        return self.invariantFailedError("LIR/interpreter invariant violated: tag {s} is not in its union's descriptor", .{name.text()});
+        return .{ .union_desc = union_desc, .variant = &union_desc.variants()[discriminant] };
     }
 
     /// The offset of argument `index` of `variant` within the union's bytes.
@@ -8433,7 +8442,12 @@ pub const Interpreter = struct {
             .table_entry => |entry| {
                 const table: [*]const u8 = @ptrFromInt(try self.localWord(frame, entry.table));
                 const word = std.mem.readInt(usize, table[LIR.tableEntryOffset(entry.index, @sizeOf(usize))..][0..@sizeOf(usize)], builtin.cpu.arch.endian());
-                try self.setWordTarget(frame, stmt_id, target, word);
+                if (self.store.getLocal(target).layout_idx == .u32) {
+                    // A field's or variant's position: the word's low 32 bits.
+                    try self.setScalarTarget(frame, stmt_id, target, u32, @truncate(word));
+                } else {
+                    try self.setWordTarget(frame, stmt_id, target, word);
+                }
             },
             .copy => |c| {
                 const desc = try self.descAt(frame, c.desc);
@@ -8445,17 +8459,7 @@ pub const Interpreter = struct {
                 }
             },
             .field_addr => |f| {
-                const field = try self.fieldBySemanticIndex(try self.descAt(frame, f.desc), f.field_index);
-                try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(field.desc, (try self.localBytes(frame, f.base)) + field.offset));
-            },
-            .field_addr_named => |f| {
-                const record = try self.recordFields(try self.descAt(frame, f.desc));
-                const name = try self.nameAt(frame, f.name);
-                const field = for (record.fields()) |*field| {
-                    if (field.name) |field_name| {
-                        if (field_name.eql(name)) break field;
-                    }
-                } else return self.invariantFailedError("LIR/interpreter invariant violated: field {s} is not in its record's descriptor", .{name.text()});
+                const field = try self.fieldBySemanticIndex(try self.descAt(frame, f.desc), try self.indexAt(frame, f.field_index));
                 try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(field.desc, (try self.localBytes(frame, f.base)) + field.offset));
             },
             .list_item_addr => |e| {
@@ -8486,10 +8490,6 @@ pub const Interpreter = struct {
                 }
                 try self.setScalarTarget(frame, stmt_id, target, u32, desc.readDiscriminant(try self.localBytes(frame, t.base)));
             },
-            .tag_discriminant_of => |t| {
-                const found = try self.variantNamed(try self.descAt(frame, t.desc), try self.nameAt(frame, t.name));
-                try self.setScalarTarget(frame, stmt_id, target, u32, found.variant.discriminant);
-            },
             .tag_payload_addr => |t| {
                 const address = boxy.compiled.tagPayloadAddr(try self.descAt(frame, t.desc), try self.localBytes(frame, t.base), t.payload_index, &self.roc_ops);
                 try self.setComponentTarget(frame, stmt_id, target, address);
@@ -8506,23 +8506,18 @@ pub const Interpreter = struct {
                 try self.finishResultStorage(frame, stmt_id, target, dst);
             },
             .record_update => |u| {
-                const names_span = self.store.getLocalSpan(u.names);
                 const values_span = self.store.getLocalSpan(u.values);
-                const names = try self.allocator.alloc(*const boxy.desc.Name, names_span.len);
-                defer self.allocator.free(names);
                 const values = try self.allocator.alloc([*]const u8, values_span.len);
                 defer self.allocator.free(values);
-                for (names, values, 0..) |*name, *value, i| {
-                    name.* = try self.nameAt(frame, GuardedList.at(names_span, i));
-                    value.* = try self.localBytes(frame, GuardedList.at(values_span, i));
-                }
+                for (values, 0..) |*value, i| value.* = try self.localBytes(frame, GuardedList.at(values_span, i));
                 const desc = try self.descAt(frame, u.desc);
+                const plan: [*]const u32 = @ptrCast(try self.planAt(frame, u32, u.plan));
                 const dst = try self.targetStorage(frame, target);
-                boxy.compiled.updateRecord(try self.descAt(frame, u.base_desc), try self.localBytes(frame, u.base), desc, dst, names, values, &self.roc_ops);
+                boxy.compiled.updateRecord(try self.descAt(frame, u.base_desc), try self.localBytes(frame, u.base), desc, dst, plan, values, &self.roc_ops);
                 try self.finishResultStorage(frame, stmt_id, target, dst);
             },
             .tag => |t| {
-                const found = try self.variantNamed(try self.descAt(frame, t.desc), try self.nameAt(frame, t.name));
+                const found = try self.variantAt(try self.descAt(frame, t.desc), try self.indexAt(frame, t.discriminant));
                 const payloads = self.store.getLocalSpan(t.payloads);
                 if (payloads.len != found.variant.payload_count) {
                     return self.invariantFailedError("LIR/interpreter invariant violated: tag with {d} payloads for {d} arguments", .{ payloads.len, found.variant.payload_count });
@@ -8625,14 +8620,13 @@ pub const Interpreter = struct {
             },
             .view => |v| try self.setComponentTarget(frame, stmt_id, target, @ptrFromInt(try self.localWord(frame, v.address))),
             .adapt => |a| {
-                const from = try self.descAt(frame, a.from);
-                const to = try self.descAt(frame, a.to);
+                const plan = try self.planAt(frame, boxy.desc.AdaptPlan, a.plan);
                 const src = try self.localBytes(frame, a.src);
                 const dst = try self.targetStorage(frame, target);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 if (crash_boundary.set() != 0) return self.crashError();
-                boxy.compiled.adapt(from, to, dst, src, &self.roc_ops);
+                boxy.compiled.adapt(plan, dst, src, &self.roc_ops);
                 try self.finishResultStorage(frame, stmt_id, target, dst);
             },
             .closure => |c| {

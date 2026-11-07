@@ -1,9 +1,10 @@
 //! The descriptor operations compiled code performs through the runtime
-//! rather than inline: component addresses found by name or through a
-//! nominal's backing, value construction, representation adaptation, and the
-//! list operations a `.boxy` generic body emits with an element descriptor
-//! (design.md "Dynamic Values In LIR"). `exports.zig` exposes
-//! each as a `roc_desc_*` C entry point.
+//! rather than inline: component addresses by index or through a nominal's
+//! backing, value construction, representation adaptation by coercion plan,
+//! and the list operations a `.boxy` generic body emits with an element
+//! descriptor (design.md "Dynamic Values In LIR"). Every field and variant
+//! is reached by a position the compiler computed; nothing here looks one up
+//! by name. `exports.zig` exposes each as a `roc_desc_*` C entry point.
 
 const std = @import("std");
 const builtins = @import("builtins");
@@ -18,9 +19,8 @@ const utils = builtins.utils;
 const erased_callable = builtins.erased_callable;
 
 const TypeDesc = desc_mod.TypeDesc;
-const Name = desc_mod.Name;
-const Field = desc_mod.Field;
 const Variant = desc_mod.Variant;
+const AdaptPlan = desc_mod.AdaptPlan;
 
 const invariant = walk.invariant;
 
@@ -38,28 +38,10 @@ fn recordOf(desc: *const TypeDesc, ops: *RocOps) *const TypeDesc {
     return record;
 }
 
-fn variantNamed(desc: *const TypeDesc, name: *const Name, ops: *RocOps) struct { union_desc: *const TypeDesc, variant: *const Variant } {
+fn unionOf(desc: *const TypeDesc, ops: *RocOps) *const TypeDesc {
     const union_desc = backing(desc);
     if (union_desc.kind != .tag_union) invariant(ops, "a tag of a descriptor that is not a tag union");
-    const variants = union_desc.variants();
-    if (comptime @import("builtin").mode == .debug) {
-        for (variants, 0..) |variant, index| {
-            if (index == 0) continue;
-            std.debug.assert(std.mem.order(u8, variants[index - 1].name.text(), variant.name.text()) == .lt);
-        }
-    }
-    var low: usize = 0;
-    var high = variants.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        const variant = &variants[mid];
-        switch (std.mem.order(u8, name.text(), variant.name.text())) {
-            .lt => high = mid,
-            .gt => low = mid + 1,
-            .eq => return .{ .union_desc = union_desc, .variant = variant },
-        }
-    }
-    invariant(ops, "a tag that is not in its union's descriptor");
+    return union_desc;
 }
 
 /// The offset of argument `index` of `variant` within its union's bytes.
@@ -110,16 +92,6 @@ pub fn fieldAddr(desc: *const TypeDesc, base: [*]u8, field_index: u32, ops: *Roc
     return componentAddr(field.desc, base + field.offset);
 }
 
-/// The address of the field named `name` of the record at `base`.
-pub fn fieldAddrNamed(desc: *const TypeDesc, base: [*]u8, name: *const Name, ops: *RocOps) [*]u8 {
-    const record = recordOf(desc, ops);
-    for (record.fields()) |*field| {
-        const field_name = field.name orelse continue;
-        if (field_name.eql(name)) return componentAddr(field.desc, base + field.offset);
-    }
-    invariant(ops, "a field name that is not in its record's descriptor");
-}
-
 /// The discriminant of the tag union value at `base`.
 pub fn tagDiscriminant(desc: *const TypeDesc, base: [*]const u8, ops: *RocOps) u32 {
     const union_desc = backing(desc);
@@ -127,14 +99,9 @@ pub fn tagDiscriminant(desc: *const TypeDesc, base: [*]const u8, ops: *RocOps) u
     return union_desc.readDiscriminant(base);
 }
 
-/// The discriminant of the variant named `name` in `desc`'s union.
-pub fn tagDiscriminantOf(desc: *const TypeDesc, name: *const Name, ops: *RocOps) u32 {
-    return variantNamed(desc, name, ops).variant.discriminant;
-}
-
 /// The address of payload `payload_index` of the value's active variant.
 /// Lowering establishes the variant before projecting its typed payload;
-/// the stored discriminant indexes the same finalized table as name lookup.
+/// the stored discriminant indexes the union's variants.
 pub fn tagPayloadAddr(desc: *const TypeDesc, base: [*]u8, payload_index: u32, ops: *RocOps) [*]u8 {
     const union_desc = backing(desc);
     if (union_desc.kind != .tag_union) invariant(ops, "a payload of a descriptor that is not a tag union");
@@ -185,28 +152,27 @@ pub fn buildRecord(desc: *const TypeDesc, dst: [*]u8, fields: []const [*]const u
 }
 
 /// Build the record `desc` describes at `dst` from the record `base`
-/// (described by `base_desc`): each field named in `names` takes the value
-/// at the corresponding one of `values`, moved in, and every other field
-/// `base`'s field of the same name, shared. `base` is released.
-pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDesc, dst: [*]u8, names: []const *const Name, values: []const [*]const u8, ops: *RocOps) void {
+/// (described by `base_desc`) by the update plan `plan`
+/// (`desc.update_value_flag`): each field the plan gives a value takes that
+/// one of `values`, moved in, and every other field the base's field the
+/// plan names, shared. `base` is released.
+pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDesc, dst: [*]u8, plan: [*]const u32, values: []const [*]const u8, ops: *RocOps) void {
     const record = recordOf(desc, ops);
-    const base_record = recordOf(base_desc, ops);
+    const base_fields = recordOf(base_desc, ops).fields();
     var end: u32 = 0;
-    for (record.fields()) |*field| {
+    for (record.fields(), 0..) |*field, slot| {
         if (field.is_padding != 0) continue;
         if (end != field.offset) @memset(dst[end..field.offset], 0);
         end = field.offset + field.desc.size;
-        const name = field.name orelse invariant(ops, "an updated record has an unnamed field");
-        const updated = for (names, values) |candidate, value| {
-            if (candidate.eql(name)) break value;
-        } else null;
-        if (updated) |value| {
-            writeComponent(field.desc, dst + field.offset, value, ops);
+        const entry = plan[slot];
+        if (entry & desc_mod.update_value_flag != 0) {
+            const position = entry & ~desc_mod.update_value_flag;
+            if (position >= values.len) invariant(ops, "an update plan names a value past the update's values");
+            writeComponent(field.desc, dst + field.offset, values[position], ops);
             continue;
         }
-        const source = for (base_record.fields()) |*candidate| {
-            if (candidate.name != null and candidate.name.?.eql(name)) break candidate;
-        } else invariant(ops, "an updated record's field is absent from its base");
+        if (entry >= base_fields.len) invariant(ops, "an update plan names a field past its base's fields");
+        const source = &base_fields[entry];
         @memcpy(dst[field.offset..][0..field.desc.size], base[source.offset..][0..field.desc.size]);
         walk.incref(field.desc, dst + field.offset, 1, ops);
     }
@@ -214,25 +180,27 @@ pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDe
     walk.decref(base_desc, base, ops);
 }
 
-/// Write the variant named `name` of `desc`'s union to `dst` from its
-/// payloads' bytes.
-pub fn buildTag(desc: *const TypeDesc, name: *const Name, dst: [*]u8, payloads: []const [*]const u8, ops: *RocOps) void {
-    const found = variantNamed(desc, name, ops);
-    if (payloads.len != found.variant.payload_count) invariant(ops, "a tag built with a different number of arguments than its descriptor has");
+/// Write the variant whose discriminant is `discriminant` of `desc`'s union
+/// to `dst` from its payloads' bytes.
+pub fn buildTag(desc: *const TypeDesc, discriminant: u32, dst: [*]u8, payloads: []const [*]const u8, ops: *RocOps) void {
+    const union_desc = unionOf(desc, ops);
+    if (discriminant >= union_desc.count) invariant(ops, "a tag's discriminant is past its union's variants");
+    const variant = &union_desc.variants()[discriminant];
+    if (payloads.len != variant.payload_count) invariant(ops, "a tag built with a different number of arguments than its descriptor has");
     if (payloads.len == 1) {
         // A single payload starts at zero and writeComponent initializes
         // its entire slot, including a recursive box's pointer. Preserve
         // zeroes in the unused payload space, alignment gaps, and tail.
-        const payload = found.variant.payload;
+        const payload = variant.payload;
         writeComponent(payload, dst, payloads[0], ops);
-        @memset(dst[payload.size..found.union_desc.size], 0);
+        @memset(dst[payload.size..union_desc.size], 0);
     } else {
-        @memset(dst[0..found.union_desc.size], 0);
+        @memset(dst[0..union_desc.size], 0);
         for (payloads, 0..) |src, index| {
-            writeComponent(payloadDesc(found.variant, @intCast(index)), dst + payloadOffset(found.variant, @intCast(index)), src, ops);
+            writeComponent(payloadDesc(variant, @intCast(index)), dst + payloadOffset(variant, @intCast(index)), src, ops);
         }
     }
-    writeDiscriminant(found.union_desc, dst, found.variant.discriminant);
+    writeDiscriminant(union_desc, dst, variant.discriminant);
 }
 
 /// Write a list of the given items, which `elem` describes, to `dst`.
@@ -288,108 +256,61 @@ pub fn storeSlot(desc: *const TypeDesc, slot: *const usize, value: [*]const u8, 
 
 // Representation adaptation.
 
-/// One value of an adaptation: the source bytes `from` describes, rebuilt at
-/// `dst` as `to` describes.
-const AdaptWork = struct { from: *const TypeDesc, to: *const TypeDesc, src: [*]const u8, dst: [*]u8 };
+/// One value of an adaptation: the source bytes rebuilt at `dst` by `plan`.
+const AdaptWork = struct { plan: *const AdaptPlan, src: [*]const u8, dst: [*]u8 };
 
-/// Rebuild the value `src` (borrowed), which `from` describes, at `dst` as
-/// the owned value `to` describes. The two descriptors describe one type
-/// whose record fields may differ in storage (design.md "Field Kinds"): a
-/// field `from` stores inline and `to` in a presence slot is wrapped
-/// `#Present`, and a presence slot `to` stores inline is unwrapped, which a
-/// `#Missing` slot cannot be. Lists and boxes whose contents change storage
-/// are rebuilt; everything else is copied and retained.
-pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]const u8, ops: *RocOps) void {
+/// Rebuild the value `src` (borrowed) at `dst` as an owned value by the
+/// coercion plan `plan` (`desc.AdaptPlan`), which the compiler built for the
+/// pair of descriptors the coercion converts between: record fields move by
+/// offset, variants re-tag by discriminant, and presence slots wrap or
+/// unwrap, a `#Missing` slot crashing where its destination requires the
+/// field. Lists and boxes whose contents change storage are rebuilt;
+/// everything else is copied and retained.
+pub fn adapt(plan: *const AdaptPlan, dst: [*]u8, src: [*]const u8, ops: *RocOps) void {
     var stack: walk.Stack(AdaptWork, 16) = undefined;
     stack.init();
     defer stack.deinit(ops);
-    stack.push(.{ .from = from, .to = to, .src = src, .dst = dst }, ops);
+    stack.push(.{ .plan = plan, .src = src, .dst = dst }, ops);
     while (stack.pop()) |work| {
-        const f = work.from;
-        const t = work.to;
-        if (f == t) {
-            @memcpy(work.dst[0..t.size], work.src[0..t.size]);
-            walk.incref(t, work.dst, 1, ops);
-            continue;
-        }
-        if (t.flags.presence_slot and !f.flags.presence_slot) {
-            // Wrap: `#Present` is the slot's second variant.
-            const present = &t.variants()[1];
-            @memset(work.dst[0..t.size], 0);
-            writeDiscriminant(t, work.dst, present.discriminant);
-            stack.push(.{ .from = f, .to = present.payload, .src = work.src, .dst = work.dst }, ops);
-            continue;
-        }
-        if (f.flags.presence_slot and !t.flags.presence_slot) {
-            const present = &f.variants()[1];
-            if (f.readDiscriminant(work.src) != present.discriminant) ops.crash("an optional record field that is missing reached a position that requires it");
-            stack.push(.{ .from = present.payload, .to = t, .src = work.src, .dst = work.dst }, ops);
-            continue;
-        }
-        // A nominal shares its backing's representation.
-        if (f.kind == .nominal and t.kind != .nominal) {
-            stack.push(.{ .from = f.child.?, .to = t, .src = work.src, .dst = work.dst }, ops);
-            continue;
-        }
-        if (t.kind == .nominal and f.kind != .nominal) {
-            stack.push(.{ .from = f, .to = t.child.?, .src = work.src, .dst = work.dst }, ops);
-            continue;
-        }
-        // Bool is the union `[False, True]` with its discriminant for a value,
-        // and a row holding those tags re-tags to and from it by name.
-        if (f.kind == .tag_union and t.kind == .bool) {
-            const source = &f.variants()[f.readDiscriminant(work.src)];
-            work.dst[0] = @intFromBool(std.mem.eql(u8, source.name.text(), "True"));
-            continue;
-        }
-        if (f.kind == .bool and t.kind == .tag_union) {
-            const tag: []const u8 = if (work.src[0] != 0) "True" else "False";
-            const target = for (t.variants()) |*candidate| {
-                if (std.mem.eql(u8, candidate.name.text(), tag)) break candidate;
-            } else invariant(ops, "a re-tagged variant is not in its destination's row");
-            @memset(work.dst[0..t.size], 0);
-            writeDiscriminant(t, work.dst, target.discriminant);
-            continue;
-        }
-        if (f.kind != t.kind) invariant(ops, "adapted descriptors describe different kinds of value");
-        switch (t.kind) {
-            .zst, .scalar, .str, .bool, .erased_callable => {
+        const node = work.plan;
+        switch (node.kind) {
+            .copy => {
+                const t = node.to.?;
                 @memcpy(work.dst[0..t.size], work.src[0..t.size]);
                 walk.incref(t, work.dst, 1, ops);
             },
-            .nominal => stack.push(.{ .from = f.child.?, .to = t.child.?, .src = work.src, .dst = work.dst }, ops),
-            .record, .tuple => {
+            .wrap => {
+                const t = node.to.?;
                 @memset(work.dst[0..t.size], 0);
-                for (t.fields()) |*to_field| {
-                    if (to_field.is_padding != 0) continue;
-                    // Fields match by name, tuple elements by position.
-                    const from_field: ?*const Field = if (t.kind == .tuple) f.fieldBySemanticIndex(to_field.field_index) else for (f.fields()) |*candidate| {
-                        if (candidate.name != null and candidate.name.?.eql(to_field.name.?)) break candidate;
-                    } else null;
-                    if (from_field) |source| {
-                        stack.push(.{ .from = source.desc, .to = to_field.desc, .src = work.src + source.offset, .dst = work.dst + to_field.offset }, ops);
-                    } else {
-                        // An optional field the source lacks is missing.
-                        if (!to_field.desc.flags.presence_slot) invariant(ops, "an adapted record lacks a field its destination requires");
-                        writeDiscriminant(to_field.desc, work.dst + to_field.offset, to_field.desc.variants()[0].discriminant);
-                    }
-                }
+                writeDiscriminant(t, work.dst, node.discriminant);
+                stack.push(.{ .plan = node.child.?, .src = work.src, .dst = work.dst }, ops);
             },
-            .tag_union => {
-                // The destination's variant is the source's by tag name; a
-                // label a joined row holds at several payload types names
-                // the variant whose payload describes the same values.
-                const source = &f.variants()[f.readDiscriminant(work.src)];
-                const target = targetVariant(t, source, ops);
+            .unwrap => {
+                if (node.from.?.readDiscriminant(work.src) != node.discriminant) ops.crash("an optional record field that is missing reached a position that requires it");
+                stack.push(.{ .plan = node.child.?, .src = work.src, .dst = work.dst }, ops);
+            },
+            .missing => writeDiscriminant(node.to.?, work.dst, node.discriminant),
+            .retag => {
+                const t = node.to.?;
+                const source = node.from.?.readDiscriminant(work.src);
+                if (source >= node.count) invariant(ops, "a re-tagged value's discriminant is past its plan's variants");
+                const target = node.variants()[source];
+                if (target.discriminant == desc_mod.AdaptVariant.absent) invariant(ops, "a re-tagged variant is not in its destination's row");
                 @memset(work.dst[0..t.size], 0);
                 writeDiscriminant(t, work.dst, target.discriminant);
-                if (source.payload_count != 0) stack.push(.{ .from = source.payload, .to = target.payload, .src = work.src, .dst = work.dst }, ops);
+                if (target.plan) |payload| stack.push(.{ .plan = payload, .src = work.src, .dst = work.dst }, ops);
+            },
+            .record => {
+                @memset(work.dst[0..node.to.?.size], 0);
+                for (node.fields()) |field| {
+                    stack.push(.{ .plan = field.plan, .src = work.src + field.from_offset, .dst = work.dst + field.to_offset }, ops);
+                }
             },
             .list => {
                 const source: *const RocList = @ptrCast(@alignCast(work.src));
                 const target: *RocList = @ptrCast(@alignCast(work.dst));
-                const from_elem = f.child.?;
-                const to_elem = t.child.?;
+                const from_elem = node.from.?.child.?;
+                const to_elem = node.to.?.child.?;
                 const len = source.len();
                 if (len == 0 or to_elem.size == 0) {
                     target.* = zstList(len);
@@ -398,11 +319,11 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
                 const data = utils.allocateWithRefcount(to_elem.size * len, to_elem.alignment, to_elem.flags.contains_refcounted, ops);
                 target.* = .{ .bytes = data, .length = len, .capacity_or_alloc_ptr = RocList.encodeCapacity(len) };
                 for (0..len) |index| {
-                    stack.push(.{ .from = from_elem, .to = to_elem, .src = source.bytes.? + index * from_elem.size, .dst = data + index * to_elem.size }, ops);
+                    stack.push(.{ .plan = node.child.?, .src = source.bytes.? + index * from_elem.size, .dst = data + index * to_elem.size }, ops);
                 }
             },
-            .box, .recursive_box => {
-                const payload_to = t.child.?;
+            .box => {
+                const payload_to = node.to.?.child.?;
                 const target: *usize = @ptrCast(@alignCast(work.dst));
                 if (payload_to.size == 0) {
                     target.* = 0;
@@ -411,23 +332,11 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
                 const word = @as(*const usize, @ptrCast(@alignCast(work.src))).* & ~utils.DATA_PTR_TAG_MASK;
                 const data = utils.allocateWithRefcount(payload_to.size, payload_to.alignment, payload_to.flags.contains_refcounted, ops);
                 target.* = @intFromPtr(data);
-                stack.push(.{ .from = f.child.?, .to = payload_to, .src = @ptrFromInt(word), .dst = data }, ops);
+                stack.push(.{ .plan = node.child.?, .src = @ptrFromInt(word), .dst = data }, ops);
             },
+            .mismatch => invariant(ops, "adapted descriptors describe different kinds of value"),
         }
     }
-}
-
-/// The variant of the tag union `to` a value of variant `source` is
-/// re-tagged as: the one with its name and payload count, which a row names
-/// once (design.md "Row Joins", "One label, two payload types").
-fn targetVariant(to: *const TypeDesc, source: *const Variant, ops: *RocOps) *const Variant {
-    var found: ?*const Variant = null;
-    for (to.variants()) |*candidate| {
-        if (!candidate.name.eql(source.name) or candidate.payload_count != source.payload_count) continue;
-        if (found != null) invariant(ops, "a re-tagged variant matches two destination variants");
-        found = candidate;
-    }
-    return found orelse invariant(ops, "a re-tagged variant is not in its destination's row");
 }
 
 /// Bytes before a static callable's payload: alignment padding, then the

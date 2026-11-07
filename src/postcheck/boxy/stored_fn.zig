@@ -170,7 +170,7 @@ pub const Retained = struct {
         for (bound, inputs[0..shape.descs]) |*ty, input| ty.* = switch (input) {
             .desc => |desc_ty| desc_ty,
             .scoped_desc => |scoped| scoped.ty,
-            .callable, .table, .node, .zero => invariant("a type table's descriptor input is not a descriptor"),
+            .callable, .table, .node, .zero, .int => invariant("a type table's descriptor input is not a descriptor"),
         };
 
         var recipe = Encoder{ .allocator = allocator, .program = program };
@@ -831,6 +831,24 @@ pub fn encodeNeeds(allocator: Allocator, program: *Program, needs: Tables.Needs)
                 try encoder.worker(table.worker);
                 try encodeOperands(&encoder, table.inputs);
             },
+            .tag_index => |tag| {
+                try encodeOperand(&encoder, tag.desc);
+                try encoder.name(tag.name);
+            },
+            .field_index => |field| {
+                try encodeOperand(&encoder, field.desc);
+                try encoder.name(field.name);
+            },
+            .update_plan => |update| {
+                try encodeOperand(&encoder, update.base);
+                try encodeOperand(&encoder, update.result);
+                try encoder.word(@intCast(update.names.len));
+                for (update.names) |name| try encoder.name(name);
+            },
+            .adapt_plan => |plan| {
+                try encodeOperand(&encoder, plan.from);
+                try encodeOperand(&encoder, plan.to);
+            },
         }
     }
     try encoder.word(@intCast(needs.slots.len));
@@ -857,7 +875,7 @@ fn encodeOperand(encoder: *Encoder, operand: Tables.Operand) Allocator.Error!voi
                 try encoder.typeOf(ty);
             },
             .zero => try encoder.bytes.append(encoder.allocator, 2),
-            .scoped_desc, .callable, .table, .node => invariant("a recipe holds a static word other than a closed type's descriptor or the null word"),
+            .scoped_desc, .callable, .table, .node, .int => invariant("a recipe holds a static word other than a closed type's descriptor or the null word"),
         },
     }
 }
@@ -899,6 +917,25 @@ pub fn decodeNeeds(program: *Program, bytes: []const u8) Allocator.Error!Tables.
             .table => blk: {
                 const worker = try decoder.worker();
                 break :blk .{ .table = .{ .worker = worker, .inputs = try decodeOperands(&decoder) } };
+            },
+            .tag_index => blk: {
+                const desc = try decodeOperand(&decoder);
+                break :blk .{ .tag_index = .{ .desc = desc, .name = try decoder.name() } };
+            },
+            .field_index => blk: {
+                const desc = try decodeOperand(&decoder);
+                break :blk .{ .field_index = .{ .desc = desc, .name = try decoder.name() } };
+            },
+            .update_plan => blk: {
+                const update_base = try decodeOperand(&decoder);
+                const result = try decodeOperand(&decoder);
+                const names = try arena.alloc(types.NameId, decoder.word());
+                for (names) |*name| name.* = try decoder.name();
+                break :blk .{ .update_plan = .{ .base = update_base, .result = result, .names = names } };
+            },
+            .adapt_plan => blk: {
+                const from = try decodeOperand(&decoder);
+                break :blk .{ .adapt_plan = .{ .from = from, .to = try decodeOperand(&decoder) } };
             },
         };
     }

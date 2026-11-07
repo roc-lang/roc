@@ -4150,7 +4150,7 @@ pub const MonoLlvmCodeGen = struct {
                     // A dictionary's entry is called through the address
                     // its composition takes.
                     .dyn => |dyn_stmt| switch (self.store.stmtRow(dyn_stmt.data)) {
-                        .frame_alloc, .table_entry, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
+                        .frame_alloc, .table_entry, .copy, .field_addr, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
                     },
                     .init_uninitialized, .assign_ref, .assign_call_erased, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
                 }
@@ -12013,6 +12013,15 @@ pub const MonoLlvmCodeGen = struct {
         try self.materializeLocalIfDeferred(local);
     }
 
+    /// An index operand's `i32` value: the immediate, or the `u32` local
+    /// holding it.
+    fn dynIndexValue(self: *MonoLlvmCodeGen, index: lir.LIR.DynIndex) Error!LlvmBuilder.Value {
+        return switch (index) {
+            .immediate => |value| try self.intValue(.i32, value),
+            .local => |local| try self.loadLocalScalar(local, .u32),
+        };
+    }
+
     fn emitDyn(self: *MonoLlvmCodeGen, target_or_null: ?LocalId, op: lir.LIR.DynOp) Error!void {
         try lir.DynOps.Operands.of(op).each(self.store, self, materializeDynOperand);
         if (op == .frame_alloc) return self.emitDynFrameAlloc();
@@ -12023,18 +12032,21 @@ pub const MonoLlvmCodeGen = struct {
             .frame_alloc => unreachable, // handled above
             .table_entry => |entry| {
                 const table = try self.wordValue(entry.table);
-                try self.bindWord(target, try self.loadPointer(try self.offsetPtr(table, lir.LIR.tableEntryOffset(entry.index, self.targetWordSize()))));
+                const word_ptr = try self.offsetPtr(table, lir.LIR.tableEntryOffset(entry.index, self.targetWordSize()));
+                if (self.localLayout(target) == .u32) {
+                    // A field's or variant's position: the word's low 32 bits.
+                    const position = wip.load(.normal, .i32, word_ptr, LlvmBuilder.Alignment.fromByteUnits(4), "") catch return error.OutOfMemory;
+                    try self.prepareLocalWrite(target);
+                    try self.storeLocalInt(target, position, .u32);
+                } else {
+                    try self.bindWord(target, try self.loadPointer(word_ptr));
+                }
             },
             .copy => |c| try self.emitDescCopy(c.desc, try self.targetAddress(target), try self.bytesAddress(c.src)),
             .field_addr => |f| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_field_addr", ptr_ty, &.{ ptr_ty, ptr_ty, .i32 }, &.{
                 try self.wordValue(f.desc),
                 try self.bytesAddress(f.base),
-                try self.intValue(.i32, f.field_index),
-            })),
-            .field_addr_named => |f| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_field_addr_named", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{
-                try self.wordValue(f.desc),
-                try self.bytesAddress(f.base),
-                try self.wordValue(f.name),
+                try self.dynIndexValue(f.field_index),
             })),
             .list_item_addr => |e| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_list_item_addr", ptr_ty, &.{ ptr_ty, ptr_ty, .i64 }, &.{
                 try self.wordValue(e.elem_desc),
@@ -12047,11 +12059,6 @@ pub const MonoLlvmCodeGen = struct {
             })),
             .tag_discriminant => |t| {
                 const discriminant = try self.callBoxyRuntime("roc_desc_tag_discriminant", .i32, &.{ ptr_ty, ptr_ty }, &.{ try self.wordValue(t.desc), try self.bytesAddress(t.base) });
-                try self.prepareLocalWrite(target);
-                try self.storeLocalInt(target, discriminant, self.localLayout(target));
-            },
-            .tag_discriminant_of => |t| {
-                const discriminant = try self.callBoxyRuntime("roc_desc_tag_discriminant_of", .i32, &.{ ptr_ty, ptr_ty }, &.{ try self.wordValue(t.desc), try self.wordValue(t.name) });
                 try self.prepareLocalWrite(target);
                 try self.storeLocalInt(target, discriminant, self.localLayout(target));
             },
@@ -12070,23 +12077,22 @@ pub const MonoLlvmCodeGen = struct {
                 });
             },
             .record_update => |u| {
-                const names = try self.dynLocalArray(u.names, .words);
                 const values = try self.dynLocalArray(u.values, .bytes);
-                _ = try self.callBoxyRuntime("roc_desc_update_record", .void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty, ptr_ty }, &.{
+                _ = try self.callBoxyRuntime("roc_desc_update_record", .void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty }, &.{
                     try self.wordValue(u.base_desc),
                     try self.bytesAddress(u.base),
                     try self.wordValue(u.desc),
                     try self.targetAddress(target),
+                    try self.wordValue(u.plan),
                     try self.intValue(.i32, u.values.len),
-                    names,
                     values,
                 });
             },
             .tag => |t| {
                 const payloads = try self.dynLocalArray(t.payloads, .bytes);
-                _ = try self.callBoxyRuntime("roc_desc_build_tag", .void, &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty }, &.{
+                _ = try self.callBoxyRuntime("roc_desc_build_tag", .void, &.{ ptr_ty, .i32, ptr_ty, .i32, ptr_ty }, &.{
                     try self.wordValue(t.desc),
-                    try self.wordValue(t.name),
+                    try self.dynIndexValue(t.discriminant),
                     try self.targetAddress(target),
                     try self.intValue(.i32, t.payloads.len),
                     payloads,
@@ -12195,9 +12201,8 @@ pub const MonoLlvmCodeGen = struct {
                 }
             },
             .view => |v| try self.bindComponentAddress(target, try self.wordValue(v.address)),
-            .adapt => |a| _ = try self.callBoxyRuntime("roc_desc_adapt", .void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
-                try self.wordValue(a.from),
-                try self.wordValue(a.to),
+            .adapt => |a| _ = try self.callBoxyRuntime("roc_desc_adapt", .void, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{
+                try self.wordValue(a.plan),
                 try self.targetAddress(target),
                 try self.bytesAddress(a.src),
             }),

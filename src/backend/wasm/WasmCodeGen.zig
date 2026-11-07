@@ -9406,6 +9406,15 @@ fn emitProcTableIndex(self: *Self, proc_id: LIR.LirProcSpecId) Allocator.Error!v
     try self.emitFunctionTableIndexConst(table_idx);
 }
 
+/// Push an index operand's `i32`: the immediate, or the `u32` local holding
+/// it.
+fn emitDynIndex(self: *Self, index: LIR.DynIndex) Allocator.Error!void {
+    switch (index) {
+        .immediate => |value| try self.emitI32Const(@bitCast(value)),
+        .local => |local| try self.emitProcLocal(local),
+    }
+}
+
 fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocator.Error!void {
     if (op == .frame_alloc) return self.generateDynFrameAlloc();
     const dst = target_or_null orelse wasmInvariantFmt("WASM/codegen invariant violated: dyn {s} has no target", .{@tagName(op)});
@@ -9424,15 +9433,8 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
         .field_addr => |f| {
             try self.emitProcLocal(f.desc);
             try self.emitBytesAddress(f.base);
-            try self.emitI32Const(@bitCast(f.field_index));
+            try self.emitDynIndex(f.field_index);
             try self.emitBoxyRuntimeCall(.field_addr);
-            try self.bindComponentAddress(dst);
-        },
-        .field_addr_named => |f| {
-            try self.emitProcLocal(f.desc);
-            try self.emitBytesAddress(f.base);
-            try self.emitProcLocal(f.name);
-            try self.emitBoxyRuntimeCall(.field_addr_named);
             try self.bindComponentAddress(dst);
         },
         .list_item_addr => |e| {
@@ -9454,12 +9456,6 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitBoxyRuntimeCall(.tag_discriminant);
             try self.bindReturnedScalar(dst, .i32);
         },
-        .tag_discriminant_of => |t| {
-            try self.emitProcLocal(t.desc);
-            try self.emitProcLocal(t.name);
-            try self.emitBoxyRuntimeCall(.tag_discriminant_of);
-            try self.bindReturnedScalar(dst, .i32);
-        },
         .tag_payload_addr => |t| {
             try self.emitProcLocal(t.desc);
             try self.emitBytesAddress(t.base);
@@ -9478,15 +9474,14 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.finishTarget(dst, t);
         },
         .record_update => |u| {
-            const names = try self.emitLocalArray(u.names, .words);
             const values = try self.emitLocalArray(u.values, .bytes);
             const t = try self.dynTarget(dst);
             try self.emitProcLocal(u.base_desc);
             try self.emitBytesAddress(u.base);
             try self.emitProcLocal(u.desc);
             try self.emitTargetAddress(t);
+            try self.emitProcLocal(u.plan);
             try self.emitI32Const(@intCast(self.store.getLocalSpan(u.values).len));
-            try self.emitLocalGet(names);
             try self.emitLocalGet(values);
             try self.emitBoxyRuntimeCall(.update_record);
             try self.finishTarget(dst, t);
@@ -9495,7 +9490,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             const payloads = try self.emitLocalArray(tag.payloads, .bytes);
             const t = try self.dynTarget(dst);
             try self.emitProcLocal(tag.desc);
-            try self.emitProcLocal(tag.name);
+            try self.emitDynIndex(tag.discriminant);
             try self.emitTargetAddress(t);
             try self.emitI32Const(@intCast(self.store.getLocalSpan(tag.payloads).len));
             try self.emitLocalGet(payloads);
@@ -9552,8 +9547,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
         },
         .adapt => |a| {
             const t = try self.dynTarget(dst);
-            try self.emitProcLocal(a.from);
-            try self.emitProcLocal(a.to);
+            try self.emitProcLocal(a.plan);
             try self.emitTargetAddress(t);
             try self.emitBytesAddress(a.src);
             try self.emitBoxyRuntimeCall(.adapt);

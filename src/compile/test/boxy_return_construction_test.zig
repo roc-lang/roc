@@ -64,7 +64,7 @@ fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLi
                         }
                     },
                     .copy => try std.testing.expect(stmt.dyn.target != result),
-                    .frame_alloc, .table_entry, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
+                    .frame_alloc, .table_entry, .field_addr, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_payload_addr, .record_update, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
                 }
             }
             try lir.BodyClone.appendSuccessors(store, &work, id, std.testing.allocator);

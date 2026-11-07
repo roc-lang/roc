@@ -373,7 +373,6 @@ fn sortKeyOf(d: *const TypeDesc) SortKey {
 }
 
 fn nameOrder(a: *const Name, b: *const Name) std.math.Order {
-    if (a.eql(b)) return .eq;
     return std.mem.order(u8, a.text(), b.text());
 }
 

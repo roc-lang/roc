@@ -787,9 +787,11 @@ const RecordReadProgram = struct {
     fn build(b: *Builder) TestError!RecordReadProgram {
         const ReadInt = struct {
             fn next(builder: *Builder, f: RecordFixture) TestError!CFStmtId {
-                const a = try builder.local(.opaque_ptr);
+                // `a` ranks first; its position arrives in a local, as a
+                // type table word does.
+                const a = try builder.local(.u32);
                 const out = try builder.local(.i64);
-                return builder.static(a, .{ .name = &name_a }, try builder.dyn(out, .{ .field_addr_named = .{ .base = f.record, .desc = f.record_desc, .name = a } }, try builder.ret(out)));
+                return builder.int(a, 0, try builder.dyn(out, .{ .field_addr = .{ .base = f.record, .desc = f.record_desc, .field_index = .{ .local = a } } }, try builder.ret(out)));
             }
         };
         const int_proc = try b.proc(&.{}, try RecordFixture.build(b, ReadInt.next), .i64, .{});
@@ -799,7 +801,7 @@ const RecordReadProgram = struct {
                 const field_desc = try builder.local(.opaque_ptr);
                 const view = try builder.dynLocal(field_desc, .view);
                 const out = try builder.local(.str);
-                return builder.static(field_desc, .{ .desc = builder.descs.str() }, try builder.dyn(view, .{ .field_addr = .{ .base = f.record, .desc = f.record_desc, .field_index = 1 } }, try builder.dyn(out, .{ .copy = .{ .src = view, .desc = field_desc } }, try builder.ret(out))));
+                return builder.static(field_desc, .{ .desc = builder.descs.str() }, try builder.dyn(view, .{ .field_addr = .{ .base = f.record, .desc = f.record_desc, .field_index = .{ .immediate = 1 } } }, try builder.dyn(out, .{ .copy = .{ .src = view, .desc = field_desc } }, try builder.ret(out))));
             }
         };
         const str_proc = try b.proc(&.{}, try RecordFixture.build(b, ReadStr.next), .str, .{});
@@ -894,13 +896,14 @@ test "boxy wasm: eq, hash, and inspect of a dynamic record" {
     try expectWasmStr(&b, program.inspect_proc, "{ a: 7, b: \"hi\" }");
 }
 
-/// Procedures reading a tag union's discriminant, a tag's discriminant
-/// under its descriptor, and a payload, in that order.
-fn buildTagUnionProgram(b: *Builder) TestError![3]LirProcSpecId {
-    const Proc = enum { discriminant, discriminant_of, payload };
-    var procs: [3]LirProcSpecId = undefined;
-    inline for (.{ Proc.discriminant, Proc.discriminant_of, Proc.payload }, 0..) |which, index| {
-        const ok = try b.local(.opaque_ptr);
+/// Procedures reading a tag union's discriminant and a payload, in that
+/// order, of a value built by its discriminant, which arrives in a local as
+/// a type table word does.
+fn buildTagUnionProgram(b: *Builder) TestError![2]LirProcSpecId {
+    const Proc = enum { discriminant, payload };
+    var procs: [2]LirProcSpecId = undefined;
+    inline for (.{ Proc.discriminant, Proc.payload }, 0..) |which, index| {
+        const ok = try b.local(.u32);
         const union_desc = try b.local(.opaque_ptr);
         const value = try b.dynLocal(union_desc, .frame);
         const x = try b.local(.i64);
@@ -909,17 +912,14 @@ fn buildTagUnionProgram(b: *Builder) TestError![3]LirProcSpecId {
                 const out = try b.local(.u32);
                 break :blk try b.dyn(out, .{ .tag_discriminant = .{ .base = value, .desc = union_desc } }, try b.ret(out));
             },
-            .discriminant_of => blk: {
-                const out = try b.local(.u32);
-                break :blk try b.dyn(out, .{ .tag_discriminant_of = .{ .desc = union_desc, .name = ok } }, try b.ret(out));
-            },
             .payload => blk: {
                 const out = try b.local(.i64);
                 break :blk try b.dyn(out, .{ .tag_payload_addr = .{ .base = value, .desc = union_desc, .payload_index = 0 } }, try b.ret(out));
             },
         };
         const desc = b.descs.tagUnion(&.{ .{ .name = &name_ok, .payloads = &.{boxy.desc.scalarDesc(.i64)} }, .{ .name = &name_err, .payloads = &.{b.descs.str()} } });
-        const body = try b.static(ok, .{ .name = &name_ok }, try b.static(union_desc, .{ .desc = desc }, try b.dyn(null, .frame_alloc, try b.int(x, 1234, try b.dyn(value, .{ .tag = .{ .desc = union_desc, .name = ok, .payloads = try b.span(&.{x}) } }, tail)))));
+        // Tags are ordered by name: Err = 0, Ok = 1.
+        const body = try b.int(ok, 1, try b.static(union_desc, .{ .desc = desc }, try b.dyn(null, .frame_alloc, try b.int(x, 1234, try b.dyn(value, .{ .tag = .{ .desc = union_desc, .discriminant = .{ .local = ok }, .payloads = try b.span(&.{x}) } }, tail)))));
         procs[index] = try b.proc(&.{}, body, if (which == .payload) .i64 else .u32, .{});
     }
     return procs;
@@ -933,10 +933,8 @@ test "boxy interpreter: a tag union's discriminant and payload" {
     var run: Run = undefined;
     try run.init(&b);
     defer run.deinit();
-    // Tags are ordered by name: Err = 0, Ok = 1.
     try std.testing.expectEqual(@as(u32, 1), (try run.eval(procs[0], .u32)).value.read(u32));
-    try std.testing.expectEqual(@as(u32, 1), (try run.eval(procs[1], .u32)).value.read(u32));
-    try std.testing.expectEqual(@as(i64, 1234), (try run.eval(procs[2], .i64)).value.read(i64));
+    try std.testing.expectEqual(@as(i64, 1234), (try run.eval(procs[1], .i64)).value.read(i64));
     try run.env.checkForLeaks();
 }
 
@@ -945,8 +943,7 @@ test "boxy wasm: a tag union's discriminant and payload" {
     defer b.deinit();
     const procs = try buildTagUnionProgram(&b);
     try expectWasmInt(&b, procs[0], .u32, 1);
-    try expectWasmInt(&b, procs[1], .u32, 1);
-    try expectWasmInt(&b, procs[2], .i64, 1234);
+    try expectWasmInt(&b, procs[1], .i64, 1234);
 }
 
 /// acc = 5; i = 3; loop { if i == 0 then return acc else i -= 1; acc = acc }
@@ -1056,7 +1053,7 @@ fn buildDictionaryProgram(b: *Builder) TestError!LirProcSpecId {
     const args = try b.dynLocal(args_desc, .param);
     const x = try b.dynLocal(elem_desc, .view);
     const result = try b.dynLocal(elem_desc, .result);
-    const worker_body = try b.lowLevel(table, .erased_capture_load, &.{capture}, false, try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = 0 } }, try b.ret(x)))));
+    const worker_body = try b.lowLevel(table, .erased_capture_load, &.{capture}, false, try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = .{ .immediate = 0 } } }, try b.ret(x)))));
     const worker = try b.proc(&.{ args, capture }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture });
 
     const record_layout = try b.layouts.putTuple(&.{b.layouts.getLayout(.i64)});
@@ -1176,7 +1173,7 @@ fn buildReturnedRecordProgram(b: *Builder, in_result: bool) TestError!struct { w
     const right = try b.local(.str);
     const joined = try b.local(.str);
     const out = try b.local(.str);
-    const body = try b.static(str_desc, .{ .desc = b.descs.str() }, try b.static(desc, .{ .desc = b.descs.record(&.{.{ .name = &name_a, .desc = b.descs.str() }}) }, try b.dyn(null, .frame_alloc, try b.str(left, "a returned record containing a heap string, ", try b.str(right, "still owned after returning", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.decref(right, try b.call(record, worker, &.{ joined, str_desc, desc }, try b.dyn(field, .{ .field_addr = .{ .base = record, .desc = desc, .field_index = 0 } }, try b.dyn(out, .{ .copy = .{ .src = field, .desc = str_desc } }, try b.ret(out)))))))))));
+    const body = try b.static(str_desc, .{ .desc = b.descs.str() }, try b.static(desc, .{ .desc = b.descs.record(&.{.{ .name = &name_a, .desc = b.descs.str() }}) }, try b.dyn(null, .frame_alloc, try b.str(left, "a returned record containing a heap string, ", try b.str(right, "still owned after returning", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.decref(right, try b.call(record, worker, &.{ joined, str_desc, desc }, try b.dyn(field, .{ .field_addr = .{ .base = record, .desc = desc, .field_index = .{ .immediate = 0 } } }, try b.dyn(out, .{ .copy = .{ .src = field, .desc = str_desc } }, try b.ret(out)))))))))));
     return .{ .worker = worker, .root = try b.proc(&.{}, body, .str, .{}) };
 }
 
@@ -1225,7 +1222,7 @@ fn buildUnaryArgumentProgram(b: *Builder, dynamic: bool, reuse: bool, deferred: 
     const args = try b.dynLocal(if (direct_entry) elem_desc else args_desc, .param);
     const x = if (direct_entry) args else try b.dynLocal(elem_desc, .view);
     const result = try b.dynLocal(elem_desc, .result);
-    const use_arg = if (direct_entry) try b.ret(x) else try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = 0 } }, try b.ret(x)));
+    const use_arg = if (direct_entry) try b.ret(x) else try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = .{ .immediate = 0 } } }, try b.ret(x)));
     const worker_body = try b.lowLevel(table, .erased_capture_load, &.{capture}, false, try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, use_arg));
     const worker = try b.proc(&.{ args, capture }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture });
 
