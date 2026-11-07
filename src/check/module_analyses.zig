@@ -56,6 +56,9 @@ const LiteralComponent = checked_artifact.LiteralComponent;
 const LiteralArgumentDemand = checked_artifact.LiteralArgumentDemand;
 const UnitLiteralConversions = checked_artifact.UnitLiteralConversions;
 const RootRequestTable = checked_artifact.RootRequestTable;
+const CheckedTables = checked_artifact.CheckedTables;
+const ResolvedValueRefTable = checked_artifact.ResolvedValueRefTable;
+const PlatformPairing = checked_artifact.PlatformPairing;
 const UnitId = @import("body_analyses.zig").UnitId;
 const EvidenceTraversal = checked_artifact.EvidenceTraversal;
 const ModuleEnv = @import("can").ModuleEnv;
@@ -187,12 +190,13 @@ const DispatchImports = struct {
 
 const DispatchImportsRequest = struct {
     analyses: *ModuleAnalyses,
-    dispatch: CheckedDispatch,
+    module: checked_artifact.ModuleId,
+    direct_imports: []const checked_artifact.CheckedModuleArtifactKey,
+    store: *const CheckedTypeStore,
 
     fn compute(self: DispatchImportsRequest) Allocator.Error!*DispatchImports {
         const allocator = self.analyses.allocator;
-        const source = self.dispatch.source;
-        const views = try checked_artifact.computeDispatchImports(allocator, source.key.digest(), source.direct_imports, source.types.store.sealed_origins.items, self.analyses.resolver);
+        const views = try checked_artifact.computeDispatchImports(allocator, self.module, self.direct_imports, self.store.sealed_origins.items, self.analyses.resolver);
         errdefer allocator.free(views);
         const result = try allocator.create(DispatchImports);
         result.* = .{ .views = views };
@@ -208,6 +212,10 @@ pub const ModuleAnalyses = struct {
     /// The platform a platform/app pairing reads: the pairing's export
     /// closures and public API dependencies are its platform's.
     platform: ?*const CheckedModuleArtifact,
+    /// The platform/app pairing whose analyses these are, which classifies
+    /// its own value references (`PlatformPairing.valueRefs`).
+    pairing: ?*PlatformPairing = null,
+    checked_tables: collections.OnceSlot(*CheckedTables, .module_checked_tables) = .empty,
     export_rows: collections.OnceSlot(*ExportRows, .module_export_rows) = .empty,
     provided_exports: collections.OnceSlot(*ProvidedExportTable, .module_provided_exports) = .empty,
     platform_type_inputs: collections.OnceSlot(*PlatformTypeInputs, .module_platform_type_inputs) = .empty,
@@ -297,8 +305,26 @@ pub const ModuleAnalyses = struct {
     /// computed on first demand from the module's direct imports and its
     /// types' name owners, transitively.
     pub fn dispatchImports(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error![]const ImportedModuleView {
+        const source = dispatch.source;
+        return self.reachedImports(source.key.digest(), source.direct_imports, source.types.store);
+    }
+
+    /// The modules the module `module`, which imports `direct_imports`
+    /// directly and whose types `store` holds, reaches through its direct
+    /// imports and its types' name owners, transitively: its dispatch imports.
+    pub fn reachedImports(
+        self: *ModuleAnalyses,
+        module: checked_artifact.ModuleId,
+        direct_imports: []const checked_artifact.CheckedModuleArtifactKey,
+        store: *const CheckedTypeStore,
+    ) Allocator.Error![]const ImportedModuleView {
         self.assertPublished();
-        const result = try self.dispatch_imports.getOrCompute(self.io, Allocator.Error, DispatchImportsRequest{ .analyses = self, .dispatch = dispatch }, DispatchImportsRequest.compute);
+        const result = try self.dispatch_imports.getOrCompute(self.io, Allocator.Error, DispatchImportsRequest{
+            .analyses = self,
+            .module = module,
+            .direct_imports = direct_imports,
+            .store = store,
+        }, DispatchImportsRequest.compute);
         return result.views;
     }
 
@@ -316,6 +342,7 @@ pub const ModuleAnalyses = struct {
 
     pub fn destroy(self: *ModuleAnalyses) void {
         const allocator = self.allocator;
+        if (self.checked_tables.peek()) |tables| tables.destroy(allocator);
         if (self.dispatch_slots.peek()) |slots| slots.destroy(allocator);
         if (self.dispatch_index.peek()) |index| index.destroy();
         if (self.module_dispatch.peek()) |result| result.destroy(allocator);
@@ -413,6 +440,11 @@ pub const ModuleAnalyses = struct {
     pub fn exportRows(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const ExportRows {
         self.assertPublished();
         if (self.platform) |platform| return platformAnalyses(platform).exportRows(checked_artifact.importedView(platform));
+        if (self.export_rows.peek()) |rows| return rows;
+        // The rows read the module's checked tables, which read other
+        // modules' export rows: they are demanded before the rows are
+        // claimed.
+        _ = try self.checkedTables(owner);
         return self.export_rows.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.exportRows);
     }
 
@@ -456,9 +488,33 @@ pub const ModuleAnalyses = struct {
         return self.hosted_bindings.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.hostedBindings);
     }
 
+    /// The checked tables of `owner`, this module. A platform/app pairing's
+    /// are its platform's.
+    pub fn checkedTables(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const CheckedTables {
+        self.assertPublished();
+        if (self.platform) |platform| return platformAnalyses(platform).checkedTables(checked_artifact.importedView(platform));
+        if (self.checked_tables.peek()) |tables| return tables;
+        // A thread never waits on a slot of a kind it holds a claim of, so
+        // what the tables read of other modules is demanded first, holding
+        // no claim.
+        try checked_artifact.demandCheckedTablesInputs(self.allocator, owner);
+        return self.checked_tables.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.checkedTables);
+    }
+
+    /// The resolved value references of `owner`, this module: its checked
+    /// tables', or a platform/app pairing's own (`PlatformPairing.valueRefs`).
+    pub fn valueRefs(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const ResolvedValueRefTable {
+        if (self.pairing) |pairing| return pairing.valueRefs();
+        return &(try self.checkedTables(owner)).resolved_value_refs;
+    }
+
     const ViewRequest = struct {
         analyses: *ModuleAnalyses,
         owner: ImportedModuleView,
+
+        fn checkedTables(request: ViewRequest) Allocator.Error!*CheckedTables {
+            return checked_artifact.computeCheckedTables(request.analyses.allocator, request.owner);
+        }
 
         fn hostedProcs(request: ViewRequest) Allocator.Error!*HostedProcTable {
             return checked_artifact.computeHostedProcs(request.analyses.allocator, request.owner);
@@ -557,7 +613,7 @@ pub const ModuleAnalyses = struct {
     /// module's; a platform/app pairing reads its platform's sites.
     pub fn nestedProcSites(self: *ModuleAnalyses, bodies: CheckedBodies, owner: NestedProcSiteOwner) Allocator.Error!*const OwnerNestedProcSites {
         self.assertPublished();
-        if (self.platform) |platform| return platformAnalyses(platform).nestedProcSites(platform.bodies(), owner);
+        if (self.platform) |platform| return platformAnalyses(platform).nestedProcSites(try platform.bodies(), owner);
         const slots = try self.ownerSlots(bodies);
         const slot = switch (owner) {
             .template => |template| blk: {
@@ -574,7 +630,7 @@ pub const ModuleAnalyses = struct {
     /// captures. A platform/app pairing reads its platform's.
     pub fn moduleNestedProcSites(self: *ModuleAnalyses, bodies: CheckedBodies) Allocator.Error!*const ModuleNestedProcSites {
         self.assertPublished();
-        if (self.platform) |platform| return platformAnalyses(platform).moduleNestedProcSites(platform.bodies());
+        if (self.platform) |platform| return platformAnalyses(platform).moduleNestedProcSites(try platform.bodies());
         return self.nested_proc_sites.getOrCompute(self.io, Allocator.Error, BodiesRequest{ .analyses = self, .bodies = bodies }, BodiesRequest.moduleNestedProcSites);
     }
 
@@ -582,7 +638,7 @@ pub const ModuleAnalyses = struct {
     /// reaches. A platform/app pairing reads its platform's.
     pub fn templateExhaustivenessSites(self: *ModuleAnalyses, bodies: CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const TemplateExhaustivenessSites {
         self.assertPublished();
-        if (self.platform) |platform| return platformAnalyses(platform).templateExhaustivenessSites(platform.bodies(), template);
+        if (self.platform) |platform| return platformAnalyses(platform).templateExhaustivenessSites(try platform.bodies(), template);
         const raw = template.rowIndex() orelse return &checked_artifact.empty_template_exhaustiveness_sites;
         const slots = try self.ownerSlots(bodies);
         if (raw >= slots.template_exhaustiveness.len) checked_artifact.checkedArtifactInvariant("exhaustiveness sites were demanded of a template outside the module's templates", .{});
@@ -1024,7 +1080,7 @@ pub const ModuleAnalyses = struct {
         for (order.items) |next| {
             for (graph.componentInfo(next).members) |member| for (graph.finishedNode(member).edges) |edge| switch (edge.callee) {
                 .template => |template| if (!template.artifact.eql(owner)) {
-                    if (try dispatch.importedView(template.artifact)) |view| _ = try view.dispatch().templateLiteralRequirements(template.template);
+                    if (try dispatch.importedView(template.artifact)) |view| _ = try (try view.dispatch()).templateLiteralRequirements(template.template);
                 },
                 .scope => {},
             };

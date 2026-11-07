@@ -6302,7 +6302,7 @@ fn directDispatchPlanIsParametric(
 ) TestError!bool {
     var found: ?bool = null;
     for (0..resources.checked_artifact.static_dispatch_plans.plans.len) |raw| {
-        const plan = try resources.checked_artifact.dispatch().plan(@fromBackingInt(@intCast(raw)));
+        const plan = try (try resources.checked_artifact.dispatch()).plan(@fromBackingInt(@intCast(raw)));
         if (!std.mem.eql(u8, resources.checked_artifact.nameStore().methodNameText(plan.method), method)) continue;
         const parametric = switch (plan.resolution) {
             .direct_parametric => true,
@@ -9373,8 +9373,8 @@ test "deeply nested tuple literal publishes evidence paths linear in its depth" 
     var resources = try helpers.parseProgram(allocator, .module, source.items, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    const templates = &resources.checked_artifact.checked_procedure_templates;
-    const dispatch = resources.checked_artifact.dispatch();
+    const templates = &(try resources.checked_artifact.checkedTables()).checked_procedure_templates;
+    const dispatch = try resources.checked_artifact.dispatch();
     var deepest_path: u32 = 0;
     var path_nodes: usize = 0;
     for (0..templates.templates.items.len) |raw| {
@@ -9423,7 +9423,7 @@ test "literal conversion ownership includes nested codec evidence" {
         const artifact = &resources.checked_artifact;
         try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
         var dependent_conversions: usize = 0;
-        const bodies = artifact.bodies();
+        const bodies = try artifact.bodies();
         for (0..bodies.nodeCount()) |raw| {
             if (bodies.index().nodeKind(@intCast(raw)) != .expr) continue;
             const expr_id: check.CheckedBodies.ExprId = @fromBackingInt(@intCast(raw));
@@ -9474,7 +9474,7 @@ test "literal conversion ownership includes nested codec evidence" {
                 .run_low_level,
                 => continue,
             };
-            const plan = try artifact.dispatch().plan(plan_id);
+            const plan = try (try artifact.dispatch()).plan(plan_id);
             try std.testing.expect(plan.resolution == .direct_parametric);
             try std.testing.expect(conversion_root == null);
             dependent_conversions += 1;
@@ -9519,7 +9519,7 @@ test "custom literal field default gets an ordinary conversion root" {
     // (design.md "Defaulted Fields").
     var numeral_roots: usize = 0;
     var quote_roots: usize = 0;
-    const bodies = resources.checked_artifact.bodies();
+    const bodies = try resources.checked_artifact.bodies();
     for (bodies.defaultExprs()) |default_expr| {
         const conversion = try resources.checked_artifact.compileTimeRoot((try bodies.literalConversionRoot(default_expr)) orelse
             return error.TestUnexpectedResult);
@@ -9534,7 +9534,7 @@ test "custom literal field default gets an ordinary conversion root" {
 
     // A root link needs its proof of independence: the conversion is closed.
     const plan_id = (try bodies.literalConversion(bodies.defaultExprs()[0])).plan orelse return error.TestUnexpectedResult;
-    try std.testing.expect((try resources.checked_artifact.dispatch().plan(plan_id)).resolution == .direct_closed);
+    try std.testing.expect((try (try resources.checked_artifact.dispatch()).plan(plan_id)).resolution == .direct_closed);
 }
 
 test "compiler-generated dispatch classes lower via checked evidence" {
@@ -9701,7 +9701,7 @@ test "W6a open where-method widening and nested evidence lower through explicit 
     // nested vector through checked-artifact construction and Monotype lowering.
     var found_requires_record_reuse = false;
     for (0..compiled.resources.checked_artifact.static_dispatch_plans.plans.len) |raw| {
-        const plan = try compiled.resources.checked_artifact.dispatch().plan(@fromBackingInt(@intCast(raw)));
+        const plan = try (try compiled.resources.checked_artifact.dispatch()).plan(@fromBackingInt(@intCast(raw)));
         if (!std.mem.eql(
             u8,
             compiled.resources.checked_artifact.nameStore().methodNameText(plan.method),
@@ -13821,7 +13821,7 @@ test "issue 12491 nested closure chain bound to a block local lowers under boxy"
 
 /// The procedure template of `artifact` exported as `name`.
 fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) error{TestUnexpectedResult}!check.CheckedArtifact.CheckedProcedureTemplate {
-    for (artifact.checked_procedure_templates.templates.items) |template| {
+    for ((try artifact.checkedTables()).checked_procedure_templates.templates.items) |template| {
         const def_name = check.CheckedArtifact.procBaseDefName(artifact.moduleEnvConst(), template.proc_base) orelse continue;
         if (std.mem.eql(u8, def_name, name)) return template;
     }
@@ -13885,7 +13885,7 @@ test "sealed result rows: an annotated result row is a static worker and widenin
     const artifact = &lowered.resources.checked_artifact;
     for ([_][]const u8{ "read", "parse" }) |name| {
         const template = try templateNamed(artifact, name);
-        const scheme_vars = try artifact.dispatch().templateSchemeVars(template.template_id);
+        const scheme_vars = try (try artifact.dispatch()).templateSchemeVars(template.template_id);
         try std.testing.expectEqual(@as(usize, 1), scheme_vars.len);
         const payload = artifact.checked_types.payload(scheme_vars[0]);
         try std.testing.expect(payload == .flex);
@@ -13894,7 +13894,7 @@ test "sealed result rows: an annotated result row is a static worker and widenin
     }
     {
         const template = try templateNamed(artifact, "pass");
-        const scheme_vars = try artifact.dispatch().templateSchemeVars(template.template_id);
+        const scheme_vars = try (try artifact.dispatch()).templateSchemeVars(template.template_id);
         try std.testing.expectEqual(@as(usize, 1), scheme_vars.len);
         try std.testing.expect(artifact.checked_types.payload(scheme_vars[0]) == .rigid);
     }

@@ -1015,7 +1015,7 @@ fn runComptimeFloatBitsTest(
         .canonicalize_ns = resources.canonicalize_ns,
         .typecheck_ns = resources.typecheck_ns,
     };
-    const roots = resources.checked_artifact.compile_time_roots.roots;
+    const roots = (try resources.checked_artifact.checkedTables()).compile_time_roots.roots;
     if (roots.len != 1) {
         return .{
             .status = .fail,
@@ -1132,9 +1132,9 @@ fn materializedComptimeFloatBitsMatch(
     target: roc_target.RocTarget,
     expected: TestCase.Expected,
 ) (std.mem.Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{UnsupportedTarget})!bool {
-    const compile_time_root = resources.checked_artifact.compile_time_roots.roots[0];
+    const compile_time_root = (try resources.checked_artifact.checkedTables()).compile_time_roots.roots[0];
     const pattern = compile_time_root.pattern orelse return false;
-    const top_level = resources.checked_artifact.top_level_values.lookupByPattern(pattern) orelse return false;
+    const top_level = (try resources.checked_artifact.checkedTables()).top_level_values.lookupByPattern(pattern) orelse return false;
     const const_locator = switch (top_level.value) {
         .const_ref => |value| value,
         .procedure_binding => return false,

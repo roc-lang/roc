@@ -2243,6 +2243,7 @@ pub const BuildEnv = struct {
                     try self.makeWorkspaceReportsDrainable();
                     return error.InvalidTargetConfiguration;
                 },
+                error.OutOfMemory => return error.OutOfMemory,
             };
         }
     }

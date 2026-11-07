@@ -2477,7 +2477,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             .kind = @tagName(root.module_identity.kind),
             .names = root.nameStore(),
             .types = root.typesView(),
-            .templates = &root.checked_procedure_templates,
+            .templates = &(try root.checkedTables()).checked_procedure_templates,
             .env = root.moduleEnvConst(),
         });
         for (modules.imports) |imported| {
@@ -2487,7 +2487,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                 .kind = @tagName(imported.module_identity.kind),
                 .names = imported.canonical_names,
                 .types = imported.checked_types,
-                .templates = imported.checked_procedure_templates,
+                .templates = &(try imported.checkedTables()).checked_procedure_templates,
                 .env = imported.module_env,
             });
         }
@@ -2498,7 +2498,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                 .kind = @tagName(relation.module_identity.kind),
                 .names = relation.canonical_names,
                 .types = relation.checked_types,
-                .templates = relation.checked_procedure_templates,
+                .templates = &(try relation.checkedTables()).checked_procedure_templates,
                 .env = relation.module_env,
             });
         }

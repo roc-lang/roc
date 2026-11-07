@@ -63,7 +63,7 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
     for (messages) |message| try expected_stderr.print(gpa, "[dbg] {s}\n", .{message});
     try std.testing.expectEqualStrings(expected_stderr.items, stderr_capture.bytes.items);
     var constants: usize = 0;
-    for (artifact.compile_time_roots.roots) |root| {
+    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind != .constant) continue;
         constants += 1;
         try std.testing.expect(artifact.evaluation.rootPayload(root.id) == .const_node);

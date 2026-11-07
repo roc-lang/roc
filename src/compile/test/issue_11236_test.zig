@@ -147,15 +147,15 @@ test "issue 11236: independent valid code still lowers alongside a rejected bind
 
 fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArtifact) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
     var rejected: usize = 0;
-    for (artifact.top_level_procedure_bindings.bindings.items) |binding| {
+    for ((try artifact.checkedTables()).top_level_procedure_bindings.bindings.items) |binding| {
         if (binding.body != .checked_error) continue;
         rejected += 1;
         const expr = binding.body.checked_error;
-        try std.testing.expect(artifact.bodies().exprData(expr) == .runtime_error);
-        for (artifact.compile_time_roots.roots) |root| try std.testing.expect(root.expr != expr);
+        try std.testing.expect((try artifact.bodies()).exprData(expr) == .runtime_error);
+        for ((try artifact.checkedTables()).compile_time_roots.roots) |root| try std.testing.expect(root.expr != expr);
     }
     try std.testing.expectEqual(@as(usize, 1), rejected);
-    try std.testing.expectEqual(@as(usize, 0), artifact.callable_eval_templates.templates.items.len);
+    try std.testing.expectEqual(@as(usize, 0), (try artifact.checkedTables()).callable_eval_templates.templates.items.len);
     var exported_rejected: usize = 0;
     var exported_valid: usize = 0;
     for ((try artifact.exportRows()).procedure_bindings) |binding| {
@@ -217,13 +217,13 @@ test "issue 11236: rejection survives exports and serialization without callable
     try std.testing.expectEqual(@as(usize, 1), (try alias.exportRows()).procedure_bindings.len);
     try std.testing.expect((try alias.exportRows()).procedure_bindings[0].body == .checked_error);
     // The alias's evaluation reaches the rejected binding and stores the crash.
-    for (alias.compile_time_roots.roots) |root| {
+    for ((try alias.checkedTables()).compile_time_roots.roots) |root| {
         try std.testing.expect(alias.evaluation.rootPayload(root.id) == .const_node);
         try std.testing.expect(alias.evaluation.const_store.get(alias.evaluation.rootPayload(root.id).const_node) == .checked_error);
     }
     const importer = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
     var found_use = false;
-    const importer_bodies = importer.bodies();
+    const importer_bodies = try importer.bodies();
     const importer_store = &importer.moduleEnvConst().store;
     for (0..importer_bodies.nodeCount()) |raw| {
         if (importer_bodies.index().nodeKind(@intCast(raw)) != .expr) continue;

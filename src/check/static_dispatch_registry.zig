@@ -2712,7 +2712,7 @@ pub const StaticDispatchPlanTable = struct {
         }
 
         const module_env = module.moduleEnvConst();
-        const checked_type_view = checked_types.store.view();
+        const checked_type_view = checked_types.view;
         var subject_scratch = @TypeOf(checked_type_view).EqualityScratch.init(allocator);
         defer subject_scratch.deinit();
         // Roles are keyed by the type a subject denotes, so subjects
@@ -3427,14 +3427,14 @@ pub fn lookupCheckedMethodTarget(
     imported_views: anytype,
     owner: MethodOwner,
     method: canonical.MethodNameId,
-) ?CheckedMethodLookup {
+) Allocator.Error!?CheckedMethodLookup {
     if (local_method_registry.lookup(.{ .owner = owner, .method = method })) |found| return found;
 
     const method_name = names.methodNameText(method);
     for (imported_views) |imported| {
         const imported_owner = methodOwnerInImportedStore(names, imported.canonical_names, owner) orelse continue;
         const imported_method = imported.canonical_names.lookupMethodName(method_name) orelse continue;
-        if (imported.method_registry.lookup(.{ .owner = imported_owner, .method = imported_method })) |found| {
+        if ((try imported.checkedTables()).method_registry.lookup(.{ .owner = imported_owner, .method = imported_method })) |found| {
             switch (found) {
                 .rejected => return found,
                 .target => |target| switch (target.kind) {

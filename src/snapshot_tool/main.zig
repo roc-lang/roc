@@ -3736,7 +3736,7 @@ fn snapshotProvidedEntrypointName(
             base.invariant("snapshot invariant violated: exported platform root is not a definition", .{});
         },
     };
-    const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
+    const top_level = (try root_artifact.checkedTables()).top_level_values.lookupByDef(def_idx) orelse {
         base.invariant("snapshot invariant violated: exported platform root has no published top-level value", .{});
     };
 

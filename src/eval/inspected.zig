@@ -1284,7 +1284,7 @@ pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
 /// Return the finalized string value of the explicitly published compile-time
 /// REPL root. The returned bytes borrow from `resources`.
 pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const u8 {
-    for (resources.checked_artifact.compile_time_roots.roots) |root| {
+    for ((try resources.checked_artifact.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind != .repl_expr) continue;
 
         var node = switch (resources.checked_artifact.evaluation.rootPayload(root.id)) {

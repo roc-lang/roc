@@ -95,7 +95,7 @@ fn expectPublishedPatterns(body: []const u8, expected_error: ?[]const u8) Patter
     // A failed pattern cannot discard an independent definition's checked body.
     const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
     var found_good = false;
-    const bodies = artifact.bodies();
+    const bodies = try artifact.bodies();
     const store = &artifact.moduleEnvConst().store;
     for (0..bodies.nodeCount()) |i| {
         if (bodies.index().nodeKind(@intCast(i)) != .expr) continue;

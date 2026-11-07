@@ -3820,7 +3820,7 @@ const RootCompletionState = struct {
             request_root_ids[i] = root_id;
         }
 
-        const visited_templates = try allocator.alloc(u32, module.checked_procedure_templates.templates.items.len);
+        const visited_templates = try allocator.alloc(u32, (try module.checkedTables()).checked_procedure_templates.templates.items.len);
         errdefer allocator.free(visited_templates);
         @memset(visited_templates, 0);
 
@@ -3895,13 +3895,13 @@ const RootCompletionState = struct {
         // instantiates (design.md "Literal Arguments").
         if ((try self.module.compileTimeRoot(request_root_id)).literal_argument) |argument| switch (argument.edge) {
             .literal => {},
-            .node => |id| switch ((try self.module.dispatch().evidenceNode(id)).target.kind) {
+            .node => |id| switch ((try (try self.module.dispatch()).evidenceNode(id)).target.kind) {
                 .procedure => |procedure| try self.pending_templates.append(self.allocator, procedure.template),
                 .local_proc, .structural => {},
             },
             .use => |expr| {
-                if (self.module.resolved_value_refs.lookupIdByExpr(expr)) |ref_id| {
-                    switch (self.resolvedRefDependency(self.module.resolved_value_refs.records[@backingInt(ref_id)].ref)) {
+                if ((try self.module.valueRefs()).lookupIdByExpr(expr)) |ref_id| {
+                    switch (try self.resolvedRefDependency((try self.module.valueRefs()).records[@backingInt(ref_id)].ref)) {
                         .complete => |complete| if (!complete) return false,
                         .template => |dependency| try self.pending_templates.append(self.allocator, dependency),
                     }
@@ -3934,19 +3934,19 @@ const RootCompletionState = struct {
         if (self.visited_templates[index] == self.visit) return true;
         self.visited_templates[index] = self.visit;
 
-        const template = self.module.checked_procedure_templates.get(template_ref.template);
+        const template = (try self.module.checkedTables()).checked_procedure_templates.get(template_ref.template);
         const refs = template.resolved_value_refs;
         const start = refs.start;
         const end = refs.start + refs.len;
-        if (end > self.module.resolved_value_refs.template_refs.len) {
+        if (end > (try self.module.valueRefs()).template_refs.len) {
             finalizationInvariant("compile-time dependency template-ref span was outside the checked table");
         }
-        for (self.module.resolved_value_refs.template_refs[start..end]) |ref_id| {
+        for ((try self.module.valueRefs()).template_refs[start..end]) |ref_id| {
             const raw = @backingInt(ref_id);
-            if (raw >= self.module.resolved_value_refs.records.len) {
+            if (raw >= (try self.module.valueRefs()).records.len) {
                 finalizationInvariant("compile-time dependency ref id was outside the checked table");
             }
-            switch (self.resolvedRefDependency(self.module.resolved_value_refs.records[raw].ref)) {
+            switch (try self.resolvedRefDependency((try self.module.valueRefs()).records[raw].ref)) {
                 .complete => |complete| if (!complete) return false,
                 .template => |dependency| try self.pending_templates.append(self.allocator, dependency),
             }
@@ -3958,9 +3958,9 @@ const RootCompletionState = struct {
     /// is complete (design.md "Literal Arguments").
     fn literalArgumentDemandComplete(self: *RootCompletionState, template: canonical.CheckedProcedureTemplateId) Allocator.Error!bool {
         self.literal_demand.clearRetainingCapacity();
-        try self.module.dispatch().appendLiteralArgumentDemand(self.allocator, template, &self.literal_demand);
+        try (try self.module.dispatch()).appendLiteralArgumentDemand(self.allocator, template, &self.literal_demand);
         for (self.literal_demand.items) |root| {
-            if (!self.rootDependencyComplete(root)) return false;
+            if (!try self.rootDependencyComplete(root)) return false;
         }
         return true;
     }
@@ -3975,15 +3975,15 @@ const RootCompletionState = struct {
     fn resolvedRefDependency(
         self: *RootCompletionState,
         ref: checked.ResolvedValueRef,
-    ) Dependency {
+    ) Allocator.Error!Dependency {
         return switch (ref) {
-            .top_level_const => |const_use| .{ .complete = self.constUseComplete(const_use) },
-            .selected_hoisted_const => |selected| .{ .complete = self.constUseComplete(selected.const_use) },
+            .top_level_const => |const_use| .{ .complete = try self.constUseComplete(const_use) },
+            .selected_hoisted_const => |selected| .{ .complete = try self.constUseComplete(selected.const_use) },
             .top_level_proc,
             .promoted_top_level_proc,
             => |proc_use| self.procedureUseDependency(proc_use),
-            .platform_required_const => |required| .{ .complete = self.constUseComplete(required.const_use) },
-            .platform_required_proc => |required| self.procedureUseDependency(required.procedure),
+            .platform_required_const => |required| .{ .complete = try self.constUseComplete(required.const_use) },
+            .platform_required_proc => |required| try self.procedureUseDependency(required.procedure),
             .local_param,
             .local_value,
             .local_mutable_version,
@@ -4001,23 +4001,23 @@ const RootCompletionState = struct {
     fn constUseComplete(
         self: *RootCompletionState,
         const_use: checked.ConstUseTemplate,
-    ) bool {
+    ) Allocator.Error!bool {
         // A declaration with no implementation evaluates nothing, so it
         // publishes no compile-time root and there is nothing to wait on.
-        if (self.constUseIsUnimplemented(const_use.const_ref)) return true;
-        const root_id = self.rootForConstRef(const_use.const_ref) orelse return true;
+        if (try self.constUseIsUnimplemented(const_use.const_ref)) return true;
+        const root_id = try self.rootForConstRef(const_use.const_ref) orelse return true;
         return self.rootDependencyComplete(root_id);
     }
 
-    fn constUseIsUnimplemented(self: *RootCompletionState, const_ref: checked.ConstRef) bool {
+    fn constUseIsUnimplemented(self: *RootCompletionState, const_ref: checked.ConstRef) Allocator.Error!bool {
         if (!artifactMatches(const_ref.artifact, self.module.key)) return false;
-        return self.module.const_templates.get(const_ref).state == .unimplemented;
+        return (try self.module.checkedTables()).const_templates.get(const_ref).state == .unimplemented;
     }
 
     fn rootDependencyComplete(
         self: *RootCompletionState,
         dependency_root_id: checked.ComptimeRootKey,
-    ) bool {
+    ) Allocator.Error!bool {
         const dependent_root_id = self.current_root_id orelse
             finalizationInvariant("compile-time dependency checked outside a root request");
         if (dependency_root_id == dependent_root_id) return true;
@@ -4025,8 +4025,8 @@ const RootCompletionState = struct {
         // Only two definitions' roots can depend on each other lazily; a
         // literal root's source is its literal or its edge, never a
         // definition.
-        const dependent_def = rootDef(self.module, dependent_root_id);
-        const dependency_def = rootDef(self.module, dependency_root_id);
+        const dependent_def = try rootDef(self.module, dependent_root_id);
+        const dependency_def = try rootDef(self.module, dependency_root_id);
         const is_strict = if (dependent_def != null and dependency_def != null)
             self.module.moduleEnvConst().hasTopLevelDemandDependency(dependent_def.?, dependency_def.?)
         else
@@ -4041,18 +4041,18 @@ const RootCompletionState = struct {
     fn rootForConstRef(
         self: *RootCompletionState,
         const_ref: checked.ConstRef,
-    ) ?checked.ComptimeRootKey {
+    ) Allocator.Error!?checked.ComptimeRootKey {
         if (!artifactMatches(const_ref.artifact, self.module.key)) return null;
         return switch (const_ref.owner) {
             .top_level_binding => |top_level| {
-                return self.module.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse
+                return (try self.module.checkedTables()).compile_time_roots.lookupIdByPattern(top_level.pattern) orelse
                     finalizationInvariant("local const dependency had no compile-time root");
             },
             .hoisted_root => |hoisted| {
                 if (hoisted.module_idx != self.module.module_identity.module_idx) {
                     finalizationInvariant("local hoisted const dependency had mismatched module index");
                 }
-                const entry = self.module.hoisted_constants.lookupByRoot(hoisted.root) orelse
+                const entry = (try self.module.checkedTables()).hoisted_constants.lookupByRoot(hoisted.root) orelse
                     finalizationInvariant("local hoisted const dependency had no hoisted const entry");
                 return entry.root;
             },
@@ -4062,19 +4062,19 @@ const RootCompletionState = struct {
     fn procedureUseDependency(
         self: *RootCompletionState,
         proc_use: checked.ProcedureUseTemplate,
-    ) Dependency {
+    ) Allocator.Error!Dependency {
         var binding = proc_use.binding;
         while (true) switch (binding) {
             .top_level => |top_level| {
                 if (!artifactMatches(top_level.artifact, self.module.key)) return .{ .complete = true };
-                return switch (self.module.top_level_procedure_bindings.get(top_level.binding).body) {
+                return switch ((try self.module.checkedTables()).top_level_procedure_bindings.get(top_level.binding).body) {
                     .direct_template => |direct| switch (direct.template) {
                         .checked => |checked_template| .{ .template = checked_template },
                         .lifted, .synthetic => finalizationInvariant("checked procedure dependency referenced a post-check template"),
                     },
                     .checked_error => .{ .complete = true },
                     .callable_eval_template => |template_id| .{
-                        .complete = self.rootDependencyComplete(self.module.callable_eval_templates.get(template_id).root),
+                        .complete = try self.rootDependencyComplete((try self.module.checkedTables()).callable_eval_templates.get(template_id).root),
                     },
                 };
             },
@@ -4085,7 +4085,7 @@ const RootCompletionState = struct {
                     finalizationInvariant("platform-required procedure dependency referenced a missing binding");
                 switch (required_binding.value_use) {
                     .procedure_value => |procedure_use| binding = procedure_use.procedure.binding,
-                    .const_value => |const_use| return .{ .complete = self.constUseComplete(const_use.const_use) },
+                    .const_value => |const_use| return .{ .complete = try self.constUseComplete(const_use.const_use) },
                 }
             },
         };
@@ -4518,12 +4518,12 @@ fn checkedProducerReportedFailure(
     owners: *const ModuleOwners,
     module: checked.ModuleId,
     root_id: checked.ComptimeRootKey,
-) bool {
+) Allocator.Error!bool {
     for (owners.modules) |owner| {
         if (!artifactMatches(module, owner.module.key)) continue;
         // Only a selected hoisted root of the root table is guarded.
         if (root_id.isLiteral()) return true;
-        return !owner.module.compile_time_roots.root(root_id).guarded;
+        return !(try owner.module.checkedTables()).compile_time_roots.root(root_id).guarded;
     }
     finalizationInvariant("value guard producer belonged to a module this finalization does not complete");
 }
@@ -4558,7 +4558,7 @@ fn reportEmbeddedFailure(
     const Embedded = struct { kind: ?lir.LIR.LiteralRejectionKind, message: []const u8, region: ?base.Region, loc: ?base.SourceLoc };
     const embedded: Embedded = if (guardProducerSlot(lir_result, failed_at.meaning)) |producer| switch (producer.root) {
         .checked => |producer_root| {
-            if (checkedProducerReportedFailure(owners, producer.module, producer_root)) return .reported_elsewhere;
+            if (try checkedProducerReportedFailure(owners, producer.module, producer_root)) return .reported_elsewhere;
             return .none;
         },
         .literal => |read| blk: {
@@ -4772,7 +4772,7 @@ fn recordLiteralRootFailure(
         finalizationInvariant("a literal root failed in a finalization that records no literal root failures");
     const cause: LiteralRootFailures.Cause = if (guardProducerSlot(&lowered.lir_result, failure.meaning)) |producer| switch (producer.root) {
         .literal => |read| .{ .literal = read },
-        .checked => |producer_root| if (checkedProducerReportedFailure(owners, producer.module, producer_root)) .checked else .crash,
+        .checked => |producer_root| if (try checkedProducerReportedFailure(owners, producer.module, producer_root)) .checked else .crash,
     } else if (failedLiteralRejection(&lowered.lir_result, failure.meaning)) |site|
         .{ .rejection = site.kind }
     else
@@ -7137,9 +7137,9 @@ fn regionsEqual(a: base.Region, b: base.Region) bool {
 
 /// The definition a root of the module's root table evaluates, or null for
 /// any other root.
-fn rootDef(module: *const checked.CheckedModuleArtifact, root_id: checked.ComptimeRootKey) ?@FieldType(checked.RootSource, "def") {
+fn rootDef(module: *const checked.CheckedModuleArtifact, root_id: checked.ComptimeRootKey) Allocator.Error!?@FieldType(checked.RootSource, "def") {
     if (root_id.isLiteral()) return null;
-    return switch (module.compile_time_roots.root(root_id).source) {
+    return switch ((try module.checkedTables()).compile_time_roots.root(root_id).source) {
         .def => |def| def,
         .expr, .statement, .required_binding, .hoisted, .literal => null,
     };
@@ -7214,7 +7214,7 @@ fn completeRoot(
         .literal_argument,
         => null,
     };
-    finishConstRoot(module, compile_time_root, payload, stored_root_type);
+    try finishConstRoot(module, compile_time_root, payload, stored_root_type);
     try state.markDone(root_id);
 }
 
@@ -7224,7 +7224,7 @@ pub fn finishConstRoot(
     root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
     root_type: ?check.ConstStore.ConstTypeId,
-) void {
+) Allocator.Error!void {
     if (root.kind == .repl_expr) {
         if (payload != .const_node) {
             finalizationInvariant("compile-time REPL root finalized with non-constant payload");
@@ -7250,7 +7250,7 @@ pub fn finishConstRoot(
                 .def => |def| def,
                 .expr, .statement, .required_binding, .hoisted, .literal => finalizationInvariant("constant root source was not a top-level definition"),
             };
-            const top_level = module.top_level_values.lookupByDef(def_idx) orelse
+            const top_level = (try module.checkedTables()).top_level_values.lookupByDef(def_idx) orelse
                 finalizationInvariant("constant root had no top-level value");
             break :blk switch (top_level.value) {
                 .const_ref => |ref| ref,
@@ -7258,7 +7258,7 @@ pub fn finishConstRoot(
             };
         },
         .hoisted_constant => blk: {
-            const hoisted = module.hoisted_constants.lookupByRoot(root.id) orelse
+            const hoisted = (try module.checkedTables()).hoisted_constants.lookupByRoot(root.id) orelse
                 finalizationInvariant("hoisted constant root had no hoisted const entry");
             break :blk hoisted.const_ref;
         },

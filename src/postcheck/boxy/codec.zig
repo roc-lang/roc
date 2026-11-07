@@ -283,7 +283,7 @@ fn fnRet(program: *Program, ty: TypeId) TypeId {
 pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Allocator.Error!u32 {
     const state = &program.codec;
     const allocator = program.allocator;
-    const table = try program.module(module).view.dispatch().generatedCodecs();
+    const table = try program.module(module).dispatch().generatedCodecs();
     const derivation = table.generated_codec_derivations[@backingInt(id)];
     const kind: Kind = switch (derivation.kind) {
         .parser => .parser,
@@ -371,7 +371,7 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
     const allocator = program.allocator;
     const module = program.codec.families.items[family_index].module;
     const env = program.codec.families.items[family_index].env;
-    const table = try program.module(module).view.dispatch().generatedCodecs();
+    const table = try program.module(module).dispatch().generatedCodecs();
     const names = program.module(module).nameStore();
     var visited: collections.DenseMapUnmanaged(DerivationId, void) = .empty;
     defer visited.deinit(allocator);
@@ -751,7 +751,7 @@ fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Local
     defer b.allocator.free(captures);
     if (fam_.locals.items.len != 0) {
         if (fam_.module != b.module) invariant("a generated codec calling local procedures is used outside the module declaring them");
-        const table = b.view.view.dispatch();
+        const table = b.view.dispatch();
         // The function values are built in the entry chain, where the
         // constructor that holds them is composed.
         const saved = b.immortal_closures;
@@ -821,7 +821,7 @@ pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore
 fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge) Allocator.Error!?struct { callable_ty: checked.CheckedTypeId, id: DerivationId } {
     _ = (try view.types().rootForKey(codec.dispatcher_key)) orelse return null;
     const callable_ty = (try view.types().rootForKey(codec.callable_key)) orelse return null;
-    for ((try view.view.dispatch().generatedCodecs()).generated_codec_derivations, 0..) |contract, index| {
+    for ((try view.dispatch().generatedCodecs()).generated_codec_derivations, 0..) |contract, index| {
         if (std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) return .{ .callable_ty = callable_ty, .id = @fromBackingInt(@intCast(index)) };
     }
     return null;
@@ -838,7 +838,7 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
         .dispatch_call, .type_dispatch_call => owner_view.bodies().dispatchPlan(@backingInt(expr)) orelse invariant("a stored generated codec runtime's dispatch has no plan"),
         .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored generated codec runtime does not name a dispatch"),
     };
-    const plan = (try owner_view.view.dispatch().plan(plan_id));
+    const plan = (try owner_view.dispatch().plan(plan_id));
     // A dispatch on a constrained variable reaches its derivation through
     // the evidence the stored value's procedure was instantiated with.
     const derivation_module, const derivation = if (plan.generated_codec_derivation) |id| .{ owner_view.index, id } else switch (plan.resolution) {
@@ -874,7 +874,7 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
     const stored_count = 1 + fam_.names.items.len;
     if (fam_.locals.items.len != 0) {
         if (fam_.module != b.module) invariant("a stored generated codec calling local procedures is restored outside the module declaring them");
-        const table = b.view.view.dispatch();
+        const table = b.view.dispatch();
         var local_index = fam_.locals.items.len;
         while (local_index > 0) {
             local_index -= 1;
@@ -1248,7 +1248,7 @@ const Gen = struct {
                 return .{ .value = try self.local(ret_ty), .ty = ret_ty };
             },
             .callable => |callable| {
-                const table = program_.module(self.fam().module).view.dispatch();
+                const table = program_.module(self.fam().module).dispatch();
                 const node = try table.evidenceNode(callable.node);
                 if (callable.local) |index| {
                     const value = try self.localValue(index);

@@ -4474,7 +4474,7 @@ fn collectModuleTypeInfo(
     }
 
     const hosted_procs = try artifact.hostedProcs();
-    for (artifact.top_level_values.entries) |entry| {
+    for ((try artifact.checkedTables()).top_level_values.entries) |entry| {
         const def_idx = entry.def;
 
         // A platform module's own hosted declaration is a plain top-level

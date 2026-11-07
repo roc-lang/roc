@@ -320,7 +320,7 @@ const Builder = struct {
         // if it is a conversion root, and nothing else.
         if (checked.templateLiteralRoot(template.template)) |root| {
             if (self.views.get(template.artifact.bytes)) |view| {
-                const dispatch = view.dispatch();
+                const dispatch = try view.dispatch();
                 if ((try dispatch.literalRoot(root)).plan) |plan_id| try self.addPlan(node, view, dispatch, plan_id);
                 return node;
             }
@@ -399,16 +399,16 @@ const Builder = struct {
         return switch (use.binding) {
             .top_level => |top_level| blk: {
                 const view = self.views.get(top_level.artifact.bytes) orelse break :blk .unbounded;
-                break :blk self.bindingBodyTarget(view, view.top_level_procedure_bindings.get(top_level.binding).body);
+                break :blk try self.bindingBodyTarget(view, (try view.checkedTables()).top_level_procedure_bindings.get(top_level.binding).body);
             },
             .imported => |imported| blk: {
                 const view = self.views.get(imported.artifact.bytes) orelse break :blk .unbounded;
                 for ((try view.exportRows()).procedure_bindings) |binding| {
                     if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
                     break :blk switch (binding.body) {
-                        .direct_template => |direct| self.bindingBodyTarget(view, .{ .direct_template = direct }),
-                        .callable_eval_template => |id| self.bindingBodyTarget(view, .{ .callable_eval_template = id }),
-                        .checked_error => |expr| self.bindingBodyTarget(view, .{ .checked_error = expr }),
+                        .direct_template => |direct| try self.bindingBodyTarget(view, .{ .direct_template = direct }),
+                        .callable_eval_template => |id| try self.bindingBodyTarget(view, .{ .callable_eval_template = id }),
+                        .checked_error => |expr| try self.bindingBodyTarget(view, .{ .checked_error = expr }),
                     };
                 }
                 break :blk .unbounded;
@@ -416,7 +416,7 @@ const Builder = struct {
             .hosted => null,
             .platform_required => |required| blk: {
                 const view = self.views.get(required.artifact.bytes) orelse break :blk .unbounded;
-                break :blk self.bindingBodyTarget(view, view.top_level_procedure_bindings.get(required.procedure_binding).body);
+                break :blk try self.bindingBodyTarget(view, (try view.checkedTables()).top_level_procedure_bindings.get(required.procedure_binding).body);
             },
         };
     }
@@ -426,7 +426,7 @@ const Builder = struct {
         unbounded,
     };
 
-    fn bindingBodyTarget(_: *Builder, view: checked.ImportedModuleView, body: checked.ProcedureBindingBody) ?TemplateOrUnbounded {
+    fn bindingBodyTarget(_: *Builder, view: checked.ImportedModuleView, body: checked.ProcedureBindingBody) Allocator.Error!?TemplateOrUnbounded {
         return switch (body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| .{ .template = template },
@@ -434,8 +434,8 @@ const Builder = struct {
             },
             .callable_eval_template => |id| blk: {
                 const raw = @backingInt(id);
-                if (raw >= view.callable_eval_templates.templates.len) break :blk .unbounded;
-                const wrapper = view.entry_wrappers.lookupByRoot(view.callable_eval_templates.templates[raw].root) orelse break :blk .unbounded;
+                if (raw >= (try view.checkedTables()).callable_eval_templates.view().templates.len) break :blk .unbounded;
+                const wrapper = (try view.checkedTables()).entry_wrappers.lookupByRoot((try view.checkedTables()).callable_eval_templates.view().templates[raw].root) orelse break :blk .unbounded;
                 break :blk .{ .template = wrapper.template };
             },
             .checked_error => null,
@@ -444,15 +444,15 @@ const Builder = struct {
 
     /// Whether reading a constant can lower its computation in place: its
     /// value is neither stored nor evaluated by this compilation.
-    fn constReadLowersBody(self: *Builder, use: checked.ConstUseTemplate) bool {
+    fn constReadLowersBody(self: *Builder, use: checked.ConstUseTemplate) Allocator.Error!bool {
         const const_ref = use.const_ref;
         const view = self.views.get(const_ref.artifact.bytes) orelse return true;
-        switch (view.constValue(const_ref)) {
+        switch (try view.constValue(const_ref)) {
             .stored_const, .unimplemented => return false,
             .reserved, .eval_template => {},
         }
         const root_id = switch (const_ref.owner) {
-            .top_level_binding => |top_level| view.compile_time_roots.lookupIdByPattern(top_level.pattern),
+            .top_level_binding => |top_level| (try view.checkedTables()).compile_time_roots.lookupIdByPattern(top_level.pattern),
             .hoisted_root => |hoisted| hoisted.root,
         } orelse return true;
         return !self.declared.contains(.{ .module = view.key.digest(), .root = root_id });
@@ -470,16 +470,16 @@ const Builder = struct {
         if (template.target == .hosted) return;
         try self.addTypeEdge(node, view, try view.checked_types.pairedType(template.checked_fn_root));
 
-        const refs = view.resolved_value_refs;
+        const refs = (try view.valueRefs());
         for (refs.template_refs[template.resolved_value_refs.start..][0..template.resolved_value_refs.len]) |ref_id| {
             const record = refs.records[@backingInt(ref_id)];
             try self.addTypeEdge(node, view, record.checked_ty);
             switch (record.ref) {
                 .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| try self.addTemplateTarget(node, try self.procedureUseTarget(use)),
                 .platform_required_proc => |required| try self.addTemplateTarget(node, try self.procedureUseTarget(required.procedure)),
-                .top_level_const, .imported_const => |use| if (self.constReadLowersBody(use)) self.markUnbounded(node, "const read"),
-                .selected_hoisted_const => |selected| if (self.constReadLowersBody(selected.const_use)) self.markUnbounded(node, "hoisted const read"),
-                .platform_required_const => |required| if (self.constReadLowersBody(required.const_use)) self.markUnbounded(node, "required const read"),
+                .top_level_const, .imported_const => |use| if (try self.constReadLowersBody(use)) self.markUnbounded(node, "const read"),
+                .selected_hoisted_const => |selected| if (try self.constReadLowersBody(selected.const_use)) self.markUnbounded(node, "hoisted const read"),
+                .platform_required_const => |required| if (try self.constReadLowersBody(required.const_use)) self.markUnbounded(node, "required const read"),
                 .local_param,
                 .local_value,
                 .local_mutable_version,
@@ -492,8 +492,8 @@ const Builder = struct {
             }
         }
 
-        const dispatch = view.dispatch();
-        for (view.checked_procedure_templates.dispatch_plan_refs[template.static_dispatch_plans.start..][0..template.static_dispatch_plans.len]) |plan_id| {
+        const dispatch = try view.dispatch();
+        for ((try view.checkedTables()).checked_procedure_templates.dispatch_plan_refs[template.static_dispatch_plans.start..][0..template.static_dispatch_plans.len]) |plan_id| {
             try self.addPlan(node, view, dispatch, plan_id);
         }
     }
@@ -553,7 +553,7 @@ const Builder = struct {
     /// A plan's own contribution when it is a literal conversion.
     fn literalFlags(self: *Builder, view: checked.ImportedModuleView, plan_id: static_dispatch.StaticDispatchPlanId, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!Flags {
         if (plan.resolution == .checked_error) return .{};
-        const bodies = view.checked_bodies;
+        const bodies = (try view.bodies());
         const region = view.module_env.store.getNodeRegion(@fromBackingInt(plan.node));
         const conversion_root, const dependent: Flags = switch (bodies.index().nodeKind(plan.node)) {
             // A custom literal pattern's node keys both its conversion plan
@@ -630,14 +630,14 @@ const Builder = struct {
     /// Record every method name dispatch can select by type in this module.
     fn addImplicitMethods(self: *Builder, view: checked.ImportedModuleView) Allocator.Error!void {
         const names = view.canonical_names;
-        const dispatch = view.dispatch();
-        for (0..view.checked_procedure_templates.templates.items.len) |raw| {
+        const dispatch = try view.dispatch();
+        for (0..(try view.checkedTables()).checked_procedure_templates.templates.items.len) |raw| {
             for (try dispatch.evidenceParams(.row(@intCast(raw)))) |param| try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});
         }
-        for (0..view.checked_procedure_templates.dispatch_scopes.len) |raw| {
+        for (0..(try view.checkedTables()).checked_procedure_templates.dispatch_scopes.len) |raw| {
             for ((try dispatch.scopeSchema(@fromBackingInt(@intCast(raw)))).params) |param| try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});
         }
-        const plans = view.static_dispatch_plans;
+        const plans = &(try view.checkedTables()).static_dispatch_plans;
         for (0..plans.plans.len) |raw| switch ((try dispatch.plan(@fromBackingInt(@intCast(raw)))).resolution) {
             .evidence_dependent, .structural => try self.implicit_methods.put(self.allocator, names.methodNameText(plans.plans[raw].method), {}),
             .direct_pending, .direct_closed, .direct_parametric, .checked_error, .@"unreachable" => {},
@@ -654,7 +654,7 @@ const Builder = struct {
     /// explicit call reaches its method through its own plan.
     fn addMethods(self: *Builder, view: checked.ImportedModuleView) Allocator.Error!void {
         const names = view.canonical_names;
-        for (view.method_registry.entries) |entry| {
+        for ((try view.checkedTables()).method_registry.entries) |entry| {
             const target = entry.target orelse continue;
             const implicit = self.implicit_methods.contains(names.methodNameText(entry.key.method));
             const owner: NodeId = switch (entry.key.owner) {
@@ -737,7 +737,7 @@ pub fn compute(
     // Every template has its node before any edge names one.
     var views = builder.views.valueIterator();
     while (views.next()) |view| {
-        for (0..view.checked_procedure_templates.templates.items.len) |index| {
+        for (0..(try view.checkedTables()).checked_procedure_templates.templates.items.len) |index| {
             const node = try builder.addNode(.{});
             try demand.templates.put(allocator, .{ .module = view.key.bytes, .template = @intCast(index) }, node);
         }
@@ -748,7 +748,7 @@ pub fn compute(
     while (views.next()) |view| try builder.addMethods(view.*);
     views = builder.views.valueIterator();
     while (views.next()) |view| {
-        for (view.checked_procedure_templates.templates.items, 0..) |template, index| {
+        for ((try view.checkedTables()).checked_procedure_templates.templates.items, 0..) |template, index| {
             const node = demand.templates.get(.{ .module = view.key.bytes, .template = @intCast(index) }).?;
             try builder.addTemplate(view.*, node, template);
             if (!builder.own.items[node].eql(.{})) demand.counters.source_templates += 1;
@@ -839,7 +839,7 @@ fn rootFlags(
     if (request.root_evidence) |evidence| {
         const evidence_view = findView(modules, evidence.checked_module) orelse
             Common.invariant("discovery root evidence named a checked module outside its lowering set");
-        const dispatch = evidence_view.dispatch();
+        const dispatch = try evidence_view.dispatch();
         evidence_flags = try demand.checkedEvidenceFlags(allocator, dispatch, try dispatch.evidenceEntries(evidence.span));
     }
     if (traceEnabled()) std.debug.print("ctfe-demand root-flags template={b:0>8} type={b:0>8} evidence={b:0>8}\n", .{

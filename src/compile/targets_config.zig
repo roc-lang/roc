@@ -442,7 +442,7 @@ pub const TargetsConfig = struct {
         allocator: Allocator,
         checked_module: *const checked.CheckedModuleArtifact,
         diagnostic: *TargetConfigResolveDiagnostic,
-    ) error{TargetConfigInvalid}!void {
+    ) error{ TargetConfigInvalid, OutOfMemory }!void {
         try resolveLinkTypeCheckedConstants(allocator, checked_module, @constCast(self.targets), diagnostic);
     }
 
@@ -897,7 +897,7 @@ fn resolveLinkTypeCheckedConstants(
     checked_module: *const checked.CheckedModuleArtifact,
     specs: []TargetLinkSpec,
     diagnostic: *TargetConfigResolveDiagnostic,
-) error{TargetConfigInvalid}!void {
+) error{ TargetConfigInvalid, OutOfMemory }!void {
     for (specs) |*spec| {
         var wasm = spec.wasm orelse continue;
         resolveWasmCheckedConstants(allocator, checked_module, spec.target, spec.output, &wasm, diagnostic) catch |err| {
@@ -915,7 +915,7 @@ fn resolveWasmCheckedConstants(
     output: OutputKind,
     wasm: *WasmTargetConfig,
     diagnostic: *TargetConfigResolveDiagnostic,
-) error{TargetConfigInvalid}!void {
+) error{ TargetConfigInvalid, OutOfMemory }!void {
     try resolveWasmImportMemoryField(allocator, checked_module, target, output, "import_memory", &wasm.import_memory, &wasm.import_memory_ident, diagnostic);
     try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "minimum_memory", 0, &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
     try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "maximum_memory", 0, &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
@@ -932,10 +932,10 @@ fn resolveWasmImportMemoryField(
     out: *WasmImportMemory,
     ident_slot: *?[]const u8,
     diagnostic: *TargetConfigResolveDiagnostic,
-) error{TargetConfigInvalid}!void {
+) error{ TargetConfigInvalid, OutOfMemory }!void {
     const ident = ident_slot.* orelse return;
     var reason: TargetConfigResolveReason = .missing_top_level_value;
-    const node = topLevelConstNode(checked_module, ident, &reason) orelse {
+    const node = try topLevelConstNode(checked_module, ident, &reason) orelse {
         diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
         return error.TargetConfigInvalid;
     };
@@ -961,10 +961,10 @@ fn resolveWasmUnsignedField(
     out: *?T,
     ident_slot: *?[]const u8,
     diagnostic: *TargetConfigResolveDiagnostic,
-) error{TargetConfigInvalid}!void {
+) error{ TargetConfigInvalid, OutOfMemory }!void {
     const ident = ident_slot.* orelse return;
     var reason: TargetConfigResolveReason = .expected_unsigned_integer;
-    const node = topLevelConstNode(checked_module, ident, &reason) orelse {
+    const node = try topLevelConstNode(checked_module, ident, &reason) orelse {
         diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
         return error.TargetConfigInvalid;
     };
@@ -989,8 +989,8 @@ fn topLevelConstNode(
     checked_module: *const checked.CheckedModuleArtifact,
     ident: []const u8,
     reason: *TargetConfigResolveReason,
-) ?checked.ConstNodeId {
-    for (checked_module.top_level_values.entries) |entry| {
+) Allocator.Error!?checked.ConstNodeId {
+    for ((try checked_module.checkedTables()).top_level_values.entries) |entry| {
         const source_name = checked_module.nameStore().exportNameText(entry.source_name);
         if (!Ident.textEql(source_name, ident)) continue;
 
@@ -1001,7 +1001,7 @@ fn topLevelConstNode(
                 return null;
             },
         };
-        return switch (checked.ConstTemplateValue.of(checked_module.const_templates.get(const_ref), &checked_module.evaluation)) {
+        return switch (checked.ConstTemplateValue.of((try checked_module.checkedTables()).const_templates.get(const_ref), &checked_module.evaluation)) {
             .stored_const => |stored| stored.node,
             .reserved, .eval_template => blk: {
                 reason.* = .unevaluated_constant;

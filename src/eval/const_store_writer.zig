@@ -1347,21 +1347,11 @@ fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.
         },
         .checking_context_identity = .{},
         .module_env = .{ .checked_source = module_env },
-        .method_registry = .{},
-        .static_dispatch_plans = .{},
-        .resolved_value_refs = .{},
-        .checked_procedure_templates = .{},
-        .top_level_procedure_bindings = .{},
-        .compile_time_roots = .{},
-        .top_level_values = .{},
-        .hoisted_constants = .{},
-        .const_templates = .{},
         .evaluation = checked.EvaluationOutput.init(allocator),
     };
 }
 
 fn deinitTestArtifact(artifact: *checked.CheckedModuleArtifact, allocator: Allocator) void {
-    artifact.const_templates.deinit(allocator);
     artifact.evaluation.deinit(allocator);
     artifact.canonical_names.deinit();
 }

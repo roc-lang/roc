@@ -5054,7 +5054,7 @@ pub const Coordinator = struct {
             module_alloc,
             self.roc_ctx.std_io,
             cached_env,
-            artifact_serialized.checked_procedure_templates.promoted.deserialize(@intFromPtr(artifact_buffer.ptr)),
+            cached_env.promoted_local_procedures.items.items,
         ) catch {
             manager.stats.recordInvalidation();
             return false;
@@ -7689,6 +7689,7 @@ const PatternExtractionRegionStatsError = error{
     PatternExtractionConstantResultWasNotHoisted,
     PatternExtractionConstantResultRootMismatch,
     PatternExtractionValidationRootHadExtraction,
+    OutOfMemory,
 };
 
 var shared_test_builtins: ?eval.BuiltinModules = null;
@@ -7746,8 +7747,8 @@ fn compileAppWithCheckedModuleCache(
     const root = (try coord.executableRootCheckedArtifact());
     const imports = try coord.collectImportedArtifactViews(arena, root);
     const relations = try coord.collectRelationArtifactViews(arena, root);
-    const hoisted_constants = countHoistedConstants(root, imports, relations);
-    const hoisted_validations = countHoistedValidations(root, imports, relations);
+    const hoisted_constants = try countHoistedConstants(root, imports, relations);
+    const hoisted_validations = try countHoistedValidations(root, imports, relations);
     const pattern_extraction_regions = try collectPatternExtractionRegionStats(root, imports, relations);
     const exhaustiveness_sites = try collectExhaustivenessSiteStats(root, imports, relations);
 
@@ -8111,9 +8112,9 @@ fn compileAppRootIdentityExpecting(
     const root = (try coord.executableRootCheckedArtifact());
     for (expected_constants) |expected| {
         var found = false;
-        for (root.top_level_values.entries) |entry| {
+        for ((try root.checkedTables()).top_level_values.entries) |entry| {
             if (!std.mem.eql(u8, root.nameStore().exportNameText(entry.source_name), expected.name)) continue;
-            const state = CheckedArtifact.ConstTemplateValue.of(root.const_templates.get(entry.value.const_ref), &root.evaluation);
+            const state = CheckedArtifact.ConstTemplateValue.of((try root.checkedTables()).const_templates.get(entry.value.const_ref), &root.evaluation);
             try std.testing.expect(state == .stored_const);
             var value = root.evaluation.const_store.get(state.stored_const.node);
             while (value == .nominal) value = root.evaluation.const_store.get(value.nominal.backing);
@@ -8135,8 +8136,8 @@ fn compileAppRootIdentityExpecting(
         }
     }
     var direct_required_call_count: usize = 0;
-    for (root.resolved_value_refs.call_direct_targets) |call| {
-        if (root.resolved_value_refs.records[@backingInt(call.target)].ref == .platform_required_proc) {
+    for ((try root.valueRefs()).call_direct_targets) |call| {
+        if ((try root.valueRefs()).records[@backingInt(call.target)].ref == .platform_required_proc) {
             direct_required_call_count += 1;
         }
     }
@@ -8693,7 +8694,7 @@ fn compileForReuseWithStrategy(allocator: Allocator, cache_dir: []const u8, app_
     }
     var values = std.ArrayList(?i64).empty;
     errdefer values.deinit(allocator);
-    for (app.compile_time_roots.roots) |root| {
+    for ((try app.checkedTables()).compile_time_roots.roots) |root| {
         const def = switch (root.source) {
             .def => |def| def,
             .hoisted, .expr, .statement, .required_binding, .literal => continue,
@@ -9019,7 +9020,7 @@ test "app artifact records platform requirement solutions from checking" {
     // The recorded export id resolves to the app's exported `prog` value—
     // the correspondence is id-keyed, and the ids must agree with the app's
     // own published top-level value table.
-    const top_level = app_artifact.top_level_values.lookupByDef(solution.def) orelse return error.TestUnexpectedResult;
+    const top_level = (try app_artifact.checkedTables()).top_level_values.lookupByDef(solution.def) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(solution.pattern, top_level.pattern);
     try std.testing.expectEqualStrings("prog", app_artifact.nameStore().exportNameText(top_level.source_name));
 
@@ -9327,7 +9328,7 @@ test "platform requirement relation specializes identity reached through app ali
 
     const platform_artifact = (try coord.executableRootCheckedArtifact());
     var platform_hoisted_constants: usize = 0;
-    for (platform_artifact.compile_time_roots.roots) |root| {
+    for ((try platform_artifact.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind == .hoisted_constant) platform_hoisted_constants += 1;
     }
     try std.testing.expect(platform_hoisted_constants > 0);
@@ -9724,7 +9725,7 @@ fn hashPatternExtractionRegionsForView(
     count: *usize,
     view: check.CheckedArtifact.ImportedModuleView,
 ) PatternExtractionRegionStatsError!void {
-    for (view.compile_time_roots.roots) |root| {
+    for ((try view.checkedTables()).compile_time_roots.roots) |root| {
         const is_selected_root = switch (root.kind) {
             .hoisted_constant,
             .hoisted_validation,
@@ -9760,7 +9761,7 @@ fn hashPatternExtractionRegionsForView(
         if (parts.expr != extraction.base_expr) return error.PatternExtractionBodyExprMismatch;
         if (parts.pattern != extraction.scrutinee_pattern) return error.PatternExtractionBodyPatternMismatch;
 
-        const result_const = view.hoisted_constants.lookupByPattern(extraction.result_pattern);
+        const result_const = (try view.checkedTables()).hoisted_constants.lookupByPattern(extraction.result_pattern);
         switch (root.kind) {
             .callable_binding => if (result_const != null) return error.PatternExtractionCallableResultWasHoistedConst,
             .hoisted_constant => {
@@ -9892,10 +9893,10 @@ fn countHoistedConstants(
     root: *const check.CheckedArtifact.CheckedModuleArtifact,
     imports: []const check.CheckedArtifact.ImportedModuleView,
     relations: []const check.CheckedArtifact.ImportedModuleView,
-) usize {
-    var count = root.hoisted_constants.entries.len;
-    for (imports) |view| count += view.hoisted_constants.entries.len;
-    for (relations) |view| count += view.hoisted_constants.entries.len;
+) Allocator.Error!usize {
+    var count = (try root.checkedTables()).hoisted_constants.entries.len;
+    for (imports) |view| count += (try view.checkedTables()).hoisted_constants.entries.len;
+    for (relations) |view| count += (try view.checkedTables()).hoisted_constants.entries.len;
     return count;
 }
 
@@ -9903,19 +9904,19 @@ fn countHoistedValidations(
     root: *const check.CheckedArtifact.CheckedModuleArtifact,
     imports: []const check.CheckedArtifact.ImportedModuleView,
     relations: []const check.CheckedArtifact.ImportedModuleView,
-) usize {
+) Allocator.Error!usize {
     var count: usize = 0;
     const root_view = check.CheckedArtifact.importedView(root);
-    for (root_view.compile_time_roots.roots) |entry| {
+    for ((try root_view.checkedTables()).compile_time_roots.roots) |entry| {
         if (entry.kind == .hoisted_validation) count += 1;
     }
     for (imports) |view| {
-        for (view.compile_time_roots.roots) |entry| {
+        for ((try view.checkedTables()).compile_time_roots.roots) |entry| {
             if (entry.kind == .hoisted_validation) count += 1;
         }
     }
     for (relations) |view| {
-        for (view.compile_time_roots.roots) |entry| {
+        for ((try view.checkedTables()).compile_time_roots.roots) |entry| {
             if (entry.kind == .hoisted_validation) count += 1;
         }
     }
@@ -13391,7 +13392,7 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
                 if (std.mem.eql(u8, artifact.moduleEnvConst().module_name, "Schema")) found = artifact;
             }
             const artifact = found orelse return error.TestUnexpectedResult;
-            const root_id = root: for (artifact.compile_time_roots.roots) |root| {
+            const root_id = root: for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
                 if (root.source != .def) continue;
                 const env = artifact.moduleEnvConst();
                 const pattern = env.store.getPattern(env.store.getDef(root.source.def).pattern);

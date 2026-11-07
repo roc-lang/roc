@@ -55,7 +55,7 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
         return error.TestUnexpectedResult;
     };
     var constants: usize = 0;
-    for (artifact.compile_time_roots.roots) |root| {
+    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind != .constant) continue;
         constants += 1;
         try std.testing.expect(artifact.evaluation.rootPayload(root.id) == .const_node);

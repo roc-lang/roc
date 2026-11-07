@@ -198,11 +198,11 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     try std.testing.expectEqual(@as(usize, if (expected_rejections == 0) 0 else 1), mismatches);
 
     const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
-    const bodies = artifact.bodies();
+    const bodies = try artifact.bodies();
     const store = &artifact.moduleEnvConst().store;
     var rejected: usize = 0;
-    for (0..artifact.static_dispatch_plans.plans.len) |raw| {
-        const plan = try artifact.dispatch().plan(@fromBackingInt(@intCast(raw)));
+    for (0..(try artifact.checkedTables()).static_dispatch_plans.plans.len) |raw| {
+        const plan = try (try artifact.dispatch()).plan(@fromBackingInt(@intCast(raw)));
         if (plan.resolution != .checked_error) continue;
         rejected += 1;
         try std.testing.expect(switch (bodies.index().nodeKind(plan.node)) {
@@ -219,8 +219,8 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     // Every compile-time root: the root table's rows, then the literal roots.
     var root_ids: std.ArrayList(check.CheckedArtifact.ComptimeRootKey) = .empty;
     defer root_ids.deinit(std.testing.allocator);
-    for (artifact.compile_time_roots.roots) |row| try root_ids.append(std.testing.allocator, row.id);
-    try artifact.dispatch().appendLiteralRoots(std.testing.allocator, &root_ids);
+    for ((try artifact.checkedTables()).compile_time_roots.roots) |row| try root_ids.append(std.testing.allocator, row.id);
+    try (try artifact.dispatch()).appendLiteralRoots(std.testing.allocator, &root_ids);
     for (root_ids.items) |root_id| {
         const root = try artifact.compileTimeRoot(root_id);
         const root_node = if (root.literalNode()) |literal| literal.node() else @backingInt(root.rootExpr());

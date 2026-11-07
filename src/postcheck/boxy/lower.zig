@@ -899,8 +899,8 @@ pub const Program = struct {
         const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
-        const template = (try view.view.dispatch().procedureTemplate(template_id));
-        const checked_scheme_vars = try view.view.dispatch().templateSchemeVars(template_id);
+        const template = (try view.dispatch().procedureTemplate(template_id));
+        const checked_scheme_vars = try view.dispatch().templateSchemeVars(template_id);
         // A sealed variable (design.md "Sealed Result Rows") is no hidden
         // parameter: it seals to the empty row wherever the body mentions it,
         // and an evidence parameter dispatching on it is no dictionary.
@@ -908,7 +908,7 @@ pub const Program = struct {
         var checked_slots: std.ArrayList(u32) = .empty;
         var sealed_slots: std.ArrayList(u32) = .empty;
         defer sealed_slots.deinit(self.allocator);
-        const evidence_params = try view.view.dispatch().evidenceParams(template_id);
+        const evidence_params = try view.dispatch().evidenceParams(template_id);
         const template_fn_ty = try view.view.checked_types.pairedType(template.checked_fn_root);
         for (checked_scheme_vars, 0..) |variable, slot| {
             // A platform requirement's identity variable is the app type
@@ -923,7 +923,7 @@ pub const Program = struct {
             try scheme_vars.append(self.arena.allocator(), variable);
             try checked_slots.append(self.arena.allocator(), @intCast(slot));
         }
-        const literal_requirements = try view.view.dispatch().templateLiteralRequirements(template_id);
+        const literal_requirements = try view.dispatch().templateLiteralRequirements(template_id);
         var dictionary_params: std.ArrayList(u32) = .empty;
         for (evidence_params, 0..) |param, index| {
             const sealed_dispatcher = if (param.slot) |slot| std.mem.findScalar(u32, sealed_slots.items, slot) != null else false;
@@ -1507,7 +1507,7 @@ pub const Program = struct {
                 .{ .nominal = declaration.nominal }
             else
                 .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin) }) else .{ .nominal = declaration.nominal };
-            const registry = view.view.method_registry;
+            const registry = &view.tables().method_registry;
             const names = view.nameStore();
             const method_names = [_][]const u8{ "is_eq", "to_hash", "to_inspect" };
             for (method_names, &result, 0..) |method_name, *slot, method_index| {
@@ -1647,7 +1647,7 @@ pub const Program = struct {
             .template => |key| key,
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
         };
-        const params = try self.module(key.module).view.dispatch().evidenceParams(key.template);
+        const params = try self.module(key.module).dispatch().evidenceParams(key.template);
         const env: types.Env = .{ .module = key.module, .vars = target_worker.scheme_vars, .bound = bound };
         for (target_worker.dictionary_params, requirements) |param_index, *requirement| {
             const param = params[param_index];
@@ -1802,7 +1802,7 @@ pub const Program = struct {
             .template => |key| key,
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
         };
-        const all_params = try self.module(key.module).view.dispatch().evidenceParams(key.template);
+        const all_params = try self.module(key.module).dispatch().evidenceParams(key.template);
         const params = try self.allocator.alloc(static_dispatch.EvidenceParamRecord, target_worker.dictionary_params.len);
         defer self.allocator.free(params);
         for (target_worker.dictionary_params, params) |param_index, *param| param.* = all_params[param_index];
@@ -1998,7 +1998,7 @@ pub const Program = struct {
     fn methodIn(view: *const types.ModuleView, owner_names: anytype, owner: static_dispatch.MethodOwner, method_text: []const u8) ?static_dispatch.CheckedMethodLookup {
         const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.nameStore(), owner) orelse return null;
         const method = view.nameStore().lookupMethodName(method_text) orelse return null;
-        return view.view.method_registry.lookup(.{ .owner = view_owner, .method = method });
+        return view.tables().method_registry.lookup(.{ .owner = view_owner, .method = method });
     }
 
     /// The worker of an adapter function value (see `WorkerKey.adapter`).
@@ -2359,7 +2359,7 @@ pub const Program = struct {
         return switch (binding) {
             .top_level => |top| blk: {
                 const owner = self.moduleByKey(top.artifact);
-                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(top.binding)].body };
+                break :blk .{ .module = owner.index, .body = owner.tables().top_level_procedure_bindings.bindings.items[@backingInt(top.binding)].body };
             },
             .imported => |imported| blk: {
                 const owner = self.moduleByKey(imported.artifact);
@@ -2369,7 +2369,7 @@ pub const Program = struct {
             },
             .platform_required => |required| blk: {
                 const owner = self.moduleByKey(required.artifact);
-                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(required.procedure_binding)].body };
+                break :blk .{ .module = owner.index, .body = owner.tables().top_level_procedure_bindings.bindings.items[@backingInt(required.procedure_binding)].body };
             },
             .hosted => |hosted| .{ .module = self.moduleByIdx(hosted.module_idx).index, .body = .{ .direct_template = .{ .proc_value = hosted.proc, .template = .{ .checked = hosted.template } } } },
         };
@@ -2524,10 +2524,10 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         for ((try view.view.exportRows()).procedure_bindings) |*binding| {
             try program.exported_bindings.put(allocator, .{ .module = view.index, .def = binding.binding.def, .pattern = binding.binding.pattern }, binding);
         }
-        for (view.view.callable_eval_templates.templates) |template| {
+        for (view.tables().callable_eval_templates.view().templates) |template| {
             try program.callable_eval_by_pattern.put(allocator, .{ .module = view.index, .pattern = template.pattern }, template.id);
         }
-        for (view.view.entry_wrappers.wrappers.items) |wrapper| {
+        for (view.tables().entry_wrappers.wrappers.items) |wrapper| {
             try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
         }
     }
@@ -2536,7 +2536,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     try initHosted(program);
     for (program.modules.views.items) |*view| {
         const bodies = view.bodies();
-        for (view.view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
+        for (view.tables().checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
             const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
             switch (bodies.exprData(scope.checked_expr)) {
@@ -2552,7 +2552,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
         // A method of a type declared in a function body is a local
         // procedure its dispatches call, each at its own instantiation.
-        for (view.view.method_registry.entries) |entry| {
+        for (view.tables().method_registry.entries) |entry| {
             const target = entry.target orelse continue;
             switch (target.kind) {
                 .local_proc => |local| {
@@ -2567,7 +2567,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
         // A local procedure's uses all reach it through its binding, so its
         // own scheme's arguments are passed per call.
-        for (view.view.resolved_value_refs.records) |record| {
+        for (view.valueRefs().records) |record| {
             const local = switch (record.ref) {
                 .local_proc => |local| local,
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => continue,
@@ -2683,7 +2683,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 .template => |key| blk: {
                     const view = program.module(key.module);
                     if (key.template.rowIndex() == null) break :blk "boxy.literal_root";
-                    const template = view.view.checked_procedure_templates.get(key.template);
+                    const template = view.tables().checked_procedure_templates.get(key.template);
                     break :blk checked.procBaseDefName(view.view.module_env, template.proc_base) orelse "boxy.template";
                 },
                 inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| "boxy." ++ @tagName(kind),
@@ -2710,7 +2710,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 fn seedUnitWorkers(program: *Program) Allocator.Error!void {
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;
-        for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
+        for (view.tables().checked_procedure_templates.templates.items, 0..) |template, index| {
             if (!unitEmitsTemplate(view, template)) continue;
             if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, .row(@intCast(index)));
@@ -2719,21 +2719,21 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         // Each literal root's entry wrapper, which no table row holds.
         var literal_roots: std.ArrayList(checked.ComptimeRootKey) = .empty;
         defer literal_roots.deinit(program.allocator);
-        try view.view.dispatch().appendLiteralRoots(program.allocator, &literal_roots);
+        try view.dispatch().appendLiteralRoots(program.allocator, &literal_roots);
         for (literal_roots.items) |root| {
             const template_id = checked.literalRootWrapperTemplate(root);
-            if (try templateRejected(program, view, try view.view.dispatch().procedureTemplate(template_id))) continue;
+            if (try templateRejected(program, view, try view.dispatch().procedureTemplate(template_id))) continue;
             const worker = try program.templateWorker(view.index, template_id);
             _ = try program.methodEntryWorker(worker);
         }
-        for (view.view.method_registry.entries) |entry| {
+        for (view.tables().method_registry.entries) |entry| {
             const target = entry.target orelse continue;
             const template = switch (target.kind) {
                 .procedure => |procedure| procedure.template,
                 .local_proc, .structural => continue,
             };
             const owner = program.moduleByKey(.{ .bytes = template.artifact.bytes });
-            if (try templateRejected(program, owner, owner.view.checked_procedure_templates.get(template.template))) continue;
+            if (try templateRejected(program, owner, owner.tables().checked_procedure_templates.get(template.template))) continue;
             const worker = try program.templateRefWorker(template);
             if (program.worker(worker).imported) continue;
             _ = try program.methodEntryWorker(worker);
@@ -2758,7 +2758,7 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) bool {
     return switch (template.body) {
         .checked_body, .intrinsic_wrapper, .unimplemented => true,
-        .entry_wrapper => |wrapper_id| switch (view.view.compile_time_roots.root(view.view.entry_wrappers.get(wrapper_id).root).kind) {
+        .entry_wrapper => |wrapper_id| switch (view.tables().compile_time_roots.root(view.tables().entry_wrappers.get(wrapper_id).root).kind) {
             .expect, .repl_expr => false,
             .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
         },
@@ -2888,7 +2888,7 @@ fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source
     // A root whose target takes no hidden arguments is the target itself.
     const direct: ?checked_names.ProcedureTemplateRef = if (request.procedure_template) |template|
         template
-    else if (request.procedure_binding) |binding| switch (program.module(source_module).view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
+    else if (request.procedure_binding) |binding| switch (program.module(source_module).tables().top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
         .direct_template => |direct| Program.directTemplate(direct.template),
         // A rejected binding's root is a wrapper that crashes.
         .callable_eval_template, .checked_error => null,

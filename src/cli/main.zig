@@ -13048,9 +13048,9 @@ fn buildCliTestPlan(
         // the checker's diagnostic is its only report.
         var checking_results = std.ArrayList(CliTestResultItem).empty;
         defer checking_results.deinit(ctx.gpa);
-        for (artifact.compile_time_roots.roots, 0..) |root, position| {
+        for ((try artifact.checkedTables()).compile_time_roots.roots, 0..) |root, position| {
             if (root.kind != .expect or root.request_eligibility != .ineligible) continue;
-            if (std.debug.runtime_safety) std.debug.assert(try artifact.bodies().exprContainsDiagnosticError(root.rootExpr()));
+            if (std.debug.runtime_safety) std.debug.assert(try (try artifact.bodies()).exprContainsDiagnosticError(root.rootExpr()));
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
                 .order = @intCast(position),

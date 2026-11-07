@@ -109,7 +109,7 @@ pub const Digests = struct {
             .templates => for ((try artifact.exportRows()).procedure_templates) |exported| try self.hashTemplateRef(hasher, artifact, exported.template),
             .bindings => try self.hashBindings(hasher, artifact),
             .methods => try self.hashMethods(hasher, artifact),
-            .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len)))),
+            .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast((try artifact.bodies()).defaultExprs().len)))),
             .nominals => hashNominals(hasher, artifact),
             .consts => try self.hashConsts(hasher, artifact),
             .values => try self.hashStoredValues(hasher, artifact, .read_by_importers),
@@ -210,7 +210,7 @@ pub const Digests = struct {
         }
         try self.hashBindings(hasher, artifact);
         try self.hashMethods(hasher, artifact);
-        hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len))));
+        hasher.update(std.mem.asBytes(&@as(u32, @intCast((try artifact.bodies()).defaultExprs().len))));
         hashNominals(hasher, artifact);
         try self.hashConsts(hasher, artifact);
         try self.hashStoredValues(hasher, artifact, .read_by_importers);
@@ -230,7 +230,7 @@ pub const Digests = struct {
     }
 
     fn hashMethods(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
-        for (artifact.method_registry.entries) |entry| {
+        for ((try artifact.checkedTables()).method_registry.entries) |entry| {
             const target = entry.target orelse {
                 hashTag(hasher, "rejected");
                 continue;
@@ -253,7 +253,7 @@ pub const Digests = struct {
     fn hashConsts(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         const exported_consts = (try artifact.exportRows()).const_templates;
         for (exported_consts) |exported| try self.hashConstTemplate(hasher, artifact, exported.template);
-        for (artifact.const_templates.templates.items) |template| switch (template.owner) {
+        for ((try artifact.checkedTables()).const_templates.templates.items) |template| switch (template.owner) {
             .top_level_binding => try self.hashConstTemplate(hasher, artifact, template),
             .hoisted_root => {},
         };
@@ -266,13 +266,13 @@ pub const Digests = struct {
         hasher.update(&self.nameOf(ref.artifact.bytes));
         ref.template.digestInto(hasher);
         if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return;
-        const schema = try artifact.dispatch().templateSchema(ref.template);
+        const schema = try (try artifact.dispatch()).templateSchema(ref.template);
         hasher.update(std.mem.asBytes(&schema.vars.len));
         for (schema.params) |param| {
             hashBytes(hasher, artifact.nameStore().methodNameText(param.method));
             hasher.update(std.mem.asBytes(&(param.slot orelse @as(u32, std.math.maxInt(u32)))));
         }
-        hasher.update(std.mem.asBytes(&@as(u32, @intCast((try artifact.dispatch().templateLiteralRequirements(ref.template)).len))));
+        hasher.update(std.mem.asBytes(&@as(u32, @intCast((try (try artifact.dispatch()).templateLiteralRequirements(ref.template)).len))));
     }
 
     /// How an importer reads a constant: the value stored for it, or the
@@ -284,8 +284,8 @@ pub const Digests = struct {
             .eval_template => |eval_template| try self.hashTemplateRef(hasher, artifact, eval_template.entry_template),
             .stored_const => {
                 const root = switch (template.owner) {
-                    .hoisted_root => |hoisted| (artifact.hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
-                    .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
+                    .hoisted_root => |hoisted| ((try artifact.checkedTables()).hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
+                    .top_level_binding => |top_level| (try artifact.checkedTables()).compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
                 };
                 try self.hashRootValue(hasher, artifact, (try artifact.compileTimeRoot(root)));
             },
@@ -301,7 +301,7 @@ pub const Digests = struct {
     /// The values of `artifact`'s compile-time roots in `scope`. A module's
     /// own object stores all of them.
     fn hashStoredValues(self: *Digests, hasher: *Sha256, artifact: *const Artifact, scope: RootScope) Allocator.Error!void {
-        for (artifact.compile_time_roots.roots) |root| {
+        for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
             switch (scope) {
                 .every_root => {},
                 .read_by_importers => if (root.kind != .callable_binding and artifact.evaluation.rootBoxyValue(root.id) == null) continue,

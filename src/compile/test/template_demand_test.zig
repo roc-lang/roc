@@ -52,7 +52,7 @@ fn expectDemandsWithImports(source: []const u8, imports: []const ImportedSource,
         return error.TestUnexpectedResult;
     };
     const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
-    const templates = &artifact.checked_procedure_templates;
+    const templates = &(try artifact.checkedTables()).checked_procedure_templates;
     for (expected) |entry| {
         const name, const demands = entry;
         const template = for (templates.templates.items) |*template| {
@@ -62,7 +62,7 @@ fn expectDemandsWithImports(source: []const u8, imports: []const ImportedSource,
             std.debug.print("no template named {s}\n", .{name});
             return error.TestUnexpectedResult;
         };
-        std.testing.expectEqualSlices(Demand, demands, try artifact.dispatch().templateDemands(template.template_id)) catch |err| {
+        std.testing.expectEqualSlices(Demand, demands, try (try artifact.dispatch()).templateDemands(template.template_id)) catch |err| {
             std.debug.print("template {s}\n", .{name});
             return err;
         };

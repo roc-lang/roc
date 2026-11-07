@@ -135,10 +135,10 @@ test "issue 11263: a rejected field access preserves independent compile-time ro
     try std.testing.expectEqual(@as(usize, 1), name_errors);
 
     const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
-    const bodies = artifact.bodies();
+    const bodies = try artifact.bodies();
     const store = &artifact.moduleEnvConst().store;
     var found_independent = false;
-    for (artifact.compile_time_roots.roots) |root| {
+    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
         const root_node = if (root.literalNode()) |literal| literal.node() else @backingInt(root.rootExpr());
         const region = store.getNodeRegion(@fromBackingInt(root_node));
         // A root evaluated at compile time whose own body contains the

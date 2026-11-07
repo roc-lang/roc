@@ -35,6 +35,15 @@ pub const ModuleView = struct {
     index: ModuleIndex,
     key: checked.ModuleId,
     view: checked.ImportedModuleView,
+    /// The reader over the module's bodies (`ImportedModuleView.bodies`).
+    checked_bodies: checked.CheckedBodies,
+    /// The reader over the module's dispatch resolution
+    /// (`ImportedModuleView.dispatch`).
+    checked_dispatch: checked.CheckedDispatch,
+    /// The module's checked tables (`ImportedModuleView.checkedTables`).
+    checked_tables: *const checked.CheckedTables,
+    /// The module's resolved value references (`ImportedModuleView.valueRefs`).
+    value_refs: *const checked.ResolvedValueRefTable,
     /// What `Modules.linkName` returns.
     link_name: [32]u8,
 
@@ -43,7 +52,19 @@ pub const ModuleView = struct {
     }
 
     pub fn bodies(self: *const ModuleView) checked.CheckedBodies {
-        return self.view.checked_bodies;
+        return self.checked_bodies;
+    }
+
+    pub fn dispatch(self: *const ModuleView) checked.CheckedDispatch {
+        return self.checked_dispatch;
+    }
+
+    pub fn tables(self: *const ModuleView) *const checked.CheckedTables {
+        return self.checked_tables;
+    }
+
+    pub fn valueRefs(self: *const ModuleView) *const checked.ResolvedValueRefTable {
+        return self.value_refs;
     }
 
     pub fn nameStore(self: *const ModuleView) *const names.CanonicalNameStore {
@@ -119,12 +140,16 @@ pub const Modules = struct {
 
     /// Add a module unless one with the same key is present.
     pub fn add(self: *Modules, view: checked.ImportedModuleView) Allocator.Error!ModuleIndex {
+        if (self.by_key.get(view.key.bytes)) |existing| return existing;
+        const checked_bodies = try view.bodies();
+        const checked_dispatch = checked_bodies.tables.dispatch.?;
+        const checked_tables = try view.checkedTables();
+        const value_refs = checked_bodies.tables.refs.?;
         const entry = try self.by_key.getOrPut(self.allocator, view.key.bytes);
-        if (entry.found_existing) return entry.value_ptr.*;
         const index: ModuleIndex = @fromBackingInt(@intCast(self.views.items.len));
         entry.value_ptr.* = index;
         const link_name = if (self.link_names) |link_names| link_names.of(view) else view.module_identity.stable_hash;
-        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view, .link_name = link_name });
+        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view, .checked_bodies = checked_bodies, .checked_dispatch = checked_dispatch, .checked_tables = checked_tables, .value_refs = value_refs, .link_name = link_name });
         return index;
     }
 

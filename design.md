@@ -5634,6 +5634,27 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   conversion roots, then every literal component's argument roots, with
   the compile-time requests in evaluation order). A platform/app pairing's
   root requests are its own slot over its platform's.
+- The module's checked tables (`ModuleAnalyses.checkedTables`, one slot,
+  because each table is built from and completes the others): its procedure
+  templates (one per value-binding definition that is a procedure, then one
+  per promoted local procedure, then one entry wrapper per compile-time
+  root), its method registry, static dispatch plans and compile-time roots,
+  its top-level values with their procedure bindings, callable-eval and
+  constant templates, its hoisted constants, and its resolved value
+  references (a translation of the value references checking recorded, by
+  the tables' ids; an associated lookup's target is found by content
+  identity among the module's direct imports and the modules they and its
+  types' name owners reach). The slot computes them from the live module
+  on their first demand. The types they name that have no solver variable
+  (the empty record of a valueless root and the synthetic scheme of a
+  pattern-validation constant, then each entry wrapper's function type and
+  scheme) are created under the creation lock, in two sections, each after
+  every slot the creation reads. What the tables read of other modules
+  (their export rows and interface capabilities) is demanded before the
+  slot is claimed, so its computation never waits on a slot of its own
+  kind. A platform/app pairing reads its platform's tables, except its
+  resolved value references, which are the pairing's own slot over its
+  platform's.
 - Per-module slots of `check.ModuleAnalyses`
   (`src/check/module_analyses.zig`), which every checked module owns:
   the module's export rows (`exportRows`: the definitions it exports, in

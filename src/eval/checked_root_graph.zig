@@ -153,14 +153,14 @@ const Walker = struct {
             if (!entry.found_existing) entry.value_ptr.* = @intCast(ordinal);
         }
         const visited = try walkStamps(allocator, modules, struct {
-            fn count(module: *const checked.CheckedModuleArtifact) usize {
-                return module.checked_procedure_templates.templates.items.len;
+            fn count(module: *const checked.CheckedModuleArtifact) Allocator.Error!usize {
+                return (try module.checkedTables()).checked_procedure_templates.templates.items.len;
             }
         }.count);
         errdefer freeStamps(allocator, visited);
         const visited_derivations = try walkStamps(allocator, modules, struct {
-            fn count(module: *const checked.CheckedModuleArtifact) usize {
-                return module.static_dispatch_plans.recorded_codec_derivations.len;
+            fn count(module: *const checked.CheckedModuleArtifact) Allocator.Error!usize {
+                return (try module.checkedTables()).static_dispatch_plans.recorded_codec_derivations.len;
             }
         }.count);
         errdefer freeStamps(allocator, visited_derivations);
@@ -168,7 +168,7 @@ const Walker = struct {
     }
 
     /// Per module, a zeroed walk stamp per item `count` counts.
-    fn walkStamps(allocator: Allocator, modules: []const *const checked.CheckedModuleArtifact, count: fn (*const checked.CheckedModuleArtifact) usize) Allocator.Error![][]u32 {
+    fn walkStamps(allocator: Allocator, modules: []const *const checked.CheckedModuleArtifact, count: fn (*const checked.CheckedModuleArtifact) Allocator.Error!usize) Allocator.Error![][]u32 {
         const out = try allocator.alloc([]u32, modules.len);
         var allocated: usize = 0;
         errdefer {
@@ -176,7 +176,7 @@ const Walker = struct {
             allocator.free(out);
         }
         for (modules, out) |module, *items| {
-            items.* = try allocator.alloc(u32, count(module));
+            items.* = try allocator.alloc(u32, try count(module));
             @memset(items.*, 0);
             allocated += 1;
         }
@@ -254,25 +254,25 @@ const Walker = struct {
         const reads_start = self.reads.items.len;
         self.evidence_visit += 1;
         const module = self.modules[key.module];
-        const template = module.checked_procedure_templates.get(key.template);
+        const template = (try module.checkedTables()).checked_procedure_templates.get(key.template);
         const refs = template.resolved_value_refs;
         const end = refs.start + refs.len;
-        if (end > module.resolved_value_refs.template_refs.len) base.invariant("compile-time finalization invariant violated: a template's value reference span is outside its checked table", .{});
-        for (module.resolved_value_refs.template_refs[refs.start..end]) |ref_id| {
+        if (end > (try module.valueRefs()).template_refs.len) base.invariant("compile-time finalization invariant violated: a template's value reference span is outside its checked table", .{});
+        for ((try module.valueRefs()).template_refs[refs.start..end]) |ref_id| {
             const raw = @backingInt(ref_id);
-            if (raw >= module.resolved_value_refs.records.len) base.invariant("compile-time finalization invariant violated: a value reference id is outside its checked table", .{});
-            const record = module.resolved_value_refs.records[raw];
+            if (raw >= (try module.valueRefs()).records.len) base.invariant("compile-time finalization invariant violated: a value reference id is outside its checked table", .{});
+            const record = (try module.valueRefs()).records[raw];
             try self.walkRef(record.ref);
-            if (try module.dispatch().siteEvidence(record.expr)) |evidence| {
+            if (try (try module.dispatch()).siteEvidence(record.expr)) |evidence| {
                 try self.walkEntries(key.module, evidence);
                 try self.drainNodes(key.module);
             }
         }
-        const plan_refs = module.checked_procedure_templates.dispatch_plan_refs;
+        const plan_refs = (try module.checkedTables()).checked_procedure_templates.dispatch_plan_refs;
         const plan_span = template.static_dispatch_plans;
         if (plan_span.start + plan_span.len > plan_refs.len) base.invariant("compile-time finalization invariant violated: a template's dispatch plan span is outside its checked table", .{});
         for (plan_refs[plan_span.start..][0..plan_span.len]) |plan_id| {
-            const plan = try module.dispatch().plan(plan_id);
+            const plan = try (try module.dispatch()).plan(plan_id);
             switch (plan.resolution) {
                 .direct_closed, .direct_parametric => |direct| try self.nodes.append(self.allocator, direct.evidence),
                 .structural => if (plan.generated_codec_derivation) |id| try self.derivations.append(self.allocator, id),
@@ -299,7 +299,7 @@ const Walker = struct {
     /// procedure target is a template the evaluation reaches, and each
     /// node's nested evidence names further targets.
     fn drainNodes(self: *Walker, module: u32) Allocator.Error!void {
-        const dispatch = self.modules[module].dispatch();
+        const dispatch = try self.modules[module].dispatch();
         while (self.nodes.items.len != 0 or self.derivations.items.len != 0) {
             if (self.derivations.pop()) |id| {
                 const stamps_of = self.visited_derivations[module];
@@ -335,7 +335,7 @@ const Walker = struct {
 
     /// Queue the evidence nodes and derivations `evidence` resolves to.
     fn walkEntries(self: *Walker, module: u32, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error!void {
-        const dispatch = self.modules[module].dispatch();
+        const dispatch = try self.modules[module].dispatch();
         for (evidence) |entry| {
             try self.walkResolution(entry.resolution);
             for (try dispatch.evidenceEntries(entry.callable_contracts)) |contract| try self.walkResolution(contract.resolution);
@@ -356,7 +356,7 @@ const Walker = struct {
         const stamp = try self.visited_literal_wrappers.getOrPut(self.allocator, key);
         if (stamp.found_existing and stamp.value_ptr.* == self.visit) return;
         stamp.value_ptr.* = self.visit;
-        const dispatch = self.modules[key.module].dispatch();
+        const dispatch = try self.modules[key.module].dispatch();
         self.evidence_visit += 1;
         if ((try dispatch.literalRoot(root)).plan) |plan_id| {
             const plan = try dispatch.plan(plan_id);
@@ -374,7 +374,7 @@ const Walker = struct {
     /// "Literal Arguments").
     fn readLiteralArgumentDemand(self: *Walker, key: TemplateKey) Allocator.Error!void {
         self.literal_demand.clearRetainingCapacity();
-        try self.modules[key.module].dispatch().appendLiteralArgumentDemand(self.allocator, key.template, &self.literal_demand);
+        try (try self.modules[key.module].dispatch()).appendLiteralArgumentDemand(self.allocator, key.template, &self.literal_demand);
         for (self.literal_demand.items) |root| try self.readRoot(key.module, root);
     }
 
@@ -384,13 +384,13 @@ const Walker = struct {
         const artifact = self.modules[module];
         switch (edge) {
             .literal => {},
-            .node => |id| switch ((try artifact.dispatch().evidenceNode(id)).target.kind) {
+            .node => |id| switch ((try (try artifact.dispatch()).evidenceNode(id)).target.kind) {
                 .procedure => |procedure| try self.pushTemplate(procedure.template),
                 .local_proc, .structural => {},
             },
             .use => |expr| {
-                const ref_id = artifact.resolved_value_refs.lookupIdByExpr(expr) orelse return;
-                try self.walkRef(artifact.resolved_value_refs.records[@backingInt(ref_id)].ref);
+                const ref_id = (try artifact.valueRefs()).lookupIdByExpr(expr) orelse return;
+                try self.walkRef((try artifact.valueRefs()).records[@backingInt(ref_id)].ref);
             },
         }
     }
@@ -417,7 +417,7 @@ const Walker = struct {
         const const_ref = const_use.const_ref;
         const module = self.moduleOf(const_ref.artifact) orelse return;
         const artifact = self.modules[module];
-        switch (checked.ConstTemplateValue.of(artifact.const_templates.get(const_ref), &artifact.evaluation)) {
+        switch (checked.ConstTemplateValue.of((try artifact.checkedTables()).const_templates.get(const_ref), &artifact.evaluation)) {
             // A declaration with no implementation evaluates nothing.
             .unimplemented => return,
             // A value holding function values is restored by lowering its
@@ -427,8 +427,8 @@ const Walker = struct {
             .stored_const, .reserved => {},
         }
         const root: checked.ComptimeRootKey = switch (const_ref.owner) {
-            .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
-            .hoisted_root => |hoisted| (artifact.hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
+            .top_level_binding => |top_level| (try artifact.checkedTables()).compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
+            .hoisted_root => |hoisted| ((try artifact.checkedTables()).hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
         };
         try self.readRoot(module, root);
     }
@@ -438,7 +438,7 @@ const Walker = struct {
             .top_level => |top_level| try self.topLevelBinding(self.moduleOf(top_level.artifact) orelse return, top_level.binding),
             .imported => |imported| {
                 const module = self.moduleOf(imported.artifact) orelse return;
-                const entry = self.modules[module].top_level_values.lookupByDef(imported.def) orelse return;
+                const entry = (try self.modules[module].checkedTables()).top_level_values.lookupByDef(imported.def) orelse return;
                 switch (entry.value) {
                     .procedure_binding => |procedure_binding| try self.topLevelBinding(module, procedure_binding),
                     .const_ref => |const_ref| try self.constUse(.{ .const_ref = const_ref, .requested_source_ty_payload = proc_use.source_fn_ty_payload }),
@@ -454,12 +454,12 @@ const Walker = struct {
 
     fn topLevelBinding(self: *Walker, module: u32, binding: checked.TopLevelProcedureBindingRef) Allocator.Error!void {
         const artifact = self.modules[module];
-        switch (artifact.top_level_procedure_bindings.get(binding).body) {
+        switch ((try artifact.checkedTables()).top_level_procedure_bindings.get(binding).body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| try self.pushTemplate(template),
                 .lifted, .synthetic => base.invariant("compile-time finalization invariant violated: a checked procedure dependency named a post-check template", .{}),
             },
-            .callable_eval_template => |template_id| try self.readRoot(module, artifact.callable_eval_templates.get(template_id).root),
+            .callable_eval_template => |template_id| try self.readRoot(module, (try artifact.checkedTables()).callable_eval_templates.get(template_id).root),
             .checked_error => {},
         }
     }
@@ -646,9 +646,9 @@ fn expectSharedDependencies(source: []const u8, imports: []const @import("inspec
     evidence_probe.visit = 1;
     var probed_evidence = false;
     evidence: for (modules.items, 0..) |module, module_index| {
-        for (0..module.checked_procedure_templates.templates.items.len) |raw_template| {
+        for (0..(try module.checkedTables()).checked_procedure_templates.templates.items.len) |raw_template| {
             const owner = static_dispatch.EvidenceOwner.forTemplate(@fromBackingInt(@intCast(raw_template)));
-            for ((try module.dispatch().pool(owner)).nodes, 0..) |node, node_index| {
+            for ((try (try module.dispatch()).pool(owner)).nodes, 0..) |node, node_index| {
                 if (node.target.kind != .procedure or evidence_probe.moduleOf(node.target.kind.procedure.template.artifact) == null) continue;
                 const id: static_dispatch.EvidenceNodeId = .{ .index = @intCast(node_index), .owner = owner };
                 evidence_probe.evidence_visit = 1;
