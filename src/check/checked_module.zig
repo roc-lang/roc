@@ -13578,6 +13578,58 @@ pub const CheckedDispatch = struct {
     }
 };
 
+/// The evidence parameters of each scheme of one module an evidence pass
+/// enumerated, by scheme owner, before any pass publishes them. Each is a
+/// function of the module's solver store alone, so every pass of the module
+/// (a pass per template schema and per template resolution) enumerates a
+/// scheme once and the others copy it.
+pub const SchemeSchemaCache = struct {
+    mutex: std.Io.Mutex = .init,
+    arena: ?std.heap.ArenaAllocator = null,
+    schemas: std.AutoHashMapUnmanaged(Var, Shared) = .empty,
+
+    pub const Shared = struct {
+        params: []const dispatch_evidence.EvidenceParam,
+        dispatcher_rows: []const EvidencePass.DispatcherParams.Row,
+        path_nodes: []const static_dispatch.EvidencePathNode,
+        identity_vars: []const Var,
+    };
+
+    pub fn deinit(self: *SchemeSchemaCache) void {
+        if (self.arena) |*arena| {
+            self.schemas.deinit(arena.child_allocator);
+            arena.deinit();
+        }
+        self.* = .{};
+    }
+
+    fn get(self: *SchemeSchemaCache, io: std.Io, owner: Var) ?Shared {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        return self.schemas.get(owner);
+    }
+
+    /// Keep `schema`, copied, for every later pass, unless a pass on
+    /// another thread kept the same scheme's first.
+    fn put(self: *SchemeSchemaCache, allocator: Allocator, io: std.Io, owner: Var, schema: Shared) Allocator.Error!void {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        if (self.arena == null) self.arena = std.heap.ArenaAllocator.init(allocator);
+        const arena = self.arena.?.allocator();
+        const entry = try self.schemas.getOrPut(allocator, owner);
+        if (entry.found_existing) return;
+        errdefer _ = self.schemas.remove(owner);
+        const params = try arena.dupe(dispatch_evidence.EvidenceParam, schema.params);
+        for (params) |*param| param.callable_contracts = try arena.dupe(types.StaticDispatchConstraint, param.callable_contracts);
+        entry.value_ptr.* = .{
+            .params = params,
+            .dispatcher_rows = try arena.dupe(EvidencePass.DispatcherParams.Row, schema.dispatcher_rows),
+            .path_nodes = try arena.dupe(static_dispatch.EvidencePathNode, schema.path_nodes),
+            .identity_vars = try arena.dupe(Var, schema.identity_vars),
+        };
+    }
+};
+
 /// The traversal scratch of an evidence pass: the visited sets and work
 /// lists its walks over the module's solver store keep between walks. A
 /// visited set's storage spans the range of solver variables its walks
@@ -14757,6 +14809,29 @@ const EvidencePass = struct {
     fn schemeSchema(self: *EvidencePass, root: Var) Allocator.Error!SchemeSchema {
         const owner = self.schemeOwner(root);
         if (self.schemas_by_root.get(owner)) |schema| return schema;
+        const analyses = self.dispatch.source.analyses;
+        const schema = if (analyses.scheme_schemas.get(analyses.io, owner)) |shared| SchemeSchema{
+            .params = try self.enumerated_path_arena.allocator().dupe(EvidenceParam, shared.params),
+            .by_dispatcher = .{ .rows = shared.dispatcher_rows },
+            .path_nodes = shared.path_nodes,
+            .identity_vars = try self.allocator.dupe(Var, shared.identity_vars),
+        } else computed: {
+            const computed = try self.enumerateSchemeSchema(root);
+            errdefer self.allocator.free(computed.identity_vars);
+            try analyses.scheme_schemas.put(analyses.allocator, analyses.io, owner, .{
+                .params = computed.params,
+                .dispatcher_rows = computed.by_dispatcher.rows,
+                .path_nodes = computed.path_nodes,
+                .identity_vars = computed.identity_vars,
+            });
+            break :computed computed;
+        };
+        errdefer self.allocator.free(schema.identity_vars);
+        try self.schemas_by_root.put(owner, schema);
+        return schema;
+    }
+
+    fn enumerateSchemeSchema(self: *EvidencePass, root: Var) Allocator.Error!SchemeSchema {
         const env = self.module.moduleEnvConst();
         const requirements = env.bindingSchemeCodecRequirementsForNode(@fromBackingInt(@intCast(@backingInt(root))));
         var explicit = std.ArrayListUnmanaged(dispatch_evidence.SchemeRequirement).empty;
@@ -14800,14 +14875,12 @@ const EvidencePass = struct {
             dispatcher_row_len += 1;
         }
         std.sort.pdq(DispatcherParams.Row, dispatcher_rows, {}, DispatcherParams.Row.lessThan);
-        const schema = SchemeSchema{
+        return .{
             .params = try arena.dupe(EvidenceParam, params.items),
             .by_dispatcher = .{ .rows = dispatcher_rows },
             .path_nodes = try arena.dupe(static_dispatch.EvidencePathNode, self.traversal.enum_scratch.paramPathNodes()),
             .identity_vars = identity_vars,
         };
-        try self.schemas_by_root.put(owner, schema);
-        return schema;
     }
 
     fn enumerateParams(self: *EvidencePass, root: Var, out: *std.ArrayListUnmanaged(EvidenceParam)) Allocator.Error!void {

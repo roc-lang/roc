@@ -261,6 +261,8 @@ pub const ModuleAnalyses = struct {
     /// Guards `idle_evidence_traversals` and `evidence_traversal_count`; held
     /// around a borrow's or a return's list update only.
     evidence_traversal_mutex: std.Io.Mutex = .init,
+    /// The scheme schemas the module's evidence passes enumerated.
+    scheme_schemas: checked_module.SchemeSchemaCache = .{},
     /// The type-variable mention memos no template demand walk of the module
     /// has borrowed (`borrowTypeVarMentions`), with capacity for every memo
     /// the module has created.
@@ -412,6 +414,7 @@ pub const ModuleAnalyses = struct {
             capabilities.deinit(allocator);
             allocator.destroy(capabilities);
         }
+        self.scheme_schemas.deinit();
         std.debug.assert(self.idle_evidence_traversals.items.len == self.evidence_traversal_count);
         for (self.idle_evidence_traversals.items) |traversal| traversal.destroy(allocator);
         self.idle_evidence_traversals.deinit(allocator);
