@@ -33888,7 +33888,6 @@ fn publicationDefaultExprs(
     return defaults.toOwnedSlice(allocator);
 }
 
-/// Public `publishFromTypedModule` function.
 /// A module's checked tables: its procedure templates, method registry,
 /// static dispatch plans, compile-time roots, entry wrappers, top-level
 /// values with their procedure bindings, callable-eval and constant
@@ -34126,6 +34125,7 @@ fn valuelessRootTypes(selected_hoisted_roots: []const hoist_roots.SelectedHoiste
     return .{ .empty_record = empty_record, .validation_scheme = validation_scheme };
 }
 
+/// Public `publishFromTypedModule` function.
 pub fn publishFromTypedModule(
     allocator: Allocator,
     modules: *const TypedCIR.Modules,
