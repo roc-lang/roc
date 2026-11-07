@@ -272,7 +272,9 @@ pub const Writer = struct {
     };
 
     const StoreFinish = union(enum) {
-        list: checked.ConstNodeId,
+        /// A list whose items are nodes, with the capacity it was evaluated
+        /// with.
+        list: struct { node: checked.ConstNodeId, capacity: u64 },
         box: checked.ConstNodeId,
         tuple: checked.ConstNodeId,
         record: checked.ConstNodeId,
@@ -413,11 +415,20 @@ pub const Writer = struct {
             .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
             .zst => return self.store.fill(node, .zst),
             .scalar => return self.store.fill(node, .{ .scalar = self.storeScalar(layout_idx, value) }),
-            .str => return self.store.fill(node, try self.storeStr(value)),
+            .str => {
+                self.store.fill(node, try self.storeStr(value));
+                const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
+                if (spareStrCapacity(roc_str)) |capacity| self.store.setCapacity(node, capacity);
+                return;
+            },
             .list => |elem_plan| blk: {
                 if (try self.storeListLeaf(node, elem_plan, layout_idx, value)) return;
                 try self.appendListRequests(children, elem_plan, layout_idx, value);
-                break :blk .{ .list = node };
+                const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
+                // A list of zero-sized items allocates nothing, so it has no
+                // room of its own to keep.
+                const capacity: u64 = if (self.program.layouts.getLayout(layout_idx).tag == .list) roc_list.getCapacity() else roc_list.len();
+                break :blk .{ .list = .{ .node = node, .capacity = capacity } };
             },
             .box => |elem_plan| blk: {
                 try self.appendBoxRequest(children, elem_plan, layout_idx, value);
@@ -523,7 +534,10 @@ pub const Writer = struct {
         const nodes = self.store_nodes.items[frame.nodes_start..][0..frame.requests_len];
         const capture_types = self.store_capture_types.items[frame.capture_types_start..][0..frame.slots.len];
         switch (frame.finish) {
-            .list => |node| self.store.fill(node, .{ .list = .{ .nodes = nodes } }),
+            .list => |list| {
+                self.store.fill(list.node, .{ .list = .{ .nodes = nodes } });
+                if (list.capacity > nodes.len) self.store.setCapacity(list.node, list.capacity);
+            },
             .box => |node| self.store.fill(node, .{ .box = nodes[0] }),
             .tuple => |node| self.store.fill(node, .{ .tuple = nodes }),
             .record => |node| self.store.fill(node, .{ .record = nodes }),
@@ -590,14 +604,15 @@ pub const Writer = struct {
         }
         if (self.planIsScalar(elem_plan)) {
             try self.storePackedList(target_node, layout_value, roc_list);
-            return true;
-        }
-        const elem_layout = if (layout_value.tag == .list_of_zst) layout.Idx.zst else layout_value.getIdx();
-        if (try self.productPlan(elem_plan, elem_layout)) |plan| {
+        } else {
+            const elem_layout = if (layout_value.tag == .list_of_zst) layout.Idx.zst else layout_value.getIdx();
+            const plan = try self.productPlan(elem_plan, elem_layout) orelse return false;
             try self.storeProductList(target_node, plan, roc_list);
-            return true;
         }
-        return false;
+        // A list of zero-sized items allocates nothing, so it has no room of
+        // its own to keep.
+        if (layout_value.tag == .list and roc_list.getCapacity() > roc_list.len()) self.store.setCapacity(target_node, roc_list.getCapacity());
+        return true;
     }
 
     fn appendListRequests(
@@ -809,6 +824,15 @@ pub const Writer = struct {
             .offset = 0,
             .len = len,
         } };
+    }
+
+    /// The capacity a heap string was evaluated with, when it has room beyond
+    /// its bytes. A small string holds its bytes in its descriptor, so it has
+    /// no room of its own to keep.
+    fn spareStrCapacity(roc_str: *const RocStr) ?u64 {
+        if (roc_str.isSmallStr()) return null;
+        const capacity = roc_str.getCapacity();
+        return if (capacity > roc_str.len()) capacity else null;
     }
 
     fn storeBytes(self: *Writer, bytes: []const u8) Allocator.Error!const_store.ConstStr {
@@ -1470,6 +1494,48 @@ test "const store writer stores every NaN as Roc's one NaN" {
     var finite: u64 = @bitCast(@as(f64, -2.5));
     const stored_finite = try writer.storeRoot(testConstRoot(scalar_plan, .f64), .{ .ptr = @ptrCast(&finite) });
     try testing.expectEqual(finite, artifact.evaluation.const_store.get(stored_finite.const_node).scalar.f64_bits);
+}
+
+test "const store writer keeps the capacity a list and a heap string were evaluated with beyond their contents" {
+    const testing = std.testing;
+
+    var module_env = try can.ModuleEnv.init(testing.allocator, "");
+    defer module_env.deinit();
+
+    var artifact = try initTestArtifact(testing.allocator, &module_env);
+    defer deinitTestArtifact(&artifact, testing.allocator);
+
+    var program = try LirProgram.Result.init(testing.allocator, .u64);
+    defer program.deinit();
+    const str_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .str);
+    const scalar_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .scalar);
+    const list_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .{ .list = scalar_plan });
+    const u8_list_layout = try program.layouts.insertLayout(layout.Layout.list(.u8));
+
+    var writer = Writer.init(testing.allocator, &artifact, &program);
+    defer writer.deinit();
+
+    var backing: [64]u8 = undefined;
+    @memcpy(backing[0..3], "abc");
+    // A heap string holding three bytes with room for sixty-four, and a
+    // list holding three items with room for as many.
+    var roomy_str = RocStr{ .bytes = &backing, .length = 3, .capacity_or_alloc_ptr = RocStr.encodeCapacity(backing.len) };
+    var full_str = RocStr{ .bytes = &backing, .length = 3, .capacity_or_alloc_ptr = RocStr.encodeCapacity(3) };
+    var roomy_list = RocList{ .bytes = &backing, .length = 3, .capacity_or_alloc_ptr = RocList.encodeCapacity(backing.len) };
+    var full_list = RocList{ .bytes = &backing, .length = 3, .capacity_or_alloc_ptr = RocList.encodeCapacity(3) };
+
+    const store = &artifact.evaluation.const_store;
+    const roomy_str_node = (try writer.storeRoot(testConstRoot(str_plan, .str), .{ .ptr = @ptrCast(&roomy_str) })).const_node;
+    try testing.expectEqual(@as(?u64, 64), store.spareCapacity(roomy_str_node));
+    const full_str_node = (try writer.storeRoot(testConstRoot(str_plan, .str), .{ .ptr = @ptrCast(&full_str) })).const_node;
+    try testing.expectEqual(@as(?u64, null), store.spareCapacity(full_str_node));
+    const roomy_list_node = (try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&roomy_list) })).const_node;
+    try testing.expectEqual(@as(?u64, 64), store.spareCapacity(roomy_list_node));
+    const full_list_node = (try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&full_list) })).const_node;
+    try testing.expectEqual(@as(?u64, null), store.spareCapacity(full_list_node));
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10177

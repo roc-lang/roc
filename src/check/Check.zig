@@ -7054,53 +7054,6 @@ fn computeMethodCallPreservesIteratorSourceInput(self: *Self, expr: CIR.Expr.Idx
     return self.varIsIteratorNominal(ModuleEnv.varFrom(expr));
 }
 
-/// Whether a method call selects a Builtin procedure that only requests
-/// capacity (`LowLevel.requestsCapacity`). Only a Builtin nominal's methods
-/// can, so any other receiver skips the method lookup.
-fn methodCallRequestsCapacity(self: *Self, call: anytype) bool {
-    const nominal = self.types.resolveThroughAliases(ModuleEnv.varFrom(call.receiver)).desc.content.unwrapNominalType() orelse return false;
-    const owner_env = self.getNominalOriginEnv(nominal);
-    if (owner_env.module_role != .builtin) return false;
-    const method = self.lookupStaticDispatchMethodBinding(
-        owner_env,
-        nominal.sourceDeclOptional(),
-        self.cir,
-        call.method_name,
-    ) orelse return false;
-    return builtinDefRequestsCapacity(method.env, method.binding.def_idx);
-}
-
-/// Whether a direct call's callee is a Builtin procedure that only requests
-/// capacity (`LowLevel.requestsCapacity`).
-fn callRequestsCapacity(self: *Self, callee: CIR.Expr.Idx) bool {
-    const callee_expr = self.cir.store.getExpr(callee);
-    if (callee_expr == .e_lookup_associated_resolved) {
-        const resolved = callee_expr.e_lookup_associated_resolved;
-        const target = self.moduleEnvForIdentity(self.cir, resolved.module_identity);
-        return builtinDefRequestsCapacity(target.env, resolved.target_def_idx);
-    }
-    if (callee_expr == .e_lookup_external) {
-        const external = callee_expr.e_lookup_external;
-        const module = self.hoistedImportedModule(self.cir, external.module_idx) orelse return false;
-        // An imported procedure is exposed by its definition's node.
-        const node: CIR.Node.Idx = @fromBackingInt(@intCast(external.target_node_idx));
-        if (module.store.nodes.get(node).tag != .def) return false;
-        return builtinDefRequestsCapacity(module, @fromBackingInt(@intCast(external.target_node_idx)));
-    }
-    return false;
-}
-
-/// Whether `def_idx` is a Builtin procedure whose body is exactly a
-/// capacity-requesting low-level operation.
-fn builtinDefRequestsCapacity(env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
-    if (env.module_role != .builtin) return false;
-    const def_expr = env.store.getExpr(env.store.getDef(def_idx).expr);
-    if (def_expr != .e_lambda) return false;
-    const body = env.store.getExpr(def_expr.e_lambda.body);
-    if (body != .e_run_low_level) return false;
-    return body.e_run_low_level.op.requestsCapacity();
-}
-
 fn methodNameIsHoistPreservingCandidate(method_text: []const u8) bool {
     for (static_dispatch.hoist_preserving_method_names) |candidate| {
         if (Ident.textEql(method_text, candidate)) return true;
@@ -14013,20 +13966,7 @@ fn hoistedRootIsIntrinsicallyKept(
     root.value_kind = .data_constant;
     if (self.cir.store.getExpr(root.expr) == .e_runtime_error) return true;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
-    if (root.body == .expr and !self.selectedHoistedRootIsTopLevel(root.*) and self.exprRequestsCapacity(root.expr)) return false;
     return try self.varIsConcreteHoistedConstType(type_var);
-}
-
-/// Whether `expr` calls a Builtin procedure that only requests capacity
-/// (`LowLevel.requestsCapacity`), which no hoisted root stands for (design.md
-/// "Compile-Time Constants and Hoisted Roots"). Read after solving, so the
-/// receiver of a method call has its type.
-fn exprRequestsCapacity(self: *Self, expr: CIR.Expr.Idx) bool {
-    const data = self.cir.store.getExpr(expr);
-    if (data == .e_call) return self.callRequestsCapacity(data.e_call.func);
-    if (data == .e_dispatch_call) return self.methodCallRequestsCapacity(data.e_dispatch_call);
-    if (data == .e_method_call) return self.methodCallRequestsCapacity(data.e_method_call);
-    return false;
 }
 
 fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {

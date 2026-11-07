@@ -1439,6 +1439,17 @@ pub const StaticDataCandidate = struct {
     storage: Common.StaticDataStorage,
     static_data: Common.StaticDataId,
     value: StaticDataCandidateValue,
+    /// The capacity a list with items or a string was evaluated with, when
+    /// it has room beyond its contents: static data freezes the contents
+    /// alone, and a read that builds the value fresh gives it this room
+    /// again (`ConstStore.spareCapacity`).
+    capacity: ?u64 = null,
+    /// Whether a list or string on the value's spine was evaluated with room
+    /// beyond its contents: the value then has a fresh form, and each read
+    /// chooses between it and the static datum, so a pass that sees through
+    /// constants keeps the candidate one opaque value rather than rebuilding
+    /// its parts at a read.
+    fresh_form: bool = false,
 };
 
 /// What a static data candidate's value is built from.

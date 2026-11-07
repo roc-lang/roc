@@ -219,6 +219,12 @@ const Builder = struct {
     fn string(self: *Builder, job: Job) Allocator.Error!void {
         const str = job.source.read(builtins.str.RocStr);
         const slice = str.asSlice();
+        // The descriptor cannot carry the room a heap string was evaluated
+        // with; keep it on the root so a runtime consumer can build the
+        // string again with that capacity.
+        if (@backingInt(job.dest.symbol) == 0 and !str.isSmallStr() and str.getCapacity() > slice.len) {
+            try self.graph.nodes.items[0].capacities.append(self.graph.allocator, .{ .offset = job.dest.offset, .capacity = str.getCapacity() });
+        }
         if (builtins.str.RocStr.fitsInSmallStr(slice.len)) {
             var small = builtins.str.RocStr.fromSliceSmall(slice);
             @memcpy(self.graph.bytes(job.dest, @sizeOf(builtins.str.RocStr)), std.mem.asBytes(&small));
@@ -243,15 +249,14 @@ const Builder = struct {
         const list_value = job.source.read(builtins.list.RocList);
         try self.graph.writeWord(job.dest.offsetBy(word_size), list_value.len());
         try self.graph.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(list_value.len()));
-        if (list_value.len() == 0) {
-            // The descriptor cannot carry the capacity the value was
-            // evaluated with; keep it on the root so the runtime can
-            // construct the list as the `with_capacity` it came from.
-            if (@backingInt(job.dest.symbol) == 0 and physical.tag == .list and list_value.getCapacity() != 0) {
-                try self.graph.nodes.items[0].empty_list_capacities.append(self.graph.allocator, .{ .offset = job.dest.offset, .capacity = list_value.getCapacity() });
-            }
-            return;
+        // The descriptor cannot carry the capacity the value was evaluated
+        // with; keep it on the root so a runtime consumer can build the
+        // list again with that capacity: an empty one as the
+        // `with_capacity` it came from, one with items as their fresh form.
+        if (@backingInt(job.dest.symbol) == 0 and physical.tag == .list and list_value.getCapacity() > list_value.len()) {
+            try self.graph.nodes.items[0].capacities.append(self.graph.allocator, .{ .offset = job.dest.offset, .capacity = list_value.getCapacity() });
         }
+        if (list_value.len() == 0) return;
         if (physical.tag == .list_of_zst) return;
         const ptr = list_value.bytes orelse invariant("nonempty native list had a null pointer");
         const element_layout = physical.getIdx();
@@ -418,10 +423,65 @@ test "native root export keeps an empty list root's evaluated capacity" {
     const exports = try freezeRoot(allocator, &program, slot, testRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&list_value) }, .{});
     defer static_data.deinitStaticData(allocator, exports);
     try std.testing.expectEqual(@as(usize, 1), exports.len);
-    try std.testing.expectEqual(@as(usize, 1), exports[0].empty_list_capacities.len);
-    try std.testing.expectEqual(@as(u64, 0), exports[0].empty_list_capacities[0].offset);
-    try std.testing.expectEqual(@as(u64, 16), exports[0].empty_list_capacities[0].capacity);
+    try std.testing.expectEqual(@as(usize, 1), exports[0].capacities.len);
+    try std.testing.expectEqual(@as(u64, 0), exports[0].capacities[0].offset);
+    try std.testing.expectEqual(@as(u64, 16), exports[0].capacities[0].capacity);
     try std.testing.expectEqual(@as(usize, 0), exports[0].relocations.len);
+}
+
+test "native root export keeps the evaluated capacity of a root's list and string with room beyond their contents" {
+    const allocator = std.testing.allocator;
+    var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
+    defer program.deinit();
+    const scalar_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(allocator, .scalar);
+    const list_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(allocator, .{ .list = scalar_plan });
+    const str_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(allocator, .str);
+    const record_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    const field_plans = try allocator.dupe(Program.ConstPlanId, &.{ list_plan, str_plan });
+    try program.const_plans.append(allocator, .{ .record = field_plans });
+    const list_layout = try program.layouts.insertList(.u32);
+    const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = list_layout }, .{ .index = 1, .layout = .str } });
+    const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
+
+    // Three items with room for sixteen, and a short string with room for
+    // forty bytes, as `List.reserve` and `Str.reserve` leave them.
+    var items: [16]u32 = .{ 1, 2, 3 } ++ @as([13]u32, @splat(0));
+    var bytes: [40]u8 = undefined;
+    @memcpy(bytes[0..3], "abc");
+    const Record = extern struct { list: builtins.list.RocList, str: builtins.str.RocStr };
+    var record: [@sizeOf(Record)]u8 align(@alignOf(Record)) = undefined;
+    const list_value = builtins.list.RocList{
+        .bytes = @ptrCast(&items),
+        .length = 3,
+        .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(items.len),
+    };
+    const str_value = builtins.str.RocStr{
+        .bytes = &bytes,
+        .length = 3,
+        .capacity_or_alloc_ptr = builtins.str.RocStr.encodeCapacity(bytes.len),
+    };
+    const list_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+    const str_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+    @memcpy(record[list_offset..][0..@sizeOf(builtins.list.RocList)], std.mem.asBytes(&list_value));
+    @memcpy(record[str_offset..][0..@sizeOf(builtins.str.RocStr)], std.mem.asBytes(&str_value));
+    const slot = try testSlot(&program, record_layout);
+    const exports = try freezeRoot(allocator, &program, slot, testRoot(record_plan, record_layout), .{ .ptr = @ptrCast(&record) }, .{});
+    defer static_data.deinitStaticData(allocator, exports);
+    // The frozen descriptors hold the contents alone; the root's export
+    // keeps each one's room, by its descriptor's offset.
+    const capacities = exports[0].capacities;
+    try std.testing.expectEqual(@as(usize, 2), capacities.len);
+    for (capacities) |item| {
+        if (item.offset == list_offset) {
+            try std.testing.expectEqual(@as(u64, 16), item.capacity);
+        } else {
+            try std.testing.expectEqual(@as(u64, str_offset), item.offset);
+            try std.testing.expectEqual(@as(u64, 40), item.capacity);
+        }
+    }
 }
 
 test "native root export owns list strings and preserves shared typed pointers" {

@@ -257,7 +257,7 @@ pub const Solution = struct {
     /// from a read that stays the static datum, whose count is the static
     /// sentinel.
     unique_origins_ok: std.bit_set.DynamicBitSetUnmanaged,
-    /// Bit set (by statement) => this read of a static list of copies takes
+    /// Bit set (by statement) => this read of a static value takes
     /// its fresh form: some runtime uniqueness check, or a callee position a
     /// variant would seed, rests on the value being born there. Every other
     /// such read keeps the static datum.
@@ -801,7 +801,7 @@ const UniqueJoinIncoming = struct {
     source: u32,
 };
 
-/// A read of a static list of copies that names a fresh form, and its target.
+/// A read of a static value that names a fresh form, and its target.
 const CandidateDef = struct {
     stmt: LIR.CFStmtId,
     target: u32,
@@ -3929,9 +3929,9 @@ pub const Uniqueness = struct {
     /// Bit set => some statement consumes the local's value (moves its
     /// unit, or would retain to do so).
     consumed: std.bit_set.DynamicBitSetUnmanaged,
-    /// The reads of a static list of copies that name a fresh form, in the
+    /// The reads of a static value that name a fresh form, in the
     /// analyzed statements; candidate `c` is the read at `candidates[c]`.
-    /// Each is a birth whose value is the fresh list if the read takes that
+    /// Each is a birth whose value is the fresh value if the read takes that
     /// form and a static datum otherwise.
     candidates: []LIR.CFStmtId,
     /// Per local, `origin_words` words: bit `c` set => the local's born
@@ -5980,7 +5980,7 @@ fn computeUniquenessDetailed(
             .assign_literal => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 switch (assign.value) {
-                    // A read of a static list of copies that names a fresh
+                    // A read of a static value that names a fresh
                     // form is a birth if the read takes that form; which
                     // reads do is settled from where their values reach.
                     .static_data => if (store.literalExtra(assign.value).fresh_alternative != null) {

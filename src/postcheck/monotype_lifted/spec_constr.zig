@@ -1797,9 +1797,11 @@ const Pass = struct {
         const value: Value = switch (expr.data) {
             .comptime_value => .{ .expr = expr_id },
             // A stored list has no constructor components, as the list it
-            // stands for has none: the candidate is its own opaque value.
+            // stands for has none, and a value with a fresh form keeps its
+            // reads choosing between it and the static datum: either
+            // candidate is its own opaque value.
             .static_data_candidate => |candidate| switch (candidate.value) {
-                .runtime => return null,
+                .runtime => if (candidate.fresh_form) .{ .expr = expr_id } else return null,
                 .stored => .{ .expr = expr_id },
             },
             .tag, .tuple, .record, .nominal, .fn_ref => return null,

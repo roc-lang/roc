@@ -518,6 +518,12 @@ within an explicit code-growth limit; a larger value keeps its named binding.
 A compile-time value read is not a substitutable read: its value guard crashes
 where the program evaluates the read when that value's evaluation failed, so
 substitution may neither drop a discarded read nor move one to a later use.
+A static-data candidate with a fresh form (`StaticDataCandidate.fresh_form`:
+a list or string on its spine was evaluated with room beyond its contents)
+is a leaf, as a stored list is: rebuilding its parts at a read would rebuild
+its capacity requests there, allocating at a read that only reads it, where
+the read of its static datum chooses its form per read (see "Fresh forms of
+static values").
 Making a value reusable is decided by substitutability alone, never by that
 limit: a substitutable value of any size is already reusable and is kept whole,
 so reuse never walks or copies its structure. A long interpolation binds one
@@ -1803,33 +1809,40 @@ a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
 record, or guard exists for the root. The decoded value is a construction
 tree, and a root whose every leaf is a scalar, the empty string, or an
-empty list lowers as that tree rather than as bytes, because static data
-is the wrong home for it: records,
+empty list, none evaluated with room for items, lowers as that tree rather
+than as bytes, because static data is the wrong home for it: records,
 tuples, and tag payloads of such parts rebuild field by field, so an
 empty `Dict` or `Set`, which is a record of empty lists, never reaches the
-image either. An empty list lowers to the `with_capacity` it was evaluated
-with: a frozen descriptor's capacity word is its length, so the freezer
-keeps each empty list's evaluated capacity on the root's export, keyed by
-its byte offset within the image, and the runtime rebuilds the request so
-the first append goes in place. A list with items keeps its slot however
-uniform its contents, so the constructions are the scalars, the empty
-string, the empty list, and records, tuples and tags of those. A completed
-string shorter than three target words, the threshold below which a
-restored string needs no target storage, lowers as its literal, as a read
-restoring the stored string does, so a procedure's code is the same whether
-it reads the string completed or restored. A restored string is its own
-bytes, never a view into a longer stored backing, so whether it needs
-target storage depends on the string alone. A list of
-copies of one construction—what `List.repeat` and a constant fill loop
-complete to—additionally names, on each read, the argument-free procedure
-that builds the same list fresh (`assign_literal.fresh_alternative`), and
-ARC chooses one form per read (see "Fresh forms of static lists" under ARC
-Borrow Inference): a read whose value only ever gets read keeps the static
-datum and allocates nothing, while a read whose value an in-place operation
-would otherwise copy on first write is born fresh, so the write is proven
-unique and the copy never happens. Neither form is visible after ARC. A non-empty
-list with spare capacity freezes to its items alone; only the capacity of
-an empty list survives. Identical nodes of one frozen image are one symbol:
+image either. A frozen descriptor's capacity word is its length, so the
+freezer keeps the capacity each list and string on the root's spine (its
+fields, tuple items and tag payloads) was evaluated with, where it is more
+than the contents, on the root's export, keyed by the descriptor's byte
+offset within the image (`StaticDataExport.capacities`). A construction
+rebuilds an empty list or string as the `with_capacity` it was evaluated
+with, so the first append goes in place; a root whose construction holds
+such a request keeps its slot and names that construction as its fresh form
+(below), so a read that only reads it allocates nothing. A list with items
+keeps its slot however uniform its
+contents, so the constructions are the scalars, the empty string, the empty
+list, and records, tuples and tags of those. A completed string shorter
+than three target words, the threshold below which a restored string needs
+no target storage, lowers as its literal, as a read restoring the stored
+string does, so a procedure's code is the same whether it reads the string
+completed or restored; a string evaluated with room beyond its bytes keeps
+its slot instead, however short. A restored string is its own bytes, never
+a view into a longer stored backing, so whether it needs target storage
+depends on the string alone. A value a list or string on whose spine was
+evaluated with spare capacity, and a list of copies of one
+construction—what `List.repeat` and a constant fill loop complete
+to—additionally name, on each read, the argument-free procedure that builds
+the same value fresh (`assign_literal.fresh_alternative`), and ARC chooses
+one form per read (see "Fresh forms of static values" under ARC Borrow
+Inference): a read whose value only ever gets read keeps the static datum
+and allocates nothing, while a read whose value an in-place operation would
+otherwise copy on first write is born fresh with the capacity the value was
+evaluated with, so the write is proven unique and neither the copy nor a
+regrowth within that capacity happens. Neither form is visible after ARC.
+Identical nodes of one frozen image are one symbol:
 two evaluations of the same constant expression, such as two `List.repeat`
 calls with the same arguments, freeze to separate allocations with the same
 contents, and both the evaluation's image and the runtime program's
@@ -1844,10 +1857,15 @@ index of its items; a frozen list of a million string pointers therefore
 costs work proportional to the image at every one of these steps, never a
 scan per pointer. A build that restores its compile-time values from a checked
 module's const store rather than from a completed host program, as every
-build after the first does, reaches the same constructions: the const
-store keeps an empty list's evaluated capacity and restores it as the
-`with_capacity` call, and a restored value whose parts are all
-constructions lowers as them rather than as a static-data candidate.
+build after the first does, reaches the same constructions and fresh forms:
+the const store keeps every list's and string's evaluated capacity
+(`ConstStore.spareCapacity`, part of the stored value), an empty list or
+string restores as its `with_capacity` call (a static-data candidate of its
+own when it is the root), a list with items or a string evaluated with room
+beyond its contents restores as a static-data candidate carrying that
+capacity (a part of its enclosing candidate when it is on one's spine), and
+a restored value whose parts are all constructions, none requesting
+capacity, lowers as them rather than as a static-data candidate.
 A construction is the value's shape and leaves alone and names no list,
 field or payload layout: the compile-time consumer that decoded it and the
 runtime consumer that emits it lower separately and intern layouts in their
@@ -5192,7 +5210,7 @@ after checking, are on-demand analyses of the sealed module
   the module's nested procedure sites), and the exhaustiveness check
   checking left at each match expression and destructuring pattern. Whether
   a node's own dispatch plan cannot run is read from the node's plans as a
-  unit's facts need it, not computed for the module. A dispatch reaches a
+  unit's analysis needs it, not computed for the module. A dispatch reaches a
   template only as the target a method registry entry of the plan's method
   names, so the single-source analysis resolves only the plans whose method
   names a private template.
@@ -6061,20 +6079,6 @@ checked plan does not identify a pure compile-time-evaluable operation.
 Low-level operations may participate only through explicit checked purity and
 totality metadata; they must never be allowed by whitelist, name, or backend
 knowledge.
-
-A call to a Builtin procedure whose body is a capacity request
-(`LowLevel.requestsCapacity`: `Str.with_capacity`, `Str.reserve`,
-`List.with_capacity`, `List.reserve` and the append reservation) is never a
-hoisted root of its own, as an expression or as a binding's right-hand side:
-post-solve pruning drops such a root, and the call evaluates at runtime.
-Its result differs from its input only in capacity, which a stored constant
-does not hold beyond its contents, so evaluating it ahead of time would drop
-the request and leave the runtime to grow the value again on its first
-append, while removing no work: the request is an allocation either way. Its
-operands may still be roots, and an enclosing expression that is a root
-evaluates the request as part of its own value. The checker decides this
-after solving, from the procedure the call selects, through the same method
-lookup dispatch uses.
 
 Checking errors are dependency-local for hoistability. A malformed expression,
 unresolved static-dispatch call, type error, or other checker-owned diagnostic
@@ -20422,23 +20426,50 @@ solver outputs the least one. There is no failure path and no recovery path.
 An occurrence the solver leaves owned is emitted as a move or an `incref`,
 exactly as all-owned insertion would emit it.
 
-### Fresh forms of static lists
+### Fresh forms of static values
 
-A read of a compile-time list of copies lowers as its static-data slot and
-also names the argument-free procedure that would build the list fresh. The
-static datum has the static count, so it is never born unique: a mutating
-consumer copies it on first write, at the one allocation a fresh build would
-have spent, plus the copy. The fresh build reserves the count plus the range
-copy's scratch, appends the one item, and fills the rest with the unchecked
-range-within append, whose periodic copy runs at word-store pace; it allocates
-on every execution of the read, which a read whose value is only ever read has
-no use for. Which form a
-read takes is therefore a question of where its value reaches, and the
-uniqueness analysis answers it.
+A read of a compile-time value lowers as its static-data slot, and two kinds
+of value also name an argument-free procedure that would build the value
+fresh: a list of copies of one construction, and a value a list or string on
+whose spine (the root's own bytes: its fields, tuple items and tag payloads,
+not a list's items or a box's payload) was evaluated with more capacity than
+it holds. The static datum has the static count, so it is never born unique:
+a mutating consumer copies it on first write, at the one allocation a fresh
+build would have spent, plus the copy, and static data keeps a list's or
+string's items alone, so the copy has only the room its contents need and
+the evaluated capacity is lost. A fresh build allocates on every execution
+of the read, which a read whose value is only ever read has no use for.
+Which form a read takes is therefore a question of where its value reaches,
+and the uniqueness analysis answers it.
 
-The fresh procedure's identity is the list's layout and content (the count
-and the item's construction) and nothing a program numbers, so reads of equal
-lists share one procedure.
+A list of copies builds fresh by reserving the count plus the range copy's
+scratch, appending the one item, and filling the rest with the unchecked
+range-within append, whose periodic copy runs at word-store pace. Its
+procedure's identity is the list's layout and content (the count and the
+item's construction) and nothing a program numbers, so reads of equal lists
+share one procedure.
+
+A value with spare capacity builds fresh from its own static datum, as its
+`FreshPart` describes (`postcheck_values.emitFresh`): a part with a
+construction is built as it, empty lists and strings as the `with_capacity`
+they were evaluated with; every list and string with items on its spine is
+built unique with the capacity it was evaluated with (`with_capacity`, then
+the datum's items or bytes concatenated in, which a unique value with the
+room takes in place); records, tuples and tags are rebuilt around their
+parts; and every other part is read out of the datum as it is. A form made
+of constructions alone reads nothing of the datum, so a read that takes it
+leaves the datum unread. The
+lists and strings with contents but no spare room are built unique too, with
+exactly their contents' room, so an operation that writes several of the
+value's lists finds every one of them unique. The completed path
+decodes the form from the frozen root and the capacities its export keeps
+(`Decoder.decodeFresh`); the restored path reads it from the restored
+expressions and the capacities their candidates carry (`freshFormOfCandidate`),
+so both paths give a read the same form. The procedure reads a program's
+static datum, a program-scoped symbol, so its identity names that datum by
+its slot beside the value's layout and the form, as a static initializer's
+does, and reads of one datum in one form share one procedure. A list of
+copies with spare capacity takes this form, which keeps the room.
 
 Every such read is a candidate birth. Alongside the born bit and its parameter
 conditions, the settlement carries each local's *origins*: the candidates its
@@ -22547,7 +22578,7 @@ edges the solver already walks:
   visible container is visible
 - direct-call argument-to-parameter and return-to-result relations, and the
   return-to-result relation of a read's fresh form, which that read may become
-  (see "Fresh forms of static lists")
+  (see "Fresh forms of static values")
 - low-level ops, from explicit `RcEffect` data
 
 Bidirectional containment keeps every reachable-value tree uniformly
@@ -22607,13 +22638,17 @@ Uniqueness inference is an optimized-build analysis
 (`TargetConfig.prove_uniqueness`, on for `--opt=speed` and `--opt=size`). It
 answers at compile time a question the runtime check answers anyway, so
 skipping it costs each mutation only that branch, and it is a large share of
-ARC. Under `--opt=dev`, `--opt=interpreter`, and compile-time evaluation the
-settlement does not run: no local is proven unique, no signature carries a
-unique return, and every candidate read stays the static datum, which a
-mutation copies on first write. Borrow inference, field takes, and liveness
-run at every opt level, since they decide the ownership schedule rather than
-remove a check. This is one ARC with one analysis switched off, never a
-second implementation, and nothing observable depends on the switch.
+ARC. Under `--opt=dev`, `--opt=interpreter`, and compile-time evaluation no
+local is proven unique and no signature carries a unique return, so every
+mutation keeps its check. The settlement runs there only when the program has
+a read that names a fresh form (see "Fresh forms of static values"), because
+only it can tell which of those reads an in-place operation would otherwise
+copy, and a read left as the static datum loses the capacity its value was
+evaluated with; it decides those reads' forms and nothing else. Borrow
+inference, field takes, and liveness run at every opt level, since they
+decide the ownership schedule rather than remove a check. This is one ARC
+with one analysis's claims switched off, never a second implementation, and
+the program a build runs differs only in which checks it keeps.
 
 A join parameter is an ownership phi, not a foreign definition. Its origin is
 born-unique exactly when it has at least one explicit non-self

@@ -689,10 +689,14 @@ const StoredValue = union(enum) {
     pending,
     zst,
     scalar: ConstScalar,
-    str: ConstStr,
+    /// A string, with the capacity it was evaluated with (`setCapacity`),
+    /// never less than its length.
+    str: struct { str: ConstStr, capacity: u64 },
     list: union(enum) {
-        nodes: ConstRange,
-        packed_bytes: ConstPackedList,
+        /// Items with the capacity the list was evaluated with, never less
+        /// than its length.
+        nodes: struct { items: ConstRange, capacity: u64 },
+        packed_bytes: struct { list: ConstPackedList, capacity: u64 },
         empty: u64,
     },
     box: ConstNodeId,
@@ -1281,7 +1285,7 @@ pub const ConstStore = struct {
             .pending => constStoreInvariant("cannot fill a const node with a pending value"),
             .zst => .zst,
             .scalar => |s| .{ .scalar = s },
-            .str => |s| .{ .str = s },
+            .str => |s| .{ .str = .{ .str = s, .capacity = s.len } },
             .crash => |s| .{ .crash = s },
             .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
@@ -1289,8 +1293,8 @@ pub const ConstStore = struct {
             .fn_value => |f| .{ .fn_value = f },
             .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = try self.appendNodes(function.captures) } },
             .list => |list| .{ .list = switch (list) {
-                .nodes => |items| .{ .nodes = try self.appendNodes(items) },
-                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
+                .nodes => |items| .{ .nodes = .{ .items = try self.appendNodes(items), .capacity = items.len } },
+                .packed_bytes => |packed_list| .{ .packed_bytes = .{ .list = packed_list, .capacity = packed_list.len } },
                 .empty => |capacity| .{ .empty = capacity },
             } },
             .tuple => |items| .{ .tuple = try self.appendNodes(items) },
@@ -1300,6 +1304,46 @@ pub const ConstStore = struct {
                 const payloads_range = try self.appendNodes(tag.payloads);
                 break :blk .{ .tag = .{ .tag_name = name_range, .payloads = payloads_range } };
             },
+        };
+    }
+
+    /// Record that `id`, a filled list or string, was evaluated with room for
+    /// `capacity` items or bytes: more than it holds. Static data keeps a
+    /// value's items alone, so a read that builds the value fresh gives it
+    /// this capacity again (design.md "Fresh forms of static values").
+    pub fn setCapacity(self: *ConstStore, id: ConstNodeId, capacity: u64) void {
+        switch (self.values.items[@backingInt(id)]) {
+            .str => |*str| {
+                if (capacity <= str.str.len) constStoreInvariant("a string's recorded capacity did not exceed its length");
+                str.capacity = capacity;
+            },
+            .list => |*list| switch (list.*) {
+                .nodes => |*nodes| {
+                    if (capacity <= nodes.items.len) constStoreInvariant("a list's recorded capacity did not exceed its length");
+                    nodes.capacity = capacity;
+                },
+                .packed_bytes => |*packed_list| {
+                    if (capacity <= packed_list.list.len) constStoreInvariant("a list's recorded capacity did not exceed its length");
+                    packed_list.capacity = capacity;
+                },
+                .empty => constStoreInvariant("an empty list's capacity is part of its value"),
+            },
+            .pending, .zst, .scalar, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => constStoreInvariant("only a list or string has a capacity"),
+        }
+    }
+
+    /// The capacity `id`'s list or string was evaluated with, when it is
+    /// room beyond what the value holds; null for any other node, and for a
+    /// list or string that holds all it has room for.
+    pub fn spareCapacity(self: *const ConstStore, id: ConstNodeId) ?u64 {
+        return switch (self.values.items[@backingInt(id)]) {
+            .str => |str| if (str.capacity > str.str.len) str.capacity else null,
+            .list => |list| switch (list) {
+                .nodes => |nodes| if (nodes.capacity > nodes.items.len) nodes.capacity else null,
+                .packed_bytes => |packed_list| if (packed_list.capacity > packed_list.list.len) packed_list.capacity else null,
+                .empty => |capacity| if (capacity != 0) capacity else null,
+            },
+            .pending, .zst, .scalar, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => null,
         };
     }
 
@@ -1545,7 +1589,7 @@ pub const ConstStore = struct {
             .pending => .pending,
             .zst => .zst,
             .scalar => |s| .{ .scalar = s },
-            .str => |s| .{ .str = s },
+            .str => |s| .{ .str = s.str },
             .crash => |s| .{ .crash = s },
             .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
@@ -1553,8 +1597,8 @@ pub const ConstStore = struct {
             .fn_value => |f| .{ .fn_value = f },
             .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = self.nodeSlice(function.captures) } },
             .list => |list| .{ .list = switch (list) {
-                .nodes => |r| .{ .nodes = self.nodeSlice(r) },
-                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
+                .nodes => |nodes| .{ .nodes = self.nodeSlice(nodes.items) },
+                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list.list },
                 .empty => |capacity| .{ .empty = capacity },
             } },
             .tuple => |r| .{ .tuple = self.nodeSlice(r) },
@@ -1675,6 +1719,9 @@ pub const ConstStore = struct {
             const value = self.get(node);
             hasher.update(@tagName(std.meta.activeTag(value)));
             hasher.update(&[_]u8{0});
+            // An evaluated capacity is part of the value: a read that builds
+            // it fresh gives it that room again.
+            if (self.spareCapacity(node)) |capacity| hasher.update(std.mem.asBytes(&capacity));
             switch (value) {
                 .pending, .zst => {},
                 .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
@@ -1696,7 +1743,8 @@ pub const ConstStore = struct {
                         hasher.update(if (packed_list.element) |element| @tagName(element) else "product");
                         hashBytes(hasher, self.blobBytes(packed_list.bytes));
                     },
-                    .empty => |capacity| hasher.update(std.mem.asBytes(&capacity)),
+                    // Hashed with every evaluated capacity above.
+                    .empty => {},
                 },
                 inline .tuple, .record => |items| {
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
