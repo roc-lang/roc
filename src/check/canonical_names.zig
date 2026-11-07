@@ -127,8 +127,6 @@ pub fn digestId(raw: u128, hasher: anytype) void {
 }
 /// Public `NestedProcSiteId` declaration.
 pub const NestedProcSiteId = enum(u32) { _ };
-/// Public `IntrinsicWrapperId` declaration.
-pub const IntrinsicWrapperId = enum(u32) { _ };
 /// Public `EntryWrapperId` declaration.
 pub const EntryWrapperId = enum(u32) { _ };
 

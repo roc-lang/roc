@@ -1351,7 +1351,6 @@ fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.
         .static_dispatch_plans = .{},
         .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
-        .intrinsic_wrappers = .{},
         .top_level_procedure_bindings = .{},
         .platform_required_bindings = .{},
         .compile_time_roots = .{},

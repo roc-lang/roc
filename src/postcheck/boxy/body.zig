@@ -1502,7 +1502,7 @@ pub const Builder = struct {
                 const message = try self.store.insertString(@import("../common.zig").unimplemented_declaration_crash);
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message } } });
             },
-            .intrinsic_wrapper => |wrapper| try Codec.lowerIntrinsic(self, self.view.view.intrinsic_wrappers.get(wrapper).intrinsic, params),
+            .intrinsic_wrapper => |intrinsic| try Codec.lowerIntrinsic(self, intrinsic, params),
             .entry_wrapper => |wrapper_id| try self.lowerRootEntry(self.view.view.entry_wrappers.get(wrapper_id).root, params),
             .literal_root => |root_id| try self.lowerRootEntry(root_id, params),
         }

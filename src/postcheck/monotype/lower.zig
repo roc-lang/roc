@@ -1467,11 +1467,9 @@ const ModuleViewData = struct {
     names: *const names.NameStore,
     types: checked.CheckedTypeStoreView,
     bodies: checked.CheckedBodies,
-    checked_const_bodies: *const checked.CheckedConstBodyTable,
     templates: *const checked.CheckedProcedureTemplateTable,
     compile_time_roots: *const checked.CompileTimeRootTable,
     entry_wrappers: *const checked.EntryWrapperTable,
-    intrinsic_wrappers: *const checked.IntrinsicWrapperTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     /// The reader over the module's dispatch resolution and schemas.
     dispatch: checked.CheckedDispatch,
@@ -27816,9 +27814,8 @@ const BodyContext = struct {
             .unimplemented => |declaration| return try self.lowerUnimplementedTemplateAtNode(declaration, fn_nodes, ret_cell),
             .entry_wrapper => |wrapper_id| return try self.lowerRootEntryAtCell(self.view.entry_wrappers.get(wrapper_id).root, ret_cell),
             .literal_root => |root_id| return try self.lowerRootEntryAtCell(root_id, ret_cell),
-            .intrinsic_wrapper => |wrapper_id| {
-                const wrapper = self.view.intrinsic_wrappers.get(wrapper_id);
-                return switch (wrapper.intrinsic) {
+            .intrinsic_wrapper => |intrinsic| {
+                return switch (intrinsic) {
                     .str_inspect => try self.lowerStrInspectIntrinsicAtNode(fn_nodes, ret_cell),
                     .structural_eq => Common.invariant("structural equality intrinsic wrapper must lower through checked dispatch plans"),
                     .parse_tag_union,
@@ -47373,10 +47370,10 @@ const BodyContext = struct {
         source_region_override: ?base.Region,
         current_entry_root: ?EntryRoot,
     ) Allocator.Error!DraftExprId {
-        const body = store_view.checked_const_bodies.get(eval.body);
-        if (self.builder.comptimeValueReadDeclared(store_view, body.root)) {
-            return self.declaredComptimeValueRead(store_view, body.root, DraftTypeCell.fromGraphNode(request_node), const_use);
+        if (self.builder.comptimeValueReadDeclared(store_view, eval.root)) {
+            return self.declaredComptimeValueRead(store_view, eval.root, DraftTypeCell.fromGraphNode(request_node), const_use);
         }
+        const root = try store_view.compileTimeRoot(eval.root);
         const entry_template = (try store_view.template(eval.entry_template.template));
 
         var body_ctx = try BodyContext.init(
@@ -47402,7 +47399,7 @@ const BodyContext = struct {
         body_ctx.source_region_override = source_region_override;
         body_ctx.current_entry_root = current_entry_root orelse .{
             .module = store_view.key,
-            .root = body.root,
+            .root = eval.root,
         };
 
         var active_const_scope: ActiveConstBindingScope = .{};
@@ -47427,13 +47424,13 @@ const BodyContext = struct {
             try body_ctx.instNode(try store_view.types.pairedType(entry_template.checked_fn_root)),
             wrapper_fn_node,
         );
-        try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
+        try self.graph.unify(try body_ctx.instNode(root.checked_type), request_node);
 
         const evaluated = try body_ctx.lowerComptimeRootExprAtCell(
-            rootBodyExpr(store_view, (try store_view.compileTimeRoot(body.root))),
+            rootBodyExpr(store_view, root),
             DraftTypeCell.fromGraphNode(request_node),
         );
-        try self.draft.recordEvaluatedRootRead(evaluated, store_view.key, body.root);
+        try self.draft.recordEvaluatedRootRead(evaluated, store_view.key, eval.root);
         if (has_active_const_binding) return try body_ctx.finishActiveConstBinding(active_const_scope.active, evaluated);
         return evaluated;
     }
@@ -69464,11 +69461,9 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .names = checked.importedNames(view),
         .types = view.checked_types,
         .bodies = view.checked_bodies,
-        .checked_const_bodies = view.checked_const_bodies,
         .templates = view.checked_procedure_templates,
         .compile_time_roots = view.compile_time_roots,
         .entry_wrappers = view.entry_wrappers,
-        .intrinsic_wrappers = view.intrinsic_wrappers,
         .static_dispatch_plans = view.static_dispatch_plans,
         .dispatch = view.dispatch(),
         .method_registry = view.method_registry,

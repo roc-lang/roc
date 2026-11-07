@@ -5331,7 +5331,7 @@ Some types lowering needs have no solver variable:
 - nominal declaration templates (backing, formals, declared fields and
   padding), built from the declaration annotation;
 - instantiated named applications;
-- entry and intrinsic wrapper function types;
+- entry wrapper function types;
 - resolved dispatch target instantiations;
 - literal-argument roots;
 - synthetic schemes;
@@ -5450,8 +5450,8 @@ other type's image is a synthesized type of the platform's store, created
 under the store's creation lock and memoized by the pairing, which records
 each image of a type that existed when it was created in a lock-free column.
 Whether a type reaches a formal is classified on demand too, over exactly the
-types the demanded type reaches. A consumer reads a template's, an entry or
-intrinsic wrapper's, a compile-time root's or a resolved reference's type
+types the demanded type reaches. A consumer reads a template's, an entry
+wrapper's, a compile-time root's or a resolved reference's type
 through the pairing; root requests and provided exports carry their images.
 The paired checked module holds no type store or name store of its own: its
 types and names are its platform's (`typeStore`, `nameStore`), and every name
@@ -6643,7 +6643,7 @@ const ImportedHostedProc = struct {
 
 const GeneratedFn = union(enum) {
     entry_wrapper: EntryWrapperId,
-    intrinsic_wrapper: IntrinsicWrapperId,
+    intrinsic_wrapper: IntrinsicId,
 };
 
 const FnTemplate = struct {
@@ -25699,9 +25699,9 @@ Canonicalization resolves every `hosted` mapping once to an exact imported
 definition. Checking validates that definition is a hosted declaration, and a
 successfully checked platform module keeps the header-ordered entries in its
 `ModuleEnv`; its hosted bindings (`ModuleAnalyses.hostedBindings`) are those
-entries indexed by `(target checked module key, target CIR definition)`. `HostedCompiler.replaceAnnoOnlyWithHosted` records the exact
-rewritten definition span in `ModuleEnv`, and every reader consumes it
-directly. CLI and post-check consumers join hosted procedures to the binding
+entries indexed by `(target checked module key, target CIR definition)`.
+`HostedCompiler.replaceAnnoOnlyWithHosted` records the exact rewritten
+definition span in `ModuleEnv`, and every reader consumes it directly. CLI and post-check consumers join hosted procedures to the binding
 table by those identities in linear time; they must not reconstruct or match
 qualified source names.
 

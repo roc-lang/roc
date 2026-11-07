@@ -10466,11 +10466,9 @@ const TestImportViewTables = struct {
     /// The store a view's dispatch resolution would synthesize types in;
     /// these views resolve no dispatch, so it stays empty.
     checked_type_store: CheckedTypeStore = .{},
-    checked_const_bodies: CheckedConstBodyTable = .{},
     checked_procedure_templates: CheckedProcedureTemplateTable = .{},
     compile_time_roots: CompileTimeRootTable = .{},
     entry_wrappers: EntryWrapperTable = .{},
-    intrinsic_wrappers: IntrinsicWrapperTable = .{},
     resolved_value_refs: ResolvedValueRefTable = .{},
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable = .{},
@@ -10522,11 +10520,9 @@ const TestImportViewTables = struct {
                 .types = checked_types,
                 .analyses = analyses,
             },
-            .checked_const_bodies = &self.checked_const_bodies,
             .checked_procedure_templates = &self.checked_procedure_templates,
             .compile_time_roots = &self.compile_time_roots,
             .entry_wrappers = &self.entry_wrappers,
-            .intrinsic_wrappers = &self.intrinsic_wrappers,
             .resolved_value_refs = &self.resolved_value_refs,
             .static_dispatch_plans = &self.static_dispatch_plans,
             .top_level_procedure_bindings = &self.top_level_procedure_bindings,
@@ -11212,7 +11208,8 @@ pub const UnimplementedDeclaration = struct {
 pub const CheckedProcedureBody = union(enum) {
     /// The template's root expression in its module's CIR.
     checked_body: CIR.Expr.Idx,
-    intrinsic_wrapper: canonical.IntrinsicWrapperId,
+    /// The compiler-provided intrinsic the template's definition wraps.
+    intrinsic_wrapper: IntrinsicId,
     entry_wrapper: canonical.EntryWrapperId,
     /// The entry wrapper of a literal root, which no table row holds: its
     /// body converts the root's literal (`CheckedDispatch.procedureTemplate`).
@@ -11235,49 +11232,6 @@ pub const RuntimeResultProvenance = enum(u8) {
     /// A successful `list_get_unsafe` result requires an element to exist in
     /// the source list. Therefore `List({})` makes the result path unreachable.
     list_element_read,
-};
-
-/// Public `IntrinsicWrapper` declaration.
-pub const IntrinsicWrapper = struct {
-    id: canonical.IntrinsicWrapperId,
-    template: canonical.ProcedureTemplateRef,
-    checked_fn_root: CheckedTypeId,
-    intrinsic: IntrinsicId,
-};
-
-/// Public `IntrinsicWrapperTable` declaration.
-pub const IntrinsicWrapperTable = struct {
-    wrappers: std.ArrayList(IntrinsicWrapper) = .empty,
-
-    pub const Serialized = extern struct {
-        wrappers: SerializedSlice(IntrinsicWrapper) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(IntrinsicWrapperTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
-    pub fn append(
-        self: *IntrinsicWrapperTable,
-        allocator: Allocator,
-        template: canonical.ProcedureTemplateRef,
-        checked_fn_root: CheckedTypeId,
-        intrinsic: IntrinsicId,
-    ) Allocator.Error!canonical.IntrinsicWrapperId {
-        const id: canonical.IntrinsicWrapperId = @fromBackingInt(@intCast(@as(u32, @intCast(self.wrappers.items.len))));
-        try self.wrappers.append(allocator, .{
-            .id = id,
-            .template = template,
-            .checked_fn_root = checked_fn_root,
-            .intrinsic = intrinsic,
-        });
-        return id;
-    }
-
-    pub fn get(self: *const IntrinsicWrapperTable, id: canonical.IntrinsicWrapperId) IntrinsicWrapper {
-        return self.wrappers.items[@backingInt(id)];
-    }
-
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `EntryWrapper` declaration.
@@ -17404,7 +17358,6 @@ fn enclosingSitesFor(
 fn sealConstEvalTemplatesForRoots(
     const_templates: *ConstTemplateTable,
     compile_time_roots: *const CompileTimeRootTable,
-    checked_const_bodies: *const CheckedConstBodyTable,
     entry_wrappers: *const EntryWrapperTable,
     checked_procedure_templates: *const CheckedProcedureTemplateTable,
     top_level_values: *const TopLevelValueTable,
@@ -17441,13 +17394,10 @@ fn sealConstEvalTemplatesForRoots(
             .literal_argument,
             => checkedArtifactInvariant("non-constant root reached const eval template sealing", .{}),
         };
-        const body = checked_const_bodies.bodyForRoot(root.id) orelse {
-            checkedArtifactInvariant("constant root has no checked const body", .{});
-        };
         const wrapper = entryWrapperForRoot(entry_wrappers, root.id);
         const template = checked_procedure_templates.get(wrapper.template.template);
         const_templates.fillEval(const_ref, .{
-            .body = body,
+            .root = root.id,
             .entry_template = wrapper.template,
             .source_scheme = const_ref.source_scheme,
             .resolved_value_refs = template.resolved_value_refs,
@@ -18473,7 +18423,6 @@ pub const CheckedProcedureTemplateTable = struct {
         owner_artifact: canonical.ArtifactRef,
         checked_type_publication: *CheckedTypePublication,
         module_index: *const ModuleIndex,
-        intrinsic_wrappers: *IntrinsicWrapperTable,
     ) Allocator.Error!CheckedProcedureTemplateTable {
         var templates = std.ArrayList(CheckedProcedureTemplate).empty;
         errdefer templates.deinit(allocator);
@@ -18519,8 +18468,7 @@ pub const CheckedProcedureTemplateTable = struct {
             };
             const checked_fn_scheme = checked_type_publication.schemeForSourceVar(module, module.defType(def_idx));
             const body: CheckedProcedureBody = if (intrinsic) |intrinsic_id| blk: {
-                const wrapper_id = try intrinsic_wrappers.append(allocator, template_ref, checked_fn_root, intrinsic_id);
-                break :blk .{ .intrinsic_wrapper = wrapper_id };
+                break :blk .{ .intrinsic_wrapper = intrinsic_id };
             } else if (def.expr.data == .e_anno_only) .{ .unimplemented = .{
                 .region = module.regionAt(ModuleEnv.nodeIdxFrom(def.expr.idx)),
             } } else blk: {
@@ -20755,7 +20703,7 @@ pub const PlatformRequiredBindingTable = struct {
         closure_pool: ClosurePool.Serialized = .{},
 
         comptime {
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 13);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(PlatformRequiredBindingTable, @This());
@@ -24495,14 +24443,12 @@ pub const PlatformPairing = struct {
                 "module_env",
                 "checked_types",
                 "inference",
-                "checked_const_bodies",
                 "compile_time_roots",
                 "const_templates",
                 "method_registry",
                 "static_dispatch_plans",
                 "checked_procedure_templates",
                 "entry_wrappers",
-                "intrinsic_wrappers",
                 "top_level_procedure_bindings",
                 "callable_eval_templates",
                 "top_level_values",
@@ -28730,72 +28676,8 @@ pub const HoistedConstTable = struct {
 
 /// Public `CheckedCallableBodyRef` declaration.
 pub const CheckedCallableBodyRef = enum(u32) { _ };
-/// Public `CheckedConstBodyRef` declaration.
-pub const CheckedConstBodyRef = enum(u32) { _ };
 /// Public `ConstTemplateId` declaration.
 pub const ConstTemplateId = enum(u32) { _ };
-
-/// Public `CheckedConstBody` declaration.
-pub const CheckedConstBody = struct {
-    id: CheckedConstBodyRef,
-    root: ComptimeRootKey,
-    body_expr: CIR.Expr.Idx,
-    checked_type: CheckedTypeId,
-};
-
-/// Public `CheckedConstBodyTable` declaration.
-pub const CheckedConstBodyTable = struct {
-    bodies: []CheckedConstBody = &.{},
-
-    pub const Serialized = extern struct {
-        bodies: SerializedSlice(CheckedConstBody) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(CheckedConstBodyTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
-    pub fn fromRoots(
-        allocator: Allocator,
-        roots: *const CompileTimeRootTable,
-    ) Allocator.Error!CheckedConstBodyTable {
-        var bodies = std.ArrayList(CheckedConstBody).empty;
-        errdefer bodies.deinit(allocator);
-
-        for (roots.roots) |root| {
-            if (!compileTimeRootHasConstBody(root.kind)) continue;
-            const id: CheckedConstBodyRef = @fromBackingInt(@intCast(@as(u32, @intCast(bodies.items.len))));
-            try bodies.append(allocator, .{
-                .id = id,
-                .root = root.id,
-                .body_expr = root.rootExpr(),
-                .checked_type = root.checked_type,
-            });
-        }
-
-        return .{
-            .bodies = try bodies.toOwnedSlice(allocator),
-        };
-    }
-
-    /// The checked const body of root `root`. Bodies follow their roots'
-    /// ascending identities.
-    pub fn bodyForRoot(self: *const CheckedConstBodyTable, root: ComptimeRootKey) ?CheckedConstBodyRef {
-        const index = std.sort.binarySearch(CheckedConstBody, self.bodies, root, struct {
-            fn order(key: ComptimeRootKey, item: CheckedConstBody) std.math.Order {
-                return std.math.order(@backingInt(key), @backingInt(item.root));
-            }
-        }.order) orelse return null;
-        return self.bodies[index].id;
-    }
-
-    pub fn get(self: *const CheckedConstBodyTable, id: CheckedConstBodyRef) CheckedConstBody {
-        const idx = @backingInt(id);
-        if (idx >= self.bodies.len) checkedArtifactInvariant("checked const body id is out of range", .{});
-        return self.bodies[idx];
-    }
-
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-};
 
 /// Public `MethodRegistryEntryRef` declaration.
 pub const MethodRegistryEntryRef = enum(u32) { _ };
@@ -28830,12 +28712,6 @@ pub const ArtifactCheckedCallableBodyRef = struct {
     body: CheckedCallableBodyRef,
 };
 
-/// Public `ArtifactCheckedConstBodyRef` declaration.
-pub const ArtifactCheckedConstBodyRef = struct {
-    artifact: CheckedModuleDigest,
-    body: CheckedConstBodyRef,
-};
-
 pub const ArtifactProcedureTemplateRef = canonical.ProcedureTemplateRef;
 
 /// Public `ArtifactCallableEvalTemplateRef` declaration.
@@ -28867,7 +28743,6 @@ pub const ImportedTemplateClosureView = struct {
     checked_type_roots: []const ArtifactCheckedTypeRef = &.{},
     checked_type_schemes: []const ArtifactCheckedTypeSchemeRef = &.{},
     checked_callable_bodies: []const ArtifactCheckedCallableBodyRef = &.{},
-    checked_const_bodies: []const ArtifactCheckedConstBodyRef = &.{},
     checked_procedure_templates: []const ArtifactProcedureTemplateRef = &.{},
     callable_eval_templates: []const ArtifactCallableEvalTemplateRef = &.{},
     const_templates: []const ConstRef = &.{},
@@ -28884,7 +28759,7 @@ const closure_fields = @typeInfo(ImportedTemplateClosureView).@"struct".field_na
 pub const ClosureRange = extern struct { start: u32 = 0, len: u32 = 0 };
 
 /// Relocation-invariant (POD) mirror of `ImportedTemplateClosureView`: each of
-/// the 12 closure slices is replaced by a `ClosureRange` into the owning
+/// the 11 closure slices is replaced by a `ClosureRange` into the owning
 /// `ClosurePool`. Stored by value in closure-bearing table rows so each row
 /// relocates with a constant number of base-pointer fixups. The public
 /// `ImportedTemplateClosureView` (with slices) is reconstructed on demand.
@@ -28893,7 +28768,6 @@ pub const StoredImportedTemplateClosure = extern struct {
     checked_type_roots: ClosureRange = .{},
     checked_type_schemes: ClosureRange = .{},
     checked_callable_bodies: ClosureRange = .{},
-    checked_const_bodies: ClosureRange = .{},
     checked_procedure_templates: ClosureRange = .{},
     callable_eval_templates: ClosureRange = .{},
     const_templates: ClosureRange = .{},
@@ -28912,7 +28786,6 @@ pub const ClosurePool = struct {
     checked_type_roots: std.ArrayList(ArtifactCheckedTypeRef) = .empty,
     checked_type_schemes: std.ArrayList(ArtifactCheckedTypeSchemeRef) = .empty,
     checked_callable_bodies: std.ArrayList(ArtifactCheckedCallableBodyRef) = .empty,
-    checked_const_bodies: std.ArrayList(ArtifactCheckedConstBodyRef) = .empty,
     checked_procedure_templates: std.ArrayList(ArtifactProcedureTemplateRef) = .empty,
     callable_eval_templates: std.ArrayList(ArtifactCallableEvalTemplateRef) = .empty,
     const_templates: std.ArrayList(ConstRef) = .empty,
@@ -28951,7 +28824,7 @@ pub const ClosurePool = struct {
         return stored;
     }
 
-    /// Materialize the public 13-slice view aliasing this pool's flat storage.
+    /// Materialize the public 11-slice view aliasing this pool's flat storage.
     pub fn reconstruct(self: *const ClosurePool, stored: StoredImportedTemplateClosure) ImportedTemplateClosureView {
         var closure: ImportedTemplateClosureView = .{};
         inline for (closure_fields) |name| {
@@ -28963,14 +28836,13 @@ pub const ClosurePool = struct {
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
-    /// Relocatable serialized form: one `SerializedSlice` per flat pool (13
+    /// Relocatable serialized form: one `SerializedSlice` per flat pool (11
     /// base-pointer fixups, independent of stored data size).
     pub const Serialized = extern struct {
         checked_bodies: SerializedSlice(ArtifactCheckedBodyRef) = .{},
         checked_type_roots: SerializedSlice(ArtifactCheckedTypeRef) = .{},
         checked_type_schemes: SerializedSlice(ArtifactCheckedTypeSchemeRef) = .{},
         checked_callable_bodies: SerializedSlice(ArtifactCheckedCallableBodyRef) = .{},
-        checked_const_bodies: SerializedSlice(ArtifactCheckedConstBodyRef) = .{},
         checked_procedure_templates: SerializedSlice(ArtifactProcedureTemplateRef) = .{},
         callable_eval_templates: SerializedSlice(ArtifactCallableEvalTemplateRef) = .{},
         const_templates: SerializedSlice(ConstRef) = .{},
@@ -28980,7 +28852,7 @@ pub const ClosurePool = struct {
         interface_capabilities: SerializedSlice(ArtifactModuleInterfaceCapabilitiesRef) = .{},
 
         comptime {
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 12);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 11);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ClosurePool, @This());
@@ -29284,7 +29156,6 @@ pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleV
             owner.callable_eval_templates,
             owner.entry_wrappers,
             owner.const_templates,
-            owner.checked_const_bodies,
             owner.resolved_value_refs,
             owner.top_level_procedure_bindings,
             owner.platform_required_bindings,
@@ -29554,7 +29425,6 @@ const PublicApiClosureDependencyCollector = struct {
     callable_eval_templates: CallableEvalTemplateTableView,
     entry_wrappers: *const EntryWrapperTable,
     const_templates: *const ConstTemplateTable,
-    checked_const_bodies: *const CheckedConstBodyTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -29572,8 +29442,7 @@ const PublicApiClosureDependencyCollector = struct {
         callable_eval_templates: CallableEvalTemplateTableView,
         entry_wrappers: *const EntryWrapperTable,
         const_templates: *const ConstTemplateTable,
-        checked_const_bodies: *const CheckedConstBodyTable,
-        resolved_value_refs: *const ResolvedValueRefTable,
+            resolved_value_refs: *const ResolvedValueRefTable,
         top_level_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         keys: *ArtifactKeyAccumulator,
@@ -29587,7 +29456,6 @@ const PublicApiClosureDependencyCollector = struct {
             .callable_eval_templates = callable_eval_templates,
             .entry_wrappers = entry_wrappers,
             .const_templates = const_templates,
-            .checked_const_bodies = checked_const_bodies,
             .resolved_value_refs = resolved_value_refs,
             .top_level_bindings = top_level_bindings,
             .platform_required_bindings = platform_required_bindings,
@@ -29695,7 +29563,6 @@ const PublicApiClosureDependencyCollector = struct {
                     try pending.append(gpa, .{ .type_owner_key = value.artifact });
                 }
                 for (closure.checked_callable_bodies) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
-                for (closure.checked_const_bodies) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
                 for (closure.checked_procedure_templates) |value| try pending.append(gpa, .{ .procedure_template = value });
                 for (closure.callable_eval_templates) |value| try pending.append(gpa, .{ .callable_eval_template = value });
                 for (closure.const_templates) |value| try pending.append(gpa, .{ .const_ref = value });
@@ -30052,7 +29919,6 @@ pub fn computeLoweringVisibility(allocator: Allocator, owner: ImportedModuleView
         owner.callable_eval_templates,
         owner.entry_wrappers,
         owner.const_templates,
-        owner.checked_const_bodies,
         owner.resolved_value_refs,
         owner.top_level_procedure_bindings,
         owner.platform_required_bindings,
@@ -30173,7 +30039,6 @@ const ImportedTemplateClosureContext = struct {
     callable_eval_template_table: CallableEvalTemplateTableView,
     entry_wrappers: *const EntryWrapperTable,
     const_templates_table: *const ConstTemplateTable,
-    checked_const_bodies: *const CheckedConstBodyTable,
     resolved_value_refs_table: *const ResolvedValueRefTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -30188,7 +30053,6 @@ const ImportedTemplateClosureContext = struct {
             .callable_eval_template_table = owner.callable_eval_templates,
             .entry_wrappers = owner.entry_wrappers,
             .const_templates_table = owner.const_templates,
-            .checked_const_bodies = owner.checked_const_bodies,
             .resolved_value_refs_table = owner.resolved_value_refs,
             .top_level_bindings = owner.top_level_procedure_bindings,
             .platform_required_bindings = owner.platform_required_bindings,
@@ -30277,7 +30141,6 @@ const ImportedTemplateClosureBuilder = struct {
     checked_type_roots: UniqueList(ArtifactCheckedTypeRef) = .empty,
     checked_type_schemes: UniqueList(ArtifactCheckedTypeSchemeRef) = .empty,
     checked_callable_bodies: UniqueList(ArtifactCheckedCallableBodyRef) = .empty,
-    checked_const_bodies: UniqueList(ArtifactCheckedConstBodyRef) = .empty,
     checked_procedure_templates: UniqueList(ArtifactProcedureTemplateRef) = .empty,
     callable_eval_templates: UniqueList(ArtifactCallableEvalTemplateRef) = .empty,
     const_templates: UniqueList(ConstRef) = .empty,
@@ -30395,11 +30258,6 @@ const ImportedTemplateClosureBuilder = struct {
     fn appendCheckedBody(self: *ImportedTemplateClosureBuilder, body: CIR.Expr.Idx) Allocator.Error!void {
         const ref = ArtifactCheckedBodyRef{ .artifact = self.context.artifact_key.digest(), .body = body };
         _ = try self.checked_bodies.append(self.context.allocator, ref);
-    }
-
-    fn appendCheckedConstBody(self: *ImportedTemplateClosureBuilder, body: CheckedConstBodyRef) Allocator.Error!void {
-        const ref = ArtifactCheckedConstBodyRef{ .artifact = self.context.artifact_key.digest(), .body = body };
-        _ = try self.checked_const_bodies.append(self.context.allocator, ref);
     }
 
     fn appendCheckedTypeRoot(self: *ImportedTemplateClosureBuilder, ty: CheckedTypeId) Allocator.Error!void {
@@ -30603,7 +30461,6 @@ const ImportedTemplateClosureBuilder = struct {
         try self.appendCheckedTypeScheme(const_ref.source_scheme);
 
         const eval = constEvalTemplate(self.context.const_templates_table, const_ref) orelse return;
-        try self.appendCheckedConstBody(eval.body);
         try self.appendResolvedValueRefs(eval.resolved_value_refs);
         try self.appendStaticDispatchPlans(eval.static_dispatch_plans);
         var pending: std.ArrayListUnmanaged(ClosureStep) = .empty;
@@ -30817,7 +30674,8 @@ fn buildProcedureBindingClosure(
 
 /// Public `ConstEvalTemplate` declaration.
 pub const ConstEvalTemplate = struct {
-    body: CheckedConstBodyRef,
+    /// The compile-time root whose body evaluates the constant.
+    root: ComptimeRootKey,
     entry_template: canonical.ProcedureTemplateRef,
     source_scheme: CheckedTypeSchemeId,
     resolved_value_refs: ResolvedValueRefTableRef = .{},
@@ -31467,13 +31325,11 @@ pub const CheckedModuleArtifact = struct {
     /// What inference output beside the solved source, its checking outcome
     /// included.
     inference: InferenceOutput = .{},
-    checked_const_bodies: CheckedConstBodyTable = .{},
     method_registry: static_dispatch.MethodRegistry,
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable,
     resolved_value_refs: ResolvedValueRefTable,
     checked_procedure_templates: CheckedProcedureTemplateTable,
     entry_wrappers: EntryWrapperTable = .{},
-    intrinsic_wrappers: IntrinsicWrapperTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
     platform_requirement_relations: PlatformRequirementRelationTable = .{},
@@ -31945,14 +31801,12 @@ pub const CheckedModuleArtifact = struct {
         canonical_names: canonical.CanonicalNameStore.Serialized,
         checking_context_identity: CheckingContextIdentity.Serialized,
         checked_types: CheckedTypeStore.Serialized,
-        checked_const_bodies: CheckedConstBodyTable.Serialized,
         inference: InferenceOutput.Serialized,
         method_registry: static_dispatch.MethodRegistry.Serialized,
         static_dispatch_plans: static_dispatch.StaticDispatchPlanTable.Serialized,
         resolved_value_refs: ResolvedValueRefTable.Serialized,
         checked_procedure_templates: CheckedProcedureTemplateTable.Serialized,
         entry_wrappers: EntryWrapperTable.Serialized,
-        intrinsic_wrappers: IntrinsicWrapperTable.Serialized,
         top_level_procedure_bindings: TopLevelProcedureBindingTable.Serialized,
         callable_eval_templates: CallableEvalTemplateTable.Serialized,
         compile_time_roots: CompileTimeRootTable.Serialized,
@@ -31985,7 +31839,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 159);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 157);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -32280,17 +32134,6 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        for (self.checked_const_bodies.bodies, 0..) |body, i| {
-            std.debug.assert(@backingInt(body.id) == i);
-            std.debug.assert(self.compile_time_roots.position(body.root) != null);
-            const root = self.compile_time_roots.root(body.root);
-            std.debug.assert(compileTimeRootHasConstBody(root.kind));
-            std.debug.assert(root.expr == body.body_expr);
-            std.debug.assert(root.checked_type == body.checked_type);
-            std.debug.assert(@backingInt(body.body_expr) < self.moduleEnvConst().store.nodes.len());
-            std.debug.assert(self.typesView().containsId(body.checked_type));
-        }
-
         for (root_requests.requests, 0..) |request, i| {
             std.debug.assert(request.order == i);
             if (request.kind == .provided_export) {
@@ -32381,23 +32224,7 @@ pub const CheckedModuleArtifact = struct {
             }
             const template = self.checked_procedure_templates.templates.items[template_index];
             const template_intrinsic: ?IntrinsicId = switch (template.body) {
-                .intrinsic_wrapper => |wrapper_id| blk: {
-                    const wrapper_index = @backingInt(wrapper_id);
-                    if (wrapper_index >= self.intrinsic_wrappers.wrappers.items.len) {
-                        base.invariant(
-                            "checked artifact invariant violated: method registry procedure {d} referenced a missing intrinsic wrapper",
-                            .{entry_index},
-                        );
-                    }
-                    const wrapper = self.intrinsic_wrappers.wrappers.items[wrapper_index];
-                    if (wrapper.template.template != procedure.template.template) {
-                        base.invariant(
-                            "checked artifact invariant violated: method registry procedure {d} referenced the wrong intrinsic wrapper template",
-                            .{entry_index},
-                        );
-                    }
-                    break :blk wrapper.intrinsic;
-                },
+                .intrinsic_wrapper => |intrinsic| intrinsic,
                 .checked_body, .entry_wrapper, .literal_root, .unimplemented => null,
             };
 
@@ -32555,30 +32382,13 @@ pub const CheckedModuleArtifact = struct {
             };
         }
 
-        for (self.checked_const_bodies.bodies, 0..) |body, i| {
-            std.debug.assert(@backingInt(body.id) == i);
-            std.debug.assert(self.compile_time_roots.position(body.root) != null);
-            const root = self.compile_time_roots.root(body.root);
-            std.debug.assert(compileTimeRootHasConstBody(root.kind));
-            std.debug.assert(root.expr == body.body_expr);
-            std.debug.assert(root.checked_type == body.checked_type);
-            std.debug.assert(@backingInt(body.body_expr) < self.moduleEnvConst().store.nodes.len());
-            std.debug.assert(self.typesView().containsId(body.checked_type));
-        }
-
         for (self.checked_procedure_templates.templates.items, 0..) |template, i| {
             std.debug.assert(template.template_id.index() == i);
             std.debug.assert(self.typesView().containsId(template.checked_fn_root));
             _ = self.typeStore().scheme(template.checked_fn_scheme);
             switch (template.body) {
                 .checked_body => |root_expr| std.debug.assert(self.bodies().index().reachesExpr(root_expr)),
-                .intrinsic_wrapper => |wrapper_id| {
-                    const wrapper = self.intrinsic_wrappers.get(wrapper_id);
-                    std.debug.assert(wrapper.checked_fn_root == template.checked_fn_root);
-                    std.debug.assert(wrapper.template.template == template.template_id);
-                    std.debug.assert(wrapper.template.proc_base == template.proc_base);
-                    std.debug.assert(std.meta.eql(wrapper.template.artifact.bytes, self.key.bytes));
-                },
+                .intrinsic_wrapper => std.debug.assert(template.proc_base.kind() == .intrinsic_wrapper),
                 .entry_wrapper => |wrapper_id| {
                     const wrapper = self.entry_wrappers.get(wrapper_id);
                     std.debug.assert(self.typesView().containsId(wrapper.checked_fn_root));
@@ -32612,7 +32422,8 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@backingInt(exported.const_ref.template) < self.const_templates.templates.items.len);
             switch (exported.template.state) {
                 .eval_template => |eval| {
-                    std.debug.assert(@backingInt(eval.body) < self.checked_const_bodies.bodies.len);
+                    std.debug.assert(self.compile_time_roots.position(eval.root) != null);
+                    std.debug.assert(compileTimeRootHasConstBody(self.compile_time_roots.root(eval.root).kind));
                     std.debug.assert(std.meta.eql(eval.entry_template.artifact.bytes, self.key.bytes));
                     std.debug.assert(@backingInt(eval.entry_template.template) < self.checked_procedure_templates.templates.items.len);
                 },
@@ -32861,11 +32672,9 @@ pub const ImportedModuleView = struct {
     module_analyses: ?*ModuleAnalyses = null,
     checked_types: CheckedTypeStoreView,
     checked_bodies: CheckedBodies,
-    checked_const_bodies: *const CheckedConstBodyTable,
     checked_procedure_templates: *const CheckedProcedureTemplateTable,
     compile_time_roots: *const CompileTimeRootTable,
     entry_wrappers: *const EntryWrapperTable,
-    intrinsic_wrappers: *const IntrinsicWrapperTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
@@ -33029,11 +32838,9 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .module_analyses = artifact.module_analyses,
         .checked_types = artifact.typesView(),
         .checked_bodies = artifact.bodies(),
-        .checked_const_bodies = &artifact.checked_const_bodies,
         .checked_procedure_templates = &artifact.checked_procedure_templates,
         .compile_time_roots = &artifact.compile_time_roots,
         .entry_wrappers = &artifact.entry_wrappers,
-        .intrinsic_wrappers = &artifact.intrinsic_wrappers,
         .resolved_value_refs = &artifact.resolved_value_refs,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
@@ -34318,8 +34125,6 @@ pub fn publishFromTypedModule(
 
     const value_binding_defs = module_env.store.sliceDefs(module_env.value_binding_defs);
 
-    var intrinsic_wrappers = IntrinsicWrapperTable{};
-    errdefer intrinsic_wrappers.deinit(allocator);
 
     var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(
         allocator,
@@ -34328,7 +34133,6 @@ pub fn publishFromTypedModule(
         owner_artifact,
         &checked_type_publication,
         module_index,
-        &intrinsic_wrappers,
     );
     errdefer checked_procedure_templates.deinit(allocator);
     try checked_procedure_templates.appendPromotedLocalProcedures(
@@ -34374,9 +34178,6 @@ pub fn publishFromTypedModule(
         &checked_procedure_templates,
     );
     errdefer compile_time_roots.deinit(allocator);
-
-    var checked_const_bodies = try CheckedConstBodyTable.fromRoots(allocator, &compile_time_roots);
-    errdefer checked_const_bodies.deinit(allocator);
 
     var entry_wrappers = EntryWrapperTable{};
     errdefer entry_wrappers.deinit(allocator);
@@ -34479,7 +34280,6 @@ pub fn publishFromTypedModule(
     sealConstEvalTemplatesForRoots(
         &const_templates,
         &compile_time_roots,
-        &checked_const_bodies,
         &entry_wrappers,
         &checked_procedure_templates,
         &top_level_values,
@@ -34508,13 +34308,11 @@ pub fn publishFromTypedModule(
         .module_env = inputs.module_env_storage,
         .checked_types = checked_types.*,
         .inference = inference,
-        .checked_const_bodies = checked_const_bodies,
         .method_registry = method_registry,
         .static_dispatch_plans = static_dispatch_plans,
         .resolved_value_refs = resolved_value_refs,
         .checked_procedure_templates = checked_procedure_templates,
         .entry_wrappers = entry_wrappers,
-        .intrinsic_wrappers = intrinsic_wrappers,
         .top_level_procedure_bindings = top_level_procedure_bindings,
         .callable_eval_templates = callable_eval_templates,
         .platform_requirement_relations = .{},
@@ -34741,16 +34539,18 @@ test "constant template states contain sealed value data but no runtime initiali
 test "checked module owns post-check inputs at the checked boundary" {
     try std.testing.expect(@hasField(CheckedModuleArtifact, "checked_types"));
     try std.testing.expect(!@hasField(CheckedModuleArtifact, "checked_bodies"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "checked_const_bodies"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "method_registry"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "static_dispatch_plans"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "resolved_value_refs"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "checked_procedure_templates"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "entry_wrappers"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "intrinsic_wrappers"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_procedure_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "callable_eval_templates"));
     try std.testing.expect(!@hasField(CheckedModuleArtifact, "root_requests"));
+    try std.testing.expect(!@hasField(CheckedModuleArtifact, "hosted_procs"));
+    try std.testing.expect(!@hasField(CheckedModuleArtifact, "hosted_bindings"));
+    try std.testing.expect(!@hasField(CheckedModuleArtifact, "checked_const_bodies"));
+    try std.testing.expect(!@hasField(CheckedModuleArtifact, "intrinsic_wrappers"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "compile_time_roots"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_values"));
@@ -35217,7 +35017,6 @@ test "relation projection preserves anonymous row identity and provenance" {
         .static_dispatch_plans = .{},
         .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
-        .intrinsic_wrappers = .{},
         .top_level_procedure_bindings = .{},
         .platform_required_bindings = .{},
         .compile_time_roots = .{},
@@ -35463,7 +35262,6 @@ test "artifact views are read-only projections" {
         .static_dispatch_plans = .{},
         .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
-        .intrinsic_wrappers = .{},
         .top_level_procedure_bindings = .{},
         .platform_required_bindings = .{},
         .compile_time_roots = .{},
@@ -35543,10 +35341,8 @@ fn isNestedStoreField(comptime T: type) bool {
 
 test "transform-A stores: serialize/deserialize round-trip preserves every slice field" {
     try expectAllSliceStoreRoundTrips(EntryWrapperTable);
-    try expectAllSliceStoreRoundTrips(IntrinsicWrapperTable);
     try expectAllSliceStoreRoundTrips(CallableEvalTemplateTable);
     try expectAllSliceStoreRoundTrips(CompileTimeRootTable);
-    try expectAllSliceStoreRoundTrips(CheckedConstBodyTable);
     try expectAllSliceStoreRoundTrips(ResolvedValueRefTable);
     try expectAllSliceStoreRoundTrips(RootRequestTable);
     try expectAllSliceStoreRoundTrips(TopLevelProcedureBindingTable);
@@ -35603,11 +35399,9 @@ fn testVisibilityImportedView(
         .module_analyses = analyses,
         .checked_types = undefined,
         .checked_bodies = undefined,
-        .checked_const_bodies = undefined,
         .checked_procedure_templates = undefined,
         .compile_time_roots = undefined,
         .entry_wrappers = undefined,
-        .intrinsic_wrappers = undefined,
         .resolved_value_refs = undefined,
         .static_dispatch_plans = undefined,
         .top_level_procedure_bindings = undefined,
