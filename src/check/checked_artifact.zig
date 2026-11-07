@@ -11248,13 +11248,6 @@ pub const EntryWrapper = struct {
 pub const EntryWrapperTable = struct {
     wrappers: std.ArrayList(EntryWrapper) = .empty,
 
-    pub const Serialized = extern struct {
-        wrappers: SerializedSlice(EntryWrapper) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(EntryWrapperTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
     pub fn append(
         self: *EntryWrapperTable,
         allocator: Allocator,
@@ -11380,13 +11373,6 @@ pub const TopLevelProcedureBinding = struct {
 pub const TopLevelProcedureBindingTable = struct {
     bindings: std.ArrayList(TopLevelProcedureBinding) = .empty,
 
-    pub const Serialized = extern struct {
-        bindings: SerializedSlice(TopLevelProcedureBinding) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(TopLevelProcedureBindingTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
     pub fn initEmpty() TopLevelProcedureBindingTable {
         return .{};
     }
@@ -11471,13 +11457,6 @@ pub const CallableEvalTemplateTableView = struct {
 /// Public `CallableEvalTemplateTable` declaration.
 pub const CallableEvalTemplateTable = struct {
     templates: std.ArrayList(CallableEvalTemplate) = .empty,
-
-    pub const Serialized = extern struct {
-        templates: SerializedSlice(CallableEvalTemplate) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(CallableEvalTemplateTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
 
     pub fn append(
         self: *CallableEvalTemplateTable,
@@ -11780,16 +11759,6 @@ pub const ResolvedValueRefTable = struct {
     /// Each call that targets a directly callable procedure, with that
     /// procedure's reference, ascending by call.
     call_direct_targets: []CallDirectTarget = &.{},
-
-    pub const Serialized = extern struct {
-        records: SerializedSlice(ResolvedValueRefRecord) = .{},
-        template_refs: SerializedSlice(ResolvedValueRefId) = .{},
-        retired_exprs: SerializedSlice(u64) = .{},
-        call_direct_targets: SerializedSlice(CallDirectTarget) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(ResolvedValueRefTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
 
     /// The module's resolved value references in published ids, translated
     /// from the value-reference resolution checking recorded
@@ -12870,22 +12839,6 @@ pub const TemplateDispatchSites = struct {
 
     pub const default_plan_refs = 0;
     pub const default_value_refs = 1;
-
-    pub const Serialized = extern struct {
-        iterator_spans: SerializedSlice(artifact_serialize.Span) = .{},
-        iterator_refs: SerializedSlice(static_dispatch.IteratorForPlanId) = .{},
-        iterator_scopes: SerializedSlice(DispatchScope) = .{},
-        value_ref_scopes: SerializedSlice(DispatchScope) = .{},
-        scheme_use_spans: SerializedSlice(artifact_serialize.Span) = .{},
-        scheme_use_sites: SerializedSlice(CollectedSchemeUseSite) = .{},
-        scheme_use_scopes: SerializedSlice(DispatchScope) = .{},
-        scope_site_spans: SerializedSlice(artifact_serialize.Span) = .{},
-        scope_sites: SerializedSlice(CollectedScopeConstructionSite) = .{},
-        default_ref_spans: SerializedSlice(artifact_serialize.Span) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(TemplateDispatchSites, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 
@@ -18401,22 +18354,6 @@ pub const CheckedProcedureTemplateTable = struct {
     specialization_interface_relations: []SpecializationInterfaceRelation = &.{},
     /// Checked argument types backing call-relation spans.
     specialization_interface_types: []CheckedTypeId = &.{},
-
-    pub const Serialized = extern struct {
-        templates: SerializedSlice(CheckedProcedureTemplate) = .{},
-        by_def: SerializedSlice(static_dispatch.ProcedureTemplateLookupEntry) = .{},
-        promoted: SerializedSlice(PromotedProcedureTemplateEntry) = .{},
-        dispatch_plan_refs: SerializedSlice(static_dispatch.StaticDispatchPlanId) = .{},
-        dispatch_ref_scopes: SerializedSlice(DispatchScope) = .{},
-        dispatch_sites: TemplateDispatchSites.Serialized = .{},
-        dispatch_relation_kinds: SerializedSlice(DispatchRelationKind) = .{},
-        dispatch_scopes: SerializedSlice(DispatchRefScope) = .{},
-        specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
-        specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
 
     pub fn fromModule(
         allocator: Allocator,
@@ -25657,13 +25594,6 @@ fn rootBodyContainsDiagnosticError(diagnostics: *const body_analyses.NodeBits, r
 pub const CompileTimeRootTable = struct {
     roots: []CompileTimeRoot = &.{},
 
-    pub const Serialized = extern struct {
-        roots: SerializedSlice(CompileTimeRoot) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
@@ -28309,15 +28239,6 @@ pub const TopLevelValueTable = struct {
     by_pattern: []TopLevelValueByPatternEntry = &.{},
     by_def: []TopLevelValueByDefEntry = &.{},
 
-    pub const Serialized = extern struct {
-        entries: SerializedSlice(TopLevelValueEntry) = .{},
-        by_pattern: SerializedSlice(TopLevelValueByPatternEntry) = .{},
-        by_def: SerializedSlice(TopLevelValueByDefEntry) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(TopLevelValueTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
@@ -28507,16 +28428,6 @@ pub const HoistedConstTable = struct {
     entries: []HoistedConstEntry = &.{},
     by_expr: []HoistedConstByExprEntry = &.{},
     by_pattern: []HoistedConstByPatternEntry = &.{},
-
-    pub const Serialized = extern struct {
-        entries: SerializedSlice(HoistedConstEntry) = .{},
-        by_expr: SerializedSlice(HoistedConstByExprEntry) = .{},
-        by_pattern: SerializedSlice(HoistedConstByPatternEntry) = .{},
-
-        const Serde = artifact_serialize.SliceStoreSerde(HoistedConstTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
 
     pub fn fromRoots(
         allocator: Allocator,
@@ -30711,13 +30622,6 @@ pub const ConstTemplate = struct {
 /// Public `ConstTemplateTable` declaration.
 pub const ConstTemplateTable = struct {
     templates: std.ArrayList(ConstTemplate) = .empty,
-
-    pub const Serialized = extern struct {
-        templates: SerializedSlice(ConstTemplate) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(ConstTemplateTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
 
     pub fn reserveTopLevel(
         self: *ConstTemplateTable,
@@ -35364,19 +35268,8 @@ fn isNestedStoreField(comptime T: type) bool {
 }
 
 test "transform-A stores: serialize/deserialize round-trip preserves every slice field" {
-    try expectAllSliceStoreRoundTrips(EntryWrapperTable);
-    try expectAllSliceStoreRoundTrips(CallableEvalTemplateTable);
-    try expectAllSliceStoreRoundTrips(CompileTimeRootTable);
-    try expectAllSliceStoreRoundTrips(ResolvedValueRefTable);
     try expectAllSliceStoreRoundTrips(RootRequestTable);
-    try expectAllSliceStoreRoundTrips(TopLevelProcedureBindingTable);
     try expectAllSliceStoreRoundTrips(PlatformRequirementRelationTable);
-    try expectAllSliceStoreRoundTrips(TopLevelValueTable);
-    try expectAllSliceStoreRoundTrips(CheckedProcedureTemplateTable);
-    try expectAllSliceStoreRoundTrips(static_dispatch.MethodRegistry);
-    // Total-dispatch plans: resolutions, evidence nodes/refs, site evidence,
-    // and iterator plans must survive artifact caching byte-exactly.
-    try expectAllSliceStoreRoundTrips(static_dispatch.StaticDispatchPlanTable);
 }
 
 /// Module analyses whose public API dependencies are `dependencies` and
@@ -35550,19 +35443,6 @@ test "CheckingContextIdentity serialize/deserialize round-trip (slices + optiona
     try std.testing.expect(rt.loaded.platform_requirement_context != null);
     try std.testing.expectEqualSlices(u8, std.mem.asBytes(&prc), std.mem.asBytes(&rt.loaded.platform_requirement_context.?));
     try std.testing.expectEqual(@as(?PlatformAppRelationKey, null), rt.loaded.platform_app_relation);
-}
-
-test "ConstTemplateTable serialize/deserialize round-trip (ArrayList-backed)" {
-    const gpa = std.testing.allocator;
-    const templates = try gpa.alloc(ConstTemplate, 3);
-    defer gpa.free(templates);
-    artifact_serialize.poisonSlice(ConstTemplate, templates, 0x5A);
-    artifact_serialize.zeroSlicePadding(ConstTemplate, templates);
-    const store = ConstTemplateTable{ .templates = artifact_serialize.arrayListFromSlice(ConstTemplate, templates) };
-
-    const rt = try artifact_serialize.roundTripForTest(gpa, ConstTemplateTable, &store);
-    defer gpa.free(rt.buffer);
-    try artifact_serialize.expectSlicesByteEqual(ConstTemplate, store.templates.items, rt.loaded.templates.items);
 }
 
 test "issue 11290: builtin backing declarations survive serialization with shared formals" {

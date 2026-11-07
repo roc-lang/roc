@@ -14,8 +14,6 @@ const checked_ids = @import("checked_ids.zig");
 const collections = @import("collections");
 const artifact_serialize = @import("artifact_serialize.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
-const SerializedSlice = artifact_serialize.SerializedSlice;
-const CompactWriter = collections.CompactWriter;
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -930,16 +928,6 @@ pub const InspectOverride = struct {
 pub const MethodRegistry = struct {
     entries: []MethodRegistryEntry = &.{},
 
-    pub const Serialized = extern struct {
-        entries: SerializedSlice(MethodRegistryEntry) = .{},
-        pub fn serialize(self: *Serialized, t: *const MethodRegistry, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            try self.entries.serialize(t.entries, gpa, writer);
-        }
-        pub fn deserialize(self: *const Serialized, base_addr: usize) MethodRegistry {
-            return .{ .entries = self.entries.deserialize(base_addr) };
-        }
-    };
-
     pub fn lookup(self: *const MethodRegistry, key: MethodKey) ?CheckedMethodLookup {
         // Stack-built keys carry undefined bytes in the owner union's padding
         // and inactive-variant region; ReleaseFast fuses the comparator's
@@ -968,9 +956,6 @@ pub const MethodRegistry = struct {
         };
     }
 
-    /// Build-time-only teardown (see `StaticDispatchPlanTable.deinit`): a frozen
-    /// table's `entries` alias the artifact buffer and are freed wholesale by the
-    /// artifact, never here.
     pub fn deinit(self: *MethodRegistry, allocator: Allocator) void {
         allocator.free(self.entries);
         self.* = .{};
@@ -2473,32 +2458,6 @@ pub const StaticDispatchPlanTable = struct {
     /// Shared flat pool backing `GeneratedCodecDerivation.calls`.
     recorded_codec_calls: []GeneratedCodecCall = &.{},
 
-    pub const Serialized = extern struct {
-        plans: SerializedSlice(RecordedDispatchPlan) = .{},
-        by_node: SerializedSlice(PlanKV) = .{},
-        numeral_by_node: SerializedSlice(PlanKV) = .{},
-        quote_by_node: SerializedSlice(PlanKV) = .{},
-        iterator_for_plans: SerializedSlice(IteratorForPlan) = .{},
-        iterator_topologies: SerializedSlice(IteratorRepresentationTopology) = .{},
-        iterator_for_by_node: SerializedSlice(PlanKV) = .{},
-        operand_pool: SerializedSlice(StaticDispatchOperand) = .{},
-        iter_operand_pool: SerializedSlice(IteratorDispatchOperand) = .{},
-        plan_sources: SerializedSlice(PlanSource) = .{},
-        iterator_plan_sources: SerializedSlice(IteratorPlanSource) = .{},
-        recorded_codec_derivations: SerializedSlice(GeneratedCodecDerivation) = .{},
-        recorded_codec_calls: SerializedSlice(GeneratedCodecCall) = .{},
-
-        comptime {
-            // 13 side lists → 13 base-pointer fixups on deserialize, never a
-            // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 13);
-        }
-
-        const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
@@ -3056,12 +3015,6 @@ pub const StaticDispatchPlanTable = struct {
         return if (lookupPlanKV(self.iterator_for_by_node, node)) |v| @fromBackingInt(@intCast(v)) else null;
     }
 
-    /// Build-time-only teardown: frees the heap-owned slices. A frozen
-    /// (deserialized) table's slices alias the artifact's single backing buffer and are
-    /// NEVER freed here—the artifact's `deinitInternal` frees the buffer wholesale and
-    /// does not call any sub-store `deinit` on the frozen path. (No `serialized` flag is
-    /// needed because, unlike the mutation-guarded stores, this table has no post-load
-    /// mutators.)
     pub fn deinit(self: *StaticDispatchPlanTable, allocator: Allocator) void {
         allocator.free(self.by_node);
         allocator.free(self.numeral_by_node);
@@ -3593,88 +3546,6 @@ test "method registry distinguishes a rejected declaration from an undeclared me
     try std.testing.expect(rejected == .rejected);
 
     try std.testing.expect(registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @fromBackingInt(@intCast(3)) }) == null);
-}
-
-fn testPlan(node: u32, args_start: u32, args_len: u32) RecordedDispatchPlan {
-    return .{
-        .node = node,
-        .method = @fromBackingInt(@intCast(1)),
-        .dispatcher = .{ .arg = 0 },
-        .dispatcher_ty = @fromBackingInt(@intCast(2)),
-        .callable_ty = @fromBackingInt(@intCast(3)),
-        .args = .{ .start = args_start, .len = args_len },
-        .result_mode = .value,
-    };
-}
-
-test "StaticDispatchPlanTable: relocates with a constant number of fixups, operands resolve post-deserialize" {
-    const gpa = std.testing.allocator;
-
-    // The fixup count is fixed by the number of serialized base pointers, never
-    // by how much data each pool holds. The two tables below differ in operand
-    // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".field_names.len == 13);
-
-    inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
-        const operands = try gpa.alloc(StaticDispatchOperand, operand_count);
-        defer gpa.free(operands);
-        for (operands, 0..) |*op, i| op.* = .{ .checked_expr = @fromBackingInt(@intCast(@as(u32, @intCast(i)) + 100)) };
-
-        var plans = [_]RecordedDispatchPlan{
-            testPlan(10, 0, 2),
-            testPlan(11, 2, operand_count - 2),
-        };
-        var by_node = [_]PlanKV{
-            .{ .key = 10, .val = 0 },
-            .{ .key = 11, .val = 1 },
-        };
-        var plan_sources = [_]PlanSource{
-            .{ .dispatcher_var = @fromBackingInt(@intCast(30)), .constraint_fn_var = null },
-            .{ .dispatcher_var = @fromBackingInt(@intCast(31)), .constraint_fn_var = @fromBackingInt(@intCast(32)) },
-        };
-        var iterator_topologies = [_]IteratorRepresentationTopology{.{
-            .len_field = @fromBackingInt(@intCast(20)),
-            .step_field = @fromBackingInt(@intCast(21)),
-            .ok_tag = @fromBackingInt(@intCast(22)),
-            .err_tag = @fromBackingInt(@intCast(29)),
-            .unknown_tag = @fromBackingInt(@intCast(23)),
-            .done_tag = @fromBackingInt(@intCast(24)),
-            .one_tag = @fromBackingInt(@intCast(25)),
-            .skip_tag = @fromBackingInt(@intCast(26)),
-            .item_field = @fromBackingInt(@intCast(27)),
-            .rest_field = @fromBackingInt(@intCast(28)),
-        }};
-
-        const table = StaticDispatchPlanTable{
-            .plans = &plans,
-            .by_node = &by_node,
-            .iterator_topologies = &iterator_topologies,
-            .operand_pool = operands,
-            .plan_sources = &plan_sources,
-        };
-
-        const rt = try artifact_serialize.roundTripForTest(gpa, StaticDispatchPlanTable, &table);
-        defer gpa.free(rt.buffer);
-
-        const loaded = rt.loaded;
-        try std.testing.expectEqual(@as(usize, 2), loaded.plans.len);
-        try std.testing.expectEqual(@as(usize, operand_count), loaded.operand_pool.len);
-        try std.testing.expectEqualSlices(IteratorRepresentationTopology, &iterator_topologies, loaded.iterator_topologies);
-
-        const first_args = loaded.plans[0].argsSlice(&loaded);
-        try std.testing.expectEqual(@as(usize, 2), first_args.len);
-        try std.testing.expectEqual(@as(CIR.Expr.Idx, @fromBackingInt(@intCast(100))), first_args[0].checked_expr);
-
-        const second_args = loaded.plans[1].argsSlice(&loaded);
-        try std.testing.expectEqual(@as(usize, operand_count - 2), second_args.len);
-        try std.testing.expectEqual(
-            @as(CIR.Expr.Idx, @fromBackingInt(@intCast(operand_count - 1 + 100))),
-            second_args[second_args.len - 1].checked_expr,
-        );
-
-        try std.testing.expectEqual(@as(?u32, 1), lookupPlanKV(loaded.by_node, 11));
-        try std.testing.expectEqualSlices(PlanSource, &plan_sources, loaded.plan_sources);
-    }
 }
 
 fn testMethodTarget(def_idx: CIR.Def.Idx) MethodTarget {
