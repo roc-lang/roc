@@ -2467,7 +2467,7 @@ pub const Coordinator = struct {
             while (self.task_channel.tryRecv()) |task| {
                 switch (task) {
                     .parse => |t| if (t.discovered) |discovered| discovered.deinit(),
-                    .post_check => {},
+                    .post_check, .imported_module_analyses => {},
                     .canonicalize => |t| {
                         t.cached_ast.deinit();
                     },
@@ -3437,6 +3437,10 @@ pub const Coordinator = struct {
                 };
                 self.workers.appendAssumeCapacity(th);
             }
+            // Every module checked or opened reads Builtin's export rows and
+            // public API dependencies, so a worker computes them while the
+            // first modules are parsed.
+            try self.enqueueTask(.{ .imported_module_analyses = &self.builtin_modules.checked_module });
         }
     }
 
@@ -3475,7 +3479,7 @@ pub const Coordinator = struct {
                 .parse => |t| std.debug.print("[COORD] ENQUEUE parse: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
                 .canonicalize => |t| std.debug.print("[COORD] ENQUEUE canonicalize: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
                 .type_check => |t| std.debug.print("[COORD] ENQUEUE type_check: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
-                .post_check => {},
+                .post_check, .imported_module_analyses => {},
             }
         }
         // Increment inflight BEFORE sending to the channel. This ensures there is
@@ -4398,6 +4402,10 @@ pub const Coordinator = struct {
                 const ice = base.ice_context.enter(.{ .phase = .type_check, .module_name = t.module_name, .module_path = self.crashReportPath(t.path) });
                 defer ice.leave();
                 return self.executeTypeCheck(t, allocators);
+            },
+            .imported_module_analyses => |checked| {
+                try demandImportedModuleAnalyses(checked);
+                return .imported_module_analyses_demanded;
             },
             .post_check => coordinatorInvariant("post-check tasks run through the post-check executor, never executeTaskInline", .{}),
         }
@@ -5322,6 +5330,7 @@ pub const Coordinator = struct {
             .cached_module_opened => |*r| try self.handleCachedModuleOpened(r),
             .operation_failed => |r| return self.handleOperationFailed(r),
             .worker_oom => return error.OutOfMemory,
+            .imported_module_analyses_demanded => {},
         }
         // The unit scheduler's completions arrive in its own session while
         // frontend tasks run; recording them releases the units waiting
@@ -7352,6 +7361,15 @@ pub const Coordinator = struct {
                 .canonicalize_diagnostics_ns = diagnostics_ns,
             },
         };
+    }
+
+    /// Demand the analyses of `checked`, a module without a type-check task,
+    /// that checking or opening every module importing it reads: its export
+    /// rows, which read its checked tables, and its public API dependencies.
+    fn demandImportedModuleAnalyses(checked: *const CheckedModule) Allocator.Error!void {
+        const view = Checked.importedView(checked);
+        _ = try view.exportRows();
+        _ = try view.publicApiDependencies(checked.analysesResolver());
     }
 
     /// Demand, in the type-check task that checked or opened `checked`, the

@@ -232,6 +232,9 @@ pub const WorkerTask = union(enum) {
     canonicalize: CanonicalizeTask,
     /// Type-check a canonicalized module
     type_check: TypeCheckTask,
+    /// Demand the analyses of a module that has no type-check task of its
+    /// own (Builtin) which checking or opening any other module reads.
+    imported_module_analyses: *const Checked.CheckedModule,
     /// A token of a post-check session with a task queued: the worker
     /// taking it runs a task of that session, if one is still queued, and
     /// delivers the completion to the session itself.
@@ -466,6 +469,8 @@ pub const WorkerResult = union(enum) {
     operation_failed: WorkerOperationFailure,
     /// A worker stage ran out of memory
     worker_oom: WorkerOom,
+    /// The analyses an `imported_module_analyses` task demands are computed.
+    imported_module_analyses_demanded,
 
     /// Release a result that shutdown prevented the coordinator from accepting.
     /// Parsed environments have no coordinator owner yet; later stages borrow
@@ -481,7 +486,7 @@ pub const WorkerResult = union(enum) {
                 var storage: Checked.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
-            .canonicalized, .type_checked, .cached_module_opened, .operation_failed, .worker_oom => {},
+            .canonicalized, .type_checked, .cached_module_opened, .operation_failed, .worker_oom, .imported_module_analyses_demanded => {},
         }
         self.deinit(gpa);
     }
@@ -538,6 +543,7 @@ pub const WorkerResult = union(enum) {
             .cached_module_opened => |*r| r.deinit(),
             .operation_failed => {},
             .worker_oom => {},
+            .imported_module_analyses_demanded => {},
         }
     }
 };
