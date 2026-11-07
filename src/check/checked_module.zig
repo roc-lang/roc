@@ -17313,6 +17313,15 @@ pub fn computeTemplateDispatchRelations(allocator: Allocator, dispatch: CheckedD
 /// from each target's module, so their interface capabilities are demanded
 /// before the lock is taken; classification reads only complete types and
 /// runs after the lock is released.
+/// Whether a plan or iterator call `pass` resolved is a pending direct call.
+fn passHasPendingDirectCalls(pass: *const EvidencePass) bool {
+    for (pass.plan_results.items) |entry| if (entry.resolution.resolution == .direct_pending) return true;
+    for (pass.iterator_results.items) |entry| {
+        if (entry.resolution.iter == .direct_pending or entry.resolution.next == .direct_pending) return true;
+    }
+    return false;
+}
+
 fn specializeResolvedPlans(allocator: Allocator, pass: *EvidencePass, index: *const DispatchIndex) Allocator.Error!void {
     const source = pass.dispatch.source;
     const store = source.types.store;
@@ -17348,7 +17357,9 @@ fn specializeResolvedPlans(allocator: Allocator, pass: *EvidencePass, index: *co
         .identity_index = EnclosingIdentityIndex.init(allocator, source.names, source.types.store),
     };
     defer specializer.deinit();
-    {
+    // Only a pending direct call's callable is specialized, so a pass with
+    // none takes no creation.
+    if (passHasPendingDirectCalls(pass)) {
         store.beginCreation(source.analyses.io);
         errdefer store.endCreation(source.analyses.io);
         for (pass.plan_results.items) |*entry| try specializer.specializePlan(&entry.resolution);
