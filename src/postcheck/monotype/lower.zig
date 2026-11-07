@@ -2719,13 +2719,10 @@ fn substitutionNodeCount(subst: SpecSubstitution) usize {
 
 /// The substitution an evidence node recorded for its target's scheme, or
 /// null for a monomorphic target.
-fn checkedTargetSubstitution(site_view: ModuleView, target_view: ModuleView, node: static_dispatch.EvidenceNode) Allocator.Error!?CheckedTargetSubstitution {
+fn checkedTargetSubstitution(site_view: ModuleView, builder: *Builder, node: static_dispatch.EvidenceNode) Allocator.Error!?CheckedTargetSubstitution {
     const alias: ?TargetAlias = switch (node.instantiation) {
-        .alias => .{
-            .view = target_view,
-            .alias = node.target.alias orelse
-                Common.invariant("alias-instantiated evidence named a target with no alias binding"),
-        },
+        .alias => builder.targetAlias(node.target.alias orelse
+            Common.invariant("alias-instantiated evidence named a target with no alias binding")),
         .monomorphic, .callable, .derived_from_callable => null,
     };
     if (node.subst.len == 0 and alias == null) return null;
@@ -8420,15 +8417,13 @@ const Builder = struct {
             },
             .imported => |imported| blk: {
                 const view = self.moduleForId(checked.importedProcedureModuleId(imported));
-                for ((try view.checked_view.exportRows()).procedure_bindings) |binding| {
-                    if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
-                    break :blk switch (binding.body) {
-                        .direct_template => null,
-                        .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
-                        .callable_eval_template => |template| .{ .view = view, .template = template },
-                    };
-                }
-                Common.invariant("imported procedure binding was not exported by its checked module");
+                const binding = (try view.checked_view.exportRows()).procedureBinding(imported.def, imported.pattern) orelse
+                    Common.invariant("imported procedure binding was not exported by its checked module");
+                break :blk switch (binding.body) {
+                    .direct_template => null,
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
+                    .callable_eval_template => |template| .{ .view = view, .template = template },
+                };
             },
             .hosted => null,
             .platform_required => |required| blk: {
@@ -12242,6 +12237,26 @@ const Builder = struct {
         return try view.bodies.templateHasSingleSourceCall(checked_template.template);
     }
 
+    /// An exact procedure alias a method target was reached through, in the
+    /// module that declares it.
+    fn targetAlias(self: *Builder, alias: static_dispatch.MethodAlias) TargetAlias {
+        return .{ .view = self.moduleForDigest(alias.module), .alias = alias };
+    }
+
+    /// A target of `owner_view`'s method registry. A procedure's target data,
+    /// its callable type included, belongs to the module that owns its
+    /// template, which for a method bound to another module's function
+    /// (`method = Other.function`) is not the owner's.
+    fn registryMethodLookup(self: *Builder, owner_view: ModuleView, target: static_dispatch.MethodTarget) MethodLookup {
+        return .{
+            .view = switch (target.kind) {
+                .procedure => |procedure| self.moduleForDigest(names.procTemplateModuleDigest(procedure.template)),
+                .local_proc, .structural => owner_view,
+            },
+            .target = target,
+        };
+    }
+
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
         return self.moduleForKeyBytes(module_digest.bytes) orelse
             Common.invariant("procedure template referenced a checked module that is not in the lowering input");
@@ -13039,6 +13054,7 @@ const Builder = struct {
     ) ?MethodLookup {
         const owner_view = self.methodOwnerView(owner_names, owner) orelse return null;
         return value_rules.lookupInspectOverride(InspectOverrideViews{
+            .builder = self,
             .owner_view = owner_view,
             .owner_names = owner_names,
             .owner = owner,
@@ -13047,6 +13063,7 @@ const Builder = struct {
 
     /// The one view inspection reads an owner's `to_inspect` from.
     const InspectOverrideViews = struct {
+        builder: *Builder,
         owner_view: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
@@ -13072,8 +13089,8 @@ const Builder = struct {
             return &candidate.tables.method_registry;
         }
 
-        pub fn found(_: InspectOverrideViews, candidate: ModuleView, _: static_dispatch.MethodKey, override: static_dispatch.InspectOverride) MethodLookup {
-            return .{ .view = candidate, .target = override.target };
+        pub fn found(views: InspectOverrideViews, candidate: ModuleView, _: static_dispatch.MethodKey, override: static_dispatch.InspectOverride) MethodLookup {
+            return views.builder.registryMethodLookup(candidate, override.target);
         }
     };
 
@@ -13122,7 +13139,7 @@ const Builder = struct {
         const view_method = owner_view.names.lookupMethodName(method_name) orelse return null;
         return switch (owner_view.tables.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null) {
             .rejected => .rejected,
-            .target => |target| .{ .target = .{ .view = owner_view, .target = target } },
+            .target => |target| .{ .target = self.registryMethodLookup(owner_view, target) },
         };
     }
 
@@ -13200,20 +13217,17 @@ const Builder = struct {
             },
             .imported => |imported| blk: {
                 const view = self.moduleForId(checked.importedProcedureModuleId(imported));
-                for ((try view.checked_view.exportRows()).procedure_bindings) |binding| {
-                    if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-                        break :blk switch (binding.body) {
-                            .direct_template => |direct| switch (direct.template) {
-                                .checked => |template| template,
-                                .lifted => Common.invariant("imported lifted target reached Monotype procedure use"),
-                                .synthetic => Common.invariant("imported synthetic target reached Monotype procedure use"),
-                            },
-                            .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
-                            .callable_eval_template => Common.invariant("imported callable-eval template reached Monotype procedure use"),
-                        };
-                    }
-                }
-                Common.invariant("imported procedure binding was not exported by its checked module");
+                const binding = (try view.checked_view.exportRows()).procedureBinding(imported.def, imported.pattern) orelse
+                    Common.invariant("imported procedure binding was not exported by its checked module");
+                break :blk switch (binding.body) {
+                    .direct_template => |direct| switch (direct.template) {
+                        .checked => |template| template,
+                        .lifted => Common.invariant("imported lifted target reached Monotype procedure use"),
+                        .synthetic => Common.invariant("imported synthetic target reached Monotype procedure use"),
+                    },
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
+                    .callable_eval_template => Common.invariant("imported callable-eval template reached Monotype procedure use"),
+                };
             },
             .hosted => |hosted| hosted.template,
             .platform_required => |required| blk: {
@@ -36738,7 +36752,7 @@ const BodyContext = struct {
             break :blk existing.slot;
         } else blk: {
             const template = (try lookup.view.template(procedure.template.template));
-            const edge: EdgeEvidence = if (try self.directAliasTargetEdge(plan, lookup)) |alias_edge| alias_edge else edge: {
+            const edge: EdgeEvidence = if (try self.directAliasTargetEdge(plan)) |alias_edge| alias_edge else edge: {
                 const subst = (try self.directDispatchTargetSubstitution(plan, lookup, callable_node)) orelse
                     Common.invariant("closed direct procedure call had no checked substitution");
                 break :edge .{
@@ -51473,8 +51487,8 @@ const BodyContext = struct {
             .from_callable => return false,
             // A block-local alias's scope belongs to this body's lexical
             // context, as a local procedure's does.
-            .through_alias => switch (node.target.alias orelse
-                Common.invariant("alias-scope evidence named a target with no alias binding")) {
+            .through_alias => switch ((node.target.alias orelse
+                Common.invariant("alias-scope evidence named a target with no alias binding")).binding) {
                 .local => return true,
                 .top_level => try dispatch.aliasScopeEvidence(node),
             },
@@ -53615,11 +53629,8 @@ const BodyContext = struct {
             // alias when the frame finishes.
             .through_alias => .{
                 (try site_view.dispatch.aliasScopeEvidence(node)),
-                (try self.aliasScopeSchema(.{
-                    .view = lookup.view,
-                    .alias = node.target.alias orelse
-                        Common.invariant("alias-scope evidence named a target with no alias binding"),
-                })).params,
+                (try self.aliasScopeSchema(self.builder.targetAlias(node.target.alias orelse
+                    Common.invariant("alias-scope evidence named a target with no alias binding")))).params,
             },
         };
         if (node.nested != .from_callable and refs.len != params.len) {
@@ -53639,7 +53650,7 @@ const BodyContext = struct {
         frame: EvidenceTargetFrame,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!*const SpecEvidenceTarget {
-        const substitution = try checkedTargetSubstitution(site_view, frame.lookup.view, frame.node);
+        const substitution = try checkedTargetSubstitution(site_view, self.builder, frame.node);
         const nested: []const SpecEvidence = switch (frame.node.nested) {
             .resolved, .from_callable => frame.nested,
             .through_alias => blk: {
@@ -54381,7 +54392,6 @@ const BodyContext = struct {
     fn directAliasTargetEdge(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
-        lookup: MethodLookup,
     ) Allocator.Error!?EdgeEvidence {
         const direct = switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| direct,
@@ -54390,7 +54400,7 @@ const BodyContext = struct {
         };
         const contract = try self.directAliasScopeContract(direct.evidence) orelse return null;
         const node = (try self.view.dispatch.evidenceNode(direct.evidence));
-        return try self.aliasTargetEdge((try checkedTargetSubstitution(self.view, lookup.view, node)).?, contract, .body_lowering);
+        return try self.aliasTargetEdge((try checkedTargetSubstitution(self.view, self.builder, node)).?, contract, .body_lowering);
     }
 
     /// The requirement-target contract a checked dispatch plan recorded for
@@ -54464,7 +54474,7 @@ const BodyContext = struct {
         const node = (try self.view.dispatch.evidenceNode(direct.evidence));
         switch (node.instantiation) {
             .monomorphic, .callable => return try self.dispatchTargetSubstitution(plan),
-            .alias => return try self.targetSubstitutionNodes((try checkedTargetSubstitution(self.view, lookup.view, node)).?),
+            .alias => return try self.targetSubstitutionNodes((try checkedTargetSubstitution(self.view, self.builder, node)).?),
             .derived_from_callable => {},
         }
         const procedure = switch (lookup.target.kind) {
@@ -54584,7 +54594,7 @@ const BodyContext = struct {
             callable_eval: Builder.CallableEvalUse,
             local: struct { view: ModuleView, lookup: CIR.Expr.Idx, dispatch_scope: ?checked.DispatchScopeId },
         };
-        var step: Step = switch (target_alias.alias) {
+        var step: Step = switch (target_alias.alias.binding) {
             .top_level => |binding| .{ .callable_eval = self.builder.callableEvalForAliasBinding(target_alias.view, binding) },
             .local => |local| .{ .local = .{ .view = target_alias.view, .lookup = local.lookup, .dispatch_scope = local.dispatch_scope } },
         };
@@ -54662,7 +54672,7 @@ const BodyContext = struct {
     /// a top-level alias's entry wrapper's, or a block-local alias's
     /// generalized-local scope's.
     fn aliasScopeSchema(self: *BodyContext, target_alias: TargetAlias) Allocator.Error!SchemeRequirements {
-        return switch (target_alias.alias) {
+        return switch (target_alias.alias.binding) {
             .top_level => |binding| blk: {
                 const use = self.builder.callableEvalForAliasBinding(target_alias.view, binding);
                 const template = use.view.tables.callable_eval_templates.view().templates[@backingInt(use.template)];
@@ -54913,7 +54923,7 @@ const BodyContext = struct {
             .monomorphic => null,
             .callable, .alias, .derived_from_callable => |callable_ty| .{ .view = self.view, .callable_ty = callable_ty },
         };
-        if (try checkedTargetSubstitution(self.view, lookup.view, node)) |substitution| lookup.substitution = .{ .own_body = substitution };
+        if (try checkedTargetSubstitution(self.view, self.builder, node)) |substitution| lookup.substitution = .{ .own_body = substitution };
         return lookup;
     }
 
@@ -55671,7 +55681,7 @@ const BodyContext = struct {
         const lookup = try self.withLocalProcContext(raw_lookup);
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = try lookup.view.types.rootKey(source_fn_ty);
-        const alias_edge = try self.directAliasTargetEdge(plan, lookup);
+        const alias_edge = try self.directAliasTargetEdge(plan);
         const subst = if (alias_edge) |edge| edge.subst else (try self.directDispatchTargetSubstitution(plan, lookup, request_fn_node)) orelse
             Common.invariant("direct dispatch target had no checked substitution");
         const contract: ?[]const static_dispatch.CheckedEvidence = if (try self.dispatchTargetContract(plan)) |c| c.entries else null;

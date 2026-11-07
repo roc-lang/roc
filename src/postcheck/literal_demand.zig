@@ -403,15 +403,8 @@ const Builder = struct {
             },
             .imported => |imported| blk: {
                 const view = self.views.get(imported.artifact.bytes) orelse break :blk .unbounded;
-                for ((try view.exportRows()).procedure_bindings) |binding| {
-                    if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
-                    break :blk switch (binding.body) {
-                        .direct_template => |direct| try self.bindingBodyTarget(view, .{ .direct_template = direct }),
-                        .callable_eval_template => |id| try self.bindingBodyTarget(view, .{ .callable_eval_template = id }),
-                        .checked_error => |expr| try self.bindingBodyTarget(view, .{ .checked_error = expr }),
-                    };
-                }
-                break :blk .unbounded;
+                const binding = (try view.exportRows()).procedureBinding(imported.def, imported.pattern) orelse break :blk .unbounded;
+                break :blk try self.bindingBodyTarget(view, binding.body);
             },
             .hosted => null,
             .platform_required => |required| blk: {
