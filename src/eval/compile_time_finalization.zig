@@ -4001,6 +4001,9 @@ const RootCompletionState = struct {
             .literal => {},
             .node => |id| switch (self.module.static_dispatch_plans.evidenceNode(id).target.kind) {
                 .procedure => |procedure| try self.pending_templates.append(self.allocator, procedure.template),
+                .callable_binding => |binding| if (artifactMatches(binding.module, self.module.key)) {
+                    if (!self.rootDependencyComplete(self.module.callable_eval_templates.get(binding.template).root)) return false;
+                },
                 .local_proc, .structural => {},
             },
             .use => |expr| {
@@ -6757,24 +6760,14 @@ fn appendCrashConst(
     module: *checked.CheckedModuleArtifact,
     message: []const u8,
 ) Allocator.Error!checked.ConstNodeId {
-    const data = try module.const_store.addBlobData(message);
-    return try module.const_store.append(.{ .crash = .{
-        .data = data,
-        .offset = 0,
-        .len = @intCast(message.len),
-    } });
+    return try module.const_store.append(.{ .crash = try module.const_store.addBlobData(message) });
 }
 
 fn appendCheckedErrorConst(
     module: *checked.CheckedModuleArtifact,
     message: []const u8,
 ) Allocator.Error!checked.ConstNodeId {
-    const data = try module.const_store.addBlobData(message);
-    return try module.const_store.append(.{ .checked_error = .{
-        .data = data,
-        .offset = 0,
-        .len = @intCast(message.len),
-    } });
+    return try module.const_store.append(.{ .checked_error = try module.const_store.addBlobData(message) });
 }
 
 fn reportCompileTimeExpectFailures(

@@ -77,7 +77,7 @@ pub fn captureShape(program: *Program, id: WorkerId) CaptureShape {
             };
         },
         .structural, .structural_map => .{ .values = &.{}, .descs = worker.structural_descs, .dicts = 0, .composed = true },
-        .crash_dictionary, .literal_thunk, .root_slot => .{ .values = &.{}, .descs = 0, .dicts = 0, .composed = true },
+        .crash_dictionary, .literal_thunk, .root_slot, .callable_eval_entry => .{ .values = &.{}, .descs = 0, .dicts = 0, .composed = true },
         .codec => |index| .{
             .values = worker.capture_types,
             .descs = @intCast(worker.scheme_vars.len),
@@ -747,6 +747,12 @@ const MetadataReader = struct {
                 try self.typeRef();
                 return;
             },
+            .callable_eval_entry => {
+                try self.module();
+                try self.module();
+                _ = try self.word();
+                return;
+            },
             .structural => {
                 try self.module();
                 _ = try self.tag(@FieldType(lower.WorkerKey, "structural"));
@@ -893,7 +899,7 @@ pub fn encodeMetadata(retained: *Retained, result: *LirProgram.Result, compiled:
         const record = program.worker(id);
         switch (record.key) {
             .template, .default, .root, .static_data, .convert => continue,
-            .lambda, .adapter, .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .codec => {},
+            .lambda, .adapter, .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .callable_eval_entry, .codec => {},
         }
         const shape = captureShape(program, id);
         try encoder.bytes.appendSlice(allocator, &function.identity.bytes);
@@ -965,6 +971,7 @@ const Tag = enum(u8) {
     structural_map,
     crash_dictionary,
     codec,
+    callable_eval_entry,
 };
 
 fn appendWord(allocator: Allocator, list: *std.ArrayList(u8), value: u32) Allocator.Error!void {
@@ -1195,6 +1202,11 @@ const Encoder = struct {
                 try self.word(input.word());
                 try self.typeOf(input.typeOf());
             },
+            .callable_eval_entry => {
+                try self.module(input.module());
+                try self.module(input.module());
+                try self.word(input.word());
+            },
             .structural, .crash_dictionary => {
                 try self.module(input.module());
                 try self.bytes.append(self.allocator, input.byte());
@@ -1292,6 +1304,12 @@ const Encoder = struct {
                 try self.tag(.crash_dictionary);
                 try self.module(record.module);
                 try self.bytes.append(self.allocator, @backingInt(kind));
+            },
+            .callable_eval_entry => |binding| {
+                try self.tag(.callable_eval_entry);
+                try self.module(record.module);
+                try self.module(binding.module);
+                try self.word(@backingInt(binding.template));
             },
             .codec => |index| {
                 try self.tag(.codec);
@@ -1512,6 +1530,12 @@ const Decoder = struct {
                 const module_index = self.module();
                 return try program.crashDictionaryWorker(module_index, @fromBackingInt(@intCast(self.byte())));
             },
+            .callable_eval_entry => {
+                const module_index = self.module();
+                const binding_module = self.module();
+                const template: checked.CallableEvalTemplateId = @fromBackingInt(self.word());
+                return try program.callableEvalEntryWorker(module_index, .{ .module = binding_module, .template = template });
+            },
             .codec => {
                 const module_index = self.module();
                 const kind: Codec.PieceKind = @fromBackingInt(@intCast(self.byte()));
@@ -1592,6 +1616,24 @@ pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
         try b.recipes.set(word.recipe, recipe_node);
     }
     return .{ .worker = worker, .bound = bound, .inputs = try captureOperands(arena, words, inputs), .capture_descs = try captureOperands(arena, words, capture_descs) };
+}
+
+test "function unit metadata validates both callable eval entry module references" {
+    var bytes = [_]u8{ @backingInt(Tag.callable_eval_entry), 0, 0, 0, 0, 1, 0, 0, 0, 23, 0, 0, 0 };
+    var reader = MetadataReader{ .bytes = &bytes, .modules = 2 };
+    try reader.worker();
+    try std.testing.expectEqual(@as(usize, 0), reader.remaining());
+    for (0..bytes.len) |len| {
+        var truncated = MetadataReader{ .bytes = bytes[0..len], .modules = 2 };
+        try std.testing.expectError(error.InvalidMetadata, truncated.worker());
+    }
+    for ([_]usize{ 1, 5 }) |offset| {
+        const original = bytes[offset];
+        bytes[offset] = 2;
+        var invalid = MetadataReader{ .bytes = &bytes, .modules = 2 };
+        try std.testing.expectError(error.InvalidMetadata, invalid.worker());
+        bytes[offset] = original;
+    }
 }
 
 test "function unit metadata rejects truncated records and invalid type and module references" {

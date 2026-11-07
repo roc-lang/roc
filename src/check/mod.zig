@@ -94,6 +94,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/let_polymorphism_integration_test.zig"));
     std.testing.refAllDecls(@import("test/hoist_roots_test.zig"));
     std.testing.refAllDecls(@import("test/capturing_method_test.zig"));
+    std.testing.refAllDecls(@import("test/local_value_method_test.zig"));
     std.testing.refAllDecls(@import("test/num_type_requirements_test.zig"));
     std.testing.refAllDecls(@import("test/custom_num_type_test.zig"));
     std.testing.refAllDecls(@import("test/builtin_low_level_types_test.zig"));

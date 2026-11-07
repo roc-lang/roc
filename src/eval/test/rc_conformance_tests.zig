@@ -762,6 +762,57 @@ const cases = [_]Case{
         ,
     },
     .{
+        .name = "list keep_while and keep_until return a prefix of their input",
+        .source =
+        \\{
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique_some = List.keep_while(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() > 33,
+        \\    )
+        \\    unique_until = List.keep_until(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() < 33,
+        \\    )
+        \\    unique_none = List.keep_while(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |_| False,
+        \\    )
+        \\    unique_all = List.keep_until(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |_| False,
+        \\    )
+        \\    shared_some = List.keep_while(shared, |text| text.count_utf8_bytes() > 33)
+        \\    shared_all = List.keep_while(shared, |_| True)
+        \\    shared_none = List.keep_until(shared, |_| True)
+        \\    List.len(unique_some)
+        \\        + List.len(unique_until)
+        \\        + List.len(unique_none)
+        \\        + List.len(unique_all)
+        \\        + List.len(shared_some)
+        \\        + List.len(shared_all)
+        \\        + List.len(shared_none)
+        \\        + List.len(holder)
+        \\}
+        ,
+    },
+    .{
         .name = "boxed values are allocated, read, and updated",
         .source =
         \\{

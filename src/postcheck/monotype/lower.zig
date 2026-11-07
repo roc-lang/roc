@@ -2662,13 +2662,10 @@ fn substitutionNodeCount(subst: SpecSubstitution) usize {
 
 /// The substitution an evidence node recorded for its target's scheme, or
 /// null for a monomorphic target.
-fn checkedTargetSubstitution(site_view: ModuleView, target_view: ModuleView, node: static_dispatch.EvidenceNode) ?CheckedTargetSubstitution {
+fn checkedTargetSubstitution(site_view: ModuleView, builder: *Builder, node: static_dispatch.EvidenceNode) ?CheckedTargetSubstitution {
     const alias: ?TargetAlias = switch (node.instantiation) {
-        .alias => .{
-            .view = target_view,
-            .alias = node.target.alias orelse
-                Common.invariant("alias-instantiated evidence named a target with no alias binding"),
-        },
+        .alias => builder.targetAlias(node.target.alias orelse
+            Common.invariant("alias-instantiated evidence named a target with no alias binding")),
         .monomorphic, .callable, .derived_from_callable => null,
     };
     if (node.subst.len == 0 and alias == null) return null;
@@ -8088,7 +8085,7 @@ const Builder = struct {
             break :blk .{
                 try ctx.addExprWithTypeCell(completed_ret, .{
                     .call_proc = .{
-                        .callee = draftProcCalleeForSlot(callee),
+                        .callee = try ctx.draftProcCalleeForSlot(callee),
                         .args = try body_draft.addExprSpan(arg_exprs),
                     },
                 }),
@@ -8352,15 +8349,13 @@ const Builder = struct {
             },
             .imported => |imported| blk: {
                 const view = self.moduleForId(checked.importedProcedureModuleId(imported));
-                for (view.exported_procedure_bindings.bindings) |binding| {
-                    if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
-                    break :blk switch (binding.body) {
-                        .direct_template => null,
-                        .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
-                        .callable_eval_template => |template| .{ .view = view, .template = template },
-                    };
-                }
-                Common.invariant("imported procedure binding was not exported by its checked module");
+                const binding = view.exported_procedure_bindings.lookup(imported.def, imported.pattern) orelse
+                    Common.invariant("imported procedure binding was not exported by its checked module");
+                break :blk switch (binding.body) {
+                    .direct_template => null,
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
+                    .callable_eval_template => |template| .{ .view = view, .template = template },
+                };
             },
             .hosted => null,
             .platform_required => |required| blk: {
@@ -9747,7 +9742,7 @@ const Builder = struct {
             .target => |target| {
                 switch (target.target.kind) {
                     .procedure => |procedure| flags = flags.merge(demand.templateFlags(procedure.template)),
-                    .local_proc => return unbounded,
+                    .local_proc, .callable_binding => return unbounded,
                     .structural => {},
                 }
                 switch (target.nested) {
@@ -12175,6 +12170,27 @@ const Builder = struct {
         return try view.bodies.templateHasSingleSourceCall(checked_template.template);
     }
 
+    /// An exact procedure alias a method target was reached through, in the
+    /// module that declares it.
+    fn targetAlias(self: *Builder, alias: static_dispatch.MethodAlias) TargetAlias {
+        return .{ .view = self.moduleForDigest(alias.module), .alias = alias };
+    }
+
+    /// A target of `owner_view`'s method registry. A procedure's target data,
+    /// its callable type included, belongs to the module that owns its
+    /// template, which for a method bound to another module's function
+    /// (`method = Other.function`) is not the owner's.
+    fn registryMethodLookup(self: *Builder, owner_view: ModuleView, target: static_dispatch.MethodTarget) MethodLookup {
+        return .{
+            .view = switch (target.kind) {
+                .procedure => |procedure| self.moduleForDigest(names.procTemplateModuleDigest(procedure.template)),
+                .callable_binding => |binding| self.moduleForDigest(binding.module),
+                .local_proc, .structural => owner_view,
+            },
+            .target = target,
+        };
+    }
+
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
         return self.moduleForKeyBytes(module_digest.bytes) orelse
             Common.invariant("procedure template referenced a checked module that is not in the lowering input");
@@ -12849,6 +12865,7 @@ const Builder = struct {
     ) ?MethodLookup {
         const owner_view = self.methodOwnerView(owner_names, owner) orelse return null;
         return value_rules.lookupInspectOverride(InspectOverrideViews{
+            .builder = self,
             .owner_view = owner_view,
             .owner_names = owner_names,
             .owner = owner,
@@ -12857,6 +12874,7 @@ const Builder = struct {
 
     /// The one view inspection reads an owner's `to_inspect` from.
     const InspectOverrideViews = struct {
+        builder: *Builder,
         owner_view: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
@@ -12882,8 +12900,8 @@ const Builder = struct {
             return candidate.method_registry;
         }
 
-        pub fn found(_: InspectOverrideViews, candidate: ModuleView, _: static_dispatch.MethodKey, override: static_dispatch.InspectOverride) MethodLookup {
-            return .{ .view = candidate, .target = override.target };
+        pub fn found(views: InspectOverrideViews, candidate: ModuleView, _: static_dispatch.MethodKey, override: static_dispatch.InspectOverride) MethodLookup {
+            return views.builder.registryMethodLookup(candidate, override.target);
         }
     };
 
@@ -12932,7 +12950,7 @@ const Builder = struct {
         const view_method = owner_view.names.lookupMethodName(method_name) orelse return null;
         return switch (owner_view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null) {
             .rejected => .rejected,
-            .target => |target| .{ .target = .{ .view = owner_view, .target = target } },
+            .target => |target| .{ .target = self.registryMethodLookup(owner_view, target) },
         };
     }
 
@@ -13010,20 +13028,17 @@ const Builder = struct {
             },
             .imported => |imported| blk: {
                 const view = self.moduleForId(checked.importedProcedureModuleId(imported));
-                for (view.exported_procedure_bindings.bindings) |binding| {
-                    if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-                        break :blk switch (binding.body) {
-                            .direct_template => |direct| switch (direct.template) {
-                                .checked => |template| template,
-                                .lifted => Common.invariant("imported lifted target reached Monotype procedure use"),
-                                .synthetic => Common.invariant("imported synthetic target reached Monotype procedure use"),
-                            },
-                            .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
-                            .callable_eval_template => Common.invariant("imported callable-eval template reached Monotype procedure use"),
-                        };
-                    }
-                }
-                Common.invariant("imported procedure binding was not exported by its checked module");
+                const binding = view.exported_procedure_bindings.lookup(imported.def, imported.pattern) orelse
+                    Common.invariant("imported procedure binding was not exported by its checked module");
+                break :blk switch (binding.body) {
+                    .direct_template => |direct| switch (direct.template) {
+                        .checked => |template| template,
+                        .lifted => Common.invariant("imported lifted target reached Monotype procedure use"),
+                        .synthetic => Common.invariant("imported synthetic target reached Monotype procedure use"),
+                    },
+                    .checked_error => Common.invariant("rejected binding reached Monotype callable consumption"),
+                    .callable_eval_template => Common.invariant("imported callable-eval template reached Monotype procedure use"),
+                };
             },
             .hosted => |hosted| hosted.template,
             .platform_required => |required| blk: {
@@ -14682,13 +14697,19 @@ const Builder = struct {
         right: DraftFnSlot,
     ) Allocator.Error!bool {
         if (std.meta.eql(left, right)) return true;
-        const left_fn = switch (left.local) {
-            .draft => |fn_id| fn_id,
-            .final => return false,
+        const left_fn = switch (left) {
+            .local => |local| switch (local) {
+                .draft => |fn_id| fn_id,
+                .final => return false,
+            },
+            .callable_binding => return false,
         };
-        const right_fn = switch (right.local) {
-            .draft => |fn_id| fn_id,
-            .final => return false,
+        const right_fn = switch (right) {
+            .local => |local| switch (local) {
+                .draft => |fn_id| fn_id,
+                .final => return false,
+            },
+            .callable_binding => return false,
         };
         const left_index = body_draft.template_spec_by_fn.get(left_fn) orelse return false;
         const right_index = body_draft.template_spec_by_fn.get(right_fn) orelse return false;
@@ -16877,6 +16898,19 @@ const DraftCallValue = struct {
 
 const DraftFnSlot = union(enum(u8)) {
     local: DraftFnTarget,
+    /// A method bound to a computed callable: the function value its
+    /// compile-time root evaluated, restored at `fn_node` where each call
+    /// materializes it (`draftProcCalleeForSlot`). The slot names the
+    /// binding, not a value, so one slot serves every call site.
+    callable_binding: DraftCallableBindingCallee,
+};
+
+/// A computed callable's callee: the binding whose value a call restores,
+/// and the request node the value is restored at.
+const DraftCallableBindingCallee = struct {
+    module: names.CheckedModuleDigest,
+    template: checked.CallableEvalTemplateId,
+    fn_node: NodeId,
 };
 
 const ClosedDirectDraftSpecialization = struct {
@@ -16920,6 +16954,9 @@ const DraftProcCallee = union(enum(u8)) {
     declared_root: u32,
     func: DraftFnSlot,
     lifted: Ast.LiftedFnId,
+    /// A call of a function value: a method bound to a computed callable.
+    /// Sealing emits it as a value call, so it carries no captures.
+    value: DraftExprId,
 };
 
 const DraftCallProc = struct {
@@ -16942,10 +16979,6 @@ const DraftMonotypeFunctionValue = struct {
 
 fn draftFinalFn(id: Ast.FnId) DraftFnTarget {
     return .{ .final = id };
-}
-
-fn draftProcCalleeForSlot(slot: DraftFnSlot) DraftProcCallee {
-    return .{ .func = slot };
 }
 
 const DraftLowLevelCall = struct {
@@ -20552,7 +20585,7 @@ const BodyDraftStore = struct {
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
             const id = if (literal.const_blob) |blob|
-                try program.addConstBlobView(blob.module_bytes, blob.data, blob.bytes, literal.offset, literal.len)
+                try program.addConstBlobView(blob.module_bytes, blob.data, blob.bytes)
             else blk: {
                 const draft_backing = self.stringBytes(literal.backing);
                 const backing = literal_backing.?;
@@ -21214,14 +21247,23 @@ const BodyDraftStore = struct {
                 .callee = ids.expr(call.callee),
                 .args = ids.exprSpan(call.args),
             } },
-            .call_proc => |call| .{ .call_proc = .{
-                .callee = ids.procCallee(call.callee),
-                .args = ids.exprSpan(call.args),
-                .iterator_procedure = call.iterator_procedure,
-                .captures = try self.sealCallCaptureOperandSpan(program, ids, call.captures),
-                .is_cold = call.is_cold,
-                .demand_shaped = ids.callDemandShaped(call.callee),
-            } },
+            .call_proc => |call| switch (call.callee) {
+                .value => |callee| blk: {
+                    if (call.captures.len != 0) Common.invariant("a value call carried capture operands");
+                    break :blk .{ .call_value = .{
+                        .callee = ids.expr(callee),
+                        .args = ids.exprSpan(call.args),
+                    } };
+                },
+                .func, .lifted, .declared_root => .{ .call_proc = .{
+                    .callee = ids.procCallee(call.callee),
+                    .args = ids.exprSpan(call.args),
+                    .iterator_procedure = call.iterator_procedure,
+                    .captures = try self.sealCallCaptureOperandSpan(program, ids, call.captures),
+                    .is_cold = call.is_cold,
+                    .demand_shaped = ids.callDemandShaped(call.callee),
+                } },
+            },
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
                 .args = ids.exprSpan(call.args),
@@ -21579,8 +21621,9 @@ const FinalIdOffsets = struct {
                     .draft => |draft| self.fn_demand_shaped[@backingInt(draft)],
                     .final => false,
                 },
+                .callable_binding => false,
             },
-            .lifted, .declared_root => false,
+            .lifted, .declared_root, .value => false,
         };
     }
 
@@ -21591,9 +21634,11 @@ const FinalIdOffsets = struct {
                     .draft => |draft| self.fnSlot(draft),
                     .final => |final| .{ .local = final },
                 },
+                .callable_binding => Common.invariant("a computed callable's slot reached procedure callee emission"),
             } },
             .lifted => |lifted| .{ .lifted = lifted },
             .declared_root => Common.invariant("unresolved declared root reached Monotype emission"),
+            .value => Common.invariant("a value call reached procedure callee emission"),
         };
     }
 
@@ -23611,6 +23656,10 @@ const BodyContext = struct {
             }),
             .call_proc => |call| try self.anyImpossibilityProof(&.{
                 try self.cellImpossibilityProof(ty),
+                switch (call.callee) {
+                    .value => |callee| self.exprImpossibilityProof(callee),
+                    .func, .lifted, .declared_root => null,
+                },
                 try self.anyExprSpanImpossibilityProof(call.args),
                 try self.anyExprSpanImpossibilityProof(call.captures),
             }),
@@ -24188,9 +24237,10 @@ const BodyContext = struct {
         return try self.draft.addStringLiteral(text);
     }
 
-    fn addConstBlobView(self: *BodyContext, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8, offset: u32, len: u32) Allocator.Error!DraftStringLiteralId {
+    fn addConstBlobView(self: *BodyContext, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8) Allocator.Error!DraftStringLiteralId {
         const id: DraftStringLiteralId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.string_literals.items.len))));
-        try self.draft.string_literals.append(self.allocator, .{ .backing = .empty(), .const_blob = .{ .module_bytes = module_bytes, .data = data, .bytes = bytes }, .offset = offset, .len = len });
+        const len = std.math.cast(u32, bytes.len) orelse return error.OutOfMemory;
+        try self.draft.string_literals.append(self.allocator, .{ .backing = .empty(), .const_blob = .{ .module_bytes = module_bytes, .data = data, .bytes = bytes }, .offset = 0, .len = len });
         return id;
     }
 
@@ -24987,7 +25037,7 @@ const BodyContext = struct {
 
         const args = [_]DraftExprId{value};
         return try self.addExpr(.{ .ty = str_ty, .data = .{ .call_proc = .{
-            .callee = draftProcCalleeForSlot(callee),
+            .callee = try self.draftProcCalleeForSlot(callee),
             .args = try self.addExprSpan(&args),
             .captures = try self.methodTargetCaptureSpan(lookup),
         } } });
@@ -26198,6 +26248,10 @@ const BodyContext = struct {
                     try search.pushExprs(ctx.exprSpan(call.args));
                 },
                 .call_proc => |call| {
+                    switch (call.callee) {
+                        .value => |callee| try search.push(.{ .expr = callee }),
+                        .func, .lifted, .declared_root => {},
+                    }
                     try search.pushExprs(ctx.exprSpan(call.args));
                     try search.pushExprs(ctx.exprSpan(call.captures));
                 },
@@ -33471,9 +33525,14 @@ const BodyContext = struct {
         const rendered = switch (frame.cursor) {
             0 => {
                 task.str_ty = try self.primitiveType(.str);
-                if (checkedExpr(self.view, task.expr).data == .runtime_error) {
+                // A divergent operand never produces a value to render, so it
+                // lowers for its effect alone and its value type is never
+                // requested: a runtime error's checked type can contain the
+                // error it was retired for, and a rejected dispatch has no
+                // result type to instantiate.
+                if (try self.checkedExprDivergesInLoweredRuntime(task.expr)) {
                     frame.cursor = 2;
-                    return requestLowerTask(self, .{ .with_type = .{ .expr = task.expr, .ty = task.str_ty } });
+                    return divergentStep(self, task.expr, .{ .effect_data = task.str_ty });
                 }
                 task.value_node = try self.lowerExprTypeNode(task.expr);
                 frame.cursor = 1;
@@ -33483,7 +33542,8 @@ const BodyContext = struct {
                 try self.inspectCall(input.?.exprValue(), try self.activeTypeFromNode(task.value_node), task.str_ty)
             else
                 try self.deferInspectAtNode(input.?.exprValue(), task.value_node, task.str_ty),
-            else => input.?.exprValue(),
+            // The operand diverged, so no message around it can be produced.
+            else => return loweredExprStep(try self.addExpr(.{ .ty = task.str_ty, .data = input.?.dataValue() })),
         };
         const snippet = task.expect_err_snippet orelse return loweredExprStep(rendered);
         return loweredExprStep(try self.expectErrMessage(rendered, snippet, task.str_ty));
@@ -34428,7 +34488,7 @@ const BodyContext = struct {
         const lowered = try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(task.ret_node),
             .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(task.callee),
+                .callee = try self.draftProcCalleeForSlot(task.callee),
                 .args = try self.addExprSpan(task.args),
                 .iterator_procedure = self.iteratorProcedureForMethodTarget(task.lookup.target),
                 .captures = try self.methodTargetCaptureSpan(task.lookup),
@@ -36201,7 +36261,7 @@ const BodyContext = struct {
                         },
                         .intrinsic, .graph_participating => {},
                     },
-                    .local_proc, .structural => {},
+                    .local_proc, .structural, .callable_binding => {},
                 }
             },
             .direct_parametric => |direct| {
@@ -36211,7 +36271,7 @@ const BodyContext = struct {
                         .low_level => |op| task.direct_parametric_low_level = op,
                         .procedure, .intrinsic, .graph_participating => {},
                     },
-                    .local_proc, .structural => {},
+                    .local_proc, .structural, .callable_binding => {},
                 }
             },
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
@@ -36626,7 +36686,7 @@ const BodyContext = struct {
             break :blk existing.slot;
         } else blk: {
             const template = lookup.view.templates.get(procedure.template.template);
-            const edge: EdgeEvidence = if (try self.directAliasTargetEdge(plan, lookup)) |alias_edge| alias_edge else edge: {
+            const edge: EdgeEvidence = if (try self.directAliasTargetEdge(plan)) |alias_edge| alias_edge else edge: {
                 const subst = (try self.directDispatchTargetSubstitution(plan, lookup, callable_node)) orelse
                     Common.invariant("closed direct procedure call had no checked substitution");
                 break :edge .{
@@ -36693,7 +36753,7 @@ const BodyContext = struct {
         else
             expected_ret_cell;
         const call = try self.addExprWithTypeCell(call_ret_cell, .{ .call_proc = .{
-            .callee = draftProcCalleeForSlot(slot),
+            .callee = try self.draftProcCalleeForSlot(slot),
             .args = lowered,
             .iterator_procedure = procedure.runtime_target.iteratorProcedure(),
             .captures = try self.methodTargetCaptureSpan(lookup),
@@ -38631,7 +38691,7 @@ const BodyContext = struct {
     ) ?checked.IteratorProcedureId {
         return switch (target.kind) {
             .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
-            .local_proc, .structural => null,
+            .local_proc, .structural, .callable_binding => null,
         };
     }
 
@@ -38647,7 +38707,7 @@ const BodyContext = struct {
                     Common.invariant("non-call-site intrinsic had a call-site method runtime target"),
                 .procedure, .low_level, .graph_participating => null,
             },
-            .local_proc, .structural => null,
+            .local_proc, .structural, .callable_binding => null,
         };
     }
 
@@ -41303,7 +41363,7 @@ const BodyContext = struct {
             const result = try self.addExpr(.{
                 .ty = parse_fn.ret,
                 .data = .{ .call_proc = .{
-                    .callee = draftProcCalleeForSlot(prepared.callee),
+                    .callee = try self.draftProcCalleeForSlot(prepared.callee),
                     .args = try self.addExprSpan(&parse_args),
                     .captures = try self.methodTargetCaptureSpan(parse_lookup),
                 } },
@@ -41332,7 +41392,7 @@ const BodyContext = struct {
         const result = try self.addExpr(.{
             .ty = callable_fn.ret,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, final_spec_expr, state_expr }),
                 .captures = try self.methodTargetCaptureSpan(parse_lookup),
             } },
@@ -41580,7 +41640,7 @@ const BodyContext = struct {
         const step_expr = try self.addExpr(.{
             .ty = step_try_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{
                     encoding_expr,
                     try self.localExpr(fields_local, fields_ty),
@@ -42386,7 +42446,7 @@ const BodyContext = struct {
         const skip_expr = try self.addExpr(.{
             .ty = skip_fn.ret,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, try self.localExpr(rest_local, state_ty) }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -43808,7 +43868,7 @@ const BodyContext = struct {
         const parse_null_expr = try self.addExpr(.{
             .ty = null_try_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, state_expr }),
                 .captures = try self.methodTargetCaptureSpan(parse_null_lookup),
             } },
@@ -43905,7 +43965,7 @@ const BodyContext = struct {
         const parser_expr = try self.addExpr(.{
             .ty = runtime_fn_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
                 .captures = try self.methodTargetCaptureSpan(prepared.lookup),
             } },
@@ -44775,7 +44835,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = str_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, field_expr }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -46035,8 +46095,10 @@ const BodyContext = struct {
                 local.expr,
                 local.context_anchor,
             ),
+            // A computed callable's value holds its own captures.
             .procedure,
             .structural,
+            .callable_binding,
             => DraftSpan(DraftExprId).empty(),
         };
     }
@@ -46896,6 +46958,7 @@ const BodyContext = struct {
 
     fn requireLocalDraftSlot(self: *BodyContext, slot: DraftFnSlot) Allocator.Error!DraftFnTarget {
         return switch (slot) {
+            .callable_binding => Common.invariant("a computed callable's slot has no draft function"),
             .local => |local| blk: {
                 switch (local) {
                     .draft => |draft_fn| {
@@ -46919,6 +46982,7 @@ const BodyContext = struct {
         imported_fallback: NodeId,
     ) Allocator.Error!NodeId {
         return switch (slot) {
+            .callable_binding => |binding| binding.fn_node,
             .local => |local| switch (local) {
                 .draft => |draft_fn| try self.completedDraftCalleeWitness(
                     draft_fn,
@@ -47925,20 +47989,14 @@ const BodyContext = struct {
                     .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
                     .zst => .unit,
                     .scalar => |scalar| restoreScalar(BodyExprData, scalar),
-                    .str => |str| .{ .str_lit = try self.addStringView(
+                    .str => |str| .{ .str_lit = try self.addStringLiteral(
                         store_view.const_store.strBytes(str),
-                        0,
-                        str.len,
                     ) },
-                    .crash => |str| .{ .crash = try self.addStringView(
-                        store_view.const_store.blobData(str.data),
-                        str.offset,
-                        str.len,
+                    .crash => |str| .{ .crash = try self.addStringLiteral(
+                        store_view.const_store.strBytes(str),
                     ) },
-                    .checked_error => |str| .{ .checked_error = try self.addStringView(
-                        store_view.const_store.blobData(str.data),
-                        str.offset,
-                        str.len,
+                    .checked_error => |str| .{ .checked_error = try self.addStringLiteral(
+                        store_view.const_store.strBytes(str),
                     ) },
                     .list => |list| switch (list) {
                         .nodes => .{ .list = try self.addExprSpan(lowered_children) },
@@ -47946,10 +48004,8 @@ const BodyContext = struct {
                         .packed_bytes => |packed_list| .{ .bytes_lit = .{
                             .literal = try self.addConstBlobView(
                                 store_view.key.bytes,
-                                packed_list.bytes.data,
-                                store_view.const_store.blobData(packed_list.bytes.data),
-                                packed_list.bytes.offset,
-                                packed_list.bytes.len,
+                                packed_list.bytes,
+                                store_view.const_store.blobData(packed_list.bytes),
                             ),
                             .len = packed_list.len,
                             .element = packed_list.element,
@@ -51240,7 +51296,7 @@ const BodyContext = struct {
         const node = self.view.static_dispatch_plans.evidenceNode(evidence);
         return switch (node.target.kind) {
             .procedure => |procedure| procedure.runtime_target == .procedure,
-            .local_proc => true,
+            .local_proc, .callable_binding => true,
             .structural => false,
         };
     }
@@ -51356,8 +51412,8 @@ const BodyContext = struct {
             .from_callable => return false,
             // A block-local alias's scope belongs to this body's lexical
             // context, as a local procedure's does.
-            .through_alias => switch (node.target.alias orelse
-                Common.invariant("alias-scope evidence named a target with no alias binding")) {
+            .through_alias => switch ((node.target.alias orelse
+                Common.invariant("alias-scope evidence named a target with no alias binding")).binding) {
                 .local => return true,
                 .top_level => plans.aliasScopeEvidence(node),
             },
@@ -51999,7 +52055,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{arg_expr}),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -52056,7 +52112,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = dict_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ dict_expr, key_expr, value_expr }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
             } },
@@ -52227,7 +52283,7 @@ const BodyContext = struct {
         const evidence = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
         const procedure = switch (evidence.target.kind) {
             .procedure => |procedure| procedure,
-            .local_proc, .structural => return null,
+            .local_proc, .structural, .callable_binding => return null,
         };
         const runtime_target = procedure.runtime_target;
         switch (runtime_target) {
@@ -52634,7 +52690,7 @@ const BodyContext = struct {
                     );
                     break :blk_context context_id;
                 },
-                .procedure, .structural => null,
+                .procedure, .structural, .callable_binding => null,
             },
             .nested = nested,
         };
@@ -53495,6 +53551,7 @@ const BodyContext = struct {
                 .view = self.builder.moduleForDigest(names.procTemplateModuleDigest(procedure.template)),
                 .target = node.target,
             },
+            .callable_binding => |binding| .{ .view = self.builder.moduleForDigest(binding.module), .target = node.target },
             .local_proc => .{ .view = site_view, .target = node.target },
             .structural => Common.invariant("structural method target reached callable checked evidence"),
         };
@@ -53505,6 +53562,7 @@ const BodyContext = struct {
                 break :blk templateSchemaIn(lookup.view, &template);
             },
             .local_proc => |local| self.scopeSchema(lookup.view, local.dispatch_scope),
+            .callable_binding => emptySchema(lookup.view),
             .structural => unreachable, // methodLookupForEvidencePurpose keeps the target, whose structural kind was rejected above
         };
         const target = try self.builder.evidence_arena.allocator().create(SpecEvidenceTarget);
@@ -53525,11 +53583,8 @@ const BodyContext = struct {
             // alias when the frame finishes.
             .through_alias => .{
                 site_view.static_dispatch_plans.aliasScopeEvidence(node),
-                self.aliasScopeSchema(.{
-                    .view = lookup.view,
-                    .alias = node.target.alias orelse
-                        Common.invariant("alias-scope evidence named a target with no alias binding"),
-                }).params,
+                self.aliasScopeSchema(self.builder.targetAlias(node.target.alias orelse
+                    Common.invariant("alias-scope evidence named a target with no alias binding"))).params,
             },
         };
         if (node.nested != .from_callable and refs.len != params.len) {
@@ -53549,7 +53604,7 @@ const BodyContext = struct {
         frame: EvidenceTargetFrame,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!*const SpecEvidenceTarget {
-        const substitution = checkedTargetSubstitution(site_view, frame.lookup.view, frame.node);
+        const substitution = checkedTargetSubstitution(site_view, self.builder, frame.node);
         const nested: []const SpecEvidence = switch (frame.node.nested) {
             .resolved, .from_callable => frame.nested,
             .through_alias => blk: {
@@ -53947,6 +54002,7 @@ const BodyContext = struct {
                 .target = target.target,
                 .local_proc_context = target.local_proc_context,
             }, local),
+            .callable_binding => |binding| callableBindingOwnerTemplate(target.view, binding.template),
             .structural => Common.invariant("structural method target reached target-to-constraint relation"),
         };
         var scratch = self.graph.acquireArena();
@@ -53979,7 +54035,7 @@ const BodyContext = struct {
         const evidence = StoredConstFnEvidence.empty();
         const address: InterfaceReplayAddress = .{
             .kind = switch (target.target.kind) {
-                .procedure => .method_contract,
+                .procedure, .callable_binding => .method_contract,
                 .local_proc => .local_method_contract,
                 .structural => unreachable, // the owner-template switch above rejects structural targets before this address is built
             },
@@ -54213,6 +54269,8 @@ const BodyContext = struct {
                 break :blk if (schema == .from_callable and !template.callable_determines_scheme) .requires_record else schema;
             },
             .local_proc => |local| static_dispatch.procedureEvidenceSchema(self.scopeSchema(target.view, local.dispatch_scope).params),
+            // A computed callable is a monomorphic value: it requires nothing.
+            .callable_binding => .none,
             .structural => Common.invariant("structural evidence target reached callable nested-evidence classification"),
         };
     }
@@ -54295,7 +54353,6 @@ const BodyContext = struct {
     fn directAliasTargetEdge(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
-        lookup: MethodLookup,
     ) Allocator.Error!?EdgeEvidence {
         const direct = switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| direct,
@@ -54304,7 +54361,7 @@ const BodyContext = struct {
         };
         const contract = self.directAliasScopeContract(direct.evidence) orelse return null;
         const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
-        return try self.aliasTargetEdge(checkedTargetSubstitution(self.view, lookup.view, node).?, contract, .body_lowering);
+        return try self.aliasTargetEdge(checkedTargetSubstitution(self.view, self.builder, node).?, contract, .body_lowering);
     }
 
     /// The requirement-target contract a checked dispatch plan recorded for
@@ -54378,12 +54435,12 @@ const BodyContext = struct {
         const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
         switch (node.instantiation) {
             .monomorphic, .callable => return try self.dispatchTargetSubstitution(plan),
-            .alias => return try self.targetSubstitutionNodes(checkedTargetSubstitution(self.view, lookup.view, node).?),
+            .alias => return try self.targetSubstitutionNodes(checkedTargetSubstitution(self.view, self.builder, node).?),
             .derived_from_callable => {},
         }
         const procedure = switch (lookup.target.kind) {
             .procedure => |procedure| procedure,
-            .local_proc, .structural => Common.invariant("a callable-derived substitution reached a non-procedure method target"),
+            .local_proc, .structural, .callable_binding => Common.invariant("a callable-derived substitution reached a non-procedure method target"),
         };
         const template = lookup.view.templates.get(procedure.template.template);
         var target_ctx = try BodyContext.init(
@@ -54504,7 +54561,7 @@ const BodyContext = struct {
             callable_eval: Builder.CallableEvalUse,
             local: struct { view: ModuleView, lookup: CIR.Expr.Idx, dispatch_scope: ?checked.DispatchScopeId },
         };
-        var step: Step = switch (target_alias.alias) {
+        var step: Step = switch (target_alias.alias.binding) {
             .top_level => |binding| .{ .callable_eval = self.builder.callableEvalForAliasBinding(target_alias.view, binding) },
             .local => |local| .{ .local = .{ .view = target_alias.view, .lookup = local.lookup, .dispatch_scope = local.dispatch_scope } },
         };
@@ -54582,7 +54639,7 @@ const BodyContext = struct {
     /// a top-level alias's entry wrapper's, or a block-local alias's
     /// generalized-local scope's.
     fn aliasScopeSchema(self: *BodyContext, target_alias: TargetAlias) SchemeRequirements {
-        return switch (target_alias.alias) {
+        return switch (target_alias.alias.binding) {
             .top_level => |binding| blk: {
                 const use = self.builder.callableEvalForAliasBinding(target_alias.view, binding);
                 const template = use.view.callable_eval_templates.templates[@backingInt(use.template)];
@@ -54598,6 +54655,7 @@ const BodyContext = struct {
         return switch (lookup.target.kind) {
             .procedure => |procedure| templateSchemaIn(lookup.view, &lookup.view.templates.get(procedure.template.template)),
             .local_proc => |local| self.scopeSchema(lookup.view, local.dispatch_scope),
+            .callable_binding => emptySchema(lookup.view),
             .structural => Common.invariant("structural method registry result has no quantified scheme"),
         };
     }
@@ -54836,7 +54894,7 @@ const BodyContext = struct {
             .monomorphic => null,
             .callable, .alias, .derived_from_callable => |callable_ty| .{ .view = self.view, .callable_ty = callable_ty },
         };
-        if (checkedTargetSubstitution(self.view, lookup.view, node)) |substitution| lookup.substitution = .{ .own_body = substitution };
+        if (checkedTargetSubstitution(self.view, self.builder, node)) |substitution| lookup.substitution = .{ .own_body = substitution };
         return lookup;
     }
 
@@ -54853,6 +54911,10 @@ const BodyContext = struct {
                 .view = self.view,
                 .target = target,
             },
+            .callable_binding => |binding| .{
+                .view = self.builder.moduleForDigest(binding.module),
+                .target = target,
+            },
             .structural => Common.invariant("structural method registry result reached callable checked evidence"),
         };
     }
@@ -54864,9 +54926,52 @@ const BodyContext = struct {
         const owner_template = switch (lookup.target.kind) {
             .procedure => |procedure| procedure.template,
             .local_proc => |local| self.localMethodOwnerTemplate(lookup, local),
+            .callable_binding => |binding| callableBindingOwnerTemplate(lookup.view, binding.template),
             .structural => Common.invariant("structural method registry result has no callable body context"),
         };
         return BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, self.graph, self.draft);
+    }
+
+    /// The scope a computed callable's binding owns: its root's entry
+    /// wrapper, which instantiates the binding's types.
+    fn callableBindingOwnerTemplate(view: ModuleView, template_id: checked.CallableEvalTemplateId) names.ProcTemplate {
+        const raw = @backingInt(template_id);
+        if (raw >= view.callable_eval_templates.templates.len) Common.invariant("callable binding method named a missing checked template");
+        const wrapper = view.entry_wrappers.lookupByRoot(view.callable_eval_templates.templates[raw].root) orelse
+            Common.invariant("callable binding method root had no checked entry wrapper");
+        return wrapper.template;
+    }
+
+    /// The callee of a dispatch to a method bound to a computed callable:
+    /// its function value, restored at the request node when the call
+    /// materializes it. The binding is monomorphic, so its type relates
+    /// to the request directly.
+    fn callableBindingMethodCallee(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        binding: static_dispatch.CallableBindingTarget,
+        request_fn_node: NodeId,
+    ) Allocator.Error!DraftFnSlot {
+        const source_fn_ty = lookup.target.callable_ty;
+        var target_ctx = try self.substitutedMethodTargetContext(lookup);
+        defer target_ctx.deinit();
+        const target_root_node = try target_ctx.instNode(source_fn_ty);
+        try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node);
+        return .{ .callable_binding = .{ .module = binding.module, .template = binding.template, .fn_node = request_fn_node } };
+    }
+
+    /// The procedure callee a call of `slot` names. A computed callable's
+    /// slot materializes its function value here, once per call.
+    fn draftProcCalleeForSlot(self: *BodyContext, slot: DraftFnSlot) Allocator.Error!DraftProcCallee {
+        return switch (slot) {
+            .local => .{ .func = slot },
+            .callable_binding => |binding| .{ .value = try self.lowerCallableEvalBindingValueAtNode(
+                self.builder.moduleForDigest(binding.module),
+                binding.template,
+                binding.fn_node,
+                &.{},
+            ) },
+        };
     }
 
     fn localMethodOwnerTemplate(
@@ -55053,7 +55158,7 @@ const BodyContext = struct {
                 );
                 contextual.local_proc_context = context_id;
             },
-            .procedure, .structural => if (lookup.local_proc_context != null) {
+            .procedure, .structural, .callable_binding => if (lookup.local_proc_context != null) {
                 Common.invariant("non-local method target carried a local declaration context");
             },
         }
@@ -55477,6 +55582,10 @@ const BodyContext = struct {
                     codec_contract_selection,
                 ) };
             },
+            .callable_binding => |binding| blk: {
+                if (alias_edge != null) Common.invariant("a method alias reached a computed callable target");
+                break :blk try self.callableBindingMethodCallee(lookup, binding, request_fn_node);
+            },
             .structural => Common.invariant("structural method registry result has no callable procedure body"),
         };
     }
@@ -55596,7 +55705,7 @@ const BodyContext = struct {
         const lookup = try self.withLocalProcContext(raw_lookup);
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = try lookup.view.types.rootKey(source_fn_ty);
-        const alias_edge = try self.directAliasTargetEdge(plan, lookup);
+        const alias_edge = try self.directAliasTargetEdge(plan);
         const subst = if (alias_edge) |edge| edge.subst else (try self.directDispatchTargetSubstitution(plan, lookup, request_fn_node)) orelse
             Common.invariant("direct dispatch target had no checked substitution");
         const contract: ?[]const static_dispatch.CheckedEvidence = if (self.dispatchTargetContract(plan)) |c| c.entries else null;
@@ -55649,6 +55758,11 @@ const BodyContext = struct {
                     .inherit,
                 ) };
             },
+            .callable_binding => |binding| blk: {
+                if (alias_edge != null) Common.invariant("a method alias reached a computed callable target");
+                if (subst.len != 0) Common.invariant("a computed callable target had a scheme substitution");
+                break :blk try self.callableBindingMethodCallee(lookup, binding, request_fn_node);
+            },
             .structural => Common.invariant("direct checked call targeted a structural derivation"),
         };
     }
@@ -55673,7 +55787,7 @@ const BodyContext = struct {
                 .procedure => {},
                 .intrinsic, .low_level, .graph_participating => return request_fn_node,
             },
-            .local_proc => {},
+            .local_proc, .callable_binding => {},
             .structural => return request_fn_node,
         }
         const request_fn = try self.graph.functionNodes(request_fn_node);
@@ -55705,7 +55819,7 @@ const BodyContext = struct {
     ) Allocator.Error!BodyExprData {
         const contextual_lookup = try self.withLocalProcContext(lookup);
         return .{ .call_proc = .{
-            .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNodeWithEvidence(
+            .callee = try self.draftProcCalleeForSlot(try self.methodTargetCalleeAtNodeWithEvidence(
                 contextual_lookup,
                 callable_node,
                 self.dispatchTargetEvidenceSource(plan),
@@ -55725,7 +55839,7 @@ const BodyContext = struct {
     ) Allocator.Error!BodyExprData {
         const contextual_lookup = try self.withLocalProcContext(lookup);
         return .{ .call_proc = .{
-            .callee = draftProcCalleeForSlot(try self.methodTargetCalleeDirectAtNode(
+            .callee = try self.draftProcCalleeForSlot(try self.methodTargetCalleeDirectAtNode(
                 contextual_lookup,
                 callable_node,
                 plan,
@@ -57712,7 +57826,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = method.result_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(method.callee),
+                .callee = try self.draftProcCalleeForSlot(method.callee),
                 .args = try self.addExprSpan(args),
                 .captures = try self.methodTargetCaptureSpan(method.lookup),
             } },
@@ -57810,7 +57924,7 @@ const BodyContext = struct {
         const encoder_expr = try self.addExpr(.{
             .ty = runtime_fn_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
                 .captures = try self.methodTargetCaptureSpan(prepared.lookup),
             } },
@@ -57849,7 +57963,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(arg_exprs),
                 .captures = try self.methodTargetCaptureSpan(prepared.lookup),
             } },
@@ -57881,7 +57995,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = parse_fn.ret,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(arg_exprs),
                 .captures = try self.methodTargetCaptureSpan(prepared.lookup),
             } },
@@ -59271,7 +59385,7 @@ const BodyContext = struct {
             .structural => {},
             .callable => |node_id| switch (call.view.static_dispatch_plans.evidenceNode(node_id).target.kind) {
                 .local_proc => return true,
-                .procedure, .structural => {},
+                .procedure, .structural, .callable_binding => {},
             },
         };
         return false;
@@ -61389,7 +61503,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = err_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeForSlot(prepared.callee),
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, state_expr }),
                 .captures = try self.methodTargetCaptureSpan(lookup),
                 .is_cold = true,
@@ -61755,7 +61869,7 @@ const BodyContext = struct {
                                         Common.invariant("named structural derivation resolved to a different structural registry implementation");
                                     }
                                 },
-                                .procedure, .local_proc => {
+                                .procedure, .local_proc, .callable_binding => {
                                     try self.prepareStructuralEqMethodCall(
                                         boundary_index,
                                         mode,
@@ -62119,7 +62233,7 @@ const BodyContext = struct {
                                 .structural => |kind| if (kind != D.structural_kind) {
                                     Common.invariant("structural registry implementation did not match the active derivation");
                                 },
-                                .procedure, .local_proc => return derivationExpr(try self.derivationMethodCall(D, lookup, ty, derive.operand, ctx), D),
+                                .procedure, .local_proc, .callable_binding => return derivationExpr(try self.derivationMethodCall(D, lookup, ty, derive.operand, ctx), D),
                             }
                         }
                     },
@@ -62334,7 +62448,7 @@ const BodyContext = struct {
         };
         const args = D.callArgs(operand);
         return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .call_proc = .{
-            .callee = draftProcCalleeForSlot(callee),
+            .callee = try self.draftProcCalleeForSlot(callee),
             .args = try self.addExprSpan(&args),
             .captures = try self.methodTargetCaptureSpan(lookup),
         } } });
@@ -65806,7 +65920,7 @@ const BodyContext = struct {
                     }, snapshots);
                 }
             },
-            .procedure, .structural => {},
+            .procedure, .structural, .callable_binding => {},
         };
     }
 
@@ -65924,7 +66038,7 @@ const BodyContext = struct {
                     }
                 } else context_anchor = local.context_anchor;
             },
-            .procedure, .structural => {},
+            .procedure, .structural, .callable_binding => {},
         };
 
         const declaration = DraftLocalProcDeclaration{
@@ -69694,20 +69808,14 @@ fn constRestoreData(
         .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
         .zst => .unit,
         .scalar => |scalar| restoreScalar(@TypeOf(restorer.*).ConstExprData, scalar),
-        .str => |str| .{ .str_lit = try emit.addStringView(
+        .str => |str| .{ .str_lit = try emit.addStringLiteral(
             store_view.const_store.strBytes(str),
-            0,
-            str.len,
         ) },
-        .crash => |str| .{ .crash = try emit.addStringView(
-            store_view.const_store.blobData(str.data),
-            str.offset,
-            str.len,
+        .crash => |str| .{ .crash = try emit.addStringLiteral(
+            store_view.const_store.strBytes(str),
         ) },
-        .checked_error => |str| .{ .checked_error = try emit.addStringView(
-            store_view.const_store.blobData(str.data),
-            str.offset,
-            str.len,
+        .checked_error => |str| .{ .checked_error = try emit.addStringLiteral(
+            store_view.const_store.strBytes(str),
         ) },
         .box => .{ .low_level = .{
             .op = .box_box,
@@ -69719,10 +69827,8 @@ fn constRestoreData(
             .packed_bytes => |packed_list| .{ .bytes_lit = .{
                 .literal = try emit.addConstBlobView(
                     store_view.key.bytes,
-                    packed_list.bytes.data,
-                    store_view.const_store.blobData(packed_list.bytes.data),
-                    packed_list.bytes.offset,
-                    packed_list.bytes.len,
+                    packed_list.bytes,
+                    store_view.const_store.blobData(packed_list.bytes),
                 ),
                 .len = packed_list.len,
                 .element = packed_list.element,
@@ -70005,7 +70111,7 @@ fn monotypeBackingAuthority(authority: check.ConstStore.TypeBackingAuthority) Ty
 fn constStrNodeByteLen(view: ModuleView, node: checked.ConstNodeId) u32 {
     return switch (view.const_store.get(node)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-        .str => |str| str.len,
+        .str => |str| @intCast(view.const_store.strBytes(str).len),
         .pending, .zst, .scalar, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => Common.invariant("stored parser renamed field capture was not a Str constant"),
     };
 }

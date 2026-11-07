@@ -57,11 +57,6 @@ const TagBase = struct {
     layout_idx: layout.Idx,
 };
 
-const StrBacking = struct {
-    data: const_store.ConstBlobDataId,
-    len: usize,
-};
-
 /// Stores interpreted compile-time roots into a checked ConstStore.
 pub const Writer = struct {
     allocator: Allocator,
@@ -71,8 +66,6 @@ pub const Writer = struct {
     names: ?*check.CanonicalNames.CanonicalNameStore,
     program: *const LirProgram.Result,
     stored_values: std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId),
-    visited_str_values: std.AutoHashMap(RuntimeValueAddress, void),
-    str_backings: std.AutoHashMap(usize, StrBacking),
     erased_callable_resolver: ErasedCallableResolver,
     boxy_functions: ?BoxyFunctions = null,
     product_plans: std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan),
@@ -107,8 +100,6 @@ pub const Writer = struct {
             .names = names,
             .program = program,
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
-            .visited_str_values = std.AutoHashMap(RuntimeValueAddress, void).init(allocator),
-            .str_backings = std.AutoHashMap(usize, StrBacking).init(allocator),
             .erased_callable_resolver = .{},
             .product_plans = std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan).init(allocator),
             .product_eligibility = collections.DenseMap(LirProgram.ConstPlanId, bool).init(allocator),
@@ -173,8 +164,6 @@ pub const Writer = struct {
         while (plans.next()) |plan| if (plan.*) |*present| present.deinit();
         self.product_plans.deinit();
         self.product_eligibility.deinit();
-        self.str_backings.deinit();
-        self.visited_str_values.deinit();
         self.stored_values.deinit();
     }
 
@@ -187,11 +176,8 @@ pub const Writer = struct {
         // evaluated root. The interpreter drops each root after storage, so
         // later roots may reuse those addresses for unrelated values.
         self.stored_values.clearRetainingCapacity();
-        self.visited_str_values.clearRetainingCapacity();
-        self.str_backings.clearRetainingCapacity();
 
         const plan = self.constPlan(root.plan);
-        try self.collectStrBackings(root.plan, root.ret_layout, value);
         return switch (root.request.kind) {
             .compile_time_constant, .repl_expr => .{ .const_node = try self.storeValue(root.plan, root.ret_layout, value) },
             .compile_time_callable => switch (plan) {
@@ -229,9 +215,6 @@ pub const Writer = struct {
         value: Value,
     ) Error!checked.ConstNodeId {
         self.stored_values.clearRetainingCapacity();
-        self.visited_str_values.clearRetainingCapacity();
-        self.str_backings.clearRetainingCapacity();
-        try self.collectStrBackings(plan, ret_layout, value);
         return self.storeValue(plan, ret_layout, value);
     }
 
@@ -771,52 +754,17 @@ pub const Writer = struct {
         };
     }
 
-    fn storeStr(self: *Writer, value: Value) Error!checked.ConstValue {
+    /// A string is stored as exactly its own bytes. How the evaluator's
+    /// allocations share bytes between strings is runtime representation,
+    /// which never enters the ConstStore; equal bytes share one blob because
+    /// `addBlobData` interns by content.
+    fn storeStr(self: *Writer, value: Value) Allocator.Error!checked.ConstValue {
         const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
-        const slice = roc_str.asSlice();
-        const len = try checkedU32(slice.len);
-
-        if (!roc_str.isSmallStr()) {
-            if (roc_str.isSeamlessSlice()) {
-                if (roc_str.getAllocationPtr()) |alloc_ptr| {
-                    const alloc_address = @intFromPtr(alloc_ptr);
-                    const slice_address = @intFromPtr(slice.ptr);
-                    if (slice_address < alloc_address) {
-                        writerInvariant("string slice view started before its recorded backing bytes");
-                    }
-                    const slice_start = slice_address - alloc_address;
-                    if (self.str_backings.get(alloc_address)) |backing| {
-                        if (slice_start > backing.len or slice.len > backing.len - slice_start) {
-                            writerInvariant("string slice view was outside its recorded backing bytes");
-                        }
-                        return .{ .str = .{
-                            .data = backing.data,
-                            .offset = try checkedU32(slice_start),
-                            .len = len,
-                        } };
-                    }
-                }
-            } else if (roc_str.bytes) |bytes| {
-                const address = @intFromPtr(bytes);
-                const backing = self.str_backings.get(address) orelse try self.addStrBacking(address, slice);
-                return .{ .str = .{
-                    .data = backing.data,
-                    .offset = 0,
-                    .len = len,
-                } };
-            }
-        }
-
-        const data = try self.store.addBlobData(slice);
-        return .{ .str = .{
-            .data = data,
-            .offset = 0,
-            .len = len,
-        } };
+        return .{ .str = try self.storeBytes(roc_str.asSlice()) };
     }
 
     fn storeBytes(self: *Writer, bytes: []const u8) Allocator.Error!const_store.ConstStr {
-        return .{ .data = try self.store.addBlobData(bytes), .offset = 0, .len = @intCast(bytes.len) };
+        return try self.store.addBlobData(bytes);
     }
 
     fn planIsProduct(self: *Writer, root: LirProgram.ConstPlanId) Allocator.Error!bool {
@@ -894,7 +842,7 @@ pub const Writer = struct {
             break :blk try self.store.commitBlobData(byte_len);
         };
         self.store.fill(node, .{ .list = .{ .packed_bytes = .{
-            .bytes = .{ .data = data, .offset = 0, .len = try checkedU32(byte_len) },
+            .bytes = data,
             .len = try checkedU32(list.len()),
             .element = null,
             .product_width = plan.packed_width,
@@ -987,7 +935,7 @@ pub const Writer = struct {
         }
         const data = try self.store.commitBlobData(byte_len);
         self.store.fill(target_node, .{ .list = .{ .packed_bytes = .{
-            .bytes = .{ .data = data, .offset = 0, .len = try checkedU32(byte_len) },
+            .bytes = data,
             .len = try checkedU32(roc_list.len()),
             .element = element,
         } } });
@@ -1000,107 +948,6 @@ pub const Writer = struct {
             self.typeNames(),
             ty,
         );
-    }
-
-    /// Records the backing bytes of every heap string reachable from the
-    /// value, visiting components in order.
-    fn collectStrBackings(
-        self: *Writer,
-        plan_id: LirProgram.ConstPlanId,
-        layout_idx: layout.Idx,
-        value: Value,
-    ) Error!void {
-        var pending = std.ArrayList(ValueRequest).empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .plan = plan_id, .layout_idx = layout_idx, .value = value });
-        while (pending.pop()) |request| {
-            // Components are appended in order and reversed so the first
-            // component is visited next.
-            const mark = pending.items.len;
-            try self.appendStrBackingComponents(&pending, request);
-            std.mem.reverse(ValueRequest, pending.items[mark..]);
-        }
-    }
-
-    fn appendStrBackingComponents(
-        self: *Writer,
-        out: *std.ArrayList(ValueRequest),
-        request: ValueRequest,
-    ) Error!void {
-        const layout_idx = request.layout_idx;
-        const value = request.value;
-        if (self.memoAddress(request.plan, layout_idx, value, request.storage)) |address| {
-            const entry = try self.visited_str_values.getOrPut(address);
-            if (entry.found_existing) return;
-            entry.value_ptr.* = {};
-        }
-        if (request.storage == .recursive_box) {
-            const boxed = self.program.layouts.getLayout(layout_idx);
-            if (boxed.tag != .box) writerInvariant("recursive capture slot did not use box storage");
-            const payload = self.readBoxDataPointer(value) orelse
-                writerInvariant("recursive capture slot had null payload pointer");
-            return try out.append(self.allocator, .{ .plan = request.plan, .layout_idx = boxed.getIdx(), .value = .{ .ptr = payload } });
-        }
-
-        switch (self.constPlan(request.plan)) {
-            .pending => writerInvariant("pending const plan reached string backing collection"),
-            .layout_only => writerInvariant("layout-only const plan reached string backing collection"),
-            .zst,
-            .scalar,
-            .boxy_fn,
-            => {},
-            .str => try self.collectStrValue(value),
-            .list => |elem_plan| {
-                const layout_value = self.program.layouts.getLayout(layout_idx);
-                if (layout_value.tag != .list and layout_value.tag != .list_of_zst) {
-                    writerInvariant("list const plan had non-list layout");
-                }
-                if (try self.planIsProduct(elem_plan)) return;
-                try self.appendListRequests(out, elem_plan, layout_idx, value);
-            },
-            .box => |elem_plan| try self.appendBoxRequest(out, elem_plan, layout_idx, value),
-            .tuple => |items| try self.appendStructRequests(out, items, layout_idx, value),
-            .record => |fields| try self.appendStructRequests(out, fields, layout_idx, value),
-            .tag_union => |variants| {
-                const tag_base = self.resolveTagBase(layout_idx, value);
-                const selected = self.selectTagVariant(variants, tag_base.layout_idx, tag_base.value);
-                const payload_layout = self.tagPayloadLayout(tag_base.layout_idx, selected.discriminant);
-                try self.appendTagPayloadRequests(out, selected.payloads, payload_layout, tag_base.value);
-            },
-            .named => |named| try out.append(self.allocator, .{ .plan = named.backing, .layout_idx = layout_idx, .value = value }),
-            .fn_value => |set_id| {
-                const set = self.program.fn_sets.items[@backingInt(set_id)];
-                const tag_base = self.resolveTagBase(layout_idx, value);
-                const variant = self.selectFnVariant(set, tag_base.layout_idx, tag_base.value);
-                try self.appendCaptureRequests(out, variant.captures, variant.payload_layout, tag_base.value);
-            },
-            .erased_fn => |set_id| {
-                const entry = try self.resolveErasedEntry(set_id, value);
-                try self.appendCaptureRequests(out, entry.entry.captures, entry.entry.capture_layout, .{ .ptr = entry.capture_ptr });
-            },
-        }
-    }
-
-    fn collectStrValue(self: *Writer, value: Value) Error!void {
-        const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
-        if (roc_str.isSmallStr() or roc_str.isSeamlessSlice()) return;
-        const bytes = roc_str.bytes orelse {
-            if (roc_str.len() == 0) return;
-            writerInvariant("non-empty string had null bytes pointer");
-        };
-        const address = @intFromPtr(bytes);
-        if (self.str_backings.contains(address)) return;
-        _ = try self.addStrBacking(address, roc_str.asSlice());
-    }
-
-    fn addStrBacking(self: *Writer, address: usize, bytes: []const u8) Error!StrBacking {
-        const data = try self.store.addBlobData(bytes);
-        const backing: StrBacking = .{
-            .data = data,
-            .len = bytes.len,
-        };
-        try self.str_backings.put(address, backing);
-        return backing;
     }
 
     fn selectFnVariant(
@@ -1444,6 +1291,59 @@ test "const store writer pointer memoization is scoped to one root" {
     try testing.expectEqualStrings(second_bytes, artifact.const_store.strBytes(second_value.str));
 }
 
+test "const store writer stores each string's own bytes when strings share an allocation" {
+    const testing = std.testing;
+
+    var module_env = try can.ModuleEnv.init(testing.allocator, "");
+    defer module_env.deinit();
+
+    var artifact = try initTestArtifact(testing.allocator, &module_env);
+    defer deinitTestArtifact(&artifact, testing.allocator);
+
+    var program = try LirProgram.Result.init(testing.allocator, .u64);
+    defer program.deinit();
+
+    const str_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .str);
+    const list_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(testing.allocator, .{ .list = str_plan });
+    const str_list_layout = try program.layouts.insertLayout(layout.Layout.list(.str));
+
+    var writer = Writer.init(testing.allocator, &artifact, &program);
+    defer writer.deinit();
+
+    const text = "a,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const bytes = try testing.allocator.alignedAlloc(u8, .of(usize), text.len);
+    defer testing.allocator.free(bytes);
+    @memcpy(bytes, text);
+
+    // The pieces as `Str.split_on` leaves them: the first keeps the whole
+    // allocation as its capacity with a shortened length, and the second is
+    // a seamless slice of bytes past that length.
+    var pieces = [_]RocStr{
+        .{ .bytes = bytes.ptr, .capacity_or_alloc_ptr = RocStr.encodeCapacity(bytes.len), .length = 1 },
+        .{ .bytes = bytes.ptr + 2, .capacity_or_alloc_ptr = RocStr.encodeSliceAllocationPtr(bytes.ptr), .length = bytes.len - 2 },
+    };
+    var roc_list = RocList{
+        .bytes = @ptrCast(&pieces),
+        .length = pieces.len,
+        .capacity_or_alloc_ptr = RocList.encodeCapacity(pieces.len),
+    };
+    const stored = try writer.storeRoot(testConstRoot(list_plan, str_list_layout), .{ .ptr = @ptrCast(&roc_list) });
+
+    const list_value = artifact.const_store.get(stored.const_node);
+    try testing.expect(list_value == .list);
+    try testing.expect(list_value.list == .nodes);
+    const nodes = list_value.list.nodes;
+    try testing.expectEqual(@as(usize, 2), nodes.len);
+    const expected = [_][]const u8{ "a", text[2..] };
+    for (expected, nodes) |expected_piece, node| {
+        const piece = artifact.const_store.get(node);
+        try testing.expect(piece == .str);
+        try testing.expectEqualStrings(expected_piece, artifact.const_store.strBytes(piece.str));
+    }
+}
+
 test "const store writer stores every NaN as Roc's one NaN" {
     const testing = std.testing;
 
@@ -1536,8 +1436,8 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     const scalar_bytes = list_value.list.packed_bytes;
     try testing.expectEqual(@as(u32, 20 * 1024), scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u8, scalar_bytes.element);
-    try testing.expectEqual(str_value.str.data, scalar_bytes.bytes.data);
-    try testing.expectEqualSlices(u8, bytes, artifact.const_store.blobBytes(scalar_bytes.bytes));
+    try testing.expectEqual(str_value.str, scalar_bytes.bytes);
+    try testing.expectEqualSlices(u8, bytes, artifact.const_store.blobData(scalar_bytes.bytes));
 
     const u16_scalar_bytes = artifact.const_store.get(stored_u16_list.const_node).list.packed_bytes;
     try testing.expectEqual(@as(u32, 10 * 1024), u16_scalar_bytes.len);
@@ -1551,5 +1451,5 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     };
     const stored_empty_list = try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&roc_empty_list) });
     try testing.expectEqual(@as(u64, bytes.len), artifact.const_store.get(stored_empty_list.const_node).list.empty);
-    try testing.expectEqual(str_value.str.data, u16_scalar_bytes.bytes.data);
+    try testing.expectEqual(str_value.str, u16_scalar_bytes.bytes);
 }

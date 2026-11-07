@@ -2465,7 +2465,7 @@ fn computeSingleSourceCalls(allocator: Allocator, bodies: CheckedBodies) Allocat
                 .procedure => local.template(procedure.template),
                 .low_level, .intrinsic, .graph_participating => null,
             },
-            .local_proc, .structural => null,
+            .local_proc, .structural, .callable_binding => null,
         };
         if (target) |id| eligible[@backingInt(id)] = false;
     }

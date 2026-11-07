@@ -244,7 +244,7 @@ pub const LiteralDemand = struct {
                     const node = plans.evidenceNode(node_id);
                     switch (node.target.kind) {
                         .procedure => |procedure| result = result.merge(self.templateFlags(procedure.template)),
-                        .local_proc => return Flags.all,
+                        .local_proc, .callable_binding => return Flags.all,
                         .structural => {},
                     }
                     switch (node.nested) {
@@ -394,15 +394,8 @@ const Builder = struct {
             },
             .imported => |imported| blk: {
                 const view = self.views.get(imported.artifact.bytes) orelse break :blk .unbounded;
-                for (view.exported_procedure_bindings.bindings) |binding| {
-                    if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
-                    break :blk switch (binding.body) {
-                        .direct_template => |direct| self.bindingBodyTarget(view, .{ .direct_template = direct }),
-                        .callable_eval_template => |id| self.bindingBodyTarget(view, .{ .callable_eval_template = id }),
-                        .checked_error => |expr| self.bindingBodyTarget(view, .{ .checked_error = expr }),
-                    };
-                }
-                break :blk .unbounded;
+                const binding = view.exported_procedure_bindings.lookup(imported.def, imported.pattern) orelse break :blk .unbounded;
+                break :blk self.bindingBodyTarget(view, binding.body);
             },
             .hosted => null,
             .platform_required => |required| blk: {
@@ -509,6 +502,7 @@ const Builder = struct {
             switch (node.target.kind) {
                 .procedure => |procedure| try self.addEdge(from, try self.templateNode(procedure.template)),
                 .local_proc => self.markUnbounded(from, "local procedure evidence"),
+                .callable_binding => self.markUnbounded(from, "computed callable evidence"),
                 .structural => {},
             }
             switch (node.nested) {
@@ -659,6 +653,7 @@ const Builder = struct {
             switch (target.kind) {
                 .procedure => |procedure| try self.addEdge(owner, try self.templateNode(procedure.template)),
                 .local_proc => self.markUnbounded(owner, "local procedure method"),
+                .callable_binding => self.markUnbounded(owner, "computed callable method"),
                 .structural => {},
             }
         }

@@ -823,6 +823,10 @@ pub const StaticDescs = struct {
                     },
                     .derived => types.invariant("a closed requirement tree names a derived codec or map, which checking records with its plan at the dispatch it serves"),
                     .scope_variable => types.invariant("a closed requirement tree names a scope variable"),
+                    .callable_eval => |entry| {
+                        self.extra_nodes += 1;
+                        nodes[position] = try self.staticCallableOf(owner, 16 + self.extra_nodes, program_.worker(entry).proc, &.{});
+                    },
                     .target => types.invariant("a dictionary's target requirement is not a resolved node"),
                 },
                 .back_edge => |head| nodes[position] = nodes[head],
