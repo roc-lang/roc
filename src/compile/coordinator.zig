@@ -8902,6 +8902,58 @@ test "a native build after a wasm32 build reads every entry the wasm32 build sto
     try std.testing.expectEqual(@as(u32, 0), native.platform_pairing_count);
 }
 
+test "a native build after a wasm32 build evaluates again a module whose stored guarded root ran out of memory only in a 32-bit address space" {
+    if (@sizeOf(usize) < 8) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // `Seed.make`'s branch body is a guarded root: its crash is not a
+    // diagnostic but a `runtime` payload, so the out-of-memory crash of its
+    // 32-bit evaluation reports nothing and `Seed`'s entry is stored holding
+    // it. Only a 32-bit evaluation crashes there; a native build must not
+    // read that outcome as its own.
+    try writeReuseFixture(&tmp,
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Seed
+        \\answer = Seed.seed
+        \\
+    );
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Seed.roc", .data =
+        \\Seed := [].{
+        \\    seed : I64
+        \\    seed = 41
+        \\
+        \\    make : Bool -> List(U8)
+        \\    make = |flag| if flag {
+        \\        List.with_capacity(4294967296)
+        \\    } else {
+        \\        []
+        \\    }
+        \\}
+        \\
+    });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var wasm32 = try compileInAddressSpace(allocator, cache, app, .u32);
+    defer wasm32.deinit(allocator);
+    try std.testing.expect(!wasm32.has_errors);
+    try std.testing.expect(!wasm32.seed_cached);
+
+    var wasm32_again = try compileInAddressSpace(allocator, cache, app, .u32);
+    defer wasm32_again.deinit(allocator);
+    try std.testing.expect(!wasm32_again.has_errors);
+    try std.testing.expect(wasm32_again.seed_cached);
+
+    var native = try compileInAddressSpace(allocator, cache, app, .u64);
+    defer native.deinit(allocator);
+    try std.testing.expect(!native.has_errors);
+    try std.testing.expect(!native.seed_cached);
+    try std.testing.expect(native.platform_cached);
+}
+
 test "imported edits recompute nominal literal results and changed conversions" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

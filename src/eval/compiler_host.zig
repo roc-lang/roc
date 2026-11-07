@@ -62,7 +62,7 @@ expect_message: ?[]u8 = null,
 max_allocation_bytes: usize = std.math.maxInt(usize),
 /// Whether an evaluation since the last `reset` asked for an allocation
 /// larger than a 32-bit `roc_alloc` can be asked for
-/// (`compile_time_host.exceedsU32AddressSpace`).
+/// (`compile_time_host.exceedsU32AddressSpace`), granted or not.
 asked_past_u32_address_space: bool = false,
 
 pub fn init(allocator: std.mem.Allocator) CompilerHost {
@@ -154,8 +154,8 @@ fn allocateBlock(self: *CompilerHost, size: usize, alignment: usize) ?*Header {
         1, 2, 4, 8, 16 => {},
         else => base.invariant("{s}", .{"unsupported compiler RocOps allocation alignment"}),
     }
-    if (size > self.max_allocation_bytes) return null;
     if (compile_time_host.exceedsU32AddressSpace(size)) self.asked_past_u32_address_space = true;
+    if (size > self.max_allocation_bytes) return null;
     const block = self.allocator.alignedAlloc(u8, Header.block_alignment, Header.payload_offset + size) catch return null;
     const header: *Header = @ptrCast(@alignCast(block.ptr));
     header.* = .{ .prev = null, .next = self.live_blocks, .size = size, .alignment = alignment };
@@ -222,6 +222,9 @@ test "a 64-bit program's evaluation asks the allocator for any block, and a 32-b
 
         try std.testing.expectEqual(@as(?*Header, null), host.allocateBlock(past_32_bits, 8));
         try std.testing.expectEqual(address_space == .u64, backing.refused);
+        // Granted or refused, the request is one only this address space's
+        // evaluation answers this way.
+        try std.testing.expect(host.asked_past_u32_address_space);
     }
 }
 

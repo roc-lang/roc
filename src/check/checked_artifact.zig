@@ -31536,11 +31536,24 @@ pub const EvaluatedAddressSpace = enum(u8) {
     /// `roc_alloc`, so the output is what any address space's evaluation
     /// produces.
     any = 0,
-    /// The evaluation asked for an allocation larger than a 32-bit
-    /// `roc_alloc` can be asked for, which only a 64-bit program's
-    /// evaluation grants; a 32-bit program's evaluation runs out of memory
-    /// there instead.
+    /// A 64-bit evaluation asked for an allocation larger than a 32-bit
+    /// `roc_alloc` can be asked for and was granted it; a 32-bit program's
+    /// evaluation runs out of memory there instead.
     u64_only = 1,
+    /// A 32-bit evaluation asked for an allocation larger than a 32-bit
+    /// `roc_alloc` can be asked for and ran out of memory there; a 64-bit
+    /// program's evaluation is granted it instead.
+    u32_only = 2,
+
+    /// The kind of output an evaluation in `address_space` produces when it
+    /// asks for an allocation larger than a 32-bit `roc_alloc` can be asked
+    /// for: only that address space's evaluation answers it that way.
+    pub fn askedPastU32(address_space: base.target.TargetUsize) EvaluatedAddressSpace {
+        return switch (address_space) {
+            .u64 => .u64_only,
+            .u32 => .u32_only,
+        };
+    }
 
     /// Whether a compilation whose compile-time evaluation runs in
     /// `address_space` reads an output of this kind as its own.
@@ -31551,9 +31564,25 @@ pub const EvaluatedAddressSpace = enum(u8) {
                 .u64 => true,
                 .u32 => false,
             },
+            .u32_only => switch (address_space) {
+                .u64 => false,
+                .u32 => true,
+            },
         };
     }
 };
+
+test "an evaluation output serves the address spaces whose evaluation answers its requests the way it did" {
+    try std.testing.expect(EvaluatedAddressSpace.any.serves(.u32) and EvaluatedAddressSpace.any.serves(.u64));
+    inline for (.{ base.target.TargetUsize.u32, base.target.TargetUsize.u64 }) |ran_in| {
+        const output = EvaluatedAddressSpace.askedPastU32(ran_in);
+        try std.testing.expect(output.serves(ran_in));
+        try std.testing.expect(!output.serves(switch (ran_in) {
+            .u32 => .u64,
+            .u64 => .u32,
+        }));
+    }
+}
 
 /// Whether compile-time evaluation still has to finish a module's evaluation
 /// output. Process-local: a cache entry holds a finished output.
@@ -31773,10 +31802,12 @@ pub const EvaluationOutput = struct {
         self.consts = consts;
     }
 
-    /// Record that evaluating one of this output's roots asked for an
-    /// allocation only a 64-bit program's evaluation grants.
-    pub fn recordU64OnlyEvaluation(self: *EvaluationOutput) void {
-        self.address_space = .u64_only;
+    /// Record that evaluating one of this output's roots in
+    /// `address_space` asked for an allocation larger than a 32-bit
+    /// `roc_alloc` can be asked for, which only that address space's
+    /// evaluation answers the way it did.
+    pub fn recordAskedPastU32(self: *EvaluationOutput, address_space: base.target.TargetUsize) void {
+        self.address_space = EvaluatedAddressSpace.askedPastU32(address_space);
     }
 
     /// Make every root no compilation evaluated await evaluation again.

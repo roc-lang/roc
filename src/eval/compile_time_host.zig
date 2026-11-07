@@ -177,8 +177,9 @@ termination: Termination = .returned,
 /// The largest allocation request Roc code is granted (`maxAllocationBytes`).
 max_allocation_bytes: usize,
 /// Whether the current run asked for an allocation larger than a 32-bit
-/// `roc_alloc` can be asked for, which only a 64-bit program's evaluation
-/// grants (`exceedsU32AddressSpace`).
+/// `roc_alloc` can be asked for (`exceedsU32AddressSpace`), granted or not:
+/// a 64-bit program's evaluation grants it and a 32-bit one runs out of
+/// memory, so the run's outcome holds only for its own address space.
 asked_past_u32_address_space: bool = false,
 
 /// A host for evaluating the roots of a program whose pointers are
@@ -431,8 +432,8 @@ fn allocateRocBytes(self: *CompileTimeHost, length: usize, alignment: usize) [*]
     if (alignment > max_allocation_alignment or !std.math.isPowerOfTwo(alignment)) {
         base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"});
     }
-    if (length > self.max_allocation_bytes) self.rocOutOfMemory();
     if (exceedsU32AddressSpace(length)) self.asked_past_u32_address_space = true;
+    if (length > self.max_allocation_bytes) self.rocOutOfMemory();
     const size = @max(length, 1);
     const header: *AllocationHeader = if (size <= max_small_payload)
         self.allocateSmallBlock(smallClass(size))
@@ -743,6 +744,9 @@ test "a 64-bit program's evaluation asks the compiler for any allocation, and a 
         try std.testing.expectEqual(Termination.crashed, host.termination);
         try std.testing.expectEqualStrings(out_of_memory_message, host.crashMessage().?);
         try std.testing.expectEqual(address_space == .u64, backing.refused);
+        // Granted or refused, the request is one only this address space's
+        // evaluation answers this way.
+        try std.testing.expect(host.asked_past_u32_address_space);
     }
 }
 
