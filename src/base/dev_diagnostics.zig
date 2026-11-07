@@ -48,6 +48,10 @@ pub const Var = enum {
     /// Write every wasm unit image a wasm build restores or builds into the
     /// named directory, one file per unit named by its unit key.
     dump_wasm_unit_images,
+    /// Append `<start> <size> <name>` for every function of each unit image
+    /// the compiler loads into its own process (`roc test`'s and compile-time
+    /// evaluation's) to `/tmp/perf-<pid>.map`, so `perf` names them.
+    perf_map,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -66,6 +70,7 @@ pub const Var = enum {
             .dump_run_image => "ROC_DUMP_RUN_IMAGE",
             .wasm_split_bytes => "ROC_WASM_SPLIT_BYTES",
             .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
+            .perf_map => "ROC_PERF_MAP",
         };
     }
 };
