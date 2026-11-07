@@ -2480,33 +2480,8 @@ A size build (`--opt=size`) selects nothing: every function the module
 defines, including the linked builtins and the private runtime, carries
 LLVM's `optsize` and `minsize` and no `inlinehint`, so LLVM's size cost model
 is the one measure of every inlining decision, exactly as it is for a C or
-Zig module built for minimum size. The pinned forwarding builtins keep
+Zig module built for minimum size. The pinned leaf builtins keep
 `alwaysinline` in every mode.
-
-A linked builtin is pinned with `alwaysinline` only when it is a forwarding
-wrapper: its body packs its arguments and hands them to one out-of-line builtin
-routine, and any choice among forms of that routine tests only arguments that
-are constants at every call site (an update mode, or whether items are
-reference-counted). Inlining such a body replaces a call with a call, so no
-caller grows, whatever its size and however many sites it has, and the pin
-needs no account of code growth. `builder.zig` names the pinned set
-(`isPinnedForwardingBuiltin`).
-
-A builtin that does work of its own inline is never pinned, however small that
-work is once optimized, and carries `inlinehint` like every other linked
-builtin. The str concat wrapper builds a small-into-small result in the wrapper
-and calls its out-of-line half for everything else, so each inlined copy adds
-that path to its caller on top of the call. Two properties of the mandatory
-inliner make that unbounded. It inlines at every site, with no measure of what
-the copies add to one caller, and it runs before the inlining pipeline has
-simplified any callee, so what it copies is the body as linked: the wrapper's
-unoptimized bitcode, several times its simplified size, with a stack slot for
-every temporary. A procedure that formats many strings holds tens of thousands
-of concat sites, since single-use substitution gathers a program's formatting
-into few procedures, and the function passes that then have to simplify those
-copies in one body are superlinear in its size. The cost-model inliner works
-bottom-up instead: it weighs the wrapper's simplified body at each site and
-declines the sites it estimates cold.
 
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
