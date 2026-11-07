@@ -5821,7 +5821,7 @@ fn constCandidateCapacity(view: ModuleView, node: checked.ConstNodeId) ?u64 {
     while (true) switch (view.const_store.get(current)) {
         .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
         .nominal => |nominal| current = nominal.backing,
-        .str => |str| return if (str.len != 0) view.const_store.spareCapacity(current) else null,
+        .str => |str| return if (view.const_store.strBytes(str).len != 0) view.const_store.spareCapacity(current) else null,
         .list => |list| return switch (list) {
             .nodes, .packed_bytes => view.const_store.spareCapacity(current),
             .empty => null,
@@ -47747,7 +47747,7 @@ const BodyContext = struct {
                 .packed_bytes => store_view.const_store.spareCapacity(node) != null,
                 .empty => false,
             },
-            .str => |str| str.len != 0 and store_view.const_store.spareCapacity(node) != null,
+            .str => |str| store_view.const_store.strBytes(str).len != 0 and store_view.const_store.spareCapacity(node) != null,
             .box => true,
             .pending, .zst, .scalar, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => false,
         };

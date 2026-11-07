@@ -1279,7 +1279,7 @@ pub const ConstStore = struct {
             .pending => constStoreInvariant("cannot fill a const node with a pending value"),
             .zst => .zst,
             .scalar => |s| .{ .scalar = s },
-            .str => |s| .{ .str = .{ .str = s, .capacity = s.len } },
+            .str => |s| .{ .str = .{ .str = s, .capacity = self.strBytes(s).len } },
             .crash => |s| .{ .crash = s },
             .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
@@ -1308,7 +1308,7 @@ pub const ConstStore = struct {
     pub fn setCapacity(self: *ConstStore, id: ConstNodeId, capacity: u64) void {
         switch (self.values.items[@backingInt(id)]) {
             .str => |*str| {
-                if (capacity <= str.str.len) constStoreInvariant("a string's recorded capacity did not exceed its length");
+                if (capacity <= self.strBytes(str.str).len) constStoreInvariant("a string's recorded capacity did not exceed its length");
                 str.capacity = capacity;
             },
             .list => |*list| switch (list.*) {
@@ -1331,7 +1331,7 @@ pub const ConstStore = struct {
     /// list or string that holds all it has room for.
     pub fn spareCapacity(self: *const ConstStore, id: ConstNodeId) ?u64 {
         return switch (self.values.items[@backingInt(id)]) {
-            .str => |str| if (str.capacity > str.str.len) str.capacity else null,
+            .str => |str| if (str.capacity > self.strBytes(str.str).len) str.capacity else null,
             .list => |list| switch (list) {
                 .nodes => |nodes| if (nodes.capacity > nodes.items.len) nodes.capacity else null,
                 .packed_bytes => |packed_list| if (packed_list.capacity > packed_list.list.len) packed_list.capacity else null,
