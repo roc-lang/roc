@@ -4582,7 +4582,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitAssignRef(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LIR.RefOp) Error!void {
         if (op.kind == .field and self.localDyn(op.source) != null) {
-            return self.emitDyn(target, .{ .field_addr = .{ .base = op.source, .desc = self.localDyn(op.source).?.desc, .field_index = op.index } });
+            return self.emitDyn(target, .{ .field_addr = .{ .base = op.source, .desc = self.localDyn(op.source).?.desc, .field_index = .{ .immediate = op.index } } });
         }
         if (op.kind == .local and self.localDyn(target) != null) {
             return self.emitDyn(target, .{ .copy = .{ .src = op.source, .desc = self.localDyn(target).?.desc } });

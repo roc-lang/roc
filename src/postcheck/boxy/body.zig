@@ -4635,8 +4635,7 @@ pub const Builder = struct {
             .closure => |closure| closure.lambda,
             .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
-        const scope_id = (try self.program.localScope(self.module, lambda_expr)) orelse
-            return try self.localProcValue(local);
+        const scope_id = (try self.program.localScope(self.module, lambda_expr)) orelse return null;
         var scheme = try self.localScheme(scope_id);
         if (!scheme.per_call or (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0)) return null;
         const scope_worker, const per_call = try self.localProcWorker(local);
@@ -7933,7 +7932,7 @@ pub const Builder = struct {
             }
             try self.resolveOwnKinds(self.bodies().exprType(expr_id), scheme, own_types);
             for (own_types) |own_ty| try own_descs.append(self.allocator, try self.descWord(own_ty));
-            const scope_id = try self.program.localScope(self.module, lambda_expr).?;
+            const scope_id = (try self.program.localScope(self.module, lambda_expr)).?;
             const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
             for (scheme.dictionaries) |param_index| {
                 if (param_index >= evidence.len) invariant("a generalized lambda's construction evidence does not cover its dictionaries");

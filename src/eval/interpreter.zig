@@ -2377,7 +2377,7 @@ pub const Interpreter = struct {
             switch (self.store.getCFStmtImmediate(current).*) {
                 .assign_ref => |assign| {
                     if (assign.op.kind == .field and self.store.getLocal(assign.op.source).dyn != null) {
-                        try self.execDyn(frame, current, assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.store.getLocal(assign.op.source).dyn.?.desc, .field_index = assign.op.index } });
+                        try self.execDyn(frame, current, assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.store.getLocal(assign.op.source).dyn.?.desc, .field_index = .{ .immediate = assign.op.index } } });
                         current = assign.next;
                         continue;
                     }

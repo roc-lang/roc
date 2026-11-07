@@ -498,6 +498,10 @@ pub const StaticDescs = struct {
         return reserved;
     }
 
+    fn ptrSize(self: *const StaticDescs) u32 {
+        return self.width.bytes();
+    }
+
     pub fn opaqueWordSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
         return (try self.opaqueWord()).slot;
     }

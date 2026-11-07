@@ -22645,6 +22645,7 @@ pub const PlatformPairing = struct {
                 // Persisted as `templates`; the rest is borrowed.
                 "checked_procedure_templates",
                 // Pairing-independent checked metadata: borrowed from the platform.
+                "has_expects",
                 "evaluation_diagnostics",
                 "checked_const_bodies",
                 "exported_procedure_templates",
@@ -35804,6 +35805,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     @memset(&key.bytes, 0xEE);
 
     const artifact = CheckedModuleArtifact{
+        .has_expects = true,
         .key = key,
         .source_hash = @as([32]u8, @splat(0x5c)),
         .canonical_names = canonical_names_src,
@@ -35852,6 +35854,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     defer loaded.deinitRetainingModuleEnv(gpa);
 
     // POD inline fields survive byte-identically.
+    try std.testing.expect(loaded.has_expects);
     try std.testing.expectEqualSlices(u8, &key.bytes, &loaded.key.bytes);
     try std.testing.expectEqualSlices(u8, &artifact.source_hash, &loaded.source_hash);
     try std.testing.expectEqualSlices(u8, &identity.stable_hash, &loaded.module_identity.stable_hash);
