@@ -5432,7 +5432,9 @@ the same imported type (importing module and imported id) projected again.
 A type that reaches no identity variable is one type wherever it occurs, so a
 consumer that needs one entry per type asks the module's view for the one id
 its key index holds for the type's key (`canonicalId`) or compares two ids
-with `sameType`. A type that reaches an identity variable is identified by
+with `sameType`. Each type's canonical id is recorded in an atomic
+slot of its own once the walk deciding whether it reaches an identity
+variable has, so a repeated request is one load. A type that reaches an identity variable is identified by
 its id alone, because its key names its variables only by position. Whether
 a type reaches an identity variable is found by walking the types it reaches,
 never through its key.
@@ -5639,8 +5641,14 @@ compiler change.
 
 Every derived fact that is a pure function of a module's sealed data is
 computed by whichever consumer first needs it, exactly once, into a slot owned
-by the module. Nothing computes such a fact eagerly for a whole module, and no
-cache entry stores one: a cache hit recomputes each fact on its first demand.
+by the module, and no cache entry stores one: a cache hit recomputes each fact
+on its first demand. Nothing computes such a fact for a module unless a
+consumer will read it. The coordinator knows that finishing the checked
+program reads every module's root requests and every imported module's public
+API dependencies, so the type-check task that checks a module, or opens it
+from its cache entry, demands those slots (and every slot they read) right
+after, and modules compute them in parallel exactly as they are checked. This
+decides only which thread computes a slot first, never what it holds.
 
 - Per-root slots: a type's canonical key; the nested procedure sites of
   a template's body and of a defaulted-field default
