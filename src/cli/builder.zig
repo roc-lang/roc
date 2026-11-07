@@ -367,12 +367,12 @@ const pinned_forwarding_builtins = [_][]const u8{
 /// out-of-line half for everything else, so every inlined copy adds that path
 /// to its caller on top of the call. LLVM's mandatory inliner also runs before
 /// the inlining pipeline has simplified any callee, so it copies a pinned body
-/// while the helpers it calls are still calls and its temporaries are still
-/// stack slots: for the concat wrapper, several times its simplified size. A
-/// procedure that formats many strings holds tens of thousands of concat
-/// sites, and nothing bounds what the copies add to it. Such a builtin carries
-/// `inlinehint` like every other linked builtin, and the inliner's cost model
-/// decides each site on the simplified body. See design.md.
+/// as linked: for the concat wrapper, unoptimized bitcode several times its
+/// simplified size, with a stack slot for every temporary. A procedure that
+/// formats many strings holds tens of thousands of concat sites, and nothing
+/// bounds what the copies add to it. Such a builtin carries `inlinehint` like
+/// every other linked builtin, and the inliner's cost model decides each site
+/// on the simplified body. See design.md.
 fn isPinnedForwardingBuiltin(name: []const u8) bool {
     for (pinned_forwarding_builtins) |suffix| {
         if (std.mem.endsWith(u8, name, suffix)) return true;
