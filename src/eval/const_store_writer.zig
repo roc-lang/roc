@@ -147,6 +147,8 @@ pub const Writer = struct {
             try functions.retained.describeImported(self.allocator, functions.result, external.owner, external.identity, resolved.capture_ptr)
         else
             try functions.retained.describe(self.allocator, functions.result, resolved.proc, resolved.capture_ptr);
+        // The frame owns the recipe only after pushStoreFrame succeeds.
+        errdefer self.allocator.free(described.recipe);
         defer self.allocator.free(described.captures);
         const requests_start = self.store_requests.items.len;
         for (described.captures) |capture| {
@@ -156,6 +158,7 @@ pub const Writer = struct {
     }
 
     pub fn deinit(self: *Writer) void {
+        self.clearStoreStacks();
         self.store_capture_types.deinit(self.allocator);
         self.store_nodes.deinit(self.allocator);
         self.store_requests.deinit(self.allocator);
@@ -324,6 +327,12 @@ pub const Writer = struct {
     }
 
     fn clearStoreStacks(self: *Writer) void {
+        // A popped frame transfers its recipe to finishStore, which frees it
+        // even on failure. Only frames still pending belong to this stack.
+        for (self.store_frames.items) |frame| switch (frame.finish) {
+            .boxy_fn => |function| self.allocator.free(function.recipe),
+            .list, .box, .tuple, .record, .nominal, .tag, .fn_value => {},
+        };
         self.store_frames.clearRetainingCapacity();
         self.store_requests.clearRetainingCapacity();
         self.store_nodes.clearRetainingCapacity();
@@ -1452,4 +1461,94 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     const stored_empty_list = try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&roc_empty_list) });
     try testing.expectEqual(@as(u64, bytes.len), artifact.const_store.get(stored_empty_list.const_node).list.empty);
     try testing.expectEqual(str_value.str, u16_scalar_bytes.bytes);
+}
+
+/// Publish a real pending frame with an independently owned recipe, without
+/// needing a lowered callable to exercise the writer's ownership lifecycle.
+fn pushTestBoxyRecipe(writer: *Writer, node: checked.ConstNodeId, bytes: []const u8) Allocator.Error!void {
+    const recipe = try writer.allocator.dupe(u8, bytes);
+    errdefer writer.allocator.free(recipe);
+    try writer.pushStoreFrame(.{ .boxy_fn = .{ .node = node, .recipe = recipe } }, writer.store_requests.items.len, &.{});
+}
+
+test "const store writer boxy recipe ownership clears pending frames and deinitializes" {
+    const a = std.testing.allocator;
+    var program = try LirProgram.Result.init(a, .u64);
+    defer program.deinit();
+    var store = const_store.ConstStore.init(a);
+    defer store.deinit();
+    const node = try store.reserve();
+    for ([_]bool{ false, true }) |explicit_clear| {
+        var tracking = std.testing.FailingAllocator.init(a, .{});
+        {
+            var writer = Writer.initStore(tracking.allocator(), &store, null, &program);
+            defer writer.deinit();
+            try pushTestBoxyRecipe(&writer, node, "parent");
+            try writer.pushStoreFrame(.{ .record = node }, 0, &.{});
+            try pushTestBoxyRecipe(&writer, node, "child");
+            if (explicit_clear) {
+                const freed = tracking.freed_bytes;
+                writer.clearStoreStacks();
+                try std.testing.expectEqual(@as(usize, 0), writer.store_frames.items.len);
+                try std.testing.expectEqual(freed + "parent".len + "child".len, tracking.freed_bytes);
+                writer.clearStoreStacks();
+                try std.testing.expectEqual(freed + "parent".len + "child".len, tracking.freed_bytes);
+            }
+        }
+        try std.testing.expectEqual(tracking.allocated_bytes, tracking.freed_bytes);
+    }
+}
+
+test "const store writer boxy recipe ownership survives successful frame completion" {
+    const a = std.testing.allocator;
+    var program = try LirProgram.Result.init(a, .u64);
+    defer program.deinit();
+    var store = const_store.ConstStore.init(a);
+    defer store.deinit();
+    const node = try store.reserve();
+    var tracking = std.testing.FailingAllocator.init(a, .{});
+    {
+        var writer = Writer.initStore(tracking.allocator(), &store, null, &program);
+        defer writer.deinit();
+        try pushTestBoxyRecipe(&writer, node, "owned recipe");
+        const freed = tracking.freed_bytes;
+        _ = try writer.drainStore();
+        try std.testing.expectEqual(@as(usize, 0), writer.store_frames.items.len);
+        try std.testing.expectEqualStrings("owned recipe", store.blobData(store.get(node).boxy_fn.recipe));
+        try std.testing.expectEqual(freed + "owned recipe".len, tracking.freed_bytes);
+        writer.clearStoreStacks();
+        try std.testing.expectEqual(freed + "owned recipe".len, tracking.freed_bytes);
+    }
+    try std.testing.expectEqual(tracking.allocated_bytes, tracking.freed_bytes);
+}
+
+test "const store writer boxy recipe ownership frees a failed popped frame only once" {
+    const a = std.testing.allocator;
+    var program = try LirProgram.Result.init(a, .u64);
+    defer program.deinit();
+    var failing_store = std.testing.FailingAllocator.init(a, .{});
+    var store = const_store.ConstStore.init(failing_store.allocator());
+    defer store.deinit();
+    const parent = try store.reserve();
+    const child = try store.reserve();
+    var tracking = std.testing.FailingAllocator.init(a, .{});
+    {
+        var writer = Writer.initStore(tracking.allocator(), &store, null, &program);
+        defer writer.deinit();
+        try pushTestBoxyRecipe(&writer, parent, "parent");
+        try pushTestBoxyRecipe(&writer, child, "child");
+        const freed = tracking.freed_bytes;
+        // The child has no remaining requests: drainStore pops it before
+        // finishStore tries to intern its recipe into the empty blob index.
+        failing_store.fail_index = failing_store.alloc_index;
+        failing_store.resize_fail_index = failing_store.resize_index;
+        try std.testing.expectError(error.OutOfMemory, writer.drainStore());
+        try std.testing.expectEqual(@as(usize, 1), writer.store_frames.items.len);
+        try std.testing.expectEqual(freed + "child".len, tracking.freed_bytes);
+        writer.clearStoreStacks();
+        try std.testing.expectEqual(freed + "child".len + "parent".len, tracking.freed_bytes);
+        writer.clearStoreStacks();
+        try std.testing.expectEqual(freed + "child".len + "parent".len, tracking.freed_bytes);
+    }
+    try std.testing.expectEqual(tracking.allocated_bytes, tracking.freed_bytes);
 }
