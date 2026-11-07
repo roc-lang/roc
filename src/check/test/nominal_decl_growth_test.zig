@@ -1,5 +1,5 @@
 //! Declaration-level rejection of recursive nominal types applied at growing
-//! type arguments.
+//! or reordered type arguments.
 //!
 //! Monomorphization instantiates a declaration's backing at every distinct
 //! argument tuple, so a declaration group is monomorphizable exactly when
@@ -8,7 +8,10 @@
 //! carrying a variable that is no formal of its declaration is minted fresh
 //! at every level; either way no application has a Monotype, and the checker
 //! reports it once, at the declaration. Growth that never flows back into
-//! its own declaration stays finite and is accepted.
+//! its own declaration stays finite and is accepted. A recursion that brings
+//! one formal back as another reorders the declaration's arguments on every
+//! trip; it is rejected too, so that a recursion always passes its type
+//! parameters through unchanged (design.md "Polymorphic Recursion").
 
 const TestEnv = @import("./TestEnv.zig");
 
@@ -49,7 +52,7 @@ test "a recursive mention at a closed argument stays valid" {
     try test_env.assertNominalDeclValidity("Weird", true);
 }
 
-test "a recursive mention that permutes its formals stays valid" {
+test "a recursive mention that permutes its formals is rejected at the declaration" {
     const src =
         \\Pair(a, b) := [Mk(Pair(b, a)), Stop]
     ;
@@ -57,8 +60,37 @@ test "a recursive mention that permutes its formals stays valid" {
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
 
+    try test_env.assertOneTypeError("Invalid Recursive Type");
+    try test_env.assertNominalDeclValidity("Pair", false);
+}
+
+test "a mutual recursion that permutes formals is rejected at both declarations" {
+    // Each declaration's two formals come back as each other after one trip
+    // through the other declaration.
+    const src =
+        \\Ping(a, b) := [MkPing(Pong(a, b)), EndPing]
+        \\Pong(x, y) := [MkPong(Ping(y, x))]
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNominalDeclValidity("Ping", false);
+    try test_env.assertNominalDeclValidity("Pong", false);
+}
+
+test "a recursive mention that repeats one formal stays valid" {
+    // The second formal takes the first one's argument and nothing flows
+    // back, so the recursion reaches `Twin(a, a)` and stays there.
+    const src =
+        \\Twin(a, b) := [Mk(Twin(a, a)), Stop(b)]
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
     try test_env.assertNoErrors();
-    try test_env.assertNominalDeclValidity("Pair", true);
+    try test_env.assertNominalDeclValidity("Twin", true);
 }
 
 test "wrapping a formal in a mention of a non-recursive declaration stays valid" {

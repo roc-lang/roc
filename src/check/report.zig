@@ -84,6 +84,7 @@ const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
+const PolymorphicRecursion = problem_mod.PolymorphicRecursion;
 const HostedFunctionNotEffectful = problem_mod.HostedFunctionNotEffectful;
 const HostedTypeVariableNotBoxed = problem_mod.HostedTypeVariableNotBoxed;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
@@ -124,7 +125,6 @@ const LiteralDefaulted = problem_mod.LiteralDefaulted;
 
 // Generic errors
 const VarWithSnapshot = problem_mod.VarWithSnapshot;
-const GrowingPolymorphicRecursion = problem_mod.GrowingPolymorphicRecursion;
 const LocalTypeEscape = problem_mod.LocalTypeEscape;
 const RowLabelConflict = problem_mod.types.RowLabelConflict;
 
@@ -1067,9 +1067,6 @@ pub const ReportBuilder = struct {
             .anonymous_recursion => |data| {
                 return self.buildAnonymousRecursionReport(data);
             },
-            .growing_polymorphic_recursion => |data| {
-                return self.buildGrowingPolymorphicRecursionReport(data);
-            },
             .local_type_escape => |data| {
                 return self.buildLocalTypeEscapeReport(data);
             },
@@ -1120,6 +1117,9 @@ pub const ReportBuilder = struct {
             },
             .hosted_unboxed_function => |data| {
                 return self.buildHostedUnboxedFunctionReport(data);
+            },
+            .polymorphic_recursion => |data| {
+                return self.buildPolymorphicRecursionReport(data);
             },
             .hosted_function_not_effectful => |data| {
                 return self.buildHostedFunctionNotEffectfulReport(data);
@@ -5058,6 +5058,11 @@ pub const ReportBuilder = struct {
                 D.ident(type_name_ident).withAnnotation(.type_variable),
                 D.bytes("passes changing type arguments to its own recursion, so it would need infinitely many instantiations."),
             }, self, &report, &report.headline),
+            .reordered_args => try D.renderSliceInto(&.{
+                D.bytes("The nominal type"),
+                D.ident(type_name_ident).withAnnotation(.type_variable),
+                D.bytes("passes its type arguments to its own recursion in a different order."),
+            }, self, &report, &report.headline),
         }
 
         if (self.getRegionSafe(@fromBackingInt(@backingInt(data.decl_var)))) |region| {
@@ -5092,6 +5097,18 @@ pub const ReportBuilder = struct {
                 D.bytes("inside the declaration of"),
                 D.bytes("Nest(a)").withAnnotation(.inline_code),
                 D.bytes(", would create a different type at every level of the recursion.").withNoPrecedingSpace(),
+            }, self, &report),
+            .reordered_args => try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("A recursive use of a nominal type must pass each of its type parameters through unchanged, like"),
+                D.bytes("Tree(a) := [Leaf(a), Node(Tree(a), Tree(a))]").withAnnotation(.inline_code),
+                D.bytes(", or apply it to a type with no type variables, like").withNoPrecedingSpace(),
+                D.bytes("Chain(a) := [End, Link(a, Chain(Str))]").withAnnotation(.inline_code),
+                D.bytes(". Arguments in a different order, like").withNoPrecedingSpace(),
+                D.bytes("Flip(b, a)").withAnnotation(.inline_code),
+                D.bytes("inside the declaration of"),
+                D.bytes("Flip(a, b)").withAnnotation(.inline_code),
+                D.bytes(", would make each level of the recursion a different type from the one around it.").withNoPrecedingSpace(),
             }, self, &report),
         }
 
@@ -5208,42 +5225,6 @@ pub const ReportBuilder = struct {
             D.bytes("If you need a recursive data structure, define a nominal type using"),
             D.bytes(":=").withAnnotation(.inline_code),
             D.bytes(".").withNoPrecedingSpace(),
-        }, self, &report);
-
-        return report;
-    }
-
-    fn buildGrowingPolymorphicRecursionReport(self: *Self, data: GrowingPolymorphicRecursion) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Growing Polymorphic Recursion", "", .runtime_error);
-        errdefer report.deinit();
-        if (data.def_name) |def_name| {
-            try D.renderSliceInto(&.{
-                D.bytes("This use of"),
-                D.ident(def_name).withAnnotation(.inline_code),
-                D.bytes("is part of a recursion that uses it at a bigger type every time around."),
-            }, self, &report, &report.headline);
-        } else {
-            try D.renderSliceInto(&.{
-                D.bytes("This call is part of a recursion that uses its function at a bigger type every time around."),
-            }, self, &report, &report.headline);
-        }
-
-        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
-        try report.document.addLineBreak();
-
-        try D.renderSlice(&.{D.bytes("Here it is used at this type:")}, self, &report);
-        try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.use_snapshot)));
-        try report.document.addLineBreaks(2);
-
-        try report.document.addReflowingText("This type wraps a type variable of the recursion inside a bigger type, and the recursion comes back around to this use with that bigger type. The next time around it would be wrapped again, and so on without end. Roc compiles a separate copy of a function for each type it is used at, so this would need infinitely many copies.");
-        try report.document.addLineBreaks(2);
-
-        try D.renderSlice(&.{
-            D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes("Recursive uses may be at other types, as long as going around the recursion does not keep making the type bigger. Giving the value the same type at every level, for example by collecting the nested values in a"),
-            D.bytes("List").withAnnotation(.inline_code),
-            D.bytes(", fixes this.").withNoPrecedingSpace(),
         }, self, &report);
 
         return report;
@@ -5532,6 +5513,17 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreaks(2);
         try D.renderSlice(details, self, &report);
         return report;
+    }
+
+    fn buildPolymorphicRecursionReport(self: *Self, data: PolymorphicRecursion) Allocator.Error!Report {
+        return self.buildHighlightedRegionReport("Polymorphic Recursion", "This use passes changing types to a recursion.", .runtime_error, data.region, &.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("A function that reaches itself again, directly or through other functions, must pass each of its type variables through unchanged, or use types with no type variables. An argument that wraps a type variable, like"),
+            D.bytes("f([x])").withAnnotation(.inline_code),
+            D.bytes("inside"),
+            D.bytes("f : a -> U64").withAnnotation(.inline_code),
+            D.bytes("would use the function at a different type at every level of the recursion."),
+        });
     }
 
     fn buildHostedUnboxedFunctionReport(self: *Self, data: HostedUnboxedFunction) Allocator.Error!Report {

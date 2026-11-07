@@ -8992,10 +8992,23 @@ test "check type - mutually recursive functions - all annotated polymorphic" {
     );
 }
 
-test "check type - annotated self recursive function - polymorphic recursion allowed" {
+test "check type - annotated self recursive function - polymorphic recursion is rejected" {
     // An annotated def's self-reference instantiates its pre-declared scheme,
-    // so a recursive use at a specialized type is legal (polymorphic
-    // recursion for annotated defs).
+    // but the recursive use must pass the def's own type variables along
+    // unchanged: each call here would need `depth` at a larger type.
+    const source =
+        \\depth : List(a) -> U64
+        \\depth = |list| match list {
+        \\    [] => 0
+        \\    [first, ..] => 1 + depth([[first]])
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - annotated self recursive function - recursion at a concrete type allowed" {
+    // The recursive use is at `List(U8)`, which mentions none of `depth`'s
+    // variables, so the recursion reaches one further instantiation.
     const source =
         \\depth : List(a) -> U64
         \\depth = |list| match list {
@@ -9006,44 +9019,63 @@ test "check type - annotated self recursive function - polymorphic recursion all
     try checkTypesModule(source, .{ .pass = .{ .def = "depth" } }, "List(a) -> U64");
 }
 
-test "check type - annotated self recursive function - polymorphic recursion swapping variables allowed" {
-    // Each recursive use swaps the two variables, so the recursion reaches
-    // only `(a, b)` and `(b, a)`: nothing grows.
+test "check type - annotated self recursive function - swapped type variables are rejected" {
     const source =
-        \\swap : a, b, U64 -> U64
-        \\swap = |x, y, n| if n == 0 { 0 } else { 1 + swap(y, x, n - 1) }
+        \\swap : U64, a, b -> U64
+        \\swap = |n, x, y| if n == 0 0 else 1 + swap(n - 1, y, x)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "swap" } }, "a, b, U64 -> U64");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
-test "check type - annotated self recursive function - polymorphic recursion at a growing type rejected" {
-    // Each recursive use wraps `a` in another list, so specialization would
-    // need `depth` at `List(a)`, `List(List(a))`, and so on without end.
+test "check type - annotated self recursive function - a variable passed to another outside any cycle is accepted" {
+    // `b` flows into `a`, but `b` is given a closed type, so nothing flows
+    // back into `b`: the flow lies on no cycle, and the recursion reaches
+    // `(b, U8)` and then `(U8, U8)`, where it stays.
     const source =
-        \\depth : List(a) -> U64
-        \\depth = |list| match list {
-        \\    [] => 0
-        \\    [first, ..] => 1 + depth([[first]])
+        \\mixed : a, b, U64 -> U64
+        \\mixed = |_x, y, n| if n == 0 { 0 } else { 1 + mixed(y, 1.U8, n - 1) }
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "mixed" } }, "a, b, U64 -> U64");
+}
+
+test "check type - annotated local function - swapped type variables are rejected" {
+    const source =
+        \\swap : U64 -> U64
+        \\swap = |n| {
+        \\    go : a, b, U64 -> U64
+        \\    go = |x, y, k| if k == 0 { 0 } else { 1 + go(y, x, k - 1) }
+        \\    go("s", 1.U8, n)
         \\}
     ;
-    try checkTypesModule(source, .fail_with,
-        \\**Growing Polymorphic Recursion**
-        \\This use of `depth` is part of a recursion that uses it at a bigger type every time around.
-        \\```roc
-        \\    [first, ..] => 1 + depth([[first]])
-        \\```
-        \\                       ^^^^^
-        \\
-        \\Here it is used at this type:
-        \\
-        \\    List(List(a)) -> U64
-        \\
-        \\This type wraps a type variable of the recursion inside a bigger type, and the recursion comes back around to this use with that bigger type. The next time around it would be wrapped again, and so on without end. Roc compiles a separate copy of a function for each type it is used at, so this would need infinitely many copies.
-        \\
-        \\**Hint:** Recursive uses may be at other types, as long as going around the recursion does not keep making the type bigger. Giving the value the same type at every level, for example by collecting the nested values in a `List`, fixes this.
-        \\
-        \\
-    );
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - annotated self recursive function - unchanged type variables are accepted" {
+    const source =
+        \\countdown : U64, a -> a
+        \\countdown = |count, x| if count == 0 x else countdown(count - 1, x)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "countdown" } }, "U64, a -> a");
+}
+
+test "check type - annotated self recursive function - recursion at a closed type is accepted" {
+    // The recursive use mentions none of the def's own variables, so the
+    // recursion reaches one further instantiation and stops there.
+    const source =
+        \\restart : U64, a -> U64
+        \\restart = |count, _x| if count == 0 0 else 1 + restart(count - 1, 5.U64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "restart" } }, "U64, a -> U64");
+}
+
+test "check type - annotated mutual recursion - growth around the cycle is rejected" {
+    const source =
+        \\ping : U64, a -> U64
+        \\ping = |n, x| if n == 0 0 else pong(n - 1, x)
+        \\pong : U64, a -> U64
+        \\pong = |n, x| if n == 0 0 else ping(n - 1, [x])
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - mutually recursive annotated functions - polymorphic recursion at a growing type rejected" {
@@ -9055,7 +9087,7 @@ test "check type - mutually recursive annotated functions - polymorphic recursio
         \\pong : a, U64 -> U64
         \\pong = |x, n| if n == 0 { 0 } else { 1 + ping((x, 1.U8), n - 1) }
     ;
-    try checkTypesModule(source, .fail, "Growing Polymorphic Recursion");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - mutually recursive annotated functions - polymorphic recursion without growth allowed" {
@@ -9071,6 +9103,52 @@ test "check type - mutually recursive annotated functions - polymorphic recursio
     });
 }
 
+test "check type - annotated mutual recursion - variables that swap across definitions and come back are accepted" {
+    // `ping`'s `a` becomes `pong`'s `b` and comes back as `ping`'s `a`, so
+    // each component of the recursion holds one variable per definition.
+    const source =
+        \\ping : a, b, U64 -> U64
+        \\ping = |x, y, n| if n == 0 { 0 } else { 1 + pong(y, x, n - 1) }
+        \\pong : a, b, U64 -> U64
+        \\pong = |x, y, n| if n == 0 { 0 } else { 1 + ping(y, x, n - 1) }
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "ping", .expected = "a, b, U64 -> U64" },
+        .{ .def = "pong", .expected = "a, b, U64 -> U64" },
+    });
+}
+
+test "check type - annotated mutual recursion - variables that line up are accepted" {
+    const source =
+        \\Tree(a) := [Leaf(a), Node(List(Tree(a)))]
+        \\count_tree : Tree(a) -> U64
+        \\count_tree = |tree| match tree {
+        \\    Tree.Leaf(_) => 1
+        \\    Tree.Node(children) => count_children(children)
+        \\}
+        \\count_children : List(Tree(a)) -> U64
+        \\count_children = |children| {
+        \\    var $total = 0
+        \\    for child in children {
+        \\        $total = $total + count_tree(child)
+        \\    }
+        \\    $total
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "count_tree", .expected = "Tree(a) -> U64" },
+        .{ .def = "count_children", .expected = "List(Tree(a)) -> U64" },
+    });
+}
+
+test "check type - a generic function using another at a larger type without recursion is accepted" {
+    const source =
+        \\wrap_len : a -> U64
+        \\wrap_len = |x| List.len([x])
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "wrap_len" } }, "a -> U64");
+}
+
 test "check type - polymorphic recursion at a growing type through a local helper rejected" {
     // The growing use is in an unannotated local function that the
     // annotated definition calls, so the cycle passes through the helper.
@@ -9081,7 +9159,7 @@ test "check type - polymorphic recursion at a growing type through a local helpe
         \\    if n == 0 { 0 } else { 1 + wrap(x) }
         \\}
     ;
-    try checkTypesModule(source, .fail, "Growing Polymorphic Recursion");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - polymorphic recursion at a body-local type whose context is the recursion's variable rejected" {
@@ -9103,7 +9181,7 @@ test "check type - polymorphic recursion at a body-local type whose context is t
         \\    if n == 0 { 0 } else { describe(Local.L, n - 1) }
         \\}
     ;
-    try checkTypesModule(source, .fail, "Growing Polymorphic Recursion");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - polymorphic recursion at a context-free body-local type allowed" {
@@ -9125,11 +9203,10 @@ test "check type - polymorphic recursion at a context-free body-local type allow
     });
 }
 
-test "check type - issue 11740 custom literal requirements in polymorphic recursion" {
-    // An annotated recursive edge that instantiates a at Poly(a) would
-    // require literal conversions at Poly(U8), Poly(Poly(U8)), and so on, to a
-    // depth the runtime argument decides. That recursion grows its type
-    // forever, so it is rejected at the recursive use.
+test "check type - polymorphic recursion through a literal requirement is rejected" {
+    // The recursive use instantiates `a` at `Poly(a)`, so the literal would
+    // need conversions at `Poly(U8)`, `Poly(Poly(U8))`, and so on, as deep as
+    // a runtime argument says.
     const source =
         \\Poly(a) := [Val(a), Quoted(Str)].{
         \\    from_quote : Str -> Try(Poly(a), [BadQuotedBytes(Str)])
@@ -9157,7 +9234,7 @@ test "check type - issue 11740 custom literal requirements in polymorphic recurs
         \\}
         \\entry = |remaining| walk(remaining, Poly.Val(0.U8))
     ;
-    try checkTypesModule(source, .fail, "Growing Polymorphic Recursion");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - issue 11740 custom literal requirements in polymorphic recursion at a concrete type" {
@@ -13519,7 +13596,7 @@ test "check type - mutually recursive static dispatch - annotated polymorphic re
         \\}
         \\use = Poly.Val(1.U64).size(3)
     ;
-    try checkTypesModule(source, .fail, "Growing Polymorphic Recursion");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - mutually recursive static dispatch - dispatch-only mutual methods at a growing type" {
@@ -13534,7 +13611,7 @@ test "check type - mutually recursive static dispatch - dispatch-only mutual met
         \\  bwd = |Flip.Val(x), n| if n == 0 { 0 } else { 1 + Flip.Val(x).fwd(n - 1) }
         \\}
     ;
-    try checkTypesModule(source, .fail, "Growing Polymorphic Recursion");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - static dispatch - self method at a growing type" {
@@ -13544,7 +13621,7 @@ test "check type - static dispatch - self method at a growing type" {
         \\  size = |Poly.Val(x), n| if n == 0 { 0 } else { 1 + Poly.Val([x]).size(n - 1) }
         \\}
     ;
-    try checkTypesModule(source, .fail, "Growing Polymorphic Recursion");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - mutually recursive static dispatch - annotated dispatch-only mutual methods" {

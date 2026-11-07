@@ -92,7 +92,7 @@ pub const Problem = union(enum) {
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
-    growing_polymorphic_recursion: GrowingPolymorphicRecursion,
+    polymorphic_recursion: PolymorphicRecursion,
     local_type_escape: LocalTypeEscape,
     row_label_conflict: RowLabelConflict,
     polymorphic_value: VarWithSnapshot,
@@ -189,6 +189,13 @@ pub const PlatformDefNotFound = struct {
     app_region: base.Region,
     platform_region: base.Region,
     ctx: enum { not_found, found_but_not_exported },
+};
+
+/// A use of a generic definition that is on a recursion cycle and gives the
+/// definition different types from the ones it was itself used at (design.md
+/// "Polymorphic Recursion").
+pub const PolymorphicRecursion = struct {
+    region: base.Region,
 };
 
 /// Hosted functions cannot accept or return unboxed functions.
@@ -429,7 +436,7 @@ pub const InvalidNominalDeclRecursion = struct {
     type_name: Ident.Idx,
     kind: Kind,
 
-    pub const Kind = enum { infinite, anonymous, growing_args };
+    pub const Kind = enum { infinite, anonymous, growing_args, reordered_args };
 };
 
 // generic errors //
@@ -442,18 +449,6 @@ pub const VarWithSnapshot = struct {
 
     /// If this type was found in a top-level def, the name of that def
     def_name: ?Ident.Idx,
-};
-
-/// A use of a function on a recursion cycle whose type wraps a type variable
-/// of that same cycle in more structure, so every trip around the cycle would
-/// use the function at a strictly bigger type (design.md "Growing Polymorphic
-/// Recursion").
-pub const GrowingPolymorphicRecursion = struct {
-    region: base.Region,
-    /// The name the use refers to, when it is a plain name.
-    def_name: ?Ident.Idx,
-    /// The function's type at this use.
-    use_snapshot: SnapshotContentIdx,
 };
 
 /// A binding whose type contains a type declared in a function body that

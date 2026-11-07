@@ -4,8 +4,8 @@ BoxyLocalMethodRecursiveCall :: [].{}
 # call of itself. The type's method reads the function's type variable `a`, so
 # the type's identity includes `a` (design.md "Body-Local Type Context"): the
 # recursive call uses `describe` at `Local` wrapping `a`, the next level at
-# `Local` wrapping that, and so on. That is growing polymorphic recursion,
-# rejected under every lowering strategy.
+# `Local` wrapping that, and so on. That is polymorphic recursion, rejected
+# under every lowering strategy.
 
 Apples := [Apples].{
 	label : Apples -> Str

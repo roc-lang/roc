@@ -1579,7 +1579,15 @@ formal-flow cycle—growth that never returns to its origin stays finite—or
 when a mention on a declaration cycle carries a variable that is no formal of
 the mentioning declaration, which every expansion would mint fresh. Rejected
 declarations report `invalid_nominal_decl_recursion` with the `growing_args`
-kind and are poisoned exactly like the recursion-shape kinds. Everything this
+kind and are poisoned exactly like the recursion-shape kinds. A declaration is
+also invalid when two of its own formals share a formal-flow component: a trip
+around that cycle brings one formal back as the other, as in
+`Flip(a, b) := [End, Link(a, b, Flip(b, a))]`. The set of instantiations is
+finite there, but the rule for every recursion, of types and of definitions
+alike, is that type parameters pass through unchanged (Polymorphic Recursion),
+and a function over such a type could only walk it by reordering its own type
+variables. These declarations report the `reordered_args` kind and are
+poisoned the same way. Everything this
 rule admits terminates in Monotype backing instantiation: formal arguments
 resolve to the enclosing instance's own cells, closed arguments memoize once
 per instantiation context, and growing edges descend the formal-flow
@@ -4708,9 +4716,10 @@ reference to an unannotated member unifies monomorphically with the member's
 in-flight type (call-site constraints flow into the inferred scheme), unannotated
 members' top-level lambdas stay in the frame instead of generalizing on their
 own, and the whole group generalizes at the frame's boundary. References to
-annotated members instantiate the pre-declared scheme, preserving sound
-polymorphic recursion for annotated defs, except recursion that grows its
-types forever (Growing Polymorphic Recursion, below). The same rule applies to
+annotated members instantiate the pre-declared scheme, so a recursive use is
+typed like any other use; which instantiations a recursion may make is decided
+once the module's types are settled (Polymorphic Recursion). The same rule
+applies to
 block-local `s_decl` functions: each local function decl is a binding group
 of one with its own rank frame, and annotated locals pre-declare their
 scheme. A type variable a local annotation looks up from an enclosing
@@ -4825,55 +4834,76 @@ row, or a row's extension, is an invariant violation, since the annotation's rig
 bounded rows admit nothing else, and a use still unrelated when the module
 finishes checking is one too.
 
-### Growing Polymorphic Recursion
+### Polymorphic Recursion
 
-Polymorphic recursion is legal only while following the recursion around
-never keeps making a type bigger. `depth : a, U64 -> U64` whose body calls
-`depth([x], n - 1)` uses `depth` at `List(a)` inside `depth` at `a`, so the
-next level is at `List(List(a))`, and so on: every level needs a new
-specialization, and a compiler that specializes (Monotype) can never finish.
-The checker rejects such recursion as a type error at the use that grows the
-type, under every lowering strategy, so whether a program compiles never
-depends on the strategy. Recursion at a concrete type (`depth([1.U8], n - 1)`
-inside the same `depth`), recursion that swaps variables (`go(y, x)` inside
-`go : a, b -> ...`), and ordinary mutual recursion stay legal: each reaches
-finitely many types.
+A recursion must pass its own type variables along unchanged. A generic
+definition that reaches itself again, directly, through other definitions, or
+through a dispatch target, at types other than the ones it started with is
+rejected:
 
-The rule is the expansion-cycle test. The graph's nodes are the type
-variables of used schemes. Every use adds an edge from each node that its
-copy of a scheme variable contains to that scheme variable; the edge grows
-when the node sits strictly inside the copy's type (`a` in `List(a)`), and
-not when the copy is the node itself. A body-local type contains its
-context variables like any other arguments (Body-Local Type Context), so a
-recursive use at a local type whose methods read the recursion's `a` grows
-exactly as a use at `Local(a)` would, and the test decides every context
-first. A use is rejected exactly when one of
-its growing edges lies within a strongly connected component: going around
-the cycle wraps the same variable again. The test reads settled types and
-terminates by construction; it has no depth limit or counter.
+```roc
+depth : U64, a -> U64
+depth = |n, x| if n == 0 0 else 1 + depth(n - 1, [x])
 
-Every use that can lie on a cycle is recorded (`GrowthUse`) with its
-substitution, and `rejectGrowingPolymorphicRecursion` judges them all once,
-after every definition is checked, against the settled types. A cycle must
-contain a recursive use: a use of a definition that has not generalized yet
-(a predeclared scheme, an in-flight or still-open group member reached by
-name or by dispatch), since otherwise every definition on the cycle would
-have generalized before the next one was checked. A generalization boundary
-whose body made a recursive use, directly or in a nested boundary, publishes
-its scheme's variables (`growth_scheme_vars`), and a use of such a scheme is a
-recursive use in turn, so the uses recorded are exactly the recursive uses
-and the uses of schemes that can reach one; a module without recursion
-records nothing. Which boundaries enclose a recursive use is tracked by rank
-alone (`growth_use_rank`): a recursive use is enclosed by every boundary open
-at the current rank, and closing a boundary lowers the mark below its rank.
-The pass is linear in the recorded uses and the sizes of their copies'
-types. Predeclared uses are recorded when their relation to the binding's
-own scheme is accepted (Predeclared Scheme Uses); every other use is
-recorded at its instantiation.
+swap : U64, a, b -> U64
+swap = |n, x, y| if n == 0 0 else 1 + swap(n - 1, y, x)
+```
 
-A rejected use is a Growing Polymorphic Recursion error at the use, showing
-the type it was used at. The use becomes a runtime error, like any other
-rejected use, which also cuts the cycle for every later stage.
+This is the rule nominal type declarations follow for their own recursion (a
+recursive use of a nominal type passes each type parameter through unchanged,
+or applies it to a type with no type variables), stated for definitions.
+
+`depth` at `Str` uses `depth` at `List(Str)`, which uses it at
+`List(List(Str))`, and how far that goes is a runtime value. Both lowering
+strategies need the set of instantiations a program makes to be finite and
+known when it is compiled: `.lss` lowers one specialization per instantiation,
+and `.boxy` emits one table of type facts per instantiation. `swap` makes only
+two instantiations, but the rule is stated on the recursion rather than on
+that count so that it stays simple to state and to check: around a recursion,
+every type variable comes back as itself.
+
+The rule is decided from data checking already records. Every use of a
+generic definition records the type it gave each of the definition's
+quantified variables (the scheme-use pairs). Inside another generic
+definition those types are written over that definition's own variables, so
+the records are a graph over type variables: variable `u` flows into variable
+`v` when some use gave `v` a type that mentions `u`. The flow *grows* when
+that type is more than `u` itself. A body-local type's application lists its
+context variables as trailing arguments (Body-Local Type Context), so a type
+mentions them like any other argument: a recursive use at a local type whose
+methods read the recursion's `a` grows exactly as a use at `Local(a)` would.
+A strongly connected component of the
+graph that contains a flow is a recursion, and it is rejected when
+
+- a flow inside it grows, or
+- it contains two variables of one definition.
+
+Nothing else is rejected. A use at a type that mentions none of the using
+definition's variables makes no flow, so a recursive use at a closed type
+(`restart(count - 1, 5.U64)` inside `restart : U64, a -> U64`) is accepted:
+it reaches one further instantiation and stays there. A use at a larger type
+outside any recursion (`List.len([x])` in a generic body) is an ordinary
+instantiation. Mutually recursive definitions whose variables correspond one
+to one, such as a walk over a tree and a walk over its list of children, are
+accepted, because each component then holds one variable per definition.
+
+The graph is over uses, not names, so it sees every way a definition reaches
+itself: a name reference, a function value, a method called with method
+syntax, and a method selected to discharge a requirement of some other use.
+The name-reference graph that orders binding groups cannot, since a dispatch
+target is only known once the receiver's type is.
+
+`Check.rejectPolymorphicRecursion` runs once per module on the settled state,
+after every use's types are final and before the erroneous-value sweep. The
+uses it rejects are the ones that make a growing flow inside a rejected
+component, or a flow between two variables of one definition; a component
+that joins two variables of one definition only by way of other definitions
+has no such single use, and its first recorded use stands for it. Each is
+reported as Polymorphic Recursion at the use and becomes a runtime error, as
+for any other rejected use; the definitions keep their schemes. Imported
+definitions take no part: a module's uses of an imported scheme give its
+variables types over the module's own variables, never the reverse, so no
+cycle passes through another module.
 
 ### Anonymous Structure Is Copied Per Use
 
@@ -8935,8 +8965,9 @@ Only a checked recursive reference whose recorded substitution names the same
 live classes as the active specialization's substitution may join an
 in-progress specialization whose interface its fresh cells have not yet joined.
 Thus an annotated identity recursion joins its active specialization, while a
-legal polymorphically recursive call with a different substitution remains a
-fresh specialization. Every draft function and globally reserved root records
+recursive call with a different substitution that checking accepts (one at a
+closed type; Polymorphic Recursion rejects the rest) remains a fresh
+specialization. Every draft function and globally reserved root records
 the owner that created it, forming an explicit active ownership tree, and the
 reference names the in-progress specialization of the same procedure, with the
 same evidence, on that chain. Every other request—a non-recursive scheme
@@ -12121,8 +12152,8 @@ requirements were already present in the declared annotation and need no
 replay. An annotated in-flight recursive reference remains an internal edge
 through the declared scheme; the enclosing body's own requirements cover that
 implementation cycle, so it is not replayed as a new external use. Together
-these rules cover forward and polymorphically recursive lookup paths without
-making an annotation erase requirements inferred from its body.
+these rules cover forward and recursive lookup paths without making an
+annotation erase requirements inferred from its body.
 
 Predeclared scheme uses are recorded against the binding's own scheme. The
 predeclared scheme is a disjoint copy of the annotation, and the body can
