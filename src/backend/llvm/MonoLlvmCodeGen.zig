@@ -9332,10 +9332,7 @@ pub const MonoLlvmCodeGen = struct {
         const export_row = self.static_data_export_rows.get(raw_id);
         if (export_row) |row| {
             const data_export = self.static_data_exports[row];
-            // A mutable slot (a composition site) is the program's one
-            // writable copy, defined in its zero-fill data and named by
-            // symbol below; its initial zero bytes are not a constant.
-            if (!data_export.is_mutable and data_export.symbol_offset == 0 and data_export.bytes.len >= size) {
+            if (data_export.symbol_offset == 0 and data_export.bytes.len >= size) {
                 if (try self.frozenExportConstant(data_export)) |initializer| {
                     const name = builder.strtabStringFmt(".roc.static_data.{d}", .{raw_id}) catch return error.OutOfMemory;
                     const variable = builder.addVariable(name, initializer.typeOf(builder), .default) catch return error.OutOfMemory;

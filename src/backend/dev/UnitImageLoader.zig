@@ -115,11 +115,6 @@ pub const Loaded = struct {
         return self.regionAddress(@fromBackingInt(symbol.region)) + symbol.value;
     }
 
-    /// Return the zero-fill to its loaded state: all zeros.
-    pub fn resetZeroFill(self: *const Loaded) void {
-        @memset(self.memory[self.bss_offset..][0..self.view.bssSize()], 0);
-    }
-
     /// Release the image's memory.
     pub fn unload(self: *Loaded) void {
         if (windows) {
@@ -507,8 +502,6 @@ test "a loaded image runs, calls its imports and resets its zero-fill" {
     try std.testing.expectEqual(@as(i32, 7), call_ext());
     try std.testing.expectEqual(@as(i32, 1), bump());
     try std.testing.expectEqual(@as(i32, 2), bump());
-    loaded.resetZeroFill();
-    try std.testing.expectEqual(@as(i32, 1), bump());
     const pointer: *const Fn = @ptrFromInt(exportAddress(&loaded, "answer_pointer"));
     try std.testing.expectEqual(@as(i32, 42), pointer.*());
     try std.testing.expectEqual(@as(usize, if (arm64) 64 else 40), loaded.text().len);

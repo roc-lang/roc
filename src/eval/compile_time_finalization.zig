@@ -1371,7 +1371,6 @@ const BoxyLinkedImages = struct {
     registered: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     candidates: std.ArrayList(Candidate) = .empty,
     providers: std.StringHashMapUnmanaged(usize) = .empty,
-    dirty: std.ArrayList(bool) = .empty,
 
     const Candidate = struct {
         object: BoxyImage,
@@ -1418,25 +1417,6 @@ const BoxyLinkedImages = struct {
         for (self.candidates.items) |candidate| self.allocator.free(candidate.dependencies);
         self.candidates.deinit(self.allocator);
         self.providers.deinit(self.allocator);
-        self.dirty.deinit(self.allocator);
-    }
-
-    /// Return reachable reused objects' mutable data to its loaded state. An
-    /// object's composition sites (design.md "Runtime") publish entries of
-    /// the composing program's state, which dies with that program, so a
-    /// program finds the objects it shares with earlier ones holding no
-    /// entry at all.
-    fn resetMutableData(self: *BoxyLinkedImages, selection: Selection) void {
-        if (comptime compilerHostMustUseInterpreterForCtfe()) return;
-        self.lock();
-        defer self.mutex.unlock();
-        switch (boxy_object_code) {
-            .image => for (selection.indices) |index| {
-                if (self.dirty.items[index]) self.images.items[index].resetZeroFill();
-                self.dirty.items[index] = true;
-            },
-            .pieces => for (self.images.items) |*image| image.resetZeroFilled(),
-        }
     }
 
     fn lock(self: *BoxyLinkedImages) void {
@@ -1515,9 +1495,7 @@ const BoxyLinkedImages = struct {
                 try self.images.ensureUnusedCapacity(self.allocator, 1);
                 try self.code.ensureUnusedCapacity(self.allocator, 1);
                 try self.locations.ensureUnusedCapacity(self.allocator, 1);
-                try self.dirty.ensureUnusedCapacity(self.allocator, 1);
                 try self.loadImage(candidate, index, timing);
-                self.dirty.appendAssumeCapacity(false);
                 candidate.loaded_index = self.images.items.len - 1;
                 newly_loaded += 1;
             }
@@ -2214,11 +2192,6 @@ const ModuleEvaluation = struct {
             .pending => finalizationInvariant("a module's compile-time program was run before it was built"),
             .failed => return build.failure,
             .built => {},
-        }
-        // Every object's composition sites publish entries of the composing
-        // program's state, which died with the earlier programs.
-        if (comptime !compilerHostMustUseInterpreterForCtfe()) {
-            if (build.linked) shared.images.resetMutableData(build.program.?.ptr().image_selection);
         }
         const roots = shared.roots;
         const states = shared.states;
@@ -7487,15 +7460,8 @@ fn ctfeSelectionTest(allocator: Allocator, built: CtfeSelectionImages) (Finalize
     const Fn = *const fn () callconv(.c) i32;
     const callback: *const Fn = @ptrFromInt(images.lookup("callback").?);
     try std.testing.expectEqual(@as(i32, 42), callback.*());
-    images.resetMutableData(first);
-    const leaf_index = images.candidates.items[0].loaded_index.?;
-    const leaf_image = &images.images.items[leaf_index];
-    const cell: *u64 = @ptrCast(@alignCast(leaf_image.memory.ptr + leaf_image.bss_offset));
-    cell.* = 73;
     const second = try images.select(allocator, &.{"unused"}, null);
     defer second.deinit(allocator);
-    images.resetMutableData(second);
-    try std.testing.expectEqual(@as(u64, 73), cell.*);
     // Growing the shared arrays must not invalidate the first program's ranges.
     try std.testing.expectEqual(@as(usize, 2), first.code.len);
     try std.testing.expectEqual(@as(i32, 42), callback.*());
@@ -7503,11 +7469,9 @@ fn ctfeSelectionTest(allocator: Allocator, built: CtfeSelectionImages) (Finalize
     defer again.deinit(allocator);
     try std.testing.expectEqualSlices(usize, first.indices, again.indices);
     try std.testing.expectEqual(@as(usize, 3), images.images.items.len);
-    images.resetMutableData(again);
-    try std.testing.expectEqual(@as(u64, 0), cell.*);
 }
 
-test "CTFE image demand follows data callbacks and resets only reused reachable images" {
+test "CTFE image demand follows data callbacks" {
     if (comptime boxy_object_code != .image) return error.SkipZigTest;
     const built = try CtfeSelectionImages.init(std.testing.allocator);
     defer built.deinit(std.testing.allocator);

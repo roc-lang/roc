@@ -64,7 +64,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v61: dynamic operations include type table reads (`table_entry`).
 /// v62: no dynamic operation composes descriptors or dictionaries, and no
 ///      statement names a composition cache slot.
-pub const FORMAT_VERSION: u32 = 62;
+/// v63: static data rows carry no mutability flag.
+pub const FORMAT_VERSION: u32 = 63;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -1344,31 +1345,4 @@ test "LIR image preserves the specialized runtime contract and rejects incompati
     header.format_version = FORMAT_VERSION;
     header.store.runtime_contract = 2;
     try std.testing.expectError(error.InvalidLirImage, viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, allocator));
-}
-
-test "mutable static data survives LirImage transport with its initial state" {
-    const a = std.testing.allocator;
-    const memory = try a.alignedAlloc(u8, .@"16", 4096);
-    defer a.free(memory);
-    var fixed = std.heap.FixedBufferAllocator.init(memory);
-    const graph = [_]Program.StaticDataExport{.{
-        .symbol_name = "roc__mutable_test_0",
-        .value_id = null,
-        .bytes = &@as([8]u8, @splat(0)),
-        .alignment = 8,
-        .is_exported = false,
-        .is_mutable = true,
-    }};
-    const copied = try StaticDataImage.copy(fixed.allocator(), memory.ptr, memory.len, &graph);
-    const viewed = try StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 0, 0, 0, 8);
-    defer StaticDataImage.deinit(a, viewed);
-    try std.testing.expect(viewed[0].is_mutable);
-    try std.testing.expectEqualStrings(graph[0].symbol_name, viewed[0].symbol_name);
-    try std.testing.expectEqualSlices(u8, graph[0].bytes, viewed[0].bytes);
-    const rows = try sliceFromRef(StaticDataImage.Export, memory.ptr, fixed.end_index, copied);
-    rows[0].is_mutable = 2;
-    try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 0, 0, 0, 8));
-    rows[0].is_mutable = 1;
-    @constCast(viewed[0].bytes)[0] = 1;
-    try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(a, memory.ptr, fixed.end_index, copied, 0, 0, 0, 8));
 }

@@ -627,8 +627,8 @@ const Pass = struct {
         for (data.exports, 0..) |item, index| {
             if (!self.reachable_exports[index]) continue;
             const value_id = if (item.value_id) |id| self.remapStaticData(id) else null;
-            const name = if (value_id != null and !item.is_mutable)
-                try LirProgram.staticDataSymbolName(data.allocator, value_id.?)
+            const name = if (value_id) |id|
+                try LirProgram.staticDataSymbolName(data.allocator, id)
             else
                 try data.allocator.dupe(u8, item.symbol_name);
             errdefer data.allocator.free(name);

@@ -546,7 +546,7 @@ fn merge(
     for (collector.items.items) |item| {
         // Each unit named its constants by content, so constants of
         // different units meet under one name and nothing is renamed here.
-        if (item.program_local_name and !item.is_mutable) invariant("a composed unit carries a constant it did not name by content: {s}", .{item.name});
+        if (item.program_local_name) invariant("a composed unit carries a constant it did not name by content: {s}", .{item.name});
         if ((try collected.getOrPut(item.name)).found_existing) continue;
         try all_items.append(allocator, item);
     }

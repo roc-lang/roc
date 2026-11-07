@@ -14,8 +14,7 @@ fn tableReads(store: *const lir.LirStore) usize {
     return count;
 }
 
-fn expectImmutableStaticData(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
-    for (lowered.frozen_static_data.?.exports) |item| try std.testing.expect(!item.is_mutable);
+fn expectTableReads(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
     // The generic bodies read their argument records' descriptors from
     // their type tables.
     try std.testing.expect(tableReads(&lowered.lir_result.store) > 0);
@@ -32,7 +31,7 @@ test "issue 12734: boxy descriptors survive ARC and static data compaction as im
         \\    echo!(render(args))
         \\    Ok({})
         \\}
-    , .{ .specialization_strategy = .boxy }, expectImmutableStaticData);
+    , .{ .specialization_strategy = .boxy }, expectTableReads);
 }
 
 fn staticCallables(exports: []const lir.Program.StaticDataExport) usize {
