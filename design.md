@@ -678,8 +678,8 @@ Dev Link), the host executables of composed `.boxy` dev runs and test
 outcomes ("Test outcome files") use direct
 content-addressed files. Each cache
 identity includes compiler compatibility, family, logical group and key.
-Writers stage complete files beside their destination and publish by atomic
-rename. Readers own an open file or mapping; no writer truncates a published
+Writers stage complete files beside their destination and install them by atomic
+rename. Readers own an open file or mapping; no writer truncates an installed
 file. Missing, corrupt, or incompatible entries are ordinary cache misses.
 
 There is no cache catalog, index, lease, or background maintenance protocol.
@@ -697,9 +697,9 @@ In-memory sharing within a compilation remains independent of disk caching.
 the same checked sources under the same execution mode reports the same
 outcomes without running them again (`cli/test_outcome_file.zig`,
 "Optimized Test Execution"). One file holds one module's outcomes. Its key
-is the module's checked artifact key, the compiler compatibility id, the
+is the module's CheckedModule key, the compiler compatibility id, the
 native target, the specialization strategy and the optimization mode. The
-checked artifact key is a function of the module's own source inputs, the
+CheckedModule key is a function of the module's own source inputs, the
 content identity of its whole import closure, its platform/app relation and
 its imports' keys, so every input a test's behavior can depend on is in the
 key: a change anywhere in the closure is a different file, and the file
@@ -726,21 +726,21 @@ current plan cannot report against runs again too.
 Admission happens after test planning and before runtime demand is
 declared: a recorded root is neither lowered nor run, its results are
 rebuilt from its entry, and the counters report how many roots were reused.
-After the run, each module's file is republished with the reused entries
+After the run, each module's file is replaced with the reused entries
 and every outcome just observed, unless it already records exactly those.
 A file this compiler version did not write, or one that does not decode
 completely, records nothing.
 
-### Native executable publication
+### Atomic installation of native binaries
 
-Native dev links produce their executable in an invocation-private sibling
+Native dev links produce their binary in an invocation-private sibling
 of the output directory, preserving the basename and filesystem. After link
 completion and host-input validation, one atomic rename replaces the public
 name. Concurrent builds, including identical working directories and output
-paths, never truncate or delete each other's completed executable. A failed
-build leaves the last completed publication intact and reports failure. No
+paths, never truncate or delete each other's completed binary. A failed
+build leaves the last installed binary intact and reports failure. No
 build-wide lock is held through linking. Scratch object ownership remains
-independent of the public executable name.
+independent of the public binary name.
 
 ### Deterministic Dev Images
 
@@ -767,7 +767,7 @@ generator the object is encoded from (`arrange`, `assembleArranged`):
   declares it or only spliced code reaches it.
 
 A prepared data catalog owns one immutable copy of its payload bytes, names,
-and relocations. It publishes exact outgoing data and code-symbol edges once;
+and relocations. It records exact outgoing data and code-symbol edges once;
 each catalog entry holds both its datum and its edges. Fragments carry only dense
 root indices into this shared graph, and an excerpt set retains each graph owner
 once. Copying, pruning and object assembly preserve these graph references.
@@ -1282,7 +1282,7 @@ checker recovery. The recovery rules:
   literal expression whose conversion fails is not a pattern owner: it
   becomes a runtime error itself, like the source of any other rejected
   dispatch.
-- A source literal's conversion, and every obligation derived from it, fails
+- A source literal's conversion, and every requirement derived from it, fails
   at the literal's own occurrences (every literal merged into its relation),
   whichever unification grounded the literal's type and whichever queued
   entry carries it (`Check.poisonSourceLiteralConversionFailure`). In
@@ -1750,13 +1750,13 @@ expression to execute at the read. Lifting and lambda solving preserve that witn
 folding must treat the read as opaque. LIR interns storage slots only after
 exact concrete representation equality and committed layout equality, and
 records the checked root identity beside each slot. Each producer has one
-canonical source slot. A use requiring a different physical representation
+original source slot. A use requiring a different layout
 (such as a recursive box or a nominal boundary) has an explicit
 `representation_of` edge to that slot and shares its failure status. The data
-writer publishes or transcodes the completed value into that representation
+writer stores or transcodes the completed value into that representation
 once; the read contains no boxing or conversion instructions. Source lookup
-indexes only canonical slots, and reachability preserves each representation's
-canonical source. Evaluation initializes the slots in checked dependency order;
+indexes only original slots, and reachability preserves each representation's
+source slot. Evaluation initializes the slots in checked dependency order;
 runtime static-data materialization consumes the completed root payloads.
 Neither consumer executes the initializer at a slot read or reconstructs a
 callable identity from its layout.
@@ -1879,7 +1879,7 @@ records, tuples, tags, boxes, and captured functions, read immutable stored
 data. There is no construction tree, runtime constructor, or fresh alternative
 for a completed value. Mutation uses the normal copy-on-write operation.
 Allocation capacity is not part of the frozen value; empty lists require no
-backing storage, and nonempty lists store their elements without spare capacity.
+backing storage, and nonempty lists store their items without spare capacity.
 The same rule applies when restoring values from the checked module cache.
 
 Static data can refer directly to a ConstStore node with its type plan, or
@@ -2280,7 +2280,7 @@ with the explicit `unevaluated` payload; its constant template keeps its
 compilation loads a checked module whose evaluation output has unevaluated
 requests, evaluation resumes on that module: its evaluation output (the
 compile-time roots, the constant templates, the constant store, and the
-canonical name store, since a stored type names its labels and nominal types
+`CheckedModule` name store, since a stored type names its labels and nominal types
 there and a value evaluated here can reach names the module's own source never
 mentions, such as the capture types of an imported closure) moves into storage
 the module owns, every unevaluated root returns to `pending`, and the module
@@ -2304,12 +2304,12 @@ those a cache entry left unevaluated.
 ### Compile-Time Root Eligibility Proofs
 
 Root eligibility consumes the checked producer's types and fixed-callable
-fact. It does not mutate solved types or invent evidence from a use site.
-Within each immutable root-publication batch, concreteness and reachable
+result. It does not mutate solved types or invent evidence from a use site.
+Within each immutable root-output batch, concreteness and reachable
 callable-slot queries reuse completed graph proofs. Concreteness keys include
 whether a node is a value type or a nominal declaration's backing template:
 a declaration formal is allowed in the latter and unresolved in the former.
-The two predicates have separate analyses; the producer's fixed-callable fact
+The two predicates have separate analyses; the producer's fixed-callable result
 is combined with their answers at the root, never discarded by memoization.
 
 A negative reachability proof is committed only when its complete recursive
@@ -2318,7 +2318,7 @@ subgraph contains no unresolved variable or callable: another edge of that
 component may still reach one. Members of a completed component share its
 answer. A positive proof needs only its reached witness. The traversal uses
 explicit continuation and component stacks and expands each reached node
-once per analysis. Proofs live only for that immutable publication batch;
+once per analysis. Proofs live only for that immutable output batch;
 no source-path index or persistent cache is involved.
 
 ### Content-Addressed Compile-Time Values
@@ -2335,31 +2335,31 @@ these identities to the current compilation's source environments and paths.
 
 A module has two front-end cache files: canonicalization and one combined
 checking entry. The combined entry stores its solved source environment once,
-the checker's explicit publication/foreign-reference inputs, and one finalized
-checked artifact. Its address hashes source inputs, ordered checking interfaces
+the checker's explicit output and foreign-reference inputs, and one finalized
+CheckedModule. Its address hashes source inputs, ordered checking interfaces
 and nominal-owner equality of dependencies, checking context and compiler
 compatibility. Its header separately names the full implementation identity of
-the finalized artifact and constants.
+the finalized CheckedModule and constants.
 
 Matching full implementation identity restores the complete checked module.
 Matching typing inputs alone restores only solved source and checking inputs;
-producer-owned reference slots bind those inputs to current dependency artifacts
-before publication. The old artifact, constants, root states and observations
-are not consumed. Publication and required evaluation use current implementation
+producer-owned reference slots bind those inputs to current dependency modules
+before checked-module output. The old CheckedModule, constants, root states and observations
+are not consumed. Checked-module output and required evaluation use current implementation
 inputs. Binding rewrites no solver relation or stamped dispatch decision.
 
 There is no third inference file, duplicate solved environment, path index or
 payload checksum. Both identities depend only on content and checking inputs,
-so different checkout paths share them. Publication atomically replaces complete
+so different checkout paths share them. The cache writer atomically replaces complete
 entries; readers keep their open mapping. Concurrent different implementations
 with the same typing inputs may replace each other's finalized snapshot. The
 header makes the losing implementation a typing-only hit, never a stale constant
-hit. The sealed solver store remains live for later consumers, so publication streams
-the environment, checking metadata and finalized artifact once to one private
-file, then closes and atomically publishes it. It never stages an environment
-for later rereading or copying. Failed writes leave only unpublished staging data.
+hit. The sealed solver store remains live for later consumers, so the cache writer streams
+the environment, checking metadata and finalized CheckedModule once to one private
+file, then closes and atomically installs it. It never stages an environment
+for later rereading or copying. Failed writes leave only private staging data.
 One finalized snapshot is retained, not an implementation history. Only
-entries whose checking and evaluation add no diagnostics are published. No
+entries whose checking and evaluation add no diagnostics are stored. No
 source-location pointer selects an older module
 for transplantation, and no per-program literal bundle or root-validation
 certificate is persisted under a source placement.
@@ -2951,8 +2951,8 @@ representations unexpectedly differ for the same value at the same boundary,
 that is an invariant violation; fix the producer instead of adding a later
 conversion.
 
-Outside the existing Canonicalization phase and the canonical type key (see
-"Canonical Type Keys"), the word `canonical` is banned in new post-check docs
+Outside the existing Canonicalization phase and type-content key computation (see
+"Type Content Keys"), the word `canonical` is banned in new post-check docs
 and code. Use the exact term instead: `authoritative` for source-of-truth documents,
 `lexicographic order by name` for sorted rows, `payload position order` for tag
 payloads, `TypeDef`/`NamedType` for named type definitions, and `TypeDigest` for
@@ -3869,7 +3869,7 @@ User diagnostics never suppress checked module output or propagate dependency fa
 producer boundary by explicit checked data: a checked runtime-error expression,
 a checked-error dispatch plan, a crash constant, a checked-error platform
 requirement, or a checked-error provided export (a `provides` entry whose
-checked type contains an error declares no host ABI, so it publishes no
+checked type contains an error declares no host ABI, so it emits no
 runtime root, static data request, or glue signature, and a runtime command
 stops before linking). Importers and every post-check stage consume that data
 normally.
@@ -4196,12 +4196,12 @@ complete by the time the checked cache is probed.
 
 ### Source import inventory and line counting
 
-A successful parse also publishes a small source import inventory, keyed by
+A successful parse also writes a small source import inventory, keyed by
 normalized source bytes within the compiler compatibility namespace. It holds
 parser-produced local import spellings, bases and parent counts, qualified
 imports, and public-name-to-source-module mappings. Syntax errors never produce
 a reusable inventory. The inventory contains no filesystem paths or checked
-state. Graph tools consume these same producer facts; a missing or corrupt
+state. Graph tools consume this same parser output; a missing or corrupt
 optional record causes a fresh parse, never a guess about imports.
 
 `roc loc` resolves packages through the ordinary resolver and its downloaded
@@ -4215,9 +4215,10 @@ unused dependencies, embedded compiler sources, and non-Roc file imports are
 not code in this count.
 
 Traversal is deduplicated by package and logical module; counting is separately
-deduplicated by canonical filesystem path. This preserves distinct dependency
-alias contexts for a shared file. Root ownership takes precedence over local,
-then HTTPS ownership if a file is reached in multiple categories. Each physical
+deduplicated by absolute filesystem path with symlinks resolved. This preserves
+distinct dependency alias contexts for a shared file. Root ownership takes
+precedence over local,
+then HTTPS ownership if a file is reached in multiple categories. Each source
 line counts once, including a final unterminated line. The second count excludes
 whitespace-only lines and lines whose first non-whitespace byte is `#`.
 
@@ -4246,7 +4247,7 @@ literal-values file and no discovery manifest.
 
 A checked entry holds exactly the live data of the checked module ("The Live
 Checked Module"): the serialized `ModuleEnv` including the sealed solver
-store, the inference output, and the evaluation output. Derived facts (canonical
+store, the inference output, and the evaluation output. Derived data (type-content
 type keys, evidence, synthesized templates, demand vectors, layouts) are never
 cached; after a hit, each is recomputed on its first demand through its slot
 ("On-Demand Analyses And Write-Once Slots"). An entry is written only when a
@@ -4269,7 +4270,7 @@ forbidden. File completeness is checked by comparing the lengths recorded in the
 header against the loaded byte slice's length, without an additional file-length
 syscall. Do not scan payloads to defend against malicious input, arbitrary
 malformed data or bit flips. Header identity, version and lengths establish which
-producer data to consume. Publication stages complete files and atomically
+producer data to consume. Cache writers stage complete files and atomically
 renames them. Content hashes identifying compilation inputs are separate from
 integrity verification. A cache hit never reruns checked validation, reselects
 hoisted roots, reconstructs checked data or walks expressions to prove cached
@@ -4294,10 +4295,10 @@ and produces no completion. The coordinator reserves wake-message capacity
 while holding the wake queue's lock, then queues the task and commits the
 wake message without another fallible operation. Workers release the wake
 queue's lock before taking a session queue's lock. On every exit, including
-submission failure, the publication owner drains all accepted tasks before
+submission failure, the queue owner drains all accepted tasks before
 ending the session or freeing the task contexts and checked data they borrow.
-Accepted writers may finish publishing their finalized entries while draining;
-the failed submission and later unsubmitted work publish nothing.
+Accepted writers may finish storing their finalized entries while draining;
+the failed submission and later unsubmitted work store nothing.
 
 `ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
 store is part of the checked module cache data. A cache hit materializes it as a
@@ -4501,9 +4502,9 @@ which is a deterministic output of those inputs; nothing in an entry is a
 cache-id input of its own. A cache miss recomputes the entry from the
 module's checked inputs; no other entry is consulted.
 
-Within one immutable checked publication, complete type-identity traversals are
+Within one immutable CheckedModule, complete type-identity traversals are
 memoized by their exact ordered vector of checked type IDs. The memo is local
-to that publication and identity mode; ordinary value identities and test
+to that CheckedModule and identity mode; ordinary value identities and test
 identities have different declaration/import contexts and never share it.
 A hit reuses the complete traversal digest, including its first-encounter
 positions for recursive edges and shared type variables. Independently hashing
@@ -4840,7 +4841,7 @@ or applies it to a type with no type variables), stated for definitions.
 `List(List(Str))`, and how far that goes is a runtime value. Both lowering
 strategies need the set of instantiations a program makes to be finite and
 known when it is compiled: `.lss` lowers one specialization per instantiation,
-and `.boxy` emits one table of type facts per instantiation. `swap` makes only
+and `.boxy` emits one type table per instantiation. `swap` makes only
 two instantiations, but the rule is stated on the recursion rather than on
 that count so that it stays simple to state and to check: around a recursion,
 every type variable comes back as itself.
@@ -5047,7 +5048,7 @@ LIR directly from checked CIR.
 A checked module is live data, owned once and read by everyone after it is
 sealed. It consists of exactly these parts:
 
-- The canonical IR: the module's `ModuleEnv` with its `NodeStore`. It is
+- CIR: the module's `ModuleEnv` with its `NodeStore`. It is
   source-pure and cached by the content hash of its source ("Canonicalization
   output cache").
 - The solver type store (`types.Store`). Checking seals it when it finishes
@@ -5062,8 +5063,8 @@ sealed. It consists of exactly these parts:
   schemes, codec requirements, inspect override instances, `for`-loop and
   literal dispatch plans, row-coerced results, record omitted defaults,
   top-level demand dependencies, invoking definitions, callable checking
-  facts, the checking dependency digest, problems, the import mapping,
-  and the per-expression checking facts ("Per-Expression Checking Facts").
+  data, the checking dependency digest, problems, the import mapping,
+  and the per-expression checking data ("Per-Expression Checking Data").
   The selected compile-time roots, the promoted local procedures, the
   platform requirement solutions with their identity variables, and the
   exhaustiveness checks left to evaluation are `ModuleEnv` side lists that
@@ -5099,8 +5100,8 @@ or resolving anything.
 Sealing also releases checker-only buffers: instantiation worklists and their
 nested-walk pools, thawed freeze anchors, detach worklists, scan hints,
 speculation trails, descriptor free lists, constraint-growth bookkeeping,
-and the raw dispatch-relation merge journal. Checking has already published
-selected relation merges into `ModuleEnv`; that published list stays alive.
+and the raw dispatch-relation merge journal. Checking has already recorded
+selected relation merges in `ModuleEnv`; that recorded list stays alive.
 These buffers are reset to empty owners so later destruction is safe. The
 solved columns, nominal declarations, derived-map selections, stable variable
 ids, and borrowed slices into the solved pools remain owned by the sealed
@@ -5156,7 +5157,7 @@ drift silently:
 
 - DIGEST IDENTITY: does any flex or rigid reach the root at all? Every
   variable, a defaultable row tail included, counts as an identity variable.
-  This decides whether a root's canonical key is independent of the
+  This decides whether a root's content key is independent of the
   specialization that reads it, whether substitution can reuse a root
   unchanged (the closed-root fast path), and which roots the payload identity
   walk pairs slot by slot with a platform requirement.
@@ -5237,7 +5238,7 @@ scoped to one use's backing, with actuals resolved in the enclosing scope: in
 the inner backing binds it to `U64`. The innermost binding shadows the others;
 type arguments themselves belong to the enclosing scope.
 
-### Per-Expression Checking Facts
+### Per-Expression Checking Data
 
 What is a function of one node's checked state is a byproduct of
 checking. When checking completes (`checkFileInternal`, after
@@ -5311,7 +5312,7 @@ composes its children's keys (`CheckedTypeKeyRecipe.synthetic_function`), and
 a projected type keeps the recipe of the type it projects.
 
 A scheme belongs to one root type of its module and is identified within the
-module by its id; references to a scheme hold that id. Its canonical key is
+module by its id; references to a scheme hold that id. Its content key is
 its root's key in the scheme namespace, computed only for a consumer that
 needs a key (`CheckedTypeStoreView.schemeKey`).
 
@@ -5338,7 +5339,7 @@ Platform/app composition is an overlay, not a clone. A pairing owns a map from
 each platform identity formal (its solver variable, including alias
 statements) to the app's solved actual. A type read of platform data under
 that pairing resolves through the map lazily, and the pairing memoizes each
-image it actually reads as a synthesized-type entry of its own. Facts that
+image it actually reads as a synthesized-type entry of its own. Analyses that
 depend on the substituted types (direct targets, required-reference
 classification, root requests, exhaustiveness policy) are per-pairing
 on-demand analyses. Bodies, templates, names and roots are never rewritten:
@@ -5354,9 +5355,9 @@ rule and require no compile-time evaluator. Completed independent roots are
 read as stored values and never evaluated again. A pairing is never serialized
 into the platform's checked module.
 
-### Canonical Type Keys
+### Type Content Keys
 
-A canonical type key is the content identity of a type: alpha-invariant over
+A type content key is the content identity of a type: alpha-invariant over
 its variables, equal across modules for equal types, and stable across
 compilations. Keys exist because procedure identities, evidence digests,
 generated-codec content digests and the constant store need an identity with
@@ -5382,7 +5383,7 @@ stores it, because that entry's content hash covers the referenced module.
 Resolving a type from its key alone (bump, glue) builds the owning module's
 key index on first demand, through the module's index slot.
 
-Type digests, canonical type keys, recursive layout keys, and derived callable
+Type digests, type content keys, recursive layout keys, and derived callable
 and evidence digests use the shared `base.TypeDigestHasher`: SHA-256 over the
 structural byte encoding, 32 bytes wide. The hash must be cryptographic and
 this wide. A package author controls every byte these digests see, several
@@ -5427,12 +5428,12 @@ compiler change.
 
 ### On-Demand Analyses And Write-Once Slots
 
-Every derived fact that is a pure function of a module's sealed data is
+Every analysis result that is a pure function of a module's sealed data is
 computed by whichever consumer first needs it, exactly once, into a slot owned
-by the module. Nothing computes such a fact eagerly for a whole module, and no
-cache entry stores one: a cache hit recomputes each fact on its first demand.
+by the module. Nothing computes such a result eagerly for a whole module, and no
+cache entry stores one: a cache hit recomputes each result on its first demand.
 
-- Per-root slots: a type's canonical key; a definition's call-edge evidence
+- Per-root slots: a type's content key; a definition's call-edge evidence
   (the total resolution of its dispatch plans against the settled store, its
   evidence vectors and its callable specialization); a template's nested
   procedure sites; a declaration's synthesized template; a template's
@@ -5478,11 +5479,29 @@ and `unreachable` in release builds:
   module imports are acyclic: a claim in the imported module never waits on
   the importer.
 
+A sealed source type's key slot is stored in a fixed page of 64 slots. The
+first key request allocates a directory with one page-pointer slot per 64
+solver variables. Each page is allocated and initialized by the first request
+for a key in that page, through its own write-once slot. Directory entries
+and pages never move, and their owner frees them after all readers finish.
+Directory and page claims finish before the request claims its key slot or
+locks the shared key writer. They only allocate and initialize storage; they
+do not compute keys. Allocation failure abandons the corresponding claim,
+so another request can retry. Directory, page and key slots use distinct
+claim kinds. Fixed paging changes storage allocation alone: type identities,
+key encodings, proof bits and the reverse index remain unchanged.
+
+The completed read path acquires the directory, its page and then the key.
+The existing trace_boxy_work memory report counts allocated pages and their
+slot capacity, including final-page slack, and reports directory_bytes
+separately. slot_bytes covers allocated key pages; total_bytes includes both
+the pages and the directory. None of these structures is serialized.
+
 There is no scheduling edge between modules. A module's analyses are never
 ordered after its importers, nothing waits for demand to flow top-down, and
 the read path takes no lock.
 
-### Lowering Reads Bodies From The Canonical IR
+### Lowering Reads Bodies From CIR
 
 Monotype and Boxy lowering walk CIR expressions, patterns and statements
 directly, keyed by their CIR ids, through one reader
@@ -5569,8 +5588,8 @@ lowering in its worker's workspace and never added to the checked module:
 The checked boundary has exactly the live data of "The Live Checked Module",
 and these shapes are forbidden:
 
-- a frozen copy of a checked module (`CheckedModuleArtifact`) or a pass that
-  builds one (`publishFromTypedModule`);
+- an independently frozen copy of `CheckedModule` data or a pass that
+  constructs that copy;
 - a copy of the solver store (`CheckedTypeStore`) or of bodies
   (`CheckedBodyStore`);
 - template, binding or constant closures, a lowering-visibility closure, or a
@@ -5623,7 +5642,7 @@ flow that "permits" user errors.
 The pairing's required-reference classification marks each rejected
 requirement lookup, and lowering under the pairing emits the crash at that
 lookup and treats it as divergent. The platform's bodies and per-expression
-facts are never rewritten. A rejected lookup never supplies argument type
+data are never rewritten. A rejected lookup never supplies argument type
 evidence to a downstream call.
 
 Requirement rows may be allocated before their app definitions are checked, but
@@ -6531,7 +6550,7 @@ qualified (`a.Json.Encodable`) exactly like a type reference in any other
 position.
 
 The checker records a dispatch plan for each dispatch site, and the
-per-expression checking facts hold each dispatch node's resolved outcome. A
+per-expression checking data holds each dispatch node's resolved outcome. A
 dispatch plan is a checked record, not lowered code. Its type fields are type
 ids of the owning module ("The Live Checked Module"), and its sites and
 operands are CIR node ids:
@@ -6779,7 +6798,7 @@ Custom and generalized literal patterns retain the exact equality constraint
 created alongside their conversion constraint. CIR keeps the failure owner and
 equality callable in a pattern-only context referenced by its five-word literal
 plan; expression literals allocate no context. The literal pattern guard is a
-lowering-side construct ("Lowering Reads Bodies From The Canonical IR"): both
+lowering-side construct ("Lowering Reads Bodies From CIR"): both
 lowering strategies create, in the worker's workspace, a matched-value binder
 and an ordinary `method_eq` comparison whose operands are that binder and the
 pattern's conversion expression, using the equality callable the pattern
@@ -11822,7 +11841,7 @@ variables left out: each constraint is a separate relation settled on its own
 receiver, none can change which method the state selects, and a chain that only
 accumulates them repeats one selection. A repeated solver state along its
 derivation lineage—an equal digest and exact method binding—over the ancestor's
-very variables restates the obligation the ancestor is discharging, so it can
+very variables restates the requirement the ancestor is discharging, so it can
 close a recursive implementation whether or not those variables have resolved
 yet, because whatever inference learns about one applies to the other. It closes
 when the target's evidence parameters are all determined by its callable. A parameter is determined when its receiver has a
@@ -12481,7 +12500,7 @@ deferred at lowering; the checked module and lowering are both complete):
   fall-through refutability natively.
 - `.?` access: the checked module is complete—each CIR field-access
   segment records required/optional (its `mode`), and lowering reads it from
-  the canonical IR. Monotype field-access segment instantiation
+  CIR. Monotype field-access segment instantiation
   consumes that mode as field-kind evidence: a required segment commits an undetermined
   kind to required and relates its runtime slot to its source value; an
   optional segment commits optional and relates the explicit tagged slot and
@@ -12872,7 +12891,7 @@ Restrictions:
 
 The sealed store preserves the kind: a defaulted field is a required field
 CARRYING its default identity, whose origin half names the declaring module,
-exactly like nominal identities. Canonical type keys include the identity as
+exactly like nominal identities. Type content keys include the identity as
 the declaring module's content hash, so two rows defaulting a field
 differently key differently.
 
@@ -13166,7 +13185,7 @@ Only the PER-FIELD demand becomes kind-directed:
   unify. Chained/nested updates compose because every update's type equals
   its base's type.
 
-Lowering (IMPLEMENTED). The canonical IR carries each record
+Lowering (IMPLEMENTED). CIR carries each record
 expression's unset field labels explicitly (`record_unset_label_pool`)—lowering consumes that list,
 never re-derives it. In an UPDATE, both lowering pipelines (monotype
 `lowerRecordExpr`/`lowerRecordExprAtNode` in src/postcheck/monotype/lower.zig
@@ -13870,7 +13889,7 @@ variable (`CheckedTypeVariable.bounded_row_ext`), and it is the one
 condition under which a scheme variable is SEALED: a flex tag-row tail
 that is bounded, whose row default is the empty row, and whose constraints
 closing the row discharges (`variableSealsToRowDefault`), and that nothing
-the worker exchanges with code outside it involves. The checked artifact
+the worker exchanges with code outside it involves. The CheckedModule
 records each procedure template's sealed slots when it is built
 (`CheckedProcedureTemplate.sealed_slots`, by `SealedSchemeSlots` over the
 template's own module's checked types), and every Boxy lowering reads them
@@ -13903,7 +13922,7 @@ tied to a rigid or a closed row is not a flex, so genuine row polymorphism
 (`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
 hidden descriptors.
 
-Publication computes all of a template's sealed slots together. It first
+Checked-module output computes all of a template's sealed slots together. It first
 collects the bounded candidates, then traverses its current immutable checked
 types with three explicit modes: arguments, ordinary reach, and result-coercion
 reach. Arguments and evidence callable types expose every type edge; result
@@ -13918,7 +13937,7 @@ unrelated types. Duplicate scheme slots do not increase the candidate count.
 The output follows the original scheme-variable slot order, retaining every
 slot when several slots name one variable. A candidate need not occur in the
 result to qualify; it must have no disqualifying occurrence. The computation
-reads the single solved environment and current checked metadata, and publishes
+reads the single solved environment and current checked metadata, and writes
 the same `sealed_slots` column without changing cache identities or formats.
 
 Sealing removes the one dependency a worker's representation had on its
@@ -14115,9 +14134,9 @@ A type's field labels and tag names are its names block
 (`boxy_runtime.desc.Names`), static data parallel to its descriptor: for a
 record or tuple one entry per field in the descriptor's memory order, for a
 tag union one per variant in discriminant order, each the field's label or the
-variant's tag name (none for a tuple element or padding) and the names block
+variant's tag name (none for a tuple item or padding) and the names block
 of the component's type; for a list, box, recursion box, or nominal type the
-names block of its element, payload, or backing. A type with no record field
+names block of its item, payload, or backing. A type with no record field
 or tag in its reach has none (null). Blocks are built by descriptor key, each
 reserved before its components', so a recursive type's block reaches itself.
 
@@ -14146,8 +14165,8 @@ record/tuple layout, and adds nothing to the descriptor header or to
 reference-free field tables.
 
 Record and tuple reference-count traversal follows its next selected child
-directly and queues only the remaining siblings. Retain keeps reverse physical
-field order; release keeps forward physical field order. A single selected
+directly and queues only the remaining siblings. Retain visits fields in reverse
+memory order; release visits fields in forward memory order. A single selected
 child needs no push/pop pair. Pending list and box releases stay below their
 children and the children of nested records on the work stack. This uses the
 existing slot table and adds no descriptor metadata or compiler analysis.
@@ -14231,7 +14250,7 @@ of a type over the worker's variables, carrying the override callables of the
 nominal types in its reach that only this body can build; a dictionary or
 literal thunk, an immortal callable capturing its entry's table; an argument
 record's descriptor; the table of each worker the body calls or packs; the
-discriminant of a tag or the semantic index of a field under a descriptor
+discriminant of a tag or the label-order index of a field under a descriptor
 (`tag_index`, `field_index`), an integer word read into a `u32` local; and a
 record update's or a coercion's plan (`update_plan`, `adapt_plan`). A
 position or plan whose descriptor reads no input is static: a position is an
@@ -14265,7 +14284,7 @@ to the current checked graph when read. A dependency implementation edit can
 change a module's checked key without changing its native object, so that
 object must not retain the old checked key in its needs list. The exports digest covers
 it, so an importer of a changed needs list is lowered again. This digest
-identifies semantic dependencies; it is not a payload-integrity checksum.
+identifies dependencies that affect meaning; it is not a payload-integrity checksum.
 A cached object's header records its total byte length. Loading compares it
 with the loaded slice's length, without another file-size syscall or hashing
 serialized export records. Complete entries are trusted compiler-produced data.
@@ -14320,11 +14339,11 @@ clears only the bytes after that slot and then writes the discriminant. Unused
 variant space, alignment gaps, and tail padding remain initialized. Multiple
 payloads retain their operand and allocation order and the full initial clear.
 
-Record construction writes fields in semantic operand order, including any
+Record construction writes fields in operand order, including any
 recursive-box allocations. If their slot sizes fill the record, no clearing
 is needed. Otherwise it clears only the gaps between initialized slots in
-physical order and the remaining suffix, including omitted fields and explicit
-padding. Record updates already visit fields in physical order and clear gaps
+memory order and the remaining suffix, including omitted fields and explicit
+padding. Record updates already visit fields in memory order and clear gaps
 during that traversal. Neither operation clears bytes it then fills from a
 field value, and both preserve initialized padding without additional layout
 metadata.
@@ -14335,7 +14354,7 @@ descriptor explicitly as an operand:
 - `dyn_copy(dst, src, desc)` copies `desc.size` bytes; reference counting is
   separate, through `incref`/`decref` as for every other local.
 - `dyn_field_addr(dst, base, desc, field_index)` yields a field's address in
-  a record, by its semantic index: an immediate, or a `u32` local holding a
+  a record, by its label-order index: an immediate, or a `u32` local holding a
   `field_index` table word where an open row leaves the index to the
   instantiation (`LIR.DynIndex`); `dyn_list_item_addr(dst, list, item_desc,
   index)` an item's; `dyn_box_payload_addr(dst, box, desc)` a box
@@ -14406,7 +14425,7 @@ directly). A plan node copies a value both sides represent alike, wraps it as
 field the source lacks, re-tags by a table from each source discriminant to
 the destination's discriminant and the payload's plan, moves each record
 field from its source offset to its destination offset through the field's
-plan, or rebuilds a list's items or a box's payload by its element's plan.
+plan, or rebuilds a list's items or a box's payload by its item's plan.
 Matching fields and tags by name, a joined row's label by name and payload
 count, and Bool's tags by `False` and `True` happen once, when the plan is
 built; the runtime follows offsets and discriminants only. A pair of
@@ -14686,10 +14705,10 @@ keep their declared-order argument-record representation. Caller-side views
 still require independent packing; removing the callee wrapper does not grant
 views an independent lifetime or change the external byte-level ABI.
 
-A complete packed erased-argument block publishes a product ownership shape
+A complete packed erased-argument block carries a product ownership shape
 when its layout is dynamic, including any leading non-owning table words.
-Its field indices are the ABI's semantic argument indices. The callee owns
-its contents but borrows the physical buffer from its caller or pending-call
+Its field indices are the ABI's argument indices. The callee owns
+its contents but borrows the buffer from its caller or pending-call
 driver. Explicit arguments are copied into independent representation storage
 before field-take analysis; copying bytes does not retain contents. ARC moves
 or retains each field and releases untouched fields using the existing product
@@ -14799,12 +14818,12 @@ on, and it is the reason modules can be lowered independently and in
 parallel.
 
 Unit lowering finishes the closure of those module-definition workers and
-publishes their export inventory in `seedUnitWorkers`, before lowering command
+records their export inventory in `seedUnitWorkers`, before lowering command
 roots. Test and REPL roots, platform entrypoint wrappers, and requested static
 initializers keep their own explicit entrypoint/data references. Workers created
 only for those roots are local to the unit; being a lambda or method-entry worker
 does not make a test helper part of the module's external interface. A root can
-reuse a worker already published by the definition closure without changing its
+reuse a worker already emitted by the definition closure without changing its
 export status. This boundary uses the completed lowering worklist, not another
 body traversal or a guess from generated symbols. Instrumentation may change a
 public worker's calling contract, which importers must still consume and hash;
@@ -14833,7 +14852,7 @@ evaluation runs against (Compile-Time Evaluation Strategy). `roc check` and
 `roc run` with `--specialize=no` therefore leave identical cache contents for
 the same sources when the run lowers its whole program; a dev run of an app
 without a platform header builds it with a fast dev link and runs the
-executable, so it adds what `roc build` adds, and `roc build`
+binary, so it adds what `roc build` adds, and `roc build`
 adds exactly the module objects still missing (`compile.boxy_object_cache`,
 the `boxy_object` family); a wasm build adds its target's units beside the
 native ones (Fast Dev Link, "Wasm unit images").
@@ -14844,7 +14863,7 @@ when it runs its roots from test units (Unit-Image Test Execution), the test
 units it built, plus one outcome file per module whose roots it ran ("Test
 outcome files"), which it writes under either strategy.
 `cachesPostCheckWork` is the policy of lowered output, packs
-and program artifacts. `roc
+and program output. `roc
 check` accepts `--opt` and ignores it; it honors `--specialize`, because the
 strategy selects the compile-time evaluator that completes the module's
 roots. The checked module itself names no strategy: both evaluators store
@@ -14893,7 +14912,7 @@ and Per-Module Output is the invariant that makes it possible:
   both modules' checked entries and the pairing's evaluation output: the root
   unit lowers the platform's implementations at the app's types, read through
   the pairing, and calls the supplied app workers. The platform's checked key
-  alone does not identify this executable code.
+  alone does not identify this machine code.
 - The FILE is deterministically byte-identical for its key: a cold build and
   a warm build, and two machines, write the same bytes. It holds everything
   lowered for the module, through the object's machine code, and the few
@@ -14928,7 +14947,7 @@ call it, and the final link cannot prune inside a unit's object because the
 dev backend writes one code section per object and resolves calls within a
 unit to direct branches that leave no relocation behind. The linker is handed
 `-dead_strip` or `--gc-sections` and can act only on whole sections, every
-one of which something references. The program's executable therefore holds
+one of which something references. The program's binary therefore holds
 every procedure of every module, and the link's cost, which scales with the
 code it lays out, pays for all of it.
 
@@ -15119,12 +15138,12 @@ synchronous evaluation. The module's ordinary program starts only after those
 function-value stages finish. On cancellation or preparation failure, evaluation
 discards unsubmitted programs and joins submitted work before freeing the graph,
 module lists, or image set any worker borrowed; its bookkeeping needs no new
-allocation and it publishes no additional results. A module's evaluation thus waits only for
+allocation and it stores no additional results. A module's evaluation thus waits only for
 the values its roots read and the objects of its own import closure. The link
 waits for every unit after program evaluation. Platform-only evaluation before
-pairing joins running object tasks before publishing its values, but retains
+pairing joins running object tasks before storing its values, but retains
 queued app units: their imports can still have roots that program evaluation
-must complete. This publication barrier requires no active readers, not
+must complete. This value-store write barrier requires no active readers, not
 completion of units whose inputs belong to the later evaluation. The link uses
 the objects this compilation built or restored without restoring them again: a
 build that links the objects keeps each one for the link as the scheduler
@@ -15193,7 +15212,7 @@ absent entry is the checked producer's absence, never an uninitialized table.
 The index is built directly from checked records once per lowering, with no
 source traversal, guessed reachability, or persistent cache. Imports used only
 through linked code do not require their private body indexes. Allocation
-failure propagates, and the index is marked complete only after publication of
+failure propagates, and the index is marked complete only after registration of
 all its records succeeds.
 
 #### Error-Type Reachability
@@ -15206,7 +15225,7 @@ repeated queries do not traverse the same graph again. The existing checked
 reachability engine completes recursive components together: a back edge is
 not a negative result, since another edge can still reach an error. Aliases
 follow their backing and nominals follow their arguments, preserving the
-query's existing meaning. An allocation failure publishes no partial proof.
+query's existing meaning. An allocation failure retains no partial proof.
 The analysis is created on first demand and freed with the lowering; it writes
 no cache files, changes no checked identities, and retains no second type
 representation.
@@ -15214,11 +15233,11 @@ representation.
 #### Cached Function-Value Evaluation Units
 
 An evaluation that stores function-containing constants may demand imported
-compiler-only units. These remain per-module content-addressed artifacts, under
+compiler-only units. These remain per-module content-addressed cache entries, under
 a distinct variant of the ordinary object key. Ordinary runtime units emit no
 function-storage metadata or producer trailers. A module unit is demanded by the
 code references of the evaluation and the transitive references of those units;
-merely being visible to the evaluator does not demand such an artifact.
+merely being visible to the evaluator does not demand such a unit.
 
 A compiler-only unit records the callable workers its code emits, their capture
 shapes and worker recipes, their exact native image symbol indices, the
@@ -15231,7 +15250,7 @@ emitted procedure inventory: dead workers have no symbol, and direct-call
 ownership variants introduced by ARC have no function-value capture recipe.
 The intersection joins stable procedure identities recorded before LIR
 compaction, in the backend's emitted order. A retained worker's old procedure
-number must not index the compacted store when publishing its capture metadata.
+number must not index the compacted store when encoding its capture metadata.
 An emitted procedure is not necessarily a lowering worker.
 Temporary capture-graph edges and selections belong to each serialization
 operation. The encoder copies their contents into its independently owned
@@ -15239,7 +15258,7 @@ result before releasing that scratch, on success or failure; retaining a
 program for later function values does not retain prior serialization scratch.
 
 The records share a module-name table and a type table. Module references use the
-link's explicit module names, not checked-artifact keys from the producing build.
+link's explicit module names, not CheckedModule keys from the producing build.
 A reader binds those names against its current checked module graph. It reads
 captured values by the recorded shapes and types; it does not reconstruct types
 from runtime layout, lower source bodies to rediscover metadata, or execute code
@@ -15261,13 +15280,13 @@ procedure identity. Completed captures and tables are emitted as immutable data,
 never reconstructed by runtime allocation instructions.
 
 A dynamic function capture-record descriptor carries its own producer key and
-ordinal after its descriptor header, identifying its element descriptors with
+ordinal after its descriptor header, identifying its item descriptors with
 their scopes. Its producer can differ from both the callable's and its table's.
 The argument-descriptor recipe records capture-record purpose explicitly; a
 matching shape or leading-word count cannot confer that purpose. Only function-
 storing evaluation emits these records and trailers, and ordinary argument
 buffers emit none even in those units. Stored values keep only the capture graph
-reachable from their table inputs and capture-record element descriptors.
+reachable from their table inputs and capture-record item descriptors.
 
 #### Stored Function Values
 
@@ -15911,8 +15930,8 @@ type. Reading the source-value cell neither commits the field kind nor relates
 the value to its storage slot; ordinary interface relations and relation freeze
 retain ownership of those decisions.
 
-The per-expression `contains_diagnostic_error` fact ("Per-Expression Checking
-Facts") excludes rejected
+The per-expression `contains_diagnostic_error` flag ("Per-Expression Checking
+Data") excludes rejected
 expression sites from this relation table; an error-containing checked type is
 not a valid specialization constraint and never reaches Monotype instantiation.
 Monotype consumes both relation sources before applying defaults or sealing a
@@ -17184,7 +17203,7 @@ memos by it. It does not name the resulting specialization, because two call
 sites can instantiate one callable from checked types that differ at the
 checked level and seal to the same closed Monotype request. The confirmed case
 is a transparent alias: with `Count : U64`, a call site under `Count -> Count`
-and one under `U64 -> U64` carry different canonical type keys—that key
+and one under `U64 -> U64` carry different type content keys—that key
 retains alias provenance deliberately—and both requests seal to one Monotype
 function type. (Monotype does retain some alias-named types; what is required
 here is the sealed request type, whatever shape it has.)
@@ -17237,7 +17256,7 @@ key can disagree with their identity.
 Checked callable type ids inside dispatch evidence are relation-replay payload,
 not specialization identity: separate generalized scheme uses deliberately
 contain distinct identity-bearing roots. Evidence hashing and exact topology
-equality use each callable root's canonical type key, read from its key slot, instead. The
+equality use each callable root's type content key, read from its key slot, instead. The
 owning checked module remains part of the identity, and the raw root id remains
 alongside the key solely so Monotype can replay the exact checked relation.
 Thus instantiations with the same checked identity-variable topology
@@ -17568,7 +17587,7 @@ alias along the chain, which composes the target's substitution exactly.
 The chain may leave the module that declares the method: `to_inspect =
 Other.render` forwards to another module's procedure, and that module's own
 aliases forward further. The method registry resolves the chain from the
-resolved value references and procedure bindings publication already holds,
+resolved value references and procedure bindings in the checked module,
 exactly the chain Monotype and Boxy compose along, so the procedure a method
 dispatches to and the procedure its instantiation composes to are one
 decision. The target names the procedure's template, whose module owns the
@@ -17834,7 +17853,7 @@ otherwise change, and the producer-consumer shape that later passes see
 else. Boxy lowers record literals from their source field order directly.
 
 The checker records expression and statement divergence through exact
-operand and body dependencies as a per-expression checking fact. When
+operand and body dependencies as per-expression checking data. When
 an `evidence_dependent(depth, k)` call becomes `checked_error` or
 `unreachable_value` only for
 one specialization, Monotype supplies those exact dispatch expression ids to
@@ -20413,15 +20432,15 @@ every unrolled occurrence, which matches the typing rule below that nested
 modes are uniform through an owning rc.
 
 A dynamic local normally carries one opaque owned unit. For a closed-row
-record or tuple, Boxy lowering also publishes its checked product shape:
-the semantic fields' layouts and descriptor locals. This is ownership data,
-not a physical layout: field addresses and representation sizes still come
+record or tuple, Boxy lowering also emits its checked product shape:
+the fields' layouts and descriptor locals. This is ownership data,
+not a memory layout: field addresses and representation sizes still come
 from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
 unknown type has no enumerated product shape and remains opaque.
 
 ARC uses this explicit shape for the same field-take and residual-release
-rules as concrete products. Generic record projections copy representation
+rules as concrete products. Generic record field reads copy representation
 bytes into independent frame storage; owning a projected value therefore
 never relies on its container's storage remaining alive. This copy does not
 retain payloads. ARC alone emits the retains, takes and residual decrefs.
@@ -20430,7 +20449,7 @@ parameter representation still permits scalar-field reads. A dynamic interior
 view has no such independent lifetime, and reading an RC field still requires
 its stored unit to be live. Certification distinguishes these cases explicitly.
 Runtime-sized list/box interior views continue to borrow their backing
-storage. ARC's temporary projections used only for an immediate residual
+storage. ARC's temporary field reads used only for an immediate residual
 release may also address the field in place. Every dynamic RC statement uses
 the value's own descriptor. `ROC_VERIFY_ARC` in a developer-diagnostic build
 runs independent certification even when the compiler uses ReleaseFast;
@@ -21327,7 +21346,7 @@ changed.
 An exported worker additionally commits owned parameter positions for which
 dismantle analysis proved an owned-only field-take benefit, including benefits
 forwarded through its callees. This is a producer-selected boundary convention:
-the module emits it whether or not any importer exists, and publishes that
+the module emits it whether or not any importer exists, and records that
 exact signature with its object. An importing caller moves a dying argument
 and retains an argument it still needs. A borrowed return's lenders, demand
 holes, and pinned ABI positions retain their existing contracts. The emitted
@@ -21742,14 +21761,14 @@ only partly residual as a view marked with its absent slots and releases the
 residual slots through it.
 
 A view whose value reaches a consuming operand (the view itself, a
-borrowed pure same-value alias of it, or an ownership-complete projection of
-either, through any number of such projections and aliases, at an owned
+borrowed pure same-value alias of it, or an ownership-complete aggregate read of
+either, through any number of such reads and aliases, at an owned
 direct-call position, a borrowed position whose owned variant takes a field,
 or a consumed or retained low-level position, with no other mention of the
 view's borrow forest in the same statement) is first solved as a take of its
-whole range at its definition. An ownership-complete projection holds every
+whole range at its definition. An ownership-complete aggregate read holds every
 refcounted byte its source owns, so consuming it consumes the source's whole
-unit; the certifier claims the source's stored unit through the projection
+unit; the certifier claims the source's stored unit through that read
 exactly as it does for any complete aggregate read. While it is, it holds those slots: reads
 through it, through its aliases, and through views nested in it are reads of
 the view, not of its container, and once the take is committed the view is a
@@ -21942,8 +21961,9 @@ emissions the binding holds nothing and its container is a borrowed
 parameter, which no release waits for, so one grouping serves every
 emission. The binding keeps its borrow source, which the ownership-place
 query still follows to the nearest binding the current emission makes
-owned. A complete projection of such a binding denotes the unit it holds,
-exactly as a complete projection of an owned binding does.
+owned. An ownership-complete aggregate read of such a binding denotes the unit
+it holds,
+exactly as an ownership-complete aggregate read of an owned binding does.
 Dominance is computed from the control-flow graph with a synthetic entry for
 all procedure roots: a statement's structural successors, except that a
 join's body is entered only through the jumps that name the join, so a read
@@ -22099,7 +22119,7 @@ A read solved borrowed holds no unit, so it never consumes at the read, with
 one exception: a view whose value reaches a consuming operand is taken whole
 at its definition and then holds its slots (see the view rules above). Every
 other borrowed read's binding, every borrowed pure same-value alias of it,
-and every ownership-complete projection of either carries the field to where
+and every ownership-complete aggregate read of either carries the field to where
 the value is consumed: an owned direct-call position, a borrowed position
 whose owned variant takes a field, or a consumed or retained low-level
 position, with no other mention of the binding's borrow forest in the same
@@ -23790,7 +23810,7 @@ replay.
 
 Code generated for compile-time evaluation calls nothing in the compiler to
 say where it is: a failure is located from where the machine left it. Every
-procedure's code carries two tables, kept with the code in its executable
+procedure's code carries two tables, kept with the code in its loaded machine-code
 image or a `.boxy` module object's `CodeLocations`:
 
 - Its line table. Each entry is the offset where a statement's code begins,
@@ -23931,7 +23951,7 @@ it on record reports it without running the root again. Checking and
 compile-time evaluation use the checked module cache as every command does,
 so a warm `roc test` with no edits re-checks nothing, lowers nothing and
 runs nothing, and one after an edit runs the roots of the modules whose
-checked artifact keys the edit changes: the edited module and every module
+CheckedModule keys the edit changes: the edited module and every module
 importing it, directly or not.
 
 The command-level test plan is built after checking and before runtime root
@@ -23946,14 +23966,14 @@ The plan's roots are also the runtime demand of compile-time finalization,
 including its normalization specialization from completed stored values. The
 finalizer evaluates pending compile-time roots and replays stored diagnostics
 and debug observations under the checking contract, even when the plan has no
-executable roots. A plan with no executable roots (every planned expect was
+runnable roots. A plan with no runnable roots (every planned expect was
 rejected during checking) has no runtime consumer and performs no test runtime
 preparation; it never turns into the program's default root set. A source
 file with no test plan keeps ordinary checking without installing a runtime
 configuration; a plain type module need not have a runnable owner.
 
 An expect that checking rejected outright, and a platform expect that reads a
-value the platform `requires`, are not executable roots: test planning records
+value the platform `requires`, are not runnable roots: test planning records
 each as a compiler-error result in its result slot, and nothing lowers it.
 
 Only the plan's required closure reaches runtime LIR, ARC, frozen static data
@@ -23988,7 +24008,7 @@ and test units (`boxy_object_cache.KeyInput.expect_sites`). A module with
 neither uses its ordinary unit in tests too, including the builtins: test
 instrumentation cannot change code containing no expects. The checked body index
 records the presence of expect expressions and statements during its existing
-producer traversal, and publication stores that scalar in the checked artifact. Unit selection consumes this fact and
+producer traversal, and checked-module output stores that scalar in the CheckedModule. Unit selection consumes this value and
 the explicit root requests; it never scans bodies, hashes emitted bytes or
 special-cases a module name. Both cache keying and lowering use the selected
 unit mode. Each imported module selects its own mode, so an expect-free caller
@@ -24595,12 +24615,12 @@ allocation, construction, or re-evaluation of that value, under either
 specialization strategy or any backend. This is a compiler invariant, not an
 optimization preference. There is no fresh-construction alternative, including
 for a consumer that may later update a list. Required runtime operations retain
-their ordinary semantics, but cannot change a constant read into reconstruction.
+their ordinary meaning, but cannot change a constant read into reconstruction.
 All nested storage and callable captures are emitted as immutable target data
 with explicit relocations. Scalars may be immediate literals. Target-data
 encoding happens in the compiler and emits no runtime initializer.
-A product whose committed layout is zero-sized has no physical field offsets.
-Lowering represents its field projections as zero-sized value aliases, including
+A product whose committed layout is zero-sized has no stored field offsets.
+Lowering represents its field reads as zero-sized value aliases, including
 when the product comes from an immutable slot.
 
 A build's executable binary is a function of its source, its command line, and its
@@ -25525,7 +25545,7 @@ failure.
 
 A shared library's host is prelinked as one (`-shared`, `-dylib`, `/dll`),
 exporting the provides and the host inputs' own exports, with its windows in
-sections of the host as a Mach-O or COFF executable's are, so its key waits
+sections of the host as a Mach-O or COFF program binary's are, so its key waits
 for the provides' layouts in every format. An ELF shared host's generated
 object also carries one absolute word against its reserve, whose relocation
 makes LLD write a dynamic relocation table; the patch link places a new
@@ -25533,7 +25553,7 @@ table after the app's code holding the host's entries and one relative
 relocation per absolute word the app and the provided values' windows hold,
 and points `DT_RELA` and `DT_RELASZ` at it. The dev backend's ELF writer
 names pointer-bearing read-only data `.data.rel.ro` and makes it writable,
-so no absolute word lands in an image's block. A DLL is published with its
+so no absolute word lands in an image's block. A DLL is installed with its
 import library beside it, written from its export directory by LLVM's COFF
 import library writer (`coff/ImportLibrary.zig`). A Mach-O link puts the
 unmapped `__DWARF` segment at `__LINKEDIT`'s address, as dyld requires a
@@ -25541,7 +25561,7 @@ dylib's segments in address order.
 
 A `.boxy` dev `roc run` of an app without a platform header builds it
 against the synthetic default platform with a fast dev link and runs the
-executable, reusing every object `roc check` filed (Caching Under `.boxy`).
+binary, reusing every object `roc check` filed (Caching Under `.boxy`).
 
 **Unit images.** A `.boxy` unit's cache entry (`boxy_object_cache`) carries,
 beside its pieces, a unit image (`backend.dev.UnitImage`): the unit's text
@@ -25730,7 +25750,7 @@ host's pages from hashes the record filed with it and hashing only the load
 commands, the windows, the app and `__LINKEDIT`. An absolute word in code
 cannot be rebased, so the image builder admits none in the block; the dev
 backend's Mach-O writer keeps its pointer-bearing read-only data in
-`__DATA`. The executable is position independent, so every placement is an
+`__DATA`. The binary is position independent, so every placement is an
 unslid address and every reference across the host boundary is
 page-relative or rebased; the app region must lie within 4 GiB of the
 host's text, LLD's own limit for arm64 code, and a program beyond it is the
@@ -25738,7 +25758,7 @@ reported dev-program-too-large error. An x86_64 Mach-O host has 4 KiB
 segment pages where an arm64 one has 16 KiB (`HostPrelink.pageSize`), and
 is linked with an ad hoc signature as an arm64 one is by default.
 
-An ELF link of an AArch64 executable places its two segments on 64 KiB
+An ELF link of an AArch64 program binary places its two segments on 64 KiB
 boundaries, which load under a kernel of 4, 16 or 64 KiB pages, as LLD's
 own AArch64 layout does; the images inside a segment stay page aligned.
 
@@ -25764,7 +25784,7 @@ host's function table entries and those of the app's placed functions in
 address order, then the app's unwind information, which a COFF image keeps
 as regions of its own; and `.rocrelo`, the base relocation directory,
 holding the host's blocks and one entry for every absolute word the app
-holds, so the executable keeps its dynamic base. The host's debug sections,
+holds, so the binary keeps its dynamic base. The host's debug sections,
 which LLD places last, move after the app with the images' fragments
 appended, and the symbol table follows with the app's symbols appended and
 the host's entries renumbered for the inserted sections. Every address in
