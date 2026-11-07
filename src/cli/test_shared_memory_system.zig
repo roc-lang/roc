@@ -16,7 +16,7 @@ var shared_test_builtins: ?eval.BuiltinModules = null;
 
 fn sharedPrePublishedBuiltin() SharedMemorySystemTestError!test_helpers.PrePublishedBuiltin {
     if (shared_test_builtins == null) {
-        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator, std.testing.io);
     }
     return .{
         .env = shared_test_builtins.?.builtin_module.env,

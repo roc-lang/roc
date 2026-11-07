@@ -67,7 +67,7 @@ fn expectCheckReports(fixture: []const u8, expected_titles: []const []const u8) 
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,

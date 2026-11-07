@@ -59,8 +59,6 @@ pub const VTable = struct {
     /// Produce a file incrementally. Implementations must consume the stream
     /// before returning; no producer or buffer pointers escape this call.
     writeFileStream: *const fn (?*anyopaque, std.Io, []const u8, FileStream) WriteError!void = &missingWriteFileStream,
-    /// Complete a private staging file without reading or copying its prefix.
-    completeStagedFile: *const fn (?*anyopaque, std.Io, []const u8, []const u8, u64, FileStream) CompleteFileError!void = &missingCompleteStagedFile,
 
     /// Return `true` if a file or directory exists at `path`.
     fileExists: *const fn (?*anyopaque, std.Io, []const u8) bool,
@@ -226,13 +224,6 @@ pub const FileStream = struct {
 /// Write a producer's bytes without allocating a complete file-sized buffer.
 pub fn writeFileStream(self: Self, path: []const u8, stream: FileStream) WriteError!void {
     return self.vtable.writeFileStream(self.ctx, self.std_io, path, stream);
-}
-
-/// Append a producer at an explicit offset, flush it, then replace the header.
-/// The caller owns this unpublished file exclusively and publishes it only on
-/// success. Neither the prefix nor the file length is read back.
-pub fn completeStagedFile(self: Self, path: []const u8, header: []const u8, tail_offset: u64, tail: FileStream) CompleteFileError!void {
-    return self.vtable.completeStagedFile(self.ctx, self.std_io, path, header, tail_offset, tail);
 }
 
 /// Return `true` if a file (or directory) exists at `path`.
@@ -403,9 +394,6 @@ pub const WriteError = std.Io.Dir.WriteFileError || error{
     IoError,
 };
 
-/// Opening and completing an existing, unpublished file can also fail to seek.
-pub const CompleteFileError = WriteError || std.Io.File.OpenError || std.Io.File.SeekError || std.Io.File.WritePositionalError;
-
 /// Errors that can occur when querying file metadata.
 pub const StatError = error{
     FileNotFound,
@@ -559,7 +547,6 @@ const os_vtable = VTable{
     .writeFile = &osWriteFile,
     .writeTempFile = &osWriteTempFile,
     .writeFileStream = &osWriteFileStream,
-    .completeStagedFile = &osCompleteStagedFile,
     .fileExists = &osFileExists,
     .stat = &osStat,
     .listDir = &osListDir,
@@ -831,10 +818,6 @@ fn missingWriteFileStream(_: ?*anyopaque, _: std.Io, _: []const u8, _: FileStrea
     return error.IoError;
 }
 
-fn missingCompleteStagedFile(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8, _: u64, _: FileStream) CompleteFileError!void {
-    return error.IoError;
-}
-
 /// A buffered file writer whose every submission respects the host's
 /// per-request limit, so a producer may hand it a borrowed slice of any size.
 const BoundedFileWriter = struct {
@@ -883,19 +866,6 @@ fn osWriteFileStream(_: ?*anyopaque, std_io: std.Io, path: []const u8, stream: F
     // A producer that fails without a file error has no native cause to preserve.
     stream.write(stream.context, &writer.interface) catch return writer.err orelse error.IoError;
     writer.interface.flush() catch return writer.err orelse error.IoError;
-}
-
-fn osCompleteStagedFile(_: ?*anyopaque, io: std.Io, path: []const u8, header: []const u8, tail_offset: u64, tail: FileStream) CompleteFileError!void {
-    const file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .write_only });
-    defer file.close(io);
-    try io.vtable.fileSeekTo(io.userdata, file, tail_offset);
-    var buffer: [8192]u8 = undefined;
-    var writer = BoundedFileWriter.init(file, io, &buffer);
-    tail.write(tail.context, &writer.interface) catch return writer.err orelse error.IoError;
-    writer.interface.flush() catch return writer.err orelse error.IoError;
-    // A failed tail never replaces the placeholder header. Only the caller's
-    // subsequent atomic rename makes these completed bytes visible to readers.
-    try file.writePositionalAll(io, header, 0);
 }
 
 fn osFileExists(_: ?*anyopaque, std_io: std.Io, path: []const u8) bool {
@@ -2048,38 +2018,4 @@ test "freestanding canonicalize returns copy of input" {
     const result = try fs.canonicalize("/some/path", std.testing.allocator);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("/some/path", result);
-}
-
-test "complete staged file preserves prefix and installs header after its tail" {
-    const a = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(io, .{ .sub_path = "entry", .data = "0000ENV!" });
-    const path = try tmp.dir.realPathFileAlloc(io, "entry", a);
-    defer a.free(path);
-    const fs = os(a, a, io);
-    const Tail = struct {
-        fn write(_: *const anyopaque, out: *std.Io.Writer) std.Io.Writer.Error!void {
-            try out.writeAll("RESULT");
-        }
-        fn fail(_: *const anyopaque, out: *std.Io.Writer) std.Io.Writer.Error!void {
-            try out.writeAll("INCOMPLETE");
-            try out.flush();
-            return error.WriteFailed;
-        }
-    };
-    const context: u8 = 0;
-    try fs.completeStagedFile(path, "DONE", 8, .{ .context = &context, .write = Tail.write });
-    const bytes = try fs.readFile(path, a);
-    defer a.free(bytes);
-    try std.testing.expectEqualStrings("DONEENV!RESULT", bytes);
-    try fs.writeFile(path, "0000ENV!");
-    try std.testing.expectError(error.IoError, fs.completeStagedFile(path, "DONE", 8, .{ .context = &context, .write = Tail.fail }));
-    const incomplete = try fs.readFile(path, a);
-    defer a.free(incomplete);
-    try std.testing.expectEqualStrings("0000ENV!INCOMPLETE", incomplete);
-    try fs.deleteFile(path);
-    try std.testing.expectError(error.FileNotFound, fs.completeStagedFile(path, "DONE", 8, .{ .context = &context, .write = Tail.write }));
-    try std.testing.expect(!fs.fileExists(path));
 }

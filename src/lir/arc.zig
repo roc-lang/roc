@@ -4904,6 +4904,24 @@ const Inserter = struct {
                     preserve_consumed_args |= bit;
                 }
             }
+            // One unit moves into one consuming position. When the same
+            // unit reaches several consuming positions, the first moves it
+            // and each later one is retained before the operation.
+            const transferring = rc_effect.consume_args & ~operand_take_mask & ~preserve_consumed_args;
+            for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
+                const bit = argMaskBit(position);
+                if ((transferring & bit) == 0) continue;
+                const local = GuardedList.at(locals, position);
+                if (!self.localContainsRefcounted(local)) continue;
+                const unit = self.unitOf(local);
+                for (0..position) |earlier| {
+                    const earlier_bit = argMaskBit(earlier);
+                    if ((transferring & earlier_bit) == 0) continue;
+                    if (self.unitOf(GuardedList.at(locals, earlier)) != unit) continue;
+                    preserve_consumed_args |= bit;
+                    break;
+                }
+            }
         }
         const unique_args = if (want_unique)
             self.uniqueArgsMask(args, rc_effect, target, preserve_consumed_args, owned)
@@ -7681,6 +7699,49 @@ test "RC list metadata through aliases does not preserve a consumed buffer" {
 
 test "RC list payload through aliases preserves a consumed buffer" {
     try testListObservationAfterReserve(.list_get_unsafe);
+}
+
+test "RC one unit consumed at two low-level positions is retained for the second" {
+    try expectRepeatedConsumedOperandRetained(false);
+    try expectRepeatedConsumedOperandRetained(true);
+}
+
+/// `List.concat(xs, xs)` lowered to `list_concat` directly, with `xs` at
+/// its last use in both consuming positions. With `through_field`, `xs` is an
+/// alias of a field read of a dying pair, as when a matched record's field
+/// is concatenated with itself.
+fn expectRepeatedConsumedOperandRetained(through_field: bool) (Allocator.Error || ResourceError || ArcTest.ExpectError)!void {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const elem = try f.local(.i64);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const field = try f.local(f.list_i64);
+    const operand = try f.local(f.list_i64);
+    const result = try f.local(f.list_i64);
+    const ret = try f.ret(result);
+    const concat = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .list_concat,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_concat.rcEffect()),
+        .args = try f.span(&.{ operand, operand }),
+        .next = ret,
+    } }, .test_fixture);
+    const body = if (through_field) blk: {
+        const alias = try f.assignRefLocal(operand, field, concat);
+        const read = try f.assignRefField(field, pair, 0, alias);
+        const build_pair = try f.assignStruct(pair, &.{ first, second }, read);
+        const build_second = try f.assignList(second, &.{elem}, build_pair);
+        const build_first = try f.assignList(first, &.{elem}, build_second);
+        break :blk try f.assignI64(elem, 3, build_first);
+    } else blk: {
+        const build = try f.assignList(operand, &.{elem}, concat);
+        break :blk try f.assignI64(elem, 3, build);
+    };
+    _ = try f.addProc(&.{}, body, f.list_i64);
+    try f.run();
+    try f.expectRc(operand, 1, 0, 0);
 }
 
 fn testListObservationAfterReserve(op: LIR.LowLevel) (Allocator.Error || error{TestExpectedEqual})!void {

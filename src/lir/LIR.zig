@@ -447,13 +447,14 @@ pub const LiteralRejectionKind = enum(u8) {
     interpolation,
 };
 
-/// The source literal a literal-rejection crash reports: the checked
-/// expression, in its owning module, whose `from_numeral`, `from_quote`, or
+/// The source literal a literal-rejection crash reports: the literal, in its
+/// owning module, whose `from_numeral`, `from_quote`, or
 /// `from_interpolation` conversion returned `Err`.
 pub const LiteralRejectionSite = struct {
     owner: LoweringModuleId,
-    /// The literal's `CheckedExprId` in `owner`.
-    checked_expr: u32,
+    /// The literal's CIR node in `owner`: an expression, or a custom literal
+    /// pattern.
+    node: u32,
     kind: LiteralRejectionKind,
 };
 
@@ -1768,10 +1769,10 @@ pub const ComptimeValueRef = struct {
 pub const FailureMeaning = union(enum) {
     /// Code checking rejected and already reported.
     checked_error,
-    /// A literal conversion rejecting the literal at `checked_expr`.
+    /// A literal conversion rejecting the literal at CIR node `node`.
     literal_rejection: struct {
         module: [32]u8,
-        checked_expr: u32,
+        node: u32,
         kind: LiteralRejectionKind,
     },
     /// An exhaustiveness failure at a checked site.

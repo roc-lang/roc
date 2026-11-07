@@ -174,8 +174,9 @@ pub const Entry = struct {
     code_locations: []const u8 = &.{},
     /// Only compiler-only function-value units carry this table.
     function_metadata: []const u8 = &.{},
-    /// The module's unit image: a `UnitImage` for a Linux x86_64 target, a
-    /// `WasmUnitImage` for a wasm target, and empty for any other target.
+    /// The module's unit image: a `UnitImage` for a target whose
+    /// `boxy_unit.imageKind` is native, a `WasmUnitImage` for a wasm
+    /// target, and empty for any other target.
     image: []const u8 = &.{},
 };
 

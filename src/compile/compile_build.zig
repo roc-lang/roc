@@ -256,11 +256,6 @@ pub const BuildEnv = struct {
     cwd: []const u8,
     /// Whether to retain exact source byte states for watch-mode refreshes.
     track_watch_inputs: bool = false,
-    /// Whether modules' solver type stores are released once checking finishes
-    /// (`Coordinator.release_checked_solver_types`). Commands that read solver
-    /// types after compiling, such as documentation and editor tooling, leave
-    /// this off.
-    release_checked_solver_types: bool = false,
     /// Set by an embedder that abandons builds whose result it no longer
     /// needs (the LSP, when a newer edit arrives). Compilation reads it
     /// between units of work and fails with `error.Canceled` once it is set;
@@ -379,7 +374,7 @@ pub const BuildEnv = struct {
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
 
-        builtin_modules.* = try BuiltinModules.init(gpa);
+        builtin_modules.* = try BuiltinModules.init(gpa, std_io);
         errdefer builtin_modules.deinit();
 
         return initWithBuiltinModules(gpa, mode, max_threads, target, cwd, std_io, builtin_modules, true);
@@ -944,7 +939,6 @@ pub const BuildEnv = struct {
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
-        coord.setReleaseCheckedSolverTypes(self.release_checked_solver_types);
         coord.cancel_request = self.cancel_request;
         coord.runtime_lowering = self.runtime_lowering;
         coord.debug_observer = self.debug_observer;

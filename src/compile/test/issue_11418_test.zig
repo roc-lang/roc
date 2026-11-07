@@ -79,7 +79,7 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
     defer allocator.free(app_path);
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,

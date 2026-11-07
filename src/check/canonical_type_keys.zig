@@ -199,7 +199,8 @@ pub fn schemeFromVar(
 }
 
 /// A source scheme's key: its root type's key in the scheme namespace.
-fn schemeKeyForType(key: canonical.CanonicalTypeKey) canonical.CanonicalTypeSchemeKey {
+/// The scheme key of a type whose key is `key`.
+pub fn schemeKeyForType(key: canonical.CanonicalTypeKey) canonical.CanonicalTypeSchemeKey {
     var hasher = TypeDigestHasher.init();
     hasher.update(&.{@backingInt(KeyTag.canonical_type_scheme)});
     hasher.update(&key.bytes);
@@ -395,6 +396,14 @@ pub const TypeWriter = struct {
         self.inspector.resetDigest();
         try self.inspector.writeVar(var_);
         try out.appendSlice(self.inspector.allocator, self.inspector.identity_variables.items);
+    }
+
+    /// Like `appendIdentityVarsFromVar`, enumerating ordinary structure only:
+    /// the method requirements attached to an identity are not followed.
+    pub fn appendIdentityVarsFromVarIgnoringConstraints(self: *TypeWriter, var_: Var, out: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
+        self.inspector.walk_identity_constraints = false;
+        defer self.inspector.walk_identity_constraints = true;
+        try self.appendIdentityVarsFromVar(var_, out);
     }
 
     /// Like `appendIdentityVarsFromVar`, treating every var whose resolved

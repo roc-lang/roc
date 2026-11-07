@@ -2,6 +2,7 @@
 //! checked errors instead of reaching the literal conversion invariant.
 
 const std = @import("std");
+const check = @import("check");
 const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
 const BuildEnv = compile_build.BuildEnv;
@@ -94,11 +95,15 @@ fn expectPublishedPatterns(body: []const u8, expected_error: ?[]const u8) Patter
     // A failed pattern cannot discard an independent definition's checked body.
     const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
     var found_good = false;
-    for (0..artifact.checked_bodies.stored_exprs.items.len) |i| {
-        const expr = artifact.checked_bodies.expr(@fromBackingInt(@intCast(i)));
-        const text = source[expr.source_region.start.offset..expr.source_region.end.offset];
+    const bodies = artifact.bodies();
+    const store = &artifact.moduleEnvConst().store;
+    for (0..bodies.nodeCount()) |i| {
+        if (bodies.index().nodeKind(@intCast(i)) != .expr) continue;
+        const expr: check.CheckedBodies.ExprId = @fromBackingInt(@intCast(i));
+        const region = store.getExprRegion(expr);
+        const text = source[region.start.offset..region.end.offset];
         if (std.mem.eql(u8, text, "123")) {
-            try std.testing.expect(expr.data == .numeral);
+            try std.testing.expect(bodies.exprData(expr) == .numeral);
             found_good = true;
         }
     }

@@ -27,7 +27,9 @@ pub const MAGIC: u32 = 0x56454452;
 /// v9: mutable composition slots occupy separate writable pages.
 /// v10: an image composed from unit images carries its host imports, each
 /// with its sites, and the words its loader rebases.
-pub const FORMAT_VERSION: u32 = 10;
+/// v11: an image composed from COFF unit images carries its function table
+/// and unwind information.
+pub const FORMAT_VERSION: u32 = 11;
 
 /// Maximum bytes reserved per host jump stub on the supported dev-shim hosts.
 /// The machine-code shim owns the per-arch emitted sizes and asserts at compile
@@ -93,6 +95,12 @@ pub const Header = extern struct {
     host_sites: ArrayRef,
     /// A composed image's absolute addresses into itself (`Rebase`).
     rebases: ArrayRef,
+    /// A composed image's Windows function table: its `RUNTIME_FUNCTION`
+    /// entries, sorted by function start, in its executable pages. Their
+    /// addresses, and those in the unwind information they name, count from
+    /// the start of the image's code, the base the loader registers the
+    /// table with. Empty for every other image.
+    function_table: ArrayRef,
 };
 
 /// One host symbol a composed image references: the loader resolves its
@@ -110,6 +118,13 @@ pub const HostSiteKind = enum(u8) {
     pc32 = 1,
     /// The symbol's 64-bit address.
     abs64 = 2,
+    /// An arm64 `B` or `BL` word displacement, which reaches the host
+    /// symbol through the import's jump stub.
+    branch26 = 3,
+    /// An arm64 `ADRP` page displacement to the import's jump stub.
+    page21 = 4,
+    /// The low 12 bits of the import's jump stub in an arm64 `ADD`.
+    pageoff12 = 5,
 };
 
 /// One field of a composed image holding a host symbol's address. `offset`
@@ -243,6 +258,7 @@ pub const ProgramView = struct {
     host_imports: []const HostImport = &.{},
     host_sites: []const HostSite = &.{},
     rebases: []const Rebase = &.{},
+    function_table: []const u8 = &.{},
 
     /// The sites of one of the image's host imports.
     pub fn hostImportSites(self: *const ProgramView, import: HostImport) ImageError![]const HostSite {
@@ -577,6 +593,7 @@ pub fn writeToSharedMemory(
         .host_imports = ArrayRef.empty(),
         .host_sites = ArrayRef.empty(),
         .rebases = ArrayRef.empty(),
+        .function_table = ArrayRef.empty(),
     };
 
     return header;
@@ -685,11 +702,16 @@ pub fn requiredCapacityFromOffset(
 }
 
 /// The sizes of a run image composed from unit images: its code, which the
-/// composer fills with the images' blocks, its writable data and zero-fill,
-/// and its tables.
+/// composer fills with the images' blocks, its unwind tables, its writable
+/// data and zero-fill, and its tables.
 pub const ComposedLayout = struct {
     /// Bytes of the code region: every placed image's block.
     code_len: usize,
+    /// Bytes of the function table: the entries of every placed function
+    /// of the images that carry Windows unwind tables.
+    function_table_len: usize,
+    /// Bytes of the unwind information those entries name.
+    unwind_info_len: usize,
     /// Bytes of the writable region: every placed image's data and zero-fill.
     writable_len: usize,
     /// The largest alignment anything in the writable region needs.
@@ -711,9 +733,11 @@ pub const Composed = struct {
     host_imports: []HostImport,
     host_sites: []HostSite,
     rebases: []Rebase,
-    /// The code region; host jump stubs follow it in the same executable
-    /// pages.
+    /// The code region; host jump stubs, the function table and the unwind
+    /// information follow it in the same executable pages.
     code: []u8,
+    function_table: []u8,
+    unwind_info: []u8,
     /// The writable region, on pages of its own after the executable ones.
     writable: []u8,
     /// The distance from the start of `code` to the start of `writable`.
@@ -736,9 +760,34 @@ pub fn composedCapacityFromOffset(page_size: usize, initial_offset: usize, layou
     return std.mem.alignForward(usize, capacity, page_size);
 }
 
-/// The code region and the host jump stubs after it, one stub per import.
+/// Where a composed image's executable parts start, counted from the start
+/// of its code: the host jump stubs after the code, one per import, then
+/// the function table, then the unwind information.
+pub const ComposedExecutableOffsets = struct {
+    stubs: usize,
+    function_table: usize,
+    unwind_info: usize,
+    end: usize,
+};
+
+/// The offsets of a composed image's executable parts.
+pub fn composedExecutableOffsets(layout: ComposedLayout) ImageError!ComposedExecutableOffsets {
+    const stubs = std.mem.alignForward(usize, layout.code_len, 16);
+    // A function table entry and unwind information are 4-byte aligned;
+    // each image's unwind information keeps its own 16-byte placement.
+    const function_table = std.mem.alignForward(usize, try addNoOverflow(stubs, try mulNoOverflow(layout.host_import_count, max_jump_stub_size)), 16);
+    const unwind_info = std.mem.alignForward(usize, try addNoOverflow(function_table, layout.function_table_len), 16);
+    return .{
+        .stubs = stubs,
+        .function_table = function_table,
+        .unwind_info = unwind_info,
+        .end = try addNoOverflow(unwind_info, layout.unwind_info_len),
+    };
+}
+
+/// The code region and everything after it in the executable pages.
 fn composedExecutableLen(layout: ComposedLayout) ImageError!usize {
-    return addNoOverflow(std.mem.alignForward(usize, layout.code_len, 16), try mulNoOverflow(layout.host_import_count, max_jump_stub_size));
+    return (try composedExecutableOffsets(layout)).end;
 }
 
 /// Allocate a composed run image of `layout` and write its header. Its
@@ -754,7 +803,8 @@ pub fn allocComposed(image_allocator: Allocator, base_ptr: [*]align(1) u8, page_
     const host_imports = try image_allocator.alloc(HostImport, layout.host_import_count);
     const host_sites = try image_allocator.alloc(HostSite, layout.host_site_count);
     const rebases = try image_allocator.alloc(Rebase, layout.rebase_count);
-    const executable_len = try composedExecutableLen(layout);
+    const offsets = try composedExecutableOffsets(layout);
+    const executable_len = offsets.end;
     const executable_bytes = try allocRuntimeAlignedBytes(image_allocator, std.mem.Alignment.fromByteUnits(page_size), @max(executable_len, 1));
     const writable = try allocRuntimeAlignedBytes(
         image_allocator,
@@ -762,8 +812,9 @@ pub fn allocComposed(image_allocator: Allocator, base_ptr: [*]align(1) u8, page_
         layout.writable_len,
     );
     const code = executable_bytes[0..layout.code_len];
-    const stubs_start = std.mem.alignForward(usize, layout.code_len, 16);
-    const function_stubs = executable_bytes[stubs_start..][0 .. layout.host_import_count * max_jump_stub_size];
+    const function_stubs = executable_bytes[offsets.stubs..][0 .. layout.host_import_count * max_jump_stub_size];
+    const function_table = executable_bytes[offsets.function_table..][0..layout.function_table_len];
+    const unwind_info = executable_bytes[offsets.unwind_info..][0..layout.unwind_info_len];
     const executable = executable_bytes.ptr[0..std.mem.alignForward(usize, @max(executable_len, 1), page_size)];
     const image_size = std.mem.alignForward(usize, maxEnd(base_ptr, &.{
         bytesOf(header),
@@ -796,6 +847,7 @@ pub fn allocComposed(image_allocator: Allocator, base_ptr: [*]align(1) u8, page_
         .host_imports = try arrayRef(base_ptr, bytesOfSlice(host_imports)),
         .host_sites = try arrayRef(base_ptr, bytesOfSlice(host_sites)),
         .rebases = try arrayRef(base_ptr, bytesOfSlice(rebases)),
+        .function_table = try arrayRef(base_ptr, function_table),
     };
     return .{
         .header = header,
@@ -805,6 +857,8 @@ pub fn allocComposed(image_allocator: Allocator, base_ptr: [*]align(1) u8, page_
         .host_sites = host_sites,
         .rebases = rebases,
         .code = code,
+        .function_table = function_table,
+        .unwind_info = unwind_info,
         .writable = writable,
         .writable_offset = if (writable.len == 0) std.mem.alignForward(usize, executable.len, page_size) else @intFromPtr(writable.ptr) - @intFromPtr(code.ptr),
     };
@@ -842,6 +896,7 @@ pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, image_bo
         .host_imports = try sliceFromRef(HostImport, base_ptr, image_size, header.host_imports),
         .host_sites = try sliceFromRef(HostSite, base_ptr, image_size, header.host_sites),
         .rebases = try sliceFromRef(Rebase, base_ptr, image_size, header.rebases),
+        .function_table = try bytesFromRef(base_ptr, image_size, header.function_table),
     };
 }
 
@@ -851,7 +906,7 @@ fn relocationKindForData(kind: DataRelocationKind) RelocationKind {
         .rel32 => .linked_data_rel32,
         .page21 => .linked_data_page21,
         .pageoff12 => .linked_data_pageoff12,
-        .abs32s => base.invariant("run image invariant violated: an abs32s data relocation, which only a test unit emits, and no run image holds a test unit's code", .{}),
+        .abs32s, .abs64_field => base.invariant("run image invariant violated: an expect-site data relocation, which only a test unit emits, and no run image holds a test unit's code", .{}),
     };
 }
 

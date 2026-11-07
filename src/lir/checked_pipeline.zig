@@ -179,8 +179,8 @@ pub const TargetConfig = struct {
     /// compile-time roots it demands (design.md "Demand-Driven Compile-Time
     /// Evaluation").
     demand_driven_comptime_roots: bool = false,
-    /// Test/check commands validate all pending initializers, even without readers.
-    validate_all_comptime_roots: bool = false,
+    /// Validate every compile-time root, as an explicit test run does.
+    validate_every_comptime_root: bool = false,
     /// For `.boxy`: the module whose object this lowering emits, with every
     /// other module's worker an imported symbol (design.md "Per-Module
     /// Output"); null lowers everything the roots reach as one program.
@@ -1383,8 +1383,6 @@ pub const ComptimeDemand = postcheck.Monotype.Lower.ComptimeDemand;
 pub const ComptimeRootGraph = postcheck.ComptimeRootGraph;
 /// See `postcheck.Common.ComptimeRootRead`.
 pub const ComptimeRootRead = postcheck.Common.ComptimeRootRead;
-/// A checked compile-time root named in a `ComptimeDemand`.
-pub const ComptimeDemandRoot = postcheck.Monotype.Solve.EntryRoot;
 /// A root of a prepared Monotype program.
 pub const MonotypeRoot = postcheck.Monotype.Ast.Root;
 /// Source identity of a literal demand, before the producer is released.
@@ -1466,7 +1464,7 @@ pub fn prepareCheckedModulesMonotype(
                 .post_check_executor = target.post_check_executor,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
-                .validate_all_comptime_roots = target.validate_all_comptime_roots,
+                .validate_every_comptime_root = target.validate_every_comptime_root,
                 .comptime_demand_out = if (target.comptime_value_reads) &comptime_demand else null,
                 .literal_roots = target.literal_roots,
                 .replay_interface_summaries = target.replay_interface_summaries,
@@ -1495,13 +1493,10 @@ pub fn prepareCheckedModulesMonotype(
         const omitted: u32 = @intCast(roots.requests.len - root_count);
         for (test_plan_metadata) |*metadata| metadata.request_index -= omitted;
     }
-    // Initializer validation belongs to finalization, not the retained runtime consumer.
-    var retained_target = target;
-    retained_target.validate_all_comptime_roots = false;
     return .{
         .allocator = allocator,
         .program = mono,
-        .target = retained_target,
+        .target = target,
         .root_count = root_count,
         .test_plan_metadata = test_plan_metadata,
         .comptime_demand = if (target.comptime_value_reads) comptime_demand else null,
@@ -2483,7 +2478,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             .name = root.canonical_names.moduleNameText(root.module_identity.display_module_name),
             .kind = @tagName(root.module_identity.kind),
             .names = &root.canonical_names,
-            .types = root.checked_types.view(),
+            .types = root.typesView(),
             .templates = &root.checked_procedure_templates,
             .env = root.moduleEnvConst(),
         });
@@ -2536,7 +2531,10 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     try stack.appendSlice(allocator, alias.args);
                 },
                 .record => |record| {
-                    for (record.fields) |field| try stack.append(allocator, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try stack.append(allocator, field.ty);
+                    }
                     try stack.append(allocator, record.ext);
                 },
                 .tuple => |elems| try stack.appendSlice(allocator, elems),
@@ -2546,7 +2544,10 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     try stack.append(allocator, func.ret);
                 },
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try stack.appendSlice(allocator, tag.argsSlice(types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try stack.appendSlice(allocator, tag.args);
+                    }
                     try stack.append(allocator, tag_union.ext);
                 },
             }
@@ -2803,7 +2804,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     callable_name = defName(info, proc_base);
                     if (callable_kind_is_template and sub < info.templates.templates.items.len) {
                         const source_fn_ty = info.templates.templates.items[sub].checked_fn_root;
-                        if (@backingInt(source_fn_ty) < info.types.stored_payloads.len) {
+                        if (info.types.containsId(source_fn_ty)) {
                             poly = if (try checkedTypeHasVariable(allocator, info.types, source_fn_ty)) 1 else 0;
                         }
                     }

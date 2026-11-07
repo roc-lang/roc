@@ -28,7 +28,7 @@ const dev_diagnostics = base.dev_diagnostics;
 /// units and select their own mode. Paired root units must keep their explicit
 /// test mode, since they also lower the paired platform modules' bodies.
 pub fn requiresTestUnit(artifact: *const Artifact) bool {
-    if (artifact.checked_bodies.has_expects) return true;
+    if (artifact.has_expects) return true;
     for (artifact.root_requests.requests) |root| {
         if (root.kind == .test_expect) return true;
     }
@@ -79,8 +79,9 @@ pub const ImageKind = enum {
 /// entry for the target holds one, whichever command wrote it.
 pub fn imageKind(target: roc_target.RocTarget) ImageKind {
     if (target.toCpuArch() == .wasm32) return .wasm;
-    if (target.toOsTag() == .linux and target.toCpuArch() == .x86_64) return .native;
-    return .none;
+    const arch = target.toCpuArch();
+    if (arch != .x86_64 and arch != .aarch64) return .none;
+    return if (backend.dev.imageOs(target.toOsTag())) .native else .none;
 }
 
 /// Whether a unit compiled for `target` carries a native unit image: the
@@ -572,8 +573,9 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     };
     errdefer pieces.deinit();
     // The image goes into the unit's cache entry, which later fast dev links
-    // read; a build without a cache has no use for it.
-    const image: ?Image = if (producesImage(unit.target) and unit.cache_manager != null) image: {
+    // read, and to this build's own link when it wants images rather than
+    // pieces; a build with neither has no use for it.
+    const image: ?Image = if (producesImage(unit.target) and (unit.cache_manager != null or !unit.want_pieces)) image: {
         var code_locations: []const u8 = &.{};
         const bytes = object_compiler.buildUnitImage(pieces, unit.target, .every_procedure, &code_locations) catch |err| {
             if (err == error.OutOfMemory) return error.OutOfMemory;

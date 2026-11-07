@@ -19,6 +19,7 @@ test "issue 10346: unsupported generated method warning survives publication" {
     const gpa = std.testing.allocator;
     var resources = try helpers.parseAndCanonicalizeInspectedProgram(
         gpa,
+        std.testing.io,
         .module,
         source,
         &.{},

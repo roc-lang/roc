@@ -9,6 +9,7 @@ const Mono = @import("../monotype/ast.zig");
 const MonoType = @import("../monotype/type.zig");
 const Ast = @import("ast.zig");
 const checked = @import("check").CheckedModule;
+const BinderId = @import("check").CheckedBodies.BinderId;
 
 const Allocator = std.mem.Allocator;
 const GuardedList = collections.GuardedList;
@@ -1288,13 +1289,13 @@ const BoundBinder = struct {
 
 const BoundSet = struct {
     locals: collections.DenseMap(Mono.LocalId, void),
-    binder_heads: collections.DenseMap(checked.PatternBinderId, u32),
+    binder_heads: collections.DenseMap(BinderId, u32),
     binder_entries: std.ArrayList(BoundBinder),
 
     fn init(allocator: Allocator) BoundSet {
         return .{
             .locals = collections.DenseMap(Mono.LocalId, void).init(allocator),
-            .binder_heads = collections.DenseMap(checked.PatternBinderId, u32).init(allocator),
+            .binder_heads = collections.DenseMap(BinderId, u32).init(allocator),
             .binder_entries = .empty,
         };
     }
@@ -1309,7 +1310,7 @@ const BoundSet = struct {
         return (try self.bindingFor(input, local)) != null;
     }
 
-    fn binderIdentity(input: *const Ast.Program, local: Mono.LocalId) ?checked.PatternBinderId {
+    fn binderIdentity(input: *const Ast.Program, local: Mono.LocalId) ?BinderId {
         return input.getLocal(local).identity.binder();
     }
 
@@ -2695,7 +2696,7 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
     // One capturing function: a single binder-backed capture slot, and a
     // function reference that supplies it with a keyed operand.
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const binder: BinderId = @fromBackingInt(@intCast(1));
     const cap_local = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
     const cap_span = try program.addTypedLocalSpan(&.{.{ .local = cap_local, .ty = ty }});
     const fn_id = try program.addFn(.{
@@ -2771,7 +2772,7 @@ test "capture finalization supplies the caller's active binder local" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const binder: BinderId = @fromBackingInt(@intCast(1));
     const captured_outer = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
     const active_arg = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), ty, binder);
 
@@ -2818,8 +2819,8 @@ test "capture finalization preserves explicitly keyed capture permutation" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const first_binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
-    const second_binder: checked.PatternBinderId = @fromBackingInt(@intCast(2));
+    const first_binder: BinderId = @fromBackingInt(@intCast(1));
+    const second_binder: BinderId = @fromBackingInt(@intCast(2));
     const first_capture = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, first_binder);
     const second_capture = try program.addLocalWithBinder(@fromBackingInt(@intCast(2)), ty, second_binder);
     const first_capture_ref = try program.addExpr(.{ .ty = ty, .data = .{ .local = first_capture } });
@@ -2899,7 +2900,7 @@ test "lift boundary normalizes checked capture identity" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const binder: BinderId = @fromBackingInt(@intCast(1));
     const checked_id = checked.CaptureId.fromBinder(binder);
     const rewritten_id = program.nextLiftCaptureId();
     const rewritten_capture = try program.addLocalWithCaptureIdentity(
@@ -2932,7 +2933,7 @@ test "lift boundary preserves an already-lifted capture identity" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const binder: BinderId = @fromBackingInt(@intCast(1));
     const checked_id = checked.CaptureId.fromBinder(binder);
     const lifted_id = program.nextLiftCaptureId();
     const capture = try program.addLocalWithCaptureIdentity(
@@ -2965,7 +2966,7 @@ test "capture graph does not activate an operand for a removed target slot" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const binder: BinderId = @fromBackingInt(@intCast(1));
     const stale_capture = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
     const stale_slots = try program.addTypedLocalSpan(&.{.{ .local = stale_capture, .ty = ty }});
     const callee_body = try program.addExpr(.{ .ty = ty, .data = .unit });
@@ -3011,7 +3012,7 @@ test "a program retaining declared captures keeps a slot its body no longer read
     program.retains_declared_captures = true;
 
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const binder: BinderId = @fromBackingInt(@intCast(1));
     const declared = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
     const declared_slots = try program.addTypedLocalSpan(&.{.{ .local = declared, .ty = ty }});
     const callee_body = try program.addExpr(.{ .ty = ty, .data = .unit });
@@ -3060,7 +3061,7 @@ test "capture recomputation excludes replaced bodies from the active invariant" 
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const binder: BinderId = @fromBackingInt(@intCast(1));
     const stale_capture = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, binder);
     const stale_slots = try program.addTypedLocalSpan(&.{.{ .local = stale_capture, .ty = ty }});
     const callee_body = try program.addExpr(.{ .ty = ty, .data = .unit });
@@ -3240,7 +3241,7 @@ test "if_initialized_payload reads its payload as a free local" {
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
-    const payload_binder: checked.PatternBinderId = @fromBackingInt(@intCast(1));
+    const payload_binder: BinderId = @fromBackingInt(@intCast(1));
     const payload = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), ty, payload_binder);
     const cond = try program.addExpr(.{ .ty = ty, .data = .unit });
     const initialized = try program.addExpr(.{ .ty = ty, .data = .unit });

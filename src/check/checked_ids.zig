@@ -1,25 +1,24 @@
 //! Stable ids for checked artifact payload stores.
 
 const std = @import("std");
+const can = @import("can");
 
-/// Public `CheckedBodyId` declaration.
-pub const CheckedBodyId = enum(u32) { _ };
-/// Public `CheckedExprId` declaration.
-pub const CheckedExprId = enum(u32) { _ };
-/// Public `CheckedPatternId` declaration.
-pub const CheckedPatternId = enum(u32) { _ };
-/// Public `CheckedStatementId` declaration.
-pub const CheckedStatementId = enum(u32) { _ };
 /// Public `CheckedExhaustivenessSiteId` declaration.
 pub const CheckedExhaustivenessSiteId = enum(u32) { _ };
-/// Public `CheckedStringLiteralId` declaration.
-pub const CheckedStringLiteralId = enum(u32) { _ };
-/// Public `CheckedTypeId` declaration.
-pub const CheckedTypeId = enum(u32) { _ };
+/// A checked type of one module: either a variable of the module's sealed
+/// solver store or an entry of its synthesized type store. Readers treat it
+/// as opaque and read it through the module's type view.
+pub const CheckedTypeId = enum(u32) {
+    _,
+
+    /// The id's position in a dense map: its bits rotated so the module's
+    /// source and synthesized ids interleave into one dense range.
+    pub fn denseIndex(self: CheckedTypeId) usize {
+        return std.math.rotl(u32, @backingInt(self), 1);
+    }
+};
 /// Public `CheckedTypeSchemeId` declaration.
 pub const CheckedTypeSchemeId = enum(u32) { _ };
-/// Public `PatternBinderId` declaration.
-pub const PatternBinderId = enum(u32) { _ };
 
 /// Identity of one compile-time root within its checked module.
 pub const ComptimeRootId = enum(u32) { _ };
@@ -84,8 +83,8 @@ test "OptionalId round-trips none and some" {
 /// The `u32` is split into two disjoint ranges by the high bit:
 ///
 ///  - **canonical** (high bit clear, `[0, 2^31)`): the identity of a captured
-///    checked binding. The index is exactly the `PatternBinderId` of the
-///    binder, so a canonical id is a pure function of (module name, source
+///    checked binding. The index is exactly the CIR node of the binder's
+///    pattern, so a canonical id is a pure function of (module name, source
 ///    bytes) and is cache-safe to serialize in checked artifacts. Because the
 ///    mapping is the identity function, the originating binder is always
 ///    recoverable via `binder()`.
@@ -115,8 +114,8 @@ pub const CaptureId = enum(u32) {
     pub const max_generated_index: u32 = lift_bit - 1;
 
     /// The canonical capture id for a captured binder.
-    pub fn fromBinder(id: PatternBinderId) CaptureId {
-        return canonical(@backingInt(id));
+    pub fn fromBinder(binder_pattern: can.CIR.Pattern.Idx) CaptureId {
+        return canonical(@backingInt(binder_pattern));
     }
 
     /// The canonical capture id for a raw binder index.
@@ -156,9 +155,9 @@ pub const CaptureId = enum(u32) {
         return (@backingInt(self) & (generated_bit | lift_bit)) == (generated_bit | lift_bit);
     }
 
-    /// The `PatternBinderId` this canonical id was derived from. Asserts the id
+    /// The binder pattern this canonical id was derived from. Asserts the id
     /// is canonical.
-    pub fn binder(self: CaptureId) PatternBinderId {
+    pub fn binder(self: CaptureId) can.CIR.Pattern.Idx {
         std.debug.assert(self.isCanonical());
         return @fromBackingInt(@intCast(@backingInt(self)));
     }

@@ -26,7 +26,7 @@ test "body shards borrow compile-time descriptors through publication and rollba
     root_b.module.bytes[0] = 1;
     root_b.const_locator = .{
         .artifact = root_b.module,
-        .owner = .{ .hoisted_expr = .{ .module_idx = 1, .expr = @fromBackingInt(@intCast(2)) } },
+        .owner = .{ .hoisted_root = .{ .module_idx = 1, .root = @fromBackingInt(@intCast(2)) } },
         .template = @fromBackingInt(@intCast(3)),
         .source_scheme = std.mem.zeroes(@FieldType(check.CheckedModule.ConstLocator, "source_scheme")),
     };

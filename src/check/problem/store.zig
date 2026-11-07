@@ -11,7 +11,6 @@ const checked_ids = @import("../checked_ids.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
-const CIR = can.CIR;
 const CheckedExhaustivenessSiteId = checked_ids.CheckedExhaustivenessSiteId;
 const Problem = types.Problem;
 const ExtraStringIdx = types.ExtraStringIdx;
@@ -34,15 +33,9 @@ pub const Store = struct {
         destructure,
     };
 
-    pub const PendingStaticExhaustivenessMode = enum {
-        static,
-        empirical,
-    };
+    pub const PendingStaticExhaustivenessMode = can.ModuleEnv.ExhaustivenessObligation.Mode;
 
-    pub const ExhaustivenessSiteSource = union(enum) {
-        match_expr: CIR.Expr.Idx,
-        destructure_pattern: CIR.Pattern.Idx,
-    };
+    pub const ExhaustivenessSiteSource = can.ModuleEnv.ExhaustivenessObligation.Source;
 
     pub const PendingStaticExhaustiveness = struct {
         kind: EmpiricalSiteKind,
@@ -144,19 +137,6 @@ pub const Store = struct {
         });
     }
 
-    pub fn assignPendingStaticExhaustivenessSite(
-        self: *Self,
-        source: ExhaustivenessSiteSource,
-        site: CheckedExhaustivenessSiteId,
-    ) void {
-        for (self.pending_static_exhaustiveness.items) |*pending| {
-            if (!exhaustivenessSourcesEqual(pending.source, source)) continue;
-            pending.site = site;
-            return;
-        }
-        base.invariant("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
-    }
-
     /// Record that a checker-selected compile-time root will execute this site.
     /// The pending diagnostic must therefore be decided empirically by that
     /// root rather than flushed as an unconditionally runtime-reachable error.
@@ -222,6 +202,7 @@ pub const Store = struct {
                     .invalid_nominal_decl_recursion,
                     .infinite_recursion,
                     .anonymous_recursion,
+                    .polymorphic_recursion,
                     .row_label_conflict,
                     .polymorphic_value,
                     .polymorphic_var_annotation,

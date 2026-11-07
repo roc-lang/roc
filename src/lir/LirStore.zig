@@ -1304,7 +1304,7 @@ pub fn failureMeaning(self: *const Self, stmt: CFStmtId) ?lir_defs.FailureMeanin
             if (crash.checked_error) break :crash .checked_error;
             const extra = self.stmtRowOrDefault(crash.extra);
             if (extra.failed_value) |value| break :crash .{ .failed_value = .{ .module = self.loweringModuleKey(value.owner), .producer = value.producer } };
-            if (extra.literal_rejection) |site| break :crash .{ .literal_rejection = .{ .module = self.loweringModuleKey(site.owner), .checked_expr = site.checked_expr, .kind = site.kind } };
+            if (extra.literal_rejection) |site| break :crash .{ .literal_rejection = .{ .module = self.loweringModuleKey(site.owner), .node = site.node, .kind = site.kind } };
             break :crash null;
         },
         .comptime_exhaustiveness_failed => |failed| .{ .exhaustiveness = .{

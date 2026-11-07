@@ -48,7 +48,7 @@ const base = @import("base");
 const CoreCtx = @import("ctx").CoreCtx;
 
 // 1. Builtins + Coordinator
-var builtins = try eval.BuiltinModules.init(gpa);
+var builtins = try eval.BuiltinModules.init(gpa, io);
 defer builtins.deinit();
 
 var coord = try compile.coordinator.Coordinator.init(

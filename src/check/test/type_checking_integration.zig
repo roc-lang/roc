@@ -20,7 +20,7 @@ const MethodRegistryTestCheckedTypes = struct {
     store: Store = .{},
 
     const Store = struct {
-        pub fn payloadCount(_: Store) usize {
+        pub fn typeCount(_: Store) usize {
             @panic("the method registry test source declares no methods, so the registry never queries checked types");
         }
 
@@ -40,33 +40,17 @@ const MethodRegistryTestCheckedTypes = struct {
     }
 };
 
-const MethodRegistryTestCheckedBodies = struct {
-    pub fn patternBinderForSource(
-        _: *const @This(),
-        _: can.CIR.Pattern.Idx,
-    ) ?checked_ids.PatternBinderId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
+const MethodRegistryTestModuleIndex = struct {
+    pub fn reachesExpr(_: *const @This(), _: can.CIR.Expr.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
     }
 
-    pub fn exprIdForSource(
-        _: *const @This(),
-        _: can.CIR.Expr.Idx,
-    ) ?checked_ids.CheckedExprId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
+    pub fn reachesPattern(_: *const @This(), _: can.CIR.Pattern.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
     }
 
-    pub fn patternIdForSource(
-        _: *const @This(),
-        _: can.CIR.Pattern.Idx,
-    ) ?checked_ids.CheckedPatternId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
-    }
-
-    pub fn statementIdForSource(
-        _: *const @This(),
-        _: can.CIR.Statement.Idx,
-    ) ?checked_ids.CheckedStatementId {
-        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
+    pub fn reachesStatement(_: *const @This(), _: can.CIR.Statement.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
     }
 };
 
@@ -3831,7 +3815,7 @@ test "checked artifact method registry skips nominal associated values" {
         .by_def = &.{},
     };
     const checked_types = MethodRegistryTestCheckedTypes{};
-    const checked_bodies = MethodRegistryTestCheckedBodies{};
+    const module_index = MethodRegistryTestModuleIndex{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
@@ -3842,7 +3826,7 @@ test "checked artifact method registry skips nominal associated values" {
         &names,
         &template_lookup,
         &checked_types,
-        &checked_bodies,
+        &module_index,
     );
     defer registry.deinit(testing.allocator);
 
@@ -9008,10 +8992,10 @@ test "check type - mutually recursive functions - all annotated polymorphic" {
     );
 }
 
-test "check type - annotated self recursive function - polymorphic recursion allowed" {
+test "check type - annotated self recursive function - polymorphic recursion is rejected" {
     // An annotated def's self-reference instantiates its pre-declared scheme,
-    // so a recursive use at a specialized type is legal (polymorphic
-    // recursion for annotated defs).
+    // but the recursive use must pass the def's own type variables along
+    // unchanged: each call here would need `depth` at a larger type.
     const source =
         \\depth : List(a) -> U64
         \\depth = |list| match list {
@@ -9019,14 +9003,80 @@ test "check type - annotated self recursive function - polymorphic recursion all
         \\    [first, ..] => 1 + depth([[first]])
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "depth" } }, "List(a) -> U64");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
-test "check type - issue 11740 custom literal requirements in polymorphic recursion" {
-    // An annotated recursive edge may instantiate a at Poly(a). The literal
-    // therefore requires conversions at Poly(U8), Poly(Poly(U8)), and so on;
-    // the recursion depth is a runtime argument. A literal planner cannot
-    // assume that structural requirement deduplication makes this finite.
+test "check type - annotated self recursive function - swapped type variables are rejected" {
+    const source =
+        \\swap : U64, a, b -> U64
+        \\swap = |n, x, y| if n == 0 0 else 1 + swap(n - 1, y, x)
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - annotated self recursive function - unchanged type variables are accepted" {
+    const source =
+        \\countdown : U64, a -> a
+        \\countdown = |count, x| if count == 0 x else countdown(count - 1, x)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "countdown" } }, "U64, a -> a");
+}
+
+test "check type - annotated self recursive function - recursion at a closed type is accepted" {
+    // The recursive use mentions none of the def's own variables, so the
+    // recursion reaches one further instantiation and stops there.
+    const source =
+        \\restart : U64, a -> U64
+        \\restart = |count, _x| if count == 0 0 else 1 + restart(count - 1, 5.U64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "restart" } }, "U64, a -> U64");
+}
+
+test "check type - annotated mutual recursion - growth around the cycle is rejected" {
+    const source =
+        \\ping : U64, a -> U64
+        \\ping = |n, x| if n == 0 0 else pong(n - 1, x)
+        \\pong : U64, a -> U64
+        \\pong = |n, x| if n == 0 0 else ping(n - 1, [x])
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - annotated mutual recursion - variables that line up are accepted" {
+    const source =
+        \\Tree(a) := [Leaf(a), Node(List(Tree(a)))]
+        \\count_tree : Tree(a) -> U64
+        \\count_tree = |tree| match tree {
+        \\    Tree.Leaf(_) => 1
+        \\    Tree.Node(children) => count_children(children)
+        \\}
+        \\count_children : List(Tree(a)) -> U64
+        \\count_children = |children| {
+        \\    var $total = 0
+        \\    for child in children {
+        \\        $total = $total + count_tree(child)
+        \\    }
+        \\    $total
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "count_tree", .expected = "Tree(a) -> U64" },
+        .{ .def = "count_children", .expected = "List(Tree(a)) -> U64" },
+    });
+}
+
+test "check type - a generic function using another at a larger type without recursion is accepted" {
+    const source =
+        \\wrap_len : a -> U64
+        \\wrap_len = |x| List.len([x])
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "wrap_len" } }, "a -> U64");
+}
+
+test "check type - polymorphic recursion through a literal requirement is rejected" {
+    // The recursive use instantiates `a` at `Poly(a)`, so the literal would
+    // need conversions at `Poly(U8)`, `Poly(Poly(U8))`, and so on, as deep as
+    // a runtime argument says.
     const source =
         \\Poly(a) := [Val(a), Quoted(Str)].{
         \\    from_quote : Str -> Try(Poly(a), [BadQuotedBytes(Str)])
@@ -9054,7 +9104,7 @@ test "check type - issue 11740 custom literal requirements in polymorphic recurs
         \\}
         \\entry = |remaining| walk(remaining, Poly.Val(0.U8))
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "entry" } }, "U64 -> U64");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
@@ -13321,14 +13371,15 @@ test "check type - mutually recursive static dispatch - unannotated name-linked 
     });
 }
 
-test "check type - mutually recursive static dispatch - annotated polymorphic recursion into checked group member" {
+test "check type - mutually recursive static dispatch - annotated polymorphic recursion into checked group member is rejected" {
     // Polymorphic recursion: `deeper` dispatches `size` on `Poly((a, a))`, a
-    // DIFFERENT instantiation of the receiver than its own `Poly(a)`. The
-    // annotations license this—each method-syntax dispatch to an annotated
-    // target must instantiate the target's predeclared scheme, whether or not
-    // the target sits in the same name-linked group and has already been
-    // checked. (The `Poly.size`/`Poly.deeper` type-qualified calls create the
-    // name-graph cycle that makes the two methods one binding group.)
+    // DIFFERENT instantiation of the receiver than its own `Poly(a)`. Each
+    // method-syntax dispatch to an annotated target instantiates the target's
+    // predeclared scheme, whether or not the target sits in the same
+    // name-linked group and has already been checked, and the recursion
+    // through that dispatch grows the type on every trip. (The
+    // `Poly.size`/`Poly.deeper` type-qualified calls create the name-graph
+    // cycle that makes the two methods one binding group.)
     const source =
         \\Poly(a) := [Val(a)].{
         \\  size : Poly(a), U64 -> U64
@@ -13350,11 +13401,7 @@ test "check type - mutually recursive static dispatch - annotated polymorphic re
         \\}
         \\use = Poly.Val(1.U64).size(3)
     ;
-    try checkTypesModuleDefs(source, &.{
-        .{ .def = "Test.Poly.size", .expected = "Poly(a), U64 -> U64" },
-        .{ .def = "Test.Poly.deeper", .expected = "Poly(a), U64 -> U64" },
-        .{ .def = "use", .expected = "U64" },
-    });
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - mutually recursive static dispatch - annotated dispatch-only mutual methods" {
@@ -14694,6 +14741,42 @@ test "check type - row subsumption - a forwarder's input row stays closed" {
         \\forward = |x| x
         \\
         \\out = forward(C)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - row subsumption - a closed branch in result position widens into the annotated result" {
+    // A branch of an `if` or `match` in result position relates to the
+    // annotated result through a widening copy, exactly as a body that is the
+    // value itself does (design.md "Row Subsumption"), whichever branch
+    // comes first.
+    const source =
+        \\else_branch : [B, C], Bool -> [A, B, C]
+        \\else_branch = |v, first| if first { A } else { v }
+        \\
+        \\then_branch : [B, C], Bool -> [A, B, C]
+        \\then_branch = |v, first| if first { v } else { A }
+        \\
+        \\match_branch : [B, C], Bool -> [A, B, C]
+        \\match_branch = |v, first| match first {
+        \\    True => A
+        \\    False => v
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - row subsumption - a closed branch in result position may not produce a tag the annotation omits" {
+    // The widening copy re-opens only the branch's own closed row, so a
+    // branch whose row holds a tag the annotated result does not list is
+    // still rejected.
+    const source =
+        \\pick : [B, C], Bool -> [A, B]
+        \\pick = |v, first| if first { A } else { v }
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
