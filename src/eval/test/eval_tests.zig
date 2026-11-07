@@ -1801,6 +1801,73 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2.0, 3.0, 4.0, 5.0, 6.0], [1.0, 2.0, 5.0, 6.0], [1.0, 2.0, 3.0, 4.0, 5.0], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [])" },
     },
+    // List.keep_while and List.keep_until return a prefix of their input, so an
+    // item after the first rejected one is dropped even if it would be kept.
+    .{
+        .name = "inspect: List.keep_while and List.keep_until stop at the first rejected item",
+        .source =
+        \\{
+        \\    a = List.concat([1, 5], [2, 3])
+        \\    (
+        \\        a,
+        \\        List.keep_while(a, |x| x < 3),
+        \\        List.keep_until(a, |x| x > 3),
+        \\        List.keep_while(a, |_| True),
+        \\        List.keep_until(a, |_| False),
+        \\        List.keep_while(a, |_| False),
+        \\        List.keep_until(a, |_| True),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([1.0, 5.0, 2.0, 3.0], [1.0], [1.0], [1.0, 5.0, 2.0, 3.0], [1.0, 5.0, 2.0, 3.0], [], [])" },
+    },
+    .{
+        .name = "inspect: List.keep_while and List.keep_until over emptied unique lists",
+        .source = "(List.keep_while(List.drop_first(List.concat([1], [2]), 2), |_| True), List.keep_until(List.drop_first(List.concat([1], [2]), 2), |_| False))",
+        .expected = .{ .inspect_str = "([], [])" },
+    },
+    .{
+        .name = "inspect: List.keep_while over unique seamless slice",
+        .source = "List.keep_while(List.sublist(List.concat([1, 2], [3, 4]), { start: 1, len: 3 }), |x| x != 4)",
+        .expected = .{ .inspect_str = "[2.0, 3.0]" },
+    },
+    .{
+        .name = "inspect: List.keep_while predicate capturing the list",
+        .source =
+        \\{
+        \\    a = List.concat([5, 5], [7, 5])
+        \\    List.keep_while(a, |x| x == (a.get(0) ?? 0) and a.len() == 4)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5.0, 5.0]" },
+    },
+    .{
+        .name = "inspect: List.keep_while over unique list of heap strings",
+        .source = "List.keep_while(List.concat([Str.repeat(\"x\", 30), Str.repeat(\"y\", 30)], [Str.repeat(\"z\", 30)]), |s| !Str.starts_with(s, \"y\"))",
+        .expected = .{ .inspect_str = "[\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"]" },
+    },
+    .{
+        .name = "inspect: List.keep_until keeps every item of a unique list of heap strings",
+        .source = "List.keep_until(List.concat([Str.repeat(\"x\", 30), Str.repeat(\"y\", 30)], [Str.repeat(\"z\", 30)]), |_| False)",
+        .expected = .{ .inspect_str = "[\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\", \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"]" },
+    },
+    .{
+        .name = "inspect: List.keep_while and List.keep_until leave shared string list unchanged",
+        .source =
+        \\{
+        \\    a = List.concat([Str.repeat("x", 30)], [Str.repeat("y", 30)])
+        \\    b = List.keep_while(a, |s| Str.starts_with(s, "x"))
+        \\    c = List.keep_until(a, |_| True)
+        \\    (a, b, c)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"], [])" },
+    },
+    .{
+        .name = "inspect: List.keep_while over zero-sized items",
+        .source = "List.len(List.keep_while([{}, {}, {}], |_| True)).to_str()",
+        .expected = .{ .inspect_str = "\"3\"" },
+    },
     .{
         .name = "inspect: List.keep_oks and List.keep_errs with nothing to keep",
         .source =
