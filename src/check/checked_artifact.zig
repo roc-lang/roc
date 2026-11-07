@@ -54,7 +54,6 @@ const CheckedTypeRootPublisher = struct {
     imports: CheckedImportViews,
     store: *CheckedTypeStore,
     active: *CheckedSourceTypeRoots,
-    source_schemes: *collections.DenseMap(Var, CheckedTypeSchemeId),
     local_type_declarations: *const LocalTypeDeclarationIndex,
 
     /// Publish one root.
@@ -67,10 +66,10 @@ const CheckedTypeRootPublisher = struct {
         try self.visit(maybe_var orelse checkedArtifactInvariant(missing, .{}));
     }
 
-    /// Publish one root and the source scheme it owns.
+    /// Publish a root that owns a source scheme. A source scheme occupies
+    /// no store entry: its id is its root's (`CheckedSourceTypes.schemeForSourceVar`).
     pub fn visitScheme(self: *const CheckedTypeRootPublisher, var_: Var) Allocator.Error!void {
-        const root = try appendCheckedTypeRoot(self.allocator, self.module, self.store, self.active, var_);
-        try self.store.publishSourceScheme(self.allocator, self.module, self.source_schemes, var_, root);
+        try self.visit(var_);
     }
 
     /// Publish a local nominal declaration and the roots its annotation names.
@@ -175,8 +174,6 @@ pub fn forEachCheckedSourceTypeRoot(
     }
 
     for (module.requiresTypes()) |required_type| {
-        try visitor.visitScheme(ModuleEnv.varFrom(required_type.type_anno));
-
         const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
         for (aliases) |alias| {
             const alias_statement = module_env.store.getStatement(alias.alias_stmt_idx);
@@ -215,6 +212,33 @@ pub fn forEachCheckedSourceTypeRoot(
         try visitor.visit(@fromBackingInt(result.wide_var));
     }
 
+    try forEachCheckedSourceScheme(module, inputs, visitor);
+
+    // An app's solution of a platform requirement names the solved
+    // requirement type and each requirement identity variable's solution.
+    for (module_env.platform_requirement_solutions.items.items) |solution| {
+        switch (solution.outcome) {
+            .checked_error => continue,
+            .success => {},
+        }
+        for (module_env.platformRequirementIdentityVars(solution)) |identity_var| try visitor.visit(identity_var);
+        try visitor.visit(solution.solved_var);
+    }
+}
+
+/// Every source scheme of a module's checked type publication: each root
+/// `forEachCheckedSourceTypeRoot` publishes with a scheme of its own. A visitor
+/// provides `visitScheme(Var)`.
+pub fn forEachCheckedSourceScheme(
+    module: TypedCIR.Module,
+    inputs: CheckedSourceTypeRootInputs,
+    visitor: anytype,
+) Allocator.Error!void {
+    const module_env = module.moduleEnvConst();
+    for (module.requiresTypes()) |required_type| {
+        try visitor.visitScheme(ModuleEnv.varFrom(required_type.type_anno));
+    }
+
     for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
         try visitor.visitScheme(module.defType(def_idx));
     }
@@ -234,17 +258,6 @@ pub fn forEachCheckedSourceTypeRoot(
     // under its binding's generalized scheme like a top-level function.
     for (inputs.promoted_local_procedures) |promoted| {
         try visitor.visitScheme(ModuleEnv.varFrom(promoted.pattern));
-    }
-
-    // An app's solution of a platform requirement names the solved
-    // requirement type and each requirement identity variable's solution.
-    for (module_env.platform_requirement_solutions.items.items) |solution| {
-        switch (solution.outcome) {
-            .checked_error => continue,
-            .success => {},
-        }
-        for (module_env.platformRequirementIdentityVars(solution)) |identity_var| try visitor.visit(identity_var);
-        try visitor.visit(solution.solved_var);
     }
 }
 
@@ -2713,7 +2726,7 @@ fn platformRequiredBindingCheckedType(binding: PlatformRequiredBinding) CheckedT
 fn checkedTypeIdForVar(
     _: Allocator,
     module: TypedCIR.Module,
-    checked_types: *const CheckedTypePublication,
+    checked_types: *const CheckedSourceTypes,
     var_: Var,
 ) Allocator.Error!CheckedTypeId {
     return checked_types.rootForSourceVar(module, var_) orelse {
@@ -4871,54 +4884,78 @@ const CheckedStructuralRootEntry = struct {
     next_plus_one: u32,
 };
 
-const CheckedTypePublication = struct {
-    store: CheckedTypeStore,
-    /// The source graph is immutable throughout publication. Keep its direct
-    /// index through registry construction and all remaining source consumers.
-    source_types: ?CheckedSourceTypeRoots = null,
-    imports: CheckedImportViews,
-    /// Complete source-scheme IDs, scoped to this immutable source module's
-    /// publication. Specialized checked roots have independent scheme keys.
-    source_schemes: collections.DenseMap(Var, CheckedTypeSchemeId),
+/// A module's source types as its checked tables read them: each source
+/// variable type publication reached, at its checked type id, and each source
+/// scheme (`forEachCheckedSourceScheme`) at its root's id.
+pub const CheckedSourceTypes = struct {
+    store: *CheckedTypeStore,
+    /// The checked module the types belong to.
+    current_owner: ModuleId,
+    /// Resolves the modules the types name.
+    resolver: ModuleResolver,
+    /// The resolved variables of the module's source schemes, kept in debug
+    /// builds only.
+    source_schemes: SourceSchemes,
 
-    pub fn schemeForSourceVar(self: *const CheckedTypePublication, module: TypedCIR.Module, var_: Var) CheckedTypeSchemeId {
+    const SourceSchemes = if (std.debug.runtime_safety) collections.DenseMap(Var, void) else void;
+
+    pub fn init(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        inputs: CheckedSourceTypeRootInputs,
+        store: *CheckedTypeStore,
+        current_owner: ModuleId,
+        resolver: ModuleResolver,
+    ) Allocator.Error!CheckedSourceTypes {
+        var result = CheckedSourceTypes{
+            .store = store,
+            .current_owner = current_owner,
+            .resolver = resolver,
+            .source_schemes = if (std.debug.runtime_safety) collections.DenseMap(Var, void).init(allocator) else {},
+        };
+        if (std.debug.runtime_safety) {
+            errdefer result.source_schemes.deinit();
+            const collector = SourceSchemeCollector{ .module = module, .schemes = &result.source_schemes };
+            try forEachCheckedSourceScheme(module, inputs, &collector);
+        }
+        return result;
+    }
+
+    pub fn deinit(self: *CheckedSourceTypes) void {
+        if (std.debug.runtime_safety) self.source_schemes.deinit();
+    }
+
+    const SourceSchemeCollector = struct {
+        module: TypedCIR.Module,
+        schemes: *collections.DenseMap(Var, void),
+
+        pub fn visitScheme(self: *const SourceSchemeCollector, var_: Var) Allocator.Error!void {
+            try self.schemes.put(self.module.typeStoreConst().resolveVar(var_).var_, {});
+        }
+    };
+
+    /// The source scheme of `var_`, whose root publication published with a
+    /// scheme of its own.
+    pub fn schemeForSourceVar(self: *const CheckedSourceTypes, module: TypedCIR.Module, var_: Var) CheckedTypeSchemeId {
         const resolved = module.typeStoreConst().resolveVar(var_).var_;
-        return self.source_schemes.get(resolved) orelse
+        if (std.debug.runtime_safety and !self.source_schemes.contains(resolved)) {
             checkedArtifactInvariant("source scheme was not published", .{});
+        }
+        return @fromBackingInt(@backingInt(type_ids.fromVar(resolved)));
     }
 
     /// The checked type of the source variable `var_`, or null when
     /// publication never reached it.
-    pub fn rootForSourceVar(self: *const CheckedTypePublication, module: TypedCIR.Module, var_: Var) ?CheckedTypeId {
-        const resolved = module.typeStoreConst().resolveVar(var_).var_;
-        if (!self.store.sealed_var_facts.items[@backingInt(resolved)].reached) return null;
-        return self.source_types.?.get(module, resolved);
+    pub fn rootForSourceVar(self: *const CheckedSourceTypes, module: TypedCIR.Module, var_: Var) ?CheckedTypeId {
+        return self.store.reachedSourceRoot(module.typeStoreConst(), var_);
     }
 
     /// The checked type of a method binding's callable value, which type
     /// publication reached from the binding's class
     /// (`static_dispatch.classifyMethodBindings`).
-    pub fn methodCallableType(self: *const CheckedTypePublication, module: TypedCIR.Module, var_: Var) CheckedTypeId {
+    pub fn methodCallableType(self: *const CheckedSourceTypes, module: TypedCIR.Module, var_: Var) CheckedTypeId {
         return self.rootForSourceVar(module, var_) orelse
             checkedArtifactInvariant("a method binding's callable type was not reached by type publication", .{});
-    }
-
-    /// Source-type enumeration is the only source-type producer. Free its
-    /// traversal scratch; source-id lookups remain available until checking
-    /// finalizes.
-    fn finishSourceTypes(self: *CheckedTypePublication) void {
-        self.source_types.?.releaseScratch();
-    }
-
-    fn deinitIndex(self: *CheckedTypePublication, _: Allocator) void {
-        if (self.source_types) |*source_types| source_types.deinit();
-        self.source_types = null;
-        self.source_schemes.clearAndFree();
-    }
-
-    pub fn deinit(self: *CheckedTypePublication, allocator: Allocator) void {
-        self.deinitIndex(allocator);
-        self.store.deinit(allocator);
     }
 };
 
@@ -5365,7 +5402,7 @@ pub const CheckedTypeStore = struct {
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
         promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
         sealed_keys: *sealed_type_keys.SealedTypeKeys,
-    ) Allocator.Error!CheckedTypePublication {
+    ) Allocator.Error!CheckedTypeStore {
         const import_views = CheckedImportViews{
             .current_owner = current_owner,
             .direct = imports,
@@ -5376,10 +5413,8 @@ pub const CheckedTypeStore = struct {
         try sealed_type_view.buildColumns(allocator, module.moduleEnvConst(), names, import_views, store.sealedColumns());
         store.attachSealedTypes(module.moduleEnvConst(), sealed_keys, try SynthesizedTypeKeys.create(sealed_keys.allocator, sealed_keys.io, 0));
         store.key_names = names;
-        var source_schemes = collections.DenseMap(Var, CheckedTypeSchemeId).init(allocator);
-        errdefer source_schemes.deinit();
         var active = try CheckedSourceTypeRoots.init(allocator, module);
-        errdefer active.deinit();
+        defer active.deinit();
         var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, module_index);
         defer local_type_declarations.deinit();
         const publisher = CheckedTypeRootPublisher{
@@ -5389,7 +5424,6 @@ pub const CheckedTypeStore = struct {
             .imports = import_views,
             .store = &store,
             .active = &active,
-            .source_schemes = &source_schemes,
             .local_type_declarations = &local_type_declarations,
         };
         const root_inputs = CheckedSourceTypeRootInputs{
@@ -5398,27 +5432,15 @@ pub const CheckedTypeStore = struct {
             .promoted_local_procedures = promoted_local_procedures,
         };
         try forEachCheckedSourceTypeRoot(module, root_inputs, &publisher);
-
-        return .{
-            .store = store,
-            .source_types = active,
-            .imports = import_views,
-            .source_schemes = source_schemes,
-        };
+        return store;
     }
 
-    fn publishSourceScheme(
-        self: *CheckedTypeStore,
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        source_schemes: *collections.DenseMap(Var, CheckedTypeSchemeId),
-        source_var: Var,
-        root: CheckedTypeId,
-    ) Allocator.Error!void {
-        const resolved = module.typeStoreConst().resolveVar(source_var).var_;
-        if (source_schemes.contains(resolved)) return;
-        const id = try self.internScheme(allocator, .source, root);
-        try source_schemes.put(resolved, id);
+    /// The checked type of source variable `var_` of the store's module, or
+    /// null when type publication never reached it.
+    pub fn reachedSourceRoot(self: *const CheckedTypeStore, source_types: *const types.Store, var_: Var) ?CheckedTypeId {
+        const resolved = source_types.resolveVar(var_).var_;
+        if (!self.sealed_var_facts.items[@backingInt(resolved)].reached) return null;
+        return type_ids.fromVar(resolved);
     }
 
     pub fn view(self: *const CheckedTypeStore) CheckedTypeStoreView {
@@ -9254,12 +9276,12 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
         }
     } else return error.ExpectedNominalStatement;
 
-    const nominal_root = publication.rootForSourceVar(module, ModuleEnv.varFrom(nominal_stmt)) orelse return error.ExpectedNominalRoot;
-    const nominal_payload = publication.store.payload(nominal_root);
+    const nominal_root = publication.reachedSourceRoot(module.typeStoreConst(), ModuleEnv.varFrom(nominal_stmt)) orelse return error.ExpectedNominalRoot;
+    const nominal_payload = publication.payload(nominal_root);
     if (nominal_payload != .nominal) return error.ExpectedNominalPayload;
     const nominal = nominal_payload.nominal;
-    const backing = publication.store.view().nominalBackingTemplateForPayload(nominal) orelse return error.ExpectedNominalBacking;
-    try testing.expectEqual(expected, publication.store.payload(backing));
+    const backing = publication.view().nominalBackingTemplateForPayload(nominal) orelse return error.ExpectedNominalBacking;
+    try testing.expectEqual(expected, publication.payload(backing));
 }
 
 test "checked type publication normalizes closed empty tag union backing" {
@@ -9723,7 +9745,7 @@ test "body analyses read state merges, divergence and inspect elision from the c
     const bodies = CheckedBodies{
         .env = module.moduleEnvConst(),
         .names = &names,
-        .types = checked_type_publication.store.view(),
+        .types = checked_type_publication.view(),
         .analyses = analyses,
         .tables = .{ .plans = &plans },
     };
@@ -9806,7 +9828,7 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
     const bodies = CheckedBodies{
         .env = module.moduleEnvConst(),
         .names = &names,
-        .types = checked_type_publication.store.view(),
+        .types = checked_type_publication.view(),
         .analyses = analyses,
     };
 
@@ -11546,7 +11568,7 @@ const SelectedHoistedCallableTable = struct {
         roots: *const CompileTimeRootTable,
         callable_eval_templates: *CallableEvalTemplateTable,
         procedure_bindings: *TopLevelProcedureBindingTable,
-        checked_type_publication: *const CheckedTypePublication,
+        checked_type_publication: *const CheckedSourceTypes,
         promoted_templates: []const PromotedProcedureTemplateEntry,
     ) Allocator.Error!SelectedHoistedCallableTable {
         const by_pattern = try allocator.alloc(?TopLevelProcedureBindingRef, module.nodeCount());
@@ -11800,7 +11822,7 @@ pub const ResolvedValueRefTable = struct {
         top_level_values: *const TopLevelValueTable,
         selected_hoisted_callables: *const SelectedHoistedCallableTable,
         hoisted_constants: *const HoistedConstTable,
-        checked_types: *const CheckedTypePublication,
+        checked_types: *const CheckedSourceTypes,
     ) Allocator.Error!ResolvedValueRefTable {
         const env = module.moduleEnvConst();
         const references = env.value_references.items.items;
@@ -12487,7 +12509,7 @@ fn noteUnquantifiedReceiver(
 fn sealCheckedProcedureTemplateRefs(
     allocator: Allocator,
     module: TypedCIR.Module,
-    checked_types: *const CheckedTypePublication,
+    checked_types: *const CheckedSourceTypes,
     bodies: CheckedBodies,
     diagnostics: *const body_analyses.NodeBits,
     default_exprs: []const CIR.Expr.Idx,
@@ -17404,7 +17426,7 @@ fn sealConstEvalTemplatesForRoots(
 const CheckedTemplateRefCollector = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
-    checked_types: *const CheckedTypePublication,
+    checked_types: *const CheckedSourceTypes,
     bodies: CheckedBodies,
     /// Diagnostic errors as publication knows them before total dispatch
     /// resolution (`body_analyses.DiagnosticMode.ordinary`).
@@ -17447,7 +17469,7 @@ const CheckedTemplateRefCollector = struct {
     fn init(
         allocator: Allocator,
         module: TypedCIR.Module,
-        checked_types: *const CheckedTypePublication,
+        checked_types: *const CheckedSourceTypes,
         bodies: CheckedBodies,
         diagnostics: *const body_analyses.NodeBits,
         static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
@@ -17550,7 +17572,7 @@ const CheckedTemplateRefCollector = struct {
     /// result whose value crosses the explicit return boundary into the
     /// function's `Try`, so what reaches the return is that `Try`.
     fn lambdaDeliveredReturnType(self: *const CheckedTemplateRefCollector, fn_ty: CheckedTypeId) CheckedTypeId {
-        return checkedFunctionPayload(&self.checked_types.store, fn_ty, "checked lambda specialization relation").ret;
+        return checkedFunctionPayload(self.checked_types.store, fn_ty, "checked lambda specialization relation").ret;
     }
 
     fn appendProcedureRelation(
@@ -18416,7 +18438,7 @@ pub const CheckedProcedureTemplateTable = struct {
         module: TypedCIR.Module,
         value_binding_defs: []const CIR.Def.Idx,
         owner_artifact: canonical.ArtifactRef,
-        checked_type_publication: *CheckedTypePublication,
+        checked_type_publication: *const CheckedSourceTypes,
         module_index: *const ModuleIndex,
     ) Allocator.Error!CheckedProcedureTemplateTable {
         var templates = std.ArrayList(CheckedProcedureTemplate).empty;
@@ -18499,7 +18521,7 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         owner_artifact: canonical.ArtifactRef,
-        checked_type_publication: *CheckedTypePublication,
+        checked_type_publication: *const CheckedSourceTypes,
         module_index: *const ModuleIndex,
         promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
     ) Allocator.Error!void {
@@ -25672,7 +25694,7 @@ pub const CompileTimeRootTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         value_binding_defs: []const CIR.Def.Idx,
-        checked_types: *CheckedTypePublication,
+        checked_types: *const CheckedSourceTypes,
         module_index: *const ModuleIndex,
         procedure_templates: *const CheckedProcedureTemplateTable,
     ) Allocator.Error!CompileTimeRootTable {
@@ -25867,7 +25889,7 @@ pub const CompileTimeRootTable = struct {
         roots: *std.ArrayList(CompileTimeRoot),
         allocator: Allocator,
         module: TypedCIR.Module,
-        checked_types: *const CheckedTypePublication,
+        checked_types: *const CheckedSourceTypes,
         module_index: *const ModuleIndex,
         statement_idx: CIR.Statement.Idx,
         body_expr: CIR.Expr.Idx,
@@ -25924,7 +25946,7 @@ pub const CompileTimeRootTable = struct {
 fn publishCompileTimeRootRequestEligibility(
     allocator: Allocator,
     module: TypedCIR.Module,
-    checked_types: *const CheckedTypePublication,
+    checked_types: *const CheckedSourceTypes,
     roots: []CompileTimeRoot,
 ) Allocator.Error!void {
     for (roots) |*root| {
@@ -25945,9 +25967,9 @@ fn publishCompileTimeRootRequestEligibility(
         };
         const context_free = try checkedTypeIsContextFreeCompileTimeRoot(
             allocator,
-            checked_types.imports.current_owner,
+            checked_types.current_owner,
             checked_types.store.view(),
-            checked_types.imports.resolver(),
+            checked_types.resolver,
             producer_callable_type_is_fixed,
             root.checked_type,
         );
@@ -28190,7 +28212,7 @@ const SelectedHoistedRootBody = struct {
 fn selectedHoistedRootBody(
     allocator: Allocator,
     module: TypedCIR.Module,
-    checked_types: *CheckedTypePublication,
+    checked_types: *const CheckedSourceTypes,
     module_index: *const ModuleIndex,
     selected: hoist_roots.SelectedHoistedRoot,
 ) Allocator.Error!SelectedHoistedRootBody {
@@ -28332,7 +28354,7 @@ pub const TopLevelValueTable = struct {
         const_templates: *ConstTemplateTable,
         artifact_key: CheckedModuleArtifactKey,
         compile_time_roots: *const CompileTimeRootTable,
-        checked_type_publication: *const CheckedTypePublication,
+        checked_type_publication: *const CheckedSourceTypes,
     ) Allocator.Error!TopLevelValueTable {
         var entries = std.ArrayList(TopLevelValueEntry).empty;
         errdefer entries.deinit(allocator);
@@ -28527,7 +28549,7 @@ pub const HoistedConstTable = struct {
         checked_types: *CheckedTypeStore,
         roots: *const CompileTimeRootTable,
         const_templates: *ConstTemplateTable,
-        checked_type_publication: *const CheckedTypePublication,
+        checked_type_publication: *const CheckedSourceTypes,
     ) Allocator.Error!HoistedConstTable {
         var entries = std.ArrayList(HoistedConstEntry).empty;
         errdefer entries.deinit(allocator);
@@ -33964,7 +33986,7 @@ pub fn inferenceKeyFromModuleEnv(
 fn publicationBodies(
     env: *const ModuleEnv,
     names: *const canonical.CanonicalNameStore,
-    checked_type_publication: *const CheckedTypePublication,
+    checked_type_publication: *const CheckedSourceTypes,
     analyses: *BodyAnalyses,
     tables: checked_bodies_mod.Tables,
 ) CheckedBodies {
@@ -33983,7 +34005,7 @@ fn publicationDefaultExprs(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    checked_type_publication: *const CheckedTypePublication,
+    checked_type_publication: *const CheckedSourceTypes,
 ) Allocator.Error![]CIR.Expr.Idx {
     const module_env = module.moduleEnvConst();
     const self_origin = try names.internModuleIdentity(module_env.moduleIdentityHash(module_env.selfModuleIdentity()));
@@ -34104,11 +34126,15 @@ pub fn publishFromTypedModule(
     const sealed_keys = try sealed_type_keys.SealedTypeKeys.create(allocator, inputs.io, module_env);
     var sealed_keys_owned = true;
     errdefer if (sealed_keys_owned) sealed_keys.destroy();
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key.digest(), inputs.imports, inputs.available_artifacts, module_index, selected_hoisted_roots, promoted_local_procedures, sealed_keys);
-    defer checked_type_publication.deinitIndex(allocator);
-    errdefer if (!stores_moved) checked_type_publication.store.deinit(allocator);
-    const checked_types = &checked_type_publication.store;
-    checked_type_publication.finishSourceTypes();
+    var checked_type_store = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key.digest(), inputs.imports, inputs.available_artifacts, module_index, selected_hoisted_roots, promoted_local_procedures, sealed_keys);
+    errdefer if (!stores_moved) checked_type_store.deinit(allocator);
+    const checked_types = &checked_type_store;
+    var checked_type_publication = try CheckedSourceTypes.init(allocator, module, .{
+        .module_index = module_index,
+        .selected_hoisted_roots = selected_hoisted_roots,
+        .promoted_local_procedures = promoted_local_procedures,
+    }, checked_types, artifact_key.digest(), module_analyses.resolver orelse checkedArtifactInvariant("a published module's analyses have no resolver", .{}));
+    defer checked_type_publication.deinit();
 
     const default_exprs = try publicationDefaultExprs(allocator, module, &canonical_names, &checked_type_publication);
     defer allocator.free(default_exprs);
@@ -34278,9 +34304,6 @@ pub fn publishFromTypedModule(
     var inference = try inputs.inference.dupe(allocator);
     errdefer inference.deinit(allocator);
 
-    // All source-to-checked metadata has been consumed. Release its scratch
-    // before compile-time evaluation can allocate specialization/backend data.
-    checked_type_publication.deinitIndex(allocator);
     checked_types.markPublished();
     checked_types.releaseSuperseded(allocator);
 
@@ -36105,33 +36128,34 @@ test "issue 11128 source scheme publication names each source root once" {
     const module = modules.module(0);
     var counter = std.testing.FailingAllocator.init(gpa, .{});
     const allocator = counter.allocator();
-    var publication = CheckedTypePublication{
-        .store = .{},
-        .imports = .{ .current_owner = .{}, .direct = &.{} },
-        .source_schemes = collections.DenseMap(Var, CheckedTypeSchemeId).init(allocator),
-    };
-    defer publication.deinit(allocator);
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
     var names = canonical.CanonicalNameStore.init(allocator);
     defer names.deinit();
-    const test_keys = try attachTestSealedTypes(allocator, module, &names, publication.imports, &publication.store);
+    const import_views = CheckedImportViews{ .current_owner = .{}, .direct = &.{} };
+    const test_keys = try attachTestSealedTypes(allocator, module, &names, import_views, &store);
     defer test_keys.destroy();
     var active = try CheckedSourceTypeRoots.init(allocator, module);
     defer active.deinit();
+    var module_index = try ModuleIndex.build(allocator, module.moduleEnvConst(), &.{});
+    defer module_index.deinit(allocator);
     const defs = env.module_env.store.sliceDefs(env.module_env.global_value_defs);
+    for (defs) |def| _ = try appendCheckedTypeRoot(allocator, module, &store, &active, module.defType(def));
+    var source_types = try CheckedSourceTypes.init(allocator, module, .{
+        .module_index = &module_index,
+        .selected_hoisted_roots = &.{},
+        .promoted_local_procedures = &.{},
+    }, &store, .{}, import_views.resolver());
+    defer source_types.deinit();
     for (defs) |def| {
-        const root = try appendCheckedTypeRoot(allocator, module, &publication.store, &active, module.defType(def));
-        try publication.store.publishSourceScheme(allocator, module, &publication.source_schemes, module.defType(def), root);
         const expected = try canonical_type_keys.schemeFromVar(gpa, module.typeStoreConst(), module.moduleEnvConst(), module.defType(def));
-        try std.testing.expectEqualDeep(expected, try publication.store.view().schemeKey(publication.schemeForSourceVar(module, module.defType(def))));
+        try std.testing.expectEqualDeep(expected, try store.view().schemeKey(source_types.schemeForSourceVar(module, module.defType(def))));
     }
-    // Each source root names one scheme: publishing the schemes again adds
-    // nothing and allocates nothing.
+    // Each source root names one scheme, its root's own id: reading the
+    // schemes again allocates nothing.
     const allocations = counter.allocated_bytes;
     for (0..128) |_| {
-        for (defs) |def| {
-            try publication.store.publishSourceScheme(allocator, module, &publication.source_schemes, module.defType(def), active.get(module, module.defType(def)));
-            _ = publication.schemeForSourceVar(module, module.defType(def));
-        }
+        for (defs) |def| _ = source_types.schemeForSourceVar(module, module.defType(def));
     }
     try std.testing.expectEqual(allocations, counter.allocated_bytes);
 }

@@ -631,7 +631,7 @@ fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
     var publication = try CheckedTypeStore.fromModule(allocator, module, &names, ModuleId{}, &imports, &.{}, &module_index, &.{}, &.{}, publication_keys);
     defer publication.deinit(allocator);
 
-    const view = publication.store.sealedView(module.moduleEnvConst());
+    const view = publication.sealedView(module.moduleEnvConst());
     var rendered: usize = 0;
     for (view.var_facts, 0..) |facts, raw| {
         if (!facts.reached) continue;
