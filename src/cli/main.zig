@@ -154,6 +154,7 @@ const default_app = @import("default_app.zig");
 const install_store = @import("install.zig");
 const host_symbols = @import("host_symbols.zig");
 const link_artifacts = @import("link_artifacts.zig");
+const test_outcome_file = @import("test_outcome_file.zig");
 const roc_target = @import("target.zig");
 const target_selection = @import("target_selection.zig");
 pub const targets_validator = @import("targets_validator.zig");
@@ -181,6 +182,7 @@ comptime {
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
         std.testing.refAllDecls(link_artifacts);
+        std.testing.refAllDecls(test_outcome_file);
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(host_prelink);
@@ -12691,10 +12693,26 @@ const CliTestTranscriptEvent = struct {
     payload: []const u8,
 };
 
+/// Where a result's `failure_detail` came from: the expect's own source,
+/// which a reused outcome rebuilds from the current checked module, or
+/// execution, whose message a reused outcome stores (design.md "Test
+/// outcome files").
+const CliTestDetailOrigin = enum(u8) {
+    none,
+    source,
+    execution,
+};
+
 const CliTestResultItem = struct {
     result: CliTestResult,
     order: u32,
     region: base.Region,
+    detail_origin: CliTestDetailOrigin = .none,
+    /// Whether the result observes the program alone, so a later run of the
+    /// same checked sources under the same execution mode has it again. A
+    /// failure of the executing process (the interpreter running out of
+    /// memory) is not an observation of the program.
+    reusable: bool = true,
     /// Executing root that owns this inline observation, before coalescing.
     owner_order: ?u32 = null,
     inline_expect: bool = false,
@@ -12872,10 +12890,42 @@ const CliTestPlanModule = struct {
     test_roots: []check.CheckedArtifact.RootRequest,
     /// Complete reporting-plan slot for each source root, independent of the subset.
     result_indices: []u32,
+    /// For each source root, the index of its outcome in the module's
+    /// outcome file when that outcome is reused (design.md "Test outcome
+    /// files"); only roots without one run.
+    reused: []?u32,
+    /// The module's outcome file, when this command caches test outcomes.
+    outcome_file: ?CliTestOutcomeFile = null,
+
+    /// How many of the module's roots this command runs.
+    fn runCount(self: *const CliTestPlanModule) usize {
+        var count: usize = 0;
+        for (self.reused) |reused| count += @intFromBool(reused == null);
+        return count;
+    }
 
     fn deinit(self: *CliTestPlanModule, allocator: Allocator) void {
         allocator.free(self.test_roots);
         allocator.free(self.result_indices);
+        allocator.free(self.reused);
+        if (self.outcome_file) |*file| file.deinit(allocator);
+    }
+};
+
+/// One module's outcome file as this command read it (design.md "Test
+/// outcome files").
+const CliTestOutcomeFile = struct {
+    key: [32]u8,
+    /// The outcomes the file records; none when there was no file.
+    outcomes: test_outcome_file.Outcomes,
+    /// The file's bytes, which `outcomes` borrow and the cache manager's
+    /// allocator owns.
+    bytes: ?[]const u8,
+    bytes_allocator: Allocator,
+
+    fn deinit(self: *CliTestOutcomeFile, allocator: Allocator) void {
+        test_outcome_file.free(allocator, self.outcomes);
+        if (self.bytes) |bytes| self.bytes_allocator.free(bytes);
     }
 };
 
@@ -13085,6 +13135,9 @@ fn buildCliTestPlan(
 
         const result_indices = try ctx.gpa.alloc(u32, test_roots.len);
         errdefer ctx.gpa.free(result_indices);
+        const reused = try ctx.gpa.alloc(?u32, test_roots.len);
+        errdefer ctx.gpa.free(reused);
+        @memset(reused, null);
         for (test_roots, result_indices, 0..) |root, *result_slot, root_index| {
             const result_index: u32 = @intCast(entries.items.len);
             result_slot.* = result_index;
@@ -13105,6 +13158,7 @@ fn buildCliTestPlan(
             .artifact = artifact,
             .test_roots = test_roots,
             .result_indices = result_indices,
+            .reused = reused,
         });
     }
 
@@ -13135,6 +13189,247 @@ fn testRootRegion(
             base.invariant("CLI test invariant violated: test root was not published from an expect statement", .{});
         },
     };
+}
+
+/// The directory group of every test outcome file.
+const cli_test_outcome_scope = "test outcomes";
+
+/// The identity of a module's outcome file (design.md "Test outcome files").
+fn cliTestOutcomeFileKey(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, strategy: base.SpecializationStrategy, opt: cli_args.OptLevel) [32]u8 {
+    const inputs = test_outcome_file.Inputs{
+        .artifact_key = artifact.key.bytes,
+        .compiler = build_options.compiler_compatibility_id,
+        .target = @tagName(RocTarget.detectNative()),
+        .strategy = @tagName(strategy),
+        .opt = @tagName(opt),
+    };
+    return inputs.key();
+}
+
+fn compareTestRootOrder(target: u32, outcome: test_outcome_file.Outcome) std.math.Order {
+    return std.math.order(target, outcome.order);
+}
+
+/// Read every planned module's outcome file and reuse the outcome of each
+/// test root it records, so that only the other roots are lowered and run.
+/// An outcome naming an inline expect in a module the plan cannot report
+/// against is not reused. Returns how many roots are reused.
+fn admitCliTestOutcomes(
+    ctx: *CliCtx,
+    manager: *CacheManager,
+    plan: *CliTestPlan,
+    strategy: base.SpecializationStrategy,
+    opt: cli_args.OptLevel,
+    source_modules: *const CliTestSourceModuleMap,
+) Allocator.Error!usize {
+    var reused_count: usize = 0;
+    for (plan.modules) |*planned| {
+        const key = cliTestOutcomeFileKey(planned.artifact, strategy, opt);
+        const bytes = manager.loadFamilyBytes(.test_outcomes, key, cli_test_outcome_scope);
+        const outcomes: test_outcome_file.Outcomes = if (bytes) |owned| test_outcome_file.parse(ctx.gpa, owned) catch |err| {
+            manager.allocator.free(owned);
+            return err;
+        } else &.{};
+        planned.outcome_file = .{ .key = key, .outcomes = outcomes, .bytes = bytes, .bytes_allocator = manager.allocator };
+        for (planned.test_roots, planned.reused) |root, *reused| {
+            const index = std.sort.binarySearch(test_outcome_file.Outcome, outcomes, root.order, compareTestRootOrder) orelse continue;
+            const outcome = outcomes[index];
+            // The file's bytes are data: an event this compiler cannot
+            // render, like an inline expect it cannot report against, makes
+            // the entry a miss rather than an assumption.
+            var renderable = true;
+            for (outcome.events) |event| {
+                if (std.enums.fromInt(CliTestTranscriptStream, event.stream) == null or std.enums.fromInt(CliTestTranscriptEventKind, event.kind) == null) renderable = false;
+            }
+            for (outcome.inline_expects) |inline_expect| {
+                const source_module = source_modules.byIdentity(inline_expect.module) orelse {
+                    renderable = false;
+                    continue;
+                };
+                if (source_module.env == null) renderable = false;
+            }
+            if (!renderable) continue;
+            reused.* = @intCast(index);
+            reused_count += 1;
+        }
+    }
+    return reused_count;
+}
+
+/// The result items of a root whose outcome a module's outcome file
+/// records: its own, then one per inline expect it reached, appended to
+/// `own` and `inline_expects` respectively. The root's region and a detail
+/// from its source are read from the current checked module.
+fn appendReusedCliTestOutcome(
+    ctx: *CliCtx,
+    planned: *const CliTestPlanModule,
+    root: check.CheckedArtifact.RootRequest,
+    outcome: test_outcome_file.Outcome,
+    source_modules: *const CliTestSourceModuleMap,
+    own: *std.ArrayList(CliTestResultItem),
+    inline_expects: *std.ArrayList(CliTestResultItem),
+) Allocator.Error!void {
+    const env = planned.module.semantic.env;
+    const transcript = try ctx.gpa.alloc(CliTestTranscriptEvent, outcome.events.len);
+    var copied_events: usize = 0;
+    errdefer {
+        deinitCliTestTranscriptEventPayloads(ctx.gpa, transcript[0..copied_events]);
+        ctx.gpa.free(transcript);
+    }
+    for (outcome.events, transcript) |event, *copy| {
+        copy.* = .{
+            .stream = @fromBackingInt(@intCast(event.stream)),
+            .kind = @fromBackingInt(@intCast(event.kind)),
+            .payload = try ctx.gpa.dupe(u8, event.payload),
+        };
+        copied_events += 1;
+    }
+    var detail_visibility: CliTestFailureDetailVisibility = .always;
+    const failure_detail: ?[]const u8 = switch (outcome.detail) {
+        .none => null,
+        .source => blk: {
+            const detail = try buildExpectFailureDetail(ctx.gpa, env, root);
+            detail_visibility = detail.visibility;
+            break :blk detail.message;
+        },
+        .message => |message| try ctx.gpa.dupe(u8, message),
+    };
+    errdefer if (failure_detail) |message| ctx.gpa.free(message);
+    try own.append(ctx.gpa, .{
+        .result = if (outcome.passed) .passed else .failed,
+        .order = root.order,
+        .region = if (outcome.region) |region| base.Region.from_raw_offsets(region.start, region.end) else testRootRegion(env, root.source),
+        .detail_origin = switch (outcome.detail) {
+            .none => .none,
+            .source => .source,
+            .message => .execution,
+        },
+        .transcript = if (transcript.len == 0) &.{} else transcript,
+        .failure_detail = failure_detail,
+        .failure_detail_visibility = detail_visibility,
+    });
+    if (transcript.len == 0) ctx.gpa.free(transcript);
+    for (outcome.inline_expects, 0..) |inline_expect, index| {
+        const source_module = source_modules.byIdentity(inline_expect.module) orelse
+            base.invariant("roc test invariant violated: a reused outcome names an inline expect admission did not resolve", .{});
+        const result: CliTestResult = if (inline_expect.failed == 0) .passed else .failed;
+        try inline_expects.append(ctx.gpa, .{
+            .result = result,
+            .order = std.math.maxInt(u32) - @as(u32, @intCast(outcome.inline_expects.len - index)),
+            .region = base.Region.from_raw_offsets(inline_expect.region_start, inline_expect.region_end),
+            .owner_order = root.order,
+            .inline_expect = true,
+            .inline_passed = inline_expect.passed,
+            .inline_failed = inline_expect.failed,
+            .source_env = source_module.env,
+            .source_path = source_module.path,
+            .source_name = source_module.name,
+            .failure_detail = null,
+            .failure_detail_visibility = .always,
+        });
+    }
+}
+
+/// The outcome a module's outcome file records for a root this run
+/// executed, from the root's own merged result item and the inline
+/// observations owned by it, or null when the result is not an observation
+/// of the program (`CliTestResultItem.reusable`, a compiler error). The
+/// inline expects are sorted into the file's order.
+fn cliTestOutcomeOfResults(
+    ctx: *CliCtx,
+    planned: *const CliTestPlanModule,
+    root: check.CheckedArtifact.RootRequest,
+    own: CliTestResultItem,
+    observations: []const CliTestResultItem,
+    source_modules: *const CliTestSourceModuleMap,
+) Allocator.Error!?test_outcome_file.Outcome {
+    if (!own.reusable or own.result == .compiler_error) return null;
+    const events = try ctx.gpa.alloc(test_outcome_file.Event, own.transcript.len);
+    errdefer ctx.gpa.free(events);
+    for (own.transcript, events) |event, *record| record.* = .{ .stream = @backingInt(event.stream), .kind = @backingInt(event.kind), .payload = event.payload };
+    var inline_expects: std.ArrayList(test_outcome_file.InlineExpect) = .empty;
+    errdefer inline_expects.deinit(ctx.gpa);
+    for (observations) |item| {
+        if (item.owner_order != root.order) continue;
+        std.debug.assert(item.inline_expect);
+        const env = item.source_env orelse base.invariant("roc test invariant violated: an inline observation has no source module", .{});
+        // The observation reports against the current occurrence of its
+        // module; the file names that module by content.
+        const workspace = compile.watch_inputs.hashBytes(env.qualifiedModuleName());
+        const source_module = source_modules.modules.get(workspace) orelse base.invariant("roc test invariant violated: an inline observation's module is not in the plan", .{});
+        try inline_expects.append(ctx.gpa, .{
+            .module = source_module.identity,
+            .region_start = item.region.start.offset,
+            .region_end = item.region.end.offset,
+            .passed = item.inline_passed,
+            .failed = item.inline_failed,
+        });
+    }
+    std.mem.sort(test_outcome_file.InlineExpect, inline_expects.items, {}, struct {
+        fn lessThan(_: void, a: test_outcome_file.InlineExpect, b: test_outcome_file.InlineExpect) bool {
+            return test_outcome_file.inlineExpectLessThan(a, b);
+        }
+    }.lessThan);
+    const root_region = testRootRegion(planned.module.semantic.env, root.source);
+    const region_is_root = own.region.start.offset == root_region.start.offset and own.region.end.offset == root_region.end.offset;
+    return .{
+        .order = root.order,
+        .passed = own.result == .passed,
+        .region = if (region_is_root) null else .{ .start = own.region.start.offset, .end = own.region.end.offset },
+        .detail = switch (own.detail_origin) {
+            .none => .none,
+            .source => .source,
+            .execution => .{ .message = own.failure_detail orelse base.invariant("roc test invariant violated: a detail from execution has no message", .{}) },
+        },
+        .events = events,
+        .inline_expects = try inline_expects.toOwnedSlice(ctx.gpa),
+    };
+}
+
+/// Republish the module's outcome file with the outcomes this run reused
+/// and every outcome it observed. A file that already records exactly those
+/// is left in place. `results` are the module's merged results: each root's
+/// own item in plan order, then the inline observations, which belong to
+/// the root `owner_order` names.
+fn publishCliTestOutcomes(
+    ctx: *CliCtx,
+    manager: *CacheManager,
+    planned: *const CliTestPlanModule,
+    results: []const CliTestResultItem,
+    source_modules: *const CliTestSourceModuleMap,
+) Allocator.Error!void {
+    const file = if (planned.outcome_file) |*file| file else return;
+    var outcomes: std.ArrayList(test_outcome_file.Outcome) = .empty;
+    defer {
+        for (outcomes.items) |outcome| test_outcome_file.freeBorrowed(ctx.gpa, outcome);
+        outcomes.deinit(ctx.gpa);
+    }
+    const observations = results[planned.test_roots.len..];
+    for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
+        if (reused) |index| {
+            try outcomes.append(ctx.gpa, try test_outcome_file.dupeBorrowed(ctx.gpa, file.outcomes[index]));
+            continue;
+        }
+        const own = results[root_index];
+        if (own.inline_expect or own.order != root.order) base.invariant("roc test invariant violated: merged results are not in plan order", .{});
+        if (try cliTestOutcomeOfResults(ctx, planned, root, own, observations, source_modules)) |outcome| try outcomes.append(ctx.gpa, outcome);
+    }
+    std.mem.sort(test_outcome_file.Outcome, outcomes.items, {}, struct {
+        fn lessThan(_: void, a: test_outcome_file.Outcome, b: test_outcome_file.Outcome) bool {
+            return a.order < b.order;
+        }
+    }.lessThan);
+    if (file.bytes != null and outcomes.items.len == file.outcomes.len) {
+        const unchanged = for (outcomes.items, file.outcomes) |a, b| {
+            if (!test_outcome_file.eql(a, b)) break false;
+        } else true;
+        if (unchanged) return;
+    }
+    if (file.bytes == null and outcomes.items.len == 0) return;
+    var file_bytes = try test_outcome_file.Builder.init(ctx.gpa);
+    defer file_bytes.deinit(ctx.gpa);
+    for (outcomes.items) |outcome| try file_bytes.append(ctx.gpa, outcome);
+    manager.storeFamilyBytes(.test_outcomes, file.key, file_bytes.written(), cli_test_outcome_scope, planned.module.semantic.env.qualifiedModuleName());
 }
 
 const CliTestFailureDetail = struct {
@@ -13765,6 +14060,7 @@ fn collectCliTestRootRuns(
             );
         }
         const root_index: usize = @intCast(test_plan.root_index);
+        if (planned.reused[root_index] != null) base.invariant("CLI test invariant violated: a test root whose outcome is reused was lowered", .{});
         const root = planned.test_roots[root_index];
         const plan_entry = plan_entries[@intCast(test_plan.result_index)];
         if (builtin.mode == .debug and
@@ -13804,10 +14100,10 @@ fn collectCliTestRootRuns(
         });
     }
 
-    if (runs.items.len != planned.test_roots.len) {
+    if (runs.items.len != planned.runCount()) {
         base.invariant(
-            "CLI test invariant violated: lowered {d} test roots for {d} checked test roots",
-            .{ runs.items.len, planned.test_roots.len },
+            "CLI test invariant violated: lowered {d} test roots for {d} checked test roots to run",
+            .{ runs.items.len, planned.runCount() },
         );
     }
 
@@ -13839,12 +14135,14 @@ fn appendFailedCliTestResult(
     transcript: []CliTestTranscriptEvent,
     message: []const u8,
     visibility: CliTestFailureDetailVisibility,
+    detail_origin: CliTestDetailOrigin,
 ) Allocator.Error!void {
     errdefer ctx.gpa.free(message);
     try results.append(ctx.gpa, .{
         .result = result,
         .order = run.root.order,
         .region = run.region,
+        .detail_origin = detail_origin,
         .transcript = transcript,
         .failure_detail = message,
         .failure_detail_visibility = visibility,
@@ -14148,6 +14446,8 @@ fn runInterpreterTestRoots(
                     .result = .failed,
                     .order = run.root.order,
                     .region = failure_region,
+                    .detail_origin = if (failure_detail == null) .none else .execution,
+                    .reusable = err != error.OutOfMemory,
                     .transcript = transcript,
                     .failure_detail = failure_detail,
                     .failure_detail_visibility = .always,
@@ -14179,6 +14479,7 @@ fn runInterpreterTestRoots(
                     transcript,
                     detail.message,
                     detail.visibility,
+                    .source,
                 );
             }
         }
@@ -14337,6 +14638,7 @@ fn appendCompilerErrorForRoot(
         &.{},
         try std.fmt.allocPrint(ctx.gpa, "{s} test backend failed: {s}", .{ mode.displayName(), @errorName(err) }),
         .always,
+        .execution,
     );
 }
 
@@ -14366,6 +14668,7 @@ fn cliTestResultItemFromEval(
                     .result = .failed,
                     .order = run.root.order,
                     .region = run.region,
+                    .detail_origin = .source,
                     .transcript = transcript,
                     .failure_detail = detail.message,
                     .failure_detail_visibility = detail.visibility,
@@ -14393,6 +14696,7 @@ fn cliTestResultItemFromEval(
                 .result = .failed,
                 .order = run.root.order,
                 .region = base.Region.from_raw_offsets(failure.region_start, failure.region_end),
+                .detail_origin = .execution,
                 .transcript = transcript,
                 .failure_detail = message,
                 .failure_detail_visibility = .always,
@@ -14521,6 +14825,7 @@ fn runCheckedArtifactTests(
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
     max_workers: ?usize,
     source_modules: *const CliTestSourceModuleMap,
+    outcome_store: ?*CacheManager,
 ) (Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!CliTestRunSummary {
     const module = planned.module;
     var lowered_module = try lowerPlannedTestModule(ctx, shared, 0, planned, plan_entries);
@@ -14541,7 +14846,7 @@ fn runCheckedArtifactTests(
     }
     summary.modules_with_tests = 1;
 
-    const merged = try mergeCliRootOutcomes(ctx.gpa, planned, results.items);
+    const merged = try completePlannedModuleResults(ctx, outcome_store, planned, results.items, source_modules);
     results.clearRetainingCapacity();
     errdefer deinitCliTestResultItems(ctx.gpa, merged);
     summary = summarizeTestResults(merged);
@@ -14709,12 +15014,29 @@ fn cliInlineResultLessThan(_: void, a: CliTestResultItem, b: CliTestResultItem) 
     return a.region.end.offset < b.region.end.offset;
 }
 
-fn mergeCliRootOutcomes(allocator: Allocator, planned: *CliTestPlanModule, fresh: []const CliTestResultItem) Allocator.Error![]CliTestResultItem {
+/// Each root's own result item in plan order, a reused outcome's from the
+/// module's outcome file and a run root's from `fresh`, then every inline
+/// observation `fresh` holds.
+fn mergeCliRootOutcomes(ctx: *CliCtx, planned: *CliTestPlanModule, fresh: []const CliTestResultItem, source_modules: *const CliTestSourceModuleMap) Allocator.Error![]CliTestResultItem {
+    const allocator = ctx.gpa;
     var merged = std.ArrayList(CliTestResultItem).empty;
-    errdefer merged.deinit(allocator);
-    try merged.ensureTotalCapacity(allocator, fresh.len);
+    var reused_inline = std.ArrayList(CliTestResultItem).empty;
+    defer reused_inline.deinit(allocator);
+    // Items reused from the outcome file own their payloads until they are
+    // handed over in the merged slice; `fresh` items are the caller's.
+    var reused_own_end: usize = 0;
+    errdefer {
+        for (merged.items[0..reused_own_end], planned.reused[0..reused_own_end]) |item, reused| if (reused != null) deinitCliTestResultItemPayload(allocator, item);
+        deinitCliTestResultItemPayloads(allocator, reused_inline.items);
+        merged.deinit(allocator);
+    }
     var fresh_index: usize = 0;
-    for (planned.test_roots) |root| {
+    for (planned.test_roots, planned.reused) |root, reused| {
+        if (reused) |index| {
+            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[index], source_modules, &merged, &reused_inline);
+            reused_own_end = merged.items.len;
+            continue;
+        }
         const item = item: {
             while (fresh_index < fresh.len and fresh[fresh_index].inline_expect) : (fresh_index += 1) {}
             if (fresh_index == fresh.len) base.invariant("fresh root outcome is missing", .{});
@@ -14723,15 +15045,34 @@ fn mergeCliRootOutcomes(allocator: Allocator, planned: *CliTestPlanModule, fresh
             break :item result;
         };
         if (item.inline_expect or item.order != root.order) base.invariant("outcome belongs to a different checked root", .{});
-        merged.appendAssumeCapacity(item);
+        try merged.append(allocator, item);
+        reused_own_end = merged.items.len;
     }
     for (fresh) |item| if (item.inline_expect) {
-        merged.appendAssumeCapacity(item);
+        try merged.append(allocator, item);
     };
+    try merged.appendSlice(allocator, reused_inline.items);
+    reused_inline.clearRetainingCapacity();
     const inline_start = planned.test_roots.len;
     std.mem.sort(CliTestResultItem, merged.items[inline_start..], {}, cliInlineResultLessThan);
     const owned = try merged.toOwnedSlice(allocator);
     return owned;
+}
+
+/// A planned module's complete results: its reused outcomes merged with
+/// what this run produced (`mergeCliRootOutcomes`), republished to its
+/// outcome file when `outcome_store` caches outcomes.
+fn completePlannedModuleResults(
+    ctx: *CliCtx,
+    outcome_store: ?*CacheManager,
+    planned: *CliTestPlanModule,
+    fresh: []const CliTestResultItem,
+    source_modules: *const CliTestSourceModuleMap,
+) Allocator.Error![]CliTestResultItem {
+    const results = try mergeCliRootOutcomes(ctx, planned, fresh, source_modules);
+    errdefer ctx.gpa.free(results);
+    if (outcome_store) |manager| try publishCliTestOutcomes(ctx, manager, planned, results, source_modules);
+    return results;
 }
 
 fn appendPlannedModuleResult(
@@ -14807,6 +15148,31 @@ fn coalesceInlineExpectResults(
     }
 }
 
+/// Publish every reused root's own result to the live output, which prints
+/// it in its place once the entries before it are done.
+fn publishReusedCliTestOutcomesLive(
+    ctx: *CliCtx,
+    live: *CliOptimizedLiveTestOutput,
+    test_plan: *const CliTestPlan,
+    source_modules: *const CliTestSourceModuleMap,
+) ReportRenderError!void {
+    var own: std.ArrayList(CliTestResultItem) = .empty;
+    defer {
+        deinitCliTestResultItemPayloads(ctx.gpa, own.items);
+        own.deinit(ctx.gpa);
+    }
+    var inline_expects: std.ArrayList(CliTestResultItem) = .empty;
+    defer inline_expects.deinit(ctx.gpa);
+    for (test_plan.modules) |*planned| {
+        for (planned.test_roots, planned.reused, planned.result_indices) |root, reused, result_index| {
+            const index = reused orelse continue;
+            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[index], source_modules, &own, &inline_expects);
+            live.publishCopiedEntry(result_index, planned.module.semantic.env, planned.module.path, own.items[own.items.len - 1]);
+        }
+    }
+    try live.checkError();
+}
+
 fn runCompiledTestPlan(
     ctx: *CliCtx,
     shared: *lir.CheckedPipeline.LoweredProgram,
@@ -14819,12 +15185,17 @@ fn runCompiledTestPlan(
     live_output: ?*CliOptimizedLiveTestOutput,
     source_modules: *const CliTestSourceModuleMap,
     native_options: ?eval.Inspected.DevTestOptions,
+    outcome_store: ?*CacheManager,
 ) (ReportRenderError || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!void {
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
         .llvm_size, .llvm_speed, .dev => {},
         .interpreter => unreachable, // rocTest sends interpreter mode to runCheckedArtifactTests
     }
+
+    // A reused outcome is complete before anything runs, so the live output
+    // prints it in its place as soon as the entries before it are done.
+    if (live_output) |live| try publishReusedCliTestOutcomesLive(ctx, live, test_plan, source_modules);
 
     const summaries = try ctx.gpa.alloc(CliTestRunSummary, test_plan.modules.len);
     defer ctx.gpa.free(summaries);
@@ -14857,7 +15228,7 @@ fn runCompiledTestPlan(
 
     for (test_plan.modules, 0..) |*planned, planned_index| {
         const fresh = fresh_results[planned_index] orelse &.{};
-        const results = try mergeCliRootOutcomes(ctx.gpa, planned, fresh);
+        const results = try completePlannedModuleResults(ctx, outcome_store, planned, fresh, source_modules);
         if (fresh_results[planned_index]) |items| ctx.gpa.free(items);
         fresh_results[planned_index] = null;
         try appendPlannedModuleResult(ctx, module_results, planned, results);
@@ -15326,6 +15697,7 @@ fn runUnitImageTestPlan(
     module_results: *std.ArrayList(CliModuleTestResult),
     total: *CliTestRunSummary,
     source_modules: *const CliTestSourceModuleMap,
+    outcome_store: ?*CacheManager,
 ) (ReportRenderError || error{NoHomeDirectory})!void {
     const mode = cliTestExecutionMode(opt);
     std.debug.assert(mode == .dev);
@@ -15348,10 +15720,11 @@ fn runUnitImageTestPlan(
     defer reports.deinit(ctx.gpa);
     for (test_plan.modules, 0..) |*planned, planned_index| {
         const module = program.tables.digests.nameOf(planned.artifact.key.bytes);
-        const roots = try ctx.gpa.alloc(eval.Inspected.UnitImageBoolRoot, planned.test_roots.len);
+        const roots = try ctx.gpa.alloc(eval.Inspected.UnitImageBoolRoot, planned.runCount());
         errdefer ctx.gpa.free(roots);
         var cursor: usize = 0;
-        for (planned.test_roots, 0..) |root, root_index| {
+        for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
+            if (reused != null) continue;
             const entry = program.wrappers.get(.{ .module = module, .root_index = @intCast(root_index) }) orelse
                 base.invariant("roc test invariant violated: no loaded test unit exports the wrapper of root {d} of module {s}", .{ root_index, planned.module.semantic.env.qualifiedModuleName() });
             roots[cursor] = .{ .entry = entry };
@@ -15414,7 +15787,7 @@ fn runUnitImageTestPlan(
 
     for (test_plan.modules, 0..) |*planned, planned_index| {
         const fresh = fresh_results[planned_index] orelse &.{};
-        const results = try mergeCliRootOutcomes(ctx.gpa, planned, fresh);
+        const results = try completePlannedModuleResults(ctx, outcome_store, planned, fresh, source_modules);
         if (fresh_results[planned_index]) |items| ctx.gpa.free(items);
         fresh_results[planned_index] = null;
         try appendPlannedModuleResult(ctx, module_results, planned, results);
@@ -16634,6 +17007,13 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
 
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
 
+    // A root whose module's outcome file records what running it observed
+    // under these exact checked sources and this execution mode observes
+    // the same again (design.md "Test outcome files"); it is neither
+    // lowered nor run.
+    const outcome_store: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
+    const reused_roots = if (outcome_store) |manager| try admitCliTestOutcomes(ctx, manager, &test_plan, specialization_strategy, args.opt, &source_modules) else 0;
+
     var discovery_requests = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     defer discovery_requests.deinit(ctx.gpa);
     var discovery_sources = std.ArrayList(check.CheckedArtifact.ModuleId).empty;
@@ -16645,7 +17025,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     var runtime_metadata = std.ArrayList(postcheck.Common.RootTestPlanMetadata).empty;
     defer runtime_metadata.deinit(ctx.gpa);
     for (test_plan.modules) |planned| {
-        for (planned.test_roots, 0..) |root, root_index| {
+        for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
+            if (reused != null) continue;
             try runtime_requests.append(ctx.gpa, root);
             try runtime_sources.append(ctx.gpa, planned.artifact.key.digest());
             const entry = test_plan.entries[planned.result_indices[root_index]];
@@ -16696,6 +17077,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, build_env.getTimingInfo());
     reporter.recordCounters("Test outcome admission", &.{
         .{ .name = "Checked dependency records", .count = test_plan.entries.len },
+        .{ .name = "Roots reused from outcome files", .count = reused_roots },
         .{ .name = "Roots submitted for specialization", .count = runtime_requests.items.len },
     });
 
@@ -16816,6 +17198,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
             &module_results,
             &total,
             &source_modules,
+            outcome_store,
         );
     } else if (shared_test_program) |*program| switch (test_mode) {
         .llvm_size, .llvm_speed, .dev => try runCompiledTestPlan(
@@ -16830,6 +17213,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
             if (live_output) |*output| output else null,
             &source_modules,
             native_options,
+            outcome_store,
         ),
         .interpreter => {
             for (test_plan.modules) |*planned| {
@@ -16843,6 +17227,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
                     &dev_timing,
                     args.max_threads,
                     &source_modules,
+                    outcome_store,
                 );
                 total.passed += summary.passed;
                 total.failed += summary.failed;
@@ -16850,7 +17235,20 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
                 total.modules_with_tests += summary.modules_with_tests;
             }
         },
-    };
+    } else {
+        // Every planned root's outcome is reused: nothing was lowered, and
+        // each module's results are its outcome file's.
+        if (live_output) |*live| try publishReusedCliTestOutcomesLive(ctx, live, &test_plan, &source_modules);
+        for (test_plan.modules) |*planned| {
+            const results = try completePlannedModuleResults(ctx, outcome_store, planned, &.{}, &source_modules);
+            try appendPlannedModuleResult(ctx, &module_results, planned, results);
+            const summary = summarizeTestResults(results);
+            total.passed += summary.passed;
+            total.failed += summary.failed;
+            total.compiler_errors += summary.compiler_errors;
+            total.modules_with_tests += summary.modules_with_tests;
+        }
+    }
     try coalesceInlineExpectResults(ctx.gpa, module_results.items, &total);
     total.modules_with_tests = test_plan.modules_with_tests;
     total.diagnostic_errors = diag.errors;

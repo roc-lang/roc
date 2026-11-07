@@ -674,7 +674,8 @@ program-wide index of them.
 
 Checked modules (with their evaluation output), platform/app pairings,
 canonicalized modules, inference results, Boxy objects, prelinked hosts (Fast
-Dev Link) and the host executables of composed `.boxy` dev runs use direct
+Dev Link), the host executables of composed `.boxy` dev runs and test
+outcomes ("Test outcome files") use direct
 content-addressed files. Each cache
 identity includes compiler compatibility, family, logical group and key.
 Writers stage complete files beside their destination and publish by atomic
@@ -686,9 +687,49 @@ Each invocation owns a unique scratch directory and removes it on completion
 unless `--keep-temp` was requested.
 
 Specialized compilation does not persist post-check IR, native procedure packs,
-linked objects, executables, glue plugins, or test outcomes. Every invocation
+linked objects, executables, or glue plugins. Every invocation
 specializes and emits its requested program from the current checked modules.
 In-memory sharing within a compilation remains independent of disk caching.
+
+### Test outcome files
+
+`roc test` records what running each test root observed, so a later run of
+the same checked sources under the same execution mode reports the same
+outcomes without running them again (`cli/test_outcome_file.zig`,
+"Optimized Test Execution"). One file holds one module's outcomes. Its key
+is the module's checked artifact key, the compiler compatibility id, the
+native target, the specialization strategy and the optimization mode. The
+checked artifact key is a function of the module's own source inputs, the
+content identity of its whole import closure, its platform/app relation and
+its imports' keys, so every input a test's behavior can depend on is in the
+key: a change anywhere in the closure is a different file, and the file
+holds nothing that could disagree with the sources it was recorded under.
+Paths, rendering settings and worker counts are not inputs.
+
+Inside the file, each entry is keyed by the root's order within the module
+and holds only what execution produced: whether the root passed; the region
+and message of the `?` that failed it, when one did; its transcript (`dbg`
+output, failure and crash events); and each inline expect it reached, named
+by its module's content identity and region, with how many times it passed
+and failed. The root's own region and a failure detail built from the
+expect's source are not stored: a reused outcome reads them from the current
+checked module, as a fresh one does.
+
+Every outcome execution produces is recorded, passes and failures alike,
+including a crash and a stack overflow, which the fixed stack budget makes
+an observation of the program. A compiler error is not an outcome of the
+program, and a failure of the executing process (the interpreter running out
+of memory) is not an observation of it; neither is recorded, and such a root
+runs again. A root whose entry names an inline expect in a module the
+current plan cannot report against runs again too.
+
+Admission happens after test planning and before runtime demand is
+declared: a recorded root is neither lowered nor run, its results are
+rebuilt from its entry, and the counters report how many roots were reused.
+After the run, each module's file is republished with the reused entries
+and every outcome just observed, unless it already records exactly those.
+A file this compiler version did not write, or one that does not decode
+completely, records nothing.
 
 ### Native executable publication
 
@@ -14702,7 +14743,8 @@ native ones (Fast Dev Link, "Wasm unit images").
 (`Validation.explicit_roots`), which is its own check under either strategy,
 and with `--specialize=no` it leaves exactly what that check leaves plus,
 when it runs its roots from test units (Unit-Image Test Execution), the test
-units it built; it writes no test outcomes under either strategy.
+units it built, plus one outcome file per module whose roots it ran ("Test
+outcome files"), which it writes under either strategy.
 `cachesPostCheckWork` is the policy of lowered output, packs
 and program artifacts. `roc
 check` accepts `--opt` and ignores it; it honors `--specialize`, because the
@@ -23687,12 +23729,16 @@ tested root reaches into a dependency is compiled and linked the same way.
 
 ## Optimized Test Execution
 
-`roc test` runs every test root it plans, on every invocation. There is no
-cache of test outcomes: a test's result is an observation of running it, and
-the command produces each one by running the root. Checking and compile-time
-evaluation still use the checked module cache as every command does, so a warm
-`roc test` skips checking unchanged modules and evaluating their stored
-roots, but never skips running a test root.
+`roc test` runs every test root it plans whose outcome is not already
+recorded for exactly these checked sources and this execution mode ("Test
+outcome files"). A test's result is an observation of running it; the
+observation is a function of the checked program alone, so a run that has
+it on record reports it without running the root again. Checking and
+compile-time evaluation use the checked module cache as every command does,
+so a warm `roc test` with no edits re-checks nothing, lowers nothing and
+runs nothing, and one after an edit runs the roots of the modules whose
+checked artifact keys the edit changes: the edited module and every module
+importing it, directly or not.
 
 The command-level test plan is built after checking and before runtime root
 construction and checked-program finalization. It contains every test root of
