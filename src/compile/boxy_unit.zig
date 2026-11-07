@@ -23,6 +23,18 @@ const ImportedView = check.CheckedArtifact.ImportedModuleView;
 const ExportInterfaces = eval.CompileTimeFinalization.ExportInterfaces;
 const dev_diagnostics = base.dev_diagnostics;
 
+/// A library unit needs test instrumentation only if its producer recorded
+/// expect nodes or explicit test roots. Imported workers belong to their own
+/// units and select their own mode. Paired root units must keep their explicit
+/// test mode, since they also lower the paired platform modules' bodies.
+pub fn requiresTestUnit(artifact: *const Artifact) bool {
+    if (artifact.has_expects) return true;
+    for (artifact.root_requests.requests) |root| {
+        if (root.kind == .test_expect) return true;
+    }
+    return false;
+}
+
 /// Everything one unit's object is built from.
 pub const Unit = struct {
     gpa: Allocator,
@@ -106,6 +118,7 @@ pub const Image = struct {
 /// A unit's object.
 pub const Built = struct {
     restored: bool,
+    function_metadata: []const u8 = &.{},
     /// The unit's code in pieces, when the unit wanted them and its target
     /// has pieces (every target but wasm). Owned by the unit's `gpa`.
     pieces: ?*backend.dev.UnitPieces.Pieces,
@@ -131,6 +144,7 @@ pub const Built = struct {
     /// Release everything but the pieces and the image, which the caller
     /// now owns.
     pub fn deinitKeepingCode(self: Built, gpa: Allocator) void {
+        gpa.free(self.function_metadata);
         for (self.exports) |record| {
             gpa.free(record.rc_ret_conditions);
             gpa.free(record.table_needs);
@@ -220,12 +234,27 @@ pub fn restore(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.
 /// bytes this compiler did not write (a miss), never a link-time or
 /// compile-time evaluation failure.
 fn imageReads(entry: object_cache.Entry, kind: ImageKind) bool {
+    const function_metadata: ?lir.CheckedPipeline.BoxyFunctionMetadata.MetadataView = if (entry.function_metadata.len != 0) metadata: {
+        if (kind != .native or entry.image.len == 0) return false;
+        break :metadata lir.CheckedPipeline.BoxyFunctionMetadata.MetadataView.init(entry.function_metadata) catch return false;
+    } else null;
     switch (kind) {
         .none => return entry.image.len == 0 and entry.code_locations.len == 0,
         .native => {
             if (entry.image.len == 0) return entry.code_locations.len == 0;
             const image: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8 = @alignCast(entry.image);
-            _ = backend.dev.UnitImage.View.init(image) catch return false;
+            const view = backend.dev.UnitImage.View.init(image) catch return false;
+            if (function_metadata) |metadata| {
+                var functions = metadata.functions();
+                const symbols = view.symbols();
+                while (functions.next()) |function| {
+                    if (function.symbol >= symbols.len) return false;
+                    const symbol = symbols[function.symbol];
+                    if (symbol.type != @backingInt(backend.dev.UnitImage.SymbolType.func)) return false;
+                    var name: [lir.LIR.ProcIdentity.symbol_name_len]u8 = undefined;
+                    if (!std.mem.eql(u8, view.name(symbol.name), function.identity.writeSymbolName(&name))) return false;
+                }
+            }
             return entry.code_locations.len == 0 or backend.dev.CodeLocations.validate(entry.code_locations);
         },
         .wasm => {
@@ -240,7 +269,7 @@ fn imageReads(entry: object_cache.Entry, kind: ImageKind) bool {
 /// Restore `key`'s entry like `restore`, serving it from a mapping of the
 /// cache file: the pieces are left undecoded and the image is borrowed from
 /// the mapping, which the returned `Image` keeps alive.
-pub fn restoreMapped(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.Key, target: roc_target.RocTarget, interfaces: *ExportInterfaces) Allocator.Error!?struct { entry: object_cache.Entry, data: CacheData } {
+fn restoreMapped(gpa: Allocator, cache_manager: ?*CacheManager, key: object_cache.Key, target: roc_target.RocTarget, interfaces: *ExportInterfaces, function_metadata: bool) Allocator.Error!?struct { entry: object_cache.Entry, data: CacheData } {
     const manager = cache_manager orelse return null;
     const data = manager.loadFamilyMapped(gpa, .checked, .boxy_object, key.bytes, object_cache.scope) orelse {
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no object cache entry for key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
@@ -260,7 +289,7 @@ pub fn restoreMapped(gpa: Allocator, cache_manager: ?*CacheManager, key: object_
         object_cache.deinitEntryView(gpa, entry);
         data.deinit(gpa);
     }
-    if (!imageReads(entry, imageKind(target))) {
+    if ((entry.function_metadata.len != 0) != function_metadata or !imageReads(entry, imageKind(target))) {
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache entry for key {s} holds no image this compiler reads\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         object_cache.deinitEntryView(gpa, entry);
         data.deinit(gpa);
@@ -362,7 +391,7 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
     var restore_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_restore);
     defer restore_scope.end();
-    if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.target, unit.interfaces)) |restored| {
+    if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.target, unit.interfaces, unit.config.boxy_function_unit != null)) |restored| {
         defer object_cache.deinitEntryView(gpa, restored.entry);
         // The mapping stays alive as the image's owner; otherwise it is
         // released once the pieces are decoded.
@@ -375,12 +404,16 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         if (dev_diagnostics.isSet(.verify_boxy_object_reuse)) {
             const fresh = try build(unit, module_name);
             defer fresh.deinit(gpa);
-            if (fresh.pieces) |fresh_pieces| {
+            if (fresh.pieces != null and unit.config.boxy_function_unit == null) {
+                const fresh_pieces = fresh.pieces.?;
                 const encoded = try backend.dev.UnitPieces.encode(gpa, fresh_pieces);
                 defer gpa.free(encoded);
                 if (!std.mem.eql(u8, encoded, entry.pieces)) {
                     base.invariant("the cached pieces of module {s} differ from a fresh build of them: its key misses an input", .{module_name});
                 }
+            }
+            if (!std.mem.eql(u8, fresh.function_metadata, entry.function_metadata)) {
+                base.invariant("the cached function metadata of module {s} differs from a fresh build: its key misses an input", .{module_name});
             }
             if (fresh.image) |image| if (!std.mem.eql(u8, image.bytes, entry.image)) {
                 base.invariant("the cached image of module {s} differs from a fresh build of it: its key misses an input", .{module_name});
@@ -406,8 +439,13 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         const test_roots = try gpa.dupe(object_cache.TestRootRecord, entry.test_roots);
         errdefer gpa.free(test_roots);
         const exports = try dupeRecords(gpa, entry.exports);
+        errdefer {
+            for (exports) |record| gpa.free(record.rc_ret_conditions);
+            gpa.free(exports);
+        }
         return .{
             .restored = true,
+            .function_metadata = try gpa.dupe(u8, entry.function_metadata),
             .pieces = pieces,
             .image = if (keeps_mapping) .{ .bytes = @alignCast(entry.image), .code_locations = entry.code_locations, .owner = .{ .mapped = restored.data } } else null,
             .hosted_symbols = hosted_symbols,
@@ -422,12 +460,15 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     errdefer built.deinit(gpa);
     var cache_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_cache);
     defer cache_scope.end();
-    const encoded = if (built.pieces) |pieces| try backend.dev.UnitPieces.encode(gpa, pieces) else &.{};
+    // Compiler-only native units are consumed exclusively as images. Their
+    // extraction pieces are needed while building, never while restoring.
+    const encoded = if (built.pieces != null and unit.config.boxy_function_unit == null) try backend.dev.UnitPieces.encode(gpa, built.pieces.?) else &.{};
     defer gpa.free(encoded);
     try store(gpa, unit.cache_manager, unit.key, .{
         .exports = built.exports,
         .hosted_symbols = built.hosted_symbols,
         .pieces = encoded,
+        .function_metadata = built.function_metadata,
         .code_locations = if (built.image) |image| image.code_locations else &.{},
         .image = if (built.image) |image| image.bytes else &.{},
         .expect_sites = built.expect_sites,
@@ -532,6 +573,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         lowered.lir_result.store.getProcSpecs(),
         unit.target,
     ) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
         std.log.err("Native compilation of module {s} failed: {}", .{ module_name, err });
         return error.NativeCompilationFailed;
     };
@@ -542,6 +584,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     const image: ?Image = if (producesImage(unit.target) and (unit.cache_manager != null or !unit.want_pieces)) image: {
         var code_locations: []const u8 = &.{};
         const bytes = object_compiler.buildUnitImage(pieces, unit.target, .every_procedure, &code_locations) catch |err| {
+            if (err == error.OutOfMemory) return error.OutOfMemory;
             std.log.err("Building the unit image of module {s} failed: {}", .{ module_name, err });
             return error.NativeCompilationFailed;
         };
@@ -563,6 +606,26 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         });
     }
 
+    const function_metadata: []const u8 = if (unit.config.boxy_function_unit != null) metadata: {
+        var compiled: std.ArrayList(lir.CheckedPipeline.BoxyFunctionMetadata.CompiledFunction) = .empty;
+        defer compiled.deinit(gpa);
+        const view = backend.dev.UnitImage.View.init(image.?.bytes) catch unreachable;
+        var symbols: std.StringHashMapUnmanaged(u32) = .empty;
+        defer symbols.deinit(gpa);
+        for (view.symbols(), 0..) |symbol, index| if (symbol.type == @backingInt(backend.dev.UnitImage.SymbolType.func)) {
+            try symbols.put(gpa, view.name(symbol.name), @intCast(index));
+        };
+        for (pieces.set.excerpts) |excerpt| switch (excerpt.kind) {
+            .proc => |identity| {
+                var name: [lir.LIR.ProcIdentity.symbol_name_len]u8 = undefined;
+                const symbol = symbols.get(identity.writeSymbolName(&name)) orelse unreachable;
+                try compiled.append(gpa, .{ .identity = identity, .symbol = symbol });
+            },
+            else => {},
+        };
+        break :metadata try lir.CheckedPipeline.BoxyFunctionMetadata.encodeMetadata(lowered.boxy_functions.?, &lowered.lir_result, compiled.items);
+    } else &.{};
+    errdefer gpa.free(function_metadata);
     const records = try exportRecords(gpa, &lowered, unit.interfaces);
     defer gpa.free(records);
     var hosted_arena = std.heap.ArenaAllocator.init(gpa);
@@ -579,6 +642,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     if (trace_clock) |io| std.debug.print("boxy-work: built {s} in {d} ms\n", .{ module_name, @divTrunc(std.Io.Timestamp.now(io, .awake).nanoseconds - build_started_ns, std.time.ns_per_ms) });
     return .{
         .restored = false,
+        .function_metadata = function_metadata,
         .pieces = pieces,
         .image = image,
         .hosted_symbols = hosted_symbols,

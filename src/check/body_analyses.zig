@@ -88,6 +88,7 @@ const TopLevelDef = struct { pattern: u32, def: CIR.Def.Idx };
 
 /// The CIR-only index of a checked module's bodies.
 pub const ModuleIndex = struct {
+    has_expects: bool = false,
     /// Per node: the kind of node the bodies reach it as.
     node_kinds: []NodeKind = &.{},
     /// Per node: its declaration facts.
@@ -222,6 +223,7 @@ pub const ModuleIndex = struct {
     };
 
     const Builder = struct {
+        has_expects: bool = false,
         allocator: Allocator,
         env: *const ModuleEnv,
         node_kinds: []NodeKind,
@@ -287,6 +289,7 @@ pub const ModuleIndex = struct {
             errdefer allocator.free(top_level_defs);
             const defaults = try self.defaults.toOwnedSlice(allocator);
             return .{
+                .has_expects = self.has_expects,
                 .node_kinds = self.node_kinds,
                 .node_flags = self.node_flags,
                 .unit_of = self.unit_of,
@@ -513,7 +516,10 @@ pub const ModuleIndex = struct {
                 .e_tuple_access => |access| try self.mark(.{ .expr = access.tuple }, id),
                 .e_dbg => |dbg| try self.mark(.{ .expr = dbg.expr }, id),
                 .e_expect_err => |expect_err| try self.mark(.{ .expr = expect_err.expr }, id),
-                .e_expect => |expect| try self.mark(.{ .expr = expect.body }, id),
+                .e_expect => |expect| {
+                    self.has_expects = true;
+                    try self.mark(.{ .expr = expect.body }, id);
+                },
                 .e_return => |ret| {
                     try self.mark(.{ .expr = ret.expr }, id);
                     try self.mark(.{ .expr = ret.lambda }, id);
@@ -610,7 +616,10 @@ pub const ModuleIndex = struct {
                 },
                 .s_dbg => |dbg| try self.mark(.{ .expr = dbg.expr }, id),
                 .s_expr => |expr| try self.mark(.{ .expr = expr.expr }, id),
-                .s_expect => |expect| try self.mark(.{ .expr = expect.body }, id),
+                .s_expect => |expect| {
+                    self.has_expects = true;
+                    try self.mark(.{ .expr = expect.body }, id);
+                },
                 .s_for => |for_| {
                     try self.mark(.{ .pattern = for_.patt }, id);
                     try self.mark(.{ .expr = for_.expr }, id);

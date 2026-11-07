@@ -70,7 +70,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      coercions and record updates by plan, never by name.
 /// v66: `inspect` reads its type's names block.
 /// v67: dynamic product locals carry their checked ownership shape.
-pub const FORMAT_VERSION: u32 = 67;
+/// v68: combined immutable constants and type-table capture representation.
+pub const FORMAT_VERSION: u32 = 68;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

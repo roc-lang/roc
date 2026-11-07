@@ -114,7 +114,6 @@ const Printer = struct {
                         .proc_ref => |p| try writer.print("literal proc_ref p{d}", .{@backingInt(p)}),
                     }
                     const extra = self.store.literalExtra(s.value);
-                    if (extra.fresh_alternative) |proc| try writer.print(" fresh=p{d}", .{@backingInt(proc)});
                     if (extra.list_len) |len| try writer.print(" len={d}", .{len});
                     try writer.writeAll("\n");
                     current = s.next;

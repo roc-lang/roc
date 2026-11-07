@@ -40,6 +40,8 @@ pub const Var = enum {
     verify_arc,
     /// Print deterministic work counters for one test command.
     test_command_work,
+    /// Aggregate test allocations by their first sixteen native stack frames.
+    profile_allocations,
     /// Write the bytes of a dev run's first run image, as published and
     /// before the shim loads it, to the named file.
     dump_run_image,
@@ -72,6 +74,7 @@ pub const Var = enum {
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
             .verify_arc => "ROC_VERIFY_ARC",
             .test_command_work => "ROC_TEST_COMMAND_WORK",
+            .profile_allocations => "ROC_PROFILE_ALLOCATIONS",
             .dump_run_image => "ROC_DUMP_RUN_IMAGE",
             .wasm_split_bytes => "ROC_WASM_SPLIT_BYTES",
             .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
@@ -82,6 +85,18 @@ pub const Var = enum {
 
 /// Stage-owned counters used to prove complete-command reuse skips producers.
 pub const TestWork = enum {
+    ctfe_function_unit_hits,
+    ctfe_function_unit_builds,
+    ctfe_function_metadata_bytes,
+    boxy_body_index_available_modules,
+    boxy_body_index_prepared_modules,
+    boxy_body_index_rows,
+    checked_root_eligibility_queries,
+    checked_root_concreteness_nodes,
+    checked_root_callable_nodes,
+    checked_type_digest_requests,
+    checked_type_digest_walks,
+    checked_type_digest_nodes,
     specialization,
     ctfe_execution,
     second_specialization,

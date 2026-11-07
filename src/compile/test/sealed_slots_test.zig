@@ -23,7 +23,7 @@ const source =
     \\run = |x| x.go()
 ;
 
-test "a template's stored sealed slots are what the sealing walk computes" {
+test "a template's stored sealed slots match the independent scalar oracle" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -48,7 +48,8 @@ test "a template's stored sealed slots are what the sealing walk computes" {
     var walk = CheckedArtifact.SealedSchemeVarWalk.init(gpa, artifact.checked_types.view());
     defer walk.deinit();
 
-    // Every template of the module stores exactly the slots the walk seals.
+    // The production batch and the original scalar traversal must agree on
+    // every actual checked template, including its sealed source type view.
     var computed: std.ArrayList(u32) = .empty;
     defer computed.deinit(gpa);
     for (templates.templates.items) |*template| {

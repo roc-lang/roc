@@ -70,6 +70,8 @@ pub const Input = struct {
     /// names itself (`StaticDescs.table_identities`), and the lowering keeps
     /// the program for reading those values (`Output.retained`).
     stored_functions: bool = false,
+    /// Only a demanded compiler-only unit has persistent capture/type metadata.
+    function_unit: ?[32]u8 = null,
     /// What this lowering emits: one program, or one module's object.
     unit: Unit = .program,
 };
@@ -153,6 +155,27 @@ pub const ExportInterfaces = struct {
         _ = self.arena.reset(.retain_capacity);
     }
 
+    /// Adopt the producer's calling contracts before compiling against its
+    /// existing objects. A build may already share the producer's table;
+    /// tests instead own a separate table which their instrumented units fill.
+    pub fn copyFrom(self: *ExportInterfaces, source: *ExportInterfaces) Allocator.Error!void {
+        if (self == source) return;
+        // A fixed lock order also permits independent consumers to take
+        // snapshots without introducing opposing lock acquisition orders.
+        const first = if (@intFromPtr(self) < @intFromPtr(source)) self else source;
+        const second = if (first == self) source else self;
+        first.mutex.lockUncancelable(first.io);
+        defer first.mutex.unlock(first.io);
+        second.mutex.lockUncancelable(second.io);
+        defer second.mutex.unlock(second.io);
+        var entries = source.map.iterator();
+        while (entries.next()) |entry| {
+            var owned = entry.value_ptr.*;
+            owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, owned.rc_ret_conditions);
+            try self.map.put(self.allocator, entry.key_ptr.*, owned);
+        }
+    }
+
     /// Record `interface` for `identity`, copying its condition rows.
     pub fn put(self: *ExportInterfaces, identity: LIR.ProcIdentity, interface: ExportInterface) Allocator.Error!void {
         self.mutex.lockUncancelable(self.io);
@@ -194,6 +217,32 @@ pub const ExportInterfaces = struct {
         return self.map.get(identity);
     }
 };
+
+test "export interface snapshot owns the complete calling contract" {
+    const allocator = std.testing.allocator;
+    var producer = ExportInterfaces.init(allocator, std.testing.io);
+    defer producer.deinit();
+    var consumer = ExportInterfaces.init(allocator, std.testing.io);
+    defer consumer.deinit();
+    const identity = LIR.ProcIdentity.forTest(1);
+    const expected: ExportInterface = .{
+        .rc_borrowed_params = 3,
+        .rc_ret_borrowed = true,
+        .rc_ret_lenders = 2,
+        .rc_read_only_params = 1,
+        .rc_ret_unique = true,
+        .rc_ret_unique_fields = 4,
+        .rc_ret_conditions = &.{ 7, 8, 9 },
+        .may_leave_pending = true,
+    };
+    try producer.put(identity, expected);
+    try consumer.copyFrom(&producer);
+    producer.clear();
+    try producer.put(identity, .{ .rc_ret_conditions = &.{ 10, 11, 12 } });
+    try std.testing.expectEqualDeep(expected, consumer.get(identity).?);
+    try consumer.copyFrom(&consumer);
+    try std.testing.expectEqualDeep(expected, consumer.get(identity).?);
+}
 
 /// The lowered program and the static data it carries.
 pub const Output = struct {
@@ -538,6 +587,7 @@ pub const HostedEntry = struct { symbol: []const u8, dispatch_index: ?u32 };
 
 /// One `.boxy` lowering: its workers, types, layouts, and output.
 pub const Program = struct {
+    pub const StoredValueKey = struct { module: ModuleIndex, node: checked.ConstNodeId, ty: TypeId };
     allocator: Allocator,
     input: Input,
     modules: types.Modules,
@@ -566,6 +616,7 @@ pub const Program = struct {
     /// The compile-time value slot a compile-time program reads a root it
     /// evaluates later from (`rootValueSlot`), by root.
     root_value_slots: std.AutoHashMapUnmanaged(RootSlotKey, LIR.StaticDataId) = .empty,
+    stored_value_slots: std.AutoHashMapUnmanaged(StoredValueKey, LIR.StaticDataId) = .empty,
     /// The compile-time roots this program evaluates (`Input.roots`), by
     /// module and root (`evaluatesRoot`).
     requested_roots: std.AutoHashMapUnmanaged(RootSlotKey, void) = .empty,
@@ -582,6 +633,10 @@ pub const Program = struct {
     arena: std.heap.ArenaAllocator,
     /// The host binding of each hosted procedure template.
     hosted: std.AutoHashMapUnmanaged(TemplateKey, HostedEntry) = .empty,
+    /// Body metadata is indexed only when a consumer asks about that module.
+    /// Imported code called only by symbol needs no local body lookup tables.
+    body_indexed: []bool = &.{},
+    /// Types explicitly named by emitted compile-time descriptor notes.
     /// The generalized-local scope a lambda or closure expression owns.
     local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
     /// The lambda and closure expressions local procedures bind.
@@ -598,6 +653,86 @@ pub const Program = struct {
     omitted_defaults: std.AutoHashMapUnmanaged(OmittedField, checked.CheckedFieldDefault) = .empty,
     /// The generated codec families and their workers.
     codec: Codec.State = .{},
+
+    /// Index the checked producer's exact scope, capture, local-procedure and
+    /// omitted-default records once when their module is demanded. A missing
+    /// lookup means the producer has no such record, never an unbuilt index.
+    fn indexBodyMetadata(self: *Program, module_index: ModuleIndex) Allocator.Error!void {
+        const module_slot = @backingInt(module_index);
+        if (self.body_indexed[module_slot]) return;
+        const program = self;
+        const allocator = self.allocator;
+        const view = self.module(module_index);
+        const bodies = view.bodies();
+        for (view.view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
+            const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
+            try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
+            switch (bodies.exprData(scope.checked_expr)) {
+                .closure => |closure| try program.local_scopes.put(allocator, .{ .module = view.index, .expr = closure.lambda }, id),
+                .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            }
+        }
+        for (view.view.nested_proc_sites.sites, 0..) |site, site_index| {
+            const site_expr = site.checked_expr orelse continue;
+            try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
+            // A closure's site is also its lambda's, which names its worker.
+            const site_data = view.bodies().exprData(site_expr);
+            if (site_data == .closure) try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_data.closure.lambda }, @intCast(site_index));
+        }
+        for (bodies.recordOmittedDefaults()) |source_omitted| {
+            const omitted = bodies.recordOmittedDefault(source_omitted);
+            const name = try program.store.internName(view.nameStore().recordFieldLabelText(omitted.field_name));
+            try program.omitted_defaults.put(allocator, .{ .module = view.index, .expr = omitted.expr, .name = name }, omitted.default);
+        }
+        // A method of a type declared in a function body is a local
+        // procedure its dispatches call, each at its own instantiation.
+        for (view.view.method_registry.entries) |entry| {
+            const target = entry.target orelse continue;
+            switch (target.kind) {
+                .local_proc => |local| {
+                    try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
+                    switch (bodies.exprData(local.expr)) {
+                        .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
+                        .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                    }
+                },
+                .procedure, .structural => {},
+            }
+        }
+        // A local procedure's uses all reach it through its binding, so its
+        // own scheme's arguments are passed per call.
+        for (view.view.resolved_value_refs.records) |record| {
+            const local = switch (record.ref) {
+                .local_proc => |local| local,
+                .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => continue,
+            };
+            try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
+            switch (bodies.exprData(local.expr)) {
+                .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
+                .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+            }
+        }
+        self.body_indexed[module_slot] = true;
+        base.dev_diagnostics.countTestWork(.boxy_body_index_prepared_modules, 1);
+        base.dev_diagnostics.countTestWork(.boxy_body_index_rows, view.view.checked_procedure_templates.dispatch_scopes.len +
+            view.view.nested_proc_sites.sites.len + bodies.recordOmittedDefaults().len +
+            view.view.method_registry.entries.len + view.view.resolved_value_refs.records.len);
+    }
+
+    pub fn localScope(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!?checked.DispatchScopeId {
+        try self.indexBodyMetadata(module_index);
+        return self.local_scopes.get(.{ .module = module_index, .expr = expr });
+    }
+
+    pub fn isLocalProc(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!bool {
+        try self.indexBodyMetadata(module_index);
+        return self.local_procs.contains(.{ .module = module_index, .expr = expr });
+    }
+
+    pub fn omittedDefault(self: *Program, key: OmittedField) Allocator.Error!?checked.CheckedFieldDefault {
+        try self.indexBodyMetadata(key.module);
+        return self.omitted_defaults.get(key);
+    }
 
     pub fn converter(self: *Program) types.Converter {
         return .{ .store = &self.store, .modules = &self.modules, .platform_identities = &self.platform_identities };
@@ -929,10 +1064,12 @@ pub const Program = struct {
         self.callable_eval_by_pattern.deinit(self.allocator);
         self.platform_identities.deinit(self.allocator);
         self.root_value_slots.deinit(self.allocator);
+        self.stored_value_slots.deinit(self.allocator);
         self.requested_roots.deinit(self.allocator);
         self.const_schema.deinit(self.allocator);
         self.wrapper_by_root.deinit(self.allocator);
         self.hosted.deinit(self.allocator);
+        self.allocator.free(self.body_indexed);
         self.local_scopes.deinit(self.allocator);
         self.local_procs.deinit(self.allocator);
         self.by_identity.deinit(self.allocator);
@@ -1121,7 +1258,7 @@ pub const Program = struct {
         own: ?LocalScheme,
     ) Allocator.Error!WorkerId {
         const outer_worker = self.worker(outer).*;
-        const key: WorkerKey = .{ .lambda = .{ .module = outer_worker.module, .expr = lambda_expr, .outer = outer, .captured_scheme = if (own) |scheme| scheme.per_call == false and self.local_procs.contains(.{ .module = outer_worker.module, .expr = lambda_expr }) else false } };
+        const key: WorkerKey = .{ .lambda = .{ .module = outer_worker.module, .expr = lambda_expr, .outer = outer, .captured_scheme = if (own) |scheme| scheme.per_call == false and (try self.isLocalProc(outer_worker.module, lambda_expr)) else false } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const signature = switch (self.store.get(fn_ty)) {
             .function => |function| function,
@@ -2133,7 +2270,7 @@ pub const Program = struct {
             .key = key,
             .proc = proc,
             .module = outer_worker.module,
-            .scheme_vars = outer_worker.scheme_vars,
+            .scheme_vars = if (self.store.isVariableFree(from) and self.store.isVariableFree(to)) &.{} else outer_worker.scheme_vars,
             .dictionary_params = &.{},
             .params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args)),
             .ret = signature.ret,
@@ -2149,6 +2286,7 @@ pub const Program = struct {
     /// which are its own captures and those of the local procedures its
     /// body uses (`NestedProcSite.runtime_captures`).
     pub fn siteCaptures(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error![]const checked.CheckedCapture {
+        try self.indexBodyMetadata(module_index);
         const site_index = self.sites_by_expr.get(.{ .module = module_index, .expr = expr }) orelse
             invariant("a lambda or closure has no nested procedure site");
         return try self.runtimeCaptures(self.module(module_index), site_index);
@@ -2943,11 +3081,16 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     };
     program.static_descs = StaticDescs.init(allocator, &program.store, &program.layouts, &program.result, input.target_usize);
     program.static_descs.table_identities = input.stored_functions;
+    program.static_descs.table_owner = input.function_unit orelse @splat(0);
 
     _ = try program.modules.add(checked.importedView(input.modules.root.module));
     for (input.modules.imports) |view| _ = try program.modules.add(view);
     for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
+    program.body_indexed = try allocator.alloc(bool, program.modules.views.items.len);
+    @memset(program.body_indexed, false);
+    base.dev_diagnostics.countTestWork(.boxy_body_index_available_modules, program.modules.views.items.len);
     for (program.modules.views.items) |view| {
+        try program.by_identity.put(allocator, view.view.module_identity.stable_hash, view.index);
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
         for (view.view.exported_procedure_bindings.bindings) |*binding| {
             try program.exported_bindings.put(allocator, .{ .module = view.index, .def = binding.binding.def, .pattern = binding.binding.pattern }, binding);
@@ -2962,58 +3105,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     try solvePlatformIdentities(program);
     try seedSourceFiles(program);
     try initHosted(program);
-    for (program.modules.views.items) |*view| {
-        const bodies = view.bodies();
-        for (view.view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
-            const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
-            try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
-            switch (bodies.exprData(scope.checked_expr)) {
-                .closure => |closure| try program.local_scopes.put(allocator, .{ .module = view.index, .expr = closure.lambda }, id),
-                .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-            }
-        }
-        try program.by_identity.put(allocator, view.view.module_identity.stable_hash, view.index);
-        for (view.view.nested_proc_sites.sites, 0..) |site, site_index| {
-            const site_expr = site.checked_expr orelse continue;
-            try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
-            // A closure's site is also its lambda's, which names its worker.
-            const site_data = view.bodies().exprData(site_expr);
-            if (site_data == .closure) try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_data.closure.lambda }, @intCast(site_index));
-        }
-        for (bodies.recordOmittedDefaults()) |source_omitted| {
-            const omitted = bodies.recordOmittedDefault(source_omitted);
-            const name = try program.store.internName(view.nameStore().recordFieldLabelText(omitted.field_name));
-            try program.omitted_defaults.put(allocator, .{ .module = view.index, .expr = omitted.expr, .name = name }, omitted.default);
-        }
-        // A method of a type declared in a function body is a local
-        // procedure its dispatches call, each at its own instantiation.
-        for (view.view.method_registry.entries) |entry| {
-            const target = entry.target orelse continue;
-            switch (target.kind) {
-                .local_proc => |local| {
-                    try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
-                    switch (bodies.exprData(local.expr)) {
-                        .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
-                        .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-                    }
-                },
-                .procedure, .structural => {},
-            }
-        }
-        // A local procedure's uses all reach it through its binding, so its
-        // own scheme's arguments are passed per call.
-        for (view.view.resolved_value_refs.records) |record| {
-            const local = switch (record.ref) {
-                .local_proc => |local| local,
-                .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => continue,
-            };
-            try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
-            switch (bodies.exprData(local.expr)) {
-                .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
-                .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
-            }
-        }
-    }
 
     // A module unit lowers every worker of its modules as a root: the
     // workers other objects reach by symbol (design.md "Per-Module Output").
@@ -3102,9 +3193,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 
     if (program.moduleUnit() != null and !input.compile_time) {
         for (program.workers.items) |worker| {
-            if (worker.imported or !Program.exportableKind(worker.key)) continue;
-            program.result.store.getProcSpecPtr(worker.proc).exported = true;
-            try program.result.exported_procs.append(allocator, worker.proc);
+            if (worker.imported or !program.result.store.getProcSpec(worker.proc).exported) continue;
             // An importer fills the worker's tables from its needs.
             if (worker.needs) |needs| {
                 const result_allocator = program.result.store.allocator;
@@ -3151,7 +3240,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 /// each template and its dictionary entry (a template is a function value
 /// wherever another module names it, and a method wherever one dispatches
 /// to it), and each `??` default expression (design.md "Per-Module
-/// Output").
+/// Output"). Finish this closure and publish its exports before lowering
+/// command roots, whose private helpers are not an interface for importers.
 fn seedUnitWorkers(program: *Program) Allocator.Error!void {
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;
@@ -3178,6 +3268,11 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         }
     }
     try program.drain();
+    for (program.workers.items) |worker| {
+        if (worker.imported or !Program.exportableKind(worker.key)) continue;
+        program.result.store.getProcSpecPtr(worker.proc).exported = true;
+        try program.result.exported_procs.append(program.allocator, worker.proc);
+    }
 }
 
 /// Whether checking rejected `template`'s signature: it has no type to lower

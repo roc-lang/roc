@@ -9,6 +9,7 @@
 //! under their own names, and the dev backend calls them by address when it
 //! runs code in the compiler's own process.
 
+const std = @import("std");
 const builtins = @import("builtins");
 const desc_mod = @import("desc.zig");
 const walk = @import("walk.zig");

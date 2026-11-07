@@ -67,8 +67,7 @@ pub const InsertOptions = struct {
     /// else emits only atomic count updates and skips the analysis.
     thread_confined_rc: bool = false,
     /// Prove values unique so a mutation can skip its runtime refcount check,
-    /// and a read of static data can take its fresh form. Optimized builds
-    /// and the tests of the analysis enable this; off, every mutation keeps
+    /// preserving static values as immutable. Off, every mutation keeps
     /// its check, which answers the same question at runtime.
     prove_uniqueness: bool = true,
     /// Select consuming Box.unbox when its lender is dead. Compiled backends
@@ -2257,32 +2256,11 @@ const Inserter = struct {
                     .next = next,
                 } }, origin);
             },
-            // A read with a fresh form settles here: the reads whose birth
-            // some uniqueness verdict rests on call the fresh procedure, and
-            // every other one keeps the static datum, its fresh procedure
-            // leaving with the next reachability pass.
-            .assign_literal => |assign| if (self.store.literalExtra(assign.value).fresh_alternative != null and self.solution.fresh_reads.isSet(@backingInt(at)))
-                try self.store.addCFStmt(.{ .assign_call = .{
-                    .target = assign.target,
-                    .proc = self.store.literalExtra(assign.value).fresh_alternative.?,
-                    .args = LIR.LocalSpan.empty(),
-                    .next = next,
-                } }, origin)
-            else blk: {
-                var value = assign.value;
-                if (value == .static_data) {
-                    var copies = self.store.stmtRowOrDefault(value.static_data.copies);
-                    if (copies.fresh_alternative != null) {
-                        copies.fresh_alternative = null;
-                        value.static_data.copies = try self.store.addOptionalStmtRow(LIR.LiteralExtra, copies);
-                    }
-                }
-                break :blk try self.store.addCFStmt(.{ .assign_literal = .{
-                    .target = assign.target,
-                    .value = value,
-                    .next = next,
-                } }, origin);
-            },
+            .assign_literal => |assign| try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = assign.target,
+                .value = assign.value,
+                .next = next,
+            } }, origin),
             .assign_call => |assign| blk: {
                 if (step.retain_call_result) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .borrowed_call_result }, next);
                 if (step.replaces_frame) {
@@ -18212,36 +18190,6 @@ const DynFixture = struct {
     }
 };
 
-test "ARC places no reference counts around a callable read from a type table" {
-    var d = try DynFixture.init();
-    defer d.deinit();
-    const erased_callable = try d.f.layouts.insertErasedCallable();
-    const table = try d.desc();
-    const callable = try d.f.local(erased_callable);
-    const first = try d.f.local(.u64);
-    const second = try d.f.local(.u64);
-    const ret = try d.f.ret(second);
-    const second_call = try d.op(second, .{ .call_erased = .{ .closure = callable, .args = null } }, ret);
-    const first_call = try d.op(first, .{ .call_erased = .{ .closure = callable, .args = null } }, second_call);
-    const body = try d.op(callable, .{ .table_entry = .{ .table = table, .index = 0 } }, first_call);
-    const proc = try d.proc(&.{table}, body, .u64, null);
-    try testing.expect(d.f.store.getProcSpec(proc).shapes.static_literal);
-    try d.run(&.{proc});
-    // ARC owns the word as it owns a static-data literal read: no retain
-    // around its uses, one release where it dies, which names image data.
-    try d.f.expectRc(callable, 0, 1, 0);
-    var immortal = try @import("immortal_locals.zig").compute(testing.allocator, &d.f.store);
-    defer immortal.deinit(testing.allocator);
-    try testing.expect(immortal.contains(callable));
-    try testing.expectEqual(@as(usize, 1), try @import("immortal_locals.zig").elide(testing.allocator, &d.f.store));
-    var walk = try body_clone.ReachableStmts.initWithAllocator(&d.f.store, d.f.store.getProcSpec(proc).body.?, testing.allocator);
-    defer walk.deinit();
-    while (try walk.next()) |stmt_id| switch (d.f.store.getCFStmt(stmt_id)) {
-        .incref, .decref, .decref_if_initialized, .free => return error.TestUnexpectedResult,
-        .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
-    };
-}
-
 test "ARC dynamic product takes independently stored fields and preserves aliases" {
     for ([_]bool{ false, true }) |keep_record| {
         var d = try DynFixture.init();
@@ -18272,6 +18220,90 @@ test "ARC dynamic product takes independently stored fields and preserves aliase
             return err;
         };
     }
+}
+
+test "ARC erased argument products take fields and preserve prefix and scalar reads" {
+    for ([_]bool{ false, true }) |keep_record| {
+        var d = try DynFixture.init();
+        defer d.deinit();
+        const table = try d.desc();
+        const record_desc = try d.desc();
+        const field_desc = try d.desc();
+        const word_desc = try d.desc();
+        const scalar_desc = try d.desc();
+        const param = try d.value(record_desc, .param);
+        const field = try d.value(field_desc, .frame);
+        const result = try d.value(field_desc, .result);
+        const prefix = try d.f.local(.opaque_ptr);
+        const scalar = try d.f.local(.u64);
+        const product = try d.f.store.addStmtRow(LIR.ProductShape, .{
+            .layouts = try d.f.store.addU32Span(&.{ @backingInt(layout_mod.Idx.opaque_ptr), @backingInt(layout_mod.Idx.u64), @backingInt(d.dynamic), @backingInt(d.dynamic) }),
+            .slots = try d.f.store.addU32Span(&.{ 0, 0, 0, 1, 2 }),
+            .descriptors = try d.f.span(&.{ word_desc, scalar_desc, field_desc, field_desc }),
+        });
+        d.f.store.getLocalPtr(param).product = product;
+        const ret = try d.f.ret(if (keep_record) param else result);
+        // Independent parameter bytes survive a field take. Neither of these
+        // non-owning reads may require restoring the field that was moved.
+        const read_scalar = try d.f.assignRefField(scalar, param, 1, ret);
+        const read_prefix = try d.f.assignRefField(prefix, param, 0, read_scalar);
+        const append = try d.f.assignLowLevel(result, &.{field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_prefix);
+        const read = try d.f.assignRefField(field, param, 2, append);
+        // Descriptors come from a captured table; the packed record remains
+        // the erased worker's only explicit argument.
+        var body = read;
+        const descriptors = [_]LIR.LocalId{ record_desc, field_desc, word_desc, scalar_desc };
+        var index = descriptors.len;
+        while (index > 0) {
+            index -= 1;
+            body = try d.op(descriptors[index], .{ .table_entry = .{ .table = table, .index = @intCast(index) } }, body);
+        }
+        const proc = try d.proc(&.{ table, param }, body, d.dynamic, if (keep_record) param else result);
+        d.f.store.getProcSpecPtr(proc).abi = .erased_record;
+        d.f.store.getProcSpecPtr(proc).erased_capture_arg = table;
+        try insert(&d.f.store, &d.f.layouts, .{ .roots = &.{proc}, .specialize = false });
+        try testing.expectEqual(@as(usize, if (keep_record) 1 else 0), d.f.countRc(field, .incref));
+        try d.f.expectRc(param, 0, 0, 0);
+        try d.f.expectRc(prefix, 0, 0, 0);
+        try d.f.expectRc(scalar, 0, 0, 0);
+        try d.expectDynamicRcShape();
+        var diag: arc_certify.Diagnostic = .{};
+        const sigs = [_]arc_sig.RcSig{.all_owned};
+        arc_certify.certifyStore(testing.allocator, &d.f.store, &d.f.layouts, .{ .sigs = &sigs }, &.{proc}, &diag) catch |err| {
+            std.debug.print("erased argument product certification failed: {any}\n", .{diag});
+            return err;
+        };
+    }
+}
+
+test "ARC places no reference counts around a callable read from a type table" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const erased_callable = try d.f.layouts.insertErasedCallable();
+    const table = try d.desc();
+    const callable = try d.f.local(erased_callable);
+    const first = try d.f.local(.u64);
+    const second = try d.f.local(.u64);
+    const ret = try d.f.ret(second);
+    const second_call = try d.op(second, .{ .call_erased = .{ .closure = callable, .args = null } }, ret);
+    const first_call = try d.op(first, .{ .call_erased = .{ .closure = callable, .args = null } }, second_call);
+    const body = try d.op(callable, .{ .table_entry = .{ .table = table, .index = 0 } }, first_call);
+    const proc = try d.proc(&.{table}, body, .u64, null);
+    try testing.expect(d.f.store.getProcSpec(proc).shapes.static_literal);
+    try d.run(&.{proc});
+    // ARC owns the word as it owns a static-data literal read: no retain
+    // around its uses, one release where it dies, which names image data.
+    try d.f.expectRc(callable, 0, 1, 0);
+    var immortal = try @import("immortal_locals.zig").compute(testing.allocator, &d.f.store);
+    defer immortal.deinit(testing.allocator);
+    try testing.expect(immortal.contains(callable));
+    try testing.expectEqual(@as(usize, 1), try @import("immortal_locals.zig").elide(testing.allocator, &d.f.store));
+    var walk = try body_clone.ReachableStmts.initWithAllocator(&d.f.store, d.f.store.getProcSpec(proc).body.?, testing.allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| switch (d.f.store.getCFStmt(stmt_id)) {
+        .incref, .decref, .decref_if_initialized, .free => return error.TestUnexpectedResult,
+        .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
+    };
 }
 
 test "ARC dyn copy of an owned dynamic parameter into the result moves its unit" {

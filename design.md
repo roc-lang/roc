@@ -1734,10 +1734,17 @@ fills the slot at that layout. The proof call is not an
 expression to execute at the read. Lifting and lambda solving preserve that witness. Value
 folding must treat the read as opaque. LIR interns storage slots only after
 exact concrete representation equality and committed layout equality, and
-records the checked root identity beside each slot. Evaluation initializes the
-slots in checked dependency order; runtime static-data materialization consumes
-the completed root payloads. Neither consumer executes the initializer at a
-slot read or reconstructs a callable identity from its layout.
+records the checked root identity beside each slot. Each producer has one
+canonical source slot. A use requiring a different physical representation
+(such as a recursive box or a nominal boundary) has an explicit
+`representation_of` edge to that slot and shares its failure status. The data
+writer publishes or transcodes the completed value into that representation
+once; the read contains no boxing or conversion instructions. Source lookup
+indexes only canonical slots, and reachability preserves each representation's
+canonical source. Evaluation initializes the slots in checked dependency order;
+runtime static-data materialization consumes the completed root payloads.
+Neither consumer executes the initializer at a slot read or reconstructs a
+callable identity from its layout.
 
 A provided static export requested during shared preparation aliases that same
 declared slot. Its const locator's checked owner identifies the root, and the
@@ -1765,11 +1772,12 @@ When checking finalization lowers a root that refers to an already-stored,
 representation-stable `ConstStore` value, it must preserve that sharing by
 emitting an explicit LIR static-data value. It must not recursively rebuild that
 value as runtime list, record, tuple, tag, box, string, or callable construction.
-Callable-containing const graphs are not representation-stable at this boundary:
-post-check specialization may replace callable identities and capture graphs, so
-they remain explicit reconstructions. Eligibility is computed by a memoized walk
-over explicit `ConstStore` edges, never inferred from runtime bytes or layout
-coincidence.
+Callable-containing const graphs carry explicit procedure identities and capture
+edges through specialization. Target-data materialization connects the final
+code and immutable capture data; reading a completed callable never packs its
+captures again. Recursive dictionary captures likewise become a graph of static
+references, reserved before those references are connected. No runtime
+constructor or patching procedure is generated for a completed value.
 
 The explicit static-root locator is recursive context. Restoration propagates
 it through every transparent and nominal construction layer and into tag,
@@ -1850,62 +1858,23 @@ as the scalar literal rather than a slot read, so range proving, loop
 versioning, and overflow elision see the constant they would have seen from
 a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
-record, or guard exists for the root. The decoded value is a construction
-tree, and a root whose every leaf is a scalar, the empty string, or an
-empty list lowers as that tree rather than as bytes, because static data
-is the wrong home for it: records,
-tuples, and tag payloads of such parts rebuild field by field, so an
-empty `Dict` or `Set`, which is a record of empty lists, never reaches the
-image either. An empty list lowers to the `with_capacity` it was evaluated
-with: a frozen descriptor's capacity word is its length, so the freezer
-keeps each empty list's evaluated capacity on the root's export, keyed by
-its byte offset within the image, and the runtime rebuilds the request so
-the first append goes in place. A list with items keeps its slot however
-uniform its contents, so the constructions are the scalars, the empty
-string, the empty list, and records, tuples and tags of those. A completed
-string shorter than three target words, the threshold below which a
-restored string needs no target storage, lowers as its literal, as a read
-restoring the stored string does, so a procedure's code is the same whether
-it reads the string completed or restored. A restored string is its own
-bytes, never a view into a longer stored backing, so whether it needs
-target storage depends on the string alone. A list of
-copies of one construction—what `List.repeat` and a constant fill loop
-complete to—additionally names, on each read, the argument-free procedure
-that builds the same list fresh (`assign_literal.fresh_alternative`), and
-ARC chooses one form per read (see "Fresh forms of static lists" under ARC
-Borrow Inference): a read whose value only ever gets read keeps the static
-datum and allocates nothing, while a read whose value an in-place operation
-would otherwise copy on first write is born fresh, so the write is proven
-unique and the copy never happens. Neither form is visible after ARC. A non-empty
-list with spare capacity freezes to its items alone; only the capacity of
-an empty list survives. Identical nodes of one frozen image are one symbol:
-two evaluations of the same constant expression, such as two `List.repeat`
-calls with the same arguments, freeze to separate allocations with the same
-contents, and both the evaluation's image and the runtime program's
-transcoded image merge such nodes to a fixed point (`mergeIdenticalNodes`),
-so a program's static data does not depend on whether its values were
-completed by this compilation or restored from the constant store, which
-already names one value once. Each merge pass compares a node only with the
-earlier kept nodes of the same content hash, relocation targets included,
-and transcoding resolves a source pointer through a per-symbol index of its
-relocations, as linking the evaluation image resolves a data name through an
-index of its items; a frozen list of a million string pointers therefore
-costs work proportional to the image at every one of these steps, never a
-scan per pointer. A build that restores its compile-time values from a checked
-module's const store rather than from a completed host program, as every
-build after the first does, reaches the same constructions: the const
-store keeps an empty list's evaluated capacity and restores it as the
-`with_capacity` call, and a restored value whose parts are all
-constructions lowers as them rather than as a static-data candidate.
-A construction is the value's shape and leaves alone and names no list,
-field or payload layout: the compile-time consumer that decoded it and the
-runtime consumer that emits it lower separately and intern layouts in their
-own order, so a layout index from one program is not a name in the other.
-A read matches a construction by checked root identity; a scalar literal is
-checked against the read's scalar layout, which is the same fixed index in
-every store, and an aggregate is checked shape by shape as it is emitted,
-with the reading site's own layout supplying the item, field and
-payload layouts the emitted code needs.
+record, or guard exists for the root. Small strings may likewise use their
+immediate representation. All aggregate values, including empty lists,
+records, tuples, tags, boxes, and captured functions, read immutable stored
+data. There is no construction tree, runtime constructor, or fresh alternative
+for a completed value. Mutation uses the normal copy-on-write operation.
+Allocation capacity is not part of the frozen value; empty lists require no
+backing storage, and nonempty lists store their elements without spare capacity.
+The same rule applies when restoring values from the checked module cache.
+
+Static data can refer directly to a ConstStore node with its type plan, or
+contain explicit typed data edges (`StaticDataParts`) to child constants.
+Callable data names its procedure and its immutable captures. The target data
+encoder resolves these edges into bytes and relocations at compilation time;
+it never emits runtime initialization code. Static reachability and compaction
+retain and remap both child slots and referenced procedures. Identical frozen
+nodes can share storage by their contents and relocations.
+
 After the passes, which compact the slot table, the remaining
 aggregate slots are transcoded into the target's frozen image. The LLVM
 backend then defines each slot whose image is a link-time constant—bytes with
@@ -2317,6 +2286,26 @@ later compilation's evaluation could contradict.
 Every command reports the compile-time failures of every root, including
 those a cache entry left unevaluated.
 
+### Compile-Time Root Eligibility Proofs
+
+Root eligibility consumes the checked producer's types and fixed-callable
+fact. It does not mutate solved types or invent evidence from a use site.
+Within each immutable root-publication batch, concreteness and reachable
+callable-slot queries reuse completed graph proofs. Concreteness keys include
+whether a node is a value type or a nominal declaration's backing template:
+a declaration formal is allowed in the latter and unresolved in the former.
+The two predicates have separate analyses; the producer's fixed-callable fact
+is combined with their answers at the root, never discarded by memoization.
+
+A negative reachability proof is committed only when its complete recursive
+component has been inspected. Seeing an active back edge does not prove a
+subgraph contains no unresolved variable or callable: another edge of that
+component may still reach one. Members of a completed component share its
+answer. A positive proof needs only its reached witness. The traversal uses
+explicit continuation and component stacks and expands each reached node
+once per analysis. Proofs live only for that immutable publication batch;
+no source-path index or persistent cache is involved.
+
 ### Content-Addressed Compile-Time Values
 
 No persistent compiler cache may use a source file's filesystem path, checkout
@@ -2329,12 +2318,34 @@ unit-link identities, never by filesystem placement. Distinct modules sharing a
 unit-link identity are disambiguated by full content identity. Replay binds
 these identities to the current compilation's source environments and paths.
 
-A checked module's cache entry stores its checking output and finalized
-compile-time constants together. Its identity covers the module's source and
-resolved dependencies, checking context and compatibility policy. Identical
-inputs share the entry across checkouts, independently of their source paths.
-An edit that changes this identity misses the entry and evaluates the new
-module's required roots. No source-location pointer selects an older module
+A module has two front-end cache files: canonicalization and one combined
+checking entry. The combined entry stores its solved source environment once,
+the checker's explicit publication/foreign-reference inputs, and one finalized
+checked artifact. Its address hashes source inputs, ordered checking interfaces
+and nominal-owner equality of dependencies, checking context and compiler
+compatibility. Its header separately names the full implementation identity of
+the finalized artifact and constants.
+
+Matching full implementation identity restores the complete checked module.
+Matching typing inputs alone restores only solved source and checking inputs;
+producer-owned reference slots bind those inputs to current dependency artifacts
+before publication. The old artifact, constants, root states and observations
+are not consumed. Publication and required evaluation use current implementation
+inputs. Binding rewrites no solver relation or stamped dispatch decision.
+
+There is no third inference file, duplicate solved environment, path index or
+payload checksum. Both identities depend only on content and checking inputs,
+so different checkout paths share them. Publication atomically replaces complete
+entries; readers keep their open mapping. Concurrent different implementations
+with the same typing inputs may replace each other's finalized snapshot. The
+header makes the losing implementation a typing-only hit, never a stale constant
+hit. The sealed solver store remains live for later consumers, so publication streams
+the environment, checking metadata and finalized artifact once to one private
+file, then closes and atomically publishes it. It never stages an environment
+for later rereading or copying. Failed writes leave only unpublished staging data.
+One finalized snapshot is retained, not an implementation history. Only
+entries whose checking and evaluation add no diagnostics are published. No
+source-location pointer selects an older module
 for transplantation, and no per-program literal bundle or root-validation
 certificate is persisted under a source placement.
 
@@ -4237,14 +4248,18 @@ consumes its stored outcomes and replays its recorded debug observations without
 evaluation.
 The canonicalized module cache is a separate, non-checked boundary; the rules
 below bind the checked module and pairing caches.
-Checked module cache entries are trusted compiler-produced cache entries, not
-adversarial inputs. Cache reads validate only the cache header,
-entry-version hash, key, serialized layout, and ordinary binary decoding. They must
-not rerun checked validation, reselect hoisted roots, reconstruct checked data,
-or walk checked expressions to prove that cached checked data is still complete.
-Correctness belongs to the producer path that writes the cache entry, and
-invalidation belongs to the cache key and explicit cache/selection format
-versions.
+Checked module cache entries are trusted compiler-produced data, not adversarial
+inputs. Payload-integrity checksums and recursive payload-validation scans are
+forbidden. File completeness is checked by comparing the lengths recorded in the
+header against the loaded byte slice's length, without an additional file-length
+syscall. Do not scan payloads to defend against malicious input, arbitrary
+malformed data or bit flips. Header identity, version and lengths establish which
+producer data to consume. Publication stages complete files and atomically
+renames them. Content hashes identifying compilation inputs are separate from
+integrity verification. A cache hit never reruns checked validation, reselects
+hoisted roots, reconstructs checked data or walks expressions to prove cached
+output complete. Correctness belongs to the producer; invalidation belongs to
+the source/import key and explicit format versions.
 
 The coordinator captures each module's report count immediately before checked
 cache lookup, after parsing and canonicalization reports have been appended.
@@ -4258,6 +4273,16 @@ alive for every consumer of the module either way; serializing never releases
 or replaces it. A failed write is an ordinary cache-write failure: the
 compilation continues with the live module. Pairings follow their own
 cache-write rule above.
+
+Submitting a checked-cache writer is transactional: failure accepts no task
+and produces no completion. The coordinator reserves wake-message capacity
+while holding the wake queue's lock, then queues the task and commits the
+wake message without another fallible operation. Workers release the wake
+queue's lock before taking a session queue's lock. On every exit, including
+submission failure, the publication owner drains all accepted tasks before
+ending the session or freeing the task contexts and checked data they borrow.
+Accepted writers may finish publishing their finalized entries while draining;
+the failed submission and later unsubmitted work publish nothing.
 
 `ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
 store is part of the checked module cache data. A cache hit materializes it as a
@@ -4312,7 +4337,7 @@ data emitter. The checked cache must not store native pointer-width padding,
 static refcount words, allocation headers, or any other runtime `RocStr` layout
 bytes.
 
-### Checking dependencies and inference reuse
+### Checked cache identity and native checking interfaces
 
 A checking dependency is distinct from a checked module's implementation
 identity. The latter includes the complete source and imported
@@ -4320,89 +4345,15 @@ implementations. It names evaluated constants, procedure templates and lowering
 inputs. Equality of checking dependencies authorizes reuse of
 inference only; it never authorizes reuse of those implementation results.
 
-Checking commits its import-facing inputs while the solved source store is
-still available. These inputs include exposed names and their value/type
-classification, declaration and method bindings, complete copied schemes
-(including descriptor flags and generated-codec requirements), nominal backing
-templates, declaration annotations and their argument-position meaning,
-generated-method and hosted-declaration classifications, invoking-callable
-results, diagnostic hosted origins, and the results that govern stored-constant
-eligibility. The ordered imports and type-owner bindings are part of
-the dependency; methods come from the type owner's declaring module alone. An implementation edit can change one of these results without
-changing a printed type signature.
-
-Module ownership is a parameter of reusable inference. A checking dependency
-records the ordered owner bindings and their equality relationships, separately
-from the current owners' deep content hashes. Two distinct current owners never
-become one owner merely because they commit equal checking interfaces.
-Recursive type graphs retain identity sharing and cycles. Import cycles remain
-the explicitly rejected edges described under Module Completion Boundary.
-
-The inference-result cache stores the solved source environment together with
-the checker-selected commit inputs, before evaluation. Its key includes
-the module's own source inputs, validation (including the source-pin
-validation input canonicalization reported against) and resolution context,
-and the checking dependencies it consumed. Serialized references retain their explicit
-owner and declaration bindings; admission must establish those bindings against
-the current dependency commits. Equality of a signature, a name or an
-incidental node index is never a license to substitute a declaration. Source
-regions that are retained as checking input participate in admission as well.
-
-The producer assigns declaration-reference slots while committing its checking
-interface. Slots are first-encounter ordinals in the interface's deterministic
-traversal: sorted exposures, declared types and methods, and their binding and
-annotation children. They are scoped to that complete interface, not global
-identities or a name-matching scheme. The commit carries a parallel table
-from slot to current CIR node. The digest encodes slots and their checking results,
-never the table's incidental CIR indices. Changed traversal structure or checking
-results changes the interface and invalidates importers. Builtin references remain
-fixed within the compiler compatibility domain.
-
-An inference capsule carries the old dependency reference tables and their owner
-parameters. Admission establishes equal interfaces and owner equality partitions
-before translating each retained foreign reference through old node -> committed
-slot -> current node. Translation covers CIR value, associated, nominal, pattern
-and annotation references, suffix and hosted targets, nominal
-and alias source declarations, record defaults, and their type-store indices.
-Dispatch evidence's type variables and relations are local to the stored solved
-graph and are preserved; only their foreign declaration locators change. A
-reference without a committed correspondence rejects the optional capsule. No
-name, printed signature or numerical coincidence supplies a missing mapping.
-This relocation changes no solved type relationship or dispatch decision.
-Admission indexes the old owner parameters once, preserving their first
-occurrence and equality partition, then binds each stored dense module identity
-to its current owner ordinal and builtin status. Every foreign reference reads
-that binding directly; it never rescans the owner list. An unavailable owner
-remains unavailable and rejects a reference exactly as a missing slot does.
-
-Diagnostic provenance has a separate admission contract. Stored outcomes retain
-checking problems and canonicalization diagnostics in order, together with all
-reporting data they require. Local source is already an exact cache-key input;
-foreign source-dependent diagnostics require explicit current-source validation
-and otherwise miss. Evaluation diagnostics and empirical exhaustiveness outcomes
-are produced after commit against current implementations. Restored checking
-errors follow ordinary reporting and rejection, including commit's erroneous
-code exclusions; a cache hit cannot turn an error into successful machine code.
-
-A hit binds the inference result to current owners and commits a new checked
-entry against current imported entries. Commit consumes the stored
-root selections and scheme evidence; it neither reruns
-inference nor reconstructs these results. No finalized entry with old imported
-keys is installed under a new key. Evaluation and ordinary checked-entry
-caching then use the new full implementation identity.
-
-Inference cache entries have their own versioned content-addressed admission
-contract in the existing cache infrastructure. Missing, incompatible or corrupt
-entries are cache misses. Dependency diagnostics are produced by each current
-dependency's ordinary compilation. An inference result with checking reports
-is not admitted unless those reports and their current provenance are explicitly
-part of the stored result. Checking outcomes include snapshots, their formatted
-text, checker regions, and pending static-exhaustiveness recipes. Platform-side
-source regions require an exact current-platform-source digest; otherwise the
-capsule misses. Evaluation diagnostics always come from current commit.
-Work counters distinguish inference, interface commit, owner and declaration
-reference binding, diagnostic replay and entry commit, so interface creation
-cannot hide a second checking pass.
+The native-code cache also consumes checking-interface fingerprints. These are
+still produced once by fresh checking and stored in the module environment.
+They describe exported schemes, declaration and method bindings, nominal backing
+templates, annotations, generated-codec requirements, hosted declarations,
+callable eligibility, and explicit owner/declaration correspondence. Importers
+combine existing fingerprints rather than rehashing dependency source graphs.
+They are native-code identity inputs, not a second serialized inference result
+or a payload-integrity checksum. Changing this independent native-code reuse
+contract requires its own correctness and performance evaluation.
 
 Stored-constant eligibility of a foreign callable is a producer result. Checking
 scans the own body of each module-global definition and of each method
@@ -4534,6 +4485,16 @@ module cache stores only the live data of the checked module, every part of
 which is a deterministic output of those inputs; nothing in an entry is a
 cache-id input of its own. A cache miss recomputes the entry from the
 module's checked inputs; no other entry is consulted.
+
+Within one immutable checked publication, complete type-identity traversals are
+memoized by their exact ordered vector of checked type IDs. The memo is local
+to that publication and identity mode; ordinary value identities and test
+identities have different declaration/import contexts and never share it.
+A hit reuses the complete traversal digest, including its first-encounter
+positions for recursive edges and shared type variables. Independently hashing
+children and substituting their digests would lose those relationships and is
+not equivalent. This memo adds no persistent cache, cache-key input, or source
+path identity.
 
 `module_identity` includes the module's name. Canonicalization output is not
 a function of source bytes alone—a type module's main type takes its name
@@ -5119,6 +5080,17 @@ positions, which is all a variable's row default depends on; and the box
 payload capability each local nominal type was given. With those columns a
 reader renders a source type (`SealedTypeView`) without allocating, interning
 or resolving anything.
+
+Sealing also releases checker-only buffers: instantiation worklists and their
+nested-walk pools, thawed freeze anchors, detach worklists, scan hints,
+speculation trails, descriptor free lists, constraint-growth bookkeeping,
+and the raw dispatch-relation merge journal. Checking has already published
+selected relation merges into `ModuleEnv`; that published list stays alive.
+These buffers are reset to empty owners so later destruction is safe. The
+solved columns, nominal declarations, derived-map selections, stable variable
+ids, and borrowed slices into the solved pools remain owned by the sealed
+store until its last consumer is done. No serialized layout changes at this
+boundary, and releasing checker buffers neither allocates nor walks types.
 
 There is no second representation of any of this. No pass copies types,
 bodies, templates, names, plans or roots into another table after checking.
@@ -13304,13 +13276,13 @@ site to any family below must classify it here.
 
 Other solved-graph mutations:
 
-- `Store.rebindSourceReferences`—mechanism: inference-cache declaration
-  relocation (Checking dependencies and inference reuse). Equal producer
-  interfaces establish the declaration correspondence before this store-owned
-  operation translates nominal/alias/default locators and the nominal lookup
-  index. It preserves every variable, equivalence class, descriptor flag,
-  structural edge, and dispatch decision. It also normalizes the private
-  import-facing type mapping to producer slots before hashing it.
+- `Store.rebindSourceReferences`—mechanism: checking-interface declaration
+  normalization (Checked cache identity and native checking interfaces). The
+  producer establishes declaration slots before this store-owned operation
+  normalizes nominal/alias/default locators and the nominal lookup index in
+  its private import-facing type mapping. It preserves every variable,
+  equivalence class, descriptor flag, structural edge, and dispatch decision.
+  The normalized mapping contributes to the native checking-interface digest.
 
 - `checkConcreteBuiltinNumeral`—mechanism: Concrete Builtin Numeral
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction
@@ -13876,7 +13848,7 @@ that is bounded, whose row default is the empty row, and whose constraints
 closing the row discharges (`variableSealsToRowDefault`), and that nothing
 the worker exchanges with code outside it involves. The checked artifact
 records each procedure template's sealed slots when it is built
-(`CheckedProcedureTemplate.sealed_slots`, by `SealedSchemeVarWalk` over the
+(`CheckedProcedureTemplate.sealed_slots`, by `SealedSchemeSlots` over the
 template's own module's checked types), and every Boxy lowering reads them
 there. A sealed variable is bound to the empty row when its worker is lowered and takes no hidden
 descriptor, so `parse` is a static worker returning
@@ -13896,16 +13868,34 @@ result's coercion reach (the direct result row, a tag payload row under it,
 or the error row of a `Try` result): in an argument, including a callback
 parameter's row that polarity also opens, or under a record, list, box,
 function, or other named type's argument in the result
-(`SealedSchemeVarWalk.occursOutsideResultReach`). It also keeps its descriptor when a
+(the result-reach traversal of `SealedSchemeSlots`). It also keeps its descriptor when a
 callable the worker receives from its caller could involve it, since such a
 callable carries the caller's instantiation: a `where` requirement whose
 interface mentions the variable (the dictionary's methods), or any
 parameter holding a nominal over a callable payload, whose callable's
 interface its methods hide from the signature
-(`SealedSchemeVarWalk.argumentsHoldCallablePayload`). A bounded flex that unification
+(the argument traversal of `SealedSchemeSlots`). A bounded flex that unification
 tied to a rigid or a closed row is not a flex, so genuine row polymorphism
 (`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
 hidden descriptors.
+
+Publication computes all of a template's sealed slots together. It first
+collects the bounded candidates, then traverses its current immutable checked
+types with three explicit modes: arguments, ordinary reach, and result-coercion
+reach. Arguments and evidence callable types expose every type edge; result
+reach follows only the coercion paths above. Only argument reach can veto all
+candidates because of a nominal with a callable payload. A type reached in one
+mode remains visitable in another: sharing or recursion must not hide an
+externally involved occurrence. Each `(type, mode)` is expanded at most once
+per template. Scratch is cleared between templates, including after a veto.
+Argument reach runs before evidence and result reach. Once every distinct
+candidate has a disqualifying occurrence, traversal stops without visiting
+unrelated types. Duplicate scheme slots do not increase the candidate count.
+The output follows the original scheme-variable slot order, retaining every
+slot when several slots name one variable. A candidate need not occur in the
+result to qualify; it must have no disqualifying occurrence. The computation
+reads the single solved environment and current checked metadata, and publishes
+the same `sealed_slots` column without changing cache identities or formats.
 
 Sealing removes the one dependency a worker's representation had on its
 callers, so widening becomes a CONVERSION at the instantiation that widens:
@@ -14200,14 +14190,18 @@ many tables.
 
 An imported worker's tables are filled in the importing unit, from the needs
 list the worker's object exports (`ExportRecord.table_needs`), in which types
-and workers are named by their checked identities. The exports digest covers
-it, so an importer of a changed needs list is lowered again. A cached
-object's export records are followed by their digest, which loading checks
-before an importer reads them, so an altered needs list makes the entry a
-miss rather than reach the importer's lowering. In a
-compile-time program that stores function values, each table ends with one
-more word, its position among the program's tables, by which the stored
-function writer reads a function value's table inputs (design.md "Stored
+and workers name their modules by the link's content-derived identities, bound
+to the current checked graph when read. A dependency implementation edit can
+change a module's checked key without changing its native object, so that
+object must not retain the old checked key in its needs list. The exports digest covers
+it, so an importer of a changed needs list is lowered again. This digest
+identifies semantic dependencies; it is not a payload-integrity checksum.
+A cached object's header records its total byte length. Loading compares it
+with the loaded slice's length, without another file-size syscall or hashing
+serialized export records. Complete entries are trusted compiler-produced data.
+In a compile-time program that stores function values, each table ends with a
+producer identity and table ordinal, by which the stored function writer reads a
+function value's table inputs across cached units (design.md "Stored
 Function Values").
 
 #### Dynamic Values In LIR
@@ -14622,6 +14616,18 @@ keep their declared-order argument-record representation. Caller-side views
 still require independent packing; removing the callee wrapper does not grant
 views an independent lifetime or change the external byte-level ABI.
 
+A complete packed erased-argument block publishes a product ownership shape
+when its layout is dynamic, including any leading non-owning table words.
+Its field indices are the ABI's semantic argument indices. The callee owns
+its contents but borrows the physical buffer from its caller or pending-call
+driver. Explicit arguments are copied into independent representation storage
+before field-take analysis; copying bytes does not retain contents. ARC moves
+or retains each field and releases untouched fields using the existing product
+rules. No operation frees the caller's frame or the driver's argument packet.
+A hidden table is read using its prefix descriptor before the complete block's
+descriptor and product fields are established. Runtime-sized interior views
+continue to borrow and must still be packed independently for deferred calls.
+
 #### Ownership
 
 A dynamic local is a refcount-bearing owned unit to ARC exactly as a list or
@@ -14719,6 +14725,26 @@ Nothing a module emits depends on a module that imports it:
 This is the invariant the per-module Boxy cache (Caching Under `.boxy`) rests
 on, and it is the reason modules can be lowered independently and in
 parallel.
+
+Unit lowering finishes the closure of those module-definition workers and
+publishes their export inventory in `seedUnitWorkers`, before lowering command
+roots. Test and REPL roots, platform entrypoint wrappers, and requested static
+initializers keep their own explicit entrypoint/data references. Workers created
+only for those roots are local to the unit; being a lambda or method-entry worker
+does not make a test helper part of the module's external interface. A root can
+reuse a worker already published by the definition closure without changing its
+export status. This boundary uses the completed lowering worklist, not another
+body traversal or a guess from generated symbols. Instrumentation may change a
+public worker's calling contract, which importers must still consume and hash;
+private test workers must not change that interface fingerprint.
+
+A linked CTFE root program uses module-unit identities to call its imports,
+but produces no module interface: nothing links against that program. Its
+`compile_time` flag excludes both definition-worker seeding and exported
+table-needs serialization; only its requested roots and their dependencies
+are lowered. Ordinary object producers and compiler-only function-metadata
+producers keep `compile_time = false` and emit their complete module interface.
+Function-storage metadata does not turn a producer into a CTFE root program.
 
 #### Caching Under `.boxy`
 
@@ -15011,8 +15037,17 @@ program as it is built, in the order the builds finish. The build of a program
 reads the checked modules and loads its needed images under the shared image
 lock; its other writes belong to that program. Running it, which stores values
 and reports failures,
-stays on the evaluating thread, as do the programs of roots holding function
-values ("Stored Function Values"). A module's evaluation thus waits only for
+stays on the evaluating thread. Preparing programs of roots holding function
+values ("Stored Function Values") uses the same scheduler: each module retains
+its pending function roots across stages, submits one dependency-ready batch,
+and stores that batch's values on the evaluating thread before submitting the
+next. Independent modules can prepare these batches concurrently. A batch that
+makes no progress is followed by the same final failure-reporting pass as a
+synchronous evaluation. The module's ordinary program starts only after those
+function-value stages finish. On cancellation or preparation failure, evaluation
+discards unsubmitted programs and joins submitted work before freeing the graph,
+module lists, or image set any worker borrowed; its bookkeeping needs no new
+allocation and it publishes no additional results. A module's evaluation thus waits only for
 the values its roots read and the objects of its own import closure. The link
 waits for every unit after program evaluation. Platform-only evaluation before
 pairing joins running object tasks before publishing its values, but retains
@@ -15076,18 +15111,85 @@ A literal argument root ("Literal Arguments") is the module's program's
 whatever its value: one whose value holds a function is evaluated for its
 outcome and discarded.
 
+#### Demanded Checked Body Indexes
+
+A Boxy lowering registers every visible module's identity and interface, but
+indexes a module's local scopes, captures, local procedure references, and
+omitted field defaults only when a consumer requests that module's body
+metadata. Each lookup first ensures the complete index for that module; an
+absent entry is the checked producer's absence, never an uninitialized table.
+The index is built directly from checked records once per lowering, with no
+source traversal, guessed reachability, or persistent cache. Imports used only
+through linked code do not require their private body indexes. Allocation
+failure propagates, and the index is marked complete only after publication of
+all its records succeeds.
+
+#### Cached Function-Value Evaluation Units
+
+An evaluation that stores function-containing constants may demand imported
+compiler-only units. These remain per-module content-addressed artifacts, under
+a distinct variant of the ordinary object key. Ordinary runtime units emit no
+function-storage metadata or producer trailers. A module unit is demanded by the
+code references of the evaluation and the transitive references of those units;
+merely being visible to the evaluator does not demand such an artifact.
+
+A compiler-only unit records the callable workers its code emits, their capture
+shapes and worker recipes, their exact native image symbol indices, the
+immutable inputs of its explicitly filled type tables, and the number of
+words preceding each worker table's producer trailer. Descriptor inputs retain
+their nominal override scopes: each override is an explicit callable with its
+capture edges, not a method to resolve again from a type.
+Lowering's explicit callable-worker inventory is intersected with the backend's
+emitted procedure inventory: dead workers have no symbol, and direct-call
+ownership variants introduced by ARC have no function-value capture recipe.
+The intersection joins stable procedure identities recorded before LIR
+compaction, in the backend's emitted order. A retained worker's old procedure
+number must not index the compacted store when publishing its capture metadata.
+An emitted procedure is not necessarily a lowering worker.
+The records share a module-name table and a type table. Module references use the
+link's explicit module names, not checked-artifact keys from the producing build.
+A reader binds those names against its current checked module graph. It reads
+captured values by the recorded shapes and types; it does not reconstruct types
+from runtime layout, lower source bodies to rediscover metadata, or execute code
+to reconstruct an already stored constant. Captured dictionaries and recursive
+captures follow the same immutable constant-graph rules as uncached evaluation.
+
+Each table used to store function values ends with its producing unit's content
+key and its explicit table ordinal; a root program uses its local domain. This
+trailer exists only for function-storing evaluation, never ordinary runtime code.
+The unit metadata records the input capture graph at each ordinal: descriptors
+with scopes, callables with their worker recipes and captures, and tables with
+their inputs. It records neither derived table words nor lowered worker bodies.
+A returned function's table can belong to its caller rather than the unit that
+emitted its worker, so these identities remain separate. A reader uses the table's
+producer to interpret its inputs and the callable's producer to interpret its
+capture shape and recipe. No process-local type or worker id crosses that boundary.
+Compilation-local addresses bind loaded callable code to the producer's explicit
+procedure identity. Completed captures and tables are emitted as immutable data,
+never reconstructed by runtime allocation instructions.
+
+A dynamic function capture-record descriptor carries its own producer key and
+ordinal after its descriptor header, identifying its element descriptors with
+their scopes. Its producer can differ from both the callable's and its table's.
+The argument-descriptor recipe records capture-record purpose explicitly; a
+matching shape or leading-word count cannot confer that purpose. Only function-
+storing evaluation emits these records and trailers, and ordinary argument
+buffers emit none even in those units. Stored values keep only the capture graph
+reachable from their table inputs and capture-record element descriptors.
+
 #### Stored Function Values
 
 A `.boxy` function value is an erased callable: a worker's code and what the
 worker captured, which is values and its type table, whose inputs are the
 descriptors of its scope's type variables and dictionaries, themselves
 erased callables ("Type Tables"). Compile-time evaluation under `.boxy`
-stores exactly that (`ConstValue.boxy_fn`): a recipe naming the worker and
-the type each descriptor input describes, with the captured values and the
-dictionaries as nodes of the constant store. Restoring the value rebuilds the
-worker from the recipe, each dictionary as the immortal callable its own
-recipe names, and packs the values with the worker's table at those inputs,
-so nothing is inferred about the value and no checked evidence is consulted.
+stores exactly that (`ConstValue.boxy_fn`): a recipe naming the worker and its
+immutable input capture graph, with value captures as nodes of the constant
+store. Scoped override callables and dictionaries retain their exact capture
+edges, including cycles. Restoration reserves the graph's recipe nodes before
+connecting them, then emits the completed callable, values, and tables as
+immutable data. It neither resolves overrides in the receiving body's scope
+nor re-infers dictionary requirements from stored types.
 
 The recipe begins with the table of the modules it names, by checked key, each
 once, which the constant store reads to name a stored function in an identity
@@ -15108,8 +15210,8 @@ kept as the static words they were filled with.
 
 A function value has no slot for another root to read, so a module's roots
 holding one, with every pending root they read, run first in their own
-programs, in the order their checked reads give (`evaluateFunctionRoots`). A
-root reading a value that is not stored yet stays pending and runs again once
+programs, in the order their checked reads give
+(`ModuleEvaluation.startFunctions`). A root reading a value that is not stored yet stays pending and runs again once
 it is; if a program completes no root, the rest run once more and fail as they
 read. The module's remaining roots then restore the stored values.
 
@@ -20119,51 +20221,6 @@ solver outputs the least one. There is no failure path and no recovery path.
 An occurrence the solver leaves owned is emitted as a move or an `incref`,
 exactly as all-owned insertion would emit it.
 
-### Fresh forms of static lists
-
-A read of a compile-time list of copies lowers as its static-data slot and
-also names the argument-free procedure that would build the list fresh. The
-static datum has the static count, so it is never born unique: a mutating
-consumer copies it on first write, at the one allocation a fresh build would
-have spent, plus the copy. The fresh build reserves the count plus the range
-copy's scratch, appends the one item, and fills the rest with the unchecked
-range-within append, whose periodic copy runs at word-store pace; it allocates
-on every execution of the read, which a read whose value is only ever read has
-no use for. Which form a
-read takes is therefore a question of where its value reaches, and the
-uniqueness analysis answers it.
-
-The fresh procedure's identity is the list's layout and content (the count
-and the item's construction) and nothing a program numbers, so reads of equal
-lists share one procedure.
-
-Every such read is a candidate birth. Alongside the born bit and its parameter
-conditions, the settlement carries each local's *origins*: the candidates its
-born value derives from, flowing over the same pure aliases, join edges,
-field stores and takes, and call edges the birth flows over; a container
-carries origins per stored field, alongside the field's condition, and a
-callee's conditional-return row carries the caller's argument origins into
-the part of the result it names, so a table handed to a helper and re-bound
-from its returned record keeps its origin around the loop. Origins do not
-leave the procedure that read the value: a returned value or field that
-derives from a candidate is not a unique return, since a callee never learns
-of a candidate and the caller cannot see which form the read takes. A candidate is *needed*
-when a value derived from it meets a runtime uniqueness check its birth
-answers—an argument position an operation may check, or an argument passed to
-a callee position the callee's seed mask names, which a variant would seed—
-while born with no other holder. A procedure's seed mask names the parameters
-whose seed a check in its body would answer, and also those carried into a
-callee position the callee's mask names, so seeds compose through direct calls
-whether or not the callee is inlined; a mask change is a signature change and
-re-analyzes callers. Needed candidates take the fresh form, every
-other candidate stays the static datum, and a local whose origins include a
-candidate that stays static is not unique, whatever its born bit says
-(`unique_origins_ok`). Emission materializes a needed read as a call to the
-fresh procedure and any other as the static literal; no `fresh_alternative`
-survives ARC, which the certifier checks, and the fresh procedures no read
-chose leave with the reachability pass that follows ARC. Callee seed-mask
-changes re-analyze callers, since a caller's decisions read them.
-
 ### Vocabulary
 
 - `Resource`: one refcounted position of one local—the top-level value, or
@@ -20801,8 +20858,14 @@ both sides share.
 Backends follow these marks and nothing else: a deferred call becomes a call
 to the runtime's record function, a drive becomes a call to its drive
 function, and `returns_pending` becomes a query of the pending record
-followed by a return. The pending call is per-thread runtime state, held the
-same way the runtime holds its active-runtime selection.
+followed by a return. Pending state belongs exclusively to the waiter's
+frame, including its argument packet. Packets of at most 32 bytes occupy
+inline byte storage in the cell; larger packets occupy an exact-sized host
+allocation. The driver copies an inline packet into separate 16-byte-aligned
+invocation storage before calling, so a subsequent deferral cannot overwrite
+arguments the active callee still reads. Heap packets remain owned by that
+invocation until it returns. Storage selection uses the explicit packet byte
+length, never a guessed type, signature, or lifetime.
 
 ### RC Planning and Materialization
 
@@ -22275,8 +22338,7 @@ edges the solver already walks:
   visible value makes the container visible, and anything read out of a
   visible container is visible
 - direct-call argument-to-parameter and return-to-result relations, and the
-  return-to-result relation of a read's fresh form, which that read may become
-  (see "Fresh forms of static lists")
+  ordinary return-to-result relations
 - low-level ops, from explicit `RcEffect` data
 
 Bidirectional containment keeps every reachable-value tree uniformly
@@ -23653,7 +23715,10 @@ overflows, are a function of the program and the compiler build alone, and an
 overflow's reported position is reproducible. The crash boundary is set on the
 evaluation stack (`CrashBoundary.run`), so the escape from a crash or an
 overflow lands there and the root returns to the thread's own stack through
-the switch it entered by. While a root runs there, the fault handler
+the switch it entered by. The guarded callback is explicitly never tail-called:
+the frame holding the recovery point must remain live until the callback returns
+or escapes. Calls into generated code likewise preserve the host entry frame
+recorded for failure walks. While a root runs there, the fault handler
 classifies the thread's faults against the evaluation stack's bounds, and the
 frame-pointer walk ends at the generated code's entry frame on it. The
 interpreter and compiled runtime programs keep their own stack handling.
@@ -23788,14 +23853,29 @@ and counts through `roc_expect_observed`, and it exports a wrapper per
 top-level `expect` of its module, in the `(ret_ptr, args_ptr)` convention,
 under a name made of its module's package-qualified-name digest and the
 root's index among the module's test roots. Both are functions of the
-module's sources alone, never of the reporting plan, so a module has at most two cache entries: its build unit and its test
-unit (`boxy_object_cache.KeyInput.expect_sites`). Every unit of a test
-program is a test unit, dependencies included, because the shared program
-counts every inline expect any reached code holds. Beside the image, the
+module's sources alone, never of the execution subset or the reporting
+plan. A library module with expect nodes or test roots has separate ordinary
+and test units (`boxy_object_cache.KeyInput.expect_sites`). A module with
+neither uses its ordinary unit in tests too, including the builtins: test
+instrumentation cannot change code containing no expects. The checked body index
+records the presence of expect expressions and statements during its existing
+producer traversal, and publication stores that scalar in the checked artifact. Unit selection consumes this fact and
+the explicit root requests; it never scans bodies, hashes emitted bytes or
+special-cases a module name. Both cache keying and lowering use the selected
+unit mode. Each imported module selects its own mode, so an expect-free caller
+can call a test unit whose inline expects are observed. Paired platform root
+units retain their explicit test mode because they also lower the paired
+modules' bodies. Reusing an object already prepared by compile-time evaluation
+also transfers its exported calling contracts into the consumer's interface
+table before lowering importers: ownership conditions and `may_leave_pending`
+must match the reused machine code. Consumers already sharing the producer's
+table need no copy. A test unit records its own replacement contracts before
+its importers start. Beside the image, the
 entry files the unit's expect-site table (each site's module digest and
 source region, by site id) and its test-root table (each wrapper's module
 digest, root index and image symbol). A table that does not read makes the
-entry a miss. Compile-time evaluation and builds never load a test unit.
+entry a miss. Compile-time evaluation and builds never load an instrumented
+test unit; the ordinary units shared with tests contain no test instrumentation.
 
 Each site id is a relocatable field against one import,
 `roc__expect_site_base`, with the field's bytes holding the unit-local id
@@ -24380,6 +24460,19 @@ completed literal roots only from the Solved program that evaluated them,
 continuing that program rather than preparing its own.
 
 ### Runtime Programs Read Stored Values
+
+A completed compile-time value is final data. Reading it must never execute
+allocation, construction, or re-evaluation of that value, under either
+specialization strategy or any backend. This is a compiler invariant, not an
+optimization preference. There is no fresh-construction alternative, including
+for a consumer that may later update a list. Required runtime operations retain
+their ordinary semantics, but cannot change a constant read into reconstruction.
+All nested storage and callable captures are emitted as immutable target data
+with explicit relocations. Scalars may be immediate literals. Target-data
+encoding happens in the compiler and emits no runtime initializer.
+A product whose committed layout is zero-sized has no physical field offsets.
+Lowering represents its field projections as zero-sized value aliases, including
+when the product comes from an immutable slot.
 
 A build's executable binary is a function of its source, its command line, and its
 optimization state; whether the checked module cache already held a
@@ -26098,8 +26191,23 @@ and installation phases under the same diagnostic.
 
 `ROC_TEST_COMMAND_WORK` prints deterministic test-command counters at exit.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
-execution producers increment their own counters. This variable uses the same
-developer-only gate.
+execution producers increment their own counters. This variable uses the same developer-only gate.
+
+`ROC_PROFILE_ALLOCATIONS` attributes native test-root allocations on Linux x64.
+Each root owns its diagnostic table, aggregating allocation and reallocation
+calls and requested bytes by the first sixteen native return addresses. The
+live root caller bounds the frame-pointer walk. Loaded unit images print their
+address-to-source maps for offline attribution; addresses are observations of
+this process, never persistent identities. Requested bytes count every request,
+including the full new size of a reallocation, and are not peak live memory.
+Profiling changes neither allocation policy nor ownership. Its table and hot-path
+recording are absent from compilers without developer diagnostics. Profiled
+execution times include the recording overhead and are not benchmark results.
+
+`ROC_TRACE_BOXY_WORK` also separates checked-root graph construction from
+function-containing-root classification when evaluation timings are available.
+These diagnostic durations exclude the trace's per-root printing.
+
 
 
 ## Integer SIMD Builtins

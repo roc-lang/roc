@@ -10368,6 +10368,9 @@ fn buildBoxyLibraryObjects(
     phase_name: []const u8,
 ) CliMainError!BoxyLibraryObjects {
     reporter.begin(phase_name);
+    // Reusing CTFE's code also requires its ownership and pending-call ABI.
+    // Instrumented units replace their own contracts before importers start.
+    try build_env.boxyAdoptInterfaces(interfaces);
     const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
     const visible = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
     defer ctx.gpa.free(visible);
@@ -10463,10 +10466,15 @@ fn buildBoxyLibraryObjects(
         ctx.gpa.free(tasks);
     }
     for (tasks, units.items) |*task, artifact| {
+        var unit_policy = policy;
+        unit_policy.test_units = policy.test_units and compile.boxy_unit.requiresTestUnit(artifact);
+        if (policy.test_units and !unit_policy.test_units and dev_diagnostics.isSet(.trace_boxy_work)) {
+            std.debug.print("boxy-work: ordinary unit serves tests for {s} (no expect nodes or test roots)\n", .{artifact.moduleEnvConst().module_name});
+        }
         task.* = .{
             .gpa = ctx.gpa,
             .io = ctx.io.std_io,
-            .policy = policy,
+            .policy = unit_policy,
             .artifact = artifact,
             .platform = boxyUnitPlatform(artifact, platform),
             .views = try build_env.collectImportedArtifactViews(ctx.gpa, artifact),
@@ -10523,13 +10531,19 @@ fn buildBoxyLibraryObjects(
             try ready.append(ctx.gpa, index);
             continue;
         };
-        // Compile-time evaluation never builds a test unit.
-        std.debug.assert(!policy.test_units);
+        // Compile-time evaluation never builds an instrumented test unit.
+        // Its ordinary objects can also serve expect-free test dependencies.
+        std.debug.assert(!task.policy.test_units);
         try build_env.boxyAdoptExports(digests, task.artifact);
         if (known.restored) restored += 1 else built += 1;
         if (want_images) {
             const image = known.image orelse base.invariant("roc build invariant violated: a fast dev link unit has no image", .{});
             images[index] = image.bytes;
+            if (policy.test_units) unit_tests[index] = .{
+                .expect_sites = &.{},
+                .test_roots = &.{},
+                .code_locations = image.code_locations,
+            };
         } else {
             objects[index] = known.pieces orelse base.invariant("roc build invariant violated: a unit compile-time evaluation recorded for a composing link has no pieces", .{});
         }
@@ -15335,6 +15349,7 @@ const UnitImageTestProgram = struct {
             error.SiteOutOfRange => base.invariant("roc test invariant violated: a test unit's image has a reference to '{s}' out of its field's reach", .{diagnostic.name}),
         };
         errdefer loaded.unload();
+        (backend.dev.CodeLocations{ .bytes = image.tests.code_locations }).dumpAllocationMap(@intFromPtr(loaded.text().ptr));
         const symbols = view.symbols();
         try self.exports.ensureUnusedCapacity(self.gpa, @intCast(view.exports().len));
         for (view.exports()) |index| {
@@ -18573,13 +18588,51 @@ fn makeReporter(ctx: *CliCtx, op_label: []const u8, timings_flag: bool) progress
 /// in the breakdown once type checking completes.
 /// Module-level work runs on several worker threads at once, so each row is
 /// that work's time summed across threads rather than a slice of wall time.
-fn frontEndBreakdown(timing: anytype) [4]progress.SubTiming {
+fn frontEndBreakdown(timing: anytype) [7]progress.SubTiming {
     return .{
         .{ .name = "Parsing (summed)", .ns = timing.tokenize_parse_ns },
         .{ .name = "Name Resolution (summed)", .ns = timing.canonicalize_ns + timing.canonicalize_diagnostics_ns },
-        .{ .name = "Type Inference (summed)", .ns = timing.type_checking_ns + timing.check_diagnostics_ns },
+        .{ .name = "Fresh Checking (summed)", .ns = timing.checking_work.fresh_check_ns },
+        .{ .name = "Checked Publication (summed)", .ns = timing.checking_work.publication_ns },
+        .{ .name = "Other Checking Work (summed)", .ns = timing.type_checking_ns -| timing.checking_work.fresh_check_ns -| timing.checking_work.publication_ns },
+        .{ .name = "Check Diagnostics (summed)", .ns = timing.check_diagnostics_ns },
         .{ .name = "Module Compile-Time Eval (summed)", .ns = timing.module_compile_time_evaluation_ns },
     };
+}
+
+test "typing reuse work counters display zero-duration hits without inference" {
+    const timing: compile.package.TimingInfo = .{
+        .type_checking_ns = 13 * std.time.ns_per_ms,
+        .checking_work = .{ .typing_hits = 2, .publications = 2, .publication_ns = 11 * std.time.ns_per_ms },
+    };
+    const breakdown = frontEndBreakdown(timing);
+    try std.testing.expectEqual(@as(u64, 0), breakdown[2].ns);
+    try std.testing.expectEqual(@as(u64, 11 * std.time.ns_per_ms), breakdown[3].ns);
+    try std.testing.expectEqual(@as(u64, 2 * std.time.ns_per_ms), breakdown[4].ns);
+
+    var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer buf.deinit();
+    var reporter = progress.Reporter.init(.{
+        .std_io = std.testing.io,
+        .writer = &buf.writer,
+        .op_label = "roc test",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.start();
+    reporter.begin("Type Checking");
+    try finishFrontEndPhase(std.testing.allocator, reporting.ReportingConfig.initForTesting(), &reporter, timing);
+    reporter.finish();
+    const output = buf.written();
+    try std.testing.expect(std.mem.find(u8, output, "Type Inference") == null);
+    try std.testing.expect(std.mem.find(u8, output, "Checked Publication (summed)") != null);
+    for ([_][]const u8{ "Typing-only cache hits", "Checked publications" }) |label| {
+        const start = std.mem.find(u8, output, label) orelse return error.TestUnexpectedResult;
+        const remainder = output[start + label.len ..];
+        const end = std.mem.findScalar(u8, remainder, '\n') orelse remainder.len;
+        try std.testing.expectEqualStrings("2", std.mem.trim(u8, remainder[0..end], " \r"));
+    }
 }
 
 fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSnapshot) [18]progress.SubTiming {
@@ -19349,7 +19402,13 @@ fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfi
         const name = try std.fmt.allocPrint(names.allocator(), "{s}.{s}", .{ package, module.moduleName() });
         row.* = .{ .name = name, .ns = module.ns };
     }
-    reporter.recordRankedTimings("Slowest Module Type Inference", slowest_rows[0..slowest.len]);
+    reporter.recordRankedTimings("Slowest Module Check and Publication", slowest_rows[0..slowest.len]);
+    reporter.recordCounters("Frontend checking work", &.{
+        .{ .name = "Fresh checks", .count = timing.checking_work.fresh_checks },
+        .{ .name = "Typing-only cache hits", .count = timing.checking_work.typing_hits },
+        .{ .name = "Full checked-artifact hits", .count = timing.checking_work.artifact_hits },
+        .{ .name = "Checked publications", .count = timing.checking_work.publications },
+    });
     const compile_time = timing.compile_time_evaluation;
     if (timing.program_finalization_ns != 0) {
         var subs_buf: [18]progress.SubTiming = undefined;
@@ -19473,6 +19532,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             .canonicalize_ns = @as(u64, 0),
             .canonicalize_diagnostics_ns = @as(u64, 0),
             .type_checking_ns = @as(u64, 0),
+            .checking_work = compile.package.CheckingWork{},
             .check_diagnostics_ns = @as(u64, 0),
             .module_compile_time_evaluation_ns = @as(u64, 0),
             .program_finalization_ns = shared_input.total_ns,
@@ -20386,7 +20446,7 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
         writer.print("  can diagnostics:              ", .{}) catch {};
         formatElapsedTime(writer, t.canonicalize_diagnostics_ns) catch {};
         writer.print("  ({} ns)", .{t.canonicalize_diagnostics_ns}) catch {};
-        writer.print("  type checking:                ", .{}) catch {};
+        writer.print("  check, restore + publish:     ", .{}) catch {};
         formatElapsedTime(writer, t.type_checking_ns) catch {};
         writer.print("  ({} ns)", .{t.type_checking_ns}) catch {};
         writer.print("  type checking diagnostics:    ", .{}) catch {};

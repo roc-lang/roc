@@ -73,6 +73,11 @@ pub const StaticDescs = struct {
     /// The tables reserved, in reservation order; those from `next_unfilled`
     /// on have not been handed out for filling.
     unfilled_tables: std.ArrayList(UnfilledTable) = .empty,
+    /// Producer records for immutable capture edges, retained only by programs
+    /// that store function values. Export indices never leave this producer.
+    captured_callables: std.AutoHashMapUnmanaged(ExportIndex, CapturedCallable) = .empty,
+    captured_tables: std.AutoHashMapUnmanaged(ExportIndex, u32) = .empty,
+    captured_records: std.ArrayList(CapturedRecord) = .empty,
     next_unfilled: usize = 0,
     /// The root callable of each static dictionary tree, by its root.
     dictionary_trees: std.StringHashMapUnmanaged(ExportIndex) = .empty,
@@ -80,6 +85,7 @@ pub const StaticDescs = struct {
     /// tables, which reading a stored function value's table names
     /// (`StoredFn.Retained`), in a program that stores function values.
     table_identities: bool = false,
+    table_owner: [32]u8 = @splat(0),
     /// The words of each cyclic recipe group a table evaluated, by the
     /// group's content (`tables.Evaluation`), in the group's own order.
     groups: std.StringHashMapUnmanaged([]const CaptureWord) = .empty,
@@ -113,6 +119,9 @@ pub const StaticDescs = struct {
     /// A table reserved by `table` whose words its worker's needs give.
     /// `index` is its position among the reserved tables.
     pub const UnfilledTable = struct { worker: WorkerId, inputs: []const CaptureWord, reserved: Reserved, index: u32 };
+
+    pub const CapturedCallable = struct { identity: LIR.ProcIdentity, words: []const CaptureWord };
+    pub const CapturedRecord = struct { leading: u32, elems: []const CaptureWord };
 
     const Pending = struct { key: Key, node: ExportIndex };
 
@@ -150,6 +159,12 @@ pub const StaticDescs = struct {
         freeKeys(self.allocator, &self.tables);
         for (self.unfilled_tables.items) |unfilled| self.allocator.free(unfilled.inputs);
         self.unfilled_tables.deinit(self.allocator);
+        var captured = self.captured_callables.valueIterator();
+        while (captured.next()) |callable| self.allocator.free(callable.words);
+        self.captured_callables.deinit(self.allocator);
+        self.captured_tables.deinit(self.allocator);
+        for (self.captured_records.items) |record| self.allocator.free(record.elems);
+        self.captured_records.deinit(self.allocator);
         freeKeys(self.allocator, &self.dictionary_trees);
         var groups = self.groups.iterator();
         while (groups.next()) |entry| {
@@ -164,7 +179,7 @@ pub const StaticDescs = struct {
         self.pending.deinit(self.allocator);
     }
 
-    const WordContext = struct {
+    pub const WordContext = struct {
         pub fn hash(_: WordContext, word: CaptureWord) u64 {
             var hasher = std.hash.Wyhash.init(0);
             hashCaptureWord(&hasher, word);
@@ -356,10 +371,12 @@ pub const StaticDescs = struct {
     /// reference counting reads, then values of the closed types `elems`, in
     /// declared order. `scope_id` supplies the overrides of the nominal types
     /// in the elements' reach that no static descriptor holds on its own.
-    pub fn argsDescriptor(self: *StaticDescs, leading: u32, elems: []const TypeId, scope_id: ScopeId) Allocator.Error!Reserved {
+    pub fn argsDescriptor(self: *StaticDescs, leading: u32, elems: []const TypeId, scope_id: ScopeId, capture_record: bool) Allocator.Error!Reserved {
+        const retain_capture = capture_record and self.table_identities;
         var key: std.ArrayList(u8) = .empty;
         defer key.deinit(self.allocator);
         try appendKeyWord(self.allocator, &key, leading);
+        if (self.table_identities) try appendKeyWord(self.allocator, &key, @intFromBool(capture_record));
         try appendKeyWord(self.allocator, &key, @backingInt(scope_id));
         for (elems) |ty| try appendKeyWord(self.allocator, &key, @backingInt(ty));
         if (self.args_descs.get(key.items)) |existing| return existing;
@@ -373,7 +390,20 @@ pub const StaticDescs = struct {
         };
         const committed = try self.result.layouts.putNominalStructFields(fields);
         const desc_layout = desc_format.TypeDesc.layout(self.width);
-        const reserved = try self.addSlotWithNode(desc_layout.size, desc_layout.alignment);
+        const reserved = try self.addSlotWithNode(desc_layout.size + @as(u32, if (retain_capture) 36 else 0), desc_layout.alignment);
+        if (retain_capture) {
+            const words = try self.allocator.alloc(CaptureWord, elems.len);
+            errdefer self.allocator.free(words);
+            for (elems, words) |ty, *word| {
+                const scope = try self.restrictScope(scope_id, ty);
+                word.* = if (scope == .none) .{ .desc = ty } else .{ .scoped_desc = .{ .ty = ty, .scope = scope } };
+            }
+            const ordinal: u32 = @intCast(self.captured_records.items.len);
+            try self.captured_records.append(self.allocator, .{ .leading = leading, .elems = words });
+            const bytes = @constCast(self.exports.items[reserved.node].bytes);
+            @memcpy(bytes[desc_layout.size..][0..32], &self.table_owner);
+            writeU32(bytes, desc_layout.size + 32, ordinal);
+        }
         var pointers: std.ArrayList(Pointer) = .empty;
         defer pointers.deinit(self.allocator);
         var recursive = false;
@@ -413,10 +443,12 @@ pub const StaticDescs = struct {
         const owned_inputs = try self.allocator.dupe(CaptureWord, inputs);
         errdefer self.allocator.free(owned_inputs);
         try self.unfilled_tables.ensureUnusedCapacity(self.allocator, 1);
+        if (self.table_identities) try self.captured_tables.ensureUnusedCapacity(self.allocator, 1);
         const owned_key = try self.allocator.dupe(u8, key.items);
         errdefer self.allocator.free(owned_key);
         try self.tables.put(self.allocator, owned_key, reserved);
         self.unfilled_tables.appendAssumeCapacity(.{ .worker = worker, .inputs = owned_inputs, .reserved = reserved, .index = @intCast(self.unfilled_tables.items.len) });
+        if (self.table_identities) self.captured_tables.putAssumeCapacity(reserved.node, @intCast(self.unfilled_tables.items.len - 1));
         return reserved;
     }
 
@@ -429,16 +461,20 @@ pub const StaticDescs = struct {
 
     /// Fill the reserved table `unfilled` with `words`, word `index` at
     /// `tables.entryOffset(index, pointer width)`. With `table_identities`,
-    /// a word past them holds the table's position among the reserved
-    /// tables.
+    /// a trailer names the producing unit's content key (zero for the current
+    /// root program) and its explicit table ordinal. Ordinary runtime tables
+    /// have no trailer.
     pub fn fillTable(self: *StaticDescs, unfilled: UnfilledTable, words: []const CaptureWord) Allocator.Error!void {
         const node = unfilled.reserved.node;
         const item = &self.exports.items[node];
         if (item.bytes.len != 0) types.invariant("a type table was filled twice");
-        const word_count = words.len + @intFromBool(self.table_identities);
-        const bytes = try self.allocator.alloc(u8, word_count * self.ptrSize());
+        const ordinary_bytes = words.len * self.ptrSize();
+        const bytes = try self.allocator.alloc(u8, ordinary_bytes + @as(usize, if (self.table_identities) 36 else 0));
         @memset(bytes, 0);
-        if (self.table_identities) writeU32(bytes, LIR.tableEntryOffset(@intCast(words.len), self.ptrSize()), unfilled.index);
+        if (self.table_identities) {
+            @memcpy(bytes[ordinary_bytes..][0..32], &self.table_owner);
+            writeU32(bytes, @intCast(ordinary_bytes + 32), unfilled.index);
+        }
         self.allocator.free(item.bytes);
         item.bytes = bytes;
         var pointers: std.ArrayList(Pointer) = .empty;
@@ -493,7 +529,14 @@ pub const StaticDescs = struct {
         return reserved;
     }
 
-    /// The static-data slot holding a null pointer.
+    fn ptrSize(self: *const StaticDescs) u32 {
+        return self.width.bytes();
+    }
+
+    pub fn opaqueWordSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
+        return (try self.opaqueWord()).slot;
+    }
+
     pub fn nullWordSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
         if (self.null_word) |slot| return slot;
         const slot = try self.addSlot();
@@ -502,8 +545,58 @@ pub const StaticDescs = struct {
         return slot;
     }
 
-    fn ptrSize(self: *const StaticDescs) u32 {
-        return self.width.bytes();
+    /// A closed declared-order capture record's descriptor, emitted directly
+    /// as target data. Each child is an explicit descriptor pointer slot.
+    pub fn argumentRecordSlot(self: *StaticDescs, record_layout: layout.Idx, children: []const LIR.StaticDataId) Allocator.Error!LIR.StaticDataId {
+        const dl = desc_format.TypeDesc.layout(self.width);
+        const fl = desc_format.Field.layout(self.width);
+        const reserved = try self.addSlotWithNode(dl.size, dl.alignment);
+        const layouts = self.layouts.layouts;
+        const committed = layouts.getLayout(record_layout);
+        const record = committed.getStruct().idx;
+        var refcounted: u32 = 0;
+        for (children, 0..) |_, i| {
+            const field = layouts.getStructFieldLayoutByOriginalIndex(record, @intCast(i));
+            if (layouts.layoutContainsRefcounted(layouts.getLayout(field))) refcounted += 1;
+        }
+        const count: u32 = @intCast(children.len);
+        const fields_size = fl.size * count;
+        const entries = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, @backingInt(reserved.slot), 2), fields_size + if (refcounted == 0) @as(u32, 0) else 4 * (refcounted + 1), fl.alignment, null);
+        var pointers: std.ArrayList(Pointer) = .empty;
+        defer pointers.deinit(self.allocator);
+        const bytes = @constCast(self.exports.items[entries].bytes);
+        var rc_index: u32 = 0;
+        for (children, 0..) |child, raw| {
+            const i: u32 = @intCast(raw);
+            const field = layouts.getStructFieldLayoutByOriginalIndex(record, i);
+            writeU32(bytes, i * fl.size + fl.of(.offset), layouts.getStructFieldOffsetByOriginalIndex(record, i));
+            writeU32(bytes, i * fl.size + fl.of(.field_index), i);
+            writeU32(bytes, i * fl.size + fl.of(.field_slot), i);
+            try pointers.append(self.allocator, .{ .offset = i * fl.size + fl.of(.desc), .target = self.nodeOfSlot(child) });
+            if (layouts.layoutContainsRefcounted(layouts.getLayout(field))) {
+                writeU32(bytes, fields_size + 4 * (rc_index + 1), i);
+                rc_index += 1;
+            }
+        }
+        if (refcounted != 0) writeU32(bytes, fields_size, refcounted);
+        try self.setRelocations(entries, pointers.items);
+        const header = @constCast(self.exports.items[reserved.node].bytes);
+        writeU32(header, dl.of(.size), layouts.layoutSize(committed));
+        writeU32(header, dl.of(.alignment), @intCast(committed.alignment(layouts.targetUsize()).toByteUnits()));
+        writeU32(header, dl.of(.count), count);
+        header[dl.of(.kind)] = @backingInt(desc_format.Kind.tuple);
+        header[dl.of(.sort_key)] = @backingInt(committed.sortKey());
+        header[dl.of(.flags)] = @bitCast(desc_format.Flags{ .declared_order = true, .contains_refcounted = refcounted != 0 });
+        try self.setRelocations(reserved.node, &.{.{ .offset = dl.of(.entries), .target = entries }});
+        return reserved.slot;
+    }
+
+    fn nodeOfSlot(self: *const StaticDescs, slot: LIR.StaticDataId) ExportIndex {
+        for (self.exports.items) |item| if (item.value_id == slot) {
+            std.debug.assert(item.relocations.len == 1);
+            return @backingInt(item.relocations[0].target.data_symbol);
+        };
+        types.invariant("a static descriptor slot has no descriptor node");
     }
 
     fn addSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
@@ -816,6 +909,13 @@ pub const StaticDescs = struct {
     }
 
     fn fillStaticCallable(self: *StaticDescs, node: ExportIndex, proc: LIR.LirProcSpecId, words: []const CaptureWord) Allocator.Error!void {
+        if (self.table_identities) {
+            const owned = try self.allocator.dupe(CaptureWord, words);
+            errdefer self.allocator.free(owned);
+            const entry = try self.captured_callables.getOrPut(self.allocator, node);
+            if (entry.found_existing) types.invariant("an immutable callable was filled twice");
+            entry.value_ptr.* = .{ .identity = self.result.store.getProcSpec(proc).identity, .words = owned };
+        }
         const ptr = self.ptrSize();
         const capture_offset = self.staticCallableCaptureOffset();
         var relocation_count: usize = 1;
@@ -1992,14 +2092,34 @@ const TestFixture = struct {
     }
 };
 
+test "only function-storing capture record descriptors retain producer metadata" {
+    for ([_]base.target.TargetUsize{ .u32, .u64 }) |width| for ([_]bool{ false, true }) |storing| {
+        var fixture: TestFixture = undefined;
+        try fixture.init(width);
+        defer fixture.deinit();
+        fixture.descs.table_identities = storing;
+        const ty = try fixture.store.primitive(.u64);
+        // Identical shapes cannot confer capture-record purpose.
+        const arguments = try fixture.descs.argsDescriptor(3, &.{ty}, .none, false);
+        try std.testing.expectEqual(@as(usize, 0), fixture.descs.captured_records.items.len);
+        const capture = try fixture.descs.argsDescriptor(3, &.{ty}, .none, true);
+        const size = desc_format.TypeDesc.layout(fixture.descs.width).size;
+        try std.testing.expectEqual(@as(usize, size), fixture.descs.exports.items[arguments.node].bytes.len);
+        try std.testing.expectEqual(@as(usize, size + @as(u32, if (storing) 36 else 0)), fixture.descs.exports.items[capture.node].bytes.len);
+        try std.testing.expectEqual(@as(usize, @intFromBool(storing)), fixture.descs.captured_records.items.len);
+        if (!storing) try std.testing.expectEqual(arguments, capture);
+        try std.testing.expectEqual(capture, try fixture.descs.argsDescriptor(3, &.{ty}, .none, true));
+    };
+}
+
 test "argument record descriptors keep declared order at natural alignment" {
     var fixture: TestFixture = undefined;
     try fixture.init(.u64);
     defer fixture.deinit();
     const byte = try fixture.store.primitive(.u8);
     const word = try fixture.store.primitive(.u64);
-    const args = try fixture.descs.argsDescriptor(0, &.{ byte, word, byte }, .none);
-    try std.testing.expectEqual(args, try fixture.descs.argsDescriptor(0, &.{ byte, word, byte }, .none));
+    const args = try fixture.descs.argsDescriptor(0, &.{ byte, word, byte }, .none, false);
+    try std.testing.expectEqual(args, try fixture.descs.argsDescriptor(0, &.{ byte, word, byte }, .none, false));
     try std.testing.expectEqual(@as(u32, 24), fixture.headerWord(args.node, .size));
     try std.testing.expectEqual(@as(u32, 3), fixture.headerWord(args.node, .count));
     try std.testing.expectEqual(@as(u8, @backingInt(desc_format.Kind.tuple)), fixture.headerByte(args.node, .kind));
@@ -2021,7 +2141,7 @@ test "argument record descriptors lead with words no reference counting reads" {
         try fixture.init(width);
         defer fixture.deinit();
         const text = try fixture.store.primitive(.str);
-        const args = try fixture.descs.argsDescriptor(2, &.{text}, .none);
+        const args = try fixture.descs.argsDescriptor(2, &.{text}, .none, false);
         const ptr = width.size();
         try std.testing.expectEqual(@as(u32, 2 * ptr + 3 * ptr), fixture.headerWord(args.node, .size));
         try std.testing.expectEqual(@as(u32, 3), fixture.headerWord(args.node, .count));
@@ -2059,7 +2179,7 @@ test "type tables are reserved once per worker and inputs, then filled" {
         try std.testing.expect(fixture.descs.nextUnfilledTable() == null);
 
         // A table reaching itself: its second word addresses it.
-        const args = try fixture.descs.argsDescriptor(1, &.{number}, .none);
+        const args = try fixture.descs.argsDescriptor(1, &.{number}, .none, false);
         try fixture.descs.fillTable(first, &.{ .{ .desc = number }, .zero, .{ .table = reserved.node }, .{ .node = args.node } });
         const filled = fixture.descs.exports.items[reserved.node];
         const ptr = width.size();
