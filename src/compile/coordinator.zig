@@ -4542,7 +4542,7 @@ pub const Coordinator = struct {
     fn createOwnedSemanticResult(
         allocator: Allocator,
         env: *ModuleEnv,
-        checked_module: Checked.CheckedModule,
+        checked_module: *Checked.CheckedModule,
     ) Allocator.Error!*messages.OwnedSemanticModuleData {
         const semantic = try allocator.create(messages.OwnedSemanticModuleData);
         semantic.* = .{
@@ -5034,7 +5034,6 @@ pub const Coordinator = struct {
             .available_modules = task.available_modules,
             .platform_requirement_context = platform_requirement_context,
             .explicit_roots = task.explicit_roots,
-            .resolver = self.moduleResolver(),
             .outputs = .{ .stored = .{ .backing = outputs_buffer, .backing_borrowed = true } },
         }) catch {
             manager.recordInvalidationFor(.checked);
@@ -6057,9 +6056,8 @@ pub const Coordinator = struct {
 
         // Take ownership of semantic module data
         mod.replaceModuleEnv(result.semantic.module_env);
-        const checked = result.semantic.checked_module;
+        const checked_ptr = result.semantic.checked_module;
         self.unregisterCheckedModule(mod);
-        const checked_ptr = try allocateCheckedModule(checked);
         var checked_ptr_owned = true;
         errdefer if (checked_ptr_owned) destroyCheckedModule(checked_ptr, false);
         result.semantic.checked_module_owned = false;
@@ -7356,6 +7354,18 @@ pub const Coordinator = struct {
         };
     }
 
+    /// Demand, in the type-check task that checked or opened `checked`, the
+    /// analyses finishing the checked program reads of every module it
+    /// holds: its root requests, which read its checked tables, dispatch and
+    /// literal analyses, and its public API dependencies, which every
+    /// module importing it reads. Each module's are thereby computed in
+    /// parallel with every other module's checking.
+    fn demandEvaluatedModuleAnalyses(checked: *const CheckedModule) Allocator.Error!void {
+        const view = Checked.importedView(checked);
+        _ = try view.rootRequests();
+        _ = try view.publicApiDependencies(checked.analysesResolver());
+    }
+
     fn executeTypeCheck(self: *Coordinator, task: TypeCheckTask, allocators: WorkerTaskAllocators) WorkerResult {
         return self.executeTypeCheckFallible(task, allocators) catch |err| switch (err) {
             error.OutOfMemory => WorkerResult{ .worker_oom = .{
@@ -7387,13 +7397,16 @@ pub const Coordinator = struct {
         defer task_allocs.result.free(task.explicit_roots);
 
         if (self.openCachedCheckedModule(task, task_allocs.scratch)) |opened| {
-            return .{ .cached_module_opened = .{
+            var result: messages.CachedModuleOpenedResult = .{
                 .package_name = task.package_name,
                 .module_id = task.module_id,
                 .module_name = task.module_name,
                 .checked = opened.checked,
                 .source_borrowed = opened.source_borrowed,
-            } };
+            };
+            errdefer result.deinit();
+            try demandEvaluatedModuleAnalyses(opened.checked);
+            return .{ .cached_module_opened = result };
         }
 
         const result_alloc = task_allocs.result;
@@ -7452,9 +7465,18 @@ pub const Coordinator = struct {
 
         const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
 
-        var checked_module = typecheck_output.takeCheckedModule();
+        const checked_module = blk: {
+            var checked_value = typecheck_output.takeCheckedModule();
+            const owned = checked_value.owningAllocator().create(CheckedModule) catch |err| {
+                checked_value.deinitRetainingModuleEnv(checked_value.owningAllocator());
+                return err;
+            };
+            owned.* = checked_value;
+            break :blk owned;
+        };
         var checked_module_owned = true;
-        errdefer if (checked_module_owned) checked_module.deinitRetainingModuleEnv(checked_module.canonical_names.allocator);
+        errdefer if (checked_module_owned) destroyCheckedModule(checked_module, true);
+        try demandEvaluatedModuleAnalyses(checked_module);
 
         var pending_evaluation: ?*messages.PendingEvaluationState = null;
         errdefer if (pending_evaluation) |state| state.deinit();

@@ -31530,6 +31530,12 @@ pub const CheckedModule = struct {
         return importedView(self).rootRequests();
     }
 
+    /// The resolver the module's analyses find other modules through.
+    pub fn analysesResolver(self: *const CheckedModule) ModuleResolver {
+        const analyses = self.module_analyses orelse checkedModuleInvariant("a resolver was read from a module without analyses", .{});
+        return analyses.resolver orelse checkedModuleInvariant("a module's analyses were read before their resolver was attached", .{});
+    }
+
     /// The module's root requests when a consumer has demanded them.
     pub fn peekRootRequests(self: *const CheckedModule) ?*const RootRequestTable {
         const analyses = self.module_analyses orelse return null;

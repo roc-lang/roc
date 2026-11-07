@@ -336,7 +336,8 @@ pub const CanonicalizedResult = struct {
 pub const OwnedSemanticModuleData = struct {
     /// The coordinator retains this input until it accepts the checked module.
     module_env: *ModuleEnv,
-    checked_module: Checked.CheckedModule,
+    /// The checked module, at the address it keeps for as long as it lives.
+    checked_module: *Checked.CheckedModule,
     checked_module_owned: bool = true,
     pending_evaluation: ?*PendingEvaluationState = null,
 
@@ -344,7 +345,9 @@ pub const OwnedSemanticModuleData = struct {
         if (self.pending_evaluation) |state| state.deinit();
         self.pending_evaluation = null;
         if (!self.checked_module_owned) return;
-        self.checked_module.deinitRetainingModuleEnv(self.checked_module.canonical_names.allocator);
+        const allocator = self.checked_module.owningAllocator();
+        self.checked_module.deinitRetainingModuleEnv(allocator);
+        allocator.destroy(self.checked_module);
     }
 };
 
@@ -387,7 +390,7 @@ pub const CachedModuleOpenedResult = struct {
     /// that source with `module_env`.
     source_borrowed: bool,
 
-    fn deinit(self: *CachedModuleOpenedResult) void {
+    pub fn deinit(self: *CachedModuleOpenedResult) void {
         const checked = self.checked orelse return;
         if (self.source_borrowed) switch (checked.module_env) {
             .cached_entry => |*cached| cached.source = &.{},
