@@ -856,31 +856,32 @@ pub const Program = struct {
         const view = self.module(module_index);
         const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
         const checked_scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool, template.scheme_vars);
-        // A sealed variable (design.md "Sealed Result Rows") is no hidden
-        // parameter: it seals to the empty row wherever the body mentions it,
-        // and an evidence parameter dispatching on it is no dictionary.
+        // A sealed variable (design.md "Sealed Result Rows"), which checking
+        // records (`CheckedProcedureTemplate.sealed_slots`), is no hidden
+        // input: it seals to the empty row wherever the body mentions it, and
+        // an evidence parameter dispatching on it is no dictionary.
         var scheme_vars: std.ArrayList(checked.CheckedTypeId) = .empty;
         var checked_slots: std.ArrayList(u32) = .empty;
-        var sealed_slots: std.ArrayList(u32) = .empty;
-        defer sealed_slots.deinit(self.allocator);
-        const evidence_params = poolSlice(static_dispatch.EvidenceParamRecord, view.view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
+        const templates = view.view.checked_procedure_templates;
+        const evidence_params = templates.templateEvidenceParams(&template);
+        const sealed_slots = templates.templateSealedSlots(&template);
         for (checked_scheme_vars, 0..) |variable, slot| {
             // A platform requirement's identity variable is the app type
             // this program lowers the platform at (`solvePlatformIdentities`):
             // every mention converts to that type, so it is no hidden
-            // parameter either.
+            // input either, and no sealed one.
             if (self.converter().platformIdentity(module_index, variable) != null) continue;
-            if (try self.converter().sealedSchemeVar(module_index, variable, template.checked_fn_root, evidence_params)) {
-                try sealed_slots.append(self.allocator, @intCast(slot));
-                continue;
-            }
+            if (std.mem.findScalar(u32, sealed_slots, @intCast(slot)) != null) continue;
             try scheme_vars.append(self.arena.allocator(), variable);
             try checked_slots.append(self.arena.allocator(), @intCast(slot));
         }
-        const literal_requirements = view.view.checked_procedure_templates.templateLiteralRequirements(&template);
+        const literal_requirements = templates.templateLiteralRequirements(&template);
         var dictionary_params: std.ArrayList(u32) = .empty;
         for (evidence_params, 0..) |param, index| {
-            const sealed_dispatcher = if (param.slot) |slot| std.mem.findScalar(u32, sealed_slots.items, slot) != null else false;
+            const sealed_dispatcher = if (param.slot) |slot|
+                std.mem.findScalar(u32, sealed_slots, slot) != null and self.converter().platformIdentity(module_index, checked_scheme_vars[slot]) == null
+            else
+                false;
             if (sealed_dispatcher) continue;
             try dictionary_params.append(self.arena.allocator(), @intCast(index));
         }

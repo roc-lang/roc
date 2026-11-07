@@ -17580,6 +17580,11 @@ pub const CheckedProcedureTemplate = struct {
     /// Monotype specializes the template over only this much of each
     /// variable's substitution (design.md "Specialization By Demand").
     demands: artifact_serialize.Span = .{},
+    /// The `scheme_vars` slots that are sealed (design.md "Sealed Result
+    /// Rows"), ascending (a range into
+    /// `CheckedProcedureTemplateTable.sealed_slots_pool`). Boxy binds such a
+    /// variable to the empty row and passes no descriptor for it.
+    sealed_slots: artifact_serialize.Span = .{},
 };
 
 fn checkedTypeIsClosedTagRow(
@@ -17713,6 +17718,8 @@ pub const CheckedProcedureTemplateTable = struct {
     specialization_interface_types: []CheckedTypeId = &.{},
     /// Flat pool backing each template's `demands` span.
     demand_pool: []SchemeVarDemand = &.{},
+    /// Flat pool backing each template's `sealed_slots` span.
+    sealed_slots_pool: []u32 = &.{},
 
     pub const Serialized = extern struct {
         templates: SerializedSlice(CheckedProcedureTemplate) = .{},
@@ -17733,6 +17740,7 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
         demand_pool: SerializedSlice(SchemeVarDemand) = .{},
+        sealed_slots_pool: SerializedSlice(u32) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -18016,6 +18024,16 @@ pub const CheckedProcedureTemplateTable = struct {
     /// demands, in slot order.
     pub fn templateDemands(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const SchemeVarDemand {
         return self.demand_pool[template.demands.start .. template.demands.start + template.demands.len];
+    }
+
+    /// The `scheme_vars` slots of a template that are sealed, ascending.
+    pub fn templateSealedSlots(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const u32 {
+        return self.sealed_slots_pool[template.sealed_slots.start .. template.sealed_slots.start + template.sealed_slots.len];
+    }
+
+    /// A template's evidence parameters, in canonical order.
+    pub fn templateEvidenceParams(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const static_dispatch.EvidenceParamRecord {
+        return self.evidence_params_pool[template.evidence_params.start .. template.evidence_params.start + template.evidence_params.len];
     }
 
     /// The quantified variables of a generalized-local scope's scheme, in
@@ -24749,6 +24767,203 @@ const NominalFormalReach = struct {
     };
 };
 
+/// Give every procedure template its sealed scheme-variable slots
+/// (`CheckedProcedureTemplate.sealed_slots`).
+fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView, templates: *CheckedProcedureTemplateTable) Allocator.Error!void {
+    var walk = SealedSchemeVarWalk.init(allocator, checked_types);
+    defer walk.deinit();
+    var slots: std.ArrayList(u32) = .empty;
+    errdefer slots.deinit(allocator);
+    for (templates.templates.items) |*template| {
+        const start: u32 = @intCast(slots.items.len);
+        const evidence_params = templates.templateEvidenceParams(template);
+        for (templates.templateSchemeVars(template), 0..) |variable, slot| {
+            if (try walk.sealed(variable, template.checked_fn_root, evidence_params)) try slots.append(allocator, @intCast(slot));
+        }
+        template.sealed_slots = .{ .start = start, .len = @intCast(slots.items.len - start) };
+    }
+    allocator.free(templates.sealed_slots_pool);
+    templates.sealed_slots_pool = try slots.toOwnedSlice(allocator);
+}
+
+/// Whether a procedure template's scheme variable is SEALED (design.md
+/// "Sealed Result Rows"), over one module's checked types. The walks share
+/// scratch the walk owns, so a query allocates only to grow it.
+pub const SealedSchemeVarWalk = struct {
+    allocator: Allocator,
+    types: CheckedTypeStoreView,
+    pending: std.ArrayList(CheckedTypeId) = .empty,
+    seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
+    reached: std.ArrayList(CheckedTypeId) = .empty,
+    reached_seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
+
+    pub fn init(allocator: Allocator, checked_types: CheckedTypeStoreView) SealedSchemeVarWalk {
+        return .{ .allocator = allocator, .types = checked_types };
+    }
+
+    pub fn deinit(self: *SealedSchemeVarWalk) void {
+        self.pending.deinit(self.allocator);
+        self.seen.deinit(self.allocator);
+        self.reached.deinit(self.allocator);
+        self.reached_seen.deinit(self.allocator);
+    }
+
+    /// Whether scheme variable `variable` of the function type `fn_root` is
+    /// sealed: a flex tag-row tail that an annotation bounds, whose row
+    /// default is the empty row, and whose constraints closing the row
+    /// discharges, and that nothing the worker exchanges with code outside
+    /// it involves.
+    pub fn sealed(self: *SealedSchemeVarWalk, variable: CheckedTypeId, fn_root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
+        const payload = self.types.payload(variable);
+        const bounded = switch (payload) {
+            .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
+            .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+        };
+        if (!bounded) return false;
+        // Polarity also opens a row in a callback's parameter, which the
+        // definition produces but which no instantiation of its result
+        // converts: a variable at such a position, or anywhere else outside
+        // the result's reach, keeps its descriptor.
+        if (try self.occursOutsideResultReach(fn_root, variable)) return false;
+        // A callable the worker receives from its caller carries the caller's
+        // instantiation of every variable its interface mentions. A function
+        // parameter shows that interface and is excluded above; a `where`
+        // dictionary's interface is its evidence parameter's callable, and a
+        // nominal over a callable payload hides its callable's interface in
+        // its methods, so a parameter holding one may involve any variable.
+        for (evidence_params) |param| {
+            if (try self.mentionsVariable(param.callable_ty, variable)) return false;
+        }
+        return !try self.argumentsHoldCallablePayload(fn_root);
+    }
+
+    fn function(self: *const SealedSchemeVarWalk, fn_root: CheckedTypeId) ?CheckedFunctionType {
+        var root = fn_root;
+        while (true) switch (self.types.payload(root)) {
+            .alias => |alias| root = alias.backing,
+            .function => |found| return found,
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+        };
+    }
+
+    /// Whether any argument of the function type `fn_root` holds a nominal
+    /// over a callable payload (`local_box_payload_capability`,
+    /// `imported_box_payload_capability`): a function value whose
+    /// interface the signature does not show.
+    fn argumentsHoldCallablePayload(self: *SealedSchemeVarWalk, fn_root: CheckedTypeId) Allocator.Error!bool {
+        const signature = self.function(fn_root) orelse return true;
+        const allocator = self.allocator;
+        self.pending.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
+        try self.pending.appendSlice(allocator, signature.args);
+        while (self.pending.pop()) |ty| {
+            if ((try self.seen.getOrPut(allocator, ty)).found_existing) continue;
+            const payload = self.types.payload(ty);
+            switch (payload) {
+                .nominal => |nominal| switch (nominal.representation) {
+                    .local_box_payload_capability, .imported_box_payload_capability => return true,
+                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
+                },
+                .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            }
+            try self.pushChildren(payload);
+        }
+        return false;
+    }
+
+    /// Whether `variable` occurs in the function type `fn_root` anywhere but
+    /// along its result's coercion reach: an argument, or a position under
+    /// the result that a row coercion does not reach (design.md "Row
+    /// Coercion Primitive": the root row, tag payload rows, the error
+    /// argument of a `Try`, and alias backings are reached; records, tuples,
+    /// lists, boxes, functions, and other named types' arguments are not).
+    fn occursOutsideResultReach(self: *SealedSchemeVarWalk, fn_root: CheckedTypeId, variable: CheckedTypeId) Allocator.Error!bool {
+        const signature = self.function(fn_root) orelse return true;
+        const allocator = self.allocator;
+        for (signature.args) |arg| {
+            if (try self.mentionsVariable(arg, variable)) return true;
+        }
+        // Reached positions under the result, in which only the variable's
+        // own occurrence as a row extension is on the reach.
+        self.reached.clearRetainingCapacity();
+        self.reached_seen.clearRetainingCapacity();
+        try self.reached.append(allocator, signature.ret);
+        while (self.reached.pop()) |ty| {
+            if (ty == variable) continue;
+            if ((try self.reached_seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (self.types.payload(ty)) {
+                .alias => |alias| try self.reached.append(allocator, alias.backing),
+                .tag_union => |tag_union| {
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try self.reached.appendSlice(allocator, tag.args);
+                    }
+                    try self.reached.append(allocator, tag_union.ext);
+                },
+                .nominal => |nominal| switch (nominal.representation) {
+                    .builtin => |builtin_nominal| if (builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
+                        if (try self.mentionsVariable(nominal.args[0], variable)) return true;
+                        try self.reached.append(allocator, nominal.args[1]);
+                    } else {
+                        for (nominal.args) |arg| if (try self.mentionsVariable(arg, variable)) return true;
+                    },
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {
+                        for (nominal.args) |arg| if (try self.mentionsVariable(arg, variable)) return true;
+                    },
+                },
+                .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
+                .record, .tuple, .function => if (try self.mentionsVariable(ty, variable)) return true,
+            }
+        }
+        return false;
+    }
+
+    /// Whether `variable` occurs anywhere in `root`.
+    fn mentionsVariable(self: *SealedSchemeVarWalk, root: CheckedTypeId, variable: CheckedTypeId) Allocator.Error!bool {
+        self.pending.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
+        try self.pending.append(self.allocator, root);
+        while (self.pending.pop()) |ty| {
+            if (ty == variable) return true;
+            if ((try self.seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            try self.pushChildren(self.types.payload(ty));
+        }
+        return false;
+    }
+
+    /// Push every type `payload` names onto `pending`.
+    fn pushChildren(self: *SealedSchemeVarWalk, payload: CheckedTypePayload) Allocator.Error!void {
+        const allocator = self.allocator;
+        switch (payload) {
+            .alias => |alias| {
+                try self.pending.appendSlice(allocator, alias.args);
+                try self.pending.append(allocator, alias.backing);
+            },
+            .record => |record| {
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try self.pending.append(allocator, field.ty);
+                }
+                try self.pending.append(allocator, record.ext);
+            },
+            .tuple => |items| try self.pending.appendSlice(allocator, items),
+            .tag_union => |tag_union| {
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try self.pending.appendSlice(allocator, tag.args);
+                }
+                try self.pending.append(allocator, tag_union.ext);
+            },
+            .function => |inner| {
+                try self.pending.appendSlice(allocator, inner.args);
+                try self.pending.append(allocator, inner.ret);
+            },
+            .nominal => |nominal| try self.pending.appendSlice(allocator, nominal.args),
+            .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+        }
+    }
+};
+
 /// Computes every local procedure template's demand vector: for each
 /// quantified variable of its scheme, the most its body asks of the type a
 /// specialization substitutes for it (design.md "Specialization By Demand").
@@ -30079,7 +30294,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 222);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 223);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -30202,7 +30417,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 114;
+    const serialized_layout_version: u32 = 115;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -33816,6 +34031,7 @@ pub fn publishFromTypedModule(
         defer demand_pass.deinit();
         try demand_pass.publish();
     }
+    try publishSealedSlots(allocator, checked_types.view(), &checked_procedure_templates);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
@@ -35741,8 +35957,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x33, 0x18, 0xE4, 0x3E, 0x0D, 0x8C, 0xBB, 0xB4, 0x07, 0xC1, 0x8F, 0x83, 0x29, 0x4C, 0xD2, 0xF4,
-        0x0B, 0xF5, 0x70, 0x16, 0xDC, 0xD8, 0x01, 0x5A, 0xF1, 0xDA, 0xD4, 0x91, 0xD1, 0xC8, 0xBD, 0x46,
+        0x74, 0xAF, 0x85, 0x6D, 0xA4, 0x7D, 0xD5, 0x1F, 0x27, 0x12, 0xC0, 0x79, 0xBB, 0x7F, 0xA9, 0xD2,
+        0xB8, 0xE8, 0xF4, 0x0E, 0x18, 0x3A, 0x14, 0x0F, 0x18, 0x09, 0x03, 0x1C, 0xD7, 0x93, 0xE8, 0x83,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

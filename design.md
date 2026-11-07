@@ -13825,12 +13825,15 @@ variable on its error row, instantiated fresh at every call, so a caller may
 use the result at a wider union. The checker bounds that variable
 (`DescriptorFlags.bounded_row_ext`): the body can never add a tag to the row,
 only an instantiation can. The checked module records the bound on the
-variable (`CheckedTypeVariable.bounded_row_ext`), and Boxy reads it as the
-one condition under which a scheme variable is SEALED: a flex tag-row tail
+variable (`CheckedTypeVariable.bounded_row_ext`), and it is the one
+condition under which a scheme variable is SEALED: a flex tag-row tail
 that is bounded, whose row default is the empty row, and whose constraints
 closing the row discharges (`variableSealsToRowDefault`), and that nothing
-the worker exchanges with code outside it involves. A sealed variable is
-bound to the empty row when its worker is lowered and takes no hidden
+the worker exchanges with code outside it involves. The checked artifact
+records each procedure template's sealed slots when it is built
+(`CheckedProcedureTemplate.sealed_slots`, by `SealedSchemeVarWalk` over the
+template's own module's checked types), and every Boxy lowering reads them
+there. A sealed variable is bound to the empty row when its worker is lowered and takes no hidden
 descriptor, so `parse` is a static worker returning
 `Try(U8, [InvalidU8])`. An evidence parameter whose dispatcher is a sealed
 variable is no dictionary input either.
@@ -13848,13 +13851,13 @@ result's coercion reach (the direct result row, a tag payload row under it,
 or the error row of a `Try` result): in an argument, including a callback
 parameter's row that polarity also opens, or under a record, list, box,
 function, or other named type's argument in the result
-(`Converter.occursOutsideResultReach`). It also keeps its descriptor when a
+(`SealedSchemeVarWalk.occursOutsideResultReach`). It also keeps its descriptor when a
 callable the worker receives from its caller could involve it, since such a
 callable carries the caller's instantiation: a `where` requirement whose
 interface mentions the variable (the dictionary's methods), or any
 parameter holding a nominal over a callable payload, whose callable's
 interface its methods hide from the signature
-(`Converter.argumentsHoldCallablePayload`). A bounded flex that unification
+(`SealedSchemeVarWalk.argumentsHoldCallablePayload`). A bounded flex that unification
 tied to a rigid or a closed row is not a flex, so genuine row polymorphism
 (`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
 hidden descriptors.
