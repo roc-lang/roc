@@ -157,5 +157,5 @@ test "canonicalized module cache key input names nothing outside the module" {
         try std.testing.expect(!std.mem.eql(u8, field_name, "root_module"));
     }
 
-    try std.testing.expectEqual(@as(usize, 7), field_names.len);
+    try std.testing.expectEqual(@as(usize, 6), field_names.len);
 }
