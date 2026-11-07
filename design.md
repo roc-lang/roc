@@ -1241,6 +1241,21 @@ checker recovery. The recovery rules:
   literal expression whose conversion fails is not a pattern owner: it
   becomes a runtime error itself, like the source of any other rejected
   dispatch.
+- A source literal's conversion, and every obligation derived from it, fails
+  at the literal's own occurrences (every literal merged into its relation),
+  whichever unification grounded the literal's type and whichever queued
+  entry carries it (`Check.poisonSourceLiteralConversionFailure`). In
+  `var $xs = [1]` followed by `$xs = bad($xs)`, where
+  `bad = |xs| xs.append(Bool.True)`, resolving the call's copy of `append`
+  makes the list's item `Bool`, and the `1` is the runtime error: the call is
+  a valid call, and the statement that builds the list crashes. The report
+  still belongs to the relation that grounded the literal, so it is withdrawn
+  with that relation when the relation is void. Only a copy that
+  instantiation made of a literal conversion belongs to the use that copied
+  it. A class that a default decided was grounded by no relation, so once a
+  requirement rejects its default every literal it holds has no type: the
+  class's rejection retires all of them (`(3, x) = ("a", 1)` retires both
+  the pattern's `3`, rejecting the destructure, and the `"a"`).
 - An effectful top-level value's right-hand side is erroneous.
 - A value binding whose annotation is rejected for introducing a type
   variable the binding cannot quantify is checked without the annotation, and
