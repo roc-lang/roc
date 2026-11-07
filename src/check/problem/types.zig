@@ -848,6 +848,16 @@ pub const StaticDispatch = union(enum) {
     unresolved_dispatcher: UnresolvedDispatcher,
     recursive_dispatch: RecursiveDispatch,
     undetermined_type: UndeterminedType,
+    local_value_method: LocalValueMethod,
+};
+
+/// A dispatch selected an associated binding of a type declared in a function
+/// body that is a value of that body, not a local procedure: nothing
+/// dispatches to such a binding (design.md "Methods Never Capture").
+pub const LocalValueMethod = struct {
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
 };
 
 /// A requirement failed on a type that never resolved to a concrete type: a

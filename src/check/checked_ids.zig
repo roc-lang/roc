@@ -22,6 +22,10 @@ pub const CheckedTypeSchemeId = enum(u32) { _ };
 
 /// Identity of one compile-time root within its checked module.
 pub const ComptimeRootId = enum(u32) { _ };
+/// Identity of one callable-eval template within its checked module: a
+/// function-valued top-level binding that is no procedure of its own, whose
+/// callable its compile-time root evaluates.
+pub const CallableEvalTemplateId = enum(u32) { _ };
 /// Stable identity of a generalized-local dispatch scope within a checked
 /// module artifact.
 pub const DispatchScopeId = enum(u32) { _ };
