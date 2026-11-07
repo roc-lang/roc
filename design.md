@@ -5143,7 +5143,12 @@ The method registry is a view over the checked module: each retained method's
 callable type is the solver variable of its definition. Derived declarations
 own this root even when a containing expression has been replaced by a checked
 error. Rejected declarations retain their explicit target-less registry entry;
-skipped associated values request no method callable root. The method registry
+skipped associated values request no method callable root. Which target each
+method binding has (a procedure template, a promoted or local procedure, a
+structural declaration, a rejected declaration or none) is one classification
+computed from the module's checked source alone; the registry builds its
+entries from it, and the module's type roots reach exactly the callable types
+and checker-recorded inspect instances it names, so the two cannot disagree. The method registry
 view a consumer reads is a per-module on-demand analysis ("On-Demand Analyses
 And Write-Once Slots").
 

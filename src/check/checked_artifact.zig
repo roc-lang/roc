@@ -190,6 +190,18 @@ pub fn forEachCheckedSourceTypeRoot(
 
     try forEachStaticDispatchTypeRoot(module, module_index, visitor);
 
+    // The method registry names each method binding's callable type and a
+    // `to_inspect` procedure's checker-recorded inspect instance.
+    const method_classes = try static_dispatch.classifyMethodBindings(module.allocator, module, module_index);
+    defer module.allocator.free(method_classes);
+    for (method_classes) |class| switch (class) {
+        .unsupported, .associated_value, .rejected => {},
+        .target => |target| {
+            try visitor.visit(target.callable_var);
+            if (target.inspect_instance) |instance| try visitor.visit(instance);
+        },
+    };
+
     // Evidence nodes retain exact checked callable instantiations. Publish
     // every fresh type participating in a recorded scheme use, including
     // the constraint function that identifies a selected dispatch target
@@ -2766,18 +2778,6 @@ fn entryWrapperForRoot(
     return wrapper;
 }
 
-fn topLevelExprIsAlreadyProcedure(module: TypedCIR.Module, def_idx: CIR.Def.Idx, expr: CIR.Expr) bool {
-    if (expr == .e_lambda or expr == .e_closure or expr == .e_hosted_lambda) return true;
-    if (expr != .e_anno_only) return false;
-    // A compiler-owned intrinsic is a procedure whatever it declares, because
-    // its body comes from the intrinsic wrapper rather than the declaration.
-    if (intrinsicForProcedureDef(module, def_idx) != null) return true;
-    // Every other annotation-only declaration is a procedure only when the
-    // type it declares is a function. Annotation-only values are published
-    // through the const path, which records the missing value the same way.
-    return sourceTypeIsFunction(module, module.defType(def_idx));
-}
-
 fn sourceTypeIsFunction(module: TypedCIR.Module, var_: Var) bool {
     return module.typeStoreConst().varResolvesToFunction(var_);
 }
@@ -4895,22 +4895,17 @@ const CheckedTypePublication = struct {
         return self.source_types.?.get(module, resolved);
     }
 
-    /// A retained method contributes its exact callable type as a publication
-    /// root, independently of executable-body reachability. This is an ordinary
-    /// producer request, not recovery from a failed published-type lookup.
-    pub fn publishMethodCallableType(
-        self: *CheckedTypePublication,
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        var_: Var,
-    ) Allocator.Error!CheckedTypeId {
-        std.debug.assert(self.source_types.?.scratch != null);
-        try sealed_type_view.reach(allocator, module.moduleEnvConst(), self.store.sealed_var_facts.items, var_, null);
-        return self.source_types.?.get(module, var_);
+    /// The checked type of a method binding's callable value, which type
+    /// publication reached from the binding's class
+    /// (`static_dispatch.classifyMethodBindings`).
+    pub fn methodCallableType(self: *const CheckedTypePublication, module: TypedCIR.Module, var_: Var) CheckedTypeId {
+        return self.rootForSourceVar(module, var_) orelse
+            checkedArtifactInvariant("a method binding's callable type was not reached by type publication", .{});
     }
 
-    /// Registry construction is the last source-type producer. Free traversal
-    /// scratch now; source-id lookups remain available until checking finalizes.
+    /// Source-type enumeration is the only source-type producer. Free its
+    /// traversal scratch; source-id lookups remain available until checking
+    /// finalizes.
     fn finishSourceTypes(self: *CheckedTypePublication) void {
         self.source_types.?.releaseScratch();
     }
@@ -18434,7 +18429,7 @@ pub const CheckedProcedureTemplateTable = struct {
             if (def.expr.data == .e_derived_method) {
                 checkedArtifactInvariant("generated method marker reached procedure-template publication", .{});
             }
-            if (!topLevelExprIsAlreadyProcedure(module, def_idx, def.expr.data)) continue;
+            const template_kind = static_dispatch.procedureTemplateKindForValueBindingDef(module, def_idx) orelse continue;
 
             const intrinsic = intrinsicForProcedureDef(module, def_idx);
             const proc_base = canonical.ProcBase.of(
@@ -18450,18 +18445,7 @@ pub const CheckedProcedureTemplateTable = struct {
             try by_def.append(allocator, .{
                 .def = def_idx,
                 .template = template_ref,
-                .kind = if (intrinsic) |intrinsic_id| switch (intrinsic_id) {
-                    .structural_eq => .{ .structural = .equality },
-                    .str_inspect,
-                    .parse_tag_union,
-                    .field_names_rename_fields,
-                    .field_names_shortest_name,
-                    .field_names_longest_name,
-                    .field_names_iter,
-                    .field_names_for_size,
-                    .field_name,
-                    => .callable,
-                } else .callable,
+                .kind = template_kind,
             });
             const checked_fn_root = checked_type_publication.rootForSourceVar(module, module.defType(def_idx)) orelse {
                 base.invariant("checked artifact invariant violated: checked procedure function root was not published", .{});
@@ -34124,6 +34108,7 @@ pub fn publishFromTypedModule(
     defer checked_type_publication.deinitIndex(allocator);
     errdefer if (!stores_moved) checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
+    checked_type_publication.finishSourceTypes();
 
     const default_exprs = try publicationDefaultExprs(allocator, module, &canonical_names, &checked_type_publication);
     defer allocator.free(default_exprs);
@@ -34159,7 +34144,6 @@ pub fn publishFromTypedModule(
         module_index,
     );
     errdefer method_registry.deinit(allocator);
-    checked_type_publication.finishSourceTypes();
 
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(
         allocator,
