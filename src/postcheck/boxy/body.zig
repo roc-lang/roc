@@ -2760,17 +2760,17 @@ pub const Builder = struct {
             // execution produces.
             .expr => |expr| if (self.hole == null) {
                 const checked_ty = self.bodies().valueType(expr);
-                try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.valueType(expr), .frame));
+                try self.pushValue(if (try self.program.hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.valueType(expr), .frame));
             } else try self.stepExpr(expr),
             .own_expr => |expr| if (self.hole == null) {
                 const checked_ty = self.bodies().exprType(expr);
-                try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.exprType(expr), .frame));
+                try self.pushValue(if (try self.program.hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.exprType(expr), .frame));
             } else try self.stepOwnExpr(expr),
             .root_body => |root| try self.lowerRootBody(root),
             .root_pattern_match => |root| try self.rootPatternMatch(root),
             .literal_pattern_guard => |pattern| if (self.hole == null) {
                 const checked_ty = self.bodies().literalPatternGuard(pattern).?.equality_ty;
-                try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.convert(checked_ty), .frame));
+                try self.pushValue(if (try self.program.hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.convert(checked_ty), .frame));
             } else {
                 try self.push(.{ .restore_region = self.region });
                 try self.lowerLiteralPatternGuard(pattern);
@@ -3214,7 +3214,7 @@ pub const Builder = struct {
     /// row (design.md "Row Coercion Primitive").
     fn lowerRowCoercion(self: *Builder, expr_id: ExprId, wide: checked.CheckedTypeId) Allocator.Error!void {
         self.region = self.nodeRegion(@backingInt(expr_id));
-        if (self.destination_types.get(expr_id)) |destination| if (!try self.program.converter().hasError(self.module, wide)) {
+        if (self.destination_types.get(expr_id)) |destination| if (!try self.program.hasError(self.module, wide)) {
             const own = try self.convert(wide);
             if (try self.retagInto(own, destination)) |to| try self.push(.{ .retag = .{ .from = own, .to = to } });
         };
@@ -3226,7 +3226,7 @@ pub const Builder = struct {
         const expr = self.bodies().expr(expr_id);
         if (self.ownDestination(expr_id)) |destination| try self.passDestination(expr.data, destination);
         self.region = expr.source_region;
-        if (self.ownDestination(expr_id) != null and !try self.program.converter().hasError(self.module, expr.ty)) {
+        if (self.ownDestination(expr_id) != null and !try self.program.hasError(self.module, expr.ty)) {
             const own = try self.convert(expr.ty);
             if (try self.retagTarget(expr_id, own)) |destination| try self.push(.{ .retag = .{ .from = own, .to = destination } });
         }
@@ -3268,7 +3268,7 @@ pub const Builder = struct {
                     try self.push(.{ .expr = block.final_expr });
                 } else {
                     const block_ty = self.bodies().exprType(expr_id);
-                    try self.push(.{ .diverged = if (try self.program.converter().hasError(self.module, block_ty)) null else try self.exprType(expr_id) });
+                    try self.push(.{ .diverged = if (try self.program.hasError(self.module, block_ty)) null else try self.exprType(expr_id) });
                 }
                 while (index > 0) {
                     index -= 1;
@@ -3356,7 +3356,7 @@ pub const Builder = struct {
                 // A retired expression evaluates the operands it still
                 // evaluates, each for its effects, then crashes.
                 const checked_ty = self.bodies().exprType(expr_id);
-                try self.push(.{ .runtime_error = if (try self.program.converter().hasError(self.module, checked_ty)) null else try self.exprType(expr_id) });
+                try self.push(.{ .runtime_error = if (try self.program.hasError(self.module, checked_ty)) null else try self.exprType(expr_id) });
                 var index = runtime_error.evaluated.len;
                 while (index > 0) {
                     index -= 1;
@@ -3986,7 +3986,7 @@ pub const Builder = struct {
             .pattern_error => |pattern| {
                 try self.push(.{ .restore_region = self.region });
                 self.region = self.nodeRegion(@backingInt(pattern));
-                try self.push(.{ .runtime_error = if (try self.program.converter().hasError(self.module, root.checked_type)) null else try self.convert(root.checked_type) });
+                try self.push(.{ .runtime_error = if (try self.program.hasError(self.module, root.checked_type)) null else try self.convert(root.checked_type) });
             },
             .pattern_extraction => |extraction| try self.pushRootPatternMatch(root_id, extraction.scrutinee_pattern, extraction.base_expr),
             .pattern_validation => |validation| try self.pushRootPatternMatch(root_id, validation.scrutinee_pattern, validation.base_expr),
@@ -4016,7 +4016,7 @@ pub const Builder = struct {
         };
         const scrutinee = self.popValue();
         if (self.hole == null) {
-            try self.pushValue(if (try self.program.converter().hasError(self.module, root.checked_type)) try self.closedLocal(.zst) else try self.localOf(try self.convert(root.checked_type), .frame));
+            try self.pushValue(if (try self.program.hasError(self.module, root.checked_type)) try self.closedLocal(.zst) else try self.localOf(try self.convert(root.checked_type), .frame));
             return;
         }
         // A miss crashes: a hole is a runtime error until it is filled.
@@ -7506,7 +7506,7 @@ pub const Builder = struct {
     /// The value of a custom literal pattern's guard operand where no
     /// execution reaches it: a value of the pattern's type.
     fn literalPatternDeadValue(self: *Builder, pattern: PatternId) Allocator.Error!LocalId {
-        if (try self.program.converter().hasError(self.module, self.bodies().patternType(pattern))) return try self.closedLocal(.zst);
+        if (try self.program.hasError(self.module, self.bodies().patternType(pattern))) return try self.closedLocal(.zst);
         return try self.localOf(try self.patternType(pattern), .frame);
     }
 
@@ -9338,7 +9338,7 @@ pub const Builder = struct {
         // A loop whose pattern checking rejected evaluates its iterable,
         // then crashes where it would begin: its pattern binds nothing.
         const item_ty = self.view.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)].item_ty;
-        if (try self.program.converter().hasError(self.module, item_ty) or try self.program.converter().hasError(self.module, self.bodies().patternType(pattern))) {
+        if (try self.program.hasError(self.module, item_ty) or try self.program.hasError(self.module, self.bodies().patternType(pattern))) {
             try self.push(.{ .rejected_for = plan_id });
             try self.push(.{ .expr = iterable });
             return;

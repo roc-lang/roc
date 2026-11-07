@@ -15146,6 +15146,21 @@ through linked code do not require their private body indexes. Allocation
 failure propagates, and the index is marked complete only after publication of
 all its records succeeds.
 
+#### Error-Type Reachability
+
+Before converting a checked type, Boxy lowering sometimes needs to know whether
+any of that type's reachable children is an error or field-kind node. This is
+an exact analysis of the immutable checked type graph, keyed by both the
+lowering's module index and checked type id. One lowering owns its answers;
+repeated queries do not traverse the same graph again. The existing checked
+reachability engine completes recursive components together: a back edge is
+not a negative result, since another edge can still reach an error. Aliases
+follow their backing and nominals follow their arguments, preserving the
+query's existing meaning. An allocation failure publishes no partial proof.
+The analysis is created on first demand and freed with the lowering; it writes
+no cache files, changes no checked identities, and retains no second type
+representation.
+
 #### Cached Function-Value Evaluation Units
 
 An evaluation that stores function-containing constants may demand imported

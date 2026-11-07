@@ -605,6 +605,8 @@ pub const Program = struct {
     allocator: Allocator,
     input: Input,
     modules: types.Modules,
+    /// Checked error proofs, owned only until this lowering returns.
+    error_types: ?*types.ErrorTypes = null,
     store: types.Store,
     layouts: Layouts,
     result: LirProgram.Result,
@@ -1071,8 +1073,35 @@ pub const Program = struct {
         return self.modules.get(index);
     }
 
+    /// The checked graph and its module indices remain fixed during lowering.
+    /// Allocate the exact reachability memo only if a consumer asks for it.
+    pub fn hasError(self: *Program, module_index: ModuleIndex, root: checked.CheckedTypeId) Allocator.Error!bool {
+        const errors = self.error_types orelse blk: {
+            const created = try types.ErrorTypes.create(self.allocator, &self.modules);
+            self.error_types = created;
+            break :blk created;
+        };
+        return try errors.hasError(module_index, root);
+    }
+
+    fn releaseErrorTypes(self: *Program) void {
+        if (self.error_types) |errors| errors.destroy();
+        self.error_types = null;
+    }
+
+    fn finishErrorTypes(self: *Program) void {
+        if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
+            const stats = if (self.error_types) |errors| errors.stats() else types.ErrorTypes.Stats{};
+            std.debug.print("boxy-work: hasError queries={d} unique_expanded_nodes={d} retained_array_capacity_bytes={d} index_capacity={d}\n", .{
+                stats.queries, stats.unique_expanded_nodes, stats.retained_array_capacity_bytes, stats.index_capacity,
+            });
+        }
+        self.releaseErrorTypes();
+    }
+
     /// Free everything but the program's `result`, which lowering hands on.
     pub fn release(self: *Program) void {
+        self.releaseErrorTypes();
         self.static_descs.deinit();
         self.layouts.deinit();
         self.store.deinit();
@@ -3128,6 +3157,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.release();
         allocator.destroy(program);
     };
+    // Scratch must not follow a Program retained for function metadata.
+    defer program.finishErrorTypes();
     errdefer program.result.deinit();
     program.result.store.runtime_contract = .boxy;
     program.layouts = .{
@@ -3335,7 +3366,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
 /// Whether checking rejected `template`'s signature: it has no type to lower
 /// at, and every use of it is a runtime error of its own.
 fn templateRejected(program: *Program, view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) Allocator.Error!bool {
-    return try program.converter().hasError(view.index, template.checked_fn_root);
+    return try program.hasError(view.index, template.checked_fn_root);
 }
 
 /// Whether a module unit emits `template` (design.md "Per-Module Output"):
@@ -3621,4 +3652,36 @@ test "a generated worker's identity is its content, whatever lowering reaches it
     for (identities[0], 0..) |identity, index| {
         for (identities[0][index + 1 ..]) |other| try std.testing.expect(!std.meta.eql(identity, other));
     }
+}
+
+test "Boxy error reachability Program owns one lazy memo and releases it before retention" {
+    const allocator = std.testing.allocator;
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(allocator);
+    const bad = try checked_types.appendSyntheticPayloadRoot(allocator, .err);
+    const root = try checked_types.appendSyntheticPayloadRoot(allocator, .{ .tuple = try allocator.dupe(checked.CheckedTypeId, &.{bad}) });
+    var views: [1]types.ModuleView = undefined;
+    views[0].view.checked_types = checked_types.view();
+    // Exercise the actual consumer API and lowering's completion cleanup;
+    // unrelated worker/LIR state is never accessed by either operation.
+    var program: Program = undefined;
+    program.allocator = allocator;
+    program.modules = .{ .allocator = allocator, .views = .{ .items = &views, .capacity = 0 } };
+    program.error_types = null;
+    defer program.releaseErrorTypes();
+    try std.testing.expect(program.error_types == null);
+    // Even a lowering that never queried errors can finish without a memo.
+    program.finishErrorTypes();
+    try std.testing.expect(program.error_types == null);
+    try std.testing.expect(try program.hasError(@fromBackingInt(0), root));
+    const errors = program.error_types.?;
+    try std.testing.expect(try program.hasError(@fromBackingInt(0), root));
+    try std.testing.expect(try program.hasError(@fromBackingInt(0), bad));
+    try std.testing.expectEqual(errors, program.error_types.?);
+    try std.testing.expectEqual(@as(usize, 3), errors.stats().queries);
+    try std.testing.expectEqual(@as(usize, 2), errors.stats().unique_expanded_nodes);
+    // `run` executes this defer even when StoredFn retains the Program.
+    program.finishErrorTypes();
+    try std.testing.expect(program.error_types == null);
+    program.releaseErrorTypes(); // later destruction of a retained Program
 }

@@ -51,6 +51,90 @@ pub const ModuleView = struct {
     }
 };
 
+/// Exact error reachability within one Boxy lowering's published checked
+/// modules. The module index and checked ID together identify an immutable
+/// node. Program.run installs all module views before lowering; its body
+/// and template consumers only read those views. Conversion and stored-value
+/// decoding intern into Boxy's separate Store, never the checked store, so
+/// even a pending checked payload stays unchanged throughout this analysis.
+/// The owner releases this analysis at the end of lowering, including when
+/// the Program is retained for stored-function metadata.
+pub const ErrorTypes = struct {
+    const Key = struct { module: ModuleIndex, ty: checked.CheckedTypeId };
+    const Walk = check.CheckedReachability.AnyReachable(Key, ErrorTypes);
+
+    modules: *const Modules,
+    walk: Walk,
+    queries: usize = 0,
+
+    /// Allocate a stable address for the SCC walk's context.
+    pub fn create(allocator: Allocator, modules: *const Modules) Allocator.Error!*ErrorTypes {
+        const self = try allocator.create(ErrorTypes);
+        self.* = .{ .modules = modules, .walk = Walk.init(allocator, self) };
+        return self;
+    }
+
+    pub fn destroy(self: *ErrorTypes) void {
+        const allocator = self.walk.allocator;
+        self.walk.deinit();
+        allocator.destroy(self);
+    }
+
+    pub fn hasError(self: *ErrorTypes, module: ModuleIndex, root: checked.CheckedTypeId) Allocator.Error!bool {
+        self.queries += 1;
+        return try self.walk.visit(.{ .module = module, .ty = root });
+    }
+
+    pub const Stats = struct {
+        queries: usize = 0,
+        unique_expanded_nodes: usize = 0,
+        // Exact allocated element capacity of the four traversal arrays;
+        // the hash index is reported separately in slots, not guessed bytes.
+        retained_array_capacity_bytes: usize = 0,
+        index_capacity: usize = 0,
+    };
+
+    pub fn stats(self: *const ErrorTypes) Stats {
+        return .{
+            .queries = self.queries,
+            .unique_expanded_nodes = self.walk.nodes.items.len,
+            .retained_array_capacity_bytes = self.walk.nodes.capacity * @sizeOf(@TypeOf(self.walk.nodes.items[0])) +
+                self.walk.frames.capacity * @sizeOf(@TypeOf(self.walk.frames.items[0])) +
+                self.walk.children.capacity * @sizeOf(Key) + self.walk.component.capacity * @sizeOf(usize),
+            .index_capacity = self.walk.index.capacity(),
+        };
+    }
+
+    /// Preserve the old value-error predicate's edges exactly: alias backing
+    /// only, nominal arguments only, and record field types rather than kinds.
+    /// A field-kind root itself is rejected, as is an error root.
+    pub fn visit(self: *ErrorTypes, children: anytype, key: Key) Allocator.Error!?bool {
+        const payload = self.modules.get(key.module).types().payload(key.ty);
+        switch (payload) {
+            .field_kind, .err => return true,
+            .alias => |alias| try children.add(.{ .module = key.module, .ty = alias.backing }),
+            .record => |record| {
+                for (0..record.fields.len()) |index| try children.add(.{ .module = key.module, .ty = record.fields.get(index).ty });
+                try children.add(.{ .module = key.module, .ty = record.ext });
+            },
+            .tuple => |items| for (items) |ty| try children.add(.{ .module = key.module, .ty = ty }),
+            .tag_union => |tag_union| {
+                for (0..tag_union.tags.len()) |index| {
+                    for (tag_union.tags.get(index).args) |ty| try children.add(.{ .module = key.module, .ty = ty });
+                }
+                try children.add(.{ .module = key.module, .ty = tag_union.ext });
+            },
+            .function => |function| {
+                for (function.args) |ty| try children.add(.{ .module = key.module, .ty = ty });
+                try children.add(.{ .module = key.module, .ty = function.ret });
+            },
+            .nominal => |nominal| for (nominal.args) |ty| try children.add(.{ .module = key.module, .ty = ty }),
+            .pending, .flex, .rigid, .empty_record, .empty_tag_union => return false,
+        }
+        return null;
+    }
+};
+
 /// The name each module of one link gives its workers and nominal types
 /// (design.md "Caching Under `.boxy`"): what lets a module's object survive an
 /// edit to another module's bodies. A module is named by its module name and
@@ -1026,47 +1110,6 @@ pub const Converter = struct {
         };
     }
 
-    /// Whether the checked type `root` holds the erroneous type anywhere:
-    /// the type of a value checking rejected, which no lowering converts.
-    pub fn hasError(self: Converter, module: ModuleIndex, root: checked.CheckedTypeId) Allocator.Error!bool {
-        const allocator = self.store.allocator;
-        const types = self.modules.get(module).types();
-        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
-        defer seen.deinit(allocator);
-        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
-        defer pending.deinit(allocator);
-        try pending.append(allocator, root);
-        while (pending.pop()) |ty| {
-            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
-            switch (types.payload(ty)) {
-                .field_kind, .err => return true,
-                .alias => |alias| try pending.append(allocator, alias.backing),
-                .record => |record| {
-                    for (0..record.fields.len()) |field_index| {
-                        const field = record.fields.get(field_index);
-                        try pending.append(allocator, field.ty);
-                    }
-                    try pending.append(allocator, record.ext);
-                },
-                .tuple => |items| try pending.appendSlice(allocator, items),
-                .tag_union => |tag_union| {
-                    for (0..tag_union.tags.len()) |tag_index| {
-                        const tag = tag_union.tags.get(tag_index);
-                        try pending.appendSlice(allocator, tag.args);
-                    }
-                    try pending.append(allocator, tag_union.ext);
-                },
-                .function => |function| {
-                    try pending.appendSlice(allocator, function.args);
-                    try pending.append(allocator, function.ret);
-                },
-                .nominal => |nominal| try pending.appendSlice(allocator, nominal.args),
-                .pending, .flex, .rigid, .empty_record, .empty_tag_union => {},
-            }
-        }
-        return false;
-    }
-
     /// A variable the converting scope does not bind: it seals to its row
     /// default or its numeric default (`CheckedTypePayload.variableSealsToRowDefault`).
     fn sealVariable(self: Converter, variable: checked.CheckedTypeVariable) Allocator.Error!TypeId {
@@ -1887,4 +1930,261 @@ test "adapter signatures retain variables behind erased callable layouts" {
     try std.testing.expect(!store.isVariableFree(nested));
     try std.testing.expect(store.isVariableFree(concrete));
     try std.testing.expect(!store.isVariableFree(try store.intern(.{ .list = generic })));
+}
+
+// Independent pre-memo traversal, used only by the regression tests.
+fn hasErrorUnmemoized(allocator: Allocator, modules: *const Modules, module: ModuleIndex, root: checked.CheckedTypeId) Allocator.Error!bool {
+    const types = modules.get(module).types();
+    var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+    defer seen.deinit(allocator);
+    var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, root);
+    while (pending.pop()) |ty| {
+        if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+        switch (types.payload(ty)) {
+            .field_kind, .err => return true,
+            .alias => |alias| try pending.append(allocator, alias.backing),
+            .record => |record| {
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try pending.append(allocator, field.ty);
+                }
+                try pending.append(allocator, record.ext);
+            },
+            .tuple => |items| try pending.appendSlice(allocator, items),
+            .tag_union => |tag_union| {
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try pending.appendSlice(allocator, tag.args);
+                }
+                try pending.append(allocator, tag_union.ext);
+            },
+            .function => |function| {
+                try pending.appendSlice(allocator, function.args);
+                try pending.append(allocator, function.ret);
+            },
+            .nominal => |nominal| try pending.appendSlice(allocator, nominal.args),
+            .pending, .flex, .rigid, .empty_record, .empty_tag_union => {},
+        }
+    }
+    return false;
+}
+
+/// Test views expose only the checked type store, which is all this analysis
+/// reads. The caller owns both the view array and the stores.
+fn errorTestModules(views: []ModuleView, stores: []const *const checked.CheckedTypeStore) Modules {
+    for (views, stores, 0..) |*view, store, index| {
+        view.* = undefined;
+        view.index = @fromBackingInt(@intCast(index));
+        view.view.checked_types = store.view();
+    }
+    return .{ .allocator = std.testing.allocator, .views = .{ .items = views, .capacity = 0 } };
+}
+
+test "Boxy error reachability separates modules and preserves proofs across append-only publication" {
+    const a = std.testing.allocator;
+    var first = checked.CheckedTypeStore{};
+    defer first.deinit(a);
+    var second = checked.CheckedTypeStore{};
+    defer second.deinit(a);
+    const bad = try first.appendSyntheticPayloadRoot(a, .err);
+    const good = try second.appendSyntheticPayloadRoot(a, .empty_record);
+    try std.testing.expectEqual(bad, good); // IDs alone cannot identify a node.
+    var views: [2]ModuleView = undefined;
+    const modules = errorTestModules(&views, &.{ &first, &second });
+    const errors = try ErrorTypes.create(a, &modules);
+    defer errors.destroy();
+    try std.testing.expect(try errors.hasError(@fromBackingInt(0), bad));
+    try std.testing.expect(!try errors.hasError(@fromBackingInt(1), good));
+    // Force the synthetic pools to grow. Refresh the published slice view
+    // after the producer finishes; existing IDs still denote the same nodes.
+    for (0..128) |_| {
+        const fresh = try second.reserveSyntheticTypeRoot(a);
+        try second.fillSyntheticTypeRoot(a, fresh, .empty_record);
+    }
+    const new_bad = try second.appendSyntheticPayloadRoot(a, .err);
+    views[1].view.checked_types = second.view();
+    try std.testing.expect(!try errors.hasError(@fromBackingInt(1), good));
+    try std.testing.expect(try errors.hasError(@fromBackingInt(1), new_bad));
+    try std.testing.expectEqual(@as(usize, 4), errors.stats().queries);
+    try std.testing.expectEqual(@as(usize, 3), errors.stats().unique_expanded_nodes);
+}
+
+test "Boxy error reachability matches old traversal for late-positive cycles and false diamonds" {
+    const a = std.testing.allocator;
+    var store = checked.CheckedTypeStore{};
+    defer store.deinit(a);
+    var ids: [8]checked.CheckedTypeId = undefined;
+    for (&ids) |*id| id.* = try store.reserveSyntheticTypeRoot(a);
+    const edges = [_][]const usize{ &.{ 1, 2 }, &.{0}, &.{}, &.{ 4, 5 }, &.{ 6, 6 }, &.{6}, &.{7}, &.{6} };
+    for (ids, edges, 0..) |id, children, index| {
+        if (index == 2) {
+            try store.fillSyntheticTypeRoot(a, id, .err);
+        } else {
+            const items = try a.alloc(checked.CheckedTypeId, children.len);
+            for (items, children) |*item, child| item.* = ids[child];
+            try store.fillSyntheticTypeRoot(a, id, .{ .tuple = items });
+        }
+    }
+    var views: [1]ModuleView = undefined;
+    const modules = errorTestModules(&views, &.{&store});
+    const module: ModuleIndex = @fromBackingInt(0);
+    for (0..2) |order| {
+        const errors = try ErrorTypes.create(a, &modules);
+        defer errors.destroy();
+        for (0..3) |_| for (0..ids.len) |position| {
+            const index = if (order == 0) position else ids.len - 1 - position;
+            const expected = try hasErrorUnmemoized(a, &modules, module, ids[index]);
+            try std.testing.expectEqual(index < 3, expected);
+            try std.testing.expectEqual(expected, try errors.hasError(module, ids[index]));
+        };
+        try std.testing.expectEqual(ids.len, errors.stats().unique_expanded_nodes);
+        try std.testing.expectEqual(ids.len * 3, errors.stats().queries);
+    }
+}
+
+test "Boxy error reachability preserves value-error edges and field-kind semantics" {
+    const a = std.testing.allocator;
+    var store = checked.CheckedTypeStore{};
+    defer store.deinit(a);
+    var canonical_names = names.CanonicalNameStore.init(a);
+    defer canonical_names.deinit();
+    const type_name = try canonical_names.internTypeName("Value");
+    const origin = try canonical_names.internModuleIdentity(&(@as([32]u8, @splat(1))));
+    const label = try canonical_names.internRecordFieldLabel("value");
+    const tag = try canonical_names.internTagLabel("Value");
+    const good = try store.appendSyntheticPayloadRoot(a, .empty_record);
+    const empty_tags = try store.appendSyntheticPayloadRoot(a, .empty_tag_union);
+    const bad = try store.appendSyntheticPayloadRoot(a, .err);
+    const kind = try store.appendSyntheticPayloadRoot(a, .{ .field_kind = .optional });
+    // The old predicate treats a published pending node as false. This
+    // fixture never fills it while the analysis is alive.
+    const pending = try store.reserveSyntheticTypeRoot(a);
+    const flex = try store.reserveSyntheticTypeRoot(a);
+    try store.declareIdentityInstance(a, flex);
+    try store.fillSyntheticTypeRoot(a, flex, .{ .flex = .{} });
+    const rigid = try store.reserveSyntheticTypeRoot(a);
+    try store.declareIdentityInstance(a, rigid);
+    try store.fillSyntheticTypeRoot(a, rigid, .{ .rigid = .{} });
+    const alias_good = try store.appendSyntheticPayloadRoot(a, .{ .alias = .{
+        .name = type_name,
+        .origin_module = origin,
+        .owner_module = .{ .bytes = @splat(1) },
+        .backing = good,
+        .args = try a.dupe(checked.CheckedTypeId, &.{bad}),
+    } });
+    const alias_bad = try store.appendSyntheticPayloadRoot(a, .{ .alias = .{
+        .name = type_name,
+        .origin_module = origin,
+        .owner_module = .{ .bytes = @splat(1) },
+        .backing = bad,
+    } });
+    const nominal_good = try store.appendSyntheticPayloadRoot(a, .{ .nominal = .{
+        .name = type_name,
+        .origin_module = origin,
+        .owner_module = .{ .bytes = @splat(1) },
+        .source_decl = 0,
+        .is_opaque = true,
+        .representation = .opaque_without_backing,
+        .args = try a.dupe(checked.CheckedTypeId, &.{good}),
+        .padding_field_types = try a.dupe(checked.CheckedTypeId, &.{bad}),
+    } });
+    const nominal_bad = try store.appendSyntheticPayloadRoot(a, .{ .nominal = .{
+        .name = type_name,
+        .origin_module = origin,
+        .owner_module = .{ .bytes = @splat(1) },
+        .source_decl = 0,
+        .is_opaque = true,
+        .representation = .opaque_without_backing,
+        .args = try a.dupe(checked.CheckedTypeId, &.{bad}),
+    } });
+    const kind_only = try store.appendSyntheticPayloadRoot(a, .{ .record = .{
+        .fields = try a.dupe(checked.CheckedRecordField, &.{.{ .name = label, .ty = good, .kind = .err }}),
+        .ext = good,
+    } });
+    const field_bad = try store.appendSyntheticPayloadRoot(a, .{ .record = .{
+        .fields = try a.dupe(checked.CheckedRecordField, &.{.{ .name = label, .ty = kind }}),
+        .ext = good,
+    } });
+    const ext_bad = try store.appendSyntheticPayloadRoot(a, .{ .record = .{ .fields = &.{}, .ext = bad } });
+    const arg_bad = try store.appendSyntheticPayloadRoot(a, .{ .function = .{ .kind = .pure, .args = try a.dupe(checked.CheckedTypeId, &.{bad}), .ret = good } });
+    const ret_bad = try store.appendSyntheticPayloadRoot(a, .{ .function = .{ .kind = .pure, .ret = bad } });
+    const tags = try a.alloc(checked.CheckedTag, 1);
+    tags[0] = .{ .name = tag, .args = try a.dupe(checked.CheckedTypeId, &.{bad}) };
+    const tag_bad = try store.appendSyntheticPayloadRoot(a, .{ .tag_union = .{ .tags = tags, .ext = empty_tags } });
+    const tag_ext_bad = try store.appendSyntheticPayloadRoot(a, .{ .tag_union = .{ .tags = &.{}, .ext = bad } });
+    var views: [1]ModuleView = undefined;
+    const modules = errorTestModules(&views, &.{&store});
+    const errors = try ErrorTypes.create(a, &modules);
+    defer errors.destroy();
+    const module: ModuleIndex = @fromBackingInt(0);
+    for ([_]checked.CheckedTypeId{ good, empty_tags, pending, flex, rigid, alias_good, nominal_good, kind_only }) |id| {
+        try std.testing.expect(!try hasErrorUnmemoized(a, &modules, module, id));
+        try std.testing.expect(!try errors.hasError(module, id));
+    }
+    for ([_]checked.CheckedTypeId{ bad, kind, alias_bad, nominal_bad, field_bad, ext_bad, arg_bad, ret_bad, tag_bad, tag_ext_bad }) |id| {
+        try std.testing.expect(try hasErrorUnmemoized(a, &modules, module, id));
+        try std.testing.expect(try errors.hasError(module, id));
+    }
+}
+
+fn errorTypesAllocationCase(allocator: Allocator, modules: *const Modules, roots: []const checked.CheckedTypeId) !void {
+    const errors = try ErrorTypes.create(allocator, modules);
+    defer errors.destroy();
+    for (roots) |root| try std.testing.expect(try errors.hasError(@fromBackingInt(0), root));
+}
+
+test "Boxy error reachability propagates OOM and retries without stale proofs" {
+    const a = std.testing.allocator;
+    var store = checked.CheckedTypeStore{};
+    defer store.deinit(a);
+    const bad = try store.appendSyntheticPayloadRoot(a, .err);
+    const first = try store.reserveSyntheticTypeRoot(a);
+    const second = try store.reserveSyntheticTypeRoot(a);
+    try store.fillSyntheticTypeRoot(a, first, .{ .tuple = try a.dupe(checked.CheckedTypeId, &.{ second, bad }) });
+    try store.fillSyntheticTypeRoot(a, second, .{ .tuple = try a.dupe(checked.CheckedTypeId, &.{first}) });
+    var views: [1]ModuleView = undefined;
+    const modules = errorTestModules(&views, &.{&store});
+    try std.testing.checkAllAllocationFailures(a, errorTypesAllocationCase, .{ &modules, @as([]const checked.CheckedTypeId, &.{ first, second, bad }) });
+    // Fail during edge expansion after retaining a completed leaf proof.
+    var failing = std.testing.FailingAllocator.init(a, .{});
+    const errors = try ErrorTypes.create(failing.allocator(), &modules);
+    defer errors.destroy();
+    try std.testing.expect(try errors.hasError(@fromBackingInt(0), bad));
+    failing.fail_index = failing.alloc_index;
+    failing.resize_fail_index = failing.resize_index;
+    try std.testing.expectError(error.OutOfMemory, errors.hasError(@fromBackingInt(0), first));
+    try std.testing.expectEqual(@as(usize, 1), errors.stats().unique_expanded_nodes);
+    try std.testing.expect(try errors.hasError(@fromBackingInt(0), bad));
+    failing.fail_index = std.math.maxInt(usize);
+    failing.resize_fail_index = std.math.maxInt(usize);
+    try std.testing.expect(try errors.hasError(@fromBackingInt(0), first));
+    try std.testing.expect(try errors.hasError(@fromBackingInt(0), second));
+    try std.testing.expectEqual(@as(usize, 3), errors.stats().unique_expanded_nodes);
+}
+
+test "Boxy error reachability work stays bounded by shared graph nodes" {
+    const a = std.testing.allocator;
+    for ([_]usize{ 16, 128, 1024 }) |count| {
+        var store = checked.CheckedTypeStore{};
+        defer store.deinit(a);
+        const ids = try a.alloc(checked.CheckedTypeId, count);
+        defer a.free(ids);
+        for (ids) |*id| id.* = try store.reserveSyntheticTypeRoot(a);
+        for (ids[0 .. count - 1], ids[1..]) |id, child| {
+            try store.fillSyntheticTypeRoot(a, id, .{ .tuple = try a.dupe(checked.CheckedTypeId, &.{ child, child }) });
+        }
+        try store.fillSyntheticTypeRoot(a, ids[count - 1], .empty_record);
+        var views: [1]ModuleView = undefined;
+        const modules = errorTestModules(&views, &.{&store});
+        const errors = try ErrorTypes.create(a, &modules);
+        defer errors.destroy();
+        try std.testing.expect(!try errors.hasError(@fromBackingInt(0), ids[0]));
+        const capacity = errors.stats().retained_array_capacity_bytes;
+        for (0..3) |_| for (ids) |id| try std.testing.expect(!try errors.hasError(@fromBackingInt(0), id));
+        try std.testing.expectEqual(count, errors.stats().unique_expanded_nodes);
+        try std.testing.expectEqual(count * 3 + 1, errors.stats().queries);
+        try std.testing.expectEqual(capacity, errors.stats().retained_array_capacity_bytes);
+    }
 }
