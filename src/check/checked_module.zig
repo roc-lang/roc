@@ -31573,6 +31573,22 @@ pub const CheckedModule = struct {
         return importedView(self).rootRequests();
     }
 
+    /// The number of nodes of the module's literal graph
+    /// (`ModuleAnalyses.literalGraph`).
+    pub fn literalNodeCount(self: *const CheckedModule) Allocator.Error!usize {
+        return (try (try self.dispatch()).literalGraph()).node_slots.len;
+    }
+
+    /// Demand the edges of the module's literal graph nodes `start..end`
+    /// (`ModuleAnalyses.literalNode`). Listing the module's literal argument
+    /// roots reads every node's, and each node is a slot of its own, so
+    /// several threads may demand them before the roots are listed.
+    pub fn demandLiteralNodes(self: *const CheckedModule, start: usize, end: usize) Allocator.Error!void {
+        const module_dispatch = try self.dispatch();
+        const graph = try module_dispatch.literalGraph();
+        for (start..end) |node| _ = try module_dispatch.source.analyses.literalNode(module_dispatch, graph, @intCast(node));
+    }
+
     /// The resolver the module's analyses find other modules through.
     pub fn analysesResolver(self: *const CheckedModule) ModuleResolver {
         const analyses = self.module_analyses orelse checkedModuleInvariant("a resolver was read from a module without analyses", .{});

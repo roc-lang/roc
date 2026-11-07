@@ -7372,14 +7372,54 @@ pub const Coordinator = struct {
         _ = try view.publicApiDependencies(checked.analysesResolver());
     }
 
+    /// One range of a module's literal graph nodes, demanded by one task.
+    const LiteralNodeRange = struct {
+        checked: *const CheckedModule,
+        start: usize,
+        end: usize,
+        failed: bool = false,
+
+        fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
+            const range: *LiteralNodeRange = @ptrCast(@alignCast(context));
+            range.checked.demandLiteralNodes(range.start, range.end) catch {
+                range.failed = true;
+            };
+            return context;
+        }
+    };
+
+    /// Demand `checked`'s literal graph nodes, which listing its root
+    /// requests reads one at a time, split across the workers.
+    fn demandLiteralNodesInParallel(self: *Coordinator, checked: *const CheckedModule) Allocator.Error!void {
+        if (!self.hasWorkers()) return;
+        const node_count = try checked.literalNodeCount();
+        const executor = self.postCheckExecutor();
+        const range_count = @min(node_count, executor.worker_count * 4);
+        if (range_count <= 1) return;
+        const allocator = self.sessionBoxAllocator();
+        const ranges = try allocator.alloc(LiteralNodeRange, range_count);
+        defer allocator.free(ranges);
+        const tasks = try allocator.alloc(post_check_executor.Task, range_count);
+        defer allocator.free(tasks);
+        const completions = try allocator.alloc(post_check_executor.Completion, range_count);
+        defer allocator.free(completions);
+        for (ranges, tasks, 0..) |*range, *task, index| {
+            range.* = .{ .checked = checked, .start = node_count * index / range_count, .end = node_count * (index + 1) / range_count };
+            task.* = .{ .id = index, .context = range, .run = LiteralNodeRange.run };
+        }
+        try executor.run(tasks, completions);
+        for (ranges) |range| if (range.failed) return error.OutOfMemory;
+    }
+
     /// Demand, in the type-check task that checked or opened `checked`, the
     /// analyses finishing the checked program reads of every module it
     /// holds: its root requests, which read its checked tables, dispatch and
     /// literal analyses, and its public API dependencies, which every
     /// module importing it reads. Each module's are thereby computed in
     /// parallel with every other module's checking.
-    fn demandEvaluatedModuleAnalyses(checked: *const CheckedModule) Allocator.Error!void {
+    fn demandEvaluatedModuleAnalyses(self: *Coordinator, checked: *const CheckedModule) Allocator.Error!void {
         const view = Checked.importedView(checked);
+        try self.demandLiteralNodesInParallel(checked);
         _ = try view.rootRequests();
         _ = try view.publicApiDependencies(checked.analysesResolver());
     }
@@ -7423,7 +7463,7 @@ pub const Coordinator = struct {
                 .source_borrowed = opened.source_borrowed,
             };
             errdefer result.deinit();
-            try demandEvaluatedModuleAnalyses(opened.checked);
+            try self.demandEvaluatedModuleAnalyses(opened.checked);
             return .{ .cached_module_opened = result };
         }
 
@@ -7494,7 +7534,7 @@ pub const Coordinator = struct {
         };
         var checked_module_owned = true;
         errdefer if (checked_module_owned) destroyCheckedModule(checked_module, true);
-        try demandEvaluatedModuleAnalyses(checked_module);
+        try self.demandEvaluatedModuleAnalyses(checked_module);
 
         var pending_evaluation: ?*messages.PendingEvaluationState = null;
         errdefer if (pending_evaluation) |state| state.deinit();
@@ -7611,8 +7651,13 @@ pub const Coordinator = struct {
 
             // Execute task. On OOM we cannot return an error from this `void`
             // thread entry point, so record it for the coordinator to observe
-            // and stop pulling work—the coordinator aborts the build.
-            const result = self.executeTaskInline(t, worker_allocs.taskAllocators()) catch |err| switch (err) {
+            // and stop pulling work—the coordinator aborts the build. The
+            // task holds lane 0, so a session it opens runs the tasks this
+            // thread takes while it waits on deeper lanes.
+            lanes.depth += 1;
+            const executed = self.executeTaskInline(t, worker_allocs.taskAllocators());
+            lanes.depth -= 1;
+            const result = executed catch |err| switch (err) {
                 error.OutOfMemory => {
                     self.worker_oom.store(true, .release);
                     break;
