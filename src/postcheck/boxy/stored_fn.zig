@@ -135,6 +135,8 @@ const CaptureWorker = union(enum) {
 
 const CaptureGraphBuilder = struct {
     retained: *Retained,
+    /// Serialization-local storage; none of these edges escape the encoder.
+    scratch: Allocator,
     nodes: std.ArrayList(CaptureNode) = .empty,
     words: std.HashMapUnmanaged(StaticDescs.CaptureWord, u32, StaticDescs.WordContext, std.hash_map.default_max_load_percentage) = .empty,
 
@@ -145,7 +147,7 @@ const CaptureGraphBuilder = struct {
 
     fn word(self: *CaptureGraphBuilder, value: StaticDescs.CaptureWord) Allocator.Error!u32 {
         const allocator = self.retained.allocator;
-        const arena = self.retained.program.arena.allocator();
+        const scratch = self.scratch;
         const entry = try self.words.getOrPut(allocator, value);
         if (entry.found_existing) return entry.value_ptr.*;
         const index: u32 = @intCast(self.nodes.items.len);
@@ -156,7 +158,7 @@ const CaptureGraphBuilder = struct {
             .desc => |ty| .{ .desc = .{ .ty = ty, .scoped = &.{} } },
             .scoped_desc => |scoped| blk: {
                 const entries = producer.scopeEntries(scoped.scope);
-                const overrides = try arena.alloc(CaptureOverride, entries.len);
+                const overrides = try scratch.alloc(CaptureOverride, entries.len);
                 for (entries, overrides) |source, *override| {
                     override.* = .{ .nominal = source.nominal, .methods = undefined };
                     for (source.methods, &override.methods) |method, *out| out.* = if (method) |capture| try self.word(capture) else null;
@@ -181,7 +183,7 @@ const CaptureGraphBuilder = struct {
     }
 
     fn span(self: *CaptureGraphBuilder, values: []const StaticDescs.CaptureWord) Allocator.Error![]const u32 {
-        const refs = try self.retained.program.arena.allocator().alloc(u32, values.len);
+        const refs = try self.scratch.alloc(u32, values.len);
         for (refs, values) |*ref, value| ref.* = try self.word(value);
         return refs;
     }
@@ -287,7 +289,7 @@ fn captureType(graph: []const CaptureNode, index: u32) TypeId {
 /// Unrelated tables of a cached producer are not part of the stored value.
 const CaptureSelection = struct {
     allocator: Allocator,
-    arena: Allocator,
+    scratch: Allocator,
     source: []const CaptureNode,
     domain: [32]u8 = @splat(0),
     nodes: std.ArrayList(CaptureNode) = .empty,
@@ -306,7 +308,7 @@ const CaptureSelection = struct {
         try self.nodes.append(self.allocator, undefined);
         const node: CaptureNode = switch (self.source[old]) {
             .desc => |desc| blk: {
-                const scoped = try self.arena.dupe(CaptureOverride, desc.scoped);
+                const scoped = try self.scratch.dupe(CaptureOverride, desc.scoped);
                 for (scoped) |*override| for (&override.methods) |*method| {
                     if (method.*) |id| method.* = try self.ref(id);
                 };
@@ -321,7 +323,7 @@ const CaptureSelection = struct {
     }
 
     fn span(self: *CaptureSelection, refs: []const u32) Allocator.Error![]const u32 {
-        const out = try self.arena.alloc(u32, refs.len);
+        const out = try self.scratch.alloc(u32, refs.len);
         for (refs, out) |old, *new| new.* = try self.ref(old);
         return out;
     }
@@ -417,7 +419,11 @@ pub const Retained = struct {
         const table: ?[*]u8 = if (has_table) @ptrCast(@constCast(readWord(capture + offsets[shape.values.len]))) else null;
         const bound = try allocator.alloc(TypeId, shape.descs);
         defer allocator.free(bound);
-        var local_graph = CaptureGraphBuilder{ .retained = self };
+        // Producer and selected edge arrays are consumed by recipe.finish;
+        // only the independently allocated recipe and value captures escape.
+        var scratch = std.heap.ArenaAllocator.init(allocator);
+        defer scratch.deinit();
+        var local_graph = CaptureGraphBuilder{ .retained = self, .scratch = scratch.allocator() };
         defer local_graph.deinit();
         var graph: []const CaptureNode = &.{};
         var roots: []const u32 = &.{};
@@ -456,7 +462,7 @@ pub const Retained = struct {
                 try recipe.importWorker(&reader);
             },
         }
-        var selected = CaptureSelection{ .allocator = allocator, .arena = program.arena.allocator(), .source = graph, .domain = domain };
+        var selected = CaptureSelection{ .allocator = allocator, .scratch = scratch.allocator(), .source = graph, .domain = domain };
         defer selected.deinit();
         const inputs = try selected.span(roots);
         var capture_descs: []const u32 = &.{};
@@ -872,11 +878,14 @@ pub fn encodeMetadata(retained: *Retained, result: *LirProgram.Result, compiled:
     const allocator = program.allocator;
     var encoder = Encoder{ .allocator = allocator, .program = program, .link_names = true };
     defer encoder.deinit();
-    var graph = CaptureGraphBuilder{ .retained = retained };
+    // Encoding copies these graph roots and edges into its owned result.
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    var graph = CaptureGraphBuilder{ .retained = retained, .scratch = scratch.allocator() };
     defer graph.deinit();
-    const tables = try program.arena.allocator().alloc([]const u32, program.static_descs.unfilled_tables.items.len);
+    const tables = try scratch.allocator().alloc([]const u32, program.static_descs.unfilled_tables.items.len);
     for (program.static_descs.unfilled_tables.items, tables) |table, *inputs| inputs.* = try graph.span(table.inputs);
-    const records = try program.arena.allocator().alloc(ImportedRecord, program.static_descs.captured_records.items.len);
+    const records = try scratch.allocator().alloc(ImportedRecord, program.static_descs.captured_records.items.len);
     for (program.static_descs.captured_records.items, records) |record, *out| out.* = .{ .leading = record.leading, .elems = try graph.span(record.elems) };
     try encodeCaptureGraph(&encoder, graph.nodes.items);
     try encoder.word(@intCast(tables.len));
@@ -1881,4 +1890,110 @@ fn decodeOperand(decoder: *Decoder) Allocator.Error!Tables.Operand {
         2 => .{ .static = .zero },
         else => invariant("an encoded needs list holds an operand of no kind"),
     };
+}
+
+/// Serialize the selected cyclic graph, then return only independent bytes.
+/// Both temporary graphs are gone before the caller reads the result.
+fn selectedCaptureMetadataForTest(allocator: Allocator, retained: *Retained) ![]const u8 {
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    var graph = CaptureGraphBuilder{ .retained = retained, .scratch = scratch.allocator() };
+    defer graph.deinit();
+    const roots = try graph.span(retained.program.static_descs.unfilled_tables.items[0].inputs);
+    var selected = CaptureSelection{ .allocator = allocator, .scratch = scratch.allocator(), .source = graph.nodes.items };
+    defer selected.deinit();
+    const inputs = try selected.span(roots);
+    // A descriptor's override captures a table which points back to both
+    // itself and the descriptor. Shared roots remain shared after selection.
+    try std.testing.expectEqual(@as(usize, 3), selected.nodes.items.len);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 2 }, inputs);
+    try std.testing.expectEqual(@as(?u32, 1), selected.nodes.items[0].desc.scoped[0].methods[0]);
+    try std.testing.expectEqualSlices(u32, &.{2}, selected.nodes.items[1].callable.captures);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 2 }, selected.nodes.items[2].table.inputs);
+    var encoder = Encoder{ .allocator = allocator, .program = retained.program };
+    defer encoder.deinit();
+    try encodeCaptureGraph(&encoder, selected.nodes.items);
+    try encoder.word(1);
+    try encodeCaptureRefs(&encoder, inputs);
+    try encoder.word(0); // capture records
+    try encoder.word(0); // compiled functions
+    return try encoder.finish();
+}
+
+fn captureSerializationScratchCase(allocator: Allocator) !void {
+    const setup = std.testing.allocator;
+    // The test installs explicit producer records; no runtime code or
+    // checked module is needed to encode this graph.
+    var program: Program = undefined;
+    program.allocator = allocator;
+    var views: [1]types.ModuleView = undefined;
+    views[0].key = .{ .bytes = @splat(9) };
+    views[0].link_name = @splat(9);
+    program.modules = .{ .allocator = setup, .views = .{ .items = &views, .capacity = 0 } };
+    program.arena = std.heap.ArenaAllocator.init(setup);
+    defer program.arena.deinit();
+    program.store = types.Store.init(setup);
+    defer program.store.deinit();
+    program.result = try LirProgram.Result.init(setup, .u64);
+    defer program.result.deinit();
+    program.static_descs = StaticDescs.init(setup, &program.store, &program.layouts, &program.result, .u64);
+    defer program.static_descs.deinit();
+    program.workers = .empty;
+    defer program.workers.deinit(setup);
+    var worker: lower.Worker = undefined;
+    worker.key = .{ .crash_dictionary = .checked_error };
+    worker.module = @fromBackingInt(0);
+    try program.workers.append(setup, worker);
+    const worker_id: WorkerId = @fromBackingInt(0);
+    const identity = LIR.ProcIdentity.forTest(37);
+    var retained = Retained{ .allocator = allocator, .program = &program };
+    defer retained.workers.deinit(setup);
+    try retained.workers.put(setup, identity, worker_id);
+    const ty = try program.store.emptyRecord();
+    const producer = &program.static_descs;
+    try producer.scopes.ensureUnusedCapacity(setup, 2);
+    producer.scopes.appendAssumeCapacity(&.{});
+    producer.scopes.appendAssumeCapacity(try setup.dupe(StaticDescs.ScopedMethods, &.{.{
+        .nominal = ty,
+        .methods = .{ .{ .callable = 7 }, null, null },
+    }}));
+    const desc: StaticDescs.CaptureWord = .{ .scoped_desc = .{ .ty = ty, .scope = @fromBackingInt(1) } };
+    try producer.unfilled_tables.ensureUnusedCapacity(setup, 1);
+    producer.unfilled_tables.appendAssumeCapacity(.{
+        .worker = worker_id,
+        .inputs = try setup.dupe(StaticDescs.CaptureWord, &.{ desc, .{ .table = 5 } }),
+        .reserved = undefined,
+        .index = 0,
+    });
+    try producer.captured_tables.put(setup, 5, 0);
+    try producer.captured_callables.ensureUnusedCapacity(setup, 1);
+    producer.captured_callables.putAssumeCapacity(7, .{ .identity = identity, .words = try setup.dupe(StaticDescs.CaptureWord, &.{.{ .table = 5 }}) });
+    try producer.captured_records.ensureUnusedCapacity(setup, 1);
+    producer.captured_records.appendAssumeCapacity(.{ .leading = 2, .elems = try setup.dupe(StaticDescs.CaptureWord, &.{desc}) });
+
+    for (0..3) |_| {
+        const bytes = encodeMetadata(&retained, &program.result, &.{}) catch |err| {
+            try std.testing.expectEqual(@as(usize, 0), program.arena.queryCapacity());
+            return err;
+        };
+        defer allocator.free(bytes);
+        // This is checked after the operation's local arena is destroyed.
+        _ = try MetadataView.init(bytes);
+        try std.testing.expectEqual(@as(usize, 0), program.arena.queryCapacity());
+        const selected = selectedCaptureMetadataForTest(allocator, &retained) catch |err| {
+            try std.testing.expectEqual(@as(usize, 0), program.arena.queryCapacity());
+            return err;
+        };
+        defer allocator.free(selected);
+        _ = try MetadataView.init(selected);
+        try std.testing.expectEqual(@as(usize, 0), program.arena.queryCapacity());
+    }
+}
+
+test "capture serialization scratch does not accumulate in a retained program" {
+    try captureSerializationScratchCase(std.testing.allocator);
+}
+
+test "capture serialization scratch releases cyclic graphs on every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, captureSerializationScratchCase, .{});
 }

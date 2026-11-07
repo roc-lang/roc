@@ -15183,6 +15183,11 @@ The intersection joins stable procedure identities recorded before LIR
 compaction, in the backend's emitted order. A retained worker's old procedure
 number must not index the compacted store when publishing its capture metadata.
 An emitted procedure is not necessarily a lowering worker.
+Temporary capture-graph edges and selections belong to each serialization
+operation. The encoder copies their contents into its independently owned
+result before releasing that scratch, on success or failure; retaining a
+program for later function values does not retain prior serialization scratch.
+
 The records share a module-name table and a type table. Module references use the
 link's explicit module names, not checked-artifact keys from the producing build.
 A reader binds those names against its current checked module graph. It reads
