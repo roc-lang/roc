@@ -16871,8 +16871,9 @@ const DispatchSite = struct {
 };
 
 /// The site where `constraint` fails, or null for a constraint whose entry
-/// decides it (a copy that instantiation or import made, a literal
-/// conversion, a loop's own dispatch, or what derives from a copy). An
+/// decides it (a copy that instantiation or import made, a loop's own
+/// dispatch, or what derives from a copy) or that fails at its source
+/// literals (`poisonSourceLiteralConversionFailure`). An
 /// obligation derived from a dispatch, which its selected target's
 /// instantiation left behind (`dispatch_derivation_by_child_fn_var`) or which
 /// a structural comparison derived for a component
@@ -17408,44 +17409,62 @@ fn literalPatternFailureExprForConstraint(
     return null;
 }
 
-/// Reject every source occurrence represented by a merged literal relation.
-/// A literal expression becomes a runtime error itself, exactly like the
-/// source of any other rejected dispatch; a literal pattern rejects the
-/// construct that owns it (`rejectPatternFailureOwner`). The scan is
-/// failure-only: successful dispatch never pays for occurrence recovery.
-/// Collect occurrences before rewriting any of them because invalidating an
-/// expression subtree retires its literal plans from the dense plan list.
-fn poisonLiteralFailureOwners(
-    self: *Self,
-    deferred: DeferredConstraintCheck,
-) Allocator.Error!bool {
-    const dispatcher_root = self.types.resolveVar(deferred.var_).var_;
-    var literal_exprs: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
-    defer literal_exprs.deinit(self.gpa);
-    var pattern_owners: std.ArrayListUnmanaged(CIR.Node.Idx) = .empty;
-    defer pattern_owners.deinit(self.gpa);
+/// The source occurrences of rejected literal relations, collected before
+/// any of them is rewritten because invalidating an expression subtree
+/// retires its literal plans from the dense plan list.
+const LiteralFailureOccurrences = struct {
+    exprs: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
+    pattern_owners: std.ArrayListUnmanaged(CIR.Node.Idx) = .empty,
 
-    for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |literal_constraint| {
-        const plan_kind = literalPlanKind(literal_constraint.origin.literalKind() orelse continue) orelse continue;
-        const literal_fn_root = self.types.resolveVar(literal_constraint.fn_var).var_;
-
-        for (self.cir.store.literalDispatchPlans()) |plan| {
-            if (!self.literalDispatchPlanMatches(plan, plan_kind, dispatcher_root)) continue;
-            const plan_fn_var = plan.fnVar() orelse continue;
-            if (self.types.resolveVar(plan_fn_var).var_ != literal_fn_root) continue;
-            const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(plan.node_idx));
-            if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) {
-                try literal_exprs.append(self.gpa, @fromBackingInt(@intCast(plan.node_idx)));
-                continue;
-            }
-            const owner: CIR.Node.Idx = @fromBackingInt(@intCast(plan.patternFailureOwner(&self.cir.store) orelse continue));
-            for (pattern_owners.items) |recorded| {
-                if (recorded == owner) break;
-            } else try pattern_owners.append(self.gpa, owner);
-        }
+    fn deinit(self: *LiteralFailureOccurrences, gpa: Allocator) void {
+        self.exprs.deinit(gpa);
+        self.pattern_owners.deinit(gpa);
     }
 
-    for (literal_exprs.items) |expr_idx| {
+    fn isEmpty(self: *const LiteralFailureOccurrences) bool {
+        return self.exprs.items.len == 0 and self.pattern_owners.items.len == 0;
+    }
+};
+
+/// Collect every source occurrence of the literal relation whose callable
+/// resolves to `fn_root`: each literal of this module whose conversion plan
+/// names that relation, and of kind `plan_kind` targeting `dispatcher_root`
+/// when given. Merged literal relations unify their callables, so the
+/// relation names every literal merged into it.
+fn collectLiteralFailureOccurrences(
+    self: *Self,
+    occurrences: *LiteralFailureOccurrences,
+    fn_root: Var,
+    plan_kind: ?LiteralDispatchPlan.Kind,
+    dispatcher_root: ?Var,
+) Allocator.Error!void {
+    for (self.cir.store.literalDispatchPlans()) |plan| {
+        if (plan_kind) |kind| {
+            if (plan.dispatchKind() != kind) continue;
+        }
+        if (dispatcher_root) |root| {
+            if (self.types.resolveVar(@fromBackingInt(@intCast(plan.target_var))).var_ != root) continue;
+        }
+        const plan_fn_var = plan.fnVar() orelse continue;
+        if (self.types.resolveVar(plan_fn_var).var_ != fn_root) continue;
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(plan.node_idx));
+        if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) {
+            try occurrences.exprs.append(self.gpa, @fromBackingInt(@intCast(plan.node_idx)));
+            continue;
+        }
+        const owner: CIR.Node.Idx = @fromBackingInt(@intCast(plan.patternFailureOwner(&self.cir.store) orelse continue));
+        for (occurrences.pattern_owners.items) |recorded| {
+            if (recorded == owner) break;
+        } else try occurrences.pattern_owners.append(self.gpa, owner);
+    }
+}
+
+/// Reject collected literal occurrences. A literal expression becomes a
+/// runtime error itself, exactly like the source of any other rejected
+/// dispatch; a literal pattern rejects the construct that owns it
+/// (`rejectPatternFailureOwner`).
+fn rejectLiteralFailureOccurrences(self: *Self, occurrences: *const LiteralFailureOccurrences) Allocator.Error!void {
+    for (occurrences.exprs.items) |expr_idx| {
         if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(expr_idx),
@@ -17453,10 +17472,92 @@ fn poisonLiteralFailureOwners(
         try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
         try self.markErroneousValueExpr(expr_idx);
     }
-    for (pattern_owners.items) |owner| {
+    for (occurrences.pattern_owners.items) |owner| {
         try self.rejectPatternFailureOwner(owner);
     }
-    return literal_exprs.items.len != 0 or pattern_owners.items.len != 0;
+}
+
+/// Reject every source occurrence represented by a merged literal relation.
+/// The scan is failure-only: successful dispatch never pays for occurrence
+/// recovery.
+fn poisonLiteralFailureOwners(
+    self: *Self,
+    deferred: DeferredConstraintCheck,
+) Allocator.Error!bool {
+    const dispatcher_root = self.types.resolveVar(deferred.var_).var_;
+    var occurrences: LiteralFailureOccurrences = .{};
+    defer occurrences.deinit(self.gpa);
+
+    for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |literal_constraint| {
+        const plan_kind = literalPlanKind(literal_constraint.origin.literalKind() orelse continue) orelse continue;
+        const literal_fn_root = self.types.resolveVar(literal_constraint.fn_var).var_;
+        try self.collectLiteralFailureOccurrences(&occurrences, literal_fn_root, plan_kind, dispatcher_root);
+    }
+
+    try self.rejectLiteralFailureOccurrences(&occurrences);
+    return !occurrences.isEmpty();
+}
+
+/// Whether `fn_var` is the callable of a literal conversion that
+/// instantiation copied out of a scheme for a use
+/// (`instantiated_literal_conversion_uses`).
+fn literalConversionWasCopied(self: *const Self, fn_var: Var) bool {
+    for (self.instantiated_literal_conversion_uses.items) |copied| {
+        if (copied.fn_var == fn_var) return true;
+    }
+    return false;
+}
+
+/// Reject a failing requirement at the source literals it belongs to, if it
+/// belongs to any: a numeral's or quote's own conversion, or an obligation
+/// derived from one (a requirement its selected target's instantiation left
+/// behind, or a component of a structural comparison). Such a requirement
+/// fails at its literal occurrences whichever queued entry carries it: the
+/// unification that grounded the literal's type, and the entry that queued
+/// it as a consequence, do not own the literal's conversion. A copy that
+/// instantiation made belongs to the use that copied it instead, and so does
+/// what derives from it. A class a default decided is not grounded by any
+/// relation: its literals have no type once the default is rejected, so the
+/// class's own rejection retires every literal it holds
+/// (`poisonLiteralFailureOwners`), not only those of the failing conversion.
+/// Returns whether the requirement belongs to source literals. This runs only
+/// on the failure path.
+fn poisonSourceLiteralConversionFailure(
+    self: *Self,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+) Allocator.Error!bool {
+    if (self.types.varDefaultDecided(dispatcher_var)) return false;
+    var fn_var = constraint.fn_var;
+    var plan_kind: ?LiteralDispatchPlan.Kind = if (constraint.origin.literalKind()) |kind| literalPlanKind(kind) else null;
+    var guard = types_mod.debug.IterationGuard.init("poisonSourceLiteralConversionFailure");
+    while (plan_kind == null) {
+        guard.tick();
+        fn_var = self.dispatch_derivation_by_child_fn_var.get(fn_var) orelse
+            self.component_derivation_by_child_fn_var.get(fn_var) orelse return false;
+        // A derivation's parent is a dispatch that selected a target. Only a
+        // literal relation's callable is named by a literal dispatch plan.
+        if (self.literalDispatchPlanKindForFn(fn_var)) |kind| plan_kind = kind;
+    }
+    if (self.literalConversionWasCopied(fn_var)) return false;
+
+    var occurrences: LiteralFailureOccurrences = .{};
+    defer occurrences.deinit(self.gpa);
+    try self.collectLiteralFailureOccurrences(&occurrences, self.types.resolveVar(fn_var).var_, plan_kind, null);
+    if (occurrences.isEmpty()) return false;
+    try self.rejectLiteralFailureOccurrences(&occurrences);
+    return true;
+}
+
+/// The kind of the source literal whose conversion relation `fn_var` is, if
+/// a literal dispatch plan of this module names it.
+fn literalDispatchPlanKindForFn(self: *Self, fn_var: Var) ?LiteralDispatchPlan.Kind {
+    const fn_root = self.types.resolveVar(fn_var).var_;
+    for (self.cir.store.literalDispatchPlans()) |plan| {
+        const plan_fn_var = plan.fnVar() orelse continue;
+        if (self.types.resolveVar(plan_fn_var).var_ == fn_root) return plan.dispatchKind();
+    }
+    return null;
 }
 
 fn deferredConstraintFailureExpr(self: *Self, deferred: DeferredConstraintCheck) ?CIR.Expr.Idx {
@@ -17763,6 +17864,11 @@ fn poisonConstraintFailure(
         .own, .own_derived => return self.poisonConstraintFailureSource(dispatcher_var, constraint, site.expr),
         .loop_derived => return,
     };
+    // A source literal's conversion, and what derives from it, fails at the
+    // literal, whichever queued entry carries it: an explicit owner here is
+    // the entry's, inherited from the dispatch whose resolution grounded the
+    // literal's type.
+    if (try self.poisonSourceLiteralConversionFailure(dispatcher_var, constraint)) return;
     if (explicit_expr) |expr_idx| {
         return self.poisonConstraintFailureSource(dispatcher_var, constraint, expr_idx);
     }
