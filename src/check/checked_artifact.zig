@@ -29442,7 +29442,7 @@ const PublicApiClosureDependencyCollector = struct {
         callable_eval_templates: CallableEvalTemplateTableView,
         entry_wrappers: *const EntryWrapperTable,
         const_templates: *const ConstTemplateTable,
-            resolved_value_refs: *const ResolvedValueRefTable,
+        resolved_value_refs: *const ResolvedValueRefTable,
         top_level_bindings: *const TopLevelProcedureBindingTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         keys: *ArtifactKeyAccumulator,
@@ -34125,7 +34125,6 @@ pub fn publishFromTypedModule(
 
     const value_binding_defs = module_env.store.sliceDefs(module_env.value_binding_defs);
 
-
     var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(
         allocator,
         module,
@@ -35951,8 +35950,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xE6, 0xDC, 0x11, 0xCD, 0x1B, 0x70, 0x72, 0xAA, 0x0F, 0x8D, 0x1D, 0x8D, 0x95, 0x50, 0x3B, 0xDA,
-        0x14, 0x8A, 0x3E, 0xCE, 0x5B, 0x96, 0x83, 0x9B, 0x7F, 0x88, 0x09, 0x3A, 0x14, 0xD3, 0x05, 0x1E,
+        0xBF, 0xD4, 0xC9, 0x0A, 0xE2, 0x30, 0x22, 0x65, 0xE0, 0xDF, 0x4F, 0x26, 0x61, 0x73, 0x87, 0x20,
+        0xA2, 0x78, 0xD0, 0x8B, 0xC6, 0xB1, 0x1C, 0x0A, 0xD9, 0xAB, 0x28, 0x76, 0x54, 0xBB, 0x8C, 0x33,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
