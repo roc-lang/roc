@@ -15,6 +15,8 @@ pub const aarch64 = @import("aarch64/mod.zig");
 pub const object = @import("object/mod.zig");
 /// The instruction sets the dev backend emits.
 pub const isa = @import("isa.zig");
+/// The shared driver's register widths, named by kind of value.
+pub const widths = @import("widths.zig");
 const relocation_mod = @import("Relocation.zig");
 pub const Relocation = relocation_mod.Relocation;
 pub const applyRelocations = relocation_mod.applyRelocations;
