@@ -1126,7 +1126,7 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         try self.emitPluginStampFunction();
-        if (self.emit_hot_reload_generation_stub) try self.emitHotReloadGenerationStub();
+        if (self.emit_hot_reload_generation_stub) try self.emitHotReloadGenerationStub(builder);
 
         if (self.enable_default_platform_runtime) {
             try self.emitDefaultPlatformBacktraceTable();
@@ -3391,8 +3391,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.finishCurrentWipFunction();
     }
 
-    fn emitHotReloadGenerationStub(self: *MonoLlvmCodeGen) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
+    fn emitHotReloadGenerationStub(self: *MonoLlvmCodeGen, builder: *LlvmBuilder) Error!void {
         const fn_ty = builder.fnType(.i64, &.{}, .normal) catch return error.OutOfMemory;
         const fn_name = try self.exportedFunctionName(builder, shim_symbols.roc_hot_reload_generation);
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
