@@ -4,11 +4,13 @@
 //! Each solver variable owns a write-once key slot. The first consumer that
 //! needs a variable's key claims its slot and computes the key; consumers
 //! that find it claimed wait; consumers that find it done read it with one
-//! acquire load. Computations share one key writer, so a component type's
-//! key is digested once per module however many roots contain it; the
-//! writer is held only while a claimant computes, never while anyone waits
-//! on a slot. Keys are never serialized: a module loaded from a cache entry
-//! starts with every slot empty.
+//! acquire load. A claimant computes with a key writer it borrows from the
+//! module's writers, so claimants on different threads compute at once; each
+//! writer keeps the keys of the component types it digested, so a component
+//! is digested once per writer however many roots contain it. A writer is
+//! held only while a claimant computes, never while anyone waits on a slot.
+//! Keys are never serialized: a module loaded from a cache entry starts with
+//! every slot empty.
 //!
 //! Resolving a type from its key alone builds the module's key index on
 //! first demand, through the module's index slot.
@@ -37,8 +39,13 @@ pub const SealedTypeKeys = struct {
     env: *const ModuleEnv,
     table: collections.OnceSlot([]KeySlot, .sealed_type_key_table) = .empty,
     index: collections.OnceSlot(*KeyIndex, .sealed_type_key_index) = .empty,
-    writer_mutex: std.Io.Mutex = .init,
-    writer: ?canonical_type_keys.TypeWriter = null,
+    /// The writers no claimant has borrowed, with capacity for every writer
+    /// the module has, and how many it has.
+    idle_writers: std.ArrayListUnmanaged(*canonical_type_keys.TypeWriter) = .empty,
+    writer_count: usize = 0,
+    /// Guards `idle_writers` and `writer_count`; held around a borrow's or a
+    /// return's list update only.
+    writers_mutex: std.Io.Mutex = .init,
     /// Per variable: 0 while unknown, else 1 + whether a walk found the
     /// variable reaches an identity variable.
     identity: []std.atomic.Value(u8),
@@ -69,7 +76,12 @@ pub const SealedTypeKeys = struct {
             index.deinit(allocator);
             allocator.destroy(index);
         }
-        if (self.writer) |*writer| writer.deinit();
+        std.debug.assert(self.idle_writers.items.len == self.writer_count);
+        for (self.idle_writers.items) |writer| {
+            writer.deinit();
+            allocator.destroy(writer);
+        }
+        self.idle_writers.deinit(allocator);
         allocator.free(self.identity);
         allocator.free(self.canonical);
         allocator.destroy(self);
@@ -98,15 +110,37 @@ pub const SealedTypeKeys = struct {
 
         fn compute(request: KeyRequest) Allocator.Error!TypeKeyInfo {
             const keys = request.keys;
-            keys.writer_mutex.lockUncancelable(keys.io);
-            defer keys.writer_mutex.unlock(keys.io);
-            if (keys.writer == null) {
-                keys.writer = canonical_type_keys.TypeWriter.init(keys.allocator, &keys.env.types, keys.env);
-                keys.writer.?.retainComposedKeys();
-            }
-            return try keys.writer.?.fromVar(request.var_);
+            const writer = try keys.borrowWriter();
+            defer keys.returnWriter(writer);
+            return try writer.fromVar(request.var_);
         }
     };
+
+    /// An idle writer, or a new one when every writer the module has is
+    /// borrowed.
+    fn borrowWriter(self: *SealedTypeKeys) Allocator.Error!*canonical_type_keys.TypeWriter {
+        {
+            self.writers_mutex.lockUncancelable(self.io);
+            defer self.writers_mutex.unlock(self.io);
+            if (self.idle_writers.pop()) |writer| return writer;
+        }
+        const writer = try self.allocator.create(canonical_type_keys.TypeWriter);
+        errdefer self.allocator.destroy(writer);
+        writer.* = canonical_type_keys.TypeWriter.init(self.allocator, &self.env.types, self.env);
+        writer.retainComposedKeys();
+        errdefer writer.deinit();
+        self.writers_mutex.lockUncancelable(self.io);
+        defer self.writers_mutex.unlock(self.io);
+        try self.idle_writers.ensureTotalCapacity(self.allocator, self.writer_count + 1);
+        self.writer_count += 1;
+        return writer;
+    }
+
+    fn returnWriter(self: *SealedTypeKeys, writer: *canonical_type_keys.TypeWriter) void {
+        self.writers_mutex.lockUncancelable(self.io);
+        defer self.writers_mutex.unlock(self.io);
+        self.idle_writers.appendAssumeCapacity(writer);
+    }
 
     /// Whether `var_` reaches an identity variable, when a walk recorded it.
     pub fn knownIdentity(self: *const SealedTypeKeys, var_: Var) ?bool {
