@@ -152,6 +152,7 @@ pub const Operands = struct {
             .inspect => |inspect| {
                 result.single(inspect.value);
                 result.single(inspect.desc);
+                result.single(inspect.names);
             },
             .call_erased => |call| {
                 result.single(call.closure);
@@ -281,7 +282,7 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .box => |box| .{ .box = .{ .desc = try Remap.one(context, box.desc), .payload = try Remap.one(context, box.payload) } },
         .eq => |eq| .{ .eq = .{ .lhs = try Remap.one(context, eq.lhs), .rhs = try Remap.one(context, eq.rhs), .desc = try Remap.one(context, eq.desc) } },
         .hash => |hash| .{ .hash = .{ .hasher = try Remap.one(context, hash.hasher), .value = try Remap.one(context, hash.value), .desc = try Remap.one(context, hash.desc) } },
-        .inspect => |inspect| .{ .inspect = .{ .value = try Remap.one(context, inspect.value), .desc = try Remap.one(context, inspect.desc) } },
+        .inspect => |inspect| .{ .inspect = .{ .value = try Remap.one(context, inspect.value), .desc = try Remap.one(context, inspect.desc), .names = try Remap.one(context, inspect.names) } },
         .call_erased => |call| .{ .call_erased = .{
             .closure = try Remap.one(context, call.closure),
             .args = try Remap.opt(context, call.args),

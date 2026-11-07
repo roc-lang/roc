@@ -34,7 +34,6 @@ const name_b = name("b");
 const name_c = name("c");
 const name_ok = name("Ok");
 const name_err = name("Err");
-const name_point = name("Point");
 
 /// The errors these tests' helpers return.
 const TestError = std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult };
@@ -91,7 +90,7 @@ fn i64List(values: []const i64, ops: *RocOps) RocList {
 }
 
 fn expectInspect(env: *Env, d: *const TypeDesc, ptr: [*]u8, expected: []const u8) TestError!void {
-    const rendered = walk.inspect(d, ptr, env.ops());
+    const rendered = walk.inspect(d, env.descs.names(d), ptr, env.ops());
     defer rendered.decref(env.ops());
     try testing.expectEqualStrings(expected, rendered.asSlice());
 }
@@ -251,7 +250,7 @@ test "a long rendering grows its string" {
     const list_desc = env.descs.list(desc_mod.scalarDesc(.i64));
     var slot: Slot = .{};
     slot.write(0, RocList, i64List(&values, ops));
-    const rendered = walk.inspect(list_desc, slot.ptr(), ops);
+    const rendered = walk.inspect(list_desc, env.descs.names(list_desc), slot.ptr(), ops);
     defer rendered.decref(ops);
     try testing.expect(std.mem.startsWith(u8, rendered.asSlice(), "[0, 1, 2, "));
     try testing.expect(std.mem.endsWith(u8, rendered.asSlice(), ", 298, 299]"));
@@ -298,7 +297,7 @@ test "simple values retain multiple owners and release their allocations exactly
     defer env.deinit();
     const ops = env.ops();
     const text_desc = desc_mod.strDesc();
-    const nominal_text = env.descs.nominal(text_desc, &name_point, null, false);
+    const nominal_text = env.descs.nominal(text_desc, null, false);
     for ([_]*const TypeDesc{ text_desc, nominal_text }) |d| {
         for ([_][]const u8{ "small", "a string long enough to need a separate allocation" }) |text| {
             const baseline = env.allocations();
@@ -377,7 +376,7 @@ test "reference counting follows deep wrappers and preserves pending container r
     const ops = env.ops();
     var wrapped = desc_mod.strDesc();
     for (0..10_000) |_| {
-        wrapped = env.descs.nominal(wrapped, &name_point, null, false);
+        wrapped = env.descs.nominal(wrapped, null, false);
         wrapped = env.descs.tagUnion(&.{
             .{ .name = &name_ok, .payloads = &.{wrapped} },
         });
@@ -494,7 +493,7 @@ test "equality compares structure and honors is_eq overrides" {
     // A nominal whose `is_eq` says every two values are equal.
     const always = erased_callable.allocate(&Overrides.alwaysEqual, null, 0, ops);
     const methods: desc_mod.Methods = .{ .is_eq = always, .to_hash = null, .to_inspect = null };
-    const nominal = env.descs.nominal(desc_mod.scalarDesc(.i64), &name_point, &methods, false);
+    const nominal = env.descs.nominal(desc_mod.scalarDesc(.i64), &methods, false);
     lhs.write(0, i64, 1);
     rhs.write(0, i64, 2);
     try testing.expect(walk.eq(nominal, lhs.ptr(), rhs.ptr(), ops));
@@ -557,7 +556,7 @@ test "hashing feeds the hasher builtins in structural order" {
 
     const seven = erased_callable.allocate(&Overrides.hashToSeven, null, 0, ops);
     const methods: desc_mod.Methods = .{ .is_eq = null, .to_hash = seven, .to_inspect = null };
-    const nominal = env.descs.nominal(desc_mod.scalarDesc(.i64), &name_point, &methods, false);
+    const nominal = env.descs.nominal(desc_mod.scalarDesc(.i64), &methods, false);
     try testing.expectEqual(@as(u64, 7), walk.hash(nominal, seed, slot.ptr(), ops));
     erased_callable.decref(seven, ops);
 }
@@ -570,9 +569,9 @@ test "nominal inspection uses the override, hides opaque structure, or shows the
     const methods: desc_mod.Methods = .{ .is_eq = null, .to_hash = null, .to_inspect = custom };
     var slot: Slot = .{};
     slot.write(0, i64, 4);
-    try expectInspect(&env, env.descs.nominal(desc_mod.scalarDesc(.i64), &name_point, &methods, false), slot.ptr(), "four");
-    try expectInspect(&env, env.descs.nominal(desc_mod.scalarDesc(.i64), &name_point, null, true), slot.ptr(), "<opaque>");
-    try expectInspect(&env, env.descs.nominal(desc_mod.scalarDesc(.i64), &name_point, null, false), slot.ptr(), "4");
+    try expectInspect(&env, env.descs.nominal(desc_mod.scalarDesc(.i64), &methods, false), slot.ptr(), "four");
+    try expectInspect(&env, env.descs.nominal(desc_mod.scalarDesc(.i64), null, true), slot.ptr(), "<opaque>");
+    try expectInspect(&env, env.descs.nominal(desc_mod.scalarDesc(.i64), null, false), slot.ptr(), "4");
     erased_callable.decref(custom, ops);
 }
 
@@ -618,7 +617,7 @@ test "list element callbacks and C entry points reach the entered host" {
 
     var rendered: RocStr = undefined;
     var byte: u8 = 7;
-    exports.roc_desc_inspect(&rendered, desc_mod.scalarDesc(.u8), @ptrCast(&byte));
+    exports.roc_desc_inspect(&rendered, desc_mod.scalarDesc(.u8), null, @ptrCast(&byte));
     try testing.expectEqualStrings("7", rendered.asSlice());
 }
 
@@ -640,7 +639,7 @@ test "tag construction by discriminant reaches every variant of structural and n
             variant.* = .{ .name = &names[count - index - 1], .payloads = &payloads };
         }
         const union_desc = env.descs.tagUnion(variants[0..count]);
-        const nominal = env.descs.nominal(union_desc, &name_point, null, false);
+        const nominal = env.descs.nominal(union_desc, null, false);
         for ([_]*const TypeDesc{ union_desc, nominal }) |desc| {
             for (names[0..count], 0..) |tag_name, index| {
                 // Composition sorts the variants, so a tag's discriminant
@@ -894,7 +893,7 @@ test "active tag payloads preserve physical ordering, zero size, and recursive b
         .{ .name = &name_a, .payloads = &.{} },
         .{ .name = &name_b, .payloads = &payloads },
     });
-    const desc = env.descs.nominal(union_desc, &name_point, null, false);
+    const desc = env.descs.nominal(union_desc, null, false);
     const baseline = env.allocations();
     const small: u8 = 37;
     const large: u64 = 0x123456789abcdef0;
@@ -933,7 +932,7 @@ test "record construction initializes gaps and omitted fields without touching s
         env.descs.tuple(&.{ byte, wide, byte }),
         recordAB(&env, byte, wide),
         declared,
-        env.descs.nominal(declared, &name_point, null, false),
+        env.descs.nominal(declared, null, false),
     };
     var sources = [_]Slot{
         .{ .bytes = @splat(0x31) },
@@ -973,7 +972,7 @@ test "record construction and updates preserve boxed fields and initialize all p
         .{ .name = &name_a, .desc = byte, .is_padding = false },
         .{ .name = null, .desc = byte, .is_padding = true },
     });
-    const desc = env.descs.nominal(record, &name_point, null, false);
+    const desc = env.descs.nominal(record, null, false);
     const allocations = env.allocations();
     const text = "a heap string moved into a recursive record field";
     const source = bigStr(text, ops);
@@ -1038,7 +1037,7 @@ test "the runtime reads names only to print them" {
     // the compiler computed (`compiled.zig`, `exports.zig`); a name's text
     // is read in one place, inspect's printing of a label (`walk.zig`).
     for ([_][]const u8{ @embedFile("compiled.zig"), @embedFile("exports.zig") }) |source| {
-        for ([_][]const u8{ "desc_mod.Name", "const Name", ".name", ".text()", ".id[", "std.mem.eql(u8", "std.mem.order(u8" }) |forbidden| {
+        for ([_][]const u8{ "desc_mod.Name;", "const Name)", "const Name,", ".name", ".text()", ".id[", "std.mem.eql(u8", "std.mem.order(u8" }) |forbidden| {
             try testing.expectEqual(@as(usize, 0), occurrences(source, forbidden));
         }
     }

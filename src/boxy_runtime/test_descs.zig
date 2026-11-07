@@ -19,6 +19,7 @@ const TypeDesc = desc_mod.TypeDesc;
 const Field = desc_mod.Field;
 const Variant = desc_mod.Variant;
 const Name = desc_mod.Name;
+const Names = desc_mod.Names;
 const Methods = desc_mod.Methods;
 const Kind = desc_mod.Kind;
 
@@ -51,6 +52,12 @@ pub const Builder = struct {
     width: desc_mod.PointerWidth,
     str_leaf: TypeDesc,
     erased_callable_leaf: TypeDesc,
+    /// Each record's, tuple's, and tag union's labels: a field's by memory
+    /// slot (null for a tuple element or padding), a variant's by
+    /// discriminant. A descriptor holds no names; its names block does.
+    labels: std.AutoHashMapUnmanaged(*const TypeDesc, []const ?*const Name) = .empty,
+    /// Each names block `names` built, by descriptor.
+    names_blocks: std.AutoHashMapUnmanaged(*const TypeDesc, ?*const Names) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, width: desc_mod.PointerWidth) Builder {
         const word = width.bytes();
@@ -86,6 +93,39 @@ pub const Builder = struct {
         return &built[0];
     }
 
+    fn putLabels(self: *Builder, desc: *const TypeDesc, labels: []const ?*const Name) void {
+        self.labels.put(self.arena.allocator(), desc, labels) catch @panic("out of memory building a test descriptor");
+    }
+
+    /// The names block of `desc`, which holds the labels and tag names its
+    /// descriptor does not (`desc.Names`); null for a type without
+    /// components. Built on first request, after every descriptor it
+    /// reaches is complete, so a recursive type's block reaches itself.
+    pub fn names(self: *Builder, desc: *const TypeDesc) ?*const Names {
+        if (self.names_blocks.get(desc)) |known| return known;
+        const block: ?*Names = switch (desc.kind) {
+            .zst, .scalar, .str, .bool, .erased_callable => null,
+            .list, .box, .nominal, .recursive_box, .record, .tuple, .tag_union => &self.alloc(Names, 1)[0],
+        };
+        self.names_blocks.put(self.arena.allocator(), desc, block) catch @panic("out of memory building a test descriptor");
+        const built = block orelse return null;
+        built.* = .{ .entries = null, .child = null };
+        switch (desc.kind) {
+            .zst, .scalar, .str, .bool, .erased_callable => unreachable, // these have no block
+            .list, .box, .nominal, .recursive_box => built.child = self.names(desc.child.?),
+            .record, .tuple, .tag_union => {
+                const labels = self.labels.get(desc) orelse &.{};
+                const entries = self.alloc(desc_mod.NamesEntry, desc.count);
+                for (entries, 0..) |*entry, index| {
+                    const component = if (desc.kind == .tag_union) desc.variants()[index].payload else desc.fields()[index].desc;
+                    entry.* = .{ .label = if (index < labels.len) labels[index] else null, .names = self.names(component) };
+                }
+                if (desc.count != 0) built.entries = @ptrCast(entries.ptr);
+            },
+        }
+        return built;
+    }
+
     /// `List(elem)`. A list of a zero-sized element is still three words.
     pub fn list(self: *Builder, elem: *const TypeDesc) *const TypeDesc {
         return self.container(.list, elem, true);
@@ -119,8 +159,9 @@ pub const Builder = struct {
 
     /// Fill the placeholder `shell` with the recursive type's descriptor
     /// `desc`.
-    pub fn recursiveClose(_: *Builder, shell: *const TypeDesc, desc: *const TypeDesc) *const TypeDesc {
+    pub fn recursiveClose(self: *Builder, shell: *const TypeDesc, desc: *const TypeDesc) *const TypeDesc {
         @constCast(shell).* = desc.*;
+        if (self.labels.get(desc)) |labels| self.putLabels(shell, labels);
         return shell;
     }
 
@@ -210,7 +251,9 @@ pub const Builder = struct {
             .{ .name = present, .payloads = &.{payload} },
         }).*;
         built.flags.presence_slot = true;
-        return self.one(built);
+        const slot = self.one(built);
+        self.putLabels(slot, &.{ missing, present });
+        return slot;
     }
 
     /// A closed tag union. Tags may come in any order: a tag's discriminant
@@ -221,6 +264,7 @@ pub const Builder = struct {
         const discriminant_size = shape.discriminantSize(variants.len);
         var measure = shape.TagUnionMeasure.init(discriminant_size);
         const entries = self.alloc(Variant, variants.len);
+        const labels = self.alloc(?*const Name, variants.len);
         var contains_refcounted = false;
         var recursive = false;
         for (by_name, 0..) |input_index, discriminant| {
@@ -236,13 +280,13 @@ pub const Builder = struct {
             entries[discriminant] = .{
                 .discriminant = @intCast(discriminant),
                 .payload_count = @intCast(input.payloads.len),
-                .name = input.name,
                 .payload = payload,
             };
+            labels[discriminant] = input.name;
         }
         const metrics = measure.finish();
         const zero_sized = metrics.size == 0;
-        return self.one(.{
+        const built = self.one(.{
             .size = metrics.size,
             .alignment = if (zero_sized) 1 else metrics.alignment,
             .kind = .tag_union,
@@ -254,13 +298,14 @@ pub const Builder = struct {
             .discriminant_size = discriminant_size,
             .child = null,
             .entries = if (variants.len == 0) null else @ptrCast(entries.ptr),
-            .name = null,
             .methods = null,
         });
+        self.putLabels(built, labels);
+        return built;
     }
 
     /// A nominal type over `backing`, whose layout it shares.
-    pub fn nominal(self: *Builder, backing: *const TypeDesc, name: ?*const Name, methods: ?*const Methods, inspect_opaque: bool) *const TypeDesc {
+    pub fn nominal(self: *Builder, backing: *const TypeDesc, methods: ?*const Methods, inspect_opaque: bool) *const TypeDesc {
         return self.one(.{
             .size = backing.size,
             .alignment = backing.alignment,
@@ -273,7 +318,6 @@ pub const Builder = struct {
             .discriminant_size = 0,
             .child = backing,
             .entries = null,
-            .name = name,
             .methods = methods,
         });
     }
@@ -312,6 +356,7 @@ pub const Builder = struct {
         const trailer: [*]u32 = @ptrCast(@alignCast(block.ptr + entries_bytes));
         if (refcounted_count != 0) trailer[0] = refcounted_count;
         var next_refcounted: usize = 1;
+        const labels = self.alloc(?*const Name, members.len);
         var measure: shape.StructMeasure = .{};
         for (memory_order, 0..) |member_index, slot| {
             const member = members[member_index];
@@ -330,9 +375,9 @@ pub const Builder = struct {
                 .offset = offset,
                 .is_padding = @intFromBool(member.is_padding),
                 .field_slot = std.math.maxInt(u32),
-                .name = member.name,
                 .desc = member.desc,
             };
+            labels[slot] = member.name;
         }
         for (entries[0..members.len], 0..) |entry, slot| {
             std.debug.assert(entry.field_index < members.len and entries[entry.field_index].field_slot == std.math.maxInt(u32));
@@ -341,7 +386,7 @@ pub const Builder = struct {
 
         const metrics = measure.finish();
         const zero_sized = metrics.size == 0;
-        return self.one(.{
+        const built = self.one(.{
             .size = metrics.size,
             .alignment = if (zero_sized) 1 else metrics.alignment,
             .kind = kind,
@@ -353,9 +398,10 @@ pub const Builder = struct {
             .discriminant_size = 0,
             .child = null,
             .entries = if (members.len == 0) null else @ptrCast(entries),
-            .name = null,
             .methods = null,
         });
+        self.putLabels(built, labels);
+        return built;
     }
 };
 

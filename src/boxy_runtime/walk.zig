@@ -27,6 +27,7 @@ const inspect_rules = value_rules.inspect;
 
 const TypeDesc = desc_mod.TypeDesc;
 const Name = desc_mod.Name;
+const Names = desc_mod.Names;
 const Field = desc_mod.Field;
 
 /// A value of the type its descriptor describes, at an address.
@@ -672,83 +673,128 @@ pub fn hash(desc: *const TypeDesc, hasher: u64, ptr: [*]u8, ops: *RocOps) u64 {
 const InspectWork = union(enum) {
     literal: []const u8,
     label: *const Name,
-    child: Value,
+    child: Named,
     /// The items of a list from `index` on, then its closing bracket.
-    list_items: struct { list: RocList, elem: *const TypeDesc, index: u64 },
+    list_items: struct { list: RocList, elem: *const TypeDesc, names: ?*const Names, index: u64 },
+};
+
+/// A value inspection renders and the names block of its type, which holds
+/// the labels and tag names its descriptor does not (`desc.Names`).
+const Named = struct {
+    value: Value,
+    names: ?*const Names,
+
+    fn at(desc: *const TypeDesc, ptr: [*]u8, names: ?*const Names) Named {
+        return .{ .value = .at(desc, ptr), .names = names };
+    }
+
+    /// The names of component `index` (a field's memory slot, or a
+    /// variant), whose type has names only where this one does.
+    fn entryNames(self: Named, index: usize) ?*const Names {
+        const names = self.names orelse return null;
+        return names.entry(index).names;
+    }
+
+    /// The label of component `index`, which a record field or variant
+    /// always has.
+    fn label(self: Named, index: usize, ops: *RocOps) *const Name {
+        const names = self.names orelse invariant(ops, "a labeled component's type has no names block");
+        return names.entry(index).label orelse invariant(ops, "a names block lacks a field's or variant's label");
+    }
+
+    /// The names of a list element, box payload, or nominal backing.
+    fn childNames(self: Named) ?*const Names {
+        const names = self.names orelse return null;
+        return names.child;
+    }
+
+    /// The memory slot of `field` among its record's fields.
+    fn slotOf(self: Named, field: *const Field) usize {
+        return field - self.value.desc.fields().ptr;
+    }
 };
 
 const InspectCtx = struct {
     ops: *RocOps,
 
-    pub const Ty = Value;
-    pub const Primitive = Value;
-    pub const Record = Value;
-    pub const Tuple = Value;
-    pub const TagUnion = Value;
-    pub const PresenceSlot = Value;
-    pub const Override = Value;
-    pub const Child = Value;
+    pub const Ty = Named;
+    pub const Primitive = Named;
+    pub const Record = Named;
+    pub const Tuple = Named;
+    pub const TagUnion = Named;
+    pub const PresenceSlot = Named;
+    pub const Override = Named;
+    pub const Child = Named;
     pub const Label = *const Name;
 
     const Spec = inspect_rules.InspectSpec(InspectCtx);
 
-    pub fn inspectShape(self: InspectCtx, value: Value) Spec.Shape {
+    pub fn inspectShape(self: InspectCtx, named: Named) Spec.Shape {
+        const value = named.value;
         const d = value.desc;
         return switch (d.kind) {
             .zst => .empty_record,
             .scalar => if (d.scalar.isVector())
-                .{ .nominal = .{ .override = if (override(d, .to_inspect) != null) value else invariant(self.ops, "a SIMD vector descriptor has no to_inspect"), .backing = null } }
+                .{ .nominal = .{ .override = if (override(d, .to_inspect) != null) named else invariant(self.ops, "a SIMD vector descriptor has no to_inspect"), .backing = null } }
             else
-                .{ .primitive = value },
-            .str => .{ .primitive = value },
+                .{ .primitive = named },
+            .str => .{ .primitive = named },
             .bool => .bool,
-            .list => .{ .list = value },
-            .box => .{ .box = if (d.child.?.size == 0) .at(d.child.?, zeroSizedPtr()) else value.boxPayload() },
-            .record => .{ .record = value },
-            .tuple => .{ .tuple = value },
-            .tag_union => if (d.flags.presence_slot) .{ .presence_slot = value } else .{ .tag_union = value },
+            .list => .{ .list = named },
+            .box => .{ .box = if (d.child.?.size == 0) .at(d.child.?, zeroSizedPtr(), named.childNames()) else .{ .value = value.boxPayload(), .names = named.childNames() } },
+            .record => .{ .record = named },
+            .tuple => .{ .tuple = named },
+            .tag_union => if (d.flags.presence_slot) .{ .presence_slot = named } else .{ .tag_union = named },
             // A box of a function is the callable itself (design.md "Function Values").
-            .erased_callable => if (d.child) |function| .{ .box = .at(function, value.ptr) } else .function,
+            .erased_callable => if (d.child) |function| .{ .box = .at(function, value.ptr, null) } else .function,
             .nominal => .{ .nominal = .{
-                .override = if (override(d, .to_inspect) != null) value else null,
-                .backing = if (d.flags.inspect_opaque) null else .at(d.child.?, value.ptr),
+                .override = if (override(d, .to_inspect) != null) named else null,
+                .backing = if (d.flags.inspect_opaque) null else .at(d.child.?, value.ptr, named.childNames()),
             } },
-            .recursive_box => .{ .transparent = value.boxPayload() },
+            .recursive_box => .{ .transparent = .{ .value = value.boxPayload(), .names = named.childNames() } },
         };
     }
 
-    pub fn recordSlotCount(_: InspectCtx, record: Value) u32 {
-        return record.desc.count;
+    pub fn recordSlotCount(_: InspectCtx, record: Named) u32 {
+        return record.value.desc.count;
     }
 
-    pub fn recordField(_: InspectCtx, record: Value, slot: u32) ?inspect_rules.RecordField(InspectCtx) {
-        const f = record.desc.fieldBySemanticIndex(slot);
+    pub fn recordField(self: InspectCtx, record: Named, slot: u32) ?inspect_rules.RecordField(InspectCtx) {
+        const f = record.value.desc.fieldBySemanticIndex(slot);
         if (f.is_padding != 0) return null;
-        return .{ .label = f.name.?, .child = record.field(f) };
+        const memory = record.slotOf(f);
+        return .{ .label = record.label(memory, self.ops), .child = .{ .value = record.value.field(f), .names = record.entryNames(memory) } };
     }
 
-    pub fn tupleElemCount(_: InspectCtx, tuple: Value) u32 {
-        return tuple.desc.count;
+    pub fn tupleElemCount(_: InspectCtx, tuple: Named) u32 {
+        return tuple.value.desc.count;
     }
 
-    pub fn tupleElem(_: InspectCtx, tuple: Value, index: u32) Value {
-        return tuple.field(tuple.desc.fieldBySemanticIndex(index));
+    pub fn tupleElem(_: InspectCtx, tuple: Named, index: u32) Named {
+        const f = tuple.value.desc.fieldBySemanticIndex(index);
+        return .{ .value = tuple.value.field(f), .names = tuple.entryNames(tuple.slotOf(f)) };
     }
 
-    pub fn variantCount(_: InspectCtx, tag_union: Value) u32 {
-        return tag_union.desc.count;
+    pub fn variantCount(_: InspectCtx, tag_union: Named) u32 {
+        return tag_union.value.desc.count;
     }
 
-    pub fn variantName(_: InspectCtx, tag_union: Value, variant: u32) *const Name {
-        return tag_union.desc.variants()[variant].name;
+    pub fn variantName(self: InspectCtx, tag_union: Named, variant: u32) *const Name {
+        return tag_union.label(variant, self.ops);
     }
 
-    pub fn payloadCount(_: InspectCtx, tag_union: Value, variant: u32) u32 {
-        return tag_union.desc.variants()[variant].payload_count;
+    pub fn payloadCount(_: InspectCtx, tag_union: Named, variant: u32) u32 {
+        return tag_union.value.desc.variants()[variant].payload_count;
     }
 
-    pub fn payload(_: InspectCtx, tag_union: Value, variant: u32, index: u32) Value {
-        return tag_union.tagPayload(&tag_union.desc.variants()[variant], index);
+    pub fn payload(_: InspectCtx, tag_union: Named, variant: u32, index: u32) Named {
+        const v = &tag_union.value.desc.variants()[variant];
+        const payload_names = tag_union.entryNames(variant);
+        if (v.payload_count == 1) return .{ .value = tag_union.value.tagPayload(v, index), .names = payload_names };
+        // Several payloads are the tuple the variant's payload descriptor is.
+        const tuple: Named = .{ .value = .at(v.payload, tag_union.value.ptr), .names = payload_names };
+        const f = v.payload.fieldBySemanticIndex(index);
+        return .{ .value = tuple.value.field(f), .names = tuple.entryNames(tuple.slotOf(f)) };
     }
 };
 
@@ -767,7 +813,7 @@ const PartsSink = struct {
         self.stack.push(.{ .label = name }, self.ops);
     }
 
-    pub fn child(self: *PartsSink, value: Value) PartsError!void {
+    pub fn child(self: *PartsSink, value: Named) PartsError!void {
         self.stack.push(.{ .child = value }, self.ops);
     }
 };
@@ -795,7 +841,8 @@ const Output = struct {
     }
 };
 
-fn appendPrimitive(out: *Output, value: Value, ops: *RocOps) void {
+fn appendPrimitive(out: *Output, named: Named, ops: *RocOps) void {
+    const value = named.value;
     const d = value.desc;
     if (d.kind == .str) return out.appendOwned(builtins.str.strEscapeAndQuote(value.rocStr().*, ops), ops);
     var buffer: [builtins.compiler_rt_128.float_string_capacity]u8 = undefined;
@@ -824,9 +871,10 @@ fn intText(comptime T: type, buffer: []u8, ptr: [*]const u8) []const u8 {
     return builtins.compiler_rt_128.int_to_str(T, buffer, readScalar(T, ptr));
 }
 
-/// What `Str.inspect` renders for a value of the type `desc` describes,
+/// What `Str.inspect` renders for a value of the type `desc` describes, whose
+/// labels and tag names `names` holds (null for a type with neither),
 /// honoring nominal `to_inspect` overrides.
-pub fn inspect(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) RocStr {
+pub fn inspect(desc: *const TypeDesc, names: ?*const Names, ptr: [*]u8, ops: *RocOps) RocStr {
     // A custom `to_inspect` can inspect its own components through here.
     builtins.stack_guard.check();
     const ctx: InspectCtx = .{ .ops = ops };
@@ -836,7 +884,7 @@ pub fn inspect(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) RocStr {
     stack.init();
     defer stack.deinit(ops);
     var sink: PartsSink = .{ .stack = &stack, .ops = ops };
-    stack.push(.{ .child = .at(desc, ptr) }, ops);
+    stack.push(.{ .child = .at(desc, ptr, names) }, ops);
     while (stack.pop()) |work| switch (work) {
         .literal => |text| out.append(text, ops),
         .label => |name| out.append(name.text(), ops),
@@ -845,38 +893,39 @@ pub fn inspect(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) RocStr {
                 out.append(inspect_rules.text.list_close, ops);
                 continue;
             }
-            stack.push(.{ .list_items = .{ .list = items.list, .elem = items.elem, .index = items.index + 1 } }, ops);
-            stack.push(.{ .child = listItem(items.list, items.elem, items.index) }, ops);
+            stack.push(.{ .list_items = .{ .list = items.list, .elem = items.elem, .names = items.names, .index = items.index + 1 } }, ops);
+            stack.push(.{ .child = .{ .value = listItem(items.list, items.elem, items.index), .names = items.names } }, ops);
             const separator = Spec.listSeparator(items.index);
             if (separator.len != 0) stack.push(.{ .literal = separator }, ops);
         },
-        .child => |value| {
+        .child => |named| {
             const start = stack.len;
-            switch (Spec.action(ctx, value)) {
+            const value = named.value;
+            switch (Spec.action(ctx, named)) {
                 .literal => |text| out.append(text, ops),
                 .primitive => |primitive| appendPrimitive(&out, primitive, ops),
                 .bool => out.append(Spec.boolText(value.ptr[0] == 1), ops),
                 .record => |record| Spec.recordParts(ctx, record, &sink) catch |err| switch (err) {},
                 .tuple => |tuple| Spec.tupleParts(ctx, tuple, &sink) catch |err| switch (err) {},
-                .tag_union => |tag_union| Spec.variantParts(ctx, tag_union, tag_union.desc.readDiscriminant(tag_union.ptr), &sink) catch |err| switch (err) {},
+                .tag_union => |tag_union| Spec.variantParts(ctx, tag_union, tag_union.value.desc.readDiscriminant(tag_union.value.ptr), &sink) catch |err| switch (err) {},
                 .uninhabited => ops.crash(inspect_rules.text.uninhabited_crash),
                 // Missing is the slot's first variant, Present its second.
-                .presence_slot => |slot| if (slot.desc.readDiscriminant(slot.ptr) == 1)
-                    stack.push(.{ .child = slot.tagPayload(&slot.desc.variants()[1], 0) }, ops)
+                .presence_slot => |slot| if (slot.value.desc.readDiscriminant(slot.value.ptr) == 1)
+                    stack.push(.{ .child = .{ .value = slot.value.tagPayload(&slot.value.desc.variants()[1], 0), .names = slot.entryNames(1) } }, ops)
                 else
                     out.append(inspect_rules.text.missing, ops),
                 .list => |list_value| {
                     out.append(inspect_rules.text.list_open, ops);
-                    stack.push(.{ .list_items = .{ .list = list_value.rocList().*, .elem = list_value.desc.child.?, .index = 0 } }, ops);
+                    stack.push(.{ .list_items = .{ .list = list_value.value.rocList().*, .elem = list_value.value.desc.child.?, .names = list_value.childNames(), .index = 0 } }, ops);
                 },
                 .box => |payload| {
                     sink.literal(inspect_rules.text.box_open) catch |err| switch (err) {};
                     sink.child(payload) catch |err| switch (err) {};
                     sink.literal(inspect_rules.text.box_close) catch |err| switch (err) {};
                 },
-                .override => |overridden| out.appendOwned(callToInspect(override(overridden.desc, .to_inspect).?, overridden, ops), ops),
+                .override => |overridden| out.appendOwned(callToInspect(override(overridden.value.desc, .to_inspect).?, overridden.value, ops), ops),
                 .backing => |backing| stack.push(.{ .child = backing }, ops),
-                .transparent => |named| stack.push(.{ .child = named }, ops),
+                .transparent => |inner| stack.push(.{ .child = inner }, ops),
                 .descriptor => invariant(ops, "a descriptor described a value as dynamic"),
             }
             stack.reverseFrom(start);

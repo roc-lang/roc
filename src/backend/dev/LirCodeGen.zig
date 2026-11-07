@@ -17843,6 +17843,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const dst = try self.dynTarget(dst_local);
                     try addTargetArg(&builder, dst);
                     try self.addWordArg(&builder, i.desc);
+                    try self.addWordArg(&builder, i.names);
                     try self.addBytesArg(&builder, i.value);
                     try self.callBoxyRuntime(&builder, "roc_desc_inspect");
                     try self.finishTarget(dst_local, dst);

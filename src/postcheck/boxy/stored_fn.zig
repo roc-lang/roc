@@ -849,6 +849,7 @@ pub fn encodeNeeds(allocator: Allocator, program: *Program, needs: Tables.Needs)
                 try encodeOperand(&encoder, plan.from);
                 try encodeOperand(&encoder, plan.to);
             },
+            .names_block => |block| try encodeOperand(&encoder, block.desc),
         }
     }
     try encoder.word(@intCast(needs.slots.len));
@@ -937,6 +938,7 @@ pub fn decodeNeeds(program: *Program, bytes: []const u8) Allocator.Error!Tables.
                 const from = try decodeOperand(&decoder);
                 break :blk .{ .adapt_plan = .{ .from = from, .to = try decodeOperand(&decoder) } };
             },
+            .names_block => .{ .names_block = .{ .desc = try decodeOperand(&decoder) } },
         };
     }
     const slots = try arena.alloc(Tables.RecipeId, decoder.word());

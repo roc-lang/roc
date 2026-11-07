@@ -97,8 +97,8 @@ pub fn roc_desc_hash(desc: *const TypeDesc, hasher: u64, ptr: ?[*]u8) callconv(.
 }
 
 /// The C-ABI form of `walk.inspect`.
-pub fn roc_desc_inspect(out: *RocStr, desc: *const TypeDesc, ptr: ?[*]u8) callconv(.c) void {
-    out.* = walk.inspect(desc, valuePtr(ptr), ops());
+pub fn roc_desc_inspect(out: *RocStr, desc: *const TypeDesc, names: ?*const desc_mod.Names, ptr: ?[*]u8) callconv(.c) void {
+    out.* = walk.inspect(desc, names, valuePtr(ptr), ops());
 }
 
 /// The `Payload.on_drop` of an erased callable whose capture record is

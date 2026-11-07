@@ -18306,7 +18306,7 @@ test "ARC dyn eq and inspect borrow their operand" {
     const equal = try d.f.local(.bool);
     const text = try d.f.local(.str);
     const ret = try d.f.ret(text);
-    const inspect = try d.op(text, .{ .inspect = .{ .value = param, .desc = desc } }, ret);
+    const inspect = try d.op(text, .{ .inspect = .{ .value = param, .desc = desc, .names = desc } }, ret);
     const eq = try d.op(equal, .{ .eq = .{ .lhs = param, .rhs = param, .desc = desc } }, inspect);
     const proc = try d.proc(&.{ desc, param }, eq, .str, null);
     try d.run(&.{proc});

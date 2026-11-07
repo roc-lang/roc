@@ -12141,9 +12141,10 @@ pub const MonoLlvmCodeGen = struct {
                 });
                 _ = wip.store(.normal, hashed, try self.targetAddress(target), LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.OutOfMemory;
             },
-            .inspect => |i| _ = try self.callBoxyRuntime("roc_desc_inspect", .void, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{
+            .inspect => |i| _ = try self.callBoxyRuntime("roc_desc_inspect", .void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
                 try self.targetAddress(target),
                 try self.wordValue(i.desc),
+                try self.wordValue(i.names),
                 try self.bytesAddress(i.value),
             }),
             .call_erased => |c| {

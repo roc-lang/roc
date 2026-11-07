@@ -1,11 +1,15 @@
-//! Static descriptors and names (design.md "Type Descriptors").
+//! Static descriptors and names blocks (design.md "Type Descriptors", "Names
+//! Blocks").
 //!
 //! Every closed type a body needs a descriptor for gets one static
 //! descriptor, interned by the type's join-set representative, emitted as
 //! readonly static data in the runtime's descriptor format at the target's
-//! pointer width. Each descriptor (and each name) is a static-data slot whose
-//! value is the pointer to the descriptor (or `Name`) node, so a body reads it
-//! into an `opaque_ptr` local with an ordinary `static_data` literal. Nodes
+//! pointer width. A descriptor holds no names: a type's labels and tag names
+//! are its names block, a separate node only an inspection reads, so a
+//! program that prints no value of a type emits none of its names. Each
+//! descriptor is a static-data slot whose value is the pointer to the
+//! descriptor node, so a body reads it into an `opaque_ptr` local with an
+//! ordinary `static_data` literal. Nodes
 //! reference one another through relocations; recursive types make the node
 //! graph cyclic, which needs no special treatment because every node is
 //! reserved before any is filled.
@@ -85,6 +89,9 @@ pub const StaticDescs = struct {
     update_plans: std.StringHashMapUnmanaged(ExportIndex) = .empty,
     /// Each coercion plan node, by the descriptors it converts between.
     adapt_plans: std.AutoHashMapUnmanaged(struct { from: Key, to: Key }, ExportIndex) = .empty,
+    /// Each names block, by its descriptor's type and recursion box; null
+    /// for a type with no label in its reach.
+    names_blocks: std.AutoHashMapUnmanaged(Key, ?ExportIndex) = .empty,
 
     /// A descriptor's identity: a type, or the recursion box around one, and
     /// the override scope that supplies the overrides of the nominal types
@@ -153,6 +160,7 @@ pub const StaticDescs = struct {
         self.word_slots.deinit(self.allocator);
         freeKeys(self.allocator, &self.update_plans);
         self.adapt_plans.deinit(self.allocator);
+        self.names_blocks.deinit(self.allocator);
         self.pending.deinit(self.allocator);
     }
 
@@ -994,7 +1002,7 @@ pub const StaticDescs = struct {
                 const storage = try self.layouts.recordStorage(record);
                 defer self.allocator.free(storage);
                 count = @intCast(storage.len);
-                try self.fillFields(item.node, &pointers, committed_layout, .{ .types = storage, .scope = scope_id }, fields, if (record.declared) |declared| self.store.declaredSlots(declared) else null);
+                try self.fillFields(item.node, &pointers, committed_layout, .{ .types = storage, .scope = scope_id }, fields.len, if (record.declared) |declared| self.store.declaredSlots(declared) else null);
             },
             .tuple => |items_span| {
                 kind = .tuple;
@@ -1026,7 +1034,6 @@ pub const StaticDescs = struct {
                     const backing = try self.layouts.converter.backing(ty);
                     const backing_node = (try self.reserveDescriptor(.{ .ty = backing, .recursive_box = false, .scope = try self.restrictScope(scope_id, backing) })).node;
                     try pointers.append(self.allocator, .{ .offset = desc_layout.of(.child), .target = backing_node });
-                    try pointers.append(self.allocator, .{ .offset = desc_layout.of(.name), .target = (try self.reserveName(nominal.name)).node });
                     if (try self.methodsNode(item.key)) |methods| try pointers.append(self.allocator, .{ .offset = desc_layout.of(.methods), .target = methods });
                 }
             },
@@ -1065,17 +1072,17 @@ pub const StaticDescs = struct {
     }
 
     /// The `Field` entries of a record or tuple, in the committed layout's
-    /// memory order. `names` is null for a tuple or an argument record;
-    /// `components` holds a slot for each field by storage index, and past
-    /// them the slots of a padded record's unnamed fields, which `declared`
-    /// orders.
+    /// memory order. `named_count` is a record's number of fields, null for
+    /// a tuple or an argument record; `components` holds a slot for each
+    /// field by storage index, and past them the slots of a padded record's
+    /// unnamed fields, which `declared` orders.
     fn fillFields(
         self: *StaticDescs,
         owner: ExportIndex,
         pointers: *std.ArrayList(Pointer),
         committed_layout: layout.Layout,
         components: Components,
-        names: ?[]const types.Field,
+        named_count: ?usize,
         declared: ?[]const u32,
     ) Allocator.Error!void {
         const storage_len = components.len();
@@ -1124,9 +1131,6 @@ pub const StaticDescs = struct {
                 // The entry at memory position `field.index` names this slot.
                 writeU32(bytes, field.index * field_layout.size + field_layout.of(.field_slot), position);
                 try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.desc), .target = try self.componentAt(components, field.index, field.layout) });
-                if (names) |record_fields| if (!field.is_padding) {
-                    try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.name), .target = (try self.reserveName(record_fields[field.index].name)).node });
-                };
             }
         } else {
             // Every field is zero-sized: each sits at offset 0, in checked
@@ -1137,13 +1141,10 @@ pub const StaticDescs = struct {
                 const bytes = @constCast(self.exports.items[entries].bytes);
                 writeU32(bytes, base_offset + field_layout.of(.field_index), @intCast(index));
                 writeU32(bytes, @as(u32, @intCast(index)) * field_layout.size + field_layout.of(.field_slot), @intCast(position));
-                const is_padding = if (names) |record_fields| index >= record_fields.len else false;
+                const is_padding = if (named_count) |count| index >= count else false;
                 writeU32(bytes, base_offset + field_layout.of(.is_padding), @intFromBool(is_padding));
                 const committed: layout.Idx = if (index < components.leading) .opaque_ptr else try self.layouts.layoutOf(components.types[index - components.leading]);
                 try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.desc), .target = try self.componentAt(components, index, committed) });
-                if (names) |record_fields| if (!is_padding) {
-                    try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.name), .target = (try self.reserveName(record_fields[index].name)).node });
-                };
             }
         }
         try self.setRelocations(entries, entry_pointers.items);
@@ -1183,11 +1184,117 @@ pub const StaticDescs = struct {
             const bytes = @constCast(self.exports.items[entries].bytes);
             writeU32(bytes, base_offset + variant_layout.of(.discriminant), @intCast(index));
             writeU32(bytes, base_offset + variant_layout.of(.payload_count), @intCast(payloads.len));
-            try entry_pointers.append(self.allocator, .{ .offset = base_offset + variant_layout.of(.name), .target = (try self.reserveName(tag.name)).node });
             try entry_pointers.append(self.allocator, .{ .offset = base_offset + variant_layout.of(.payload), .target = try self.componentNode(payload_ty, payload_layout, scope_id) });
         }
         try self.setRelocations(entries, entry_pointers.items);
         try pointers.append(self.allocator, .{ .offset = desc_format.TypeDesc.layout(self.width).of(.entries), .target = entries });
+    }
+
+    // -- Names blocks --
+    //
+    // A type's labels and tag names are its names block (`desc_format.Names`),
+    // parallel to its descriptor, which only an inspection reads: a body that
+    // prints a value reads its type's block, and nothing else references one,
+    // so a program that prints no value of a type emits none of its names.
+
+    /// The names block word of the type the descriptor word `word`
+    /// describes: a node, or the null word for a type with no label in its
+    /// reach.
+    pub fn namesWord(self: *StaticDescs, word: CaptureWord) Allocator.Error!CaptureWord {
+        const key = try self.wordKey(word);
+        const block = try self.namesBlock(.{ .ty = key.ty, .recursive_box = key.recursive_box });
+        return if (block) |node| .{ .node = node } else .zero;
+    }
+
+    /// The names block of descriptor `key`, reserved before the blocks of its
+    /// components so a recursive type's block reaches itself; null for a
+    /// type with no label in its reach.
+    fn namesBlock(self: *StaticDescs, key: Key) Allocator.Error!?ExportIndex {
+        if (self.names_blocks.get(key)) |known| return known;
+        if (!try self.reachesLabel(key)) {
+            try self.names_blocks.put(self.allocator, key, null);
+            return null;
+        }
+        const names_layout = desc_format.Names.layout(self.width);
+        self.extra_nodes += 1;
+        const node = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, 0, 16 + self.extra_nodes), names_layout.size, names_layout.alignment, null);
+        try self.names_blocks.put(self.allocator, key, node);
+        const shape = try self.shapeOf(key);
+        defer shape.deinit(self.allocator);
+        var pointers: std.ArrayList(Pointer) = .empty;
+        defer pointers.deinit(self.allocator);
+        switch (shape) {
+            .leaf, .bool_ => types.invariant("a type without labels was given a names block"),
+            .list, .box, .recursive_box, .nominal => |child| if (try self.namesBlock(child)) |target| {
+                try pointers.append(self.allocator, .{ .offset = names_layout.of(.child), .target = target });
+            },
+            .record, .tuple => |fields| {
+                const labels = try self.allocator.alloc(?NameId, fields.len);
+                defer self.allocator.free(labels);
+                const keys = try self.allocator.alloc(Key, fields.len);
+                defer self.allocator.free(keys);
+                for (fields, labels, keys) |field, *label, *child| {
+                    label.* = field.name;
+                    child.* = field.key;
+                }
+                if (try self.namesEntries(labels, keys)) |entries| try pointers.append(self.allocator, .{ .offset = names_layout.of(.entries), .target = entries });
+            },
+            .tag_union => |tag_union| {
+                const labels = try self.allocator.alloc(?NameId, tag_union.variants.len);
+                defer self.allocator.free(labels);
+                const keys = try self.allocator.alloc(Key, tag_union.variants.len);
+                defer self.allocator.free(keys);
+                for (tag_union.variants, labels, keys) |variant, *label, *child| {
+                    label.* = variant.name;
+                    child.* = variant.payload;
+                }
+                if (try self.namesEntries(labels, keys)) |entries| try pointers.append(self.allocator, .{ .offset = names_layout.of(.entries), .target = entries });
+            },
+        }
+        try self.setRelocations(node, pointers.items);
+        return node;
+    }
+
+    /// The `NamesEntry` array of a names block: each component's label and
+    /// its type's names block.
+    fn namesEntries(self: *StaticDescs, labels: []const ?NameId, keys: []const Key) Allocator.Error!?ExportIndex {
+        if (labels.len == 0) return null;
+        const entry_layout = desc_format.NamesEntry.layout(self.width);
+        self.extra_nodes += 1;
+        const entries = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, 0, 16 + self.extra_nodes), @as(u32, @intCast(labels.len)) * entry_layout.size, entry_layout.alignment, null);
+        var pointers: std.ArrayList(Pointer) = .empty;
+        defer pointers.deinit(self.allocator);
+        for (labels, keys, 0..) |label, key, index| {
+            const base_offset = @as(u32, @intCast(index)) * entry_layout.size;
+            if (label) |name| try pointers.append(self.allocator, .{ .offset = base_offset + entry_layout.of(.label), .target = (try self.reserveName(name)).node });
+            if (try self.namesBlock(key)) |block| try pointers.append(self.allocator, .{ .offset = base_offset + entry_layout.of(.names), .target = block });
+        }
+        try self.setRelocations(entries, pointers.items);
+        return entries;
+    }
+
+    /// Whether a record field or a tag is in the reach of descriptor `key`.
+    fn reachesLabel(self: *StaticDescs, root: Key) Allocator.Error!bool {
+        var seen: std.AutoHashMapUnmanaged(Key, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var pending: std.ArrayList(Key) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |key| {
+            if ((try seen.getOrPut(self.allocator, key)).found_existing) continue;
+            const shape = try self.shapeOf(key);
+            defer shape.deinit(self.allocator);
+            switch (shape) {
+                .leaf, .bool_ => {},
+                .list, .box, .recursive_box, .nominal => |child| try pending.append(self.allocator, child),
+                .record, .tuple => |fields| for (fields) |field| {
+                    if (field.name != null) return true;
+                    try pending.append(self.allocator, field.key);
+                },
+                .tag_union => |tag_union| if (tag_union.variants.len != 0) return true,
+            }
+        }
+        return false;
     }
 
     // -- Positions and plans --

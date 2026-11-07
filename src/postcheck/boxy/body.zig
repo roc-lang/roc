@@ -1093,6 +1093,18 @@ pub const Builder = struct {
         return try self.materialize(.{ .recipe = try self.recipes.intern(.{ .adapt_plan = .{ .from = from, .to = to } }) });
     }
 
+    /// The local holding the names block of `ty`'s descriptor, which an
+    /// inspection of a value of `ty` reads its labels and tag names from.
+    pub fn namesOf(self: *Builder, ty: TypeId) Allocator.Error!LocalId {
+        return try self.namesIn(try self.descWord(ty));
+    }
+
+    /// The local holding the names block of the type the descriptor word
+    /// `desc` describes.
+    pub fn namesIn(self: *Builder, desc: Word) Allocator.Error!LocalId {
+        return try self.materialize(.{ .recipe = try self.recipes.intern(.{ .names_block = .{ .desc = desc } }) });
+    }
+
     /// Rebuild `src`, of type `from`, into `target`, of type `to`, by their
     /// coercion plan.
     pub fn emitAdapt(self: *Builder, target: LocalId, src: LocalId, from: TypeId, to: TypeId) Allocator.Error!void {
@@ -1283,7 +1295,7 @@ pub const Builder = struct {
         if (self.recipe_locals.get(id)) |known| return known;
         const local = switch (self.recipes.get(id)) {
             .input => |index| return try self.inputLocal(index),
-            .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan => if (try self.readsInputs(id))
+            .desc, .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => if (try self.readsInputs(id))
                 try self.slotLocal(id)
             else
                 try self.staticWordLocal(try self.foldWord(id)),
@@ -1323,7 +1335,7 @@ pub const Builder = struct {
             switch (recipe) {
                 .input => break :walk true,
                 .desc => |desc| if (!self.program.store.isClosed(desc.ty)) break :walk true,
-                .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan => {},
+                .args_desc, .callable, .table, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => {},
             }
             operands.clearRetainingCapacity();
             try Tables.appendOperands(self.allocator, &operands, recipe);
@@ -1355,7 +1367,7 @@ pub const Builder = struct {
         try self.slots.append(self.allocator, id);
         const local = try self.closedLocal(switch (self.recipes.get(id)) {
             .callable => try self.erasedLayout(),
-            .desc, .args_desc, .table, .update_plan, .adapt_plan => .opaque_ptr,
+            .desc, .args_desc, .table, .update_plan, .adapt_plan, .names_block => .opaque_ptr,
             .tag_index, .field_index => .u32,
             .input => invariant("an input has no slot of its own"),
         });
@@ -2539,7 +2551,7 @@ pub const Builder = struct {
                 switch (method) {
                     .is_eq => try self.emitDyn(target, .{ .eq = .{ .lhs = values[0], .rhs = values[1], .desc = try self.varDesc(0) } }),
                     .to_hash => try self.emitDyn(target, .{ .hash = .{ .hasher = values[1], .value = values[0], .desc = try self.varDesc(0) } }),
-                    .to_inspect => try self.emitDyn(target, .{ .inspect = .{ .value = values[0], .desc = try self.varDesc(0) } }),
+                    .to_inspect => try self.emitDyn(target, .{ .inspect = .{ .value = values[0], .desc = try self.varDesc(0), .names = try self.namesIn(try self.inputWord(0)) } }),
                 }
                 break :blk target;
             },
@@ -2921,7 +2933,7 @@ pub const Builder = struct {
                 const value = self.popValue();
                 const expr = self.bodies().expr(fail.expr);
                 const rendered = try self.closedLocal(.str);
-                try self.emitDyn(rendered, .{ .inspect = .{ .value = value, .desc = try self.descOf(fail.value) } });
+                try self.emitDyn(rendered, .{ .inspect = .{ .value = value, .desc = try self.descOf(fail.value), .names = try self.namesOf(fail.value) } });
                 const prefix_text = try std.fmt.allocPrint(self.allocator, "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(", .{self.bodies().text(expr.data.expect_err.snippet)});
                 defer self.allocator.free(prefix_text);
                 const with_value = try self.closedLocal(.str);
@@ -2934,7 +2946,7 @@ pub const Builder = struct {
             .finish_dbg => |ty| {
                 const value = self.popValue();
                 const message = try self.closedLocal(.str);
-                try self.emitDyn(message, .{ .inspect = .{ .value = value, .desc = try self.descOf(ty) } });
+                try self.emitDyn(message, .{ .inspect = .{ .value = value, .desc = try self.descOf(ty), .names = try self.namesOf(ty) } });
                 try self.emitLinear(.{ .debug = .{ .message = message, .next = undefined } });
                 // `dbg` evaluates to `{}`.
                 try self.pushValue(try self.unitValue());

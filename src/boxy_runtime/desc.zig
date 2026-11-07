@@ -42,7 +42,7 @@ pub const Kind = enum(u8) {
     /// A function value: the data pointer of a boxed erased callable.
     erased_callable,
     /// `child` is the backing descriptor, whose layout this one shares;
-    /// `methods` holds the type's overrides and `name` its name.
+    /// `methods` holds the type's overrides.
     nominal,
     /// The box a layout inserts to break a recursive type. `child` is the
     /// payload; inspection, equality, and hashing see through it.
@@ -104,7 +104,8 @@ pub const Flags = packed struct(u8) {
     _: u3 = 0,
 };
 
-/// A field label, tag name, or nominal type name. Static and immortal.
+/// A field label or tag name, which a names block holds (`Names`). Static
+/// and immortal.
 ///
 /// A name's identity is its content (design.md "Name Identity"): the SHA-256
 /// digest of a label's or tag's text, or of a nominal declaration's declaring
@@ -187,7 +188,9 @@ test "a name id round-trips through its digest and tells names apart by content"
     try std.testing.expect(!std.meta.eql(nominalId(@splat(1), 0, "Point"), nominalId(@splat(1), 1, "Point")));
 }
 
-/// An immutable, immortal description of one type's representation.
+/// An immutable, immortal description of one type's representation. It
+/// holds no names: a type's field labels and tag names are in its names block
+/// (`Names`), which only code that prints a value reads.
 pub const TypeDesc = extern struct {
     size: u32,
     /// In bytes.
@@ -211,8 +214,6 @@ pub const TypeDesc = extern struct {
     /// by a u32 count and that many u32 memory-slot indices, in ascending
     /// order, naming exactly its non-padding reference-containing fields.
     entries: ?*const anyopaque,
-    /// A nominal's name.
-    name: ?*const Name,
     /// A nominal's overrides, or a SIMD vector's `to_inspect`.
     methods: ?*const Methods,
 
@@ -299,8 +300,6 @@ pub const Field = extern struct {
     /// `field_index` equals this entry's own index, so walks in semantic
     /// order need no search.
     field_slot: u32,
-    /// Null for tuple elements and padding.
-    name: ?*const Name,
     desc: *const TypeDesc,
 
     pub fn layout(width: PointerWidth) ExternLayout(Field) {
@@ -313,7 +312,6 @@ pub const Variant = extern struct {
     discriminant: u32,
     /// The number of tag arguments.
     payload_count: u32,
-    name: *const Name,
     /// No arguments: a zero-sized descriptor. One: that argument's
     /// descriptor. More: a `.tuple` descriptor whose element `i` is argument
     /// `i`, laid out structurally.
@@ -337,6 +335,44 @@ pub const Methods = extern struct {
 
     pub fn layout(width: PointerWidth) ExternLayout(Methods) {
         return externLayout(Methods, width);
+    }
+};
+
+// Names blocks.
+
+/// The field labels and tag names of one type, parallel to its descriptor
+/// (design.md "Names Blocks"). Only code that reflects over a type reads
+/// one: inspection prints a value's labels and tag names from it. A type
+/// with no record field or tag in its reach has no names block (null), so a
+/// program that prints no value of a type carries none of its names.
+pub const Names = extern struct {
+    /// Record, tuple: one `NamesEntry` per field, in the descriptor's memory
+    /// order. Tag union: one per variant, in discriminant order.
+    entries: ?*const anyopaque,
+    /// A list element's, box or recursion box payload's, or nominal
+    /// backing's names.
+    child: ?*const Names,
+
+    pub fn entry(self: *const Names, index: usize) *const NamesEntry {
+        const first: [*]const NamesEntry = @ptrCast(@alignCast(self.entries.?));
+        return &first[index];
+    }
+
+    pub fn layout(width: PointerWidth) ExternLayout(Names) {
+        return externLayout(Names, width);
+    }
+};
+
+/// One field's or variant's names.
+pub const NamesEntry = extern struct {
+    /// A record field's label or a variant's tag name; null for a tuple
+    /// element or padding.
+    label: ?*const Name,
+    /// The names of the field's type or the variant's payload.
+    names: ?*const Names,
+
+    pub fn layout(width: PointerWidth) ExternLayout(NamesEntry) {
+        return externLayout(NamesEntry, width);
     }
 };
 
@@ -461,7 +497,6 @@ pub fn leaf(kind: Kind, scalar: Scalar, size: u32, alignment: u32, sort_key: Sor
         .discriminant_size = 0,
         .child = null,
         .entries = null,
-        .name = null,
         .methods = null,
     };
 }
@@ -626,19 +661,21 @@ test "descriptor layouts match the native extern layout" {
     try expectNativeLayout(AdaptPlan);
     try expectNativeLayout(AdaptField);
     try expectNativeLayout(AdaptVariant);
+    try expectNativeLayout(Names);
+    try expectNativeLayout(NamesEntry);
 }
 
 test "descriptor layouts at both pointer widths" {
     const t32 = TypeDesc.layout(.u32);
     const t64 = TypeDesc.layout(.u64);
     try std.testing.expectEqual(@as(u32, 24), t32.of(.child));
-    try std.testing.expectEqual(@as(u32, 36), t32.of(.methods));
-    try std.testing.expectEqual(@as(u32, 40), t32.size);
+    try std.testing.expectEqual(@as(u32, 32), t32.of(.methods));
+    try std.testing.expectEqual(@as(u32, 36), t32.size);
     try std.testing.expectEqual(@as(u32, 24), t64.of(.child));
-    try std.testing.expectEqual(@as(u32, 48), t64.of(.methods));
-    try std.testing.expectEqual(@as(u32, 56), t64.size);
-    try std.testing.expectEqual(@as(u32, 24), Field.layout(.u32).size);
-    try std.testing.expectEqual(@as(u32, 32), Field.layout(.u64).size);
-    try std.testing.expectEqual(@as(u32, 16), Variant.layout(.u32).size);
-    try std.testing.expectEqual(@as(u32, 24), Variant.layout(.u64).size);
+    try std.testing.expectEqual(@as(u32, 40), t64.of(.methods));
+    try std.testing.expectEqual(@as(u32, 48), t64.size);
+    try std.testing.expectEqual(@as(u32, 20), Field.layout(.u32).size);
+    try std.testing.expectEqual(@as(u32, 24), Field.layout(.u64).size);
+    try std.testing.expectEqual(@as(u32, 12), Variant.layout(.u32).size);
+    try std.testing.expectEqual(@as(u32, 16), Variant.layout(.u64).size);
 }

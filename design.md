@@ -13980,12 +13980,12 @@ TypeDesc {
     size, alignment, sort_key,
     kind: scalar(int|frac|str|opaque_ptr) | zst | list(item) | box(payload)
         | record(fields) | tag_union(variants) | erased_callable
-        | nominal(backing, methods, inspect name)
+        | nominal(backing, methods)
     contains_refcounted: bool,
     record fields: ordered by memory position, each
-        { field_index, name, offset, desc },
+        { field_index, offset, desc },
     tag union: discriminant offset and width, variants ordered by
-        discriminant, each { name, payload fields as a record },
+        discriminant, each { payload fields as a record },
     methods: optional erased callables for `is_eq`, `to_hash`, `to_inspect`
         overrides, plus their rejected marks,
     presence_slot_present_discriminant: optional, for optional-field slots,
@@ -14000,8 +14000,29 @@ type table is filled, because a table is built per instantiation: the
 position of a tag or field in an open row is a table word (`tag_index`,
 `field_index` recipes, "Type Tables"), computed at compile time from the
 instantiation's closed type, and an immediate operand where the type is
-closed. No code compares a field or tag name at runtime; names are read only
-to print a value (`dyn_inspect`), never to find a component of one.
+closed. No code compares a field or tag name at runtime, and a descriptor
+holds no names at all: a type's labels and tag names are its names block
+("Names Blocks"), which only printing a value reads.
+
+#### Names Blocks
+
+A type's field labels and tag names are its names block
+(`boxy_runtime.desc.Names`), static data parallel to its descriptor: for a
+record or tuple one entry per field in the descriptor's memory order, for a
+tag union one per variant in discriminant order, each the field's label or the
+variant's tag name (none for a tuple element or padding) and the names block
+of the component's type; for a list, box, recursion box, or nominal type the
+names block of its element, payload, or backing. A type with no record field
+or tag in its reach has none (null). Blocks are built by descriptor key, each
+reserved before its components', so a recursive type's block reaches itself.
+
+Only code that reflects over a type reads a names block: `dyn_inspect`
+(`Str.inspect`, `dbg`, and the rendered value of a failed `expect`'s `Err`)
+takes the names block of its descriptor's type as an operand, a `names_block`
+recipe of the body's type table where the type is open and static data where
+it is closed. A derived encoder or decoder names its fields with string
+literals of its own body, and nothing else references a names block, so a
+program that prints no value of a type emits none of that type's names.
 
 Tag descriptors store variants in strict byte-wise name order, the order that
 assigns discriminants, so a variant's discriminant indexes the descriptor's

@@ -916,7 +916,7 @@ pub fn lowerIntrinsic(b: *Builder, intrinsic: checked.IntrinsicId, params: []con
         // The descriptor-guided walkers (design.md "Dynamic Values In LIR").
         .str_inspect => blk: {
             const text = try b.closedLocal(.str);
-            try b.emitDyn(text, .{ .inspect = .{ .value = params[0], .desc = try b.descOf(worker.params[0]) } });
+            try b.emitDyn(text, .{ .inspect = .{ .value = params[0], .desc = try b.descOf(worker.params[0]), .names = try b.namesOf(worker.params[0]) } });
             break :blk text;
         },
         .structural_eq => blk: {

@@ -69,7 +69,8 @@ var name_ok = testName("Ok");
 /// An immortal object a static-data slot addresses.
 const StaticObject = union(enum) {
     desc: *const TypeDesc,
-    name: *const Name,
+    /// The names block of the type `desc` describes (`boxy.Names`).
+    names: struct { names: *const boxy.Names, desc: *const TypeDesc },
     /// A type table whose words address these descriptors.
     table: []const *const TypeDesc,
 };
@@ -190,13 +191,13 @@ const Builder = struct {
         return self.literal(target, .{ .str_literal = try self.store.insertStringView(text, 0, @intCast(text.len)) }, next);
     }
 
-    /// `target` = the address of an immortal object (a static descriptor or
-    /// name), read as static data.
+    /// `target` = the address of an immortal object (a static descriptor,
+    /// names block, or table), read as static data.
     fn static(self: *Builder, target: LocalId, given: StaticObject, next: CFStmtId) TestError!CFStmtId {
         const id: LIR.StaticDataId = @fromBackingInt(@intCast(self.statics.items.len));
         // A table's descriptors outlive the caller's slice of them.
         const object: StaticObject = switch (given) {
-            .desc, .name => given,
+            .desc, .names => given,
             .table => |descs| blk: {
                 const owned = try allocator.dupe(*const TypeDesc, descs);
                 errdefer allocator.free(owned);
@@ -207,7 +208,7 @@ const Builder = struct {
         const cell = try allocator.create(usize);
         cell.* = switch (object) {
             .desc => |desc| @intFromPtr(desc),
-            .name => |name| @intFromPtr(name),
+            .names => |block| @intFromPtr(block.names),
             .table => |descs| blk: {
                 const words = try allocator.alloc(usize, descs.len);
                 try self.tables.append(allocator, words);
@@ -223,8 +224,8 @@ const Builder = struct {
 
     /// The static data of the wasm program: each slot's word addresses its
     /// object, serialized in the descriptor format at the wasm32 pointer
-    /// width: a descriptor and everything it reaches, a name and its text,
-    /// or a table's words and their descriptors, each object once
+    /// width: a descriptor and everything it reaches, a names block and its
+    /// names, or a table's words and their descriptors, each object once
     /// (`WasmObjects`).
     fn wasmStaticData(self: *Builder) TestError![]StaticDataExport {
         var objects: WasmObjects = .{};
@@ -236,7 +237,7 @@ const Builder = struct {
             errdefer allocator.free(slot_name);
             const target = switch (object) {
                 .desc => |desc| try objects.desc(desc),
-                .name => |name| try objects.name(name),
+                .names => |block| try objects.names(block.names, block.desc),
                 .table => |descs| blk: {
                     const bytes = try allocator.alloc(u8, descs.len * wasm_word_size);
                     errdefer allocator.free(bytes);
@@ -296,6 +297,44 @@ const Builder = struct {
             return symbol;
         }
 
+        /// The symbol of the names block `value` of the type `of` describes,
+        /// and of everything it reaches, walked alongside `of`.
+        fn names(self: *WasmObjects, value: *const boxy.Names, of: *const TypeDesc) TestError![]const u8 {
+            if (self.symbols.get(@intFromPtr(value))) |known| return known;
+            const names_layout = boxy.Names.layout(.u32);
+            const bytes = try allocator.alloc(u8, names_layout.size);
+            @memset(bytes, 0);
+            const relocations = try allocator.alloc(StaticDataRelocation, 2);
+            const symbol = try self.add(bytes, names_layout.alignment, relocations);
+            // Reserved first: a recursive type's names block reaches itself.
+            try self.symbols.put(allocator, @intFromPtr(value), symbol);
+            var count: usize = 0;
+            if (value.child) |child| {
+                relocations[count] = .{ .offset = names_layout.of(.child), .target_symbol_name = try self.names(child, of.child.?) };
+                count += 1;
+            }
+            if (value.entries != null) {
+                const entry_layout = boxy.desc.NamesEntry.layout(.u32);
+                const entry_bytes = try allocator.alloc(u8, of.count * entry_layout.size);
+                @memset(entry_bytes, 0);
+                var entry_relocations: std.ArrayList(StaticDataRelocation) = .empty;
+                for (0..of.count) |index| {
+                    const entry = value.entry(index);
+                    const component = if (of.kind == .tag_union) of.variants()[index].payload else of.fields()[index].desc;
+                    const at: u32 = @intCast(index * entry_layout.size);
+                    if (entry.label) |label| try entry_relocations.append(allocator, .{ .offset = at + entry_layout.of(.label), .target_symbol_name = try self.name(label) });
+                    if (entry.names) |child| try entry_relocations.append(allocator, .{ .offset = at + entry_layout.of(.names), .target_symbol_name = try self.names(child, component) });
+                }
+                relocations[count] = .{ .offset = names_layout.of(.entries), .target_symbol_name = try self.add(entry_bytes, entry_layout.alignment, try entry_relocations.toOwnedSlice(allocator)) };
+                count += 1;
+            }
+            const at = for (self.exports.items, 0..) |item, index| {
+                if (item.symbol_name.ptr == symbol.ptr) break index;
+            } else unreachable; // `add` exported the symbol above
+            self.exports.items[at].relocations = try allocator.realloc(relocations, count);
+            return symbol;
+        }
+
         /// The symbol of `value` and of everything it reaches. A `Str` or
         /// function leaf is the native one, whose size is the wasm32 width's
         /// there; every other descriptor is laid out at the wasm32 width
@@ -327,10 +366,6 @@ const Builder = struct {
             var count: usize = 0;
             if (value.child) |child| {
                 relocations[count] = .{ .offset = desc_layout.of(.child), .target_symbol_name = try self.desc(child) };
-                count += 1;
-            }
-            if (value.name) |nominal_name| {
-                relocations[count] = .{ .offset = desc_layout.of(.name), .target_symbol_name = try self.name(nominal_name) };
                 count += 1;
             }
             const entries: ?[]const u8 = switch (value.kind) {
@@ -366,7 +401,6 @@ const Builder = struct {
                 std.mem.writeInt(u32, bytes[at + field_layout.of(.offset) ..][0..4], field.offset, .little);
                 std.mem.writeInt(u32, bytes[at + field_layout.of(.is_padding) ..][0..4], field.is_padding, .little);
                 std.mem.writeInt(u32, bytes[at + field_layout.of(.field_slot) ..][0..4], field.field_slot, .little);
-                if (field.name) |field_name| try relocations.append(allocator, .{ .offset = at + field_layout.of(.name), .target_symbol_name = try self.name(field_name) });
                 try relocations.append(allocator, .{ .offset = at + field_layout.of(.desc), .target_symbol_name = try self.desc(field.desc) });
             }
             if (trailer_words != 0) {
@@ -386,7 +420,6 @@ const Builder = struct {
                 const at: u32 = @intCast(index * variant_layout.size);
                 std.mem.writeInt(u32, bytes[at + variant_layout.of(.discriminant) ..][0..4], variant.discriminant, .little);
                 std.mem.writeInt(u32, bytes[at + variant_layout.of(.payload_count) ..][0..4], variant.payload_count, .little);
-                try relocations.append(allocator, .{ .offset = at + variant_layout.of(.name), .target_symbol_name = try self.name(variant.name) });
                 try relocations.append(allocator, .{ .offset = at + variant_layout.of(.payload), .target_symbol_name = try self.desc(variant.payload) });
             }
             return try self.add(bytes, variant_layout.alignment, try relocations.toOwnedSlice(allocator));
@@ -760,23 +793,25 @@ test "boxy wasm: a generic identity reads its descriptor from its type table" {
 /// Builds `{ a : I64, b : Str }` in a dynamic frame local.
 const RecordFixture = struct {
     record_desc: LocalId,
+    record_names: LocalId,
     record: LocalId,
 
     /// Statements reading the descriptor and building the record, then
     /// `next`.
     fn build(b: *Builder, next_after: fn (*Builder, RecordFixture) TestError!CFStmtId) TestError!CFStmtId {
         const record_desc = try b.local(.opaque_ptr);
+        const record_names = try b.local(.opaque_ptr);
         const record = try b.dynLocal(record_desc, .frame);
         const x = try b.local(.i64);
         const s = try b.local(.str);
-        const fixture: RecordFixture = .{ .record_desc = record_desc, .record = record };
+        const fixture: RecordFixture = .{ .record_desc = record_desc, .record_names = record_names, .record = record };
         const rest = try next_after(b, fixture);
         // Fields in any order; the descriptor orders them by name.
         const desc = b.descs.record(&.{ .{ .name = &name_b, .desc = b.descs.str() }, .{ .name = &name_a, .desc = boxy.desc.scalarDesc(.i64) } });
-        return b.static(record_desc, .{ .desc = desc }, try b.dyn(null, .frame_alloc, try b.int(x, 7, try b.str(s, "hi", try b.dyn(record, .{ .record = .{
+        return b.static(record_desc, .{ .desc = desc }, try b.static(record_names, .{ .names = .{ .names = b.descs.names(desc).?, .desc = desc } }, try b.dyn(null, .frame_alloc, try b.int(x, 7, try b.str(s, "hi", try b.dyn(record, .{ .record = .{
             .desc = record_desc,
             .fields = try b.span(&.{ x, s }),
-        } }, rest)))));
+        } }, rest))))));
     }
 };
 
@@ -856,7 +891,7 @@ const RecordValueProgram = struct {
         const Inspect = struct {
             fn next(builder: *Builder, f: RecordFixture) TestError!CFStmtId {
                 const out = try builder.local(.str);
-                return builder.dyn(out, .{ .inspect = .{ .value = f.record, .desc = f.record_desc } }, try builder.ret(out));
+                return builder.dyn(out, .{ .inspect = .{ .value = f.record, .desc = f.record_desc, .names = f.record_names } }, try builder.ret(out));
             }
         };
         const inspect_proc = try b.proc(&.{}, try RecordFixture.build(b, Inspect.next), .str, .{});

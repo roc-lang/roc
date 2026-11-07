@@ -8611,11 +8611,12 @@ pub const Interpreter = struct {
             },
             .inspect => |i| {
                 const desc = try self.descAt(frame, i.desc);
+                const names: ?*const boxy.desc.Names = @ptrFromInt(try self.localWord(frame, i.names));
                 const value = try self.localBytes(frame, i.value);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 if (crash_boundary.set() != 0) return self.crashError();
-                const rendered = boxy.walk.inspect(desc, value, &self.roc_ops);
+                const rendered = boxy.walk.inspect(desc, names, value, &self.roc_ops);
                 try self.setLocalChecked(frame, stmt_id, target, try self.rocStrToValue(rendered, self.store.getLocal(target).layout_idx), false);
             },
             .view => |v| try self.setComponentTarget(frame, stmt_id, target, @ptrFromInt(try self.localWord(frame, v.address))),

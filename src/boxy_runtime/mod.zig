@@ -18,6 +18,7 @@ pub const TypeDesc = desc.TypeDesc;
 pub const Field = desc.Field;
 pub const Variant = desc.Variant;
 pub const Name = desc.Name;
+pub const Names = desc.Names;
 pub const NameId = desc.NameId;
 pub const labelId = desc.labelId;
 pub const nominalId = desc.nominalId;

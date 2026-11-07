@@ -9557,6 +9557,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             const t = try self.dynTarget(dst);
             try self.emitTargetAddress(t);
             try self.emitProcLocal(i.desc);
+            try self.emitProcLocal(i.names);
             try self.emitBytesAddress(i.value);
             try self.emitBoxyRuntimeCall(.inspect);
             try self.finishTarget(dst, t);

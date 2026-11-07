@@ -1398,7 +1398,10 @@ pub const DynOp = union(enum) {
     /// layout) honoring nominal overrides.
     hash: struct { hasher: LocalId, value: LocalId, desc: LocalId },
     /// `Str.inspect` rendering (target: `Str`) honoring nominal overrides.
-    inspect: struct { value: LocalId, desc: LocalId },
+    /// `names` (an `opaque_ptr` local) is the names block of `desc`'s type,
+    /// which holds its labels and tag names (`boxy_runtime.desc.Names`;
+    /// null for a type with neither).
+    inspect: struct { value: LocalId, desc: LocalId, names: LocalId },
     /// Call the erased callable `closure` in the uniform erased-callable ABI:
     /// `args` holds the complete packed argument block, or is null for no
     /// arguments. A single argument may supply the block directly: its bytes
