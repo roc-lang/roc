@@ -2058,7 +2058,9 @@ pub const Program = struct {
 
     /// The runtime captures of nested procedure site `site_index` of `view`.
     /// A scheme alias owns no value: each of its uses lowers the callable it
-    /// names, whose own captures the site lists, so it takes no capture.
+    /// names, whose own captures the site lists, so it takes no capture. A
+    /// promoted method of a body-declared type, which another local
+    /// procedure refers to, is a top-level procedure and takes none either.
     pub fn runtimeCaptures(self: *Program, view: *const types.ModuleView, site_index: anytype) Allocator.Error![]const checked.CheckedCapture {
         const table = view.view.nested_proc_sites;
         const span = table.sites[site_index].runtime_captures;
@@ -2066,7 +2068,8 @@ pub const Program = struct {
         const bodies = view.bodies();
         var kept: std.ArrayList(checked.CheckedCapture) = .empty;
         for (listed) |capture| {
-            if (bodies.binder(capture.pattern).is_scheme_alias) continue;
+            const binder = bodies.binder(capture.pattern);
+            if (binder.is_scheme_alias or binder.is_promoted) continue;
             try kept.append(self.arena.allocator(), capture);
         }
         return kept.items;

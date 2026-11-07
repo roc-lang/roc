@@ -16692,10 +16692,18 @@ runtime captures list, in ascending CaptureId order (the order of lifted
 capture slots). A lambda that captures nothing itself but calls a local
 procedure therefore differs between two enclosing instantiations whenever that
 procedure's captures do, and a local procedure does not differ on in-scope
-binders it never reads. Two binder kinds in the list contribute no frame
-value: a scheme alias, whose uses lower the callable it names, and a hoisted
-constant's binder, which is a frame local only while its own root lowers and
-is otherwise read through the ConstStore.
+binders it never reads. Only a frame value in the list is read from the
+enclosing frame. A scheme alias contributes none: its uses lower the callable
+it names. Neither does a method of a body-declared type, which a local
+procedure referring to it lists as a source capture (canonicalization leaves
+only a block's own local functions out of capture lists): a promoted method is
+a top-level procedure, and the uses of an unpromoted one (the checked method
+registry's `.local_proc` target) lower the procedure from its declaration
+context, its own runtime captures already in the referring site's list through
+that selection. Boxy reads the same list and builds an unpromoted sibling
+method's capture as that procedure's function value. A hoisted constant's
+binder contributes none either: it is a frame local only while its own root
+lowers and is otherwise read through the ConstStore.
 Stored function evidence remains graph-free across root and cache boundaries.
 Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and

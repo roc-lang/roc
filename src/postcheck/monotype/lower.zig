@@ -46363,7 +46363,7 @@ const BodyContext = struct {
         errdefer bindings.deinit(self.allocator);
         for (captures) |capture| {
             const entry = switch (runtimeCaptureKind(view, capture.pattern)) {
-                .scheme_alias => continue,
+                .scheme_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => declarationContextEntry(context.entries, capture.pattern) orelse continue,
                 .frame_value => declarationContextEntry(context.entries, capture.pattern) orelse
                     Common.invariant("local procedure runtime capture was not bound in its declaration context"),
@@ -46380,17 +46380,41 @@ const BodyContext = struct {
     }
 
     /// How Monotype reads a binder listed in a site's
-    /// `NestedProcSite.runtime_captures`. A scheme alias owns no value: each
-    /// use lowers the callable it names, whose own captures the site already
-    /// lists. A hoisted constant's binder is a frame local only while its own
-    /// root lowers; every other read goes through the ConstStore, so it adds
-    /// nothing the enclosing frame decides.
-    const RuntimeCaptureKind = enum { frame_value, scheme_alias, hoisted_constant };
+    /// `NestedProcSite.runtime_captures`. Only a frame value is read from the
+    /// enclosing frame. A scheme alias owns no value: each use lowers the
+    /// callable it names, whose own captures the site already lists. A
+    /// method of a type declared in a function body is listed when another
+    /// local procedure refers to it, and owns no value either: a promoted one
+    /// is a top-level procedure, and each use of an unpromoted one lowers the
+    /// procedure from its declaration context, whose runtime captures the
+    /// referring site already lists through that selection. A hoisted
+    /// constant's binder is a frame local only while its own root lowers;
+    /// every other read goes through the ConstStore, so it adds nothing the
+    /// enclosing frame decides.
+    const RuntimeCaptureKind = enum { frame_value, scheme_alias, promoted_proc, local_method, hoisted_constant };
 
     fn runtimeCaptureKind(view: ModuleView, binder: BinderId) RuntimeCaptureKind {
-        if (view.bodies.binder(binder).is_scheme_alias) return .scheme_alias;
+        const facts = view.bodies.binder(binder);
+        if (facts.is_scheme_alias) return .scheme_alias;
+        if (facts.is_promoted) return .promoted_proc;
         if (view.hoisted_constants.lookupByPattern(binder) != null) return .hoisted_constant;
+        if (bindsLocalMethod(view, binder)) return .local_method;
         return .frame_value;
+    }
+
+    /// Whether `binder` binds a method of a type declared in one of `view`'s
+    /// function bodies that is a local procedure: the checked method
+    /// registry names it as a `.local_proc` target of this module.
+    fn bindsLocalMethod(view: ModuleView, binder: BinderId) bool {
+        for (view.method_registry.entries) |entry| {
+            const target = entry.target orelse continue;
+            if (target.module_idx != view.module_identity.module_idx) continue;
+            switch (target.kind) {
+                .local_proc => |local| if (local.binder == binder) return true,
+                .procedure, .structural => {},
+            }
+        }
+        return false;
     }
 
     /// The untyped declaration-context entry for `binder`. Context entries
@@ -51531,7 +51555,7 @@ const BodyContext = struct {
         for (captures) |capture_idx| {
             const binder = self.view.bodies.capture(capture_idx).pattern;
             const local = switch (runtimeCaptureKind(self.view, binder)) {
-                .scheme_alias => continue,
+                .scheme_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => self.binders.get(binder) orelse continue,
                 .frame_value => self.binders.get(binder) orelse
                     Common.invariant("closure capture was not bound where the closure is built"),
@@ -51592,7 +51616,7 @@ const BodyContext = struct {
         defer bindings.deinit(self.allocator);
         for (captures) |capture| {
             const local = switch (runtimeCaptureKind(self.view, capture.pattern)) {
-                .scheme_alias => continue,
+                .scheme_alias, .promoted_proc, .local_method => continue,
                 .hoisted_constant => self.binders.get(capture.pattern) orelse continue,
                 .frame_value => self.binders.get(capture.pattern) orelse
                     Common.invariant("nested procedure runtime capture was not bound where the procedure is built"),
