@@ -29010,6 +29010,9 @@ fn reachedSourceRoot(owner: ImportedModuleView, var_: Var) Allocator.Error!?Chec
 /// declarations and binding scheme codec requirements name, and the modules
 /// its export closures reach.
 pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!PublicApiDependencies {
+    // A module that imports nothing and requires nothing of an app names no
+    // module but itself, in its types or its closures.
+    if (owner.direct_import_module_keys.len == 0 and owner.platformRequiredDeclarations().count() == 0) return .{};
     const module_key = owner.key.digest();
     const checked_types = owner.checked_types;
     const module_env = owner.module_env;
