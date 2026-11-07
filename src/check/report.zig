@@ -985,6 +985,17 @@ pub const ReportBuilder = struct {
         self: *Self,
         problem: Problem,
     ) Allocator.Error!Report {
+        var built = try self.buildContent(problem);
+        // A platform requirement the app does not supply is part of the
+        // app's entrypoint contract (`Report.entry_contract`).
+        built.entry_contract = problem == .platform_def_not_found;
+        return built;
+    }
+
+    fn buildContent(
+        self: *Self,
+        problem: Problem,
+    ) Allocator.Error!Report {
         const trace = tracy.trace(@src());
         defer trace.end();
 

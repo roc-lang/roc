@@ -228,11 +228,6 @@ fn importStatementIdx(env: *const ModuleEnv, module_name: []const u8) ?CIR.State
     return @fromBackingInt(@intCast(type_node_idx));
 }
 
-const ModuleValidation = enum {
-    roc_check,
-    checked_module,
-};
-
 /// Compiler stage outputs (parse, canonicalize, typecheck) for a single module.
 pub const CheckedModule = struct {
     module_env: *ModuleEnv,
@@ -747,7 +742,6 @@ fn checkProgram(
             import_module.source,
             false,
             true,
-            .checked_module,
             &.{},
             builtin_env,
             builtin_indices,
@@ -783,7 +777,6 @@ fn checkProgram(
         source,
         roots.inspectWrap(),
         false,
-        .checked_module,
         executable_roots,
         builtin_env,
         builtin_indices,
@@ -1459,7 +1452,6 @@ pub fn parseCheckModule(
     source: []const u8,
     inspect_wrap: bool,
     hosted_transform: bool,
-    validation: ModuleValidation,
     executable_roots: []const ExecutableRootInput,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: CIR.BuiltinIndices,
@@ -1524,10 +1516,7 @@ pub fn parseCheckModule(
 
     var can_timer = try StageTimer.start();
     try czer.canonicalizeFile();
-    switch (validation) {
-        .roc_check => try czer.validateForChecking(),
-        .checked_module => try czer.validateForExplicitRoots(),
-    }
+    try czer.validateForChecking();
     if (hosted_transform) {
         try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
     }
@@ -2107,6 +2096,8 @@ fn moduleDiagnosticsHaveErrors(
     defer check.module_reports.deinit(allocator, &reports);
     try check.module_reports.appendCanonicalize(allocator, &reports, module_env, 0, "repl");
     try check.module_reports.appendTypes(allocator, &reports, module_env, checker, "repl", &.{}, null);
+    // Every module here has its roots requested explicitly.
+    check.module_reports.omitEntryContract(&reports);
     for (reports.items) |report| {
         if (report.severity.isError()) return true;
     }
@@ -2156,6 +2147,8 @@ fn renderCheckedModuleProblemsWithConfig(
     var reports: std.ArrayList(reporting.Report) = .empty;
     defer check.module_reports.deinit(allocator, &reports);
     try check.module_reports.appendModule(allocator, &reports, main.parse_ast, main.module_env, main.checker, filename, &.{});
+    // The program's roots are requested explicitly.
+    check.module_reports.omitEntryContract(&reports);
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();

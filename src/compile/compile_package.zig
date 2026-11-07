@@ -205,9 +205,6 @@ pub const OpenAfterCheckingInputs = struct {
     explicit_roots: []const Checked.ExplicitRootRequestInput = &.{},
     /// Waits on the module's key slots.
     io: std.Io,
-    /// How this module's compile-time roots were established. Part of the
-    /// checked module's cache identity. See `Can.Validation`.
-    validation: Can.Validation = .checking,
     /// What checking the module output beside its solved source.
     inference: check.InferenceOutput,
 };
@@ -459,7 +456,6 @@ pub fn canonicalizeModuleWithSiblings(
     parse_ast: *AST,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: can.CIR.BuiltinIndices,
-    validation: Can.Validation,
     is_entry_module: bool,
     source_pin_version: ?[]const u8,
 ) Allocator.Error!void {
@@ -469,11 +465,10 @@ pub fn canonicalizeModuleWithSiblings(
             .builtin_indices = builtin_indices,
         },
         .compiler_version = source_pin_version,
-        .validation = validation,
         .is_entry_module = is_entry_module,
     });
     try czer.canonicalizeFile();
-    try czer.runValidation();
+    try czer.validateForChecking();
     czer.deinit();
 }
 
@@ -493,7 +488,6 @@ pub fn typeCheckModule(
     platform_requirements: ?Check.PlatformRequirementInput,
     platform_requirement_context: ?Checked.PlatformRequirementContextKey,
     explicit_roots: []const Checked.ExplicitRootRequestInput,
-    validation: Can.Validation,
     source_pin_validation: [32]u8,
     io: std.Io,
     deferred_imports: can.ImportResolution.Imports,
@@ -541,7 +535,7 @@ pub fn typeCheckModule(
         checking_scope.ordinal(requirements.env.contentIdentityHash().?.*)
     else
         null;
-    const inference_key = Checked.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, validation, source_pin_validation, missing_public_types);
+    const inference_key = Checked.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, source_pin_validation, missing_public_types);
     const loaded = if (inference_cache) |cache| try cache.load(inference_key, env, &checking_scope) else null;
     defer if (loaded) |capsule| capsule.deinit();
 
@@ -556,7 +550,6 @@ pub fn typeCheckModule(
         module_builtin_ctx,
     );
     checker.platform_requirements = platform_requirements;
-    checker.validation = validation;
     checker.fixupTypeWriter();
     errdefer checker.deinit();
 
@@ -594,7 +587,6 @@ pub fn typeCheckModule(
             .explicit_roots = explicit_roots,
             .available_modules = available_modules,
             .io = io,
-            .validation = validation,
             .inference = inference,
         },
     );
@@ -630,7 +622,6 @@ pub fn openCheckedModuleAfterChecking(
         .available_modules = inputs.available_modules,
         .platform_requirement_context = inputs.platform_requirement_context,
         .explicit_roots = inputs.explicit_roots,
-        .validation = inputs.validation,
         .outputs = .{ .checked = inputs.inference },
     });
 }

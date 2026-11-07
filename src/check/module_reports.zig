@@ -28,6 +28,22 @@ pub fn deinit(gpa: Allocator, reports: *std.ArrayList(Report)) void {
     reports.deinit(gpa);
 }
 
+/// Removes and frees the reports in `reports` about the module's entrypoint
+/// contract (`Report.entry_contract`), for a module whose roots are requested
+/// explicitly. Every other report keeps its order.
+pub fn omitEntryContract(reports: *std.ArrayList(Report)) void {
+    var kept: usize = 0;
+    for (reports.items) |*item| {
+        if (item.entry_contract) {
+            item.deinit();
+            continue;
+        }
+        reports.items[kept] = item.*;
+        kept += 1;
+    }
+    reports.shrinkRetainingCapacity(kept);
+}
+
 fn appendOwned(gpa: Allocator, reports: *std.ArrayList(Report), built: Report) Allocator.Error!void {
     var owned = built;
     errdefer owned.deinit();

@@ -1,8 +1,8 @@
 //! Regression tests for issue #10940.
 //!
 //! A default app header may expose `main!` without defining it. Checking
-//! reports the missing definition, while explicit-root compilation does not
-//! require the app entrypoint. Neither mode treats it as a compiler invariant.
+//! records the missing definition, and a compilation that requests the app's
+//! roots explicitly does not show it. Neither treats it as a compiler invariant.
 
 const std = @import("std");
 const roc_target = @import("roc_target");
@@ -71,7 +71,7 @@ test "issue 10940: explicit roots do not require a default app entrypoint" {
 
     var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
     defer build_env.deinit();
-    build_env.setEntryValidation(.explicit_roots);
+    build_env.setEntryContract(.omitted);
 
     try build_env.build(main_path);
 
@@ -125,7 +125,7 @@ test "issue 10940: a headerless default app still exposes main! as a root" {
     try std.testing.expect(found_runtime_entrypoint);
 }
 
-test "issue 10940: explicit roots do not automatically root a defined main!" {
+test "issue 10940: omitting the entry contract leaves a defined main! a candidate root" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 
@@ -147,12 +147,17 @@ test "issue 10940: explicit roots do not automatically root a defined main!" {
 
     var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
     defer build_env.deinit();
-    build_env.setEntryValidation(.explicit_roots);
+    build_env.setEntryContract(.omitted);
 
     try build_env.build(main_path);
 
+    // Root requests are the module's command-independent candidates: a
+    // command that requests roots explicitly selects among them when it
+    // reads them, so the checked module is the same under every command.
     const checked = (try build_env.executableRootCheckedModule());
+    var found_runtime_entrypoint = false;
     for ((try checked.rootRequests()).runtime_requests) |root| {
-        try std.testing.expect(root.kind != .runtime_entrypoint);
+        if (root.kind == .runtime_entrypoint) found_runtime_entrypoint = true;
     }
+    try std.testing.expect(found_runtime_entrypoint);
 }

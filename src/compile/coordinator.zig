@@ -185,6 +185,25 @@ const OwnedSemanticModuleData = struct {
     }
 };
 
+/// Whether a module's entrypoint-contract reports (`Report.entry_contract`)
+/// are shown. Checking and canonicalization record them for every module the
+/// same way; whether they are shown is read when reports are emitted, so the
+/// module's checked output is the same under every command.
+pub const EntryContract = enum {
+    shown,
+    /// The module's roots are requested explicitly: `roc test`'s root, or
+    /// an entry module below an owning `main.roc`.
+    omitted,
+
+    /// Whether `report`, a report of a module with this contract, is shown.
+    pub fn shows(self: EntryContract, report: *const Report) bool {
+        return switch (self) {
+            .shown => true,
+            .omitted => !report.entry_contract,
+        };
+    }
+};
+
 /// A superseded checked module whose module id can still appear in
 /// another module's exact dependency scope.
 pub const RetiredCheckedModule = struct {
@@ -666,8 +685,11 @@ pub const ModuleState = struct {
     module_role: ModuleEnv.ModuleRole = .user,
     /// Top-level names that package metadata requires as compile-time roots.
     explicit_root_ident_names: []const []const u8 = &.{},
-    /// Post-canonicalization validation this module receives.
-    validation: can.Can.Validation = .checking,
+    /// Whether this module's entrypoint-contract reports
+    /// (`Report.entry_contract`) are shown. Checking records them for every
+    /// module; a module whose roots are requested explicitly (the root under
+    /// `roc test`, a separate entry module) does not show them.
+    entry_contract: EntryContract = .shown,
     /// Declared source pin from the parse/canonicalization producer.
     has_source_version_pin: bool = false,
     /// Whether this module's source has syntax errors, so later stages work
@@ -3130,8 +3152,8 @@ pub const Coordinator = struct {
         while (pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
             for (pkg.modules.items) |*mod| {
-                for (mod.reports.items) |rep| {
-                    if (rep.severity.isError()) return true;
+                for (mod.reports.items) |*rep| {
+                    if (mod.entry_contract.shows(rep) and rep.severity.isError()) return true;
                 }
             }
         }
@@ -3223,6 +3245,7 @@ pub const Coordinator = struct {
                         if (self.report_idx < mod.reports.items.len) {
                             const report = &mod.reports.items[self.report_idx];
                             self.report_idx += 1;
+                            if (!mod.entry_contract.shows(report)) continue;
                             return .{
                                 .package_name = pkg.name,
                                 .module_name = mod.name,
@@ -3524,7 +3547,6 @@ pub const Coordinator = struct {
                     pkg.root_dir,
                 .module_role = mod.module_role,
                 .depth = mod.depth,
-                .validation = mod.validation,
                 .is_entry_module = self.isEntryModule(pkg, module_id),
                 .discovered = discovered,
             },
@@ -4613,7 +4635,6 @@ pub const Coordinator = struct {
         source: []const u8,
         module_name: []const u8,
         module_role: ModuleEnv.ModuleRole,
-        validation: can.Can.Validation,
         is_entry_module: bool,
     ) [32]u8 {
         return cache_key_mod.canonicalizedModuleCacheKey(.{
@@ -4621,7 +4642,6 @@ pub const Coordinator = struct {
             .module_basename = base.module_path.getModuleBasename(module_name),
             .is_entry_module = is_entry_module,
             .module_role = module_role,
-            .validation = validation,
             .compiler_version = self.compiler_version,
             .entry_version_hash = canonicalized_module_entry_version_hash,
         }).bytes;
@@ -4889,7 +4909,6 @@ pub const Coordinator = struct {
         const cache_key = check.Checked.checkedModuleKeyFromModuleEnv(scratch, current_env, .{
             .imports = task.imported_modules,
             .platform_requirement_context = platform_requirement_context,
-            .validation = task.validation,
         }) catch {
             manager.recordMissFor(.checked);
             return null;
@@ -5015,7 +5034,6 @@ pub const Coordinator = struct {
             .available_modules = task.available_modules,
             .platform_requirement_context = platform_requirement_context,
             .explicit_roots = task.explicit_roots,
-            .validation = task.validation,
             .resolver = self.moduleResolver(),
             .outputs = .{ .stored = .{ .backing = outputs_buffer, .backing_borrowed = true } },
         }) catch {
@@ -5947,7 +5965,6 @@ pub const Coordinator = struct {
                 .available_modules = available_modules,
                 .platform_requirements = platform_surface,
                 .explicit_roots = explicit_roots,
-                .validation = mod.validation,
                 .source_pin_validation = canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version),
                 .qualified_module_name = mod.qualified_name,
                 .replaces_checked_module = mod.checkedModule() != null,
@@ -6552,7 +6569,6 @@ pub const Coordinator = struct {
                 .cached_ast = mod.cached_ast orelse
                     base.invariant("compile.coordinator.enqueueCanonicalizeTask missing cached AST for {s}", .{mod.name}),
                 .depth = mod.depth,
-                .validation = mod.validation,
                 // The parse task keyed its cache probe on this flag, so it is
                 // the flag canonicalization consumes; recomputing it here
                 // could disagree with the key the entry is stored under.
@@ -7057,7 +7073,7 @@ pub const Coordinator = struct {
         const src = source_read.source;
 
         // The stable key names this module's source, basename, entry-module
-        // flag, role, validation mode and compiler compatibility. A declared
+        // flag, role and compiler compatibility. A declared
         // source version pin carries its separate human-version validation
         // stamp in the entry. A hit checks that stamp, then skips parsing and
         // canonicalization entirely.
@@ -7065,7 +7081,6 @@ pub const Coordinator = struct {
             src,
             task.module_name,
             task.module_role,
-            task.validation,
             task.is_entry_module,
         );
         const cached_load = self.tryLoadCanonicalizedModule(task, task_allocs, canonicalized_key, source_read) catch |err| {
@@ -7296,7 +7311,6 @@ pub const Coordinator = struct {
             ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
-            task.validation,
             task.is_entry_module,
             self.source_pin_version,
         );
@@ -7402,7 +7416,6 @@ pub const Coordinator = struct {
             if (task.platform_requirements) |surface| surface.checkerInput() else null,
             if (task.platform_requirements) |surface| surface.context else null,
             task.explicit_roots,
-            task.validation,
             task.source_pin_validation,
             self.roc_ctx.std_io,
             .{ .explicit = task.deferred_imports },
@@ -10795,7 +10808,7 @@ fn inferenceEntriesAfter(
         .check, .build => {},
         .test_command => {
             const pkg = coord.getPackage(coord.app_package_name.?).?;
-            pkg.modules.items[pkg.root_module_id.?].validation = .explicit_roots;
+            pkg.modules.items[pkg.root_module_id.?].entry_contract = .omitted;
         },
         .build_with_explicit_root => {
             var packages = coord.packages.iterator();
@@ -10955,14 +10968,12 @@ test "a module's inference entry does not depend on the command or on modules it
     try std.testing.expect(checked.len >= 5); // The app, A, B, the platform root and Echo.
     try expectSameInferenceEntries(checked, built);
     try expectSameInferenceEntries(checked, explicit);
-    // `roc test` checks the root without its entrypoint contract, which is
-    // an input of the root's checking context (`Can.Validation`) and so of
-    // its entry: every other module's entry is the same file with the same
-    // bytes.
+    // `roc test` omits the root's entrypoint-contract reports, which is no
+    // input of checking: every module's entry, the root's included, is the
+    // same file with the same bytes.
     const tested = try inferenceEntriesAfter(allocator, cache_dirs[4], first_app, .test_command);
     defer freeInferenceEntries(allocator, tested);
-    try std.testing.expectEqual(checked.len, tested.len);
-    try std.testing.expectEqual(checked.len - 1, sharedInferenceEntryCount(checked, tested));
+    try expectSameInferenceEntries(checked, tested);
 
     // A workspace whose B differs: B's entry changes, and so may its
     // importer's; every other module's entry is the same.
@@ -11825,7 +11836,6 @@ test "Coordinator task queue" {
             .package_root = "/test/app",
             .depth = 0,
             .module_role = .user,
-            .validation = .checking,
             .is_entry_module = false,
         },
     });
@@ -11873,7 +11883,6 @@ test "Coordinator isComplete logic" {
             .package_root = "/",
             .depth = 0,
             .module_role = .user,
-            .validation = .checking,
             .is_entry_module = false,
         },
     });
@@ -11920,7 +11929,6 @@ test "Coordinator isComplete with multi_threaded max_threads=0 (inline execution
             .package_root = "/",
             .depth = 0,
             .module_role = .user,
-            .validation = .checking,
             .is_entry_module = false,
         },
     });
@@ -11963,7 +11971,6 @@ test "Coordinator shutdown does not drain buffered tasks" {
                 .package_root = "/",
                 .depth = 0,
                 .module_role = .user,
-                .validation = .checking,
                 .is_entry_module = false,
             },
         });
@@ -12017,7 +12024,6 @@ test "Coordinator shutdown stops spawned workers promptly" {
                 .package_root = "/",
                 .depth = 0,
                 .module_role = .user,
-                .validation = .checking,
                 .is_entry_module = false,
             },
         });

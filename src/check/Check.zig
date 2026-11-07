@@ -485,10 +485,6 @@ current_expect_effect_slot: ?ExpectEffectSlotId = null,
 top_level_ptrns: std.ArrayListUnmanaged(?DefProcessed),
 /// Read-only platform requirement surface used only when checking an app root.
 platform_requirements: ?PlatformRequirementInput = null,
-/// How this module's compile-time roots are established, which decides
-/// whether an app root's entrypoint contract with its platform is enforced
-/// here. See `can.Can.Validation`.
-validation: can.Can.Validation = .checking,
 /// App defs constrained by platform requirements before their bodies are checked.
 platform_required_defs: collections.DenseMapUnmanaged(CIR.Def.Idx, PlatformRequiredDef) = .empty,
 /// One row per platform requirement that resolved to an exported app def, in
@@ -1709,7 +1705,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .current_expect_effect_slot = .lexical,
     .top_level_ptrns = .keyed,
     .platform_requirements = .input,
-    .validation = .input,
     .platform_required_defs = .keyed,
     .platform_requirement_solutions = .keyed,
     .local_processing_ptrns = .lexical,
@@ -18840,11 +18835,9 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
         defer if (identity_vars_owned) self.gpa.free(instantiated.identity_vars);
 
         const def_idx = self.exposedAppDefByIdent(required_ident) orelse {
-            // Without the entrypoint contract, an unsupplied requirement is
-            // simply unbound: the requirements that the app does supply still
-            // constrain those definitions.
-            if (self.validation == .explicit_roots) continue;
-
+            // An unsupplied requirement is unbound: the requirements the app
+            // does supply still constrain those definitions. Its problem is
+            // part of the app's entrypoint contract (`Report.entry_contract`).
             const top_level_def = self.topLevelDefByIdent(required_ident);
             const app_region = if (top_level_def) |def_idx|
                 self.defPatternRegion(def_idx)

@@ -499,8 +499,8 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
 }
 
 /// The digest of the checking inputs of a module that its imports' and its
-/// app pairing's implementations do not reach: its imports' names, explicit
-/// validation mode and platform requirement context.
+/// app pairing's implementations do not reach: its imports' names and
+/// platform requirement context.
 pub fn checkingContextPolicyHash(identity: CheckingContextIdentity) [32]u8 {
     var hasher = base.Sha256.init(.{});
     hashCheckingContextPolicy(&hasher, identity, false);
@@ -533,7 +533,6 @@ fn hashCheckingContextPolicy(hasher: *base.Sha256, identity: CheckingContextIden
             hasher.update(&[_]u8{0});
         }
     }
-    hashByteSlice(hasher, @tagName(identity.validation));
 }
 
 fn hashDirectImportModuleKeys(keys: []const CheckedModuleKey) [32]u8 {
@@ -577,19 +576,12 @@ pub const CheckingContextIdentity = struct {
     imports: []ImportIdentity = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
-    /// How the module's compile-time roots were established. An app root
-    /// checked without its entrypoint contract reports no problem for a
-    /// platform requirement it does not supply, so two compilations of the
-    /// same source that disagree here produce different checked output and
-    /// must not share a cache entry.
-    validation: can.Can.Validation = .checking,
 
     pub fn fromModule(
         allocator: Allocator,
         module_env: *const ModuleEnv,
         checked_imports: []const CheckedImport,
         platform_requirement_context: ?PlatformRequirementContextKey,
-        validation: can.Can.Validation,
     ) Allocator.Error!CheckingContextIdentity {
         const imported_names = module_env.imports.imports.items.items;
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
@@ -610,7 +602,6 @@ pub const CheckingContextIdentity = struct {
         return .{
             .imports = imports,
             .platform_requirement_context = platform_requirement_context,
-            .validation = validation,
         };
     }
 
@@ -763,7 +754,6 @@ pub const OpenInputs = struct {
     available_modules: []const ImportedModuleView = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
-    validation: can.Can.Validation = .checking,
     /// The modules the module's analyses resolve. Null resolves exactly
     /// `imports` and `available_modules`.
     resolver: ?ModuleResolver = null,
@@ -1321,7 +1311,6 @@ fn moduleRootRequests(allocator: Allocator, owner: ImportedModuleView) Allocator
         &(try owner.checkedTables()).top_level_procedure_bindings,
         context.platform_app_relation,
         owner.platformRequiredDeclarations(),
-        context.validation,
     );
 
     for (owner.platform_required_bindings.bindings, 0..) |binding, i| {
@@ -2527,7 +2516,6 @@ fn appendEntrypointRootRequests(
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_app_relation: ?PlatformAppRelationKey,
     platform_required_declarations: PlatformRequiredDeclarationTable,
-    validation: can.Can.Validation,
 ) Allocator.Error!void {
     const provided_runtime_roots_ready = module_env.module_kind != .platform or
         platform_required_declarations.count() == 0 or
@@ -2557,17 +2545,15 @@ fn appendEntrypointRootRequests(
     }
 
     switch (module_env.module_kind) {
-        .default_app, .app => if (validation == .checking) {
-            try appendExposedAppProcedureRoots(
-                requests,
-                allocator,
-                module_idx,
-                module_env,
-                bodies,
-                top_level_values,
-                top_level_procedure_bindings,
-            );
-        },
+        .default_app, .app => try appendExposedAppProcedureRoots(
+            requests,
+            allocator,
+            module_idx,
+            module_env,
+            bodies,
+            top_level_values,
+            top_level_procedure_bindings,
+        ),
         .type_module,
         .package,
         .platform,
@@ -9203,7 +9189,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     };
     _ = try names.internModuleIdentity(&module_identity.stable_hash);
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, .checking);
+    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null);
     defer checking_context_identity.deinit(allocator);
     const module_key = CheckedModuleKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
@@ -33629,7 +33615,6 @@ pub fn loweringViewWithRelations(
 pub const CheckedModuleKeyInputs = struct {
     imports: []const CheckedImport = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
-    validation: can.Can.Validation = .checking,
 };
 
 /// Compute the checked module cache identity for a module environment whose
@@ -33668,7 +33653,6 @@ pub const CheckedModuleIdentity = struct {
             module_env,
             inputs.imports,
             inputs.platform_requirement_context,
-            inputs.validation,
         );
         errdefer checking_context_identity.deinit(allocator);
         const direct_import_module_keys = try directImportModuleKeysFromModule(allocator, module_env, inputs.imports);
@@ -33700,7 +33684,6 @@ pub fn inferenceKeyFromModuleEnv(
     module_env: *const ModuleEnv,
     scope_hash: [32]u8,
     platform_requirement_owner: ?u32,
-    validation: can.Can.Validation,
     source_pin_validation: [32]u8,
     missing_public_types: []const []const u8,
 ) [32]u8 {
@@ -33715,7 +33698,6 @@ pub fn inferenceKeyFromModuleEnv(
         hasher.update(&.{1});
         hashU32(&hasher, owner);
     } else hasher.update(&.{0});
-    hashByteSlice(&hasher, @tagName(validation));
     hasher.update(&source_pin_validation);
     const imports = module_env.imports.imports.items.items;
     hashU32(&hasher, @intCast(imports.len));
@@ -34258,7 +34240,6 @@ pub fn openCheckedModule(
     var identity = try CheckedModuleIdentity.compute(allocator, module_env, .{
         .imports = inputs.imports,
         .platform_requirement_context = inputs.platform_requirement_context,
-        .validation = inputs.validation,
     });
     errdefer identity.deinit(allocator);
 

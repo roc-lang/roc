@@ -3903,8 +3903,7 @@ retain an owning AST pointer while a worker consumes it.
 
 Canonicalization of a module is a pure function of these inputs and nothing
 else: the module's source bytes, its module basename (the file name, which a
-type module's main type must match), the entry-module flag, the `Validation`
-mode, the module role (whether the file is the compiler's own builtin source),
+type module's main type must match), the entry-module flag, the module role (whether the file is the compiler's own builtin source),
 and the compiler itself (its version string and its baked `Builtin` module). It
 never reads another user module's environment, the workspace's package names or
 shorthands, whether the module's package is a platform, the resolution outcome
@@ -4103,7 +4102,7 @@ applied to the env after the canonicalized-cache boundary, before the drain.
 
 The canonicalized module cache stores one module's parse-and-canonicalize
 output, keyed by the SHA-256 of exactly the inputs above: the module's source
-bytes, its module basename, the entry-module flag, the `Validation` mode, the
+bytes, its module basename, the entry-module flag, the
 module role, the compiler version string, and the cache entry format's version
 hash. Every variable-length input is length-prefixed, so no two different
 inputs can split into the same hash input. Nothing about imports, packages,
@@ -4343,8 +4342,8 @@ the explicitly rejected edges described under Module Completion Boundary.
 
 The inference-result cache stores the solved source environment together with
 the checker-selected commit inputs, before evaluation. Its key includes
-the module's own source inputs, validation (including the source-pin
-validation input canonicalization reported against) and resolution context,
+the module's own source inputs, the source-pin validation input
+canonicalization reported against, the resolution context,
 and the checking dependencies it consumed. Serialized references retain their explicit
 owner and declaration bindings; admission must establish those bindings against
 the current dependency commits. Equality of a signature, a name or an
@@ -4532,18 +4531,22 @@ emitted code, symbol names and compile-time values, so a compiler edit that chan
 them. Keeping different compiler builds' caches apart is the job of the cache
 directory alone: every cache lives under `compat-<id>`, which already names
 the build more finely than any key could. The checking context identity includes import-name
-hashes, resolved import ids, platform requirement context, and validation
-mode, and is computed with the id by one function
+hashes, resolved import ids and platform requirement context, and is computed with the id by one function
 (`CheckedModuleIdentity.compute`), which both a cache probe and opening the
 module call. The root requests a command makes of a module by name select
 among the module's checked compile-time root candidates when its root
 requests are read (`ModuleAnalyses.explicit_roots`), so they are not part of
-it, and `check`, `build` and a REPL share one checked entry for every module.
-`roc test` shares every module's entry except its root's: it checks the root
-under the `explicit_roots` validation mode, which does not check an app's
-entrypoint contract with its platform, and the validation mode is part of the
-checking context identity, so the root's checked entry and inference entry
-under `roc test` differ from the ones the other commands write. A reusable platform module has no app relation in this identity.
+it, and every command (`check`, `build`, `run`, `test` and a REPL) shares one
+checked entry and one inference entry for every module, the root included.
+Canonicalization and checking validate every module the same way: a
+headerless file that is neither a type module nor a default app is a plain
+module exposing its top-level types, and an app that lacks a definition its
+header exposes or its platform requires has that requirement unbound. Each
+records its problem. Those problems are the module's entrypoint contract
+(`Report.entry_contract`); a command that requests a module's roots
+explicitly (the root under `roc test`, an entry module below an owning
+`main.roc`) does not show them for that module, which is decided when
+reports are emitted (`compile.coordinator.EntryContract`), never by checking. A reusable platform module has no app relation in this identity.
 Generated code has a separate identity that includes the exact platform/app
 relation; specialization keys use that identity while
 local checked references retain their immutable module owner. The checked
@@ -5390,10 +5393,8 @@ A reference into another module reads that module's own recorded
 declares a type reached through the imports, and it is checked first. Its
 binding resolutions are part of its checking interface (what an importer's
 inference cache entry is keyed by), so the recorded resolution is a function
-of the module and of what its imports fix, and of nothing a workspace or a
-module it does not import decides. The one input a command chooses is the
-module's validation mode, part of its checking context: `roc test` checks its
-root module under `explicit_roots` ("Cache Boundary"). Lowering reads the
+of the module and of what its imports fix, and of nothing a command, a
+workspace or a module it does not import decides. Lowering reads the
 resolution through the module's resolved value references (`valueRefs`),
 the callable-eval templates' `forwarded_lookup` and
 the checked-error procedure bindings. The resolved value references are part
@@ -15255,9 +15256,9 @@ executable, so it adds what `roc build` adds, and `roc build`
 adds exactly the module objects still missing (`compile.boxy_object_cache`,
 the `boxy_object` family); a wasm build adds its target's units beside the
 native ones (Fast Dev Link, "Wasm unit images").
-`roc test` checks its root for explicit test roots
-(`Validation.explicit_roots`), which is its own check under either strategy,
-and with `--specialize=no` it leaves exactly what that check leaves plus,
+`roc test` checks every module as `roc check` does and requests its test
+roots explicitly; with `--specialize=no` it leaves exactly what `roc check`
+leaves plus,
 when it runs its roots from test units (Unit-Image Test Execution), the test
 units it built; it writes no test outcomes under either strategy.
 `cachesPostCheckWork` is the policy of lowered output, packs
