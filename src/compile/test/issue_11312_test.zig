@@ -58,19 +58,19 @@ fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr
     }
     try std.testing.expectEqual(@as(usize, 1), mismatches);
 
-    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
+    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
     var found_blocked = false;
     var found_good = false;
     var found_fine = false;
     const store = &artifact.moduleEnvConst().store;
-    for (artifact.compile_time_roots.roots) |root| {
+    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
         const root_node = if (root.literalNode()) |literal| literal.node() else @backingInt(root.rootExpr());
         const region = store.getNodeRegion(@fromBackingInt(root_node));
         const expr_source = module_source[region.start.offset..region.end.offset];
         if (std.mem.eql(u8, expr_source, blocked_expr)) {
             if (root.kind != .expect) {
-                try std.testing.expect(root.payload == .const_node);
-                try std.testing.expect(artifact.const_store.get(root.payload.const_node) == .checked_error);
+                try std.testing.expect(artifact.evaluation.rootPayload(root.id) == .const_node);
+                try std.testing.expect(artifact.evaluation.const_store.get(artifact.evaluation.rootPayload(root.id).const_node) == .checked_error);
             }
             found_blocked = true;
         }
@@ -78,8 +78,8 @@ fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr
         const is_fine = std.mem.eql(u8, expr_source, "helper(1.U64)");
         if (is_good or is_fine) {
             try std.testing.expectEqual(.eligible, root.request_eligibility);
-            try std.testing.expect(root.payload == .const_node);
-            try std.testing.expect(artifact.const_store.get(root.payload.const_node) != .checked_error);
+            try std.testing.expect(artifact.evaluation.rootPayload(root.id) == .const_node);
+            try std.testing.expect(artifact.evaluation.const_store.get(artifact.evaluation.rootPayload(root.id).const_node) != .checked_error);
             found_good = found_good or is_good;
             found_fine = found_fine or is_fine;
         }

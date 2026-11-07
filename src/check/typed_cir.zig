@@ -23,7 +23,8 @@ const OwnedCheckedModule = struct {
     owned_source: ?[]u8 = null,
 };
 
-const ModuleData = struct {
+/// One module of a `Modules` set: its environment and how the set owns it.
+pub const ModuleData = struct {
     env: *ModuleEnv,
     top_level_defs_by_ident: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx) = .{},
     ownership: union(enum) {
@@ -31,6 +32,16 @@ const ModuleData = struct {
         owned_checked: OwnedCheckedModule,
         owned_cached: CachedModule,
     },
+
+    /// The data of a module only read through `Module.readOnly`. A `Module`
+    /// reads its environment and never writes it, and nothing indexes the
+    /// module's top-level definitions by name.
+    pub fn readOnly(env: *const ModuleEnv) ModuleData {
+        return .{
+            .env = @constCast(env),
+            .ownership = .borrowed,
+        };
+    }
 
     fn initBorrowed(env: *ModuleEnv) ModuleData {
         return .{
@@ -111,21 +122,26 @@ pub const Modules = struct {
     /// The graph for a single root module plus its imports, with the root's index.
     pub const RootModules = struct { modules: Modules, module_idx: u32 };
 
+    /// The index of `root_env` in the module set `initForRootModule` builds
+    /// for it and `imported_envs`.
+    pub fn rootModuleIdx(root_env: *const ModuleEnv, imported_envs: []const *ModuleEnv) u32 {
+        var imported_source_count: u32 = 0;
+        for (imported_envs) |imported_env| {
+            if (root_env.module_role == .builtin and imported_env.module_role == .builtin) continue;
+            imported_source_count += 1;
+        }
+        return imported_source_count;
+    }
+
     /// Build the `Modules` graph for `root_env` plus `imported_envs`, returning the
-    /// root's `module_idx`. A builtin root does not re-include builtin imports. This is
-    /// the one place the "source-modules + `init`" dance lives, shared by the publish
-    /// and cache-key paths so a single graph can be built once and reused (e.g. for both
-    /// the cache-key probe and, on a miss, the republish) instead of rebuilt per call.
+    /// root's `module_idx` (`rootModuleIdx`). A builtin root does not re-include
+    /// builtin imports.
     pub fn initForRootModule(
         allocator: Allocator,
         root_env: *ModuleEnv,
         imported_envs: []const *ModuleEnv,
     ) Allocator.Error!RootModules {
-        var imported_source_count: usize = 0;
-        for (imported_envs) |imported_env| {
-            if (root_env.module_role == .builtin and imported_env.module_role == .builtin) continue;
-            imported_source_count += 1;
-        }
+        const imported_source_count: usize = rootModuleIdx(root_env, imported_envs);
 
         const source_modules = try allocator.alloc(SourceModule, imported_source_count + 1);
         defer allocator.free(source_modules);
@@ -223,6 +239,12 @@ pub const Module = struct {
 
     fn env(self: @This()) *ModuleEnv {
         return self.data_store.env;
+    }
+
+    /// A view over a sealed module outside a module set, at index
+    /// `module_idx`.
+    pub fn readOnly(allocator: Allocator, module_idx: u32, data: *ModuleData) Module {
+        return .{ .allocator = allocator, .module_idx = module_idx, .data_store = data };
     }
 
     pub fn moduleIndex(self: @This()) u32 {

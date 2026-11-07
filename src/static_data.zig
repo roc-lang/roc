@@ -14,14 +14,13 @@ const lir = @import("lir");
 const roc_target = @import("roc_target");
 
 const Allocator = std.mem.Allocator;
-const Checked = check.CheckedArtifact;
-const CheckedModule = check.CheckedModule;
+const Checked = check.Checked;
 const GuardedList = @import("collections").GuardedList;
 
 pub const StaticDataSymbolId = lir.Program.StaticDataSymbolId;
 pub const StaticDataExport = lir.Program.StaticDataExport;
 pub const StaticDataRelocation = lir.Program.StaticDataRelocation;
-pub const EmptyListCapacity = lir.Program.EmptyListCapacity;
+pub const EvaluatedCapacity = lir.Program.EvaluatedCapacity;
 
 /// Deterministic cross-object symbol for an atomic generated RC helper.
 pub fn atomicRcHelperSymbolName(allocator: Allocator, layouts: *const layout.Store, helper: layout.RcHelperKey) Allocator.Error![]u8 {
@@ -432,7 +431,7 @@ const StaticInitializerMachine = struct {
     /// input holds.
     fn constStoreOf(self: *const StaticInitializerMachine, module: Checked.ModuleId) *const Checked.ConstStore {
         const root = self.modules.root orelse staticDataInvariant("stored static data had no root checked module");
-        if (std.mem.eql(u8, &root.module.key.bytes, &module.bytes)) return &root.module.const_store;
+        if (std.mem.eql(u8, &root.module.key.bytes, &module.bytes)) return &root.module.evaluation.const_store;
         for (root.relation_modules) |view| {
             if (std.mem.eql(u8, &view.key.bytes, &module.bytes)) return view.const_store;
         }
@@ -1353,6 +1352,16 @@ const StaticInitializerMachine = struct {
             if (target.tag != .list and target.tag != .list_of_zst) staticDataInvariant("static initializer list_with_capacity had non-list target layout");
             return self.storedListValue(target_layout, 0, null);
         }
+        // A restored empty string evaluated with room is
+        // `str_with_capacity(n)` (`constEmptyStrData`), and freezes as the
+        // empty string for the same reason.
+        if (op == .str_with_capacity) {
+            if (target_layout != .str) staticDataInvariant("static initializer str_with_capacity had non-string target layout");
+            const result = try self.newValue(target_layout);
+            const roc_str_size = self.word_size * builtins.str.RocStr.word_count;
+            result.bytes[roc_str_size - 1] = builtins.str.RocStr.smallStrFlagByte(0);
+            return result;
+        }
         if (op != .box_box) {
             staticDataInvariant("non-construction low-level operation reached static initializer materialization");
         }
@@ -1480,7 +1489,7 @@ pub fn buildStaticDataForWidth(
 ) MaterializationError![]StaticDataExport {
     @import("base").dev_diagnostics.countTestWork(.static_data, 1);
     const root = modules.root orelse {
-        if (hasProvidedData(modules)) staticDataInvariant("provided data exports require a root checked module");
+        if (try hasProvidedData(modules)) staticDataInvariant("provided data exports require a root checked module");
         if (lowered) |lowered_program| {
             if (lowered_program.lir_result.static_data_values.items.len != 0) {
                 staticDataInvariant("internal static data values require a root checked module");
@@ -1489,7 +1498,7 @@ pub fn buildStaticDataForWidth(
         return try allocator.alloc(StaticDataExport, 0);
     };
     const lowered_program = lowered orelse {
-        if (moduleHasProvidedData(root.module)) staticDataInvariant("static data exports require LIR layout output");
+        if (try moduleHasProvidedData(root.module)) staticDataInvariant("static data exports require LIR layout output");
         return try allocator.alloc(StaticDataExport, 0);
     };
 
@@ -1505,7 +1514,7 @@ pub fn deinitStaticData(allocator: Allocator, exports: []StaticDataExport) void 
         allocator.free(static_export.bytes);
         deinitRelocationSlice(allocator, static_export.relocations);
         allocator.free(static_export.relocations);
-        allocator.free(static_export.empty_list_capacities);
+        allocator.free(static_export.capacities);
     }
     allocator.free(exports);
 }
@@ -1520,7 +1529,7 @@ pub fn cloneStaticData(allocator: Allocator, exports: []const StaticDataExport) 
             allocator.free(item.bytes);
             deinitRelocationSlice(allocator, item.relocations);
             allocator.free(item.relocations);
-            allocator.free(item.empty_list_capacities);
+            allocator.free(item.capacities);
         }
         allocator.free(result);
     }
@@ -1541,12 +1550,12 @@ pub fn cloneStaticData(allocator: Allocator, exports: []const StaticDataExport) 
             copy.owns_target_symbol_name = true;
             copied += 1;
         }
-        const capacities = try allocator.dupe(EmptyListCapacity, source.empty_list_capacities);
+        const capacities = try allocator.dupe(EvaluatedCapacity, source.capacities);
         dest.* = source;
         dest.symbol_name = name;
         dest.bytes = bytes;
         dest.relocations = relocations;
-        dest.empty_list_capacities = capacities;
+        dest.capacities = capacities;
         completed += 1;
     }
     return result;
@@ -1559,7 +1568,7 @@ fn deinitRelocationSlice(allocator: Allocator, relocations: []const StaticDataRe
 }
 
 /// Merges the identical nodes of a frozen image. Two non-root symbols with
-/// the same bytes, alignment, symbol offset, empty-list capacities and
+/// the same bytes, alignment, symbol offset, evaluated capacities and
 /// relocations, relocation targets compared as the nodes they resolve to,
 /// become one, and every relocation that named the dropped node names the
 /// kept one; merging nodes can make their parents identical, so the merge
@@ -1632,7 +1641,7 @@ pub fn mergeIdenticalNodes(allocator: Allocator, exports: []StaticDataExport) Al
             allocator.free(item.bytes);
             deinitRelocationSlice(allocator, item.relocations);
             allocator.free(item.relocations);
-            allocator.free(item.empty_list_capacities);
+            allocator.free(item.capacities);
             continue;
         }
         for (@constCast(item.relocations)) |*relocation| {
@@ -1666,7 +1675,7 @@ fn nodeContentHash(item: StaticDataExport) u64 {
     hasher.update(item.bytes);
     hasher.update(std.mem.asBytes(&item.alignment));
     hasher.update(std.mem.asBytes(&item.symbol_offset));
-    for (item.empty_list_capacities) |capacity| {
+    for (item.capacities) |capacity| {
         hasher.update(std.mem.asBytes(&capacity.offset));
         hasher.update(std.mem.asBytes(&capacity.capacity));
     }
@@ -1687,8 +1696,8 @@ fn nodeContentHash(item: StaticDataExport) u64 {
 fn nodesIdentical(a: StaticDataExport, b: StaticDataExport, canonical: []const u32) bool {
     if (a.alignment != b.alignment or a.symbol_offset != b.symbol_offset or a.is_global != b.is_global) return false;
     if (!std.mem.eql(u8, a.bytes, b.bytes)) return false;
-    if (a.empty_list_capacities.len != b.empty_list_capacities.len) return false;
-    for (a.empty_list_capacities, b.empty_list_capacities) |x, y| {
+    if (a.capacities.len != b.capacities.len) return false;
+    for (a.capacities, b.capacities) |x, y| {
         if (x.offset != y.offset or x.capacity != y.capacity) return false;
     }
     if (a.relocations.len != b.relocations.len) return false;
@@ -1900,7 +1909,7 @@ const StaticDataBuilder = struct {
     }
 
     fn buildProvidedExports(self: *StaticDataBuilder) MaterializationError!void {
-        for (self.root.module.provided_exports.exports, 0..) |provided, provided_index| {
+        for ((try self.root.module.providedExports()).exports, 0..) |provided, provided_index| {
             const data = switch (provided) {
                 .data => |data| data,
                 .procedure, .checked_error => continue,
@@ -1910,7 +1919,7 @@ const StaticDataBuilder = struct {
             const request = self.requestedLayout(data.const_ref);
             const initializer = request.initializer orelse
                 staticDataInvariant("provided static data export had no closed LIR initializer");
-            const entrypoint_name = self.root.module.canonical_names.externalSymbolNameText(data.ffi_symbol);
+            const entrypoint_name = self.root.module.nameStore().externalSymbolNameText(data.ffi_symbol);
             const symbol_name = try self.allocator.dupe(u8, entrypoint_name);
             errdefer self.allocator.free(symbol_name);
 
@@ -1985,7 +1994,7 @@ const StaticDataBuilder = struct {
         return @intCast(self.lowered.lir_result.static_data_values.items.len + self.lowered.lir_result.requested_layouts.items.len + index);
     }
 
-    fn requestedLayout(self: *StaticDataBuilder, const_locator: CheckedModule.ConstLocator) lir.Program.RequestedLayout {
+    fn requestedLayout(self: *StaticDataBuilder, const_locator: Checked.ConstLocator) lir.Program.RequestedLayout {
         for (self.lowered.lir_result.requested_layouts.items) |request| {
             const request_locator = request.const_locator orelse continue;
             if (std.meta.eql(request_locator, const_locator) and request.initializer != null) return request;
@@ -2246,8 +2255,8 @@ const StaticDataBuilder = struct {
     }
 };
 
-fn moduleHasProvidedData(module: *const Checked.CheckedModuleArtifact) bool {
-    for (module.provided_exports.exports) |provided| {
+fn moduleHasProvidedData(module: *const Checked.CheckedModule) Allocator.Error!bool {
+    for ((try module.providedExports()).exports) |provided| {
         switch (provided) {
             .data => return true,
             .procedure, .checked_error => {},
@@ -2256,9 +2265,9 @@ fn moduleHasProvidedData(module: *const Checked.CheckedModuleArtifact) bool {
     return false;
 }
 
-fn hasProvidedData(modules: ModuleViews) bool {
+fn hasProvidedData(modules: ModuleViews) Allocator.Error!bool {
     if (modules.root) |root| {
-        if (moduleHasProvidedData(root.module)) return true;
+        if (try moduleHasProvidedData(root.module)) return true;
     }
     return false;
 }

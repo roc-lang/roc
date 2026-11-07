@@ -32,7 +32,7 @@ const Codec = @import("codec.zig");
 const body = @import("body.zig");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const ExprId = check.CheckedBodies.ExprId;
 const LIR = lir_core.LIR;
 const LirProgram = lir_core.Program;
@@ -332,6 +332,15 @@ const Encoder = struct {
         try appendWord(self.allocator, &self.bytes, value);
     }
 
+    /// A template or compile-time root identity, as four words, low first.
+    fn wide(self: *Encoder, value: u128) Allocator.Error!void {
+        var remaining = value;
+        for (0..4) |_| {
+            try self.word(@truncate(remaining));
+            remaining >>= 32;
+        }
+    }
+
     fn tag(self: *Encoder, value: Tag) Allocator.Error!void {
         try self.bytes.append(self.allocator, @backingInt(value));
     }
@@ -480,7 +489,7 @@ const Encoder = struct {
             .template => |key| {
                 try self.tag(.template);
                 try self.module(key.module);
-                try self.word(@backingInt(key.template));
+                try self.wide(@backingInt(key.template));
             },
             .lambda => |key| {
                 try self.tag(.lambda);
@@ -512,7 +521,7 @@ const Encoder = struct {
             .root_slot => |key| {
                 try self.tag(.root_slot);
                 try self.module(key.module);
-                try self.word(@backingInt(key.root));
+                try self.wide(@backingInt(key.root));
                 try self.typeOf(record.ret);
             },
             .structural => |method| {
@@ -577,6 +586,13 @@ const Decoder = struct {
 
     fn word(self: *Decoder) u32 {
         return std.mem.readInt(u32, self.take(4)[0..4], .little);
+    }
+
+    /// A template or compile-time root identity (`Encoder.wide`).
+    fn wide(self: *Decoder) u128 {
+        var value: u128 = 0;
+        for (0..4) |index| value |= @as(u128, self.word()) << @intCast(32 * index);
+        return value;
     }
 
     fn byte(self: *Decoder) u8 {
@@ -694,7 +710,7 @@ const Decoder = struct {
         switch (tag) {
             .template => {
                 const module_index = self.module();
-                return try program.templateWorker(module_index, @fromBackingInt(self.word()));
+                return try program.templateWorker(module_index, @fromBackingInt(self.wide()));
             },
             .lambda => {
                 const expr: ExprId = @fromBackingInt(self.word());
@@ -724,10 +740,9 @@ const Decoder = struct {
             // stored now, and the root's wrapper restores it.
             .root_slot => {
                 const module_index = self.module();
-                const root: checked.ComptimeRootId = @fromBackingInt(self.word());
+                const root: checked.ComptimeRootKey = @fromBackingInt(self.wide());
                 _ = self.typeOf();
-                const wrapper = program.wrapper_by_root.get(.{ .module = module_index, .root = root }) orelse
-                    invariant("a literal argument root has no entry wrapper");
+                const wrapper = program.rootWrapper(module_index, root);
                 return try program.methodEntryWorker(try program.templateRefWorker(wrapper));
             },
             .structural => {

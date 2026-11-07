@@ -6762,7 +6762,7 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
 
         // A destructuring def in a plain module exposes each exposed name it
         // binds. The exposed item points at the name's binder pattern: its var
-        // is the name's type, and the checked artifact publishes the name's
+        // is the name's type, and the checked module publishes the name's
         // extraction root under it.
         if (!self.destructuredNamesAreExposable()) continue;
         binders.clearRetainingCapacity();

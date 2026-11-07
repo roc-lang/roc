@@ -19,7 +19,7 @@ const roc_target = @import("roc_target");
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const RocTarget = roc_target.RocTarget;
-const checked = check.CheckedArtifact;
+const checked = check.Checked;
 
 /// Individual link item from a targets section.
 /// Can be a file path (relative to files/ directory) or a special identifier.
@@ -358,7 +358,7 @@ pub const TargetsConfigDiagnostic = union(enum) {
 };
 
 /// Link specification for a single target.
-/// Contains the artifact kind and the ordered list of items to link for this target.
+/// Contains the module kind and the ordered list of items to link for this target.
 pub const TargetLinkSpec = struct {
     target: RocTarget,
     output: OutputKind,
@@ -385,7 +385,7 @@ fn freeLinkSpec(allocator: Allocator, spec: TargetLinkSpec) void {
     allocator.free(spec.items);
 }
 
-/// Kind of artifact a target entry produces.
+/// Kind of module a target entry produces.
 pub const OutputKind = enum {
     /// Linked executable. For wasm32, a command module (has an entry).
     exe,
@@ -440,9 +440,9 @@ pub const TargetsConfig = struct {
     pub fn resolveCheckedConstants(
         self: TargetsConfig,
         allocator: Allocator,
-        checked_module: *const checked.CheckedModuleArtifact,
+        checked_module: *const checked.CheckedModule,
         diagnostic: *TargetConfigResolveDiagnostic,
-    ) error{TargetConfigInvalid}!void {
+    ) error{ TargetConfigInvalid, OutOfMemory }!void {
         try resolveLinkTypeCheckedConstants(allocator, checked_module, @constCast(self.targets), diagnostic);
     }
 
@@ -894,10 +894,10 @@ pub const TargetFileValidationIssue = union(enum) {
 
 fn resolveLinkTypeCheckedConstants(
     allocator: Allocator,
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     specs: []TargetLinkSpec,
     diagnostic: *TargetConfigResolveDiagnostic,
-) error{TargetConfigInvalid}!void {
+) error{ TargetConfigInvalid, OutOfMemory }!void {
     for (specs) |*spec| {
         var wasm = spec.wasm orelse continue;
         resolveWasmCheckedConstants(allocator, checked_module, spec.target, spec.output, &wasm, diagnostic) catch |err| {
@@ -910,12 +910,12 @@ fn resolveLinkTypeCheckedConstants(
 
 fn resolveWasmCheckedConstants(
     allocator: Allocator,
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     target: RocTarget,
     output: OutputKind,
     wasm: *WasmTargetConfig,
     diagnostic: *TargetConfigResolveDiagnostic,
-) error{TargetConfigInvalid}!void {
+) error{ TargetConfigInvalid, OutOfMemory }!void {
     try resolveWasmImportMemoryField(allocator, checked_module, target, output, "import_memory", &wasm.import_memory, &wasm.import_memory_ident, diagnostic);
     try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "minimum_memory", 0, &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
     try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "maximum_memory", 0, &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
@@ -925,17 +925,17 @@ fn resolveWasmCheckedConstants(
 
 fn resolveWasmImportMemoryField(
     allocator: Allocator,
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     target: RocTarget,
     output: OutputKind,
     field_name: []const u8,
     out: *WasmImportMemory,
     ident_slot: *?[]const u8,
     diagnostic: *TargetConfigResolveDiagnostic,
-) error{TargetConfigInvalid}!void {
+) error{ TargetConfigInvalid, OutOfMemory }!void {
     const ident = ident_slot.* orelse return;
     var reason: TargetConfigResolveReason = .missing_top_level_value;
-    const node = topLevelConstNode(checked_module, ident, &reason) orelse {
+    const node = try topLevelConstNode(checked_module, ident, &reason) orelse {
         diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
         return error.TargetConfigInvalid;
     };
@@ -953,7 +953,7 @@ fn resolveWasmImportMemoryField(
 fn resolveWasmUnsignedField(
     comptime T: type,
     allocator: Allocator,
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     target: RocTarget,
     output: OutputKind,
     field_name: []const u8,
@@ -961,10 +961,10 @@ fn resolveWasmUnsignedField(
     out: *?T,
     ident_slot: *?[]const u8,
     diagnostic: *TargetConfigResolveDiagnostic,
-) error{TargetConfigInvalid}!void {
+) error{ TargetConfigInvalid, OutOfMemory }!void {
     const ident = ident_slot.* orelse return;
     var reason: TargetConfigResolveReason = .expected_unsigned_integer;
-    const node = topLevelConstNode(checked_module, ident, &reason) orelse {
+    const node = try topLevelConstNode(checked_module, ident, &reason) orelse {
         diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = reason };
         return error.TargetConfigInvalid;
     };
@@ -986,12 +986,12 @@ fn resolveWasmUnsignedField(
 }
 
 fn topLevelConstNode(
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     ident: []const u8,
     reason: *TargetConfigResolveReason,
-) ?checked.ConstNodeId {
-    for (checked_module.top_level_values.entries) |entry| {
-        const source_name = checked_module.canonical_names.exportNameText(entry.source_name);
+) Allocator.Error!?checked.ConstNodeId {
+    for ((try checked_module.checkedTables()).top_level_values.entries) |entry| {
+        const source_name = checked_module.nameStore().exportNameText(entry.source_name);
         if (!Ident.textEql(source_name, ident)) continue;
 
         const const_ref = switch (entry.value) {
@@ -1001,8 +1001,7 @@ fn topLevelConstNode(
                 return null;
             },
         };
-        const template = checked_module.const_templates.get(const_ref);
-        return switch (template.state) {
+        return switch (checked.ConstTemplateValue.of((try checked_module.checkedTables()).const_templates.get(const_ref), &checked_module.evaluation)) {
             .stored_const => |stored| stored.node,
             .reserved, .eval_template => blk: {
                 reason.* = .unevaluated_constant;
@@ -1019,19 +1018,19 @@ fn topLevelConstNode(
     return null;
 }
 
-fn constWasmImportMemory(checked_module: *const checked.CheckedModuleArtifact, node: checked.ConstNodeId) ?WasmImportMemory {
-    const value = checked_module.const_store.get(node);
+fn constWasmImportMemory(checked_module: *const checked.CheckedModule, node: checked.ConstNodeId) ?WasmImportMemory {
+    const value = checked_module.evaluation.const_store.get(node);
     if (value == .nominal) return constWasmImportMemory(checked_module, value.nominal.backing);
     if (value != .tag or value.tag.payloads.len != 0) return null;
     return WasmImportMemory.fromTagName(value.tag.tag_name);
 }
 
 fn constUnsigned(
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     node: checked.ConstNodeId,
     reason: *TargetConfigResolveReason,
 ) ?usize {
-    const value = checked_module.const_store.get(node);
+    const value = checked_module.evaluation.const_store.get(node);
     if (value == .nominal) return constUnsigned(checked_module, value.nominal.backing, reason);
     if (value == .scalar) return scalarUnsigned(value.scalar, reason);
     reason.* = .expected_unsigned_integer;

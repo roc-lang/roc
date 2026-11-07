@@ -149,7 +149,7 @@ pub const Store = struct {
             pending.mode = .empirical;
             return;
         }
-        base.invariant("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
+        base.invariant("checked module invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
     }
 
     pub fn discardPendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {

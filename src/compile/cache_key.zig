@@ -1,13 +1,13 @@
 //! Canonicalized-module cache keys.
 //!
 //! A key names one module's canonicalization output and depends only on the
-//! inputs canonicalization reads. Checked-artifact keys live in
-//! `check.CheckedArtifact`.
+//! inputs canonicalization reads. Checked-module keys live in
+//! `check.Checked`.
 
 const std = @import("std");
 const Sha256 = @import("base").Sha256;
 const can = @import("can");
-const CheckedModuleArtifactKey = @import("check").CheckedArtifact.CheckedModuleArtifactKey;
+const CheckedModuleKey = @import("check").Checked.CheckedModuleKey;
 const cache_versioning = @import("cache_versioning.zig");
 
 /// Names one module's canonicalization output in the canonicalized-module cache.
@@ -78,13 +78,13 @@ fn hashLengthPrefixed(hasher: *Sha256, bytes: []const u8) void {
 
 /// Names one exact platform/app composition in the platform-pairing cache: the
 /// two immutable checked-module keys, under the pairing entry's version hash.
-pub fn platformPairingCacheKey(platform: CheckedModuleArtifactKey, app: CheckedModuleArtifactKey) CheckedModuleArtifactKey {
+pub fn platformPairingCacheKey(platform: CheckedModuleKey, app: CheckedModuleKey) CheckedModuleKey {
     var hasher = Sha256.init(.{});
     hasher.update("roc-platform-pairing");
     hasher.update(&cache_versioning.entryVersionHash(.platform_pairing));
     hasher.update(&platform.bytes);
     hasher.update(&app.bytes);
-    var key = CheckedModuleArtifactKey{};
+    var key = CheckedModuleKey{};
     hasher.final(&key.bytes);
     return key;
 }

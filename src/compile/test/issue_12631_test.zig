@@ -10,7 +10,7 @@ const BuildEnv = compile_build.BuildEnv;
 //
 // A record of closures passed to an annotated function, where one closure
 // calls a method on a never-resolved type with a top-level constant as the
-// argument, must publish as a checked artifact carrying the missing-method
+// argument, must publish as a checked module carrying the missing-method
 // error rather than violating a checked-artifact invariant.
 test "issue 12631: record of closures capturing a top-level constant reports missing method" {
     const gpa = std.testing.allocator;

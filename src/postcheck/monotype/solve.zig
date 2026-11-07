@@ -21,7 +21,7 @@ const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
 const GuardedList = collections.GuardedList;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const Ident = base.Ident;
@@ -32,12 +32,12 @@ const debug_reads = @import("builtin").mode == .debug;
 const check_row_chains_finite = @import("builtin").mode == .debug;
 
 /// A compile-time entry root qualified by the checked module that owns it.
-/// `ComptimeRootId`s are module-local, so a root that travels across template
+/// `ComptimeRootKey`s are module-local, so a root that travels across template
 /// requests must carry its owning module to stay comparable: the same integer
 /// id names unrelated roots in different modules.
 pub const EntryRoot = struct {
     module: checked.ModuleId,
-    root: checked.ComptimeRootId,
+    root: checked.ComptimeRootKey,
 };
 
 /// Identity of a node in a specialization's instantiation graph.

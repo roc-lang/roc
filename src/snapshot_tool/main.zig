@@ -3471,7 +3471,7 @@ fn processDocsSnapshot(
                 .public_name = mod.name,
                 .package_name = build_env.displayNameForPackage(mod.package_name),
                 .source_env = mod.checked.env,
-                .source_identity = &mod.checked.checked_artifact.module_identity.stable_hash,
+                .source_identity = &mod.checked.checked_module.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = mod.public_order,
             });
@@ -3489,7 +3489,7 @@ fn processDocsSnapshot(
                 .public_name = mod.name,
                 .package_name = display_pkg_name,
                 .source_env = mod.checked.env,
-                .source_identity = &mod.checked.checked_artifact.module_identity.stable_hash,
+                .source_identity = &mod.checked.checked_module.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = mod.public_order,
             } else null,
@@ -3717,32 +3717,34 @@ fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
 }
 
 fn snapshotRootRequestByOrder(
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root_artifact: *const check.Checked.CheckedModule,
     order: u32,
-) check.CheckedArtifact.RootRequest {
-    for (root_artifact.root_requests.requests) |request| {
+) std.mem.Allocator.Error!check.Checked.RootRequest {
+    for ((try root_artifact.rootRequests()).requests) |request| {
         if (request.order == order) return request;
     }
     base.invariant("snapshot invariant violated: missing root request order {d}", .{order});
 }
 
 fn snapshotProvidedEntrypointName(
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    root: check.CheckedArtifact.RootRequest,
-) []const u8 {
+    root_artifact: *const check.Checked.CheckedModule,
+    root: check.Checked.RootRequest,
+) Allocator.Error![]const u8 {
     const def_idx = switch (root.source) {
         .def => |def| def,
         .expr, .statement, .required_binding, .hoisted, .literal => {
             base.invariant("snapshot invariant violated: exported platform root is not a definition", .{});
         },
     };
-    const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
+    const top_level = (try root_artifact.checkedTables()).top_level_values.lookupByDef(def_idx) orelse {
         base.invariant("snapshot invariant violated: exported platform root has no published top-level value", .{});
     };
 
-    for (root_artifact.provides_requires.provides) |entry| {
-        if (entry.source_name == top_level.source_name) {
-            return root_artifact.canonical_names.externalSymbolNameText(entry.ffi_symbol);
+    for ((try root_artifact.providedExports()).exports) |provided| {
+        switch (provided) {
+            inline .procedure, .data, .checked_error => |entry| if (entry.source_name == top_level.source_name) {
+                return root_artifact.nameStore().externalSymbolNameText(entry.ffi_symbol);
+            },
         }
     }
 
@@ -3754,7 +3756,7 @@ fn snapshotProvidedEntrypointName(
 
 fn snapshotNativeEntrypoints(
     allocator: Allocator,
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root_artifact: *const check.Checked.CheckedModule,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) Allocator.Error![]backend.Entrypoint {
     const root_procs = lowered.lir_result.root_procs.items;
@@ -3777,7 +3779,7 @@ fn snapshotNativeEntrypoints(
 
     for (root_procs, root_metadata) |root_proc, metadata| {
         if (metadata.abi != .platform or metadata.exposure != .exported) continue;
-        const root = snapshotRootRequestByOrder(root_artifact, metadata.order);
+        const root = try snapshotRootRequestByOrder(root_artifact, metadata.order);
         if (root.kind != .provided_export) continue;
 
         const proc_spec = lowered.lir_result.store.getProcSpec(root_proc);
@@ -3791,7 +3793,7 @@ fn snapshotNativeEntrypoints(
             arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
         }
 
-        const entrypoint_name = snapshotProvidedEntrypointName(root_artifact, root);
+        const entrypoint_name = try snapshotProvidedEntrypointName(root_artifact, root);
         const symbol_name = try allocator.dupe(u8, entrypoint_name);
         var symbol_name_owned = true;
         errdefer if (symbol_name_owned) allocator.free(symbol_name);
@@ -3810,9 +3812,9 @@ fn snapshotNativeEntrypoints(
 }
 
 fn snapshotHasProvidedProcedureExports(
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) bool {
-    for (root_artifact.provided_exports.exports) |provided| {
+    root_artifact: *const check.Checked.CheckedModule,
+) Allocator.Error!bool {
+    for ((try root_artifact.providedExports()).exports) |provided| {
         switch (provided) {
             .procedure => return true,
             .data, .checked_error => {},
@@ -3822,9 +3824,9 @@ fn snapshotHasProvidedProcedureExports(
 }
 
 fn snapshotHasProvidedDataExports(
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) bool {
-    for (root_artifact.provided_exports.exports) |provided| {
+    root_artifact: *const check.Checked.CheckedModule,
+) Allocator.Error!bool {
+    for ((try root_artifact.providedExports()).exports) |provided| {
         switch (provided) {
             .data => return true,
             .procedure, .checked_error => {},
@@ -3834,7 +3836,7 @@ fn snapshotHasProvidedDataExports(
 }
 
 /// Process a dev_object snapshot: parse multi-file source, compile with BuildEnv,
-/// lower through checked artifacts to LIR, cross-compile for all targets, and
+/// lower through checked modules to LIR, cross-compile for all targets, and
 /// record blake3 hashes.
 fn processDevObjectSnapshot(
     allocator: Allocator,
@@ -3879,14 +3881,14 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
-    const imported_artifacts = try build_env.collectImportedArtifactViews(allocator, root_artifact);
+    const root_artifact = (try build_env.executableRootCheckedModule());
+    const imported_artifacts = try build_env.collectImportedModuleViews(allocator, root_artifact);
     defer allocator.free(imported_artifacts);
-    const relation_artifacts = try build_env.collectRelationArtifactViews(allocator, root_artifact);
+    const relation_artifacts = try build_env.collectRelationModuleViews(allocator, root_artifact);
     defer allocator.free(relation_artifacts);
 
-    const has_procedure_exports = snapshotHasProvidedProcedureExports(root_artifact);
-    const has_data_exports = snapshotHasProvidedDataExports(root_artifact);
+    const has_procedure_exports = try snapshotHasProvidedProcedureExports(root_artifact);
+    const has_data_exports = try snapshotHasProvidedDataExports(root_artifact);
     if (!has_procedure_exports and !has_data_exports) {
         std.log.err("Failed to produce any exported platform entrypoints or data symbols", .{});
         return false;
@@ -3911,13 +3913,13 @@ fn processDevObjectSnapshot(
             }
 
             const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-            const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, root_artifact.root_requests.runtime_requests);
+            const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, (try root_artifact.rootRequests()).runtime_requests);
             defer allocator.free(build_roots);
 
             var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
                 allocator,
                 .{
-                    .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+                    .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts),
                     .imports = imported_artifacts,
                 },
                 .{
@@ -3942,7 +3944,7 @@ fn processDevObjectSnapshot(
             const static_data_exports = compile.static_data_exports.buildStaticData(
                 allocator,
                 .{
-                    .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+                    .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts),
                     .imports = imported_artifacts,
                 },
                 &lowered,
@@ -4404,7 +4406,7 @@ fn compileSnapshotReplInspectedModule(
             .{
                 .env = bm.builtin_module.env,
                 .indices = bm.builtin_indices,
-                .artifact = &bm.checked_artifact,
+                .artifact = &bm.checked_module,
             },
             null,
         )

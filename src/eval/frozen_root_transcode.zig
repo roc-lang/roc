@@ -557,7 +557,7 @@ fn recursiveCallable(allocator: Allocator, program: *Program.Result) Allocator.E
     const fn_layout = try program.layouts.putTagUnion(&.{box_layout});
     program.layouts.updateLayout(box_layout, layout.Layout.box(fn_layout));
     const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @fromBackingInt(@intCast(3)), .kind = .lexical, .slot = 0, .ty = undefined, .plan = plan, .storage = .recursive_box }});
-    const variants = try allocator.dupe(Program.FnVariant, &.{.{ .id = undefined, .discriminant = 0, .variant_index = 0, .payload_layout = box_layout, .template = .{ .frozen_fn = 17, .frozen_context = .{ .abi = .finite, .source = 17, .fn_type = 1, .captures = .{ .own = 1 } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = captures }});
+    const variants = try allocator.dupe(Program.FnVariant, &.{.{ .id = undefined, .discriminant = 0, .variant_index = 0, .payload_layout = box_layout, .template = .{ .frozen_fn = 17, .frozen_context = .{ .abi = .finite, .source = 17, .fn_type = 1, .captures = .{ .own = 1 } }, .fn_def = undefined, .source_fn_key = undefined }, .captures = captures }});
     // Fill every variant identity from its allocated slice index before publication.
     for (variants, 0..) |*variant, index| variant.id = @fromBackingInt(@intCast(index));
     try program.fn_sets.append(allocator, .{ .layout = fn_layout, .variants = variants });
@@ -606,7 +606,7 @@ test "frozen root transcode maps erased worker and drop identities across target
     for ([_]*Program.Result{ &source, &target }) |program| {
         try program.const_plans.append(allocator, .{ .erased_fn = @fromBackingInt(@intCast(program.erased_fns.items.len)) });
     }
-    const template = Program.FnTemplate{ .frozen_fn = 12, .frozen_context = .{ .abi = .erased, .source = 12, .fn_type = 1, .captures = .{ .own = 1 } }, .frozen_worker = @as([96]u8, @splat(1)), .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined };
+    const template = Program.FnTemplate{ .frozen_fn = 12, .frozen_context = .{ .abi = .erased, .source = 12, .fn_type = 1, .captures = .{ .own = 1 } }, .frozen_worker = @as([96]u8, @splat(1)), .fn_def = undefined, .source_fn_key = undefined };
     var other_template = template;
     other_template.frozen_worker = @as([96]u8, @splat(2));
     const capture = Program.CaptureSlot{ .id = @fromBackingInt(@intCast(5)), .kind = .lexical, .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value };
@@ -643,7 +643,7 @@ test "frozen root transcode maps erased worker and drop identities across target
     try std.testing.expectEqual(@as(u8, 0x87), payload.bytes[capture_offset + 11]);
 }
 
-fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("check").CheckedArtifact.ComptimeRootId) Allocator.Error!lir.LIR.StaticDataId {
+fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("check").Checked.ComptimeRootKey) Allocator.Error!lir.LIR.StaticDataId {
     const idx = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const data = program.layouts.getLayout(idx).getStruct().idx;
     const id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
@@ -657,14 +657,14 @@ test "frozen root transcode preserves failure flag and message using explicit fi
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const checked = @import("check").CheckedArtifact;
+    const checked = @import("check").Checked;
     var roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer roots.deinit(allocator);
-    const root_id: checked.ComptimeRootId = @fromBackingInt(@intCast(roots.items.len));
+    const root_id = checked.ComptimeRootKey.ofSource(.def, @intCast(roots.items.len));
     // Transcoding reads only the published root identity, not its source body/type.
-    try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
-    const source_id = try failureSlot(allocator, &source, roots.items[@backingInt(root_id)].id);
-    const target_id = try failureSlot(allocator, &target, roots.items[@backingInt(root_id)].id);
+    try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible });
+    const source_id = try failureSlot(allocator, &source, root_id);
+    const target_id = try failureSlot(allocator, &target, root_id);
     const slot = source.static_data_values.items[@backingInt(source_id)];
     const fields = slot.compile_time_root.?.role.failure_message;
     const bytes = try allocator.alloc(u8, source.layouts.layoutSize(source.layouts.getLayout(slot.layout_idx)));
@@ -694,7 +694,7 @@ fn reorderedCallable(allocator: Allocator, program: *Program.Result, reverse: bo
     const variants = try allocator.alloc(Program.FnVariant, 2);
     for (variants, 0..) |*variant, i| {
         const has_capture = i == selected;
-        variant.* = .{ .id = @fromBackingInt(@intCast(i)), .discriminant = @intCast(i), .variant_index = @intCast(i), .payload_layout = if (has_capture) .str else .zst, .template = .{ .frozen_fn = if (has_capture) 17 else 18, .frozen_context = .{ .abi = .finite, .source = if (has_capture) 17 else 18, .fn_type = 1, .captures = .{ .own = @intFromBool(has_capture) } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = if (has_capture) captures else &.{} };
+        variant.* = .{ .id = @fromBackingInt(@intCast(i)), .discriminant = @intCast(i), .variant_index = @intCast(i), .payload_layout = if (has_capture) .str else .zst, .template = .{ .frozen_fn = if (has_capture) 17 else 18, .frozen_context = .{ .abi = .finite, .source = if (has_capture) 17 else 18, .fn_type = 1, .captures = .{ .own = @intFromBool(has_capture) } }, .fn_def = undefined, .source_fn_key = undefined }, .captures = if (has_capture) captures else &.{} };
     }
     try program.fn_sets.append(allocator, .{ .layout = idx, .variants = variants });
     return .{ .plan = plan, .layout_idx = idx };
@@ -750,7 +750,7 @@ test "frozen root transcode distinguishes zero-sized capture contexts of one fun
                 .discriminant = @intCast(index),
                 .variant_index = @intCast(index),
                 .payload_layout = .zst,
-                .template = .{ .frozen_fn = 17, .frozen_context = .{ .abi = .finite, .source = 9, .fn_type = 12, .captures = .{ .solved = .{ .start = @intCast(context), .len = 1 } } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined },
+                .template = .{ .frozen_fn = 17, .frozen_context = .{ .abi = .finite, .source = 9, .fn_type = 12, .captures = .{ .solved = .{ .start = @intCast(context), .len = 1 } } }, .fn_def = undefined, .source_fn_key = undefined },
                 .captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @fromBackingInt(@intCast(context)), .kind = .lexical, .slot = 0, .ty = undefined, .plan = unit_plan, .storage = .value }}),
             };
         }
@@ -807,14 +807,14 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     // transcodeValueSlot checks that the paired slots name the same checked
     // root, so both are published against one real entry rather than a
     // placeholder index.
-    const checked = @import("check").CheckedArtifact;
+    const checked = @import("check").Checked;
     var roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer roots.deinit(allocator);
-    const root_id: checked.ComptimeRootId = @fromBackingInt(@intCast(roots.items.len));
+    const root_id = checked.ComptimeRootKey.ofSource(.def, @intCast(roots.items.len));
     // Transcoding reads only the published root identity, not its source body/type.
-    try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
+    try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible });
 
-    const source_slot_id = try boxedValueSlot(&source, source_box, source_plan, roots.items[@backingInt(root_id)].id);
+    const source_slot_id = try boxedValueSlot(&source, source_box, source_plan, root_id);
     const native = try @import("native_root_export.zig").freezeRootIntoSlot(
         allocator,
         &source,
@@ -830,7 +830,7 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     try std.testing.expectEqual(@sizeOf(usize), native[0].bytes.len);
     try std.testing.expectEqual(@as(usize, 1), native[0].relocations.len);
 
-    const target_slot_id = try boxedValueSlot(&target, target_box, target_plan, roots.items[@backingInt(root_id)].id);
+    const target_slot_id = try boxedValueSlot(&target, target_box, target_plan, root_id);
     const converted = try transcodeValueSlot(
         allocator,
         &source,
@@ -857,7 +857,7 @@ fn boxedValueSlot(
     program: *Program.Result,
     box_idx: layout.Idx,
     plan: Program.ConstPlanId,
-    root: @import("check").CheckedArtifact.ComptimeRootId,
+    root: @import("check").Checked.ComptimeRootKey,
 ) Allocator.Error!lir.LIR.StaticDataId {
     const failure_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(program.store.allocator, .{ .initializer = null, .layout_idx = .zst });

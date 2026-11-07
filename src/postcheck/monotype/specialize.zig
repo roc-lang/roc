@@ -215,8 +215,8 @@ pub const LookupResult = union(enum(u8)) {
 pub const SpecLookupAddress = struct {
     callable_kind: u8,
     module_bytes: [32]u8,
-    index_a: u32,
-    index_b: u32,
+    index_a: u64,
+    index_b: u128,
     index_c: u32,
     owner_fn_digest: [32]u8,
     /// Explicitly tagged default-root qualifier: `default_root` distinguishes
@@ -287,7 +287,7 @@ pub const SpecLookupAddress = struct {
 const SpecLookupAddressContext = struct {
     pub fn hash(_: SpecLookupAddressContext, address: SpecLookupAddress) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        const scalars = [_]u32{ address.callable_kind, address.index_a, address.index_b, address.index_c, @intFromBool(address.default_root) };
+        const scalars = [_]u128{ address.callable_kind, address.index_a, address.index_b, address.index_c, @intFromBool(address.default_root) };
         hasher.update(std.mem.asBytes(&scalars));
         inline for (.{ "module_bytes", "owner_fn_digest", "default_root_module", "evidence_digest", "codec_contract_digest", "type_digest" }) |field| {
             hasher.update(@field(address, field)[0..8]);

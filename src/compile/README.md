@@ -77,15 +77,15 @@ while (it.next()) |entry| {
 
 // 5. Lower to LIR. The allocator must own a single contiguous buffer—
 //    see "Runtime arena" below.
-const root = coord.executableRootCheckedArtifact();
+const root = try coord.executableRootCheckedModule();
 const imports = try coord.collectImportedArtifactViews(arena, root);
 const relations = try coord.collectRelationArtifactViews(arena, root);
-const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(arena, root.root_requests.runtime_requests);
+const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(arena, (try root.rootRequests()).runtime_requests);
 
 const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
     runtime_alloc,
     .{
-        .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+        .root = try check.Checked.loweringViewWithRelations(root, relations),
         .imports = imports,
     },
     .{ .requests = lir_roots },

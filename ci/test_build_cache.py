@@ -17,7 +17,7 @@ import tempfile
 
 
 SOURCE = Path(__file__).resolve().parents[1]
-OUTPUT_NAMES = ("Builtin.bin", "builtin_indices.zig", "Builtin.artifact.bin")
+OUTPUT_NAMES = ("Builtin.bin", "builtin_indices.zig", "Builtin.outputs.bin")
 
 
 def snapshot(root):

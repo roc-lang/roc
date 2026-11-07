@@ -8,9 +8,8 @@
 
 const std = @import("std");
 const can = @import("can");
-const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
-const checked_artifact = @import("../checked_artifact.zig");
+const checked_module = @import("../checked_module.zig");
 const types = @import("types");
 const ModuleEnv = can.ModuleEnv;
 const TestEnv = @import("./TestEnv.zig");
@@ -128,9 +127,9 @@ test "concrete recursive dispatch records a shared method instance without copyi
 }
 
 fn assertBuiltinIterExtremum(
-    artifact: *const checked_artifact.CheckedModuleArtifact,
+    artifact: *const checked_module.CheckedModule,
     method_name: []const u8,
-) error{ NoSpaceLeft, TestUnexpectedResult }!void {
+) (std.mem.Allocator.Error || error{ NoSpaceLeft, TestUnexpectedResult })!void {
     const env = artifact.moduleEnvConst();
     const source = env.getSourceAll();
     var needle_buffer: [64]u8 = undefined;
@@ -138,7 +137,7 @@ fn assertBuiltinIterExtremum(
     const wanted_offset = std.mem.find(u8, source, needle) orelse return error.TestUnexpectedResult;
     var found_plan = false;
 
-    for (artifact.static_dispatch_plans.by_node) |entry| {
+    for ((try artifact.checkedTables()).static_dispatch_plans.by_node) |entry| {
         const expr_idx: can.CIR.Expr.Idx = @fromBackingInt(@intCast(entry.key));
         const expr = env.store.getExpr(expr_idx);
         if (expr != .e_dispatch_call) continue;
@@ -180,7 +179,7 @@ fn assertBuiltinIterExtremum(
         // branch exists to establish.
         try std.testing.expect(body_use_count >= 2);
 
-        const plan = artifact.static_dispatch_plans.plans[entry.val];
+        const plan = try (try artifact.dispatch()).plan(@fromBackingInt(entry.val));
         switch (plan.resolution) {
             .evidence_dependent => |resolution| {
                 try std.testing.expect(resolution.independent_callable);
@@ -209,18 +208,7 @@ test "scheme use evidence resolves Builtin Iter min and max through exact raw wh
     var artifact_owns_module = false;
     errdefer if (!artifact_owns_module) builtin_module.deinit();
 
-    const blob = compiled_builtins.builtin_artifact_bin[0..];
-    const serialized_bytes = try checked_artifact.CheckedModuleArtifact.splitVersionTrailer(blob);
-    const backing: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 =
-        @alignCast(blob[0..serialized_bytes.len]);
-    const serialized: *const checked_artifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(backing.ptr));
-    try serialized.validate(backing.len);
-    var artifact = serialized.deserializeStatic(
-        backing,
-        gpa,
-        .{ .static_builtin = builtin_module.env },
-    );
-    try artifact.attachSealedTypes(gpa, std.testing.io);
+    var artifact = try checked_module.openBakedBuiltin(gpa, std.testing.io, builtin_module.env, compiled_builtins.builtin_outputs_bin[0..]);
     artifact_owns_module = true;
     defer artifact.deinit(gpa);
 

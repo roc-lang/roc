@@ -23,7 +23,7 @@ const check = @import("check");
 const boxy_runtime = @import("boxy_runtime");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const static_dispatch = check.StaticDispatchRegistry;
 const names = check.CheckedNames;
 
@@ -35,6 +35,15 @@ pub const ModuleView = struct {
     index: ModuleIndex,
     key: checked.ModuleId,
     view: checked.ImportedModuleView,
+    /// The reader over the module's bodies (`ImportedModuleView.bodies`).
+    checked_bodies: checked.CheckedBodies,
+    /// The reader over the module's dispatch resolution
+    /// (`ImportedModuleView.dispatch`).
+    checked_dispatch: checked.CheckedDispatch,
+    /// The module's checked tables (`ImportedModuleView.checkedTables`).
+    checked_tables: *const checked.CheckedTables,
+    /// The module's resolved value references (`ImportedModuleView.valueRefs`).
+    value_refs: *const checked.ResolvedValueRefTable,
     /// What `Modules.linkName` returns.
     link_name: [32]u8,
 
@@ -43,7 +52,19 @@ pub const ModuleView = struct {
     }
 
     pub fn bodies(self: *const ModuleView) checked.CheckedBodies {
-        return self.view.checked_bodies;
+        return self.checked_bodies;
+    }
+
+    pub fn dispatch(self: *const ModuleView) checked.CheckedDispatch {
+        return self.checked_dispatch;
+    }
+
+    pub fn tables(self: *const ModuleView) *const checked.CheckedTables {
+        return self.checked_tables;
+    }
+
+    pub fn valueRefs(self: *const ModuleView) *const checked.ResolvedValueRefTable {
+        return self.value_refs;
     }
 
     pub fn nameStore(self: *const ModuleView) *const names.CanonicalNameStore {
@@ -119,12 +140,16 @@ pub const Modules = struct {
 
     /// Add a module unless one with the same key is present.
     pub fn add(self: *Modules, view: checked.ImportedModuleView) Allocator.Error!ModuleIndex {
+        if (self.by_key.get(view.key.bytes)) |existing| return existing;
+        const checked_bodies = try view.bodies();
+        const checked_dispatch = checked_bodies.tables.dispatch.?;
+        const checked_tables = try view.checkedTables();
+        const value_refs = checked_bodies.tables.refs.?;
         const entry = try self.by_key.getOrPut(self.allocator, view.key.bytes);
-        if (entry.found_existing) return entry.value_ptr.*;
         const index: ModuleIndex = @fromBackingInt(@intCast(self.views.items.len));
         entry.value_ptr.* = index;
         const link_name = if (self.link_names) |link_names| link_names.of(view) else view.module_identity.stable_hash;
-        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view, .link_name = link_name });
+        try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view, .checked_bodies = checked_bodies, .checked_dispatch = checked_dispatch, .checked_tables = checked_tables, .value_refs = value_refs, .link_name = link_name });
         return index;
     }
 
@@ -466,7 +491,7 @@ pub const Store = struct {
     pub fn declarationBySourceDecl(self: *Store, view: *const ModuleView, source_decl: u32) Allocator.Error!?checked.CheckedNominalDeclarationId {
         if (!self.decl_sources_indexed.contains(view.index)) {
             try self.decl_sources_indexed.put(self.allocator, view.index, {});
-            for (view.types().nominal_declarations) |declaration| {
+            for (view.types().nominalDeclarationRows()) |declaration| {
                 try self.decl_by_source.put(self.allocator, .{ .module = view.index, .source_decl = declaration.nominal.source_decl }, declaration.id);
             }
         }
@@ -476,7 +501,7 @@ pub const Store = struct {
     pub fn declarationByKey(self: *Store, view: *const ModuleView, key: names.NominalTypeKey) Allocator.Error!?checked.CheckedNominalDeclarationId {
         if (!self.decl_keys_indexed.contains(view.index)) {
             try self.decl_keys_indexed.put(self.allocator, view.index, {});
-            for (view.types().nominal_declarations) |declaration| {
+            for (view.types().nominalDeclarationRows()) |declaration| {
                 try self.decl_by_key.put(self.allocator, .{ .module = view.index, .key = declaration.nominal }, declaration.id);
             }
         }
@@ -952,7 +977,7 @@ pub const Converter = struct {
                     .primitive => |prim| try self.store.primitive(prim),
                     .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .iterator, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => null,
                 },
-                .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => null,
+                .local_declaration, .imported_declaration, .local_box_payload_capability, .opaque_without_backing => null,
             },
             .field_kind => |kind| try self.store.committedKind(kind == .optional),
             .alias, .record, .tuple, .function, .tag_union => null,
@@ -992,9 +1017,11 @@ pub const Converter = struct {
     }
 
     /// Whether any argument of the function type `fn_root` holds a nominal
-    /// over a callable payload (`local_box_payload_capability`,
-    /// `imported_box_payload_capability`): a function value whose
-    /// interface the signature does not show.
+    /// type with a declaration, whose backing may hold a callable payload: a
+    /// function value whose interface the signature does not show. Whether
+    /// it does is a matter of the type, so every declared nominal type
+    /// answers alike, whichever module declares it and however it is
+    /// represented.
     fn argumentsHoldCallablePayload(self: Converter, module: ModuleIndex, fn_root: checked.CheckedTypeId) Allocator.Error!bool {
         const types = self.modules.get(module).types();
         const allocator = self.store.allocator;
@@ -1036,8 +1063,8 @@ pub const Converter = struct {
                     try pending.append(allocator, inner.ret);
                 },
                 .nominal => |nominal| switch (nominal.representation) {
-                    .local_box_payload_capability, .imported_box_payload_capability => return true,
-                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => try pending.appendSlice(allocator, nominal.args),
+                    .local_declaration, .imported_declaration, .local_box_payload_capability => return true,
+                    .builtin, .opaque_without_backing => try pending.appendSlice(allocator, nominal.args),
                 },
                 .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
             }
@@ -1089,7 +1116,7 @@ pub const Converter = struct {
                     } else {
                         for (nominal.args) |arg| if (try self.mentionsVariable(module, arg, variable)) return true;
                     },
-                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .opaque_without_backing => {
                         for (nominal.args) |arg| if (try self.mentionsVariable(module, arg, variable)) return true;
                     },
                 },
@@ -1444,7 +1471,7 @@ pub const Converter = struct {
                         .parse_tag_union_spec => return try self.store.intern(.{ .function = .{ .args = &.{}, .ret = children[0], .effectful = false } }),
                         .bool_tag_union, .try_nominal, .dict, .set, .iterator, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
                     },
-                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .opaque_without_backing => {},
                 }
                 const decl = try self.declarationKey(view, nominal);
                 const decl_key = decl orelse NominalDeclKey{ .module = module, .decl = @fromBackingInt(std.math.maxInt(u32)) };
@@ -1503,6 +1530,12 @@ pub const Converter = struct {
         };
     }
 
+    /// The declaration of the local nominal type a box payload capability
+    /// of `types`' module is the capability of.
+    fn capabilityDeclaration(types: checked.CheckedTypeStoreView, cap: checked.LocalBoxPayloadCapabilityRef) checked.CheckedNominalDeclarationId {
+        return types.demandedInterfaceCapabilities().boxPayloadCapability(cap.capability).declaration;
+    }
+
     /// The declaration a nominal payload names, or null for an opaque type
     /// with no backing.
     fn declarationKey(self: Converter, view: *const ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!?NominalDeclKey {
@@ -1519,19 +1552,7 @@ pub const Converter = struct {
                     invariantFmt("module has no declaration for builtin nominal {s}", .{@tagName(builtin_nominal)});
                 break :blk .{ .module = owner.index, .decl = declaration.id };
             },
-            .local_box_payload_capability => |cap| blk: {
-                const capability = view.view.interface_capabilities.boxPayloadCapability(cap.capability);
-                const decl = (try self.store.declarationByKey(view, capability.nominal)) orelse
-                    invariant("a box payload capability names a nominal its module does not declare");
-                break :blk .{ .module = view.index, .decl = decl };
-            },
-            .imported_box_payload_capability => |cap| blk: {
-                const owner = self.modules.byKey(cap.artifact);
-                const capability = owner.view.interface_capabilities.boxPayloadCapability(cap.capability);
-                const decl = (try self.store.declarationByKey(owner, capability.nominal)) orelse
-                    invariant("a box payload capability names a nominal its module does not declare");
-                break :blk .{ .module = owner.index, .decl = decl };
-            },
+            .local_box_payload_capability => |cap| .{ .module = view.index, .decl = capabilityDeclaration(view.types(), cap) },
         };
     }
 
@@ -1718,7 +1739,8 @@ pub const Converter = struct {
         return switch (view.types().payload(ty)) {
             .nominal => |nominal| switch (nominal.representation) {
                 .local_declaration => |decl| try self.outerVariables(.{ .module = module, .decl = decl }),
-                .builtin, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => &.{},
+                .local_box_payload_capability => |cap| try self.outerVariables(.{ .module = module, .decl = capabilityDeclaration(view.types(), cap) }),
+                .builtin, .imported_declaration, .opaque_without_backing => &.{},
             },
             .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => &.{},
         };
@@ -1734,7 +1756,7 @@ pub const Converter = struct {
         // the rest of the module's source leaves alone.
         var ordinal: u32 = 0;
         const name = view.types().nominalDeclarationName(declaration);
-        for (view.types().nominal_declarations[0..@backingInt(decl.decl)]) |earlier| {
+        for (view.types().nominalDeclarationRows()[0..@backingInt(decl.decl)]) |earlier| {
             if (view.types().nominalDeclarationName(earlier) == name) ordinal += 1;
         }
         return try self.store.internDeclName(decl, self.modules.linkName(decl.module), ordinal, text);
@@ -1791,15 +1813,17 @@ pub const Converter = struct {
                 },
                 .nominal => |nominal| {
                     try pending.appendSlice(allocator, nominal.args);
-                    switch (nominal.representation) {
-                        .local_declaration => |nested| if ((try decls.getOrPut(allocator, nested)).found_existing == false) {
-                            const declaration = types.nominalDeclarationById(nested);
-                            for (declaration.formalArgs(types)) |formal| try formals.put(allocator, formal, {});
-                            try pending.append(allocator, declaration.backing);
-                            try pending.appendSlice(allocator, declaration.paddingFieldTypes(types));
-                        },
-                        .builtin, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
-                    }
+                    const nested_declaration: ?checked.CheckedNominalDeclarationId = switch (nominal.representation) {
+                        .local_declaration => |nested| nested,
+                        .local_box_payload_capability => |cap| capabilityDeclaration(types, cap),
+                        .builtin, .imported_declaration, .opaque_without_backing => null,
+                    };
+                    if (nested_declaration) |nested| if ((try decls.getOrPut(allocator, nested)).found_existing == false) {
+                        const declaration = types.nominalDeclarationById(nested);
+                        for (declaration.formalArgs(types)) |formal| try formals.put(allocator, formal, {});
+                        try pending.append(allocator, declaration.backing);
+                        try pending.appendSlice(allocator, declaration.paddingFieldTypes(types));
+                    };
                 },
                 .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
             }

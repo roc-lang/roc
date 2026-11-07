@@ -28,7 +28,7 @@ const StoredFn = @import("stored_fn.zig");
 const ConstSchema = const_schema.ConstSchema;
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const ExprId = check.CheckedBodies.ExprId;
 const PatternId = check.CheckedBodies.PatternId;
 const checked_names = check.CheckedNames;
@@ -233,7 +233,7 @@ pub const WorkerKey = union(enum) {
     /// compile-time program evaluating it: an erased worker with no
     /// arguments reading the root's compile-time value slot
     /// (`Program.rootValueSlot`), which readers call once the root completes.
-    root_slot: struct { module: ModuleIndex, root: checked.ComptimeRootId },
+    root_slot: struct { module: ModuleIndex, root: checked.ComptimeRootKey },
     /// A compiler-derived structural method over the descriptor its
     /// dictionary captures.
     structural: StructuralMethod,
@@ -386,7 +386,7 @@ pub fn templateWorkerIdentity(link_name: [32]u8, template: checked_names.Checked
     hasher.update("roc.boxy.worker.v1");
     hasher.update("template");
     hasher.update(&link_name);
-    hasher.update(std.mem.asBytes(&@as(u32, @backingInt(template))));
+    template.digestInto(&hasher);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -552,7 +552,7 @@ pub const Program = struct {
     /// Each module's callable-eval templates, by their binding pattern.
     callable_eval_by_pattern: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, pattern: PatternId }, checked.CallableEvalTemplateId) = .empty,
     /// Each module's entry wrappers, by the compile-time root they wrap.
-    wrapper_by_root: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, root: checked.ComptimeRootId }, checked_names.ProcedureTemplateRef) = .empty,
+    wrapper_by_root: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, root: checked.ComptimeRootKey }, checked_names.ProcedureTemplateRef) = .empty,
     /// Each module's exported procedure bindings, by their definition.
     exported_bindings: std.AutoHashMapUnmanaged(ExportedBindingKey, *const checked.ImportedProcedureBindingView) = .empty,
     observe_expects: bool,
@@ -569,7 +569,6 @@ pub const Program = struct {
     /// `composedInBody` of each type asked about.
     composed_in_body: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
     /// The nested procedure site of each lambda and closure expression.
-    sites_by_expr: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
     /// Modules by their stable identity hash.
     by_identity: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
     /// The default a record construction that omits a field materializes.
@@ -592,7 +591,7 @@ pub const Program = struct {
             .module => |unit| unit,
         };
         if (index == self.modules.views.items[0].index) return true;
-        return unit.root and self.module(index).view.platform_type_inputs.requirements.len != 0;
+        return unit.root and self.module(index).view.hasPlatformRequirements();
     }
 
     /// The content identity of a module's worker (design.md "Per-Module
@@ -793,6 +792,22 @@ pub const Program = struct {
         return self.modules.get(index);
     }
 
+    /// The entry wrapper template of module `index`'s compile-time root
+    /// `root`: a row of its template table, or, for a literal root, the
+    /// template its identity names.
+    pub fn rootWrapper(self: *const Program, index: ModuleIndex, root: checked.ComptimeRootKey) checked_names.ProcedureTemplateRef {
+        if (root.isLiteral()) {
+            const view = self.module(index);
+            return .{
+                .artifact = view.view.key.digest(),
+                .proc_base = checked_names.ProcBase.entry_wrapper,
+                .template = checked.literalRootWrapperTemplate(root),
+            };
+        }
+        return self.wrapper_by_root.get(.{ .module = index, .root = root }) orelse
+            invariant("a compile-time root has no entry wrapper");
+    }
+
     /// Free everything but the program's `result`, which lowering hands on.
     pub fn release(self: *Program) void {
         self.static_descs.deinit();
@@ -814,7 +829,6 @@ pub const Program = struct {
         self.local_scopes.deinit(self.allocator);
         self.local_procs.deinit(self.allocator);
         self.by_identity.deinit(self.allocator);
-        self.sites_by_expr.deinit(self.allocator);
         self.nominal_overrides.deinit(self.allocator);
         self.composed_in_body.deinit(self.allocator);
         self.omitted_defaults.deinit(self.allocator);
@@ -832,7 +846,7 @@ pub const Program = struct {
     /// The names `source`'s stored types intern.
     pub fn constNames(self: *const Program, source: ConstSource) *const checked_names.CanonicalNameStore {
         return switch (source) {
-            .module => |index| self.module(index).nameStore(),
+            .module => |index| &self.module(index).view.const_store.type_names,
         };
     }
 
@@ -885,8 +899,8 @@ pub const Program = struct {
         const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
-        const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
-        const checked_scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool, template.scheme_vars);
+        const template = (try view.dispatch().procedureTemplate(template_id));
+        const checked_scheme_vars = try view.dispatch().templateSchemeVars(template_id);
         // A sealed variable (design.md "Sealed Result Rows") is no hidden
         // parameter: it seals to the empty row wherever the body mentions it,
         // and an evidence parameter dispatching on it is no dictionary.
@@ -894,21 +908,22 @@ pub const Program = struct {
         var checked_slots: std.ArrayList(u32) = .empty;
         var sealed_slots: std.ArrayList(u32) = .empty;
         defer sealed_slots.deinit(self.allocator);
-        const evidence_params = poolSlice(static_dispatch.EvidenceParamRecord, view.view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
+        const evidence_params = try view.dispatch().evidenceParams(template_id);
+        const template_fn_ty = try view.view.checked_types.pairedType(template.checked_fn_root);
         for (checked_scheme_vars, 0..) |variable, slot| {
             // A platform requirement's identity variable is the app type
             // this program lowers the platform at (`solvePlatformIdentities`):
             // every mention converts to that type, so it is no hidden
             // parameter either.
             if (self.converter().platformIdentity(module_index, variable) != null) continue;
-            if (try self.converter().sealedSchemeVar(module_index, variable, template.checked_fn_root, evidence_params)) {
+            if (try self.converter().sealedSchemeVar(module_index, variable, template_fn_ty, evidence_params)) {
                 try sealed_slots.append(self.allocator, @intCast(slot));
                 continue;
             }
             try scheme_vars.append(self.arena.allocator(), variable);
             try checked_slots.append(self.arena.allocator(), @intCast(slot));
         }
-        const literal_requirements = view.view.checked_procedure_templates.templateLiteralRequirements(&template);
+        const literal_requirements = try view.dispatch().templateLiteralRequirements(template_id);
         var dictionary_params: std.ArrayList(u32) = .empty;
         for (evidence_params, 0..) |param, index| {
             const sealed_dispatcher = if (param.slot) |slot| std.mem.findScalar(u32, sealed_slots.items, slot) != null else false;
@@ -918,7 +933,7 @@ pub const Program = struct {
         const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.items.len);
         for (bound, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
         const env: types.Env = .{ .module = module_index, .vars = scheme_vars.items, .bound = bound };
-        const fn_ty = try self.converter().convert(module_index, template.checked_fn_root, env);
+        const fn_ty = try self.converter().convert(module_index, template_fn_ty, env);
         const signature = switch (self.store.get(fn_ty)) {
             .function => |function| function,
             .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a procedure template's checked root is not a function type"),
@@ -1492,7 +1507,7 @@ pub const Program = struct {
                 .{ .nominal = declaration.nominal }
             else
                 .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin) }) else .{ .nominal = declaration.nominal };
-            const registry = view.view.method_registry;
+            const registry = &view.tables().method_registry;
             const names = view.nameStore();
             const method_names = [_][]const u8{ "is_eq", "to_hash", "to_inspect" };
             for (method_names, &result, 0..) |method_name, *slot, method_index| {
@@ -1545,7 +1560,7 @@ pub const Program = struct {
         for (self.modules.views.items) |*view| {
             const env = view.view.module_env;
             const ident = env.common.findIdent(qualified) orelse continue;
-            for (view.types().nominal_declarations) |declaration| {
+            for (view.types().nominalDeclarationRows()) |declaration| {
                 if (declaration.source_statement >= env.store.nodes.len()) continue;
                 const node: can.CIR.Node.Idx = @fromBackingInt(@intCast(declaration.source_statement));
                 if (env.store.nodes.get(node).tag != .statement_nominal_decl) continue;
@@ -1632,8 +1647,7 @@ pub const Program = struct {
             .template => |key| key,
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
         };
-        const templates = self.module(key.module).view.checked_procedure_templates;
-        const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
+        const params = try self.module(key.module).dispatch().evidenceParams(key.template);
         const env: types.Env = .{ .module = key.module, .vars = target_worker.scheme_vars, .bound = bound };
         for (target_worker.dictionary_params, requirements) |param_index, *requirement| {
             const param = params[param_index];
@@ -1788,8 +1802,7 @@ pub const Program = struct {
             .template => |key| key,
             .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
         };
-        const templates = self.module(key.module).view.checked_procedure_templates;
-        const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
+        const all_params = try self.module(key.module).dispatch().evidenceParams(key.template);
         const params = try self.allocator.alloc(static_dispatch.EvidenceParamRecord, target_worker.dictionary_params.len);
         defer self.allocator.free(params);
         for (target_worker.dictionary_params, params) |param_index, *param| param.* = all_params[param_index];
@@ -1985,7 +1998,7 @@ pub const Program = struct {
     fn methodIn(view: *const types.ModuleView, owner_names: anytype, owner: static_dispatch.MethodOwner, method_text: []const u8) ?static_dispatch.CheckedMethodLookup {
         const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.nameStore(), owner) orelse return null;
         const method = view.nameStore().lookupMethodName(method_text) orelse return null;
-        return view.view.method_registry.lookup(.{ .owner = view_owner, .method = method });
+        return view.tables().method_registry.lookup(.{ .owner = view_owner, .method = method });
     }
 
     /// The worker of an adapter function value (see `WorkerKey.adapter`).
@@ -2024,21 +2037,18 @@ pub const Program = struct {
     /// What the function value of lambda or closure expression `expr`
     /// captures: the binders of enclosing bodies whose values it needs,
     /// which are its own captures and those of the local procedures its
-    /// body uses (`NestedProcSite.runtime_captures`).
+    /// body uses (`CheckedBodies.nestedProcRuntimeCaptures`).
     pub fn siteCaptures(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error![]const checked.CheckedCapture {
-        const site_index = self.sites_by_expr.get(.{ .module = module_index, .expr = expr }) orelse
-            invariant("a lambda or closure has no nested procedure site");
-        return try self.runtimeCaptures(self.module(module_index), site_index);
+        return try self.runtimeCaptures(self.module(module_index), expr);
     }
 
-    /// The runtime captures of nested procedure site `site_index` of `view`.
-    /// A scheme alias owns no value: each of its uses lowers the callable it
+    /// The runtime captures of the procedure `view` constructs at `expr` (a
+    /// nested procedure site's expression or a closure site's lambda). A
+    /// scheme alias owns no value: each of its uses lowers the callable it
     /// names, whose own captures the site lists, so it takes no capture.
-    pub fn runtimeCaptures(self: *Program, view: *const types.ModuleView, site_index: anytype) Allocator.Error![]const checked.CheckedCapture {
-        const table = view.view.nested_proc_sites;
-        const span = table.sites[site_index].runtime_captures;
-        const listed = table.runtime_captures[span.start..][0..span.len];
+    pub fn runtimeCaptures(self: *Program, view: *const types.ModuleView, expr: ExprId) Allocator.Error![]const checked.CheckedCapture {
         const bodies = view.bodies();
+        const listed = try bodies.nestedProcRuntimeCaptures(expr);
         var kept: std.ArrayList(checked.CheckedCapture) = .empty;
         for (listed) |capture| {
             if (bodies.binder(capture.pattern).is_scheme_alias) continue;
@@ -2052,7 +2062,7 @@ pub const Program = struct {
         const key: WorkerKey = .{ .default = .{ .module = module_index, .expr = expr } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
-        const ret = try self.converter().convert(module_index, view.bodies().exprType(expr), .{ .module = module_index, .vars = &.{}, .bound = &.{} });
+        const ret = try self.converter().convert(module_index, try view.bodies().exprType(expr), .{ .module = module_index, .vars = &.{}, .bound = &.{} });
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const identity = self.workerIdentity(key);
         const imported = !self.ownsModule(module_index);
@@ -2260,7 +2270,7 @@ pub const Program = struct {
     /// The thunk reading the compile-time value slot of literal argument root
     /// `root` of `module_index`, whose value has type `ty`
     /// (`WorkerKey.root_slot`).
-    pub fn rootSlotThunkWorker(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!WorkerId {
+    pub fn rootSlotThunkWorker(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootKey, ty: TypeId) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .root_slot = .{ .module = module_index, .root = root } };
         if (self.worker_ids.get(key)) |existing| return existing;
         return try self.addErasedWorker(key, module_index, &.{}, &.{}, ty, "boxy.root_slot");
@@ -2349,7 +2359,7 @@ pub const Program = struct {
         return switch (binding) {
             .top_level => |top| blk: {
                 const owner = self.moduleByKey(top.artifact);
-                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(top.binding)].body };
+                break :blk .{ .module = owner.index, .body = owner.tables().top_level_procedure_bindings.bindings.items[@backingInt(top.binding)].body };
             },
             .imported => |imported| blk: {
                 const owner = self.moduleByKey(imported.artifact);
@@ -2359,7 +2369,7 @@ pub const Program = struct {
             },
             .platform_required => |required| blk: {
                 const owner = self.moduleByKey(required.artifact);
-                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(required.procedure_binding)].body };
+                break :blk .{ .module = owner.index, .body = owner.tables().top_level_procedure_bindings.bindings.items[@backingInt(required.procedure_binding)].body };
             },
             .hosted => |hosted| .{ .module = self.moduleByIdx(hosted.module_idx).index, .body = .{ .direct_template = .{ .proc_value = hosted.proc, .template = .{ .checked = hosted.template } } } },
         };
@@ -2377,13 +2387,13 @@ pub const Program = struct {
     }
 
     /// A compile-time root of a module of the program.
-    pub const RootSlotKey = struct { module: ModuleIndex, root: checked.ComptimeRootId };
+    pub const RootSlotKey = struct { module: ModuleIndex, root: checked.ComptimeRootKey };
 
     /// Whether this program evaluates compile-time root `root` of module
     /// `module_index`: the root is one of the program's requests. A pending
     /// root no program evaluates (a literal in a branch, whose conversion
     /// runs where it is reached) has no value to read.
-    pub fn evaluatesRoot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootId) bool {
+    pub fn evaluatesRoot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootKey) bool {
         return self.requested_roots.contains(.{ .module = module_index, .root = root });
     }
 
@@ -2391,10 +2401,10 @@ pub const Program = struct {
     /// compile-time value slot: this program evaluates the root, at one
     /// type. A polymorphic constant computes at each instance it is read
     /// at, as its entry procedure's value.
-    pub fn readsRootSlot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootId) Allocator.Error!bool {
+    pub fn readsRootSlot(self: *const Program, module_index: ModuleIndex, root: checked.ComptimeRootKey) Allocator.Error!bool {
         if (!self.evaluatesRoot(module_index, root)) return false;
         const view = self.module(module_index);
-        return !try types.Converter.rootHasIdentityVariables(view, view.view.compile_time_roots.root(root).checked_type);
+        return !try types.Converter.rootHasIdentityVariables(view, (try view.view.compileTimeRoot(root)).checked_type);
     }
 
     /// The static data slot holding the value of compile-time root `root` of
@@ -2405,7 +2415,7 @@ pub const Program = struct {
     /// fails as the recursion evaluating the value in place would end in,
     /// and the evaluator reruns the reader once the root completes
     /// (design.md "Compile-Time Evaluation Strategy").
-    pub fn rootValueSlot(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!LIR.StaticDataId {
+    pub fn rootValueSlot(self: *Program, module_index: ModuleIndex, root: checked.ComptimeRootKey, ty: TypeId) Allocator.Error!LIR.StaticDataId {
         const key: RootSlotKey = .{ .module = module_index, .root = root };
         if (self.root_value_slots.get(key)) |slot| return slot;
         const module_key = self.module(module_index).key;
@@ -2467,6 +2477,7 @@ pub fn poolSlice(comptime T: type, pool: []const T, span: anytype) []const T {
 /// Lower the requested roots and everything they reach.
 pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     base.dev_diagnostics.traceBoxyWork("boxy lowering");
+    try Common.demandInterfaceCapabilities(input.modules);
     var result = try LirProgram.Result.init(allocator, input.target_usize);
     const program = allocator.create(Program) catch |err| {
         result.deinit();
@@ -2510,13 +2521,13 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
     for (program.modules.views.items) |view| {
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
-        for (view.view.exported_procedure_bindings.bindings) |*binding| {
+        for ((try view.view.exportRows()).procedure_bindings) |*binding| {
             try program.exported_bindings.put(allocator, .{ .module = view.index, .def = binding.binding.def, .pattern = binding.binding.pattern }, binding);
         }
-        for (view.view.callable_eval_templates.templates) |template| {
+        for (view.tables().callable_eval_templates.view().templates) |template| {
             try program.callable_eval_by_pattern.put(allocator, .{ .module = view.index, .pattern = template.pattern }, template.id);
         }
-        for (view.view.entry_wrappers.wrappers.items) |wrapper| {
+        for (view.tables().entry_wrappers.wrappers.items) |wrapper| {
             try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
         }
     }
@@ -2525,7 +2536,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     try initHosted(program);
     for (program.modules.views.items) |*view| {
         const bodies = view.bodies();
-        for (view.view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
+        for (view.tables().checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
             const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
             switch (bodies.exprData(scope.checked_expr)) {
@@ -2534,13 +2545,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             }
         }
         try program.by_identity.put(allocator, view.view.module_identity.stable_hash, view.index);
-        for (view.view.nested_proc_sites.sites, 0..) |site, site_index| {
-            const site_expr = site.checked_expr orelse continue;
-            try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
-            // A closure's site is also its lambda's, which names its worker.
-            const site_data = view.bodies().exprData(site_expr);
-            if (site_data == .closure) try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_data.closure.lambda }, @intCast(site_index));
-        }
         for (bodies.recordOmittedDefaults()) |source_omitted| {
             const omitted = bodies.recordOmittedDefault(source_omitted);
             const name = try program.store.internName(view.nameStore().recordFieldLabelText(omitted.field_name));
@@ -2548,7 +2552,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
         // A method of a type declared in a function body is a local
         // procedure its dispatches call, each at its own instantiation.
-        for (view.view.method_registry.entries) |entry| {
+        for (view.tables().method_registry.entries) |entry| {
             const target = entry.target orelse continue;
             switch (target.kind) {
                 .local_proc => |local| {
@@ -2563,7 +2567,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
         // A local procedure's uses all reach it through its binding, so its
         // own scheme's arguments are passed per call.
-        for (view.view.resolved_value_refs.records) |record| {
+        for (view.valueRefs().records) |record| {
             const local = switch (record.ref) {
                 .local_proc => |local| local,
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => continue,
@@ -2609,7 +2613,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             // validated and discarded: nothing stores its value (design.md
             // "Literal Arguments").
             const validate_only = if (request.compile_time_root) |root_id| blk: {
-                const root = program.module(source_module).view.compile_time_roots.root(root_id);
+                const root = try program.module(source_module).view.compileTimeRoot(root_id);
                 break :blk if (root.literal_argument) |argument| argument.validate_only else false;
             } else false;
             const stored_ty = if (validate_only) try program.store.emptyRecord() else ret;
@@ -2678,10 +2682,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 },
                 .template => |key| blk: {
                     const view = program.module(key.module);
-                    const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
-                    const names = view.nameStore();
-                    const export_name = names.procBase(template.proc_base).export_name orelse break :blk "boxy.template";
-                    break :blk names.exportNameText(export_name);
+                    if (key.template.rowIndex() == null) break :blk "boxy.literal_root";
+                    const template = view.tables().checked_procedure_templates.get(key.template);
+                    break :blk checked.procBaseDefName(view.view.module_env, template.proc_base) orelse "boxy.template";
                 },
                 inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| "boxy." ++ @tagName(kind),
             };
@@ -2707,20 +2710,30 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 fn seedUnitWorkers(program: *Program) Allocator.Error!void {
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;
-        for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
+        for (view.tables().checked_procedure_templates.templates.items, 0..) |template, index| {
             if (!unitEmitsTemplate(view, template)) continue;
             if (try templateRejected(program, view, template)) continue;
-            const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
+            const worker = try program.templateWorker(view.index, .row(@intCast(index)));
             _ = try program.methodEntryWorker(worker);
         }
-        for (view.view.method_registry.entries) |entry| {
+        // Each literal root's entry wrapper, which no table row holds.
+        var literal_roots: std.ArrayList(checked.ComptimeRootKey) = .empty;
+        defer literal_roots.deinit(program.allocator);
+        try view.dispatch().appendLiteralRoots(program.allocator, &literal_roots);
+        for (literal_roots.items) |root| {
+            const template_id = checked.literalRootWrapperTemplate(root);
+            if (try templateRejected(program, view, try view.dispatch().procedureTemplate(template_id))) continue;
+            const worker = try program.templateWorker(view.index, template_id);
+            _ = try program.methodEntryWorker(worker);
+        }
+        for (view.tables().method_registry.entries) |entry| {
             const target = entry.target orelse continue;
             const template = switch (target.kind) {
                 .procedure => |procedure| procedure.template,
                 .local_proc, .structural => continue,
             };
             const owner = program.moduleByKey(.{ .bytes = template.artifact.bytes });
-            if (try templateRejected(program, owner, owner.view.checked_procedure_templates.get(template.template))) continue;
+            if (try templateRejected(program, owner, owner.tables().checked_procedure_templates.get(template.template))) continue;
             const worker = try program.templateRefWorker(template);
             if (program.worker(worker).imported) continue;
             _ = try program.methodEntryWorker(worker);
@@ -2735,7 +2748,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
 /// Whether checking rejected `template`'s signature: it has no type to lower
 /// at, and every use of it is a runtime error of its own.
 fn templateRejected(program: *Program, view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) Allocator.Error!bool {
-    return try program.converter().hasError(view.index, template.checked_fn_root);
+    return try program.converter().hasError(view.index, try view.view.checked_types.pairedType(template.checked_fn_root));
 }
 
 /// Whether a module unit emits `template` (design.md "Per-Module Output"):
@@ -2745,10 +2758,11 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) bool {
     return switch (template.body) {
         .checked_body, .intrinsic_wrapper, .unimplemented => true,
-        .entry_wrapper => |wrapper_id| switch (view.view.compile_time_roots.root(view.view.entry_wrappers.get(wrapper_id).root).kind) {
+        .entry_wrapper => |wrapper_id| switch (view.tables().compile_time_roots.root(view.tables().entry_wrappers.get(wrapper_id).root).kind) {
             .expect, .repl_expr => false,
             .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
         },
+        .literal_root => true,
     };
 }
 
@@ -2802,7 +2816,8 @@ fn initHosted(program: *Program) Allocator.Error!void {
     var platform: ?*const types.ModuleView = null;
     for (program.modules.views.items) |*view| {
         if (view.view.module_identity.kind == .platform) platform = view;
-        for (view.view.hosted_procs.procs) |proc| {
+        const hosted_procs = try view.view.hostedProcs();
+        for (hosted_procs.procs) |proc| {
             const owner = program.moduleByKey(.{ .bytes = proc.template.artifact.bytes });
             const key: TemplateKey = .{ .module = owner.index, .template = proc.template.template };
             try program.hosted.put(allocator, key, .{
@@ -2810,11 +2825,11 @@ fn initHosted(program: *Program) Allocator.Error!void {
                 .dispatch_index = null,
             });
             try by_def.put(allocator, .{ .module = view.index, .def = @backingInt(proc.def_idx) }, key);
-            try ordered.append(allocator, .{ .key = key, .order = proc.orderKey(view.view.hosted_procs), .def = @backingInt(proc.def_idx), .digest = view.key.bytes });
+            try ordered.append(allocator, .{ .key = key, .order = proc.orderKey(hosted_procs), .def = @backingInt(proc.def_idx), .digest = view.key.bytes });
         }
     }
     if (platform) |view| {
-        for (view.view.hosted_bindings.bindings, 0..) |binding, index| {
+        for ((try view.view.hostedBindings()).bindings, 0..) |binding, index| {
             const target = switch (program.input.unit) {
                 .program => program.moduleByKey(binding.target_checked_module),
                 // A unit binds the hosted functions of the modules it lowers;
@@ -2848,14 +2863,15 @@ fn initHosted(program: *Program) Allocator.Error!void {
 /// the app provides for its requirements.
 fn solvePlatformIdentities(program: *Program) Allocator.Error!void {
     const platform = for (program.modules.views.items) |*view| {
-        if (view.view.platform_type_inputs.requirements.len != 0) break view;
+        if (view.view.hasPlatformRequirements()) break view;
     } else return;
     for (program.modules.views.items) |*app| {
-        const table = app.view.platform_requirement_solutions;
+        const table = try app.view.platformRequirementSolutions();
         for (table.solutions) |solution| {
-            if (solution.requires_idx >= platform.view.platform_type_inputs.requirements.len) invariant("an app solves a requirement its platform does not declare");
-            const requirement = platform.view.platform_type_inputs.requirements[solution.requires_idx];
-            const formals = platform.view.platform_type_inputs.identities[requirement.identities.start..][0..requirement.identities.len];
+            const type_inputs = try platform.view.platformTypeInputs();
+            if (solution.requires_idx >= type_inputs.requirements.len) invariant("an app solves a requirement its platform does not declare");
+            const requirement = type_inputs.requirements[solution.requires_idx];
+            const formals = type_inputs.identities[requirement.identities.start..][0..requirement.identities.len];
             const solved = table.identity_solutions[solution.identity_start..][0..solution.identity_len];
             if (formals.len != solved.len) invariant("an app's requirement solution differs from its requirement's identity variables");
             for (formals, solved) |formal, app_ty| {
@@ -2872,7 +2888,7 @@ fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source
     // A root whose target takes no hidden arguments is the target itself.
     const direct: ?checked_names.ProcedureTemplateRef = if (request.procedure_template) |template|
         template
-    else if (request.procedure_binding) |binding| switch (program.module(source_module).view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
+    else if (request.procedure_binding) |binding| switch (program.module(source_module).tables().top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
         .direct_template => |direct| Program.directTemplate(direct.template),
         // A rejected binding's root is a wrapper that crashes.
         .callable_eval_template, .checked_error => null,

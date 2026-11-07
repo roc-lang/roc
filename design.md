@@ -518,6 +518,12 @@ within an explicit code-growth limit; a larger value keeps its named binding.
 A compile-time value read is not a substitutable read: its value guard crashes
 where the program evaluates the read when that value's evaluation failed, so
 substitution may neither drop a discarded read nor move one to a later use.
+A static-data candidate with a fresh form (`StaticDataCandidate.fresh_form`:
+a list or string on its spine was evaluated with room beyond its contents)
+is a leaf, as a stored list is: rebuilding its parts at a read would rebuild
+its capacity requests there, allocating at a read that only reads it, where
+the read of its static datum chooses its form per read (see "Fresh forms of
+static values").
 Making a value reusable is decided by substitutability alone, never by that
 limit: a substitutable value of any size is already reusable and is kept whole,
 so reuse never walks or copies its structure. A long interpolation binds one
@@ -1666,7 +1672,7 @@ replay order are explicit coordinator responsibilities. Successful compile-time
 message bytes. Cache hits replay that output for the roots the compilation
 demands alongside newly evaluated roots, sorted by module and root id; they do
 not rerun cached expressions. Cache
-validation checks the recorded root ids and message ranges before replay.
+validation checks the recorded message ranges before replay.
 
 Checking must evaluate every checked top-level expression and every selected
 compile-time root that can be evaluated without effectful calls or runtime
@@ -1826,33 +1832,40 @@ a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
 record, or guard exists for the root. The decoded value is a construction
 tree, and a root whose every leaf is a scalar, the empty string, or an
-empty list lowers as that tree rather than as bytes, because static data
-is the wrong home for it: records,
+empty list, none evaluated with room for items, lowers as that tree rather
+than as bytes, because static data is the wrong home for it: records,
 tuples, and tag payloads of such parts rebuild field by field, so an
 empty `Dict` or `Set`, which is a record of empty lists, never reaches the
-image either. An empty list lowers to the `with_capacity` it was evaluated
-with: a frozen descriptor's capacity word is its length, so the freezer
-keeps each empty list's evaluated capacity on the root's export, keyed by
-its byte offset within the image, and the runtime rebuilds the request so
-the first append goes in place. A list with items keeps its slot however
-uniform its contents, so the constructions are the scalars, the empty
-string, the empty list, and records, tuples and tags of those. A completed
-string shorter than three target words, the threshold below which a
-restored string needs no target storage, lowers as its literal, as a read
-restoring the stored string does, so a procedure's code is the same whether
-it reads the string completed or restored. A restored string is its own
-bytes, never a view into a longer stored backing, so whether it needs
-target storage depends on the string alone. A list of
-copies of one construction—what `List.repeat` and a constant fill loop
-complete to—additionally names, on each read, the argument-free procedure
-that builds the same list fresh (`assign_literal.fresh_alternative`), and
-ARC chooses one form per read (see "Fresh forms of static lists" under ARC
-Borrow Inference): a read whose value only ever gets read keeps the static
-datum and allocates nothing, while a read whose value an in-place operation
-would otherwise copy on first write is born fresh, so the write is proven
-unique and the copy never happens. Neither form is visible after ARC. A non-empty
-list with spare capacity freezes to its items alone; only the capacity of
-an empty list survives. Identical nodes of one frozen image are one symbol:
+image either. A frozen descriptor's capacity word is its length, so the
+freezer keeps the capacity each list and string on the root's spine (its
+fields, tuple items and tag payloads) was evaluated with, where it is more
+than the contents, on the root's export, keyed by the descriptor's byte
+offset within the image (`StaticDataExport.capacities`). A construction
+rebuilds an empty list or string as the `with_capacity` it was evaluated
+with, so the first append goes in place; a root whose construction holds
+such a request keeps its slot and names that construction as its fresh form
+(below), so a read that only reads it allocates nothing. A list with items
+keeps its slot however uniform its
+contents, so the constructions are the scalars, the empty string, the empty
+list, and records, tuples and tags of those. A completed string shorter
+than three target words, the threshold below which a restored string needs
+no target storage, lowers as its literal, as a read restoring the stored
+string does, so a procedure's code is the same whether it reads the string
+completed or restored; a string evaluated with room beyond its bytes keeps
+its slot instead, however short. A restored string is its own bytes, never
+a view into a longer stored backing, so whether it needs target storage
+depends on the string alone. A value a list or string on whose spine was
+evaluated with spare capacity, and a list of copies of one
+construction—what `List.repeat` and a constant fill loop complete
+to—additionally name, on each read, the argument-free procedure that builds
+the same value fresh (`assign_literal.fresh_alternative`), and ARC chooses
+one form per read (see "Fresh forms of static values" under ARC Borrow
+Inference): a read whose value only ever gets read keeps the static datum
+and allocates nothing, while a read whose value an in-place operation would
+otherwise copy on first write is born fresh with the capacity the value was
+evaluated with, so the write is proven unique and neither the copy nor a
+regrowth within that capacity happens. Neither form is visible after ARC.
+Identical nodes of one frozen image are one symbol:
 two evaluations of the same constant expression, such as two `List.repeat`
 calls with the same arguments, freeze to separate allocations with the same
 contents, and both the evaluation's image and the runtime program's
@@ -1867,10 +1880,15 @@ index of its items; a frozen list of a million string pointers therefore
 costs work proportional to the image at every one of these steps, never a
 scan per pointer. A build that restores its compile-time values from a checked
 module's const store rather than from a completed host program, as every
-build after the first does, reaches the same constructions: the const
-store keeps an empty list's evaluated capacity and restores it as the
-`with_capacity` call, and a restored value whose parts are all
-constructions lowers as them rather than as a static-data candidate.
+build after the first does, reaches the same constructions and fresh forms:
+the const store keeps every list's and string's evaluated capacity
+(`ConstStore.spareCapacity`, part of the stored value), an empty list or
+string restores as its `with_capacity` call (a static-data candidate of its
+own when it is the root), a list with items or a string evaluated with room
+beyond its contents restores as a static-data candidate carrying that
+capacity (a part of its enclosing candidate when it is on one's spine), and
+a restored value whose parts are all constructions, none requesting
+capacity, lowers as them rather than as a static-data candidate.
 A construction is the value's shape and leaves alone and names no list,
 field or payload layout: the compile-time consumer that decoded it and the
 runtime consumer that emits it lower separately and intern layouts in their
@@ -2265,16 +2283,17 @@ The evaluation output is the checked module's own data: compile-time
 evaluation writes it and nothing else does, and it is stored in the module's
 content-hash entry beside the `ModuleEnv` and the inference output. A checked
 module cache entry records every requested root it did not evaluate
-with the explicit `unevaluated` payload; its constant template keeps its
-`eval_template` state and the constant store holds nothing for it. When a
+with the explicit `unevaluated` payload; the evaluation output holds no
+stored value for its constant template and the constant store holds
+nothing for it. When a
 compilation loads a checked module whose evaluation output has unevaluated
-requests, evaluation resumes on that module: its evaluation output (the
-compile-time roots, the constant templates, the constant store, and the
-canonical name store, since a stored type names its labels and nominal types
-there and a value evaluated here can reach names the module's own source never
-mentions, such as the capture types of an imported closure) moves into storage
-the module owns, every unevaluated root returns to `pending`, and the module
-joins finalization with the compilation's other modules. Finalization
+requests, evaluation resumes on that module: its evaluation output moves into
+storage the module owns, from the allocator that owns the module, every
+unevaluated root returns to `pending`, and the module joins finalization with
+the compilation's other modules. The output names nothing in the module's name
+store (the names its stored types use are the constant store's own), so a value
+evaluated here that reaches names the module's own source never mentions, such
+as the capture types of an imported closure, interns them there. Finalization
 requests only the pending roots of the modules it finalizes, so the reopened
 module's evaluated roots are restored from its store like any other module's,
 and its demanded pending roots evaluate against the same checked module data
@@ -2303,8 +2322,9 @@ unit-link identities, never by filesystem placement. Distinct modules sharing a
 unit-link identity are disambiguated by full content identity. Replay binds
 these identities to the current compilation's source environments and paths.
 
-A checked module's cache entry stores its checking output and finalized
-compile-time constants together. Its identity covers the module's source and
+A checked module's cache entry stores its `ModuleEnv`, its inference output
+and its evaluation output with the finalized compile-time constants, and
+nothing else. Its identity covers the module's source and
 resolved dependencies, checking context and compatibility policy. Identical
 inputs share the entry across checkouts, independently of their source paths.
 An edit that changes this identity misses the entry and evaluates the new
@@ -3817,8 +3837,8 @@ User diagnostics never suppress checked module output or propagate dependency fa
 producer boundary by explicit checked data: a checked runtime-error expression,
 a checked-error dispatch plan, a crash constant, a checked-error platform
 requirement, or a checked-error provided export (a `provides` entry whose
-checked type contains an error declares no host ABI, so it publishes no
-runtime root, static data request, or glue signature, and a runtime command
+checked type contains an error declares no host ABI, so it has no runtime
+root, static data request, or glue signature, and a runtime command
 stops before linking). Importers and every post-check stage consume that data
 normally.
 Independent definitions, imports, compile-time roots, and runtime paths remain
@@ -3867,7 +3887,7 @@ always carries an error-severity report. A build without error reports has
 therefore completed every module successfully, and successful completion always
 includes the module's CheckedModule. Post-build consumers of checked modules
 (documentation, public API extraction) run only for builds without error
-reports, and they read checked modules through `ModuleState.checkedModule`,
+reports, and they read checked modules through `ModuleState.checkedModuleData`,
 whose CheckedModule is not optional.
 
 Workers carry source-read and type-check operational errors through the existing
@@ -4192,19 +4212,28 @@ the entry. There is no previous entry to consult, no value identity, no
 fingerprint of a definition, no reuse of evaluated values across edits, no
 literal-values file and no discovery manifest.
 
-A checked entry holds exactly the live data of the checked module ("The Live
+A checked entry holds exactly three parts of the checked module ("The Live
 Checked Module"): the serialized `ModuleEnv` including the sealed solver
-store, the inference output, and the evaluation output. Derived facts (canonical
-type keys, evidence, synthesized templates, demand vectors, layouts) are never
-cached; after a hit, each is recomputed on its first demand through its slot
-("On-Demand Analyses And Write-Once Slots"). An entry is written only when a
+store, the inference output, and the evaluation output
+(`CheckedModule.Serialized` holds the last two). A hit opens the module from
+them through the same function that opens it after checking
+(`openCheckedModule`), against the same imports: its identity and key, its
+name store and its synthesized-type store are recreated, never read from the
+entry. Derived data (canonical type keys, evidence, synthesized templates,
+demand vectors, layouts) are never cached; after a hit, each is recomputed on
+its first demand through its slot ("On-Demand Analyses And Write-Once
+Slots"). The baked Builtin module is the same three parts: its `ModuleEnv`
+and its inference and evaluation outputs (`openBakedBuiltin`). An entry is written only when a
 cache is enabled; a `--no-cache` build serializes nothing.
 
 A platform/app pairing entry is keyed by the content hashes of the platform's
 and the app's checked entries. It holds only the pairing's evaluation output:
 the completed app-dependent evaluation results and their recorded debug
-observations. It never holds bodies, types, templates, source environments or a
-live checker continuation, because a pairing rewrites none of those. Only a
+observations. It never holds bodies, types, templates, names, relations, root
+requests, source environments or a live checker continuation, because a
+pairing rewrites none of those. A hit is installed over a pairing created from
+the two modules exactly as without a hit, and everything else the pairing
+reads is computed on demand. Only a
 completed pairing without new checking or evaluation diagnostics may be
 cached; already-replayed earlier-stage reports do not prevent caching. A hit
 consumes its stored outcomes and replays its recorded debug observations without
@@ -4499,13 +4528,18 @@ emitted code, symbol names and compile-time values, so a compiler edit that chan
 them. Keeping different compiler builds' caches apart is the job of the cache
 directory alone: every cache lives under `compat-<id>`, which already names
 the build more finely than any key could. The checking context identity includes import-name
-hashes, resolved import ids, platform requirement context, and explicit root
-requests. A reusable platform module has no app relation in this identity.
+hashes, resolved import ids, platform requirement context, and validation
+mode, and is computed with the id by one function
+(`CheckedModuleIdentity.compute`), which both a cache probe and opening the
+module call. It names nothing a command chooses: the root requests a command makes
+of a module by name select among the module's checked compile-time root
+candidates when its root requests are read (`ModuleAnalyses.explicit_roots`),
+so `check`, `build`, `test` and a REPL share one checked entry. A reusable platform module has no app relation in this identity.
 Generated code has a separate identity that includes the exact platform/app
 relation; specialization keys use that identity while
 local checked references retain their immutable module owner. The checked
-module cache stores only the live data of the checked module, every part of
-which is a deterministic output of those inputs; nothing in an entry is a
+module cache stores only the module's `ModuleEnv`, inference output and
+evaluation output, each a deterministic output of those inputs; nothing in an entry is a
 cache-id input of its own. A cache miss recomputes the entry from the
 module's checked inputs; no other entry is consulted.
 
@@ -5068,9 +5102,15 @@ sealed. It consists of exactly these parts:
   checking writes when it completes, so every later analysis reads them
   from the module, after a cache hit as well. An exhaustiveness check's
   index in its list is its checked site id.
-- The evaluation output: the constant store (`ConstStore`), compile-time root
-  payloads and compile-time root reads. Compile-time evaluation writes it and
-  nothing else does.
+- The evaluation output (`EvaluationOutput`): the constant store
+  (`ConstStore`); each compile-time root's payload and stored `.boxy` value,
+  by root identity; each constant template's stored value, by the
+  template's owner; the recorded debug observations; the roots each
+  evaluated root read; and the exhaustiveness checks a pairing decides whose
+  empirical failure evaluation already reported. Compile-time evaluation
+  writes it and nothing else does: no checked table holds a payload, a
+  stored value or a copy of one, and every entry is named by an identity
+  that is a function of the module's sealed data.
 
 **Sealing.** Checking canonicalizes the solver store in place as its last
 write before sealing it (`types.Store.canonicalizeAndSeal`). Every slot comes
@@ -5087,12 +5127,24 @@ representatives. Five columns beside the module's synthesized-type store
 complete what a reader needs: the name each identifier the store's types use
 stands for, interned once into the module's name store; the checked identity
 and owning checked module of every module the store's named types come from;
-the checked data of every nominal declaration in the store; per variable,
+the checked data of every nominal declaration the module makes; per variable,
 whether the module's checked output reaches it and through which row-tail
 positions, which is all a variable's row default depends on; and the box
 payload capability each local nominal type was given. With those columns a
 reader renders a source type (`SealedTypeView`) without allocating, interning
 or resolving anything.
+
+A module's checked data holds the declarations of its own nominal types and
+no other module's. A nominal type's representation names the module that
+declares it and the declaration there (a builtin's names the Builtin module
+through its owner), and a reader that needs the declaration reads it in that
+module (`nominalDeclarationSite`), through the `ModuleResolver` its consumer
+passes; a walk over types that reaches a nominal's backing continues in the
+declaring module's types. A creation that instantiates another module's
+declaration in its own store creates that declaration's formals and backing
+in the store once, under the creation lock, and reuses them for every later
+instantiation of the declaration there (`projected_declarations`, by
+declaring module and declaration).
 
 There is no second representation of any of this. No pass copies types,
 bodies, templates, names, plans or roots into another table after checking.
@@ -5105,6 +5157,18 @@ roots), and every reader is a view over the parts above:
   needs to know which;
 - an expression id is a CIR node id;
 - a template is a definition id or a promoted local procedure id.
+
+Every embedder (the build coordinator, the builtin compiler, the evaluation
+harness, the REPL and the playground) makes a checked module one way, by
+opening it (`openCheckedModule`) from its `ModuleEnv`, its imports and its
+inference and evaluation outputs: right after checking it, from a cache entry,
+or from the baked Builtin outputs. Opening computes the module's identity and
+key (`CheckedModuleIdentity`), interns its names, creates the synthesized types
+its sealed store's readers need and sets up its analyses; every other fact is
+a slot. Evaluating a freshly opened module's compile-time roots is a separate
+step that writes only the evaluation output: `evaluateOpenedModule` for an
+embedder that evaluates one module at a time, and program finalization for the
+build coordinator, which evaluates the roots its command demands.
 
 A checked module is either complete or unavailable to later stages. Later
 stages read checked modules but never mutate checked source data, the sealed
@@ -5133,7 +5197,18 @@ The method registry is a view over the checked module: each retained method's
 callable type is the solver variable of its definition. Derived declarations
 own this root even when a containing expression has been replaced by a checked
 error. Rejected declarations retain their explicit target-less registry entry;
-skipped associated values request no method callable root. The method registry
+skipped associated values request no method callable root. Which target each
+method binding has (a procedure template, a promoted or local procedure, a
+structural declaration, a rejected declaration, a reference to another
+binding, or none) is one classification computed from the module's checked
+source alone; the registry builds its entries from it, and the module's type
+roots reach exactly the callable types and checker-recorded inspect instances
+it names, so the two cannot disagree. A binding bound by reference
+(`method = f`) has its target resolved with the module's checked tables (see
+"Procedure Aliases"); its class names the binding's own type and inspect
+instance, and every other callable type its target can have is either a type
+of a checked node of the module or a template's function root in the store of
+the module that owns the template. The method registry
 view a consumer reads is a per-module on-demand analysis ("On-Demand Analyses
 And Write-Once Slots").
 
@@ -5254,11 +5329,65 @@ after checking, are on-demand analyses of the sealed module
   `erroneous_nodes` entry, any child's, a dispatch total resolution rejected,
   and, when a dispatch was rejected, a resolved local constant reference to
   an erroneous value; the constant-following part crosses definitions, so it
-  is one slot for the module), and which templates and nested procedure sites
-  are single-source calls.
+  is one slot for the module), which templates are single-source calls,
+  which nested procedure sites are (a slot of its own, since only it reads
+  the module's nested procedure sites), and the exhaustiveness check
+  checking left at each match expression and destructuring pattern. Whether
+  a node's own dispatch plan cannot run is read from the node's plans as a
+  unit's analysis needs it, not computed for the module. A dispatch reaches a
+  template only as the target a method registry entry of the plan's method
+  names, so the single-source analysis resolves only the plans whose method
+  names a private template.
 
 There is no propagation pass over finished bodies during checking or
 checked module assembly, and no analysis result is serialized.
+
+### Value-Reference Resolution
+
+What every value reference resolves to is recorded by checking, at the end of
+checking (`Check.recordCheckingOutputs`, `check/value_resolution.zig`), in
+checker-native ids, as part of the module's `ModuleEnv` and its cache
+entries:
+
+- `value_references`: for each reached lookup expression, the binding it
+  names: a lambda parameter, block-local value, mutable version, pattern
+  binder or block-local function (an exact procedure alias carries the
+  lookup its alias chain ends at), a top-level definition, a bound selected
+  hoisted root (function- or data-valued), a promoted local procedure, a
+  directly imported module's definition or exposed destructure binder, the
+  definition of the module that declares a type an associated lookup names,
+  or a platform requirement. A foreign target is the one the lookup
+  expression itself names, so the record holds no id of another module and
+  stays valid when a cache entry's foreign references are rebound;
+- `binding_resolutions`: for every top-level binding (each top-level value
+  definition, each bound selected hoisted root, each promoted local
+  procedure), whether it is a constant, a procedure, a function value
+  compile-time evaluation produces from its root expression, or a checked
+  error, and, for an evaluated binding whose root is a lookup of a directly
+  callable procedure, that lookup (`forwarded_lookup`, see "Procedure
+  Aliases"; computed to a fixed point over alias chains);
+- `retired_exprs`: the expressions lowering evaluates as runtime errors
+  because resolution rejected them: uses of a binding resolved to a checked
+  error, calls whose callee is a runtime error, and what those rejections
+  propagate to through call-to-callee edges and through each evaluated
+  binding's root; an evaluated binding whose root is retired resolves to a
+  checked error;
+- `direct_procedure_calls`: the calls whose callee is a directly callable
+  procedure (an ordinary or hosted procedure, a block-local function, or a
+  forwarding alias).
+
+A reference into another module reads that module's own recorded
+`binding_resolutions`: the module is a direct import, or the module that
+declares a type reached through the imports, and it is checked first. Its
+binding resolutions are part of its checking interface (what an importer's
+inference cache entry is keyed by), so the recorded resolution is a function
+of the module and of what its imports fix, and of nothing a command, a
+workspace or a module it does not import decides. Lowering reads the
+resolution through the module's resolved value references, the callable-eval
+templates' `forwarded_lookup` and the checked-error procedure bindings, which
+only restate the recorded resolution in the module's procedure-binding and
+constant ids; a platform pairing extends them with the requirement bindings
+the app supplies.
 
 ### Synthesized Types
 
@@ -5267,7 +5396,7 @@ Some types lowering needs have no solver variable:
 - nominal declaration templates (backing, formals, declared fields and
   padding), built from the declaration annotation;
 - instantiated named applications;
-- entry and intrinsic wrapper function types;
+- entry wrapper function types;
 - resolved dispatch target instantiations;
 - literal-argument roots;
 - synthetic schemes;
@@ -5292,25 +5421,82 @@ its id alone, because its key names its variables only by position. Whether
 a type reaches an identity variable is found by walking the types it reaches,
 never through its key.
 
+The store grows while other threads read it. Its columns are append-only
+lists that one creator at a time grows while every other thread reads them
+without a lock (`collections.PublishedList`): a reader loads a column's
+published length, then its backing, and growth copies the column into a new
+backing and keeps the old one alive; replaced backings are freed only when
+the module is opened, before any other thread reads the store, and with the
+module. An item a reader can name never moves or changes. Once other threads can read the
+store, a creation holds the store's creation lock
+(`CheckedTypeStore.beginCreation`, `finishCreation`) from its first append
+until every type it made is complete and settled (each local nominal type
+it made given its instance's box payload capability, "Nominal
+Representations"), waits on no slot while holding it, and lets an id it
+created reach another thread only after it ends; creation's in-workspace
+memos are read and written only under that lock. Synthesized
+key slots never move (`collections.StableList`), and the key index answers
+over the roots complete when it is asked, growing as roots are created. No
+cache entry holds the store: opening a module (`openCheckedModule`) creates
+the types its sealed solver store's readers need, from the module's
+`ModuleEnv` and imports, whether checking just completed or a cache entry
+was loaded, and every other type is created again by the first consumer
+that needs it. Synthesized ids follow
+creation order, so no consumer orders anything that reaches output by a
+synthesized id.
+
+Dispatch resolution creates types once other threads read the store: each
+resolved direct call's callable is the target's callable, copied from its
+module and instantiated at the call. A template's or the module's
+resolution first demands every slot it reads (the schemas it resolves
+against, the interface capabilities of its own module once that module has
+a capability source and of each target's module) and only then holds the
+creation lock while it specializes the calls it resolved; it classifies
+them after the lock is released.
+
+A module's name store grows the same way. Once its module's types are
+complete, other threads read its names while its analyses intern method
+names, type names, labels and module identities into it (copying an
+imported type, dispatch resolution). Each interner then interns as one
+writer at a time under its own lock (`NameInterner.insertShared`), which
+it holds for no wait, while readers read its columns and probing table
+without a lock (a grown table replaces the current one and the old one
+stays alive). No cache entry holds the name store: opening the module
+interns the names its types and its lowering-visible declarations use. A
+procedure's base is no name: it is its kind and the source it
+comes from (`ProcBase`), a function of the module's checked data, so no
+store interns one. The store's own label
+rank caches hold the ranks of exactly those names; a reader that ranks
+labels interned since ranks them in its own cache.
+
 A synthesized type's key is computed on first demand through its own key
 slot, like a source type's. A synthesized function type records that its key
 composes its children's keys (`CheckedTypeKeyRecipe.synthetic_function`), and
 a projected type keeps the recipe of the type it projects.
 
 A scheme belongs to one root type of its module and is identified within the
-module by its id; references to a scheme hold that id. Its canonical key is
+module by its id; references to a scheme hold that id. A source scheme's id is
+its root's, a solver variable, so it is a function of the module's sealed
+data and occupies no entry of the synthesized-type store; only a synthetic
+scheme (over a synthesized root) is an entry there. Its canonical key is
 its root's key in the scheme namespace, computed only for a consumer that
 needs a key (`CheckedTypeStoreView.schemeKey`).
 
 ### Platform/App Composition
 
-Platform requirement declarations record their checked type roots, the
-producer-assigned order of requirement identity variables, and each for-clause
+A platform's requirement declarations are its `requires` clause: declaration
+`i` is requirement `i`, and nothing copies them into a table. Its requirement
+type inputs (`ModuleAnalyses.platformTypeInputs`) give each requirement's
+checked type root, the order of its identity variables, and each for-clause
 alias's checked identity and backing roots. Pairing consumes these exact rows
-and the app's recorded solution rows; it never revisits source annotations or
-rebuilds identity order. Deferred exhaustiveness diagnostics retain checked
-display text, missing patterns, source regions, and checked site IDs as
-serializable data.
+and the app's recorded solution rows (`ModuleAnalyses.platformRequirementSolutions`);
+it never revisits source annotations or rebuilds identity order. The exhaustiveness checks a pairing decides are
+the platform's deferred checks in its inference output whose sites need the
+pairing, less those whose empirical failure the platform's own evaluation
+reported (its evaluation output records those sites); the inference output
+holds their checked display text, missing patterns, source regions and
+checked site IDs, so their reports name nothing else. Nothing copies them
+into another table.
 
 A parametric platform outputs every root selected by the producer, including
 roots that require app bindings, and the complete same-module evaluation order.
@@ -5322,15 +5508,36 @@ requests and deferred diagnostics remain explicit checked data that a pairing
 activates.
 
 Platform/app composition is an overlay, not a clone. A pairing owns a map from
-each platform identity formal (its solver variable, including alias
-statements) to the app's solved actual. A type read of platform data under
-that pairing resolves through the map lazily, and the pairing memoizes each
-image it actually reads as a synthesized-type entry of its own. Facts that
-depend on the substituted types (direct targets, required-reference
-classification, root requests, exhaustiveness policy) are per-pairing
-on-demand analyses. Bodies, templates, names and roots are never rewritten:
-both lowering strategies read the platform's own CIR, templates and roots, and
-only the types they read through the pairing differ.
+each platform identity formal (its solver variable, including each for-clause
+alias statement's roots) to the app's solved actual, projected into the
+platform's store once when the pairing is created (`PairingOverlay`). A type
+read of platform data under that pairing resolves through the map on first
+demand (`CheckedTypeStoreView.pairedType`, `pairedScheme`; `CheckedBodies.typeOf`
+reads through it): a type that reaches no formal is its own image, and every
+other type's image is a synthesized type of the platform's store, created
+under the store's creation lock and memoized by the pairing, which records
+each image of a type that existed when it was created in a lock-free column.
+Whether a type reaches a formal is classified on demand too, over exactly the
+types the demanded type reaches. A consumer reads a template's, an entry
+wrapper's, a compile-time root's or a resolved reference's type
+through the pairing; root requests and provided exports carry their images.
+The paired checked module holds no type store or name store of its own: its
+types and names are its platform's (`typeStore`, `nameStore`), and every name
+the pairing interns for its types (an app type's names) is interned into the
+platform's name store as a shared writer. The names an evaluated constant's
+stored types use live in the constant store's own name table
+(`ConstStore.type_names`), so the evaluation output names nothing in any
+module's name store. The data that
+depends on the substituted types (direct targets, required-reference classification,
+requirement relations, required bindings, provided exports, exhaustiveness
+policy) is computed by per-pairing on-demand analyses; the pairing's root
+requests are its own slot over its platform's (`ModuleAnalyses.rootRequests`),
+each request read at its type's image, and read its required bindings and
+reference classification, which the pairing demands when it is created because
+its bodies and views read them. Bodies, templates, names, roots and
+tables are never copied or rewritten: both lowering strategies read the
+platform's own CIR, templates and roots, and only the types they read through
+the pairing differ.
 
 Calls to requirement declarations receive their direct-call classification
 from the bound app procedure kind using the checked output rule;
@@ -5419,19 +5626,246 @@ computed by whichever consumer first needs it, exactly once, into a slot owned
 by the module. Nothing computes such a fact eagerly for a whole module, and no
 cache entry stores one: a cache hit recomputes each fact on its first demand.
 
-- Per-root slots: a type's canonical key; a definition's call-edge evidence
-  (the total resolution of its dispatch plans against the settled store, its
-  evidence vectors and its callable specialization); a template's nested
-  procedure sites; a declaration's synthesized template; a template's
-  exhaustiveness sites; a top-level unit's body-level analyses
-  (divergence, inspect elision, state merges and loop mutations).
+- Per-root slots: a type's canonical key; the nested procedure sites of
+  a template's body and of a defaulted-field default
+  (`ModuleAnalyses.nestedProcSites`: each lambda, closure and hosted
+  lambda the body constructs a procedure at, identified within its owner
+  by its expression, with its lexical dispatch scope and its construction
+  evidence, whose span names the evidence pool of the resolution that
+  holds it); a declaration's synthesized template; the exhaustiveness
+  checks a template's body reaches
+  (`ModuleAnalyses.templateExhaustivenessSites`); a top-level unit's
+  body-level analyses (divergence, inspect elision, state merges and loop
+  mutations).
 - Per-component slots: analyses that are fixpoints over the call graph
   (template demand vectors, literal requirements) are claimed for a whole
   strongly connected component of the module's call graph, never per root.
+  For demand vectors each template's base vector and edges, read from its
+  body, its schema and its plans' dispatch resolution, are a slot of their
+  own and components are assigned as consumers reach them
+  (`templateDemandGraph`). For literal
+  requirements the graph is built only as far as a consumer reaches it
+  (`literalGraph`): the module slot holds only what needs no dispatch
+  resolution (the owner of each generalized local scope and the first
+  node holding each value reference and local function construction), and
+  each node's edges and own open literals (`literalNode`), the first node
+  reaching each evidence node of a template resolution's pool
+  (`computeLiteralPoolHolders`) and each node's component are slots of their
+  own. An edge is held by the first node, in node order, whose body reaches
+  it, which computes its arguments. A literal walk enters a template
+  resolution's pool only through a plan or a use site that resolution
+  resolves, and every node holding that plan or site walks it, so a pool's
+  holders follow from the pool's own plans and sites and the first node
+  holding each; generated codecs' calls and what no template's chain binds
+  are the module resolution's, which any node's walk can reach, so their
+  holders are one slot over every node. Components are assigned under the
+  graph's mutex, held around one assignment that reads only finished node
+  slots, and named by their least member; the order of every component
+  (`literalComponentOrder`, Tarjan's over every node in node order) is a
+  slot of its own, read where the module's own literal argument roots are
+  listed. A consumer of one template's requirements therefore resolves
+  only the templates that template reaches. A consumer demands, holding no claim, every
+  component a component reaches and every imported callee's result before
+  it claims the component, so a component's computation reads only
+  finished results and never waits on a slot of its own kind, in its own
+  module or another. A literal component (`literalComponent`) holds its
+  schemes' literal requirements, the literal arguments of the edges its
+  templates hold first and its literal argument roots, each with its entry
+  wrapper's function type and scheme, which the component creates; it
+  creates each type under the store's creation lock, held around that
+  creation only, after every slot the creation reads (the schemas and
+  substitutions it instantiates, the requirements of imported callees, the
+  interface capabilities of every module whose types it copies). The
+  literal argument roots a template's edges read are a per-template slot
+  over finished components (`templateLiteralArgumentDemand`).
+- Per-unit slots: the literal conversion roots of a top-level unit's
+  literals (`ModuleAnalyses.unitLiteralConversions`): each literal whose
+  custom conversion dispatch resolution proved closed, its request
+  eligibility, and its entry wrapper's function type and scheme, created
+  under the creation lock after the slots the decision reads.
 - Per-module slots: the key index (one over source types, one over
-  synthesized types), interface capabilities, the method registry view,
-  provided exports, the nodes whose dispatch plan cannot run, diagnostic
-  errors, and single-source calls.
+  synthesized types), the method registry view, provided exports,
+  diagnostic errors, single-source calls, the exhaustiveness check
+  checking left at each match
+  expression and destructuring pattern, by node, and the module's root
+  requests (`ModuleAnalyses.rootRequests`: the explicit roots the
+  compilation reading it requests by name, which its analyses hold and
+  nothing caches, its checking mode, which its checking context records,
+  its provided and exposed
+  entrypoints, its platform-required bindings, and its eligible
+  compile-time roots: the root table's rows, then every unit's literal
+  conversion roots, then every literal component's argument roots, with
+  the compile-time requests in evaluation order). A platform/app pairing's
+  root requests are its own slot over its platform's.
+- The module's checked tables (`ModuleAnalyses.checkedTables`, one slot,
+  because each table is built from and completes the others): its procedure
+  templates (one per value-binding definition that is a procedure, then one
+  per promoted local procedure, then one entry wrapper per compile-time
+  root), its method registry, static dispatch plans and compile-time roots,
+  its top-level values with their procedure bindings, callable-eval and
+  constant templates, its hoisted constants, and its resolved value
+  references (a translation of the value references checking recorded, by
+  the tables' ids; an associated lookup's target is found by content
+  identity among the module's direct imports and the modules they and its
+  types' name owners reach). The slot computes them from the live module
+  on their first demand. The types they name that have no solver variable
+  (the empty record of a valueless root and the synthetic scheme of a
+  pattern-validation constant, then each entry wrapper's function type and
+  scheme) are created under the creation lock, in two sections, each after
+  every slot the creation reads. What the tables read of other modules
+  (their export rows and interface capabilities, and the checked tables of
+  the modules a method's procedure alias chain enters, which are modules
+  its imports reach and whose tables computing those export rows
+  completed) is demanded before the slot is claimed, so its computation
+  never waits on a slot of its own kind. A platform/app pairing reads its platform's tables, except its
+  resolved value references, which are the pairing's own slot over its
+  platform's.
+- Per-module slots of `check.ModuleAnalyses`
+  (`src/check/module_analyses.zig`), which every checked module owns:
+  the module's export rows (`exportRows`: the definitions it exports, in
+  export order, and the procedure templates, procedure bindings and
+  constant templates those definitions and the binders of its exposed
+  top-level destructures name, which export closures and platform
+  relations index by position), its provided exports (`providedExports`:
+  one row per `provides` entry naming a local definition, at the
+  definition's checked type; a platform/app pairing's are the pairing's
+  own slot over its platform's), a platform's requirement type inputs
+  (`platformTypeInputs`: each requirement's checked root, the identity
+  variables it reaches in key order, and its for-clause aliases) and an
+  app's requirement solutions (`platformRequirementSolutions`: each
+  successful solution checking recorded, at its checked types), its
+  hosted procedures (`hostedProcs`: each definition the hosted transform
+  rewrote to a hosted lambda, ordered by its qualified symbol name) and a
+  platform's hosted bindings (`hostedBindings`: each resolved entry of its
+  hosted section, in header order, whose target is a hosted procedure of
+  the module the entry's import resolves to, found through the module's
+  direct import keys and resolver, or of the platform itself), each
+  read by a platform/app pairing from its platform's slot,
+  the template closures of the module's export rows (`exportClosures`),
+  the modules a consumer of its public API reads
+  (`publicApiDependencies`: the owners of the types its exports,
+  requirement signatures, exposed type declarations and binding scheme
+  codec requirements name, and the modules its export closures reach),
+  and the modules lowering its roots reads (`loweringVisibility`: its
+  direct imports, its public API dependencies, the owners of its root
+  types, the modules its roots, exports and platform requirement
+  bindings reach, and their public API dependencies), and the box payload
+  capabilities of the module's local nominal types
+  (`interfaceCapabilities`: one per instance, a declaration of the module
+  at one list of argument types, with its instantiated backing and padding
+  types, which the computation creates; computed for every local nominal type
+  the store holds when the module is opened, and grown for the types each
+  later creation makes before that creation ends, "Nominal
+  Representations" below), and the module's dispatch
+  resolution, which the module's dispatch reader (`CheckedDispatch`)
+  answers from: the modules it searches for method targets and procedure
+  schemes and resolves the types it reads in (`dispatchImports`: every
+  module the module's direct imports and the owners of its types' names
+  reach, transitively through those modules' own direct imports and
+  type-name owners, in first-reach order, which covers an app's platform
+  whose types its requirement solutions name), the indexes of the
+  checker's dispatch records (`dispatchIndex`), the schema of each template and of each generalized
+  local scope (`templateSchema`, `scopeSchema`), each template's
+  call-edge evidence (`templateDispatch`: the total resolution of the
+  plans, iterator plans and use sites its body reaches that its scheme
+  chain binds, its root evidence, and the callable specialization of each
+  direct call), how each template's plans relate to its specialization
+  (`templateDispatchRelations`), the module's resolution of what no
+  template binds, with its generated codecs (`moduleDispatch`), and an
+  app's root evidence for its platform requirement solutions
+  (`platformRequirementRootEvidence`), the module's demand call graph
+  (`templateDemandGraph`) with one slot per strongly connected component
+  for its templates' demand vectors ("Specialization By Demand"), the
+  module's nested procedure sites by expression with the runtime captures
+  of each (`moduleNestedProcSites`), and every exhaustiveness check with
+  the owner and policy that decide it (`exhaustivenessSites`: the first
+  compile-time root, in root order, whose evaluation replaces the check's
+  source, otherwise the first template, in template order, whose body
+  reaches it, decided by whether the module's root requests reach that
+  template at runtime, only at compile time, or only through a pairing).
+  Runtime captures are one slot for the module rather than one per
+  component of the call graph: the relation that defines them crosses
+  owners (a promoted local procedure's body selects local procedures its
+  enclosing template's body declares) and its components are not the call
+  graph's. Each resolution owns the evidence pool its evidence ids name,
+  and a plan's or site's resolution is the first template's, in template
+  order, that holds it, otherwise the module's. The module's resolution
+  holds site evidence only for the defaulted-field expressions' sites and
+  the sites a template's chain deferred, so the evidence of a site the
+  templates holding it neither resolved nor deferred is read as absent
+  without resolving the module (`siteEvidence`). A module's public API
+  dependencies leave out itself and the builtin modules, so a module whose
+  types name no other module skips the walk over its types, and one whose
+  exports and value references name no other module skips its export
+  closures. A platform/app pairing has
+  analyses of its own; its export closures, public API dependencies,
+  interface capabilities, dispatch resolution, demand vectors, nested
+  procedure sites and per-template exhaustiveness sites are its
+  platform's, its exhaustiveness policies are its own (it decides its
+  platform's checks by its own root requests, after demanding its
+  platform's), and a pairing demands the capabilities of its platform, its
+  app and every module it resolves against before it creates any type. A
+  pairing's own slots (`PlatformPairing`) are its requirement relations and
+  required bindings (`relationTables`, which project each requirement's
+  solved app type into the platform's store under its creation lock; the
+  pairing's creation demands it and the paired module reads its relations
+  and bindings from it, holding no copy), its
+  resolved value references (`valueRefs`: each requirement lookup classified
+  by its binding, the lookups of requirements the app rejected retired, and
+  each call of a bound procedure requirement given its direct target; it
+  demands `relationTables` first) and its provided exports at their types
+  under the pairing (`providedExports`). A constant's
+  closure follows the template its compile-time root evaluates
+  whether or not evaluation has stored the constant's value, so the result
+  is the same before and after evaluation.
+
+#### Nominal Representations
+
+A nominal type's representation is a function of the type alone: its
+module, its declaration and its argument types, the same for every type
+entry naming that type whoever created it and whenever, cold or warm. A
+builtin is represented by its builtin. A nominal type another module
+declares is represented by that declaration in every store that holds it,
+including every copy of an imported type: an importer's arguments
+are its own types, which the declaring module's capabilities cannot name.
+A nominal type a module declares is held by its store as its declaration
+(a creation that copies one read with its capability stores the
+declaration), and once a consumer demanded the module's interface
+capabilities every read of it carries its instance's box payload
+capability (`CheckedTypeStoreView.payload`).
+
+An instance is a declaration at one list of argument types. Two argument
+lists are one when they are equal as types: a flex or rigid variable is
+itself, so an instance over variables is one instance wherever those same
+variables occur and another over any other variables, and every other type
+is compared by its structure, a nominal by its declaration and arguments
+alone (`CheckedNominalEquality.declaration_args`). Every instance has
+exactly one capability. The capabilities are computed on first demand for
+every type the store holds then, which is exactly the set opening the
+module created, because every slot demands its module's capabilities before it
+creates a type there; those synthesized types are settled in id
+order, then the source types checking reached, in variable order, then the
+types the capabilities created. A type created later is settled by the
+creation that made it before the creation releases the store's creation
+lock (`CheckedTypeStore.finishCreation`), so no other thread can read it
+unsettled: settling looks its instance up under the lock (an instance hash
+of each argument's constructors and names two levels deep selects a
+bucket, and type equality decides within it), and an instance first met
+there is given a new capability, whose backing and padding types are
+instantiated under the same lock. Settling reads only the store's own
+types and declarations, and waits on no slot. A creation that fails ends without settling, and the
+next creation to finish settles what it left.
+
+Capability ids follow the order instances are first met, which for the
+instances first met in later creations is the order they end, so it
+depends on demand order. An id is a table index and an equality identity
+only: nothing compares ids by order, sorts by them, hashes them into a
+digest or key, or prints them, and the types a capability creates are
+synthesized types, which no consumer orders output by either. A consumer
+that reads a module's nominal representations (Monotype and Boxy lowering
+of every module they read, glue, compile-time root graphs, the
+opening of every module that imports it, a platform/app pairing)
+demands the module's interface capabilities first.
 
 A slot (`collections.OnceSlot`) is a state word with three states: empty,
 claimed and done; a claimed word also records whether a consumer is parked on
@@ -5456,8 +5890,13 @@ A slot's result is:
 These are compiler invariants, so each is a debug assertion in debug builds
 and `unreachable` in release builds:
 
-- A thread never waits on a slot while it holds a lock another thread might
-  need.
+- A thread never acquires a slot (waits on it, claims it, or reads it
+  through the claiming path) while it holds a lock another thread might
+  need: a type store's creation lock or a name interner's writer lock. Each
+  such lock counts itself in a per-thread ledger while held
+  (`collections.HeldLocks`), and acquiring a slot asserts the ledger is
+  empty. Whatever a creation reads from slots it acquires before taking the
+  lock; under the lock it compares types structurally, never by key.
 - A thread never waits on a slot of a kind it currently holds a claim of in
   the same module. This is why fixpoint analyses are claimed per component:
   two roots of one component would otherwise each hold a claim while waiting
@@ -5468,6 +5907,36 @@ and `unreachable` in release builds:
 There is no scheduling edge between modules. A module's analyses are never
 ordered after its importers, nothing waits for demand to flow top-down, and
 the read path takes no lock.
+
+No slot's result depends on whether, when or on which thread another slot
+was computed. Opening a checked module creates every type and interns
+every name the opening needs before any slot of the module can run: the
+type store and name store are then sealed for shared reading, the interface capabilities get their source
+(`attachCapabilitySource`), and only then are the module's analyses opened
+(`CheckedModule.openToAnalyses`). Each slot claim of a module's analyses
+(`ModuleAnalyses`, `BodyAnalyses`) asserts in debug builds that they are
+open. Every dispatch slot (schemas, resolutions, indexes, the demand graph)
+and every literal slot demands the module's interface capabilities before it
+claims, and a creation demands those of every module whose types it copies,
+so every slot reads each nominal type at the representation its
+capabilities give it. A pairing's images are synthesized types of its
+platform's store, created after the platform was opened, so no
+cache entry holds one, and the pairing's own entry holds
+only its evaluation output. An image is a function of its source type and
+the pairing's formal map alone: which types the platform's slots had created
+when the pairing was created decides only which images its lock-free column
+memoizes, never what an image is.
+
+An analysis that reads modules other than its own finds them through the
+`ModuleResolver` its consumer passes: the module's imports, a build's
+coordinator, or a list of available modules. Dispatch resolution, which
+every reader of the module reaches through one reader, finds them through
+the resolver the module was opened with: the build coordinator's when the
+coordinator opens it from a cache entry (`ModuleAnalyses.attachResolver`),
+otherwise a copy of the views it was opened against
+(`ModuleAnalyses.attachImportViews`). Every resolver resolves every
+module of the build, so the result does not depend on which consumer
+computed it.
 
 ### Lowering Reads Bodies From The Canonical IR
 
@@ -5496,7 +5965,8 @@ of a node's shape costs what reading the node costs:
   `numeralPlan`, `quotePlan`, `iteratorForPlan`, from
   `StaticDispatchPlanTable` keyed by node), resolved value references
   (`resolvedRef`), calls' direct targets (`callDirectTarget`), literal
-  conversion roots (`literalConversionRoot`, from `CompileTimeRootTable`),
+  conversion roots (`literalConversionRoot`, decided from the literal's
+  conversion plan's dispatch resolution),
   a call's function constraint type and an interpolation's assembler type
   (`callFnType`, `interpolationAssemblerType`), tag, field and symbol
   label ids (`tagLabel`, `recordFieldLabel`, `externalSymbolName`), a
@@ -5508,8 +5978,8 @@ of a node's shape costs what reading the node costs:
   (`literalPatternIsCustom`), and whether a declaration binds a recursive
   value (`declIsRecursive`);
 - types, from the sealed store: `typeOf` is the node's solver variable's
-  checked type, or its image under the pairing's type column when the module
-  is read under a platform/app pairing (`PairingTypeColumn`); `exprType` and
+  checked type, or its image under the pairing when the module is read
+  under a platform/app pairing (`CheckedTypeStoreView.pairedType`); `exprType` and
   `patternType` are a node's own type (a top-level definition's pattern is
   read at the definition's type); `valueType` is the type a parent reads an
   expression at;
@@ -5531,6 +6001,26 @@ A literal conversion compile-time root names its literal explicitly
 (`CompileTimeRoot.literal`, an expression or a custom literal pattern), and a
 hoisted pattern root names its hoisted body; no root names a node that does
 not exist in CIR.
+
+A compile-time root's identity (`ComptimeRootKey`) is a function of the
+module's checked data alone, never of the order anything was built or
+demanded in. A root of the module's root table is named by its source: a
+definition's by the definition, an expect's by its statement, a selected
+hoisted root's by its position in the module's selected hoisted roots
+(`ModuleEnv.selected_hoisted_roots`), a REPL expression's by the
+expression; the table holds its rows in ascending identity order and finds
+a row by its identity. A literal root is no row: a literal conversion root is named by its literal
+(`literalConversionRootId`), and a literal argument root by the edge that
+fixes its type and the callee requirement it converts
+(`literalArgumentRootId`). A literal root's entry wrapper is no row of the
+template table either: its template id is its root's identity
+(`literalRootWrapperTemplate`), its procedure base is the one every
+compile-time root's entry wrapper of the module shares
+(`ProcBase.entry_wrapper`), and
+`CheckedDispatch.procedureTemplate` describes it from the slot that holds
+the root. Its function type and scheme are created by that slot. What
+compile-time evaluation stores for a literal root is evaluation output keyed
+by the root's identity, like every other root's (`EvaluationOutput.roots`).
 
 Constructs lowering needs that the IR does not contain are built by each
 lowering in its worker's workspace and never added to the checked module:
@@ -5557,7 +6047,11 @@ The checked boundary has exactly the live data of "The Live Checked Module",
 and these shapes are forbidden:
 
 - a frozen copy of a checked module (`CheckedModuleArtifact`) or a pass that
-  builds one (`publishFromTypedModule`);
+  builds one (`publishFromTypedModule`), or any way to make a checked module
+  other than opening it (`openCheckedModule`);
+- a checked cache payload beside the `ModuleEnv` other than the inference
+  output and the evaluation output (`CheckedModule.Serialized`), such as a
+  serialized synthesized-type store, name store or checking-context identity;
 - a copy of the solver store (`CheckedTypeStore`) or of bodies
   (`CheckedBodyStore`);
 - template, binding or constant closures, a lowering-visibility closure, or a
@@ -5616,8 +6110,8 @@ evidence to a downstream call.
 Requirement rows may be allocated before their app definitions are checked, but
 they remain explicitly pending checker state until all definition checking and
 error poisoning has completed. The checker then stamps each row as successful
-or checked-error. `platformRequirementSolutionTableFromInputs` and
-`EvidencePass.run` consume that verdict directly; they never infer success by
+or checked-error. `platformRequirementSolutionTableFromInputs` and the app's platform
+requirement root evidence analysis consume that verdict directly; they never infer success by
 inspecting solved type shape or by comparing the eventual runtime value kind.
 
 A procedure requirement's root evidence follows the complete scheme of its
@@ -5745,7 +6239,10 @@ and keep temporary binding data in the active lexical scope, but it must not add
 permanent hoistability summaries to every checked expression. The checked module
 stores only selected hoisted roots plus sparse lookup indexes needed by later
 lowering, such as checked-expression id to hoisted-root id and selected
-local-binding id to hoisted-root id.
+local-binding id to hoisted-root id. Every selected hoisted root is a
+compile-time root of its module under every command and every embedder (the
+builtin compiler, the playground, test harnesses and the build coordinator
+alike); nothing chooses a subset of them.
 
 The hoistability decision must use explicit checked data, not source-name scans
 or canonicalization guesses. Allowed dependencies include literals, already
@@ -5843,7 +6340,15 @@ archived as a unit constant. A binder-free source declaration may then be erased
 from runtime lowering. The pending exhaustiveness site is explicitly classified
 for empirical compile-time validation when the eligible candidate is recorded.
 No candidate is recorded inside an ordinary top-level constant, because that
-enclosing root already evaluates and owns the destructure site. Validation uses
+enclosing root already evaluates and owns the destructure site. Only a root
+that has a compile-time root request owns the sites its evaluation reaches. A
+selected root whose checked type is not context-free has no request: it never
+evaluates on its own, and every reader evaluates its body in place, so each
+site in that body is classified by the procedure template that contains it, as
+if no root had been selected there. A site no root owns can be reached by
+every root that calls into it: the first root that fails there reports it,
+later ones find it reported, and a root that fails elsewhere first leaves it
+for the others to decide. Validation uses
 the checked pattern compiler and compile-time evaluator; it never reinterprets
 source patterns separately.
 
@@ -5955,9 +6460,10 @@ directly; they must not infer strictness from checked template references,
 rebuild it from CIR, or treat a missing relation as an empty one.
 
 A checked module must not permanently store a hoisted-root dependency graph or
-per-expression dependency metadata. The durable checked data is the compile-time
-roots, their sorted compile-time request order, their `ConstStore` payloads, and
-sparse root lookup indexes.
+per-expression dependency metadata. The durable checked data is the selected
+roots in `ModuleEnv` and their `ConstStore` payloads in the evaluation output;
+the compile-time root table, its sorted request order and its lookup indexes
+are slots computed from them.
 
 Checked module caches persist that same sorted selected-root list. On cache
 miss, checking computes the list once from explicit checked data while it is
@@ -6221,12 +6727,11 @@ const ImportedHostedProc = struct {
 
 const GeneratedFn = union(enum) {
     entry_wrapper: EntryWrapperId,
-    intrinsic_wrapper: IntrinsicWrapperId,
+    intrinsic_wrapper: IntrinsicId,
 };
 
 const FnTemplate = struct {
     fn_def: FnDef,
-    source_fn_ty: TypeId,
     source_fn_key: TypeDigest,
     mono_fn_ty: MonotypeTypeId,
 };
@@ -6242,11 +6747,13 @@ flow. It pairs the checked function identity with the checked source function
 type. Later stages must carry it forward instead of recovering the checked
 function type from generated procedures, runtime layouts, or call sites.
 
-Checked module output assigns a `NestedProcSiteId` to every
-expression-position function inside each checked procedure template. A nested
+Every expression-position function inside a checked procedure template has a
+`NestedProcSiteId`: the node id of its lambda, closure or hosted lambda
+expression, unique among its owner's sites. A nested
 function is identified by `(owner template, nested site, context function
-digest)`. The site id is assigned from the checked body traversal before
-post-check lowering starts. The context function digest is assigned by Monotype
+digest)`. The owner's nested procedure sites are an on-demand analysis of its
+checked body ("On-Demand Analyses And Write-Once Slots"), computed before
+post-check lowering reads them. The context function digest is assigned by Monotype
 from the `FnTemplate` whose body currently owns the nested function occurrence.
 Monotype lowering carries that checked identity together with the checked source
 function type and the lowered monomorphic function type. Post-check stages must
@@ -6254,10 +6761,11 @@ consume those checked data; they must not name nested functions by allocation
 order, generated symbols, source display strings, body shape, capture shape,
 runtime layout, or LIR procedure ids.
 
-The nested-site table stores each site's checked expression, owner, lexical
-scope, evidence, and runtime captures. It does not retain a copy of the
-traversal path to each site: site identity is already explicit, and storing
-all ancestor paths costs quadratic space for deeply nested functions.
+An owner's nested procedure sites record each site's checked expression,
+lexical scope and evidence; runtime captures are the module's analysis by
+site expression. Neither retains a copy of the traversal path to each site:
+site identity is already explicit, and storing all ancestor paths costs
+quadratic space for deeply nested functions.
 
 Monotype body lowering tracks two function-context digests:
 
@@ -8326,13 +8834,15 @@ plays no part. Checking outputs, per module, the procedure templates its
 source calls at exactly one site and never uses as a value, among those no
 other module can call: promoted local procedures, and source definitions that
 are neither exposed nor methods, since another module can dispatch to any
-method (`CheckedProcedureTemplateTable.single_source_call_templates`).
-A nested function site qualifies the same way
-(`NestedProcSite.single_source_call`): its expression is the function of a
-call, or the whole value of a non-recursive binding of one name whose only
-reference is the function of a call. A site inside a defaulted-field
-expression never qualifies, since that expression is lowered at every
-construction site that omits its field.
+method (`CheckedBodies.templateHasSingleSourceCall`, the module's
+single-source calls analysis). A nested function site qualifies the same way
+(`CheckedBodies.nestedProcSiteIsSingleSourceCall`): its expression is the
+function of a call, or the whole value of a non-recursive binding of one name
+whose only reference is the function of a call. A site inside a
+defaulted-field expression never qualifies, since that expression is lowered
+at every construction site that omits its field, and neither does an
+expression more than one owner constructs a procedure at, since it is
+lowered once per owner.
 Monotype stamps the flag on each function template, and a body without a
 procedure-relative return that has it is a source-single-use candidate,
 whether or not it captures. Every call to it in any program is that one site, lowered in some
@@ -12897,8 +13407,9 @@ vector through the ordinary `siteEvidence` lookup—lowering consumes
 explicit checked evidence and never reconstructs it. Defaults likewise
 carry their own NESTED-FUNCTION SITES: the default root's nested
 procedure sites analysis records each interior lambda/closure as a
-`NestedProcSite` owned by the module's `default_root` (a default
-belongs to no procedure template). Lowering resolves those sites at
+`NestedProcSite` owned by the default itself
+(`NestedProcSiteOwner.default_root`; a default belongs to no procedure
+template). Lowering resolves those sites at
 exactly two sanctioned points. First, while materializing a default
 (the materialization context is explicit, mirroring its view/binder
 swaps—same-module materialization swaps in fresh binder state exactly
@@ -13865,9 +14376,10 @@ function, or other named type's argument in the result
 callable the worker receives from its caller could involve it, since such a
 callable carries the caller's instantiation: a `where` requirement whose
 interface mentions the variable (the dictionary's methods), or any
-parameter holding a nominal over a callable payload, whose callable's
-interface its methods hide from the signature
-(`Converter.argumentsHoldCallablePayload`). A bounded flex that unification
+parameter holding a nominal type with a declaration, whose backing may hold
+a callable payload whose interface its methods hide from the signature
+(`Converter.argumentsHoldCallablePayload`). Every declared nominal type
+answers alike, whichever module declares it and however it is represented. A bounded flex that unification
 tied to a rigid or a closed row is not a flex, so genuine row polymorphism
 (`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
 hidden descriptors.
@@ -14341,13 +14853,18 @@ converted value as a hidden argument: a *literal argument*. No type is
 special-cased: a literal at a builtin number type takes the same path as one
 at a user type, through the builtin type's own `from_numeral`.
 
-The checker records the data in every checked module, whatever strategy
-the compilation runs under: the data describes the program, and a checked
-module serves both strategies' programs (its cache identity names no
-strategy).
+The data is derived from every checked module on demand, whatever strategy
+the compilation runs under: it describes the program, and a checked module
+serves both strategies' programs (its cache identity names no strategy).
+The module's literal call graph (`ModuleAnalyses.literalGraph`) is every
+edge its bodies hold, each scheme's own open literals, and the strongly
+connected components of the edges between templates, computed only as far
+as a consumer reaches them; each component's requirements, edge arguments
+and argument roots are one slot (`ModuleAnalyses.literalComponent`,
+"On-Demand Analyses And Write-Once Slots").
 
-- A scheme's *literal requirements* (`CheckedProcedureTemplate.literal_requirements`,
-  and the dispatch scope's `literal_requirements`): one per literal of its own body
+- A scheme's *literal requirements* (`CheckedDispatch.templateLiteralRequirements`,
+  `CheckedDispatch.scopeLiteralRequirements`): one per literal of its own body
   whose conversion plan is open (`.evidence_dependent` or
   `.direct_parametric`), recording the literal (`LiteralSite`: module,
   expression, kind) and its type over the scheme's variables; and one per
@@ -14355,22 +14872,24 @@ strategy).
   *edge*: a dispatch edge's evidence node, a procedure use, a generalized
   local function's use or construction), recording the type after the edge's
   substitution, the edge, and the callee's literal requirement index. Literal requirements are
-  computed to a fixpoint over the module's schemes and deduplicated by
+  computed to a fixpoint over the component's schemes and deduplicated by
   literal, type key, and the type's variables, so a recursive call at the same
   types adds nothing, however many roots its instantiations produce.
-- Each edge's *literal arguments* (`literalEdgeArgs`): for every literal requirement
+- Each edge's *literal arguments* (`CheckedDispatch.literalEdgeArgs`): for every literal requirement
   of the instantiated scheme, where the body gets the value from. An
   instantiation at a closed type is a `literal_argument` compile-time root
-  of this module (`.root`), one per literal and closed type, whose wrapper
-  body is the conversion at that edge. An instantiation at an open type is
+  of this module (`.root`), named by the edge and the callee's requirement
+  index (`literalArgumentRootId`) and shared by the later edges of its
+  component that instantiate the same literal at the same closed type,
+  whose wrapper body is the conversion at that edge. An instantiation at an open type is
   forwarded: the value is one of the enclosing scheme's own literal
   arguments (`.forwarded`). An instantiation at a type mentioning a variable
   that no scheme around the edge quantifies (a use's copy that nothing relates
   to the program, as in `_ = local` for a generalized local function nothing
   calls) is fixed by no use, so nothing reads its value (`.unbound`). A
-  template's `literal_argument_demand` lists the
-  roots its edges read, so compile-time evaluation orders them before any
-  evaluation of the template.
+  template's literal argument demand (`CheckedDispatch.appendLiteralArgumentDemand`)
+  lists the roots its edges read, so compile-time evaluation orders them
+  before any evaluation of the template.
 - A use of an exact procedure alias is an edge to the alias's entry wrapper,
   whose literal requirements are those its forwarded lookup, itself an edge,
   gives it. Boxy passes each alias's arguments down the chain as it does
@@ -14390,7 +14909,7 @@ strategy).
   evaluates it like any pending root of its modules, in dependency order:
   the request scheduler (`CompileTimeRequestScheduler`) and the finalizer's
   completion state walk the scheme a root's edge instantiates and treat a
-  template's `literal_argument_demand` as reads, so each root completes
+  template's literal argument demand as reads, so each root completes
   before any root whose evaluation calls through it. A `.lss` compilation
   converts each literal in the specialization that fixes its type and never
   reads these roots, so it leaves them `unevaluated`, exactly as it leaves a
@@ -14587,7 +15106,7 @@ escape the composition operation. In-process execution allocates these from
 the reclaiming SMP allocator (the wasm allocator in the freestanding compiler)
 and frees them when the operation finishes;
 platform runtimes retain their existing host allocation/free operations.
-Published descriptors and copied interning keys still use program-lifetime
+Interned descriptors and copied interning keys still use program-lifetime
 storage. Repeated cache hits must not retain temporary buffers in that storage.
 
 A generic body receives its signature's composite descriptors from its caller
@@ -16105,14 +16624,16 @@ own evidence's answer for that variable, which places it in exactly the class
 that relating the binders in the nested context would have; the relations
 themselves are not rebuilt per nested context.
 
-The nested-site walk records each site's runtime captures: the binders of
-enclosing frames whose values the site needs, which are its source captures
-plus the runtime captures of every local procedure its body selects (a lookup
+Each site expression's runtime captures are the binders of enclosing frames
+whose values the procedure constructed there needs: its source captures plus
+the runtime captures of every local procedure its body selects (a lookup
 resolved to a local procedure; methods never capture, so a dispatch adds none),
 less the binders the site itself binds. A site's needs propagate to its lexical
-parent the same way, and the walk records which site binds each binder so the
-subtraction is exact. Recursive selections make this a least fixpoint, solved
-after the walk over the recorded selections.
+parent the same way. Each owner's nested-site walk records its sites' lexical
+parents, the site that binds each binder and each site's selections, so the
+subtraction is exact; the module's runtime-capture analysis merges the owners'
+records by expression and solves the least fixpoint recursive selections make.
+Runtime captures are therefore a function of the site expression alone.
 
 Monotype's capture identity for a nested procedure (lambda, closure, or local
 procedure) is the types, in the requesting frame, of the binders its site's
@@ -17198,18 +17719,26 @@ The demand of a variable is one of three values, the same scale
   `FieldName`, `ParseTagUnionSpec`, `Iter`, `Stream`), a variable used as a row
   extension, and a variable the scheme's root type does not mention.
 
-A template's demand vector is a per-component on-demand analysis
-(`TemplateDemandPass`): the first consumer that needs one claims the strongly
-connected component of the module's call graph that holds the template,
-computes the vector of every template in it, and stores them together.
-Every later consumer reads the done slot, and no cache entry stores a demand
-vector; a cache hit recomputes it on first demand. Each body is
-walked once into a base vector and a set of edges: a direct call or a
-dispatch that checking resolved to one procedure template relates each
-caller variable that the callee slot's checked substitution mentions to that
-slot's demand. An imported callee's vector is final and applies directly; a
-local one is an edge, and edges propagate to a fixed point, so recursion
-through any number of templates converges. A direct operand of a call or a
+A template's demand vector is a per-component on-demand analysis read
+through the module's dispatch reader (`CheckedDispatch.templateDemands`).
+The module's demand call graph (`ModuleAnalyses.templateDemandGraph`) is
+built only as far as a consumer reaches it: each body is walked once, on
+first demand, into a base vector and a set of edges (a slot per template),
+and the edges between the module's own templates are split into strongly
+connected components as consumers reach them (`LazyComponents`, each named
+by its least member). A direct call or a dispatch
+that checking resolved to one procedure template relates each caller
+variable that the callee slot's checked substitution mentions to that
+slot's demand: fully where the mention needs the variable's exact type,
+and otherwise through an edge to the callee's slot, whether the callee is a
+template of the module or of a module dispatch resolution reads. Each
+component's vectors are a slot of their own: before it claims one, a
+consumer demands, holding no claim, every component the component reaches
+and every imported callee's vector, so the component's computation raises
+its base vectors along its edges to a fixed point reading only finished
+vectors, and recursion through any number of templates converges. No cache
+entry stores a demand vector; a cache hit recomputes it on first demand. A
+direct operand of a call or a
 low-level operation that reads a local materializes nothing; every other
 expression or pattern whose type mentions a variable demands its layout. A
 variable a parameter holds by value rather than as a `List` item or `Box` payload
@@ -17218,10 +17747,11 @@ type's argument stands where the declaration's backing places the matching
 formal: an argument the backing extends a row with is a row extension, one the
 backing holds only as a `List` item or `Box` payload (or not at all) is held in
 a container, and one under a function or a representation-deciding builtin is
-an exact mention. Each declaration's reach of its formals is computed once per
-module, the first time a type names it, as the least fixed point over the
-declarations whose backings name one another. Builtin nominals keep their
-fixed argument rules. A body that is
+an exact mention. A declaration is read in the module that declares it,
+through that module's types. Each declaration's reach of its formals is
+computed once per module's demand analysis, the first time a type names it,
+as the least fixed point over the declarations whose backings name one
+another. Builtin nominals keep their fixed argument rules. A body that is
 not a checked Roc body (an intrinsic, an entry wrapper, a hosted procedure, or
 an unimplemented declaration, whose crash body still returns at its declared
 type) demands all of every variable.
@@ -17349,9 +17879,11 @@ alias along the chain, which composes the target's substitution exactly.
 
 The chain may leave the module that declares the method: `to_inspect =
 Other.render` forwards to another module's procedure, and that module's own
-aliases forward further. The method registry resolves the chain from the
-resolved value references and procedure bindings publication already holds,
-exactly the chain Monotype and Boxy compose along, so the procedure a method
+aliases forward further. The method registry is computed with the module's
+other checked tables and resolves the chain from their resolved value
+references and procedure bindings, and from the export rows and checked
+tables of the modules the chain enters, which its imports reach and which are
+computed before it. That is exactly the chain Monotype and Boxy compose along, so the procedure a method
 dispatches to and the procedure its instantiation composes to are one
 decision. The target names the procedure's template, whose module owns the
 target's data, its callable type included; the alias records the module that
@@ -17700,12 +18232,11 @@ The `.lss` strategy consumes these plans while producing Monotype IR. The
 plans while lowering checked CIR directly to LIR, choosing dictionary calls
 or concrete structural operations from the explicit checked data.
 
-Totality is enforced where evidence is computed: a definition's call-edge
-evidence analysis asserts (`validateDispatchEvidence`) that every
-dispatch-bearing expression of the definition names a plan and that every
-plan and evidence reference lands inside the evidence it stores. A missing or
-corrupt record is a compiler bug: a debug assertion at that analysis in debug
-builds and `unreachable` in release builds, never a lowering panic.
+Totality is enforced where evidence is read: every plan read through the
+module's dispatch reader (`CheckedDispatch`) has a resolution, and every
+evidence reference lands inside the pool of the analysis that owns it. A
+missing or corrupt record is a compiler bug: a debug assertion at that read
+in debug builds and `unreachable` in release builds, never a lowering panic.
 
 **Target substitutions.** A direct evidence node either carries the checked
 substitution of its target's scheme, carries the substitution of the exact
@@ -20105,23 +20636,50 @@ solver outputs the least one. There is no failure path and no recovery path.
 An occurrence the solver leaves owned is emitted as a move or an `incref`,
 exactly as all-owned insertion would emit it.
 
-### Fresh forms of static lists
+### Fresh forms of static values
 
-A read of a compile-time list of copies lowers as its static-data slot and
-also names the argument-free procedure that would build the list fresh. The
-static datum has the static count, so it is never born unique: a mutating
-consumer copies it on first write, at the one allocation a fresh build would
-have spent, plus the copy. The fresh build reserves the count plus the range
-copy's scratch, appends the one item, and fills the rest with the unchecked
-range-within append, whose periodic copy runs at word-store pace; it allocates
-on every execution of the read, which a read whose value is only ever read has
-no use for. Which form a
-read takes is therefore a question of where its value reaches, and the
-uniqueness analysis answers it.
+A read of a compile-time value lowers as its static-data slot, and two kinds
+of value also name an argument-free procedure that would build the value
+fresh: a list of copies of one construction, and a value a list or string on
+whose spine (the root's own bytes: its fields, tuple items and tag payloads,
+not a list's items or a box's payload) was evaluated with more capacity than
+it holds. The static datum has the static count, so it is never born unique:
+a mutating consumer copies it on first write, at the one allocation a fresh
+build would have spent, plus the copy, and static data keeps a list's or
+string's items alone, so the copy has only the room its contents need and
+the evaluated capacity is lost. A fresh build allocates on every execution
+of the read, which a read whose value is only ever read has no use for.
+Which form a read takes is therefore a question of where its value reaches,
+and the uniqueness analysis answers it.
 
-The fresh procedure's identity is the list's layout and content (the count
-and the item's construction) and nothing a program numbers, so reads of equal
-lists share one procedure.
+A list of copies builds fresh by reserving the count plus the range copy's
+scratch, appending the one item, and filling the rest with the unchecked
+range-within append, whose periodic copy runs at word-store pace. Its
+procedure's identity is the list's layout and content (the count and the
+item's construction) and nothing a program numbers, so reads of equal lists
+share one procedure.
+
+A value with spare capacity builds fresh from its own static datum, as its
+`FreshPart` describes (`postcheck_values.emitFresh`): a part with a
+construction is built as it, empty lists and strings as the `with_capacity`
+they were evaluated with; every list and string with items on its spine is
+built unique with the capacity it was evaluated with (`with_capacity`, then
+the datum's items or bytes concatenated in, which a unique value with the
+room takes in place); records, tuples and tags are rebuilt around their
+parts; and every other part is read out of the datum as it is. A form made
+of constructions alone reads nothing of the datum, so a read that takes it
+leaves the datum unread. The
+lists and strings with contents but no spare room are built unique too, with
+exactly their contents' room, so an operation that writes several of the
+value's lists finds every one of them unique. The completed path
+decodes the form from the frozen root and the capacities its export keeps
+(`Decoder.decodeFresh`); the restored path reads it from the restored
+expressions and the capacities their candidates carry (`freshFormOfCandidate`),
+so both paths give a read the same form. The procedure reads a program's
+static datum, a program-scoped symbol, so its identity names that datum by
+its slot beside the value's layout and the form, as a static initializer's
+does, and reads of one datum in one form share one procedure. A list of
+copies with spare capacity takes this form, which keeps the room.
 
 Every such read is a candidate birth. Alongside the born bit and its parameter
 conditions, the settlement carries each local's *origins*: the candidates its
@@ -20133,22 +20691,106 @@ the part of the result it names, so a table handed to a helper and re-bound
 from its returned record keeps its origin around the loop. Origins do not
 leave the procedure that read the value: a returned value or field that
 derives from a candidate is not a unique return, since a callee never learns
-of a candidate and the caller cannot see which form the read takes. A candidate is *needed*
-when a value derived from it meets a runtime uniqueness check its birth
-answers—an argument position an operation may check, or an argument passed to
-a callee position the callee's seed mask names, which a variant would seed—
-while born with no other holder. A procedure's seed mask names the parameters
-whose seed a check in its body would answer, and also those carried into a
-callee position the callee's mask names, so seeds compose through direct calls
-whether or not the callee is inlined; a mask change is a signature change and
-re-analyzes callers. Needed candidates take the fresh form, every
-other candidate stays the static datum, and a local whose origins include a
+of a candidate and the caller cannot see which form the read takes. Origins
+follow births, which are one level deep (a value, or one field of an
+aggregate). Which candidates take their fresh form is decided by the place
+derivations below, at any depth: a candidate is *needed* when a value it may
+have become, with no other holder, meets a place whose write in place its
+birth would serve. Needed candidates take the fresh form, every other
+candidate stays the static datum, and a local whose origins include a
 candidate that stays static is not unique, whatever its born bit says
 (`unique_origins_ok`). Emission materializes a needed read as a call to the
 fresh procedure and any other as the static literal; no `fresh_alternative`
 survives ARC, which the certifier checks, and the fresh procedures no read
-chose leave with the reachability pass that follows ARC. Callee seed-mask
-changes re-analyze callers, since a caller's decisions read them.
+chose leave with the reachability pass that follows ARC.
+
+#### Place derivations
+
+A *place* is a local and a path from its value through its own bytes. Each
+step is a struct field, by its original index, or one tag union variant's
+payload; a variant whose payload is a struct continues with that struct's
+fields. A path never passes through a list's items, a box's payload, or any
+other heap contents. Committed layouts guard every recursive occurrence
+behind a box, so the paths of a layout form a finite tree.
+
+Each local carries a set of *derivations* `(at, base, from)`: the local's
+place at path `at` may hold the place at path `from` of `base`. A base is a
+candidate read, one of the procedure's tracked parameters (a *parameter
+base*), or *shared*, which stands for a second holder and has no `from`. The
+seeds are the candidate reads' targets, each wholly its candidate; every
+tracked parameter, wholly its own parameter base; and every local the
+occurrence scan gives another holder (`destroyed`, before the settlement
+propagates it), wholly shared. Derivations flow, one at a time, over:
+
+- pure aliases, views (aliases solved borrowed), and join edges: unchanged;
+- a field store `c = {..., f: s, ...}` and a tag construction `c = V(s)`
+  that is `s`'s last use: `s`'s derivations with `at` prefixed by the step (a
+  store `s` outlives keeps a second holder, and carries nothing);
+- a field read `t = c.f` or payload read (the variant's payload, then the
+  payload struct's field) that carries the container's stored unit, a view of
+  a variant's struct payload, or a struct or tag union read solved borrowed
+  (a view of the container's slots, whose own reads take the container's
+  units): `c`'s derivations whose `at` begins with the read's steps, with
+  those steps removed, and those whose `at` is a prefix of them, with `from`
+  extended by the rest of the steps. A shared derivation of a place above
+  the read does not pass: a read that carries the unit is one no copy of the
+  container reaches, so the field's stored unit is the one it holds. A read
+  carries the unit when it is a committed take, or when the container (for
+  a view, the container it views) is owned and neither a consuming use of the container nor another read of
+  the same field can execute after it, since emission then moves the unit
+  there (by a take, an ownership-complete field read, or the read's
+  consuming operand); any other read holds a second unit and carries
+  nothing. A parameter counts as owned here: the settlement runs before ARC
+  decides whether a borrowed parameter whose field is moved out is owned by
+  the base signature or by the variant a dying argument demands, and where
+  neither happens the read retains, so a read that took its fresh form is
+  copied once more at the write, which costs the allocation the fresh form
+  made and never correctness;
+- a direct call, through the callee's *carry rows*. A carry row states that
+  the result's place `at` may hold argument `j`'s place `from`, or may be
+  shared. An argument derivation whose `at` is a prefix of the row's `from`
+  lands at the row's `at`, its own `from` extended by the rest of the row's;
+  one whose `at` extends the row's `from` lands at the row's `at` extended by
+  the rest of its own. A call that is not the argument's last use carries
+  nothing from it, since the caller keeps holding the argument.
+
+A procedure's carry rows are the derivations of its returned locals whose
+base is one of its own parameters, or shared; candidate derivations never
+leave the procedure, as origins do not. Every edge maps a place to a place of
+the same committed layout, since LIR is typed by committed layouts, so a
+derivation's `at` is a path of its holder's layout and its `from` a path of
+its base's layout, and every local's derivations are drawn from a finite set.
+
+A *demand site* is a place whose write in place relies on a birth: an
+argument a low-level operation checks at runtime or writes in place
+unchecked (`RcEffect.uncheckedInPlaceArgs`, such as `list_append_unsafe`,
+whose caller guarantees the argument unique with the room it uses, which only
+the fresh form gives), at the empty path, or argument `j`'s place `p` at a
+direct call whose callee has the fresh demand `(j, p)`. A site that overlaps a
+shared derivation (one path a prefix of the other) has another holder, so no
+birth gives it count 1, and it demands nothing. Otherwise every derivation
+whose `at` is a prefix of the site's path, or extends it, demands its base's
+place there: `from`, extended by whatever of the site's path its `at` does not
+cover. A demanded candidate is needed; a demanded parameter base at path `p`
+of parameter `j` is the procedure's fresh demand `(j, p)`. Along the path
+from a candidate the value is the read's, so a join's other incoming values
+do not affect the decision. A record whose field a callee fills, or a
+dictionary whose entries a callee appends to after taking them back out of a
+returned tag's payload, therefore makes its read take the fresh form.
+
+Carry rows and fresh demands are computed once the settlement converges,
+from its final edges, in the ownership components that hold a candidate read
+and every component their direct calls reach; no other procedure's rows or
+demands can reach a candidate. Rows come first. A component's derivations
+are monotone in its callees' rows, so iterating from empty rows, and
+re-deriving the callers of every procedure whose rows grew, reaches the
+least fixpoint. Fresh demands then iterate the same way, from no demands,
+over the final derivations, since a site's demands are monotone in its
+callees' demands. Both are least fixpoints over finite lattices, so the
+result is exact, deterministic, and independent of iteration order, with no
+depth bound. Derivations decide forms and nothing else: they set no birth,
+condition, unique return, conditional-return row or seed, and the seed masks
+that let a variant elide its checks stay whole-parameter masks.
 
 ### Vocabulary
 
@@ -21503,14 +22145,15 @@ only partly residual as a view marked with its absent slots and releases the
 residual slots through it.
 
 A view whose value reaches a consuming operand (the view itself, a
-borrowed pure same-value alias of it, or an ownership-complete projection of
-either, through any number of such projections and aliases, at an owned
+borrowed pure same-value alias of it, or an ownership-complete read of
+either, a field or tag payload read through any number of such reads and
+aliases, at an owned
 direct-call position, a borrowed position whose owned variant takes a field,
 or a consumed or retained low-level position, with no other mention of the
 view's borrow forest in the same statement) is first solved as a take of its
-whole range at its definition. An ownership-complete projection holds every
+whole range at its definition. An ownership-complete read holds every
 refcounted byte its source owns, so consuming it consumes the source's whole
-unit; the certifier claims the source's stored unit through the projection
+unit; the certifier claims the source's stored unit through that read
 exactly as it does for any complete aggregate read. While it is, it holds those slots: reads
 through it, through its aliases, and through views nested in it are reads of
 the view, not of its container, and once the take is committed the view is a
@@ -21703,8 +22346,8 @@ emissions the binding holds nothing and its container is a borrowed
 parameter, which no release waits for, so one grouping serves every
 emission. The binding keeps its borrow source, which the ownership-place
 query still follows to the nearest binding the current emission makes
-owned. A complete projection of such a binding denotes the unit it holds,
-exactly as a complete projection of an owned binding does.
+owned. An ownership-complete read of such a binding denotes the unit it
+holds, exactly as one of an owned binding does.
 Dominance is computed from the control-flow graph with a synthetic entry for
 all procedure roots: a statement's structural successors, except that a
 join's body is entered only through the jumps that name the join, so a read
@@ -21860,7 +22503,7 @@ A read solved borrowed holds no unit, so it never consumes at the read, with
 one exception: a view whose value reaches a consuming operand is taken whole
 at its definition and then holds its slots (see the view rules above). Every
 other borrowed read's binding, every borrowed pure same-value alias of it,
-and every ownership-complete projection of either carries the field to where
+and every ownership-complete read of either carries the field to where
 the value is consumed: an owned direct-call position, a borrowed position
 whose owned variant takes a field, or a consumed or retained low-level
 position, with no other mention of the binding's borrow forest in the same
@@ -22229,7 +22872,7 @@ edges the solver already walks:
   visible container is visible
 - direct-call argument-to-parameter and return-to-result relations, and the
   return-to-result relation of a read's fresh form, which that read may become
-  (see "Fresh forms of static lists")
+  (see "Fresh forms of static values")
 - low-level ops, from explicit `RcEffect` data
 
 Bidirectional containment keeps every reachable-value tree uniformly
@@ -22289,13 +22932,17 @@ Uniqueness inference is an optimized-build analysis
 (`TargetConfig.prove_uniqueness`, on for `--opt=speed` and `--opt=size`). It
 answers at compile time a question the runtime check answers anyway, so
 skipping it costs each mutation only that branch, and it is a large share of
-ARC. Under `--opt=dev`, `--opt=interpreter`, and compile-time evaluation the
-settlement does not run: no local is proven unique, no signature carries a
-unique return, and every candidate read stays the static datum, which a
-mutation copies on first write. Borrow inference, field takes, and liveness
-run at every opt level, since they decide the ownership schedule rather than
-remove a check. This is one ARC with one analysis switched off, never a
-second implementation, and nothing observable depends on the switch.
+ARC. Under `--opt=dev`, `--opt=interpreter`, and compile-time evaluation no
+local is proven unique and no signature carries a unique return, so every
+mutation keeps its check. The settlement runs there only when the program has
+a read that names a fresh form (see "Fresh forms of static values"), because
+only it can tell which of those reads an in-place operation would otherwise
+copy, and a read left as the static datum loses the capacity its value was
+evaluated with; it decides those reads' forms and nothing else. Borrow
+inference, field takes, and liveness run at every opt level, since they
+decide the ownership schedule rather than remove a check. This is one ARC
+with one analysis's claims switched off, never a second implementation, and
+the program a build runs differs only in which checks it keeps.
 
 A join parameter is an ownership phi, not a foreign definition. Its origin is
 born-unique exactly when it has at least one explicit non-self
@@ -23464,10 +24111,13 @@ checked CIR
   -> store eval result in ConstStore
 ```
 
-An interactive REPL expression is an explicit `.repl_expr` compile-time root
-whose checked body returns `Str.inspect(expression)`. The evaluation helper
-that generated the zero-argument wrapper resolves its asserted body once and
-puts that exact expression identity in the root request;
+An interactive REPL expression is a `.repl_expr` compile-time root whose
+checked body returns `Str.inspect(expression)`. The evaluation helper that
+generated the zero-argument wrapper tells checking which definition it is;
+checking records that definition's body
+(`ModuleEnv.requested_compile_time_roots`) unless it rejected the
+definition, and the module's root table holds one `.repl_expr` root per
+recorded body, whose request carries that exact expression identity;
 `CompileTimeFinalization` consumes the identity directly. Checking retains the zero-argument
 REPL-root context so inspecting an
 uncalled constrained polymorphic function does not force its body, but checking
@@ -23499,6 +24149,54 @@ re-encoded at its own layouts, exactly as a 64-bit host's values reach a
 either width; one too large for its destination's widths (a 32-bit target's
 lengths, or the ConstStore's) is `error.OutOfMemory`, as it would be on that
 target at runtime.
+
+Compile-time evaluation gives the same result on every compiler host and for
+every target, except when it runs out of memory: heap exhaustion, stack
+overflow, or exhaustion of the virtual address space it runs in. Running out
+of memory is an out-of-memory crash of the root at the operation that asked,
+never an error of the compilation: it is reported, or for a guarded root
+deferred to runtime, exactly like any other compile-time crash. Only the
+host's own bookkeeping running out of memory fails the compilation.
+
+Evaluation runs in the address space of the program it completes values
+for, which a compilation names explicitly
+(`CompileTimeFinalization.Options.address_space`): the narrower of the
+compiler host's and its runtime program's, and a 64-bit one when it has no
+runtime program, as in `roc check`. Evaluating for a 32-bit program, such as
+a wasm32 build, is that program running out of address space where it
+would: both evaluators' hosts refuse an allocation request larger than a
+32-bit `roc_alloc` can be asked for, without asking the compiler's memory
+for it, and the root crashes there. A 64-bit program's evaluation is refused
+only what the compiler's memory cannot satisfy. Nothing else about
+evaluation depends on the target: values are computed at the compiler
+host's pointer width and laid into each program at its own layouts, as
+above. A host-width representation is never smaller than a 32-bit one, so a
+request the host refuses can stand for a smaller one on the target; that is
+a difference only in running out of memory.
+
+Running out of address space is decided where a value is computed, not where
+it is laid into a 32-bit image: by then the compiler would already have
+allocated, on the target's behalf, memory the target does not have. Because
+a checked module's cache entry holds its completed values, a 32-bit program
+must also never read one that only a 64-bit address space could produce.
+Every compilation shares one checked-module cache and one platform-pairing
+cache, whatever address space it evaluates in, and each evaluation output
+records which address spaces it serves (`EvaluationOutput.address_space`).
+Once evaluating any of its roots asked for an allocation larger than a
+32-bit `roc_alloc` can be asked for, the outcome holds only for the address
+space it ran in: a 64-bit evaluation grants the request (`u64_only`) and a
+32-bit one runs out of memory there (`u32_only`); every other output is
+`any`. Both evaluators' hosts note such a request before deciding whether to
+grant it (`compile_time_host.exceedsU32AddressSpace`), so a refused request
+is noted as surely as a granted one; a literal root's request marks every
+module its finalization completes, since any of their roots can read the
+literal's value. A compilation treats an entry that does not serve its
+address space as a miss and compiles the module again, reaching its own
+program's outcome; every other entry serves both address spaces, because
+evaluation results differ between them only in running out of memory. A
+module whose evaluation reported a crash is not cached at all, but a guarded
+root's crash is not a diagnostic (its payload is `runtime`), so an entry can
+hold a 32-bit evaluation's out-of-memory crash there, and is `u32_only`.
 
 Diagnostic behavior must be identical between the dev-backend evaluator and the
 host-restricted LIR interpreter. A mismatch in crashes, expect failures,
@@ -24079,7 +24777,7 @@ A stored function value keeps checked identity only:
 ```zig
 const ConstFn = struct {
     fn_def: FnDef,
-    source_fn_ty: TypeId,
+    source_fn_key: TypeDigest,
     captures: Span(ConstCapture),
 };
 
@@ -24090,7 +24788,7 @@ const CaptureId = union(enum) {
 
 const ConstCaptureKind = union(enum) {
     lexical,
-    recursive_binding: struct { module: CheckedModuleDigest, root: ComptimeRootId },
+    recursive_binding: struct { module: CheckedModuleDigest, root: ComptimeRootKey },
 };
 
 const ConstCapture = struct {
@@ -24103,7 +24801,14 @@ const ConstCapture = struct {
 
 `fn_def` names a checked, imported, nested, hosted, promoted, or checked-stage
 generated procedure template that the checked module owns or references
-explicitly.
+explicitly. `source_fn_key` is the key of the checked function type the value
+was specialized from; a stored value names its own function type by key
+alone, and a restoring compilation reads a nested function's checked type
+from its lambda in the module `fn_def` names. Every checked type a stored function's
+dispatch evidence names (a target's callable, an edge's instantiation, a
+structural edge's dispatcher and callable) is a solver variable of the module
+the evidence names, a function of that module's sealed data, never a
+synthesized type.
 `captures` bind the exact capture identities required by that function to
 stored const nodes. `ty` is the exact target-independent runtime representation
 of the captured value. The temporary LIR function-result metadata separately
@@ -24170,7 +24875,7 @@ const ErasedFn = struct {
 
 const FnTemplate = struct {
     fn_def: FnDef,
-    source_fn_ty: TypeId,
+    source_fn_key: TypeDigest,
 };
 
 const CaptureSlot = struct {
@@ -25074,9 +25779,10 @@ The contract is carried by types rather than prose: the Zig ABI declarations
 return a non-optional pointer, generated Rust glue returns `NonNull<c_void>`,
 generated C glue declares both symbols `returns_nonnull`, and the LLVM backend
 marks their declarations' return values `nonnull` in the linked module.
-Compiler-internal hosts follow the same contract: the compile-time evaluator's
-host turns allocation failure into a Roc crash by unwinding the interpreter it
-serves, rather than signaling it with null.
+Compiler-internal hosts follow the same contract: both compile-time
+evaluators' hosts turn allocation failure into a Roc crash, unwinding the
+interpreter they serve or the generated code they called, rather than
+signaling it with null (see "Compile-Time Constants").
 
 `roc_crashed` never returns to Roc. A platform host ends the process; a host
 that keeps running, like the compiler's own hosts, longjmps to a crash
@@ -25218,11 +25924,11 @@ dispatch order for that table is the `hosted` section's declaration order.
 
 Canonicalization resolves every `hosted` mapping once to an exact imported
 definition. Checking validates that definition is a hosted declaration, and a
-successfully checked platform module stores the header-ordered binding table in
-its `ModuleEnv`, indexed by `(target checked module key, target CIR
-definition)`. `HostedCompiler.replaceAnnoOnlyWithHosted` records the exact
-rewritten definition span in `ModuleEnv`, and every reader consumes it
-directly. CLI and post-check consumers join hosted procedures to the binding
+successfully checked platform module keeps the header-ordered entries in its
+`ModuleEnv`; its hosted bindings (`ModuleAnalyses.hostedBindings`) are those
+entries indexed by `(target checked module key, target CIR definition)`.
+`HostedCompiler.replaceAnnoOnlyWithHosted` records the exact rewritten
+definition span in `ModuleEnv`, and every reader consumes it directly. CLI and post-check consumers join hosted procedures to the binding
 table by those identities in linear time; they must not reconstruct or match
 qualified source names.
 

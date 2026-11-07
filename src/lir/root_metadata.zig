@@ -6,7 +6,7 @@
 const std = @import("std");
 const check = @import("check");
 
-const checked = check.CheckedArtifact;
+const checked = check.Checked;
 
 /// Source role for a root procedure emitted into LIR.
 pub const RootKind = checked.RootRequestKind;

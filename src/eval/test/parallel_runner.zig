@@ -169,7 +169,7 @@ pub const TestCase = struct {
     };
 };
 
-fn constScalar(value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.ConstScalar {
+fn constScalar(value: check.Checked.ConstValue) ?check.Checked.ConstScalar {
     return switch (value) {
         .scalar => |scalar| scalar,
         .pending,
@@ -189,7 +189,7 @@ fn constScalar(value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.C
     };
 }
 
-fn constList(value: check.CheckedArtifact.ConstValue) ?check.ConstStore.ConstList {
+fn constList(value: check.Checked.ConstValue) ?check.ConstStore.ConstList {
     return switch (value) {
         .list => |items| items,
         .pending,
@@ -210,7 +210,7 @@ fn constList(value: check.CheckedArtifact.ConstValue) ?check.ConstStore.ConstLis
 }
 
 fn constF32ListMatches(
-    store: *const check.CheckedArtifact.ConstStore,
+    store: *const check.Checked.ConstStore,
     list: check.ConstStore.ConstList,
     expected: []const u32,
 ) bool {
@@ -236,7 +236,7 @@ fn constF32ListMatches(
 }
 
 fn constF64ListMatches(
-    store: *const check.CheckedArtifact.ConstStore,
+    store: *const check.Checked.ConstStore,
     list: check.ConstStore.ConstList,
     expected: []const u64,
 ) bool {
@@ -261,7 +261,7 @@ fn constF64ListMatches(
     };
 }
 
-fn constF32Bits(value: check.CheckedArtifact.ConstValue) ?u32 {
+fn constF32Bits(value: check.Checked.ConstValue) ?u32 {
     const scalar = constScalar(value) orelse return null;
     return switch (scalar) {
         .f32_bits => |bits| bits,
@@ -281,7 +281,7 @@ fn constF32Bits(value: check.CheckedArtifact.ConstValue) ?u32 {
     };
 }
 
-fn constF64Bits(value: check.CheckedArtifact.ConstValue) ?u64 {
+fn constF64Bits(value: check.Checked.ConstValue) ?u64 {
     const scalar = constScalar(value) orelse return null;
     return switch (scalar) {
         .f64_bits => |bits| bits,
@@ -1015,7 +1015,7 @@ fn runComptimeFloatBitsTest(
         .canonicalize_ns = resources.canonicalize_ns,
         .typecheck_ns = resources.typecheck_ns,
     };
-    const roots = resources.checked_artifact.compile_time_roots.roots;
+    const roots = (try resources.checked_module.checkedTables()).compile_time_roots.roots;
     if (roots.len != 1) {
         return .{
             .status = .fail,
@@ -1026,7 +1026,7 @@ fn runComptimeFloatBitsTest(
         };
     }
 
-    const node = switch (roots[0].payload) {
+    const node = switch (resources.checked_module.evaluation.rootPayload(roots[0].id)) {
         .const_node => |value| value,
         .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => {
             return .{
@@ -1038,8 +1038,8 @@ fn runComptimeFloatBitsTest(
             };
         },
     };
-    const stored = resources.checked_artifact.const_store.get(node);
-    const const_store = &resources.checked_artifact.const_store;
+    const stored = resources.checked_module.evaluation.const_store.get(node);
+    const const_store = &resources.checked_module.evaluation.const_store;
 
     const matches = switch (expected) {
         .comptime_f32_bits => |expected_bits| if (constF32Bits(stored)) |actual_bits|
@@ -1132,14 +1132,14 @@ fn materializedComptimeFloatBitsMatch(
     target: roc_target.RocTarget,
     expected: TestCase.Expected,
 ) (std.mem.Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{UnsupportedTarget})!bool {
-    const compile_time_root = resources.checked_artifact.compile_time_roots.roots[0];
+    const compile_time_root = (try resources.checked_module.checkedTables()).compile_time_roots.roots[0];
     const pattern = compile_time_root.pattern orelse return false;
-    const top_level = resources.checked_artifact.top_level_values.lookupByPattern(pattern) orelse return false;
+    const top_level = (try resources.checked_module.checkedTables()).top_level_values.lookupByPattern(pattern) orelse return false;
     const const_locator = switch (top_level.value) {
         .const_ref => |value| value,
         .procedure_binding => return false,
     };
-    const const_node = switch (compile_time_root.payload) {
+    const const_node = switch (resources.checked_module.evaluation.rootPayload(compile_time_root.id)) {
         .const_node => |value| value,
         .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => return false,
     };
@@ -1149,20 +1149,20 @@ fn materializedComptimeFloatBitsMatch(
         .checked_type = compile_time_root.checked_type,
     };
 
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, resources.import_artifacts.len);
+    const import_views = try allocator.alloc(check.Checked.ImportedModuleView, resources.import_artifacts.len);
     defer allocator.free(import_views);
     for (resources.import_artifacts, 0..) |*artifact, index| {
-        import_views[index] = check.CheckedArtifact.importedView(artifact);
+        import_views[index] = check.Checked.importedView(artifact);
     }
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.Checked.loweringView(&resources.checked_module),
             .imports = import_views,
         },
         .{
-            .requests = resources.checked_artifact.root_requests.runtime_requests,
+            .requests = (try resources.checked_module.rootRequests()).runtime_requests,
             .static_data_requests = &.{static_request},
             .include_internal_static_data = true,
         },
@@ -1173,7 +1173,7 @@ fn materializedComptimeFloatBitsMatch(
     const exports = try static_data.buildStaticData(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.Checked.loweringView(&resources.checked_module),
             .imports = import_views,
         },
         &lowered,

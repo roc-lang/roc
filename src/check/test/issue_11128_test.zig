@@ -1,26 +1,27 @@
 //! Deterministic allocation-work guard for checked procedure publication.
 const std = @import("std");
-const CheckedArtifact = @import("../checked_artifact.zig");
-const TopLevelProcedureBinding = CheckedArtifact.TopLevelProcedureBinding;
-const TopLevelProcedureBindingTable = CheckedArtifact.TopLevelProcedureBindingTable;
+const Checked = @import("../checked_module.zig");
+const type_ids = @import("../checked_type_ids.zig");
+const TopLevelProcedureBinding = Checked.TopLevelProcedureBinding;
+const TopLevelProcedureBindingTable = Checked.TopLevelProcedureBindingTable;
 
 fn schemeAllocationFailures(gpa: std.mem.Allocator) (std.mem.Allocator.Error || error{TestExpectedEqual})!void {
-    var store = CheckedArtifact.CheckedTypeStore{};
+    var store = Checked.CheckedTypeStore{};
     defer store.deinit(gpa);
     var inserted: usize = 0;
     defer for (0..inserted) |i| {
-        const scheme = store.scheme(@fromBackingInt(@intCast(i)));
-        std.debug.assert(@backingInt(scheme.id) == i);
+        const scheme = store.scheme(@fromBackingInt(@backingInt(type_ids.fromSynthesized(i))));
+        std.debug.assert(@backingInt(scheme.id) == @backingInt(type_ids.fromSynthesized(i)));
         std.debug.assert(@backingInt(scheme.root) == i);
     };
     while (inserted < 128) : (inserted += 1) {
-        const root: CheckedArtifact.CheckedTypeId = @fromBackingInt(@intCast(inserted));
-        const id = try store.internScheme(gpa, .source, root);
-        try std.testing.expectEqual(inserted, @backingInt(id));
+        const root: Checked.CheckedTypeId = @fromBackingInt(@intCast(inserted));
+        const id = try store.internScheme(gpa, .synthetic, root);
+        try std.testing.expectEqual(@backingInt(type_ids.fromSynthesized(inserted)), @backingInt(id));
         // Asking for a root's scheme again names the scheme it already has.
-        try std.testing.expectEqual(id, try store.internScheme(gpa, .source, root));
+        try std.testing.expectEqual(id, try store.internScheme(gpa, .synthetic, root));
     }
-    try std.testing.expectEqual(inserted, store.schemes.items.len);
+    try std.testing.expectEqual(inserted, store.schemes.items().len);
 }
 
 test "issue 11128 scheme growth and allocation failure preserve existing schemes" {
@@ -92,15 +93,13 @@ test "issue 11128 top-level procedure binding appends stay amortized" {
 
 test "issue 11128 wrapper and callable template appends stay amortized" {
     const count: usize = 4096;
-    inline for (.{ CheckedArtifact.IntrinsicWrapperTable, CheckedArtifact.EntryWrapperTable, CheckedArtifact.CallableEvalTemplateTable }) |Table| {
+    inline for (.{ Checked.EntryWrapperTable, Checked.CallableEvalTemplateTable }) |Table| {
         var bytes = std.testing.FailingAllocator.init(std.testing.allocator, .{});
         const gpa = bytes.allocator();
         var table: Table = .{};
         defer table.deinit(gpa);
         for (0..count) |i| {
-            const ref = if (Table == CheckedArtifact.IntrinsicWrapperTable)
-                try table.append(gpa, .{ .proc_base = @fromBackingInt(@intCast(i)), .template = @fromBackingInt(@intCast(i)) }, @fromBackingInt(@intCast(i)), .structural_eq)
-            else if (Table == CheckedArtifact.EntryWrapperTable)
+            const ref = if (Table == Checked.EntryWrapperTable)
                 try table.append(gpa, @fromBackingInt(@intCast(i)), .{ .proc_base = @fromBackingInt(@intCast(i)), .template = @fromBackingInt(@intCast(i)) }, @fromBackingInt(@intCast(i)))
             else
                 try table.append(gpa, @intCast(i), @fromBackingInt(@intCast(i)), @fromBackingInt(@intCast(i)), @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(i)));

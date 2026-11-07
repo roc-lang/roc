@@ -753,6 +753,16 @@ pub const LowLevel = enum(u16) {
             return .{};
         }
 
+        /// Argument positions the operation writes in place without checking
+        /// their counts: it returns the consumed argument's allocation as a
+        /// unique result with no runtime uniqueness check, so its caller
+        /// guarantees that argument is uniquely owned with the room the
+        /// operation uses.
+        pub fn uncheckedInPlaceArgs(self: RcEffect) u64 {
+            if (!self.result_unique) return 0;
+            return self.result_aliases_consumed_args & ~self.may_runtime_uniqueness_check_args;
+        }
+
         pub fn allocates() RcEffect {
             return .{
                 .may_allocate = true,

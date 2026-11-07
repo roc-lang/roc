@@ -21,7 +21,7 @@ const Lifted = @import("monotype_lifted/ast.zig");
 const Common = @import("common.zig");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 
 /// One producer: the function its evaluation runs and the value it produces.
 pub const Producer = struct {
@@ -102,7 +102,7 @@ fn insertSorted(allocator: Allocator, list: *std.ArrayList(u32), value: u32) All
 const ProducerKey = struct {
     module: [32]u8,
     tag: u8,
-    index: u32,
+    index: u128,
 
     fn of(module: checked.ModuleId, root: Common.ComptimeProducer) ProducerKey {
         return switch (root) {

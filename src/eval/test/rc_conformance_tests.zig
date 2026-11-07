@@ -1257,14 +1257,14 @@ const exemptions = [_]Exemption{
 /// Builtin module for every case would dominate the sweep's runtime.
 var shared_builtins: ?eval.BuiltinModules = null;
 
-fn sharedPrePublishedBuiltin(allocator: Allocator) SweepError!helpers.PrePublishedBuiltin {
+fn sharedPreOpenedBuiltin(allocator: Allocator) SweepError!helpers.PreOpenedBuiltin {
     if (shared_builtins == null) {
         shared_builtins = try eval.BuiltinModules.init(allocator, std.testing.io);
     }
     return .{
         .env = shared_builtins.?.builtin_module.env,
         .indices = shared_builtins.?.builtin_indices,
-        .artifact = &shared_builtins.?.checked_artifact,
+        .artifact = &shared_builtins.?.checked_module,
     };
 }
 
@@ -1278,7 +1278,7 @@ fn assertCaseChecks(allocator: Allocator, case: Case) SweepError!void {
         case.source_kind,
         case.source,
         &.{},
-        try sharedPrePublishedBuiltin(allocator),
+        try sharedPreOpenedBuiltin(allocator),
     );
     defer resources.deinit(allocator);
 
@@ -1318,7 +1318,7 @@ fn runCase(allocator: Allocator, case: Case) SweepError!void {
             case.source,
             &.{},
             .native,
-            try sharedPrePublishedBuiltin(allocator),
+            try sharedPreOpenedBuiltin(allocator),
         );
     defer if (plain_compiled) |*compiled| compiled.deinit(allocator);
 

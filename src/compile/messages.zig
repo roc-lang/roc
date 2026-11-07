@@ -14,7 +14,7 @@ const reporting = @import("reporting");
 const watch_inputs = @import("watch_inputs.zig");
 
 const ModuleEnv = can.ModuleEnv;
-const CheckedArtifact = check.CheckedArtifact;
+const Checked = check.Checked;
 const Report = reporting.Report;
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
@@ -182,19 +182,19 @@ pub const TypeCheckTask = struct {
     /// For a package or platform root, the public names its header exposes
     /// whose selected nested type the selected module does not define.
     missing_public_types: []const []const u8 = &.{},
-    /// Published checked artifact keys for direct imports, keyed by typed-CIR module index
-    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
-    /// Published checked artifacts currently available for exact-key lookup during checking finalization
-    available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    /// Published checked module keys for direct imports, keyed by typed-CIR module index
+    imported_artifacts: []const Checked.CheckedImport,
+    /// Published checked modules currently available for exact-key lookup during checking finalization
+    available_artifacts: []const Checked.ImportedModuleView,
     /// Platform requirement surface for app-root checking, carrying both the
     /// checker's input and the cache-identity component so the two can never
     /// be set independently.
     platform_requirements: ?PlatformRequirementSurface = null,
     /// Additional checked roots requested by package-level metadata.
-    explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+    explicit_roots: []const Checked.ExplicitRootRequestInput,
     /// How this module's compile-time roots are established. Decides whether
     /// an app root's entrypoint contract with its platform is enforced, and
-    /// participates in the checked-artifact cache identity.
+    /// participates in the checked-module cache identity.
     validation: can.Can.Validation = .checking,
     /// The source-pin validation input canonicalization reported against.
     /// Inference admission keys it, as checked-entry admission does, because
@@ -204,7 +204,7 @@ pub const TypeCheckTask = struct {
 
 /// The platform root's requirement surface, borrowed from its completed
 /// type check: the checked platform ModuleEnv (stable once the module is
-/// Done), the cache-identity context derived from its published artifact,
+/// Done), the cache-identity context derived from its opened module,
 /// and the platform path for diagnostics. The coordinator's stored surface
 /// borrows all data; a worker-task copy additionally borrows its task-owned
 /// owner-module slice, which the worker frees after checking.
@@ -213,7 +213,7 @@ pub const PlatformRequirementSurface = struct {
     /// Exact owner closure of the platform root whose requirement types are
     /// copied into the app. Populated on the worker-task copy of the surface.
     owner_modules: []const *const ModuleEnv = &.{},
-    context: CheckedArtifact.PlatformRequirementContextKey,
+    context: Checked.PlatformRequirementContextKey,
     path: []const u8,
 
     pub fn checkerInput(self: *const PlatformRequirementSurface) check.Check.PlatformRequirementInput {
@@ -330,31 +330,28 @@ pub const CanonicalizedResult = struct {
     canonicalize_diagnostics_ns: u64,
 };
 
-/// Worker-owned checked-module output transferred to the coordinator.
-pub const TypeCheckedPublication = CheckedArtifact.CheckedModuleArtifact;
-
 /// Result of successfully type-checking a module.
 /// User diagnostics do not alter this outcome: import metadata is prepared
 /// now or retained until platform/app relation construction. Selected roots
 /// are evaluated when the coordinator finishes the checked program.
 pub const OwnedSemanticModuleData = struct {
-    /// The coordinator retains this input until it accepts the publication.
+    /// The coordinator retains this input until it accepts the checked module.
     module_env: *ModuleEnv,
-    publication: TypeCheckedPublication,
-    publication_owned: bool = true,
+    checked_module: Checked.CheckedModule,
+    checked_module_owned: bool = true,
     pending_evaluation: ?*PendingEvaluationState = null,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
         if (self.pending_evaluation) |state| state.deinit();
         self.pending_evaluation = null;
-        if (!self.publication_owned) return;
-        self.publication.deinitRetainingModuleEnv(self.publication.canonical_names.allocator);
+        if (!self.checked_module_owned) return;
+        self.checked_module.deinitRetainingModuleEnv(self.checked_module.canonical_names.allocator);
     }
 };
 
 /// Result of successfully type-checking a module
 pub const TypeCheckedResult = struct {
-    /// A hit republishes against current artifacts without invoking inference.
+    /// A hit republishes against current modules without invoking inference.
     inference_reused: bool = false,
     owner_bindings: u32 = 0,
     reference_bindings: u32 = 0,
@@ -445,11 +442,11 @@ pub const WorkerResult = union(enum) {
         switch (self.*) {
             .parsed => |r| {
                 r.cached_ast.deinit();
-                var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
+                var storage: Checked.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
             .canonicalized_cached => |r| {
-                var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
+                var storage: Checked.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
             .canonicalized, .type_checked, .operation_failed, .worker_oom => {},

@@ -1,9 +1,9 @@
 //! Regression test for issue #12434.
 //!
 //! When an app's public API reaches procedure templates owned by another
-//! module, the root artifact's `lowering_visibility.module_ids` lists every
-//! visible checked artifact exactly once: no two entries share key `.bytes`,
-//! the identity `CheckedModuleArtifactKey.eql` compares.
+//! module, the root artifact's lowering visibility lists every
+//! visible checked module exactly once: no two entries share key `.bytes`,
+//! the identity `CheckedModuleKey.eql` compares.
 //! repro for https://github.com/roc-lang/roc/issues/12434
 
 const std = @import("std");
@@ -83,8 +83,8 @@ test "issue 12434: lowering visibility lists each visible artifact once" {
         try std.testing.expectEqual(@as(usize, 0), module_reports.reports.len);
     }
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
-    const module_ids = root_artifact.lowering_visibility.module_ids;
+    const root_artifact = (try build_env.executableRootCheckedModule());
+    const module_ids = (try root_artifact.loweringVisibility(build_env.moduleResolver())).module_ids;
     for (module_ids, 0..) |key, i| {
         for (module_ids[i + 1 ..]) |other| {
             try std.testing.expect(!std.mem.eql(u8, &key.bytes, &other.bytes));
@@ -92,8 +92,8 @@ test "issue 12434: lowering visibility lists each visible artifact once" {
     }
 
     // Every visible artifact other than the root and builtins resolves to a
-    // distinct checked artifact.
-    const artifacts = try build_env.collectVisibleArtifacts(gpa, root_artifact);
+    // distinct checked module.
+    const artifacts = try build_env.collectVisibleModules(gpa, root_artifact);
     defer gpa.free(artifacts);
     for (artifacts, 0..) |artifact, i| {
         for (artifacts[i + 1 ..]) |other| {

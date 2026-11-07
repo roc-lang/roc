@@ -55,7 +55,7 @@ const Common = @import("common.zig");
 const Allocator = std.mem.Allocator;
 /// The checked modules a lowering sees.
 pub const CheckedModules = Common.CheckedModules;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const static_dispatch = check.StaticDispatchRegistry;
 const checked_names = check.CanonicalNames;
 
@@ -70,7 +70,7 @@ pub inline fn traceEnabled() bool {
 /// A compile-time root this compilation evaluates.
 pub const DeclaredRoot = struct {
     module: checked.ModuleId,
-    root: checked.ComptimeRootId,
+    root: checked.ComptimeRootKey,
 };
 
 /// What a node can contribute to a literal root.
@@ -111,7 +111,7 @@ const NominalKey = struct {
 
 const TemplateKey = struct {
     module: [32]u8,
-    template: u32,
+    template: u128,
 };
 
 const TypeKey = struct {
@@ -230,7 +230,7 @@ pub const LiteralDemand = struct {
     pub fn checkedEvidenceFlags(
         self: *const LiteralDemand,
         allocator: Allocator,
-        plans: *const static_dispatch.StaticDispatchPlanTable,
+        dispatch: checked.CheckedDispatch,
         evidence: []const static_dispatch.CheckedEvidence,
     ) Allocator.Error!Flags {
         var result: Flags = .{};
@@ -238,17 +238,17 @@ pub const LiteralDemand = struct {
         defer pending.deinit(allocator);
         try pending.appendSlice(allocator, evidence);
         while (pending.pop()) |entry| {
-            try pending.appendSlice(allocator, plans.evidence_refs[entry.callable_contracts.start..][0..entry.callable_contracts.len]);
+            try pending.appendSlice(allocator, try dispatch.evidenceEntries(entry.callable_contracts));
             switch (entry.resolution) {
                 .direct => |node_id| {
-                    const node = plans.evidenceNode(node_id);
+                    const node = try dispatch.evidenceNode(node_id);
                     switch (node.target.kind) {
                         .procedure => |procedure| result = result.merge(self.templateFlags(procedure.template)),
                         .local_proc => return Flags.all,
                         .structural => {},
                     }
                     switch (node.nested) {
-                        .resolved => try pending.appendSlice(allocator, plans.nestedEvidence(node)),
+                        .resolved => try pending.appendSlice(allocator, try dispatch.nestedEvidence(node)),
                         .from_callable, .through_alias => return Flags.all,
                     }
                 },
@@ -315,8 +315,17 @@ const Builder = struct {
         const key: TemplateKey = .{ .module = template.artifact.bytes, .template = @backingInt(template.template) };
         if (self.demand.templates.get(key)) |node| return node;
         const node = try self.addNode(.{});
-        self.markUnbounded(node, "template outside the lowering");
         try self.demand.templates.put(self.allocator, key, node);
+        // A literal root's entry wrapper runs its literal's conversion plan,
+        // if it is a conversion root, and nothing else.
+        if (checked.templateLiteralRoot(template.template)) |root| {
+            if (self.views.get(template.artifact.bytes)) |view| {
+                const dispatch = try view.dispatch();
+                if ((try dispatch.literalRoot(root)).plan) |plan_id| try self.addPlan(node, view, dispatch, plan_id);
+                return node;
+            }
+        }
+        self.markUnbounded(node, "template outside the lowering");
         return node;
     }
 
@@ -386,21 +395,21 @@ const Builder = struct {
 
     /// The template a procedure use reaches, or null when it reaches no
     /// Roc body (a hosted procedure or a rejected binding).
-    fn procedureUseTarget(self: *Builder, use: checked.ProcedureUseTemplate) ?TemplateOrUnbounded {
+    fn procedureUseTarget(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!?TemplateOrUnbounded {
         return switch (use.binding) {
             .top_level => |top_level| blk: {
                 const view = self.views.get(top_level.artifact.bytes) orelse break :blk .unbounded;
-                break :blk self.bindingBodyTarget(view, view.top_level_procedure_bindings.get(top_level.binding).body);
+                break :blk try self.bindingBodyTarget(view, (try view.checkedTables()).top_level_procedure_bindings.get(top_level.binding).body);
             },
             .imported => |imported| blk: {
                 const view = self.views.get(imported.artifact.bytes) orelse break :blk .unbounded;
-                const binding = view.exported_procedure_bindings.lookup(imported.def, imported.pattern) orelse break :blk .unbounded;
-                break :blk self.bindingBodyTarget(view, binding.body);
+                const binding = (try view.exportRows()).procedureBinding(imported.def, imported.pattern) orelse break :blk .unbounded;
+                break :blk try self.bindingBodyTarget(view, binding.body);
             },
             .hosted => null,
             .platform_required => |required| blk: {
                 const view = self.views.get(required.artifact.bytes) orelse break :blk .unbounded;
-                break :blk self.bindingBodyTarget(view, view.top_level_procedure_bindings.get(required.procedure_binding).body);
+                break :blk try self.bindingBodyTarget(view, (try view.checkedTables()).top_level_procedure_bindings.get(required.procedure_binding).body);
             },
         };
     }
@@ -410,7 +419,7 @@ const Builder = struct {
         unbounded,
     };
 
-    fn bindingBodyTarget(_: *Builder, view: checked.ImportedModuleView, body: checked.ProcedureBindingBody) ?TemplateOrUnbounded {
+    fn bindingBodyTarget(_: *Builder, view: checked.ImportedModuleView, body: checked.ProcedureBindingBody) Allocator.Error!?TemplateOrUnbounded {
         return switch (body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| .{ .template = template },
@@ -418,8 +427,8 @@ const Builder = struct {
             },
             .callable_eval_template => |id| blk: {
                 const raw = @backingInt(id);
-                if (raw >= view.callable_eval_templates.templates.len) break :blk .unbounded;
-                const wrapper = view.entry_wrappers.lookupByRoot(view.callable_eval_templates.templates[raw].root) orelse break :blk .unbounded;
+                if (raw >= (try view.checkedTables()).callable_eval_templates.view().templates.len) break :blk .unbounded;
+                const wrapper = (try view.checkedTables()).entry_wrappers.lookupByRoot((try view.checkedTables()).callable_eval_templates.view().templates[raw].root) orelse break :blk .unbounded;
                 break :blk .{ .template = wrapper.template };
             },
             .checked_error => null,
@@ -428,15 +437,15 @@ const Builder = struct {
 
     /// Whether reading a constant can lower its computation in place: its
     /// value is neither stored nor evaluated by this compilation.
-    fn constReadLowersBody(self: *Builder, use: checked.ConstUseTemplate) bool {
+    fn constReadLowersBody(self: *Builder, use: checked.ConstUseTemplate) Allocator.Error!bool {
         const const_ref = use.const_ref;
         const view = self.views.get(const_ref.artifact.bytes) orelse return true;
-        switch (view.const_templates.get(const_ref).state) {
+        switch (try view.constValue(const_ref)) {
             .stored_const, .unimplemented => return false,
             .reserved, .eval_template => {},
         }
         const root_id = switch (const_ref.owner) {
-            .top_level_binding => |top_level| view.compile_time_roots.lookupIdByPattern(top_level.pattern),
+            .top_level_binding => |top_level| (try view.checkedTables()).compile_time_roots.lookupIdByPattern(top_level.pattern),
             .hoisted_root => |hoisted| hoisted.root,
         } orelse return true;
         return !self.declared.contains(.{ .module = view.key.digest(), .root = root_id });
@@ -452,18 +461,18 @@ const Builder = struct {
     /// Add one template's own flags and edges.
     fn addTemplate(self: *Builder, view: checked.ImportedModuleView, node: NodeId, template: checked.CheckedProcedureTemplate) Allocator.Error!void {
         if (template.target == .hosted) return;
-        try self.addTypeEdge(node, view, template.checked_fn_root);
+        try self.addTypeEdge(node, view, try view.checked_types.pairedType(template.checked_fn_root));
 
-        const refs = view.resolved_value_refs;
+        const refs = (try view.valueRefs());
         for (refs.template_refs[template.resolved_value_refs.start..][0..template.resolved_value_refs.len]) |ref_id| {
             const record = refs.records[@backingInt(ref_id)];
             try self.addTypeEdge(node, view, record.checked_ty);
             switch (record.ref) {
-                .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| try self.addTemplateTarget(node, self.procedureUseTarget(use)),
-                .platform_required_proc => |required| try self.addTemplateTarget(node, self.procedureUseTarget(required.procedure)),
-                .top_level_const, .imported_const => |use| if (self.constReadLowersBody(use)) self.markUnbounded(node, "const read"),
-                .selected_hoisted_const => |selected| if (self.constReadLowersBody(selected.const_use)) self.markUnbounded(node, "hoisted const read"),
-                .platform_required_const => |required| if (self.constReadLowersBody(required.const_use)) self.markUnbounded(node, "required const read"),
+                .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| try self.addTemplateTarget(node, try self.procedureUseTarget(use)),
+                .platform_required_proc => |required| try self.addTemplateTarget(node, try self.procedureUseTarget(required.procedure)),
+                .top_level_const, .imported_const => |use| if (try self.constReadLowersBody(use)) self.markUnbounded(node, "const read"),
+                .selected_hoisted_const => |selected| if (try self.constReadLowersBody(selected.const_use)) self.markUnbounded(node, "hoisted const read"),
+                .platform_required_const => |required| if (try self.constReadLowersBody(required.const_use)) self.markUnbounded(node, "required const read"),
                 .local_param,
                 .local_value,
                 .local_mutable_version,
@@ -476,36 +485,25 @@ const Builder = struct {
             }
         }
 
-        const plans = view.static_dispatch_plans;
-        for (plans.template_refs[template.static_dispatch_plans.start..][0..template.static_dispatch_plans.len]) |plan_id| {
-            const plan = plans.plans[@backingInt(plan_id)];
-            try self.addTypeEdge(node, view, plan.callable_ty);
-            try self.addTypeEdge(node, view, plan.dispatcher_ty);
-            self.markOwn(node, self.literalFlags(view, plan_id, plan));
-            switch (plan.resolution) {
-                .direct_closed, .direct_parametric => |direct| try self.addEvidenceNode(node, plans, direct.evidence),
-                .direct_pending => |evidence| try self.addEvidenceNode(node, plans, evidence),
-                // The target comes from the specialization's evidence or is
-                // derived from the types, which the instance's and this
-                // body's type edges reach.
-                .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
-            }
+        const dispatch = try view.dispatch();
+        for ((try view.checkedTables()).checked_procedure_templates.dispatch_plan_refs[template.static_dispatch_plans.start..][0..template.static_dispatch_plans.len]) |plan_id| {
+            try self.addPlan(node, view, dispatch, plan_id);
         }
     }
 
-    fn addEvidenceNode(self: *Builder, from: NodeId, plans: *const static_dispatch.StaticDispatchPlanTable, root: static_dispatch.EvidenceNodeId) Allocator.Error!void {
+    fn addEvidenceNode(self: *Builder, from: NodeId, dispatch: checked.CheckedDispatch, root: static_dispatch.EvidenceNodeId) Allocator.Error!void {
         var pending = std.ArrayList(static_dispatch.EvidenceNodeId).empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, root);
         while (pending.pop()) |node_id| {
-            const node = plans.evidenceNode(node_id);
+            const node = try dispatch.evidenceNode(node_id);
             switch (node.target.kind) {
                 .procedure => |procedure| try self.addEdge(from, try self.templateNode(procedure.template)),
                 .local_proc => self.markUnbounded(from, "local procedure evidence"),
                 .structural => {},
             }
             switch (node.nested) {
-                .resolved => for (plans.nestedEvidence(node)) |nested| try self.addCheckedEvidence(from, plans, nested, &pending),
+                .resolved => for (try dispatch.nestedEvidence(node)) |nested| try self.addCheckedEvidence(from, dispatch, nested, &pending),
                 .from_callable => self.markUnbounded(from, "callable nested evidence"),
                 .through_alias => self.markUnbounded(from, "evidence composed through a procedure alias"),
             }
@@ -515,12 +513,12 @@ const Builder = struct {
     fn addCheckedEvidence(
         self: *Builder,
         from: NodeId,
-        plans: *const static_dispatch.StaticDispatchPlanTable,
+        dispatch: checked.CheckedDispatch,
         evidence: static_dispatch.CheckedEvidence,
         pending: *std.ArrayList(static_dispatch.EvidenceNodeId),
     ) Allocator.Error!void {
-        for (plans.evidence_refs[evidence.callable_contracts.start..][0..evidence.callable_contracts.len]) |contract| {
-            try self.addCheckedEvidence(from, plans, contract, pending);
+        for (try dispatch.evidenceEntries(evidence.callable_contracts)) |contract| {
+            try self.addCheckedEvidence(from, dispatch, contract, pending);
         }
         switch (evidence.resolution) {
             .direct => |node_id| try pending.append(self.allocator, node_id),
@@ -528,25 +526,38 @@ const Builder = struct {
         }
     }
 
+    /// A plan's types, its own literal contribution and the templates its
+    /// resolution reaches.
+    fn addPlan(self: *Builder, node: NodeId, view: checked.ImportedModuleView, dispatch: checked.CheckedDispatch, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+        const plan = try dispatch.plan(plan_id);
+        try self.addTypeEdge(node, view, plan.callable_ty);
+        try self.addTypeEdge(node, view, plan.dispatcher_ty);
+        self.markOwn(node, try self.literalFlags(view, plan_id, plan));
+        switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| try self.addEvidenceNode(node, dispatch, direct.evidence),
+            .direct_pending => |evidence| try self.addEvidenceNode(node, dispatch, evidence),
+            // The target comes from the specialization's evidence or is
+            // derived from the types, which the instance's and this body's
+            // type edges reach.
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+        }
+    }
+
     /// A plan's own contribution when it is a literal conversion.
-    fn literalFlags(self: *Builder, view: checked.ImportedModuleView, plan_id: static_dispatch.StaticDispatchPlanId, plan: static_dispatch.StaticDispatchCallPlan) Flags {
+    fn literalFlags(self: *Builder, view: checked.ImportedModuleView, plan_id: static_dispatch.StaticDispatchPlanId, plan: static_dispatch.StaticDispatchCallPlan) Allocator.Error!Flags {
         if (plan.resolution == .checked_error) return .{};
-        const bodies = view.checked_bodies;
+        const bodies = (try view.bodies());
         const region = view.module_env.store.getNodeRegion(@fromBackingInt(plan.node));
         const conversion_root, const dependent: Flags = switch (bodies.index().nodeKind(plan.node)) {
             // A custom literal pattern's node keys both its conversion plan
             // and its equality plan.
-            .pattern => blk: {
-                const conversion = bodies.literalConversion(plan.node);
-                if (conversion.plan != plan_id) return .{};
-                break :blk switch (conversion.literal) {
-                    .numeral => .{ conversion.conversion_root, .{ .dependent_numeral = true } },
-                    .quote => .{ conversion.conversion_root, .{ .dependent_quote = true } },
-                };
+            .pattern => switch (bodies.literalDispatchKind(plan.node)) {
+                .numeral => if (bodies.numeralPlan(plan.node) != plan_id) return .{} else .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },
+                .quote => if (bodies.quotePlan(plan.node) != plan_id) return .{} else .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_quote = true } },
             },
             .expr => switch (bodies.exprData(@fromBackingInt(plan.node))) {
-                .numeral => .{ bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },
-                .str => if (bodies.quoteIsCustom(plan.node)) .{ bodies.literalConversionRoot(plan.node), .{ .dependent_quote = true } } else return .{},
+                .numeral => .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_numeral = true } },
+                .str => if (bodies.quoteIsCustom(plan.node)) .{ try bodies.literalConversionRoot(plan.node), .{ .dependent_quote = true } } else return .{},
                 .interpolation => {
                     if (traceEnabled()) std.debug.print("ctfe-demand unbounded interpolation {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), region.start.offset });
                     return .{ .strict = true };
@@ -597,7 +608,7 @@ const Builder = struct {
         };
         // A conversion with no root of its own depends on its instance.
         const root_id = conversion_root orelse return dependent;
-        return switch (view.compile_time_roots.root(root_id).payload) {
+        return switch (view.rootPayload(root_id)) {
             .pending => if (self.declared.contains(.{ .module = view.key.digest(), .root = root_id })) .{} else unrequested: {
                 if (traceEnabled()) std.debug.print("ctfe-demand unbounded unrequested-root {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), region.start.offset });
                 break :unrequested .{ .strict = true };
@@ -612,15 +623,19 @@ const Builder = struct {
     /// Record every method name dispatch can select by type in this module.
     fn addImplicitMethods(self: *Builder, view: checked.ImportedModuleView) Allocator.Error!void {
         const names = view.canonical_names;
-        for (view.checked_procedure_templates.evidence_params_pool) |param| {
-            try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});
+        const dispatch = try view.dispatch();
+        for (0..(try view.checkedTables()).checked_procedure_templates.templates.items.len) |raw| {
+            for (try dispatch.evidenceParams(.row(@intCast(raw)))) |param| try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});
         }
-        const plans = view.static_dispatch_plans;
-        for (plans.plans) |plan| switch (plan.resolution) {
-            .evidence_dependent, .structural => try self.implicit_methods.put(self.allocator, names.methodNameText(plan.method), {}),
+        for (0..(try view.checkedTables()).checked_procedure_templates.dispatch_scopes.len) |raw| {
+            for ((try dispatch.scopeSchema(@fromBackingInt(@intCast(raw)))).params) |param| try self.implicit_methods.put(self.allocator, names.methodNameText(param.method), {});
+        }
+        const plans = &(try view.checkedTables()).static_dispatch_plans;
+        for (0..plans.plans.len) |raw| switch ((try dispatch.plan(@fromBackingInt(@intCast(raw)))).resolution) {
+            .evidence_dependent, .structural => try self.implicit_methods.put(self.allocator, names.methodNameText(plans.plans[raw].method), {}),
             .direct_pending, .direct_closed, .direct_parametric, .checked_error, .@"unreachable" => {},
         };
-        for (plans.generated_codec_calls) |call| try self.implicit_methods.put(self.allocator, names.methodNameText(call.method), {});
+        for (plans.recorded_codec_calls) |call| try self.implicit_methods.put(self.allocator, names.methodNameText(call.method), {});
         for (plans.iterator_for_plans) |plan| {
             try self.implicit_methods.put(self.allocator, names.methodNameText(plan.iter.method), {});
             try self.implicit_methods.put(self.allocator, names.methodNameText(plan.next.method), {});
@@ -632,7 +647,7 @@ const Builder = struct {
     /// explicit call reaches its method through its own plan.
     fn addMethods(self: *Builder, view: checked.ImportedModuleView) Allocator.Error!void {
         const names = view.canonical_names;
-        for (view.method_registry.entries) |entry| {
+        for ((try view.checkedTables()).method_registry.entries) |entry| {
             const target = entry.target orelse continue;
             const implicit = self.implicit_methods.contains(names.methodNameText(entry.key.method));
             const owner: NodeId = switch (entry.key.owner) {
@@ -715,7 +730,7 @@ pub fn compute(
     // Every template has its node before any edge names one.
     var views = builder.views.valueIterator();
     while (views.next()) |view| {
-        for (0..view.checked_procedure_templates.templates.items.len) |index| {
+        for (0..(try view.checkedTables()).checked_procedure_templates.templates.items.len) |index| {
             const node = try builder.addNode(.{});
             try demand.templates.put(allocator, .{ .module = view.key.bytes, .template = @intCast(index) }, node);
         }
@@ -726,7 +741,7 @@ pub fn compute(
     while (views.next()) |view| try builder.addMethods(view.*);
     views = builder.views.valueIterator();
     while (views.next()) |view| {
-        for (view.checked_procedure_templates.templates.items, 0..) |template, index| {
+        for ((try view.checkedTables()).checked_procedure_templates.templates.items, 0..) |template, index| {
             const node = demand.templates.get(.{ .module = view.key.bytes, .template = @intCast(index) }).?;
             try builder.addTemplate(view.*, node, template);
             if (!builder.own.items[node].eql(.{})) demand.counters.source_templates += 1;
@@ -817,8 +832,8 @@ fn rootFlags(
     if (request.root_evidence) |evidence| {
         const evidence_view = findView(modules, evidence.checked_module) orelse
             Common.invariant("discovery root evidence named a checked module outside its lowering set");
-        const plans = evidence_view.static_dispatch_plans;
-        evidence_flags = try demand.checkedEvidenceFlags(allocator, plans, plans.evidence_refs[evidence.span.start..][0..evidence.span.len]);
+        const dispatch = try evidence_view.dispatch();
+        evidence_flags = try demand.checkedEvidenceFlags(allocator, dispatch, try dispatch.evidenceEntries(evidence.span));
     }
     if (traceEnabled()) std.debug.print("ctfe-demand root-flags template={b:0>8} type={b:0>8} evidence={b:0>8}\n", .{
         @as(u8, @bitCast(template_flags)),

@@ -15,7 +15,7 @@ const types = @import("types");
 
 const body_analyses = @import("body_analyses.zig");
 const canonical = @import("canonical_names.zig");
-const checked_artifact = @import("checked_artifact.zig");
+const checked_module = @import("checked_module.zig");
 const checked_type_ids = @import("checked_type_ids.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 
@@ -26,10 +26,10 @@ const Region = base.Region;
 const Var = types.Var;
 
 const Allocator = std.mem.Allocator;
-const CheckedTypeId = checked_artifact.CheckedTypeId;
-const ComptimeRootId = checked_artifact.ComptimeRootId;
-const ResolvedValueId = checked_artifact.ResolvedValueId;
-const ResolvedValueRefId = checked_artifact.ResolvedValueRefId;
+const CheckedTypeId = checked_module.CheckedTypeId;
+const ComptimeRootKey = checked_module.ComptimeRootKey;
+const ResolvedValueId = checked_module.ResolvedValueId;
+const ResolvedValueRefId = checked_module.ResolvedValueRefId;
 const StaticDispatchPlanId = static_dispatch.StaticDispatchPlanId;
 const IteratorForPlanId = static_dispatch.IteratorForPlanId;
 
@@ -248,7 +248,7 @@ pub const ExprData = union(enum) {
     return_: struct {
         expr: ExprId,
         lambda: ExprId,
-        context: checked_artifact.CheckedReturnContext,
+        context: checked_module.CheckedReturnContext,
     },
     /// A `for` expression (`iteratorForPlan`).
     for_: ForData,
@@ -286,7 +286,7 @@ pub const PatternData = union(enum) {
     record_destructure: []const CIR.Pattern.RecordDestruct.Idx,
     list: struct {
         patterns: []const PatternId,
-        rest: ?checked_artifact.CheckedListRestPattern,
+        rest: ?checked_module.CheckedListRestPattern,
     },
     tuple: []const PatternId,
     /// Any numeric literal pattern (`numeralLiteral`,
@@ -297,7 +297,7 @@ pub const PatternData = union(enum) {
     str_interpolation: struct {
         prefix: base.StringLiteral.Idx,
         steps: CIR.Pattern.StrPatternStep.Span,
-        end: checked_artifact.CheckedStrPatternEnd,
+        end: checked_module.CheckedStrPatternEnd,
     },
     underscore,
     runtime_error,
@@ -373,14 +373,14 @@ pub const FieldAccessSegment = struct {
     field_name: canonical.RecordFieldLabelId,
     success_ty: CheckedTypeId,
     source_region: Region,
-    mode: checked_artifact.CheckedFieldAccessMode,
+    mode: checked_module.CheckedFieldAccessMode,
 };
 
 /// One capture of a closure and its canonical capture identity.
 pub const Capture = struct {
     pattern: PatternId,
     scope_depth: u32,
-    capture_id: checked_artifact.CaptureId,
+    capture_id: checked_module.CaptureId,
 };
 
 /// How a record destructure binds one field.
@@ -420,15 +420,16 @@ pub const Tables = struct {
     /// The identity of the checked module the bodies belong to.
     module: ?canonical.CheckedModuleDigest = null,
     plans: ?*const static_dispatch.StaticDispatchPlanTable = null,
-    refs: ?*const checked_artifact.ResolvedValueRefTable = null,
-    roots: ?*const checked_artifact.CompileTimeRootTable = null,
-    const_templates: ?*const checked_artifact.ConstTemplateTable = null,
-    templates: ?*const checked_artifact.CheckedProcedureTemplateTable = null,
-    top_level_procedure_bindings: ?*const checked_artifact.TopLevelProcedureBindingTable = null,
-    nested_proc_sites: ?*const checked_artifact.NestedProcSiteTable = null,
-    exported_defs: []const CIR.Def.Idx = &.{},
-    /// The pairing's types for a platform read under a platform/app pairing.
-    pairing_types: ?*const checked_artifact.PairingTypeColumn = null,
+    refs: ?*const checked_module.ResolvedValueRefTable = null,
+    roots: ?*const checked_module.CompileTimeRootTable = null,
+    const_templates: ?*const checked_module.ConstTemplateTable = null,
+    templates: ?*const checked_module.CheckedProcedureTemplateTable = null,
+    top_level_procedure_bindings: ?*const checked_module.TopLevelProcedureBindingTable = null,
+    /// The module's analyses, which hold its nested procedure sites and
+    /// exhaustiveness sites.
+    module_analyses: ?*checked_module.ModuleAnalyses = null,
+    /// The reader over the module's dispatch resolution.
+    dispatch: ?checked_module.CheckedDispatch = null,
 };
 
 /// The value a custom literal pattern converts its literal to before
@@ -440,7 +441,6 @@ pub const LiteralConversion = struct {
     },
     /// The `from_numeral` or `from_quote` plan, absent before plans exist.
     plan: ?StaticDispatchPlanId,
-    conversion_root: ?ComptimeRootId,
     /// The type the literal converts to.
     ty: CheckedTypeId,
 };
@@ -463,8 +463,9 @@ pub const LiteralPatternGuard = struct {
 pub const CheckedBodies = struct {
     env: *const ModuleEnv,
     names: *const canonical.CanonicalNameStore,
-    /// The module's checked type view, read without the pairing.
-    types: checked_artifact.CheckedTypeStoreView,
+    /// The module's checked type view, under the module's platform/app
+    /// pairing when it is read under one.
+    types: checked_module.CheckedTypeStoreView,
     analyses: *body_analyses.BodyAnalyses,
     tables: Tables = .{},
 
@@ -496,38 +497,41 @@ pub const CheckedBodies = struct {
     }
 
     /// The checked type a node with solver variable `var_` has: the
-    /// variable's own, or the pairing's image of it when the module is read
-    /// under a pairing.
-    pub fn typeOf(self: CheckedBodies, var_: Var) CheckedTypeId {
-        const own = self.typeOfVar(var_);
-        if (self.tables.pairing_types) |column| return column.image(own);
-        return own;
+    /// variable's own, or its image under the pairing the module is read
+    /// under.
+    pub fn typeOf(self: CheckedBodies, var_: Var) Allocator.Error!CheckedTypeId {
+        return try self.types.pairedType(self.typeOfVar(var_));
     }
 
-    pub fn exprType(self: CheckedBodies, id: ExprId) CheckedTypeId {
-        return self.typeOf(ModuleEnv.varFrom(id));
+    pub fn exprType(self: CheckedBodies, id: ExprId) Allocator.Error!CheckedTypeId {
+        return try self.typeOf(ModuleEnv.varFrom(id));
     }
 
     /// A pattern's type; a global definition's pattern has its definition's
     /// type.
-    pub fn patternType(self: CheckedBodies, id: PatternId) CheckedTypeId {
+    pub fn patternType(self: CheckedBodies, id: PatternId) Allocator.Error!CheckedTypeId {
         const var_: Var = if (self.index().topLevelDef(id)) |def| ModuleEnv.varFrom(def) else ModuleEnv.varFrom(id);
-        return self.typeOf(var_);
+        return try self.typeOf(var_);
     }
 
     /// The type a parent receives an expression's value at: the widened type
     /// of its row coercion when checking recorded one, its own type
     /// otherwise.
-    pub fn valueType(self: CheckedBodies, id: ExprId) CheckedTypeId {
-        return self.rowCoercion(id) orelse self.exprType(id);
+    pub fn valueType(self: CheckedBodies, id: ExprId) Allocator.Error!CheckedTypeId {
+        return (try self.rowCoercion(id)) orelse try self.exprType(id);
     }
 
     /// The widened type a row-coerced result flows into its parent at, when
     /// checking recorded one (`ModuleEnv.RowCoercedResult`). Lowering
     /// coerces the node's value to it wherever a parent reads the node.
-    pub fn rowCoercion(self: CheckedBodies, id: ExprId) ?CheckedTypeId {
+    pub fn rowCoercion(self: CheckedBodies, id: ExprId) Allocator.Error!?CheckedTypeId {
         const wide = self.env.rowCoercedResultWideVar(ModuleEnv.nodeIdxFrom(id)) orelse return null;
-        return self.typeOf(wide);
+        return try self.typeOf(wide);
+    }
+
+    /// Whether checking recorded a row coercion of the node's result.
+    pub fn hasRowCoercion(self: CheckedBodies, id: ExprId) bool {
+        return self.env.rowCoercedResultWideVar(ModuleEnv.nodeIdxFrom(id)) != null;
     }
 
     /// Whether checking recorded the node as erroneous in its own right.
@@ -577,19 +581,19 @@ pub const CheckedBodies = struct {
         }
     }
 
-    pub fn expr(self: CheckedBodies, id: ExprId) Expr {
+    pub fn expr(self: CheckedBodies, id: ExprId) Allocator.Error!Expr {
         return .{
             .id = id,
-            .ty = self.exprType(id),
+            .ty = try self.exprType(id),
             .source_region = self.regionOf(@backingInt(id)),
             .data = self.exprData(id),
         };
     }
 
-    pub fn pattern(self: CheckedBodies, id: PatternId) Pattern {
+    pub fn pattern(self: CheckedBodies, id: PatternId) Allocator.Error!Pattern {
         return .{
             .id = id,
-            .ty = self.patternType(id),
+            .ty = try self.patternType(id),
             .source_region = self.regionOf(@backingInt(id)),
             .data = self.patternData(id),
         };
@@ -644,24 +648,24 @@ pub const CheckedBodies = struct {
     }
 
     /// A call's function constraint type.
-    pub fn callFnType(self: CheckedBodies, id: ExprId) CheckedTypeId {
+    pub fn callFnType(self: CheckedBodies, id: ExprId) Allocator.Error!CheckedTypeId {
         const call = self.store().getExpr(id);
         if (call != .e_call) invariant("a call type was requested for an expression that is not a call");
-        return self.typeOf(call.e_call.constraint_fn_var orelse invariant("a checked call had no function constraint type"));
+        return try self.typeOf(call.e_call.constraint_fn_var orelse invariant("a checked call had no function constraint type"));
     }
 
     /// The type of the assembler a custom interpolation's conversion returns.
-    pub fn interpolationAssemblerType(self: CheckedBodies, id: ExprId) CheckedTypeId {
+    pub fn interpolationAssemblerType(self: CheckedBodies, id: ExprId) Allocator.Error!CheckedTypeId {
         const interpolation = self.store().getExpr(id);
         if (interpolation != .e_interpolation) invariant("an assembler type was requested for an expression that is not an interpolation");
-        return self.typeOf(interpolation.e_interpolation.assembler_fn_var orelse invariant("a checked interpolation had no assembler type"));
+        return try self.typeOf(interpolation.e_interpolation.assembler_fn_var orelse invariant("a checked interpolation had no assembler type"));
     }
 
     /// The compile-time root that evaluates a literal's conversion, when that
     /// conversion is independent of specialization.
-    pub fn literalConversionRoot(self: CheckedBodies, raw_node: u32) ?ComptimeRootId {
-        const roots = self.tables.roots orelse return null;
-        return roots.literalConversionRootForNode(raw_node);
+    pub fn literalConversionRoot(self: CheckedBodies, raw_node: u32) Allocator.Error!?ComptimeRootKey {
+        const dispatch = self.tables.dispatch orelse return null;
+        return dispatch.literalConversionRoot(raw_node);
     }
 
     /// A numeric literal expression's or pattern's exact digits.
@@ -792,7 +796,7 @@ pub const CheckedBodies = struct {
     /// it concatenates its parts directly. An open target can instantiate at
     /// a custom `from_interpolation` type and keeps its dispatch.
     pub fn interpolationIsBuiltinStr(self: CheckedBodies, id: ExprId) bool {
-        return checked_artifact.checkedConcreteBuiltinForLiteralTarget(self.types, self.typeOfVar(ModuleEnv.varFrom(id))) == .str;
+        return checked_module.checkedConcreteBuiltinForLiteralTarget(self.types, self.typeOfVar(ModuleEnv.varFrom(id))) == .str;
     }
 
     /// The tag a structural equality compares by discriminant alone: a
@@ -901,23 +905,27 @@ pub const CheckedBodies = struct {
         };
     }
 
+    /// Whether a literal node converts through `from_numeral` or `from_quote`.
+    pub fn literalDispatchKind(self: CheckedBodies, raw_node: u32) can.NodeStore.LiteralDispatchPlan.Kind {
+        const plan = self.env.store.literalDispatchPlanForNode(@fromBackingInt(@intCast(raw_node))) orelse invariant("a literal conversion was requested for a node with no literal dispatch plan");
+        return plan.dispatchKind();
+    }
+
     /// The conversion of a custom literal pattern's literal at the pattern's
     /// type, or of a literal expression at its own type.
-    pub fn literalConversion(self: CheckedBodies, raw_node: u32) LiteralConversion {
+    pub fn literalConversion(self: CheckedBodies, raw_node: u32) Allocator.Error!LiteralConversion {
         const node: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node));
         const plan = self.env.store.literalDispatchPlanForNode(node) orelse invariant("a literal conversion was requested for a node with no literal dispatch plan");
         return switch (plan.dispatchKind()) {
             .numeral => .{
                 .literal = .{ .numeral = self.numeralLiteral(raw_node) },
                 .plan = self.numeralPlan(raw_node),
-                .conversion_root = self.literalConversionRoot(raw_node),
-                .ty = self.typeOf(ModuleEnv.varFrom(node)),
+                .ty = try self.typeOf(ModuleEnv.varFrom(node)),
             },
             .quote => .{
                 .literal = .{ .quote = self.quoteText(raw_node) },
                 .plan = self.quotePlan(raw_node),
-                .conversion_root = self.literalConversionRoot(raw_node),
-                .ty = self.typeOf(ModuleEnv.varFrom(node)),
+                .ty = try self.typeOf(ModuleEnv.varFrom(node)),
             },
         };
     }
@@ -925,7 +933,7 @@ pub const CheckedBodies = struct {
     /// The equality test of a literal pattern whose comparison dispatches to
     /// its type's `from_numeral` or `from_quote` and `is_eq`, or null for a
     /// pattern compared directly.
-    pub fn literalPatternGuard(self: CheckedBodies, pattern_id: PatternId) ?LiteralPatternGuard {
+    pub fn literalPatternGuard(self: CheckedBodies, pattern_id: PatternId) Allocator.Error!?LiteralPatternGuard {
         if (!self.literalPatternIsCustom(pattern_id)) return null;
         const raw = @backingInt(pattern_id);
         const node = ModuleEnv.nodeIdxFrom(pattern_id);
@@ -933,12 +941,12 @@ pub const CheckedBodies = struct {
         const context = plan.patternContext(&self.env.store) orelse invariant("a custom literal pattern had no pattern context");
         if (context.equality_fn_var_plus_one == 0) invariant("a custom literal pattern had no equality function");
         const equality_fn: Var = @fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1));
-        const equality_fn_ty = self.typeOf(equality_fn);
+        const equality_fn_ty = try self.typeOf(equality_fn);
         return .{
             .pattern = pattern_id,
-            .conversion = self.literalConversion(raw),
+            .conversion = try self.literalConversion(raw),
             .equality_plan = self.dispatchPlan(raw),
-            .equality_ty = checked_artifact.checkedFunctionPayload(self.types, equality_fn_ty, "literal pattern equality").ret,
+            .equality_ty = checked_module.checkedFunctionPayload(self.types, equality_fn_ty, "literal pattern equality").ret,
         };
     }
 
@@ -963,13 +971,13 @@ pub const CheckedBodies = struct {
     }
 
     /// One omitted default in the checked module's names.
-    pub fn recordOmittedDefault(self: CheckedBodies, omitted: ModuleEnv.RecordOmittedDefault) checked_artifact.CheckedRecordOmittedDefault {
+    pub fn recordOmittedDefault(self: CheckedBodies, omitted: ModuleEnv.RecordOmittedDefault) checked_module.CheckedRecordOmittedDefault {
         const origin = self.names.lookupModuleIdentity(self.env.moduleIdentityHash(omitted.origin_module)) orelse
             invariant("an omitted default's origin module was not interned");
         return .{
             .expr = omitted.expr,
             .field_name = self.recordFieldLabel(omitted.field_name),
-            .default = checked_artifact.CheckedFieldDefault.fromParts(origin, omitted.default_expr_node),
+            .default = checked_module.CheckedFieldDefault.fromParts(origin, omitted.default_expr_node),
         };
     }
 
@@ -1006,7 +1014,7 @@ pub const CheckedBodies = struct {
     /// hoisted pattern root matches it against, or the literal a literal
     /// conversion root converts. A root that crashes for a
     /// rejected destructure binder always does.
-    pub fn rootContainsDiagnosticError(self: CheckedBodies, root: checked_artifact.CompileTimeRoot) Allocator.Error!bool {
+    pub fn rootContainsDiagnosticError(self: CheckedBodies, root: checked_module.CompileTimeRoot) Allocator.Error!bool {
         if (root.hoisted_body) |body| if (body == .pattern_error) return true;
         const parts = root.bodyParts();
         if (parts.expr) |body_expr| if (try self.exprContainsDiagnosticError(body_expr)) return true;
@@ -1049,6 +1057,76 @@ pub const CheckedBodies = struct {
         return self.analyses.nestedProcSiteIsSingleSourceCall(self, site);
     }
 
+    fn moduleAnalyses(self: CheckedBodies) *checked_module.ModuleAnalyses {
+        return self.tables.module_analyses orelse invariant("nested procedure or exhaustiveness sites were read from bodies without module analyses");
+    }
+
+    /// The nested procedure sites of `owner`'s body.
+    pub fn nestedProcSites(self: CheckedBodies, owner: checked_module.NestedProcSiteOwner) Allocator.Error!*const checked_module.OwnerNestedProcSites {
+        return self.moduleAnalyses().nestedProcSites(self, owner);
+    }
+
+    /// Site `site` of `owner`, which `owner`'s body constructs.
+    pub fn nestedProcSite(self: CheckedBodies, owner: checked_module.NestedProcSiteOwner, site: canonical.NestedProcSiteId) Allocator.Error!checked_module.NestedProcSite {
+        return (try self.nestedProcSites(owner)).find(site) orelse
+            invariant("a nested procedure site was read from an owner whose body does not construct it");
+    }
+
+    /// The defaulted-field default whose expression contains nested
+    /// procedure site `site`.
+    pub fn nestedProcSiteDefaultOwner(self: CheckedBodies, site: canonical.NestedProcSiteId) checked_module.NestedProcSiteOwner {
+        const module_index = self.index();
+        const unit = module_index.unit(module_index.unitOf(@backingInt(checked_module.nestedProcSiteExpr(site))));
+        if (unit.kind != .default) invariant("a default-root nested procedure site lies outside every defaulted-field default");
+        return .{ .default_root = @fromBackingInt(unit.root) };
+    }
+
+    /// The module's nested procedure sites by expression.
+    pub fn moduleNestedProcSites(self: CheckedBodies) Allocator.Error!*const checked_module.ModuleNestedProcSites {
+        return self.moduleAnalyses().moduleNestedProcSites(self);
+    }
+
+    /// The binders of enclosing frames whose values the procedure
+    /// constructed at `site_expr` (a nested procedure site's expression or a
+    /// closure site's lambda) needs at runtime.
+    pub fn nestedProcRuntimeCaptures(self: CheckedBodies, site_expr: ExprId) Allocator.Error![]const checked_module.CheckedCapture {
+        return (try self.moduleNestedProcSites()).runtimeCaptures(site_expr) orelse
+            invariant("runtime captures were read for an expression that constructs no nested procedure");
+    }
+
+    /// The procedure template whose body declares the local procedure at
+    /// `proc_expr`: the first template, in template order, whose body constructs
+    /// a procedure there.
+    pub fn localProcedureTemplate(self: CheckedBodies, proc_expr: ExprId) Allocator.Error!canonical.CheckedProcedureTemplateId {
+        const sites = try self.moduleNestedProcSites();
+        const found = sites.position(proc_expr) orelse invariant("a local procedure declaration constructs no nested procedure");
+        return sites.first_templates[found] orelse invariant("a local procedure declaration belongs to no procedure template");
+    }
+
+    /// The exhaustiveness check of match expression `match_expr`, if checking
+    /// left one to evaluation.
+    pub fn matchExhaustivenessSite(self: CheckedBodies, match_expr: ExprId) Allocator.Error!?checked_module.CheckedExhaustivenessSiteId {
+        return self.analyses.exhaustivenessSiteOf(self, @backingInt(match_expr), .match_expr);
+    }
+
+    /// Append every exhaustiveness check of `source` kind at node `raw_node`
+    /// to `found`.
+    pub fn appendExhaustivenessSitesAt(
+        self: CheckedBodies,
+        raw_node: u32,
+        source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source),
+        allocator: Allocator,
+        found: *std.ArrayList(checked_module.CheckedExhaustivenessSiteId),
+    ) Allocator.Error!void {
+        return self.analyses.appendExhaustivenessSitesAt(self, raw_node, source, allocator, found);
+    }
+
+    /// The exhaustiveness check of destructuring pattern `destructure`, if
+    /// checking left one to evaluation.
+    pub fn destructureExhaustivenessSite(self: CheckedBodies, destructure: PatternId) Allocator.Error!?checked_module.CheckedExhaustivenessSiteId {
+        return self.analyses.exhaustivenessSiteOf(self, @backingInt(destructure), .destructure_pattern);
+    }
+
     pub fn matchBranch(self: CheckedBodies, id: CIR.Expr.Match.Branch.Idx) MatchBranch {
         const branch = self.store().getMatchBranch(id);
         return .{ .patterns = self.store().sliceMatchBranchPatterns(branch.patterns), .value = branch.value, .guard = branch.guard };
@@ -1078,13 +1156,19 @@ pub const CheckedBodies = struct {
         return self.recordFieldLabel(self.store().getUnsetField(id).name);
     }
 
-    pub fn fieldAccessSegment(self: CheckedBodies, span: CIR.Expr.FieldAccessSegment.Span, position: u32) FieldAccessSegment {
+    /// Whether segment `position` of a field-access path is a `.?` access.
+    pub fn fieldAccessSegmentIsOptional(self: CheckedBodies, span: CIR.Expr.FieldAccessSegment.Span, position: u32) bool {
+        const node_store = self.store();
+        return node_store.getFieldAccessSegment(node_store.fieldAccessSegmentAt(span, position)).mode == .optional;
+    }
+
+    pub fn fieldAccessSegment(self: CheckedBodies, span: CIR.Expr.FieldAccessSegment.Span, position: u32) Allocator.Error!FieldAccessSegment {
         const node_store = self.store();
         const segment_idx = node_store.fieldAccessSegmentAt(span, position);
         const segment = node_store.getFieldAccessSegment(segment_idx);
         return .{
             .field_name = self.recordFieldLabel(segment.name),
-            .success_ty = self.typeOf(ModuleEnv.varFrom(segment_idx)),
+            .success_ty = try self.typeOf(ModuleEnv.varFrom(segment_idx)),
             .source_region = node_store.getFieldAccessSegmentRegion(segment_idx),
             .mode = switch (segment.mode) {
                 .required => .required,
@@ -1098,7 +1182,7 @@ pub const CheckedBodies = struct {
         return .{
             .pattern = source.pattern_idx,
             .scope_depth = source.scope_depth,
-            .capture_id = checked_artifact.CaptureId.fromBinder(source.pattern_idx),
+            .capture_id = checked_module.CaptureId.fromBinder(source.pattern_idx),
         };
     }
 
@@ -1186,7 +1270,7 @@ pub const CheckedBodies = struct {
         allocator: std.mem.Allocator,
         representative: PatternId,
         candidate: PatternId,
-        out: *std.ArrayList(checked_artifact.AlternativeBinderRemap),
+        out: *std.ArrayList(checked_module.AlternativeBinderRemap),
     ) std.mem.Allocator.Error!void {
         var representatives: std.ArrayList(NamedBinder) = .empty;
         defer representatives.deinit(allocator);

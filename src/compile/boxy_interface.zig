@@ -19,8 +19,8 @@ const object_cache = @import("boxy_object_cache.zig");
 
 const Allocator = std.mem.Allocator;
 const Sha256 = base.Sha256;
-const CheckedArtifact = check.CheckedArtifact;
-const Artifact = CheckedArtifact.CheckedModuleArtifact;
+const Checked = check.Checked;
+const Artifact = Checked.CheckedModule;
 const ConstStore = check.ConstStore;
 const canonical = check.CanonicalNames;
 const ModuleNames = eval.CompileTimeFinalization.ModuleNames;
@@ -40,9 +40,9 @@ pub const Digests = struct {
 
     /// The digests of `artifacts`, every module of the link.
     pub fn init(gpa: Allocator, artifacts: []const *const Artifact) Allocator.Error!Digests {
-        const views = try gpa.alloc(CheckedArtifact.ImportedModuleView, artifacts.len);
+        const views = try gpa.alloc(Checked.ImportedModuleView, artifacts.len);
         defer gpa.free(views);
-        for (artifacts, views) |artifact, *view| view.* = CheckedArtifact.importedView(artifact);
+        for (artifacts, views) |artifact, *view| view.* = Checked.importedView(artifact);
         var digests: Digests = .{ .gpa = gpa, .names = try ModuleNames.fromViews(gpa, views) };
         errdefer digests.deinit();
         for (artifacts) |artifact| _ = try digests.add(artifact);
@@ -54,7 +54,7 @@ pub const Digests = struct {
         const entry = try self.artifacts.getOrPut(self.gpa, artifact.key.bytes);
         if (entry.found_existing) return false;
         entry.value_ptr.* = artifact;
-        try self.module_names.put(self.gpa, artifact.key.bytes, self.names.of(CheckedArtifact.importedView(artifact)));
+        try self.module_names.put(self.gpa, artifact.key.bytes, self.names.of(Checked.importedView(artifact)));
         return true;
     }
 
@@ -106,10 +106,10 @@ pub const Digests = struct {
         switch (part) {
             .name => hasher.update(&self.nameOf(artifact.key.bytes)),
             .checking => hasher.update(&artifact.moduleEnvConst().checking_dependency.digest),
-            .templates => for (artifact.exported_procedure_templates.templates) |exported| self.hashTemplateRef(hasher, artifact, exported.template),
-            .bindings => self.hashBindings(hasher, artifact),
-            .methods => self.hashMethods(hasher, artifact),
-            .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len)))),
+            .templates => for ((try artifact.exportRows()).procedure_templates) |exported| try self.hashTemplateRef(hasher, artifact, exported.template),
+            .bindings => try self.hashBindings(hasher, artifact),
+            .methods => try self.hashMethods(hasher, artifact),
+            .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast((try artifact.bodies()).defaultExprs().len)))),
             .nominals => hashNominals(hasher, artifact),
             .consts => try self.hashConsts(hasher, artifact),
             .values => try self.hashStoredValues(hasher, artifact, .read_by_importers),
@@ -157,7 +157,7 @@ pub const Digests = struct {
         hasher.update("roc.boxy.object_input.v1");
         hasher.update(&artifact.source_hash);
         hasher.update(&self.nameOf(artifact.key.bytes));
-        hasher.update(&CheckedArtifact.checkingContextPolicyHash(artifact.checking_context_identity));
+        hasher.update(&Checked.checkingContextPolicyHash(artifact.checking_context_identity));
         try self.hashStoredValues(&hasher, artifact, .every_root);
         for (artifact.direct_import_module_keys) |key| {
             const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
@@ -186,7 +186,7 @@ pub const Digests = struct {
             &std.fmt.bytesToHex(digest[0..8], .lower),
             &std.fmt.bytesToHex(artifact.source_hash[0..8], .lower),
             &std.fmt.bytesToHex(self.nameOf(artifact.key.bytes)[0..8], .lower),
-            &std.fmt.bytesToHex(CheckedArtifact.checkingContextPolicyHash(artifact.checking_context_identity)[0..8], .lower),
+            &std.fmt.bytesToHex(Checked.checkingContextPolicyHash(artifact.checking_context_identity)[0..8], .lower),
             &std.fmt.bytesToHex(values.finalResult()[0..8], .lower),
             &std.fmt.bytesToHex(imports.finalResult()[0..8], .lower),
             &std.fmt.bytesToHex(exports.finalResult()[0..8], .lower),
@@ -205,23 +205,23 @@ pub const Digests = struct {
     /// they name, and the stored values they restore.
     fn hashPublicSurface(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         hasher.update(&artifact.moduleEnvConst().checking_dependency.digest);
-        for (artifact.exported_procedure_templates.templates) |exported| {
-            self.hashTemplateRef(hasher, artifact, exported.template);
+        for ((try artifact.exportRows()).procedure_templates) |exported| {
+            try self.hashTemplateRef(hasher, artifact, exported.template);
         }
-        self.hashBindings(hasher, artifact);
-        self.hashMethods(hasher, artifact);
-        hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len))));
+        try self.hashBindings(hasher, artifact);
+        try self.hashMethods(hasher, artifact);
+        hasher.update(std.mem.asBytes(&@as(u32, @intCast((try artifact.bodies()).defaultExprs().len))));
         hashNominals(hasher, artifact);
         try self.hashConsts(hasher, artifact);
         try self.hashStoredValues(hasher, artifact, .read_by_importers);
     }
 
-    fn hashBindings(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) void {
-        for (artifact.exported_procedure_bindings.bindings) |binding| {
+    fn hashBindings(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
+        for ((try artifact.exportRows()).procedure_bindings) |binding| {
             hashTag(hasher, @tagName(std.meta.activeTag(binding.body)));
             switch (binding.body) {
                 .direct_template => |direct| switch (direct.template) {
-                    .checked => |ref| self.hashTemplateRef(hasher, artifact, ref),
+                    .checked => |ref| try self.hashTemplateRef(hasher, artifact, ref),
                     .lifted, .synthetic => hasher.update(&artifact.key.bytes),
                 },
                 .callable_eval_template, .checked_error => {},
@@ -229,15 +229,15 @@ pub const Digests = struct {
         }
     }
 
-    fn hashMethods(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) void {
-        for (artifact.method_registry.entries) |entry| {
+    fn hashMethods(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
+        for ((try artifact.checkedTables()).method_registry.entries) |entry| {
             const target = entry.target orelse {
                 hashTag(hasher, "rejected");
                 continue;
             };
             hashTag(hasher, @tagName(std.meta.activeTag(target.kind)));
             switch (target.kind) {
-                .procedure => |procedure| self.hashTemplateRef(hasher, artifact, procedure.template),
+                .procedure => |procedure| try self.hashTemplateRef(hasher, artifact, procedure.template),
                 .local_proc, .structural => {},
             }
         }
@@ -245,15 +245,15 @@ pub const Digests = struct {
 
     fn hashNominals(hasher: *Sha256, artifact: *const Artifact) void {
         const checked_types = artifact.typesView();
-        for (checked_types.nominal_declarations) |declaration| {
-            hashBytes(hasher, artifact.canonical_names.typeNameText(checked_types.nominalDeclarationName(declaration)));
+        for (checked_types.nominalDeclarationRows()) |declaration| {
+            hashBytes(hasher, artifact.nameStore().typeNameText(checked_types.nominalDeclarationName(declaration)));
         }
     }
 
     fn hashConsts(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
-        const exported_consts = artifact.exported_const_templates.templates;
+        const exported_consts = (try artifact.exportRows()).const_templates;
         for (exported_consts) |exported| try self.hashConstTemplate(hasher, artifact, exported.template);
-        for (artifact.const_templates.templates.items) |template| switch (template.owner) {
+        for ((try artifact.checkedTables()).const_templates.templates.items) |template| switch (template.owner) {
             .top_level_binding => try self.hashConstTemplate(hasher, artifact, template),
             .hoisted_root => {},
         };
@@ -262,32 +262,32 @@ pub const Digests = struct {
     /// The name of `ref`'s worker, and the hidden parameters a call to it
     /// passes when `artifact` declares it. An imported template's are part of
     /// its own module's interface.
-    fn hashTemplateRef(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) void {
+    fn hashTemplateRef(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) Allocator.Error!void {
         hasher.update(&self.nameOf(ref.artifact.bytes));
-        hasher.update(std.mem.asBytes(&@as(u32, @backingInt(ref.template))));
+        ref.template.digestInto(hasher);
         if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return;
-        const templates = &artifact.checked_procedure_templates;
-        const template = templates.templates.items[@backingInt(ref.template)];
-        hasher.update(std.mem.asBytes(&template.scheme_vars.len));
-        for (templates.evidence_params_pool[template.evidence_params.start..][0..template.evidence_params.len]) |param| {
-            hashBytes(hasher, artifact.canonical_names.methodNameText(param.method));
+        const schema = try (try artifact.dispatch()).templateSchema(ref.template);
+        hasher.update(std.mem.asBytes(&schema.vars.len));
+        for (schema.params) |param| {
+            hashBytes(hasher, artifact.nameStore().methodNameText(param.method));
             hasher.update(std.mem.asBytes(&(param.slot orelse @as(u32, std.math.maxInt(u32)))));
         }
-        hasher.update(std.mem.asBytes(&@as(u32, @intCast(templates.templateLiteralRequirements(&template).len))));
+        hasher.update(std.mem.asBytes(&@as(u32, @intCast((try (try artifact.dispatch()).templateLiteralRequirements(ref.template)).len))));
     }
 
     /// How an importer reads a constant: the value stored for it, or the
     /// entry procedure of one compile-time evaluation did not store.
-    fn hashConstTemplate(self: *Digests, hasher: *Sha256, artifact: *const Artifact, template: CheckedArtifact.ConstTemplate) Allocator.Error!void {
-        hashTag(hasher, @tagName(std.meta.activeTag(template.state)));
-        switch (template.state) {
-            .eval_template => |eval_template| self.hashTemplateRef(hasher, artifact, eval_template.entry_template),
+    fn hashConstTemplate(self: *Digests, hasher: *Sha256, artifact: *const Artifact, template: Checked.ConstTemplate) Allocator.Error!void {
+        const value = Checked.ConstTemplateValue.of(template, &artifact.evaluation);
+        hashTag(hasher, @tagName(std.meta.activeTag(value)));
+        switch (value) {
+            .eval_template => |eval_template| try self.hashTemplateRef(hasher, artifact, eval_template.entry_template),
             .stored_const => {
                 const root = switch (template.owner) {
-                    .hoisted_root => |hoisted| (artifact.hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
-                    .top_level_binding => |top_level| artifact.compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
+                    .hoisted_root => |hoisted| ((try artifact.checkedTables()).hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
+                    .top_level_binding => |top_level| (try artifact.checkedTables()).compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
                 };
-                try self.hashRootValue(hasher, artifact, artifact.compile_time_roots.root(root));
+                try self.hashRootValue(hasher, artifact, (try artifact.compileTimeRoot(root)));
             },
             .reserved, .unimplemented => {},
         }
@@ -301,26 +301,27 @@ pub const Digests = struct {
     /// The values of `artifact`'s compile-time roots in `scope`. A module's
     /// own object stores all of them.
     fn hashStoredValues(self: *Digests, hasher: *Sha256, artifact: *const Artifact, scope: RootScope) Allocator.Error!void {
-        for (artifact.compile_time_roots.roots) |root| {
+        for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
             switch (scope) {
                 .every_root => {},
-                .read_by_importers => if (root.kind != .callable_binding and root.boxy_value == null) continue,
+                .read_by_importers => if (root.kind != .callable_binding and artifact.evaluation.rootBoxyValue(root.id) == null) continue,
             }
             try self.hashRootValue(hasher, artifact, root);
         }
     }
 
-    fn hashRootValue(self: *Digests, hasher: *Sha256, artifact: *const Artifact, root: CheckedArtifact.CompileTimeRoot) Allocator.Error!void {
+    fn hashRootValue(self: *Digests, hasher: *Sha256, artifact: *const Artifact, root: Checked.CompileTimeRoot) Allocator.Error!void {
         const context: ValueContext = .{ .digests = self, .artifact = artifact };
-        hashTag(hasher, @tagName(std.meta.activeTag(root.payload)));
-        switch (root.payload) {
-            .const_node => |node| try artifact.const_store.hashGraph(node, hasher, context),
+        const payload = artifact.evaluation.rootPayload(root.id);
+        hashTag(hasher, @tagName(std.meta.activeTag(payload)));
+        switch (payload) {
+            .const_node => |node| try artifact.evaluation.const_store.hashGraph(node, hasher, context),
             .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
             .pending, .unevaluated, .discarded, .expect, .runtime => {},
         }
-        if (root.boxy_value) |stored| {
+        if (artifact.evaluation.rootBoxyValue(root.id)) |stored| {
             hashTag(hasher, "boxy_value");
-            try artifact.const_store.hashGraph(stored.node, hasher, context);
+            try artifact.evaluation.const_store.hashGraph(stored.node, hasher, context);
         }
     }
 };
@@ -330,7 +331,7 @@ const ValueContext = struct {
     digests: *const Digests,
     artifact: *const Artifact,
 
-    pub fn moduleDigest(self: ValueContext, module: check.CheckedArtifact.CheckedModuleDigest) Digest {
+    pub fn moduleDigest(self: ValueContext, module: check.Checked.CheckedModuleDigest) Digest {
         return self.digests.nameOf(module.bytes);
     }
 

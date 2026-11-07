@@ -218,7 +218,7 @@ test "a checked row coercion has one post-check form at every stage" {
     // every later stage keeps as a value-only boundary. Neither form is a
     // return: `row_widen` has no target field, because this expression's own
     // type is the destination row.
-    try std.testing.expect(@hasDecl(check.CheckedModule.CheckedBodies, "rowCoercion"));
+    try std.testing.expect(@hasDecl(check.Checked.CheckedBodies, "rowCoercion"));
     try std.testing.expect(!@hasField(check.CheckedBodies.ExprData, "row_coerce"));
     try std.testing.expect(@hasField(Mono.ExprData, "row_widen"));
     try std.testing.expect(@hasField(Lifted.ExprData, "row_widen"));
@@ -245,7 +245,7 @@ test "post-check stage products do not store expression cache state" {
 
 test "checked module artifact does not store post-check lowering products" {
     @setEvalBranchQuota(1_000_000);
-    comptime assertNoPostCheckType(check.CheckedModule.CheckedModuleArtifact.Serialized, "CheckedModuleArtifact.Serialized");
+    comptime assertNoPostCheckType(check.Checked.CheckedModule.Serialized, "CheckedModule.Serialized");
 }
 
 fn assertNoPostCheckType(comptime T: type, comptime path: []const u8) void {
@@ -412,7 +412,7 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
 
     const entry_wrapper = sourceSliceBetween(
         lower_source,
-        "fn lowerEntryWrapperAtCell(",
+        "fn lowerRootEntryAtCell(",
         "fn instantiateTemplateDispatchRelations(",
     );
     try expectContains(entry_wrapper, "try relateRequestComponent(self.graph, declared_ret_node, body_ret_node)");
@@ -1102,7 +1102,7 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
     const template_body = sourceSliceBetween(
         lower_source,
         "fn lowerTemplateBodyAtNode(",
-        "fn lowerEntryWrapperAtCell(",
+        "fn lowerRootEntryAtCell(",
     );
     try expectContains(template_body, "self.function_entry_demand_guards = fn_nodes.args");
 
@@ -1194,7 +1194,7 @@ test "Monotype iterator One bodies preserve explicit reachability guard frames" 
         "fn beginIteratorOneBranch(",
         "fn finishIteratorLoop(",
     );
-    try expectContains(iterator, "self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell)");
+    try expectContains(iterator, "self.constrainCheckedInterfaceToCell((try self.view.bodies.pattern(for_.pattern)).ty, item_cell)");
     try expectContains(iterator, "self.withIteratorOneRuntimeDemandGuardFrame(for_.pattern, step)");
     try expectContains(iterator, "task.one_guard_frames = self.runtime_demand_guard_frames");
     try expectContains(lower_source, "self.runtime_demand_guard_frames = task.one_guard_frames");
@@ -1405,11 +1405,11 @@ test "Monotype encoding intrinsics consume producer-owned identity and result to
     try expectContains(intrinsic_call, "self.currentPhaseTypeForNode(callable.ret)");
     try expectNotContains(intrinsic_call, "generatedFieldNamesBackingValueFieldNames");
 
-    switch (check.CheckedArtifact.IntrinsicId.field_names_rename_fields.requestResultSource()) {
+    switch (check.Checked.IntrinsicId.field_names_rename_fields.requestResultSource()) {
         .argument => |index| try std.testing.expectEqual(@as(u8, 0), index),
         .declared_return => return error.TestUnexpectedResult,
     }
-    try std.testing.expect(check.CheckedArtifact.IntrinsicId.parse_tag_union.requestResultSource() == .declared_return);
+    try std.testing.expect(check.Checked.IntrinsicId.parse_tag_union.requestResultSource() == .declared_return);
 }
 
 test "Monotype evidence chains retain checker-recorded lexical scope topology" {
@@ -1419,7 +1419,7 @@ test "Monotype evidence chains retain checker-recorded lexical scope topology" {
     try expectNotContains(lower_source, "parent.* = source_ctx.evidence");
     try expectNotContains(lower_source, "publicOpaqueUnificationType");
     try expectContains(lower_source, "const EvidenceScope = struct");
-    try expectContains(lower_source, "const scope_record = view.templates.dispatch_scopes[raw_scope]");
+    try expectContains(lower_source, "const scope_record = view.tables.checked_procedure_templates.dispatch_scopes[raw_scope]");
     try expectContains(lower_source, "context.evidence");
     try expectContains(lower_source, "const_evidence_frames");
 
@@ -1485,11 +1485,11 @@ test "Monotype consumes producer-recorded runtime-mode divergence and explicit u
     try expectContains(lower_source, "exprDiverges(expr_id, self.checkedInlineExpectMode())");
     try expectNotContains(lower_source, "reached code after checked control transfer");
     try expectNotContains(lower_source, "checkedAnyExprDivergesInLoweredRuntime");
-    try std.testing.expect(@hasField(check.CheckedModule.InlineExpectMode, "omit"));
-    try std.testing.expect(@hasDecl(check.CheckedModule.CheckedBodies, "statementDiverges"));
+    try std.testing.expect(@hasField(check.Checked.InlineExpectMode, "omit"));
+    try std.testing.expect(@hasDecl(check.Checked.CheckedBodies, "statementDiverges"));
     try expectContains(lower_source, "exprEvaluationMayBeElidedForInspect");
     try expectNotContains(lower_source, "exprIsSideEffectFreeCallableSyntax");
-    try std.testing.expect(@hasDecl(check.CheckedModule.CheckedBodies, "exprEvaluationMayBeElidedForInspect"));
+    try std.testing.expect(@hasDecl(check.Checked.CheckedBodies, "exprEvaluationMayBeElidedForInspect"));
 }
 
 test "Monotype inspect-only lowering is gated by explicit demand" {
@@ -1567,9 +1567,9 @@ test "each primitive mapping has exactly one definition" {
         try expectNotContains(source, "fn builtinOwnerForPrimitive(");
         try expectNotContains(source, "fn builtinOwnerFromPrimitive(");
     }
-    const owner_fn = @typeInfo(@TypeOf(check.CheckedModule.builtinOwnerForPrimitive)).@"fn";
+    const owner_fn = @typeInfo(@TypeOf(check.Checked.builtinOwnerForPrimitive)).@"fn";
     try std.testing.expect(owner_fn.param_types.len == 1);
-    try std.testing.expect(owner_fn.param_types[0].? == check.CheckedModule.CheckedPrimitive);
+    try std.testing.expect(owner_fn.param_types[0].? == check.Checked.CheckedPrimitive);
     try std.testing.expect(owner_fn.return_type.? == check.StaticDispatchRegistry.BuiltinOwner);
     // `.boxy` lowering's sources hold no copy of these tables either.
     for (single_definition) |decl| try std.testing.expectEqual(@as(usize, 0), countBoxyDefinitions(decl));
@@ -2032,6 +2032,7 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
         "constNameStore",
         "constTypeStore",
         "constEmptyListData",
+        "constEmptyStrData",
         "finishConstRestoreLayer",
         "finishConstRestoreData",
         // Each scope's emission primitives into its own expression store

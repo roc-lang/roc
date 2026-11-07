@@ -18,8 +18,8 @@ const CacheData = @import("cache_module.zig").CacheModule.CacheData;
 
 const Allocator = std.mem.Allocator;
 const CacheManager = cache_manager_mod.CacheManager;
-const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
-const ImportedView = check.CheckedArtifact.ImportedModuleView;
+const Artifact = check.Checked.CheckedModule;
+const ImportedView = check.Checked.ImportedModuleView;
 const ExportInterfaces = eval.CompileTimeFinalization.ExportInterfaces;
 const dev_diagnostics = base.dev_diagnostics;
 
@@ -155,9 +155,10 @@ pub const Built = struct {
 pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8, run_image: bool, expect_sites: bool, wasm_stack_checks: bool) Allocator.Error!object_cache.Key {
     std.debug.assert(!wasm_stack_checks or imageKind(target) == .wasm);
     const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
-        const inputs = try gpa.alloc(object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.len);
+        const bindings = (try platform_view.hostedBindings()).bindings;
+        const inputs = try gpa.alloc(object_cache.HostedBindingInput, bindings.len);
         defer gpa.free(inputs);
-        for (platform_view.hosted_bindings.bindings, inputs) |binding, *input| input.* = .{
+        for (bindings, inputs) |binding, *input| input.* = .{
             .target_module = binding.target_checked_module.bytes,
             .target_def = @backingInt(binding.target_def),
             .symbol = platform_view.canonical_names.externalSymbolNameText(binding.external_symbol_name),
@@ -353,7 +354,7 @@ pub const BuildError = eval.CompileTimeFinalization.RuntimeMaterializationError 
 /// `unit`'s object, from the cache or built and filed there.
 pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const gpa = unit.gpa;
-    const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
+    const module_name = unit.artifact.nameStore().moduleNameText(unit.artifact.module_identity.module_name);
     var restore_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_restore);
     defer restore_scope.end();
     if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.target, unit.interfaces)) |restored| {
@@ -450,7 +451,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         if (!present) try views.append(gpa, platform_view);
     }
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = check.CheckedArtifact.loweringViewWithRelations(unit.artifact, &.{}),
+        .root = try check.Checked.loweringViewWithRelations(unit.artifact, &.{}),
         .imports = views.items,
     };
     std.debug.assert(unit.test_unit == (if (unit.config.boxy_unit) |module_unit| module_unit.expect_sites else false));
@@ -461,7 +462,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     defer gpa.free(test_metadata);
     var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{ .requests = test_requests, .test_plan_metadata = test_metadata }, unit.config);
     defer lowered.deinit();
-    const module_digest = if (unit.test_unit) unit.config.boxy_unit.?.names.of(check.CheckedArtifact.importedView(unit.artifact)) else @as([32]u8, @splat(0));
+    const module_digest = if (unit.test_unit) unit.config.boxy_unit.?.names.of(check.Checked.importedView(unit.artifact)) else @as([32]u8, @splat(0));
     const test_modules = try gpa.alloc([32]u8, test_requests.len);
     defer gpa.free(test_modules);
     @memset(test_modules, module_digest);
@@ -584,10 +585,10 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
 
 /// A module's top-level expects, in source order: the roots a test unit
 /// exports wrappers for, and the roots `roc test` plans for the module.
-pub fn testRootRequests(gpa: Allocator, artifact: *const Artifact) Allocator.Error![]check.CheckedArtifact.RootRequest {
-    var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+pub fn testRootRequests(gpa: Allocator, artifact: *const Artifact) Allocator.Error![]check.Checked.RootRequest {
+    var roots = std.ArrayList(check.Checked.RootRequest).empty;
     errdefer roots.deinit(gpa);
-    for (artifact.root_requests.requests) |root| {
+    for ((try artifact.rootRequests()).requests) |root| {
         if (root.kind != .test_expect) continue;
         try roots.append(gpa, root);
     }
@@ -596,7 +597,7 @@ pub fn testRootRequests(gpa: Allocator, artifact: *const Artifact) Allocator.Err
 
 /// The test-plan metadata of a test unit's roots: each root's slot is its
 /// own position, so the lowering is a function of the unit's sources alone.
-pub fn testPlanMetadata(gpa: Allocator, requests: []const check.CheckedArtifact.RootRequest) Allocator.Error![]lir.CheckedPipeline.RootTestPlanMetadata {
+pub fn testPlanMetadata(gpa: Allocator, requests: []const check.Checked.RootRequest) Allocator.Error![]lir.CheckedPipeline.RootTestPlanMetadata {
     const metadata = try gpa.alloc(lir.CheckedPipeline.RootTestPlanMetadata, requests.len);
     for (requests, metadata, 0..) |request, *slot, index| slot.* = .{
         .request_index = @intCast(index),

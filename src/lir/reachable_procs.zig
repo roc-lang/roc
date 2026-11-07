@@ -88,9 +88,9 @@ const Pass = struct {
     /// program with completed values evaluates itself; built on first use.
     own_values: ?std.AutoHashMapUnmanaged(OwnValue, void) = null,
 
-    const OwnValue = struct { module: [32]u8, tag: u8, index: u32 };
+    const OwnValue = struct { module: [32]u8, tag: u8, index: u128 };
 
-    fn ownValue(module: @import("check").CheckedModule.ModuleId, producer: LIR.ComptimeProducer) OwnValue {
+    fn ownValue(module: @import("check").Checked.ModuleId, producer: LIR.ComptimeProducer) OwnValue {
         return switch (producer) {
             .checked => |id| .{ .module = module.bytes, .tag = 0, .index = @backingInt(id) },
             .literal => |id| .{ .module = module.bytes, .tag = 1, .index = @backingInt(id) },
@@ -98,7 +98,7 @@ const Pass = struct {
     }
 
     /// Whether one of this program's own roots produces `root`'s value.
-    fn evaluatesItself(self: *Pass, module: @import("check").CheckedModule.ModuleId, producer: LIR.ComptimeProducer) Allocator.Error!bool {
+    fn evaluatesItself(self: *Pass, module: @import("check").Checked.ModuleId, producer: LIR.ComptimeProducer) Allocator.Error!bool {
         if (self.own_values == null) {
             var own = std.AutoHashMapUnmanaged(OwnValue, void).empty;
             errdefer own.deinit(self.allocator);
@@ -680,7 +680,7 @@ const Pass = struct {
             data.allocator.free(item.symbol_name);
             if (!self.reachable_exports[index]) {
                 data.allocator.free(item.bytes);
-                data.allocator.free(item.empty_list_capacities);
+                data.allocator.free(item.capacities);
             }
             for (item.relocations) |relocation| {
                 if (relocation.owns_target_symbol_name) data.allocator.free(relocation.target_symbol_name);
@@ -1169,7 +1169,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
             .bytes = try allocator.alloc(u8, 0),
             .alignment = 1,
             .is_exported = false,
-            .empty_list_capacities = try allocator.dupe(LirProgram.EmptyListCapacity, &.{.{ .offset = 0, .capacity = 16 + index }}),
+            .capacities = try allocator.dupe(LirProgram.EvaluatedCapacity, &.{.{ .offset = 0, .capacity = 16 + index }}),
         };
     }
     var frozen = LirProgram.FrozenStaticData{ .allocator = allocator, .exports = exports };
@@ -1218,8 +1218,8 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     try std.testing.expect(frozen.exports[1].relocations[0].owns_target_symbol_name);
     try std.testing.expectEqual(@as(u64, 7), result.store.getProcSpecImmediate(frozen.exports[1].relocations[0].procedure.?).native_code_revision);
     try std.testing.expectEqual(@as(u64, 11), result.store.getProcSpecImmediate(result.root_procs.items[0]).native_code_revision);
-    try std.testing.expectEqual(@as(u64, 17), frozen.exports[0].empty_list_capacities[0].capacity);
-    try std.testing.expectEqual(@as(u64, 18), frozen.exports[1].empty_list_capacities[0].capacity);
+    try std.testing.expectEqual(@as(u64, 17), frozen.exports[0].capacities[0].capacity);
+    try std.testing.expectEqual(@as(u64, 18), frozen.exports[1].capacities[0].capacity);
 }
 
 test "CTFE code demand retains union identities and omits runtime-only procedure" {
@@ -1277,7 +1277,6 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
                 // and frames remain independently owned template storage.
                 .template = .{
                     .fn_def = undefined,
-                    .source_fn_ty = undefined,
                     .source_fn_key = undefined,
                     .evidence = .{ .nodes = try allocator.dupe(@import("check").ConstStore.ConstFnEvidence, &.{.checked_error}) },
                     .evidence_frames = try allocator.dupe(@import("check").ConstStore.ConstFnEvidenceFrame, &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 1 }}),

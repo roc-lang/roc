@@ -37,7 +37,7 @@ pub const Body = union(enum) {
 /// The runtime value shape produced by a selected root.
 ///
 /// This is decided by the checker after solving and consumed directly by
-/// checked artifact publication. Source expressions and checked types are
+/// checked module publication. Source expressions and checked types are
 /// validation inputs, not alternate sources for this fact.
 pub const ValueKind = enum(u8) {
     data_constant,
@@ -49,7 +49,7 @@ pub const ValueKind = enum(u8) {
 /// A root selected during checking for compile-time evaluation.
 ///
 /// This is producer-side data, not a permanent analysis summary. It is passed
-/// into checked artifact publication as a sparse hoisted const root. The
+/// into checked module publication as a sparse hoisted const root. The
 /// checker owns selection correctness before publication or cache storage.
 pub const SelectedHoistedRoot = struct {
     /// Expression that should be evaluated at checking finalization.
@@ -69,15 +69,12 @@ pub const SelectedHoistedRoot = struct {
     value_kind: ValueKind = .data_constant,
     /// Prospective expression root that subsumes this validation when that
     /// expression survives post-solve pruning. Checker-only ownership metadata;
-    /// checked artifact publication does not persist it.
+    /// checked module publication does not persist it.
     validation_owner_expr: ?CIR.Expr.Idx = null,
     /// Whether the root's expression is reached only through a branch, guard,
     /// loop body, or expect body. A guarded root whose evaluation crashes is
     /// not a diagnostic: the original expression stays in runtime lowering.
     guarded: bool = false,
-    /// Whether the root materializes a top-level binding. Checking records it
-    /// with the root in `ModuleEnv.selected_hoisted_roots`.
-    top_level: bool = false,
 };
 
 /// A local function binding the checker promoted to a procedure of its own.

@@ -6,22 +6,37 @@ const check = @import("check");
 const roc_target = @import("roc_target");
 const BuildEnv = @import("../compile_build.zig").BuildEnv;
 
-const CheckedArtifact = check.CheckedArtifact;
-const Demand = CheckedArtifact.SchemeVarDemand;
+const Checked = check.Checked;
+const Demand = Checked.SchemeVarDemand;
 
 fn setupFailed(err: anytype) error{TestUnexpectedResult} {
     std.debug.print("building the test module failed: {s}\n", .{@errorName(err)});
     return error.TestUnexpectedResult;
 }
 
+const Expected = []const struct { []const u8, []const Demand };
+
+/// A module file written beside `Demand.roc`: its file name and source.
+const ImportedSource = struct { []const u8, []const u8 };
+
 /// Check `source` as module `Demand.roc` and compare the demand vector of
 /// each named top-level function with its expected vector.
-fn expectDemands(source: []const u8, expected: []const struct { []const u8, []const Demand }) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
+fn expectDemands(source: []const u8, expected: Expected) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
+    return expectDemandsWithImports(source, &.{}, expected);
+}
+
+/// `expectDemands` with `imports` written beside `Demand.roc`, which may
+/// import them.
+fn expectDemandsWithImports(source: []const u8, imports: []const ImportedSource, expected: Expected) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     tmp.dir.writeFile(io, .{ .sub_path = "Demand.roc", .data = source }) catch |err| return setupFailed(err);
+    for (imports) |imported| {
+        const file_name, const imported_source = imported;
+        tmp.dir.writeFile(io, .{ .sub_path = file_name, .data = imported_source }) catch |err| return setupFailed(err);
+    }
     const cwd = tmp.dir.realPathFileAlloc(io, ".", gpa) catch |err| return setupFailed(err);
     defer gpa.free(cwd);
     const path = tmp.dir.realPathFileAlloc(io, "Demand.roc", gpa) catch |err| return setupFailed(err);
@@ -36,18 +51,18 @@ fn expectDemands(source: []const u8, expected: []const struct { []const u8, []co
         std.debug.print("unexpected report: {s}\n", .{report.title});
         return error.TestUnexpectedResult;
     };
-    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
-    const templates = &artifact.checked_procedure_templates;
+    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
+    const templates = &(try artifact.checkedTables()).checked_procedure_templates;
     for (expected) |entry| {
         const name, const demands = entry;
         const template = for (templates.templates.items) |*template| {
-            const export_name = artifact.canonical_names.procBase(template.proc_base).export_name orelse continue;
-            if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) break template;
+            const def_name = check.Checked.procBaseDefName(artifact.moduleEnvConst(), template.proc_base) orelse continue;
+            if (std.mem.eql(u8, def_name, name)) break template;
         } else {
             std.debug.print("no template named {s}\n", .{name});
             return error.TestUnexpectedResult;
         };
-        std.testing.expectEqualSlices(Demand, demands, templates.templateDemands(template)) catch |err| {
+        std.testing.expectEqualSlices(Demand, demands, try (try artifact.dispatch()).templateDemands(template.template_id)) catch |err| {
             std.debug.print("template {s}\n", .{name});
             return err;
         };
@@ -174,5 +189,28 @@ test "a nominal argument demands what its backing does with it" {
         .{ "held", &.{.none} },
         .{ "ignore_tag", &.{.none} },
         .{ "ignore_pair", &.{ .layout, .none } },
+    });
+}
+
+test "an imported nominal argument demands what its declaring module's backing does with it" {
+    try expectDemandsWithImports(
+        \\module [kind_of, held, ignore_tag]
+        \\import Shapes exposing [Ref, Wrap, Tagged]
+        \\kind_of : Ref(r) -> Str
+        \\kind_of = |_ref| "ref"
+        \\held : Wrap(a), U64 -> U64
+        \\held = |_w, n| n
+        \\ignore_tag : Tagged(t), U64 -> U64
+        \\ignore_tag = |_t, n| n
+    , &.{.{
+        "Shapes.roc",
+        \\module [Ref, Wrap, Tagged]
+        \\Ref(r) := { ..r }
+        \\Wrap(a) := List(a)
+        \\Tagged(t) := U64
+    }}, &.{
+        .{ "kind_of", &.{.full} },
+        .{ "held", &.{.none} },
+        .{ "ignore_tag", &.{.none} },
     });
 }

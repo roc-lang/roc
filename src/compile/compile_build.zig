@@ -28,7 +28,7 @@ pub const RuntimeLoweringConfig = struct {
     /// Roots with cached runtime outcomes still owe literal-conversion checking.
     compile_time_discovery_roots: lir.CheckedPipeline.RootRequestSet = .{},
     explicit_roots: ?lir.CheckedPipeline.RootRequestSet = null,
-    root_module: ?*const check.CheckedArtifact.CheckedModuleArtifact = null,
+    root_module: ?*const check.Checked.CheckedModule = null,
     target: lir.CheckedPipeline.TargetConfig,
     include_provided_data_exports: bool = false,
     include_internal_static_data: bool = false,
@@ -47,7 +47,7 @@ pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ Expect
 /// Errors that can occur while initializing build inputs.
 pub const InitError = Allocator.Error || BuiltinModules.InitError;
 /// Errors that can occur while compiling discovered modules.
-pub const CompileDiscoveredError = coordinator_mod.CoordinatorError || BuildError || compile_package.PublishError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound };
+pub const CompileDiscoveredError = coordinator_mod.CoordinatorError || BuildError || compile_package.CompileTimeError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound };
 /// Errors that can occur while building a root module.
 pub const BuildRootError = BuildError || CompileDiscoveredError;
 /// Errors that can occur while building with an explicit main module.
@@ -240,7 +240,7 @@ pub const BuildEnv = struct {
     /// The lowering of the module objects a `.boxy` compile-time evaluation
     /// links against.
     boxy_object_lowering: ?@import("coordinator.zig").BoxyObjectLowering = null,
-    /// Let a caller declare a test plan from prepared artifacts before CTFE.
+    /// Let a caller declare a test plan from prepared modules before CTFE.
     defer_post_check: bool = false,
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
@@ -268,7 +268,7 @@ pub const BuildEnv = struct {
     /// Collect fine-grained compile-time lowering timings and counters.
     detailed_lowering_timing: bool = false,
 
-    /// Controls which checked-artifact publication work runs after ordinary
+    /// Controls which checked-module publication work runs after ordinary
     /// checking has completed.
     ///
     /// Checking is not complete until the platform/app relation output completes,
@@ -940,7 +940,7 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.cancel_request = self.cancel_request;
-        coord.runtime_lowering = self.runtime_lowering;
+        if (self.runtime_lowering) |config| coord.setRuntimeLowering(config);
         coord.debug_observer = self.debug_observer;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.boxy_object_lowering = self.boxy_object_lowering;
@@ -958,7 +958,7 @@ pub const BuildEnv = struct {
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
         if (self.coordinator) |coordinator| {
             std.debug.assert(coordinator.program_session == null);
-            coordinator.runtime_lowering = config;
+            coordinator.setRuntimeLowering(config);
         }
         self.runtime_lowering = config;
     }
@@ -1190,7 +1190,7 @@ pub const BuildEnv = struct {
             }
             try coord_pkg.finishPublicModules(self.gpa);
 
-            // The coordinator gates the hosted transform (and app-root artifact
+            // The coordinator gates the hosted transform (and app-root module
             // lookups) on knowing which package is the app; app modules must
             // never have annotation-only defs rewritten into hosted lambdas,
             // and app-less builds (platform/package/module roots) record that
@@ -2230,7 +2230,7 @@ pub const BuildEnv = struct {
     /// what the platform asked for.
     fn resolvePlatformTargetConfigConstants(self: *BuildEnv) (Allocator.Error || error{InvalidTargetConfiguration})!void {
         const semantic = self.getPlatformSemanticData() orelse return;
-        const checked_module = semantic.checked_artifact orelse return;
+        const checked_module = semantic.checked_module orelse return;
 
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
@@ -2243,6 +2243,7 @@ pub const BuildEnv = struct {
                     try self.makeWorkspaceReportsDrainable();
                     return error.InvalidTargetConfiguration;
                 },
+                error.OutOfMemory => return error.OutOfMemory,
             };
         }
     }
@@ -2542,7 +2543,7 @@ pub const BuildEnv = struct {
 
         /// Number of modules that were compiled (not cached)
         modules_compiled: u32 = 0,
-        /// Hits that restored inference and published current implementation artifacts.
+        /// Hits that restored inference and published current implementation modules.
         inference_cache_hits: u32 = 0,
         /// Producer interface constructions, with no inference hidden in hashing.
         checking_interfaces_built: u32 = 0,
@@ -2571,7 +2572,7 @@ pub const BuildEnv = struct {
     /// `artifact`'s object with the cache key `key`, when this compilation's
     /// compile-time evaluation built or restored it: its bytes, its hosted
     /// symbols, and whether it was restored.
-    pub fn boxyObjectWithKey(self: *BuildEnv, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, key: @import("boxy_object_cache.zig").Key) ?BoxyKnownObject {
+    pub fn boxyObjectWithKey(self: *BuildEnv, artifact: *const check.Checked.CheckedModule, key: @import("boxy_object_cache.zig").Key) ?BoxyKnownObject {
         const coordinator = self.coordinator orelse return null;
         const objects = &(coordinator.boxy_objects orelse return null);
         const known = objects.objectWithKey(artifact, key) orelse return null;
@@ -2580,7 +2581,7 @@ pub const BuildEnv = struct {
 
     /// Record in `digests` the exports of `artifact`'s object, which this
     /// compilation's compile-time evaluation built or restored.
-    pub fn boxyAdoptExports(self: *BuildEnv, digests: *boxy_interface.Digests, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!void {
+    pub fn boxyAdoptExports(self: *BuildEnv, digests: *boxy_interface.Digests, artifact: *const check.Checked.CheckedModule) Allocator.Error!void {
         const coordinator = self.coordinator orelse return;
         const objects = &(coordinator.boxy_objects orelse return);
         try digests.adoptExports(&objects.digests, artifact);
@@ -3013,18 +3014,18 @@ pub const BuildEnv = struct {
         self: *BuildEnv,
         allocator: Allocator,
         coord: *Coordinator,
-    ) Allocator.Error![]check.CheckedArtifact.CheckedModuleArtifactKey {
+    ) Allocator.Error![]check.Checked.CheckedModuleKey {
         var test_owned_packages = try self.collectTestOwnedPackages(allocator);
         defer test_owned_packages.deinit(allocator);
 
-        const Entry = struct { package: []const u8, module: []const u8, key: check.CheckedArtifact.CheckedModuleArtifactKey };
+        const Entry = struct { package: []const u8, module: []const u8, key: check.Checked.CheckedModuleKey };
         var entries = std.ArrayList(Entry).empty;
         defer entries.deinit(allocator);
         var pkg_it = coord.packages.iterator();
         while (pkg_it.next()) |entry| {
             if (!test_owned_packages.contains(entry.key_ptr.*)) continue;
             for (entry.value_ptr.*.modules.items) |*mod| {
-                const artifact = mod.checkedArtifact() orelse continue;
+                const artifact = mod.checkedModule() orelse continue;
                 try entries.append(allocator, .{ .package = entry.key_ptr.*, .module = mod.name, .key = artifact.key });
             }
         }
@@ -3035,7 +3036,7 @@ pub const BuildEnv = struct {
                 return std.mem.lessThan(u8, a.module, b.module);
             }
         }.lessThan);
-        const keys = try allocator.alloc(check.CheckedArtifact.CheckedModuleArtifactKey, entries.items.len);
+        const keys = try allocator.alloc(check.Checked.CheckedModuleKey, entries.items.len);
         for (entries.items, keys) |entry, *key| key.* = entry.key;
         return keys;
     }
@@ -3179,7 +3180,7 @@ pub const BuildEnv = struct {
                 );
             };
             const module_state = root_coord_pkg.getModule(module_id).?;
-            const module_data = module_state.checkedModule() orelse {
+            const module_data = module_state.checkedModuleData() orelse {
                 base.invariant(
                     "build env invariant violated: public module '{s}' did not complete successfully",
                     .{module_name},
@@ -3229,7 +3230,7 @@ pub const BuildEnv = struct {
             for (package.public_surface.modules.items, 0..) |public_module, public_index| {
                 const module_id = coord_package.getPublicModuleId(public_module.name) orelse continue;
                 const module_state = coord_package.getModule(module_id) orelse continue;
-                const checked = module_state.checkedModule() orelse continue;
+                const checked = module_state.checkedModuleData() orelse continue;
                 const public_target = coord_package.getPublicModuleTarget(public_module.name) orelse unreachable; // getPublicModuleId above found this name in the same public surface
                 const source_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
                     .type_decl => |statement| statement,
@@ -3286,7 +3287,7 @@ pub const BuildEnv = struct {
                 const root_module = self.rootModule(root_name) orelse {
                     base.invariant("build env invariant violated: platform documentation root module is unavailable", .{});
                 };
-                const root_data = root_module.checkedModule() orelse {
+                const root_data = root_module.checkedModuleData() orelse {
                     base.invariant("build env invariant violated: platform documentation root module did not complete successfully", .{});
                 };
                 docs_modules.appendAssumeCapacity(.{
@@ -3315,7 +3316,7 @@ pub const BuildEnv = struct {
 
         // The root's own compiled modules are its documentation surface.
         for (root_coord_pkg.modules.items) |*mod| {
-            const checked = mod.checkedModule() orelse continue;
+            const checked = mod.checkedModuleData() orelse continue;
             switch (checked.env.module_kind) {
                 .package, .platform => continue,
                 .type_module, .default_app, .app, .hosted, .module, .malformed => {},
@@ -3410,16 +3411,16 @@ pub const BuildEnv = struct {
         return root.semanticData();
     }
 
-    /// The checked artifact of the module the command names: its root
+    /// The checked module the command names: its root
     /// package's root module, whatever kind of module it is.
-    pub fn rootModuleCheckedArtifact(self: *BuildEnv) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+    pub fn rootModuleCheckedModule(self: *BuildEnv) ?*const check.Checked.CheckedModule {
         const root_name = self.discovered_pkg_name orelse return null;
         const coord = self.coordinator orelse return null;
         const pkg = coord.packages.get(root_name) orelse return null;
         const root_id = pkg.root_module_id orelse return null;
         const root = pkg.getModule(root_id) orelse return null;
         const semantic = root.semanticData() orelse return null;
-        return semantic.checked_artifact;
+        return semantic.checked_module;
     }
 
     /// Get the root semantic data for the platform package (convenience method).
@@ -3432,12 +3433,12 @@ pub const BuildEnv = struct {
         return root.semanticData();
     }
 
-    pub fn getExecutableRootSemanticData(self: *BuildEnv) ?SemanticModuleData {
+    pub fn getExecutableRootSemanticData(self: *BuildEnv) std.mem.Allocator.Error!?SemanticModuleData {
         if (self.getPlatformSemanticData()) |platform| {
-            if (platform.checked_artifact) |artifact| {
+            if (platform.checked_module) |artifact| {
                 if (artifact.checking_context_identity.platform_app_relation != null or
-                    artifact.root_requests.requests.len > 0 or
-                    artifact.provided_exports.exports.len > 0)
+                    (try artifact.rootRequests()).requests.len > 0 or
+                    (try artifact.providedExports()).exports.len > 0)
                 {
                     return platform;
                 }
@@ -3446,26 +3447,28 @@ pub const BuildEnv = struct {
         return self.getAppSemanticData();
     }
 
-    pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
-        const semantic = self.getExecutableRootSemanticData() orelse
+    pub fn executableRootCheckedModule(self: *BuildEnv) std.mem.Allocator.Error!*const check.Checked.CheckedModule {
+        const semantic = (try self.getExecutableRootSemanticData()) orelse
             base.invariant("build env invariant violated: executable root semantic data is missing", .{});
-        return semantic.checked_artifact orelse
-            base.invariant("build env invariant violated: executable root has no checked artifact", .{});
+        return semantic.checked_module orelse
+            base.invariant("build env invariant violated: executable root has no checked module", .{});
     }
 
-    /// Every checked artifact `root_artifact` can lower against, other than
+    /// Every checked module `root_artifact` can lower against, other than
     /// itself and the builtin module: its lowering-visible modules in order.
-    pub fn collectVisibleArtifacts(
+    pub fn collectVisibleModules(
         self: *const BuildEnv,
         allocator: Allocator,
-        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error![]const *const check.CheckedArtifact.CheckedModuleArtifact {
-        var artifacts = std.ArrayList(*const check.CheckedArtifact.CheckedModuleArtifact).empty;
+        root_artifact: *const check.Checked.CheckedModule,
+    ) Allocator.Error![]const *const check.Checked.CheckedModule {
+        var artifacts = std.ArrayList(*const check.Checked.CheckedModule).empty;
         errdefer artifacts.deinit(allocator);
-        const builtin_artifact = &self.builtin_modules.checked_artifact;
-        for (root_artifact.lowering_visibility.module_ids) |key| {
-            if (checkedArtifactKeysEqual(key, root_artifact.key.digest())) continue;
-            if (checkedArtifactKeysEqual(key, builtin_artifact.key.digest())) continue;
+        const builtin_artifact = &self.builtin_modules.checked_module;
+        const coord = self.coordinator orelse
+            base.invariant("build env invariant violated: visible artifacts requested before a build", .{});
+        for ((try root_artifact.loweringVisibility(coord.moduleResolver())).module_ids) |key| {
+            if (checkedModuleKeysEqual(key, root_artifact.key.digest())) continue;
+            if (checkedModuleKeysEqual(key, builtin_artifact.key.digest())) continue;
             const artifact = self.artifactByKey(key) orelse continue;
             try artifacts.append(allocator, artifact);
         }
@@ -3477,22 +3480,27 @@ pub const BuildEnv = struct {
         return self.builtCoordinator().boxyLinkDigests();
     }
 
-    /// Collect published checked artifacts available to post-check lowering.
-    pub fn collectImportedArtifactViews(
+    /// Collect published checked modules available to post-check lowering.
+    pub fn collectImportedModuleViews(
         self: *BuildEnv,
         allocator: Allocator,
-        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
-        return self.builtCoordinator().collectImportedArtifactViews(allocator, root_artifact);
+        root_artifact: *const check.Checked.CheckedModule,
+    ) Allocator.Error![]check.Checked.ImportedModuleView {
+        return self.builtCoordinator().collectImportedModuleViews(allocator, root_artifact);
     }
 
-    /// Collect the app artifacts a platform root's required bindings name.
-    pub fn collectRelationArtifactViews(
+    /// Collect the app modules a platform root's required bindings name.
+    pub fn collectRelationModuleViews(
         self: *BuildEnv,
         allocator: Allocator,
-        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
-        return self.builtCoordinator().collectRelationArtifactViews(allocator, root_artifact);
+        root_artifact: *const check.Checked.CheckedModule,
+    ) Allocator.Error![]check.Checked.ImportedModuleView {
+        return self.builtCoordinator().collectRelationModuleViews(allocator, root_artifact);
+    }
+
+    /// A resolver over every checked module of the build.
+    pub fn moduleResolver(self: *BuildEnv) check.Checked.ModuleResolver {
+        return self.builtCoordinator().moduleResolver();
     }
 
     fn builtCoordinator(self: *BuildEnv) *Coordinator {
@@ -3500,19 +3508,19 @@ pub const BuildEnv = struct {
             base.invariant("build env invariant violated: artifact views requested before a build", .{});
     }
 
-    fn checkedArtifactKeysEqual(
-        a: check.CheckedArtifact.ModuleId,
-        b: check.CheckedArtifact.ModuleId,
+    fn checkedModuleKeysEqual(
+        a: check.Checked.ModuleId,
+        b: check.Checked.ModuleId,
     ) bool {
         return a.eql(b);
     }
 
     fn artifactByKey(
         self: *const BuildEnv,
-        key: check.CheckedArtifact.ModuleId,
-    ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        key: check.Checked.ModuleId,
+    ) ?*const check.Checked.CheckedModule {
         const coord = self.coordinator orelse return null;
-        return coord.checkedArtifactByKey(key);
+        return coord.checkedModuleByKey(key);
     }
 
     /// Drain reports and render them to a writer. Returns error/warning counts.
@@ -3545,7 +3553,7 @@ pub const BuildEnv = struct {
 
     /// Render one warning for each `dbg` that remains in an optimized build.
     /// Optimized builds intentionally keep `dbg` so users can debug performance
-    /// problems, but release artifacts should make those call sites visible.
+    /// problems, but release builds should make those call sites visible.
     pub fn renderOptimizedDbgWarnings(
         self: *BuildEnv,
         writer: anytype,
@@ -3560,9 +3568,9 @@ pub const BuildEnv = struct {
         for (modules) |mod| {
             // A module that never finished checking (for example, a dependent
             // of a module whose source was rejected) is not part of any built
-            // artifact, and its canonical tree still holds unresolved import
+            // module, and its canonical tree still holds unresolved import
             // references.
-            if (mod.semantic.checked_artifact == null) continue;
+            if (mod.semantic.checked_module == null) continue;
             var regions = std.ArrayList(base.Region).empty;
             defer regions.deinit(self.gpa);
 
@@ -3973,7 +3981,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     const dep_idx = try module_env.recordFileDependency("data.txt", 0, 0);
     const dep_hash = @as([32]u8, @splat(3));
     module_env.setFileDependencyContentHash(dep_idx, dep_hash);
-    coord_mod.semantic = .{ .module_env = module_env, .checked_artifact = null };
+    coord_mod.semantic = .{ .module_env = module_env, .checked_module = null };
 
     const inputs = try env.collectWatchInputStates();
     defer env.freeWatchInputStates(inputs);

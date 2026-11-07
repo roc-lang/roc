@@ -976,7 +976,7 @@ const CheckBuiltinBakeReproducibleStep = struct {
         for (0..3) |index| {
             const bake = b.addRunArtifact(exe);
             bake.addFileArg(sources.path(b, "Builtin.roc"));
-            for ([_][]const u8{ "Builtin.bin", "builtin_indices.zig", "Builtin.artifact.bin" }) |name| {
+            for ([_][]const u8{ "Builtin.bin", "builtin_indices.zig", "Builtin.outputs.bin" }) |name| {
                 // Distinct declared output names produce distinct Run keys.
                 // Identical keys could reuse one process's output three times,
                 // defeating this ASLR reproducibility check.
@@ -1010,7 +1010,7 @@ const BuiltinCompilerRun = struct {
     run: *Step.Run,
     builtin_bin: std.Build.LazyPath,
     builtin_indices_zig: std.Build.LazyPath,
-    builtin_artifact_bin: std.Build.LazyPath,
+    builtin_outputs_bin: std.Build.LazyPath,
 };
 
 /// zstd frames of the builtin blobs, for browser modules that must stay under the
@@ -1029,7 +1029,7 @@ fn addCompressedBuiltins(
     const inputs = [_]struct { std.Build.LazyPath, []const u8 }{
         .{ builtin_compiler.builtin_bin, "Builtin.bin.zst" },
         .{ builtin_roc, "Builtin.roc.zst" },
-        .{ builtin_compiler.builtin_artifact_bin, "Builtin.artifact.bin.zst" },
+        .{ builtin_compiler.builtin_outputs_bin, "Builtin.outputs.bin.zst" },
     };
     for (inputs) |input| {
         const compress = b.addRunArtifact(compress_exe);
@@ -1041,7 +1041,7 @@ fn addCompressedBuiltins(
     const source = files.add("compressed_builtins.zig",
         \\pub const builtin_bin = @embedFile("Builtin.bin.zst");
         \\pub const builtin_source = @embedFile("Builtin.roc.zst");
-        \\pub const builtin_artifact_bin = @embedFile("Builtin.artifact.bin.zst");
+        \\pub const builtin_outputs_bin = @embedFile("Builtin.outputs.bin.zst");
         \\
     );
     return b.createModule(.{ .root_source_file = source });
@@ -1059,10 +1059,10 @@ fn createAndRunBuiltinCompiler(
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
             .target = hostToolTarget(b, .debug), // this runs at build time on the *host* machine!
-            // Kept Debug deliberately: this exe publishes + serializes the
-            // builtin CheckedModuleArtifact (a few seconds of Debug run), but building
+            // Kept Debug deliberately: this exe opens + serializes the
+            // builtin CheckedModule (a few seconds of Debug run), but building
             // it ReleaseFast would optimize the whole check/eval closure (incl. the
-            // large checked_artifact.zig), adding far more `zig build` wall-clock than
+            // large checked_module.zig), adding far more `zig build` wall-clock than
             // the one-time bake run saves. Debug compile + Debug bake is the faster total.
             .optimize = .debug,
             // ctx.CoreCtx reads env vars via std.c.getenv; Zig 0.16 requires
@@ -1084,7 +1084,7 @@ fn createAndRunBuiltinCompiler(
     builtin_compiler_exe.root_module.addImport("reporting", roc_modules.reporting);
     builtin_compiler_exe.root_module.addImport("builtins", roc_modules.builtins);
 
-    // The builtin compiler publishes the Builtin module to a CheckedModuleArtifact
+    // The builtin compiler opens the Builtin module as a CheckedModule
     // and must run the same compile-time finalizer the runtime uses (Builtin has
     // compile-time roots that must be evaluated into its ConstStore). The finalizer
     // and its interpreter dependencies live in the eval module, but the eval
@@ -1132,14 +1132,14 @@ fn createAndRunBuiltinCompiler(
 
     const builtin_bin = run_builtin_compiler.addOutputFileArg("Builtin.bin");
     const builtin_indices_zig = run_builtin_compiler.addOutputFileArg("builtin_indices.zig");
-    const builtin_artifact_bin = run_builtin_compiler.addOutputFileArg("Builtin.artifact.bin");
+    const builtin_outputs_bin = run_builtin_compiler.addOutputFileArg("Builtin.outputs.bin");
 
     return .{
         .exe = builtin_compiler_exe,
         .run = run_builtin_compiler,
         .builtin_bin = builtin_bin,
         .builtin_indices_zig = builtin_indices_zig,
-        .builtin_artifact_bin = builtin_artifact_bin,
+        .builtin_outputs_bin = builtin_outputs_bin,
     };
 }
 
@@ -2096,7 +2096,7 @@ pub fn build(b: *std.Build) void {
         \\    return comptime @import("std").fmt.comptimePrint("{f}", .{@import("std").json.fmt(range, .{})});
         \\}
         \\pub const compiler_compatibility_id: []const u8 = &@import("std").fmt.bytesToHex(compiler_compatibility_hash, .lower);
-        \\// Checked artifacts are target independent and are baked by a Debug host
+        \\// Checked modules are target independent and are baked by a Debug host
         \\// tool for consumers built in other modes. Their compiler input is the
         \\// common source/dependency/semantic-options identity.
         \\pub const compiler_artifact_hash = @import("compiler_identity").compiler_compatibility_hash;
@@ -2274,10 +2274,10 @@ pub fn build(b: *std.Build) void {
         "Builtin.roc",
     );
 
-    // Copy the baked CheckedModuleArtifact
+    // Copy the baked Builtin inference and evaluation outputs
     _ = write_compiled_builtins.addCopyFile(
-        builtin_compiler.builtin_artifact_bin,
-        "Builtin.artifact.bin",
+        builtin_compiler.builtin_outputs_bin,
+        "Builtin.outputs.bin",
     );
 
     // Generate compiled_builtins.zig with hardcoded Builtin module.
@@ -2309,10 +2309,10 @@ pub fn build(b: *std.Build) void {
         \\const builtin_source_raw = @embedFile("Builtin.roc");
         \\var builtin_source_storage: [builtin_source_raw.len + slack]u8 = @splat(0);
         \\pub const builtin_source = if (compressed) builtin_source_storage[0..builtin_source_raw.len] else builtin_source_raw;
-        \\const builtin_artifact_bin_raw = @embedFile("Builtin.artifact.bin");
-        \\var builtin_artifact_bin_storage: (if (compressed) [builtin_artifact_bin_raw.len + slack]u8 else [builtin_artifact_bin_raw.len:0]u8) align(16) =
-        \\    if (compressed) @splat(0) else builtin_artifact_bin_raw.*;
-        \\pub const builtin_artifact_bin: *align(16) [builtin_artifact_bin_raw.len]u8 = builtin_artifact_bin_storage[0..builtin_artifact_bin_raw.len];
+        \\const builtin_outputs_bin_raw = @embedFile("Builtin.outputs.bin");
+        \\var builtin_outputs_bin_storage: (if (compressed) [builtin_outputs_bin_raw.len + slack]u8 else [builtin_outputs_bin_raw.len:0]u8) align(16) =
+        \\    if (compressed) @splat(0) else builtin_outputs_bin_raw.*;
+        \\pub const builtin_outputs_bin: *align(16) [builtin_outputs_bin_raw.len]u8 = builtin_outputs_bin_storage[0..builtin_outputs_bin_raw.len];
         \\
         \\var decompressed = !compressed;
         \\
@@ -2324,7 +2324,7 @@ pub fn build(b: *std.Build) void {
         \\    const frames = root.roc_compressed_builtins;
         \\    try decompressInto(frames.builtin_bin, &builtin_bin_storage, builtin_bin_raw.len);
         \\    try decompressInto(frames.builtin_source, &builtin_source_storage, builtin_source_raw.len);
-        \\    try decompressInto(frames.builtin_artifact_bin, &builtin_artifact_bin_storage, builtin_artifact_bin_raw.len);
+        \\    try decompressInto(frames.builtin_outputs_bin, &builtin_outputs_bin_storage, builtin_outputs_bin_raw.len);
         \\    decompressed = true;
         \\}
         \\

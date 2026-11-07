@@ -19,12 +19,12 @@ const check = @import("check");
 const canonicalized_cache_entry = @import("canonicalized_cache_entry.zig");
 const Constants = @import("cache_config.zig").Constants;
 
-const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
-const PlatformPairing = check.CheckedArtifact.PlatformPairing;
+const CheckedModule = check.Checked.CheckedModule;
+const PlatformPairing = check.Checked.PlatformPairing;
 
 /// A kind of persisted cache entry.
 pub const Entry = enum {
-    /// One fully checked module: an env body and an artifact body.
+    /// One fully checked module: an env body and a module body.
     checked_module,
     /// Solved source and checker-owned publication inputs, before evaluation.
     inference,
@@ -58,12 +58,12 @@ pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
         .checked_module => compose(
             "roc-checked-module-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout },
+            &.{ CheckedModule.SERIALIZED_VERSION_HASH, module_env_layout },
         ),
         .platform_pairing => compose(
             "roc-platform-pairing-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, PlatformPairing.SERIALIZED_VERSION_HASH },
+            &.{ CheckedModule.SERIALIZED_VERSION_HASH, PlatformPairing.SERIALIZED_VERSION_HASH },
         ),
         .canonicalized_module => compose(
             "roc-canonicalized-module-entry-v1",
@@ -146,8 +146,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xEB, 0xE0, 0xF6, 0xA5, 0x2A, 0x70, 0xDF, 0x10, 0xFF, 0xDA, 0xB2, 0x9C, 0x35, 0xC3, 0x80, 0xF5,
-        0xA0, 0x83, 0xC3, 0xB5, 0x31, 0xB8, 0xC4, 0x14, 0xA2, 0x8B, 0xBF, 0x18, 0x44, 0x1A, 0xE7, 0x13,
+        0xC6, 0xD7, 0xBE, 0x87, 0x0F, 0xCB, 0x1B, 0xA2, 0x80, 0x88, 0x08, 0xCD, 0x23, 0xAB, 0x44, 0xCC,
+        0xA9, 0xEF, 0xB5, 0xB8, 0x01, 0x23, 0xBD, 0x50, 0xFE, 0x5F, 0xAD, 0xE8, 0xED, 0x43, 0x4C, 0xB6,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

@@ -62,7 +62,7 @@ test "embedding API: distinct provides aliases retain their names and image ordi
 
 const EmbeddingSequenceError = eval.BuiltinModules.InitError || std.Thread.SpawnError ||
     Coordinator.AppDiscoveryError || @import("../coordinator.zig").CoordinatorError ||
-    @import("../compile_package.zig").PublishError || lir.CheckedPipeline.LowerResourceError ||
+    @import("../compile_package.zig").CompileTimeError || lir.CheckedPipeline.LowerResourceError ||
     lir.LirImage.ViewError || eval.LirInterpreter.Error ||
     error{ EntrypointNotFound, TestUnexpectedResult, TestExpectedEqual };
 
@@ -124,16 +124,16 @@ fn runEmbeddingSequence(
     var runtime_fba = std.heap.FixedBufferAllocator.init(runtime_buffer);
     const runtime_alloc = runtime_fba.allocator();
 
-    const root = coord.executableRootCheckedArtifact();
-    const imports = try coord.collectImportedArtifactViews(arena, root);
-    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root = (try coord.executableRootCheckedModule());
+    const imports = try coord.collectImportedModuleViews(arena, root);
+    const relations = try coord.collectRelationModuleViews(arena, root);
 
-    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(arena, root.root_requests.runtime_requests);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(arena, (try root.rootRequests()).runtime_requests);
 
     const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         runtime_alloc,
         .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .root = try check.Checked.loweringViewWithRelations(root, relations),
             .imports = imports,
         },
         .{ .requests = lir_roots },

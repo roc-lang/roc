@@ -181,7 +181,7 @@ pub const FnBody = union(enum) {
 /// Root request bound to a lifted function.
 pub const Root = struct {
     fn_id: FnId,
-    request: check.CheckedModule.RootRequest,
+    request: check.Checked.RootRequest,
     /// See `Mono.Root.owner`.
     owner: Common.LoweringModuleId,
 };
@@ -189,16 +189,16 @@ pub const Root = struct {
 /// See `Mono.LiteralRoot`.
 pub const LiteralRoot = struct {
     fn_id: FnId,
-    module: check.CheckedModule.ModuleId,
+    module: check.Checked.ModuleId,
     site: Common.LiteralRejectionSite,
 };
 
 /// Runtime layout requested for a checked data value.
 pub const LayoutRequest = struct {
-    checked_type: check.CheckedModule.CheckedTypeId,
+    checked_type: check.Checked.CheckedTypeId,
     ty: Type.TypeId,
     fn_id: ?FnId = null,
-    const_locator: ?check.CheckedModule.ConstLocator = null,
+    const_locator: ?check.Checked.ConstLocator = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.
@@ -262,7 +262,7 @@ pub const ProgramView = struct {
     comptime_value_roots: []const Common.ComptimeValueRoot,
     comptime_sites: []const ComptimeSite,
     /// See `Mono.ProgramBuilder.lowering_modules`.
-    lowering_modules: []const check.CheckedModule.ModuleId,
+    lowering_modules: []const check.Checked.ModuleId,
     platform_requirement_filling: ?Common.PlatformRequirementFilling,
     source_files: []const base.SourceFileEntry,
     expr_locs: []const base.SourceLoc,
@@ -318,7 +318,7 @@ pub const ProgramView = struct {
 
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
-    pub fn captureIdOfLocal(self: ProgramView, id: LocalId) check.CheckedModule.CaptureId {
+    pub fn captureIdOfLocal(self: ProgramView, id: LocalId) check.Checked.CaptureId {
         return self.locals[@backingInt(id)].identity.captureId() orelse
             Common.invariant("lifted capture local had no CaptureId");
     }
@@ -484,7 +484,7 @@ pub const Program = struct {
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
     /// Checked modules of this lowering's input, moved from Monotype and
     /// addressed by `Common.LoweringModuleId`.
-    lowering_modules: ProgramList(check.CheckedModule.ModuleId, "lowering_modules") = .empty,
+    lowering_modules: ProgramList(check.Checked.ModuleId, "lowering_modules") = .empty,
     /// See `Common.PlatformRequirementFilling` (moved from Monotype).
     platform_requirement_filling: ?Common.PlatformRequirementFilling = null,
     /// Functions whose code reaches the app from outside it, computed on
@@ -1227,7 +1227,7 @@ pub const Program = struct {
         return self.source_files.unsafeRawItemsForView();
     }
 
-    pub fn loweringModules(self: *const Program) []const check.CheckedModule.ModuleId {
+    pub fn loweringModules(self: *const Program) []const check.Checked.ModuleId {
         if (self.body_prefix) |prefix| return prefix.source.loweringModules();
         return self.lowering_modules.unsafeRawItemsForView();
     }
@@ -1669,7 +1669,7 @@ pub const Program = struct {
         const id: LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(self.localCount()))));
         try self.locals.ensureUnusedCapacity(self.allocator, 1);
         try self.local_names.ensureUnusedCapacity(self.allocator, 1);
-        const checked_capture_id = if (binder) |b| check.CheckedModule.CaptureId.fromBinder(b) else null;
+        const checked_capture_id = if (binder) |b| check.Checked.CaptureId.fromBinder(b) else null;
         try self.locals.append(self.allocator, .{
             .id = id,
             .symbol = symbol,
@@ -1691,15 +1691,15 @@ pub const Program = struct {
         symbol: Common.Symbol,
         ty: Type.TypeId,
         binder: ?check.CheckedBodies.BinderId,
-        capture_id: check.CheckedModule.CaptureId,
-        checked_capture_id: ?check.CheckedModule.CaptureId,
-        capture_kind: check.CheckedModule.ConstCaptureKind,
+        capture_id: check.Checked.CaptureId,
+        checked_capture_id: ?check.Checked.CaptureId,
+        capture_kind: check.Checked.ConstCaptureKind,
     ) std.mem.Allocator.Error!LocalId {
         if (checked_capture_id) |checked_id| {
             if (checked_id.isCanonical()) {
                 const source_binder = binder orelse
                     Common.invariant("source capture identity had no checked binder");
-                if (checked_id != check.CheckedModule.CaptureId.fromBinder(source_binder)) {
+                if (checked_id != check.Checked.CaptureId.fromBinder(source_binder)) {
                     Common.invariant("checked capture identity disagreed with its binder");
                 }
             }
@@ -1726,14 +1726,14 @@ pub const Program = struct {
     /// local (a free local with no checked binder). The counter lives on the
     /// program so the identity is stable across fixpoint rounds and unique
     /// within the program.
-    pub fn nextLiftCaptureId(self: *Program) check.CheckedModule.CaptureId {
+    pub fn nextLiftCaptureId(self: *Program) check.Checked.CaptureId {
         if (self.body_prefix != null) Common.invariant("body shard cannot generate capture identities");
         const index = self.next_lift_capture_id;
-        if (index > check.CheckedModule.CaptureId.max_generated_index) {
+        if (index > check.Checked.CaptureId.max_generated_index) {
             Common.invariant("lifted program exhausted durable capture identities");
         }
         self.next_lift_capture_id += 1;
-        return check.CheckedModule.CaptureId.generatedLift(index);
+        return check.Checked.CaptureId.generatedLift(index);
     }
 
     pub fn addTypedLocalSpan(self: *Program, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
@@ -1820,12 +1820,12 @@ pub const Program = struct {
 
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
-    pub fn captureIdOfLocal(self: *const Program, id: LocalId) check.CheckedModule.CaptureId {
+    pub fn captureIdOfLocal(self: *const Program, id: LocalId) check.Checked.CaptureId {
         return self.getLocal(id).identity.captureId() orelse
             Common.invariant("lifted capture local had no CaptureId");
     }
 
-    pub fn ensureLiftCaptureId(self: *Program, id: LocalId) check.CheckedModule.CaptureId {
+    pub fn ensureLiftCaptureId(self: *Program, id: LocalId) check.Checked.CaptureId {
         if (self.body_prefix != null) return self.captureIdOfLocal(id);
         const local = self.locals.getPtrImmediate(@backingInt(id));
         if (local.identity.captureId() == null) {
@@ -2371,15 +2371,10 @@ fn testLiftedProgram(allocator: std.mem.Allocator) Program {
     );
 }
 
-fn testSourceDigestTemplate(name_store: *names.NameStore, template_id: u32) std.mem.Allocator.Error!names.ProcTemplate {
+fn testSourceDigestTemplate(template_id: u32) names.ProcTemplate {
     return .{
         .artifact = .{},
-        .proc_base = try name_store.internProcBase(.{
-            .module_name = try name_store.internModuleName("SourceDigest"),
-            .export_name = null,
-            .kind = .checked_source,
-            .ordinal = 0,
-        }),
+        .proc_base = names.ProcBase.of(.checked_source, 0),
         .template = @fromBackingInt(@intCast(template_id)),
     };
 }
@@ -2415,7 +2410,7 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     defer program.deinit();
 
     const ret_ty = try program.types.add(.zst);
-    const template = try testSourceDigestTemplate(&program.names, 1);
+    const template = testSourceDigestTemplate(1);
 
     // Two requesters reserved one specialization of one checked template at
     // one closed type. They instantiated it from different checked types, and
@@ -2425,12 +2420,10 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     // this digest for the reading program to check.
     const ordinary: Mono.FnTemplate = .{
         .fn_def = .{ .local_template = template },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
         .source_fn_key = testSourceDigestKey(1),
         .mono_fn_ty = ret_ty,
     };
     var other_requester = ordinary;
-    other_requester.source_fn_ty = @fromBackingInt(@intCast(9));
     other_requester.source_fn_key = testSourceDigestKey(2);
 
     const ordinary_fn = try addSourceDigestFn(&program, &symbols, ordinary, ret_ty);
@@ -2444,7 +2437,6 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     // step of one expression shares this `fn_def`, its evidence, and its type.
     const first_step: Mono.FnTemplate = .{
         .fn_def = .{ .checked_generated = template },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
         .source_fn_key = testSourceDigestKey(1),
         .mono_fn_ty = ret_ty,
     };
@@ -2459,7 +2451,6 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     // Generated runtime callbacks of one encoder carry the key the same way.
     const first_callback: Mono.FnTemplate = .{
         .fn_def = .{ .encoder_for_runtime = .{ .owner = template, .expr = @fromBackingInt(@intCast(3)) } },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
         .source_fn_key = testSourceDigestKey(1),
         .mono_fn_ty = ret_ty,
     };
@@ -2473,7 +2464,7 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
 
     // What the digest does name still separates procedures.
     var other_callable = ordinary;
-    other_callable.fn_def = .{ .local_template = try testSourceDigestTemplate(&program.names, 2) };
+    other_callable.fn_def = .{ .local_template = testSourceDigestTemplate(2) };
     var other_evidence = ordinary;
     other_evidence.evidence_digest = .{ .bytes = testSourceDigestKey(5).bytes };
     var other_type = ordinary;
@@ -2512,11 +2503,10 @@ test "code reaching the app digests what it reaches there and names its app call
     program.platform_requirement_filling = .{ .app_module = app_identity, .relation = @splat(17) };
     const ret_ty = try program.types.add(.zst);
     const fn_ty = try program.types.add(.{ .func = .{ .args = Type.Span.empty(), .ret = ret_ty } });
-    var app_template = try testSourceDigestTemplate(&program.names, 1);
+    var app_template = testSourceDigestTemplate(1);
     app_template.artifact.bytes = app_identity;
     const app_source: Mono.FnTemplate = .{
         .fn_def = .{ .local_template = app_template },
-        .source_fn_ty = @fromBackingInt(7),
         .source_fn_key = .{},
         .mono_fn_ty = fn_ty,
     };
@@ -2525,10 +2515,9 @@ test "code reaching the app digests what it reaches there and names its app call
     site_app_source.spec_key = testSourceDigestKey(4);
     const app_fn = try addSourceDigestFn(&program, &symbols, app_source, ret_ty);
     const site_app_fn = try addSourceDigestFn(&program, &symbols, site_app_source, ret_ty);
-    const template = try testSourceDigestTemplate(&program.names, 2);
+    const template = testSourceDigestTemplate(2);
     const ordinary: Mono.FnTemplate = .{
         .fn_def = .{ .local_template = template },
-        .source_fn_ty = @fromBackingInt(7),
         .source_fn_key = .{},
         .mono_fn_ty = fn_ty,
     };
@@ -2706,13 +2695,18 @@ fn writeTemplateDigest(hasher: *TypeDigestHasher, template: names.ProcTemplate, 
 
 fn writeProcTemplateDigest(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
     hasher.update(&template.artifact.bytes);
-    writeIdentityU32(hasher, @backingInt(template.proc_base));
-    writeIdentityU32(hasher, @backingInt(template.template));
+    writeIdentityU64(hasher, @backingInt(template.proc_base));
+    template.template.digestInto(hasher);
 }
 
 fn writeIdentityBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
     writeIdentityU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
+}
+
+fn writeIdentityU64(hasher: *TypeDigestHasher, value: u64) void {
+    writeIdentityU32(hasher, @truncate(value));
+    writeIdentityU32(hasher, @truncate(value >> 32));
 }
 
 fn writeIdentityU32(hasher: *TypeDigestHasher, value: u32) void {

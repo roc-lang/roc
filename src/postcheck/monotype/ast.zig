@@ -13,7 +13,7 @@ const collections = @import("collections");
 const Common = @import("../common.zig");
 const Type = @import("type.zig");
 
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const GuardedList = collections.GuardedList;
@@ -274,9 +274,9 @@ pub const NestedFn = struct {
     site: names.ProcSiteId,
     /// Set iff `site` is a DEFAULT-ROOT site (a lambda/closure inside a
     /// defaulted-field expression, design.md "Defaulted Fields"): the
-    /// declaring module's 32-byte content identity. `site` indexes THAT
-    /// module's `nested_proc_sites` table, where the site's owner is
-    /// `.default_root` (the site belongs to no procedure template).
+    /// declaring module's 32-byte content identity. `site` names an
+    /// expression of THAT module, and the site's owner is the default
+    /// containing it (the site belongs to no procedure template).
     default_root: ?names.ModuleContentIdentity = null,
     context_fn_key: names.TypeDigest,
     /// Digest of every local-procedure declaration context visible inside this
@@ -321,7 +321,6 @@ pub const FnTemplate = struct {
     /// SHA-256 template, callable-ABI, and capture-ABI digests in that order.
     frozen_worker: ?[96]u8 = null,
     fn_def: FnDef,
-    source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
     /// For a nested function, the function type of the template specialization
@@ -405,13 +404,13 @@ pub const GeneratedId = enum(u32) { _ };
 pub const CallableIdentity = union(enum(u8)) {
     proc_template: struct {
         module: names.CheckedModuleDigest,
-        proc_base: u32,
-        template: u32,
+        proc_base: u64,
+        template: u128,
     },
     nested_site: struct {
         module: names.CheckedModuleDigest,
-        owner_proc_base: u32,
-        owner_template: u32,
+        owner_proc_base: u64,
+        owner_template: u128,
         owner_fn_digest: names.TypeDigest,
         site: u32,
         /// Set iff `site` is a default-root site: the declaring module's
@@ -471,14 +470,14 @@ pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
         .proc_template => |template| {
             hasher.update("proc_template");
             hasher.update(&template.module.bytes);
-            writeU32(&hasher, template.proc_base);
-            writeU32(&hasher, template.template);
+            writeU64(&hasher, template.proc_base);
+            names.digestId(template.template, &hasher);
         },
         .nested_site => |site| {
             hasher.update("nested_site");
             hasher.update(&site.module.bytes);
-            writeU32(&hasher, site.owner_proc_base);
-            writeU32(&hasher, site.owner_template);
+            writeU64(&hasher, site.owner_proc_base);
+            names.digestId(site.owner_template, &hasher);
             hasher.update(&site.owner_fn_digest.bytes);
             writeU32(&hasher, site.site);
             if (site.default_root_module) |module| {
@@ -902,11 +901,11 @@ fn writeMethodTarget(
         .procedure => |procedure| {
             const proc_module = names.procedureValueModuleDigest(procedure.proc);
             writeBytes(hasher, &proc_module.bytes);
-            writeU32(hasher, @backingInt(procedure.proc.proc_base));
+            writeU64(hasher, @backingInt(procedure.proc.proc_base));
             const template_module = names.procTemplateModuleDigest(procedure.template);
             writeBytes(hasher, &template_module.bytes);
-            writeU32(hasher, @backingInt(procedure.template.proc_base));
-            writeU32(hasher, @backingInt(procedure.template.template));
+            writeU64(hasher, @backingInt(procedure.template.proc_base));
+            procedure.template.template.digestInto(hasher);
         },
         .local_proc => |local| {
             writeU32(hasher, @backingInt(local.binder));
@@ -1073,8 +1072,8 @@ fn writeHostedFn(hasher: *TypeDigestHasher, name_store: *const names.NameStore, 
 fn writeProcTemplate(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
     const module_digest = names.procTemplateModuleDigest(template);
     hasher.update(&module_digest.bytes);
-    writeU32(hasher, @backingInt(template.proc_base));
-    writeU32(hasher, @backingInt(template.template));
+    writeU64(hasher, @backingInt(template.proc_base));
+    template.template.digestInto(hasher);
 }
 
 fn writeBytes(hasher: anytype, bytes: []const u8) void {
@@ -1084,6 +1083,11 @@ fn writeBytes(hasher: anytype, bytes: []const u8) void {
 
 fn writeU8(hasher: anytype, value: u8) void {
     hasher.update(&.{value});
+}
+
+fn writeU64(hasher: anytype, value: u64) void {
+    const little = std.mem.nativeToLittle(u64, value);
+    hasher.update(std.mem.asBytes(&little));
 }
 
 fn writeU32(hasher: anytype, value: u32) void {
@@ -1435,6 +1439,18 @@ pub const StaticDataCandidate = struct {
     storage: Common.StaticDataStorage,
     static_data: Common.StaticDataId,
     value: StaticDataCandidateValue,
+    /// The capacity a list with items or a string was evaluated with when
+    /// it has room beyond its contents, and zero when it has none (such a
+    /// list or string holds at least one item, so its capacity is never
+    /// zero): static data freezes the contents alone, and a read that builds
+    /// the value fresh gives it this room again (`ConstStore.spareCapacity`).
+    capacity: u64 = 0,
+    /// Whether a list or string on the value's spine was evaluated with room
+    /// beyond its contents: the value then has a fresh form, and each read
+    /// chooses between it and the static datum, so a pass that sees through
+    /// constants keeps the candidate one opaque value rather than rebuilding
+    /// its parts at a read.
+    fresh_form: bool = false,
 };
 
 /// What a static data candidate's value is built from.
@@ -3175,21 +3191,15 @@ fn collectSingleShardLocalCallTargets(
 fn testFnSource(mono_fn_ty: Type.TypeId) FnTemplate {
     return .{
         .fn_def = undefined, // call-target verifier tests do not inspect the source callable
-        .source_fn_ty = undefined, // call-target verifier tests do not inspect the checked type id
         .source_fn_key = .{},
         .mono_fn_ty = mono_fn_ty,
     };
 }
 
-fn testProcTemplate(name_store: *names.NameStore, template_id: u32) std.mem.Allocator.Error!names.ProcTemplate {
+fn testProcTemplate(template_id: u32) names.ProcTemplate {
     return .{
         .artifact = .{},
-        .proc_base = try name_store.internProcBase(.{
-            .module_name = try name_store.internModuleName("SourceDigest"),
-            .export_name = null,
-            .kind = .checked_source,
-            .ordinal = 0,
-        }),
+        .proc_base = names.ProcBase.of(.checked_source, 0),
         .template = @fromBackingInt(@intCast(template_id)),
     };
 }
@@ -3211,13 +3221,11 @@ test "function template identity ignores the requester's checked source type" {
     // from differs, which is caller provenance and not identity.
     const mono_fn_ty = try types.add(.zst);
     const first: FnTemplate = .{
-        .fn_def = .{ .local_template = try testProcTemplate(&name_store, 1) },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
+        .fn_def = .{ .local_template = testProcTemplate(1) },
         .source_fn_key = testTemplateDigestKey(1),
         .mono_fn_ty = mono_fn_ty,
     };
     var second = first;
-    second.source_fn_ty = @fromBackingInt(@intCast(9));
     second.source_fn_key = testTemplateDigestKey(2);
 
     try std.testing.expect(fnTemplateIdentityEql(first, second));
@@ -3228,7 +3236,7 @@ test "function template identity ignores the requester's checked source type" {
 
     // The identity still separates a different callable and a different type.
     var other_callable = first;
-    other_callable.fn_def = .{ .local_template = try testProcTemplate(&name_store, 2) };
+    other_callable.fn_def = .{ .local_template = testProcTemplate(2) };
     try std.testing.expect(!fnTemplateIdentityEql(first, other_callable));
     var other_type = first;
     other_type.mono_fn_ty = try types.add(.{ .primitive = .str });
@@ -3250,8 +3258,7 @@ test "function template identity keeps generated bodies of one owner apart" {
     // says they are different code, so identity must carry it.
     const mono_fn_ty = try types.add(.zst);
     const first_step: FnTemplate = .{
-        .fn_def = .{ .checked_generated = try testProcTemplate(&name_store, 1) },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
+        .fn_def = .{ .checked_generated = testProcTemplate(1) },
         .source_fn_key = testTemplateDigestKey(1),
         .mono_fn_ty = mono_fn_ty,
     };
@@ -3275,10 +3282,9 @@ test "function template identity keeps generated bodies of one owner apart" {
     // Generated runtime callables carry the key the same way.
     const first_callback: FnTemplate = .{
         .fn_def = .{ .encoder_for_runtime = .{
-            .owner = try testProcTemplate(&name_store, 1),
+            .owner = testProcTemplate(1),
             .expr = @fromBackingInt(@intCast(3)),
         } },
-        .source_fn_ty = @fromBackingInt(@intCast(7)),
         .source_fn_key = testTemplateDigestKey(1),
         .mono_fn_ty = mono_fn_ty,
     };
@@ -3372,14 +3378,14 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     const local = try source.addLocal(@fromBackingInt(@intCast(1)), ty);
     try source.setLocalName(local, "value");
     const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0) });
-    var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
+    var owner_key = std.mem.zeroes(check.Checked.ModuleId);
     owner_key.bytes[0] = 9;
     const owner = try source.addLoweringModule(owner_key);
     const site = try source.addComptimeSite(.match, owner, .zero(), null);
     const name = try source.names.internExportName("entry");
     try source.proc_debug_names.put(@fromBackingInt(@intCast(1)), name);
     const root_a: Common.ComptimeValueRoot = .{
-        .module = std.mem.zeroes(check.CheckedModule.ModuleId),
+        .module = std.mem.zeroes(check.Checked.ModuleId),
         .root = .{ .checked = @fromBackingInt(@intCast(7)) },
         .const_locator = null,
     };
@@ -3389,7 +3395,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
         .artifact = root_b.module,
         .owner = .{ .hoisted_root = .{ .module_idx = 1, .root = @fromBackingInt(@intCast(2)) } },
         .template = @fromBackingInt(@intCast(3)),
-        .source_scheme = std.mem.zeroes(@FieldType(check.CheckedModule.ConstLocator, "source_scheme")),
+        .source_scheme = std.mem.zeroes(@FieldType(check.Checked.ConstLocator, "source_scheme")),
     };
     const root_a_id = try source.addComptimeValueRoot(root_a);
     const root_b_id = try source.addComptimeValueRoot(root_b);

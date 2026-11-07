@@ -679,7 +679,7 @@ const NominalValue = struct {
 };
 
 const CaptureValue = struct {
-    id: check.CheckedModule.CaptureId,
+    id: check.Checked.CaptureId,
     value: Value,
 };
 
@@ -1797,9 +1797,11 @@ const Pass = struct {
         const value: Value = switch (expr.data) {
             .comptime_value => .{ .expr = expr_id },
             // A stored list has no constructor components, as the list it
-            // stands for has none: the candidate is its own opaque value.
+            // stands for has none, and a value with a fresh form keeps its
+            // reads choosing between it and the static datum: either
+            // candidate is its own opaque value.
             .static_data_candidate => |candidate| switch (candidate.value) {
-                .runtime => return null,
+                .runtime => if (candidate.fresh_form) .{ .expr = expr_id } else return null,
                 .stored => .{ .expr = expr_id },
             },
             .tag, .tuple, .record, .nominal, .fn_ref => return null,
@@ -14996,7 +14998,7 @@ const Cloner = struct {
         return .{ .bytes = hasher.finalResult() };
     }
 
-    fn callableCaptureValueForId(values: []const CaptureValue, id: check.CheckedModule.CaptureId) ?Value {
+    fn callableCaptureValueForId(values: []const CaptureValue, id: check.Checked.CaptureId) ?Value {
         for (values) |capture_value| {
             if (capture_value.id == id) return capture_value.value;
         }
@@ -17727,7 +17729,7 @@ test "call-pattern scans direct call and function reference capture operands" {
         .target = unit_ty,
     } } });
     const captures = try program.addCaptureOperandSpan(&.{.{
-        .id = check.CheckedModule.CaptureId.generatedLift(0),
+        .id = check.Checked.CaptureId.generatedLift(0),
         .value = return_expr,
     }});
     const callee = try program.addFn(.{
@@ -19059,7 +19061,7 @@ test "issue 10168 SpecConstr clones every capture when nested cloning grows the 
         .data = .{ .local = nested_capture_local },
     });
     const nested_operands = try program.addCaptureOperandSpan(&.{.{
-        .id = check.CheckedModule.CaptureId.fromBinder(nested_binder),
+        .id = check.Checked.CaptureId.fromBinder(nested_binder),
         .value = nested_capture_value,
     }});
     const nested_fn_ref = try program.addExpr(.{
@@ -19102,7 +19104,7 @@ test "issue 10168 SpecConstr clones every capture when nested cloning grows the 
     // independent of ArrayList's current growth policy.
     while (program.capture_operands.len() < program.capture_operands.capacity()) {
         _ = try program.addCaptureOperandSpan(&.{.{
-            .id = check.CheckedModule.CaptureId.generatedLift(3),
+            .id = check.Checked.CaptureId.generatedLift(3),
             .value = second_value,
         }});
     }

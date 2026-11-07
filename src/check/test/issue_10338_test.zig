@@ -2,7 +2,7 @@
 
 const TestEnv = @import("./TestEnv.zig");
 
-test "issue 10338: forward referenced binding with out of order annotations does not panic checked artifact publication" {
+test "issue 10338: forward referenced binding with out of order annotations does not panic checked module publication" {
     const source =
         \\t = f()
         \\f : U

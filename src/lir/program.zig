@@ -12,7 +12,7 @@ const root = @import("root_metadata.zig");
 
 const Allocator = std.mem.Allocator;
 const names = check.CheckedNames;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const const_store = check.ConstStore;
 
 /// Dense index in the export slice returned by one static-data materialization.
@@ -44,15 +44,17 @@ pub const StaticDataExport = struct {
     is_mutable: bool = false,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
-    /// The capacities the empty lists inside this value were evaluated
-    /// with, by byte offset of each list's descriptor in `bytes`. A frozen
-    /// list's capacity word is its length, so the requests would otherwise
-    /// be lost; a runtime consumer rebuilding the value uses them.
-    empty_list_capacities: []const EmptyListCapacity = &.{},
+    /// The capacities the lists and strings inside this value were
+    /// evaluated with, where they have room beyond their contents, by byte
+    /// offset of each descriptor in `bytes`. A frozen descriptor's capacity
+    /// is its length, so the room would otherwise be lost; a runtime
+    /// consumer building the value again uses them.
+    capacities: []const EvaluatedCapacity = &.{},
 };
 
-/// The evaluated capacity of one empty list inside a frozen value.
-pub const EmptyListCapacity = struct {
+/// The evaluated capacity of one list or string inside a frozen value, more
+/// than it holds.
+pub const EvaluatedCapacity = struct {
     offset: u64,
     capacity: u64,
 };
@@ -106,7 +108,7 @@ pub const FrozenStaticData = struct {
                 if (relocation.owns_target_symbol_name) self.allocator.free(relocation.target_symbol_name);
             }
             self.allocator.free(item.relocations);
-            self.allocator.free(item.empty_list_capacities);
+            self.allocator.free(item.capacities);
         }
         self.allocator.free(self.exports);
         self.* = undefined;
@@ -154,7 +156,6 @@ pub const FnTemplate = struct {
     /// Exact member specialization within the shared frozen Solved owner.
     frozen_context: ?FrozenCallableContext = null,
     fn_def: const_store.FnDef,
-    source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     owner_fn_ty: ?const_store.ConstTypeId = null,
     evidence: const_store.ConstFnEvidenceVector = .{},
@@ -257,7 +258,7 @@ pub const ConstPlan = union(enum) {
     record: []const ConstPlanId,
     tag_union: []const ConstTagVariant,
     named: struct {
-        named_type: check.CheckedModule.ConstNamedType,
+        named_type: check.Checked.ConstNamedType,
         backing: ConstPlanId,
     },
     fn_value: FnSetId,
@@ -274,7 +275,7 @@ pub const ConstRootPlan = struct {
     /// types and diagnostics. One lowered program unions several modules'
     /// root requests, so position in the root plan is not an owner.
     owner: LIR.LoweringModuleId,
-    request: check.CheckedModule.RootRequest,
+    request: check.Checked.RootRequest,
     proc: LIR.LirProcSpecId,
     ret_layout: layout.Idx,
     /// Exact producer-owned Monotype representation of the evaluated root.

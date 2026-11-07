@@ -37,7 +37,7 @@ const LirProgram = core.Program;
 const postcheck = @import("postcheck");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 
 /// Committed ordinary-data layouts for checked source ABI requests.
 pub const CheckedAbiLayouts = struct {
@@ -1312,9 +1312,9 @@ pub const LoweredProgram = struct {
         for (root_metadata, names) |metadata, *name| {
             std.debug.assert(metadata.kind == .provided_export);
             std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
-            const root = root_module.lookupRootRequestByOrder(metadata.order) orelse
+            const root = (try root_module.lookupRootRequestByOrder(metadata.order)) orelse
                 checkedPipelineInvariant("platform entrypoint root metadata has no checked root request");
-            const symbol = root_module.providedEntrypointName(root) orelse
+            const symbol = (try root_module.providedEntrypointName(root)) orelse
                 checkedPipelineInvariant("platform entrypoint root metadata has no checked export declaration");
             name.* = try allocator.dupe(u8, symbol);
             initialized += 1;
@@ -2064,7 +2064,7 @@ fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Alloca
     if (builtin.mode != .debug) return;
     switch (target.checked_module_state) {
         .complete => try modules.root.module.verifyComplete(),
-        .checking_finalization => modules.root.module.verifyReadyForCompileTimeLowering(),
+        .checking_finalization => try modules.root.module.verifyReadyForCompileTimeLowering(),
     }
 }
 
@@ -2079,28 +2079,28 @@ fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Alloca
 /// already failed by the time lowering starts; this stops it there instead of
 /// lowering a call that names no host function.
 ///
-/// A platform module publishes its bindings when its checked artifact is
+/// A platform module publishes its bindings when its checked module is
 /// published, so a module still being checked has none to bind against and
 /// this reads nothing into their absence.
 /// A complete program binds every hosted procedure its modules declare.
 pub fn requireHostedProceduresBound(
     modules: CheckedModuleSet,
     target: TargetConfig,
-) HostedBindingError!void {
+) LowerResourceError!void {
     switch (target.checked_module_state) {
         .complete => {},
         .checking_finalization => return,
     }
 
     const root_view = checked.importedView(modules.root.module);
-    const bindings = platformHostedBindings(root_view, modules) orelse return;
+    const bindings = try platformHostedBindings(root_view, modules) orelse return;
 
-    if (!hostedProceduresBound(root_view, bindings)) return error.HostedFunctionNotBound;
+    if (!try hostedProceduresBound(root_view, bindings)) return error.HostedFunctionNotBound;
     for (modules.imports) |imported| {
-        if (!hostedProceduresBound(imported, bindings)) return error.HostedFunctionNotBound;
+        if (!try hostedProceduresBound(imported, bindings)) return error.HostedFunctionNotBound;
     }
     for (modules.root.relation_modules) |relation| {
-        if (!hostedProceduresBound(relation, bindings)) return error.HostedFunctionNotBound;
+        if (!try hostedProceduresBound(relation, bindings)) return error.HostedFunctionNotBound;
     }
 }
 
@@ -2109,13 +2109,13 @@ pub fn requireHostedProceduresBound(
 fn platformHostedBindings(
     root_view: checked.ImportedModuleView,
     modules: CheckedModuleSet,
-) ?[]const checked.HostedBinding {
-    if (root_view.module_identity.kind == .platform) return root_view.hosted_bindings.bindings;
+) Allocator.Error!?[]const checked.HostedBinding {
+    if (root_view.module_identity.kind == .platform) return (try root_view.hostedBindings()).bindings;
     for (modules.imports) |imported| {
-        if (imported.module_identity.kind == .platform) return imported.hosted_bindings.bindings;
+        if (imported.module_identity.kind == .platform) return (try imported.hostedBindings()).bindings;
     }
     for (modules.root.relation_modules) |relation| {
-        if (relation.module_identity.kind == .platform) return relation.hosted_bindings.bindings;
+        if (relation.module_identity.kind == .platform) return (try relation.hostedBindings()).bindings;
     }
     return null;
 }
@@ -2123,8 +2123,8 @@ fn platformHostedBindings(
 fn hostedProceduresBound(
     view: checked.ImportedModuleView,
     bindings: []const checked.HostedBinding,
-) bool {
-    for (view.hosted_procs.procs) |proc| {
+) Allocator.Error!bool {
+    for ((try view.hostedProcs()).procs) |proc| {
         var bound = false;
         for (bindings) |binding| {
             if (!std.mem.eql(u8, &binding.target_checked_module.bytes, &view.key.bytes)) continue;
@@ -2205,7 +2205,7 @@ fn collectStaticDataRequests(
 
     if (!include_provided) return try requests.toOwnedSlice(allocator);
 
-    for (root.provided_exports.exports) |provided| {
+    for ((try root.providedExports()).exports) |provided| {
         switch (provided) {
             .data => |data| {
                 try requests.append(allocator, .{
@@ -2373,7 +2373,7 @@ test "adopting completed compile-time values drops their initializers and identi
         .bytes = try allocator.alloc(u8, 0),
         .alignment = 1,
         .relocations = try allocator.alloc(LirProgram.StaticDataRelocation, 0),
-        .empty_list_capacities = try allocator.alloc(LirProgram.EmptyListCapacity, 0),
+        .capacities = try allocator.alloc(LirProgram.EvaluatedCapacity, 0),
     };
     lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
 
@@ -2427,7 +2427,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
         }
     }
 
-    const ModuleEnvPtr = @TypeOf(@as(*const checked.CheckedModuleArtifact, undefined).moduleEnvConst());
+    const ModuleEnvPtr = @TypeOf(@as(*const checked.CheckedModule, undefined).moduleEnvConst());
 
     const ModuleInfo = struct {
         key: [32]u8,
@@ -2439,10 +2439,9 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
         env: ModuleEnvPtr,
     };
 
-    fn defName(info: *const ModuleInfo, proc_base: u32) []const u8 {
-        const key = info.names.procBase(@fromBackingInt(@intCast(proc_base)));
-        if (key.export_name) |export_name| return info.names.exportNameText(export_name);
-        const def_idx = key.source_def_idx orelse return "?";
+    fn defName(info: *const ModuleInfo, proc_base: u64) []const u8 {
+        const base_: check.CheckedNames.ProcBase = @fromBackingInt(proc_base);
+        const def_idx = base_.sourceDef() orelse return "?";
         const def = info.env.store.getDef(@fromBackingInt(@intCast(def_idx)));
         return switch (info.env.store.getPattern(def.pattern)) {
             inline .assign, .var_assign => |assign| info.env.getIdent(assign.ident),
@@ -2474,11 +2473,11 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
         const root = modules.root.module;
         try list.append(allocator, .{
             .key = root.key.bytes,
-            .name = root.canonical_names.moduleNameText(root.module_identity.display_module_name),
+            .name = root.nameStore().moduleNameText(root.module_identity.display_module_name),
             .kind = @tagName(root.module_identity.kind),
-            .names = &root.canonical_names,
+            .names = root.nameStore(),
             .types = root.typesView(),
-            .templates = &root.checked_procedure_templates,
+            .templates = &(try root.checkedTables()).checked_procedure_templates,
             .env = root.moduleEnvConst(),
         });
         for (modules.imports) |imported| {
@@ -2488,7 +2487,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                 .kind = @tagName(imported.module_identity.kind),
                 .names = imported.canonical_names,
                 .types = imported.checked_types,
-                .templates = imported.checked_procedure_templates,
+                .templates = &(try imported.checkedTables()).checked_procedure_templates,
                 .env = imported.module_env,
             });
         }
@@ -2499,7 +2498,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                 .kind = @tagName(relation.module_identity.kind),
                 .names = relation.canonical_names,
                 .types = relation.checked_types,
-                .templates = relation.checked_procedure_templates,
+                .templates = &(try relation.checkedTables()).checked_procedure_templates,
                 .env = relation.module_env,
             });
         }
@@ -2773,8 +2772,8 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             var callable_kind: []const u8 = "generated";
             var callable_kind_is_template = false;
             var module_key: ?[32]u8 = null;
-            var proc_base: u32 = 0;
-            var sub: u32 = 0;
+            var proc_base: u64 = 0;
+            var sub: u128 = 0;
             switch (spec.identity.callable) {
                 .proc_template => |template| {
                     callable_kind = "template";
@@ -2802,7 +2801,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     module_name = info.name;
                     callable_name = defName(info, proc_base);
                     if (callable_kind_is_template and sub < info.templates.templates.items.len) {
-                        const source_fn_ty = info.templates.templates.items[sub].checked_fn_root;
+                        const source_fn_ty = info.templates.templates.items[@intCast(sub)].checked_fn_root;
                         if (info.types.containsId(source_fn_ty)) {
                             poly = if (try checkedTypeHasVariable(allocator, info.types, source_fn_ty)) 1 else 0;
                         }

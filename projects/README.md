@@ -193,7 +193,7 @@ project): `CheckedPrimitive`'s four post-check mappings—storage layout,
 inspect low-level op, hasher write op, and builtin owner—each have one
 definition. The first three live in `src/postcheck/common.zig`; the
 owner table lives beside `CheckedPrimitive` itself in
-`src/check/checked_artifact.zig`. A `structural_test.zig` lint fails the
+`src/check/checked_module.zig`. A `structural_test.zig` lint fails the
 build if a second definition of any of them appears. None of the copies
 had been forced by a type barrier: `MonoType.Primitive` is a plain alias
 of `checked.CheckedPrimitive`.
@@ -333,7 +333,7 @@ arguments (the ARC certifier and the observer), not at comptime, since no
 arity table exists to check against.
 
 The divergence-classification parity suite has landed. Divergence is one
-classification, `checkedExprDivergence` in `checked_artifact.zig`; Monotype's
+classification, `checkedExprDivergence` in `checked_module.zig`; Monotype's
 and Boxy's never-divergent arms check it at compile time, and checked-artifact
 tests drive `DivergenceScan` over every expression kind against it, alongside
 pinned echo fixtures for a divergent nominal payload, call argument, and

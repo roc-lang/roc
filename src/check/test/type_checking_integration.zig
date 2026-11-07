@@ -8,7 +8,7 @@ const TestEnv = @import("./TestEnv.zig");
 const canonical = @import("../canonical_names.zig");
 const checked_ids = @import("../checked_ids.zig");
 const static_dispatch = @import("../static_dispatch_registry.zig");
-const checked_artifact = @import("../checked_artifact.zig");
+const checked_module = @import("../checked_module.zig");
 const TypedCIR = @import("../typed_cir.zig");
 const types = @import("types");
 
@@ -24,18 +24,16 @@ const MethodRegistryTestCheckedTypes = struct {
             @panic("the method registry test source declares no methods, so the registry never queries checked types");
         }
 
-        pub fn payload(_: Store, _: checked_ids.CheckedTypeId) checked_artifact.CheckedTypePayload {
+        pub fn payload(_: Store, _: checked_ids.CheckedTypeId) checked_module.CheckedTypePayload {
             @panic("the method registry test source declares no methods, so the registry never queries checked types");
         }
     };
 
-    pub fn publishMethodCallableType(
+    pub fn methodCallableType(
         _: *const @This(),
-        _: std.mem.Allocator,
         _: TypedCIR.Module,
-        _: *canonical.CanonicalNameStore,
         _: types.Var,
-    ) std.mem.Allocator.Error!checked_ids.CheckedTypeId {
+    ) checked_ids.CheckedTypeId {
         @panic("the method registry test source declares no methods, so the registry never queries checked types");
     }
 };
@@ -3799,7 +3797,7 @@ test "check type - basic nominal" {
     try checkTypesModule(source, .{ .pass = .last_def }, "MyNominal");
 }
 
-test "checked artifact method registry skips nominal associated values" {
+test "checked module method registry skips nominal associated values" {
     const source =
         \\Basic := [Val(Str)].{
         \\  rec = { foo: "hello", bar: 42 }

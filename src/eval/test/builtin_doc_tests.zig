@@ -95,13 +95,13 @@ const BuiltinDocTestError = test_helpers.TestHelperError || eval_mod.BuiltinModu
 /// when `fork()` copies it into each child.
 var shared_builtins: ?*eval_mod.BuiltinModules = null;
 
-/// Borrow the shared Builtin as a `PrePublishedBuiltin`, or null before setup.
-fn prePublishedBuiltin() ?test_helpers.PrePublishedBuiltin {
+/// Borrow the shared Builtin as a `PreOpenedBuiltin`, or null before setup.
+fn preOpenedBuiltin() ?test_helpers.PreOpenedBuiltin {
     const bm = shared_builtins orelse return null;
     return .{
         .env = bm.builtin_module.env,
         .indices = bm.builtin_indices,
-        .artifact = &bm.checked_artifact,
+        .artifact = &bm.checked_module,
     };
 }
 
@@ -560,7 +560,7 @@ fn runCheck(
     source_kind: test_helpers.SourceKind,
     source: []const u8,
 ) BuiltinDocTestError!?[]u8 {
-    var resources = test_helpers.parseAndCheckProgramForProblems(allocator, source_kind, source, &.{}, prePublishedBuiltin()) catch |err|
+    var resources = test_helpers.parseAndCheckProgramForProblems(allocator, source_kind, source, &.{}, preOpenedBuiltin()) catch |err|
         return try dupeErr(allocator, "parseAndCheckProgramForProblems: {s}", .{@errorName(err)});
     defer resources.deinit(allocator);
 
@@ -573,7 +573,7 @@ fn runCheck(
 /// Run a block's top-level expects the way `roc test` runs them, and return
 /// null when every one passes, or an owned message naming each that failed.
 fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
-    var run = test_helpers.devEvalTopLevelExpects(allocator, std.testing.io, source, &.{}, prePublishedBuiltin()) catch |err| {
+    var run = test_helpers.devEvalTopLevelExpects(allocator, std.testing.io, source, &.{}, preOpenedBuiltin()) catch |err| {
         return try dupeErr(allocator, "devEvalTopLevelExpects: {s}", .{@errorName(err)});
     };
     defer run.deinit(allocator);
@@ -666,7 +666,7 @@ fn compileNative(
     source_kind: test_helpers.SourceKind,
     source: []const u8,
 ) BuiltinDocTestError!test_helpers.CompiledTargetProgram {
-    if (prePublishedBuiltin()) |ppb| {
+    if (preOpenedBuiltin()) |ppb| {
         return test_helpers.compileInspectedProgramForTargetWithBuiltin(
             allocator,
             std.testing.io,

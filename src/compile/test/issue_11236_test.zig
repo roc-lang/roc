@@ -145,27 +145,22 @@ test "issue 11236: independent valid code still lowers alongside a rejected bind
     }
 }
 
-fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArtifact) error{ TestUnexpectedResult, TestExpectedEqual }!void {
+fn expectRejectedBinding(artifact: *const check.Checked.CheckedModule) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
     var rejected: usize = 0;
-    for (artifact.top_level_procedure_bindings.bindings.items) |binding| {
+    for ((try artifact.checkedTables()).top_level_procedure_bindings.bindings.items) |binding| {
         if (binding.body != .checked_error) continue;
         rejected += 1;
         const expr = binding.body.checked_error;
-        try std.testing.expect(artifact.bodies().exprData(expr) == .runtime_error);
-        for (artifact.compile_time_roots.roots) |root| try std.testing.expect(root.expr != expr);
+        try std.testing.expect((try artifact.bodies()).exprData(expr) == .runtime_error);
+        for ((try artifact.checkedTables()).compile_time_roots.roots) |root| try std.testing.expect(root.expr != expr);
     }
     try std.testing.expectEqual(@as(usize, 1), rejected);
-    try std.testing.expectEqual(@as(usize, 0), artifact.callable_eval_templates.templates.items.len);
+    try std.testing.expectEqual(@as(usize, 0), (try artifact.checkedTables()).callable_eval_templates.templates.items.len);
     var exported_rejected: usize = 0;
     var exported_valid: usize = 0;
-    for (artifact.exported_procedure_bindings.bindings) |binding| {
+    for ((try artifact.exportRows()).procedure_bindings) |binding| {
         switch (binding.body) {
-            .checked_error => {
-                exported_rejected += 1;
-                const closure = artifact.exported_procedure_bindings.rowClosure(binding);
-                try std.testing.expectEqual(@as(usize, 0), closure.checked_procedure_templates.len);
-                try std.testing.expectEqual(@as(usize, 0), closure.callable_eval_templates.len);
-            },
+            .checked_error => exported_rejected += 1,
             .direct_template => exported_valid += 1,
             .callable_eval_template => return error.TestUnexpectedResult,
         }
@@ -174,7 +169,7 @@ fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArt
     try std.testing.expectEqual(@as(usize, 1), exported_valid);
 }
 
-test "issue 11236: rejection survives exports and serialization without callable wrappers" {
+test "issue 11236: rejection survives exports and stored outputs without callable wrappers" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -216,19 +211,19 @@ test "issue 11236: rejection survives exports and serialization without callable
         if (std.mem.eql(u8, report.title, "Type Mismatch")) mismatch = true;
     };
     try std.testing.expect(mismatch);
-    const artifact = build.findModuleByPath(bad_path).?.semanticData().?.checked_artifact.?;
+    const artifact = build.findModuleByPath(bad_path).?.semanticData().?.checked_module.?;
     try expectRejectedBinding(artifact);
-    const alias = build.findModuleByPath(alias_path).?.semanticData().?.checked_artifact.?;
-    try std.testing.expectEqual(@as(usize, 1), alias.exported_procedure_bindings.bindings.len);
-    try std.testing.expect(alias.exported_procedure_bindings.bindings[0].body == .checked_error);
+    const alias = build.findModuleByPath(alias_path).?.semanticData().?.checked_module.?;
+    try std.testing.expectEqual(@as(usize, 1), (try alias.exportRows()).procedure_bindings.len);
+    try std.testing.expect((try alias.exportRows()).procedure_bindings[0].body == .checked_error);
     // The alias's evaluation reaches the rejected binding and stores the crash.
-    for (alias.compile_time_roots.roots) |root| {
-        try std.testing.expect(root.payload == .const_node);
-        try std.testing.expect(alias.const_store.get(root.payload.const_node) == .checked_error);
+    for ((try alias.checkedTables()).compile_time_roots.roots) |root| {
+        try std.testing.expect(alias.evaluation.rootPayload(root.id) == .const_node);
+        try std.testing.expect(alias.evaluation.const_store.get(alias.evaluation.rootPayload(root.id).const_node) == .checked_error);
     }
-    const importer = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
+    const importer = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
     var found_use = false;
-    const importer_bodies = importer.bodies();
+    const importer_bodies = try importer.bodies();
     const importer_store = &importer.moduleEnvConst().store;
     for (0..importer_bodies.nodeCount()) |raw| {
         if (importer_bodies.index().nodeKind(@intCast(raw)) != .expr) continue;
@@ -249,14 +244,27 @@ test "issue 11236: rejection survives exports and serialization without callable
     defer arena.deinit();
     const CompactWriter = collections.CompactWriter;
     var writer = CompactWriter.init();
-    const Serialized = check.CheckedArtifact.CheckedModuleArtifact.Serialized;
+    const Serialized = check.Checked.CheckedModule.Serialized;
     const header = try writer.appendAlloc(arena.allocator(), Serialized);
     try header.serialize(artifact, arena.allocator(), &writer);
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     _ = try writer.writeToBuffer(buffer);
-    const serialized: *const Serialized = @ptrCast(@alignCast(buffer.ptr));
-    var loaded = serialized.deserialize(buffer, gpa, artifact.module_env);
+    // `Bad` imports only Builtin, which its module set holds first.
+    std.debug.assert(artifact.direct_import_module_keys.len == 1);
+    const builtin_key = artifact.direct_import_module_keys[0];
+    const imports = [_]check.Checked.CheckedImport{.{
+        .module_idx = 0,
+        .key = builtin_key,
+        .view = build.moduleResolver().resolve(builtin_key.digest()).?,
+    }};
+    var loaded = try check.Checked.openCheckedModule(gpa, .{
+        .module_env_storage = artifact.module_env,
+        .module_idx = artifact.module_identity.module_idx,
+        .io = io,
+        .imports = &imports,
+        .resolver = build.moduleResolver(),
+        .outputs = .{ .stored = .{ .backing = buffer, .backing_borrowed = false } },
+    });
     defer loaded.deinitRetainingModuleEnv(gpa);
-    try loaded.attachSealedTypes(gpa, io);
     try expectRejectedBinding(&loaded);
 }

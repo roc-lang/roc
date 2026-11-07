@@ -49,27 +49,27 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
         var packages = coord.packages.iterator();
         while (packages.next()) |package| {
             for (package.value_ptr.*.modules.items) |*module| {
-                if (std.mem.eql(u8, module.name, "Repro")) break :artifact module.checkedArtifact().?;
+                if (std.mem.eql(u8, module.name, "Repro")) break :artifact module.checkedModule().?;
             }
         }
         return error.TestUnexpectedResult;
     };
     var constants: usize = 0;
-    for (artifact.compile_time_roots.roots) |root| {
+    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind != .constant) continue;
         constants += 1;
-        try std.testing.expect(root.payload == .const_node);
-        const value = artifact.const_store.get(root.payload.const_node);
+        try std.testing.expect(artifact.evaluation.rootPayload(root.id) == .const_node);
+        const value = artifact.evaluation.const_store.get(artifact.evaluation.rootPayload(root.id).const_node);
         try std.testing.expect(value == .list and value.list == .nodes);
         try std.testing.expectEqual(literal_count, value.list.nodes.len);
         for (value.list.nodes, 0..) |node, index| {
-            const word = artifact.const_store.get(node);
+            const word = artifact.evaluation.const_store.get(node);
             try std.testing.expect(word == .nominal);
-            const bytes = artifact.const_store.get(word.nominal.backing);
+            const bytes = artifact.evaluation.const_store.get(word.nominal.backing);
             try std.testing.expect(bytes == .list and bytes.list == .packed_bytes);
             const expected = try std.fmt.allocPrint(gpa, "w{d}", .{index});
             defer gpa.free(expected);
-            try std.testing.expectEqualStrings(expected, artifact.const_store.blobBytes(bytes.list.packed_bytes.bytes));
+            try std.testing.expectEqualStrings(expected, artifact.evaluation.const_store.blobBytes(bytes.list.packed_bytes.bytes));
         }
     }
     try std.testing.expectEqual(@as(usize, 1), constants);

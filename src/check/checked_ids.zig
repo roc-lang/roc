@@ -1,4 +1,4 @@
-//! Stable ids for checked artifact payload stores.
+//! Stable ids for checked module payload stores.
 
 const std = @import("std");
 const can = @import("can");
@@ -17,11 +17,88 @@ pub const CheckedTypeId = enum(u32) {
         return std.math.rotl(u32, @backingInt(self), 1);
     }
 };
-/// Public `CheckedTypeSchemeId` declaration.
+/// A scheme of one checked module: a source scheme is named by its root's id,
+/// a source variable, so it is a function of the module's sealed data; a
+/// synthetic scheme by its row of the module's synthetic schemes, in the
+/// synthesized id space (`CheckedTypeStore.internScheme`).
 pub const CheckedTypeSchemeId = enum(u32) { _ };
 
-/// Identity of one compile-time root within its checked module.
-pub const ComptimeRootId = enum(u32) { _ };
+/// Identity of one compile-time root within its checked module, a function
+/// of the module's checked data alone: a REPL expression's root named by its
+/// expression, a definition's by its definition, a selected hoisted root by
+/// its index in the module's selected hoisted roots, an expect's by its
+/// statement, a literal conversion root by its literal, or a literal argument
+/// root by the edge that fixes its type and the callee requirement it
+/// converts. The top three bits say which; the literal encodings live with
+/// the literal identities (`checked_module.literalConversionRootId`,
+/// `checked_module.literalArgumentRootId`). No kind encodes as zero, so a
+/// root's identity is never a template table row
+/// (`CheckedProcedureTemplateId`).
+pub const ComptimeRootKey = enum(u128) {
+    _,
+
+    pub const Kind = enum(u3) {
+        repl_expr = 1,
+        def = 2,
+        hoisted = 3,
+        expect = 4,
+        literal_conversion = 5,
+        literal_argument = 6,
+    };
+
+    pub const kind_shift = 125;
+
+    /// The root of a source kind (`repl_expr`, `def`, `hoisted`, `expect`)
+    /// named by `source`.
+    pub fn ofSource(source_kind: Kind, source_index: u32) ComptimeRootKey {
+        std.debug.assert(!kindIsLiteral(source_kind));
+        return @fromBackingInt((@as(u128, @backingInt(source_kind)) << kind_shift) | source_index);
+    }
+
+    pub fn kind(self: ComptimeRootKey) Kind {
+        return switch (@as(u3, @truncate(@backingInt(self) >> kind_shift))) {
+            1 => .repl_expr,
+            2 => .def,
+            3 => .hoisted,
+            4 => .expect,
+            5 => .literal_conversion,
+            6 => .literal_argument,
+            0, 7 => unreachable, // no root identity encodes these kinds
+        };
+    }
+
+    fn kindIsLiteral(root_kind: Kind) bool {
+        return switch (root_kind) {
+            .repl_expr, .def, .hoisted, .expect => false,
+            .literal_conversion, .literal_argument => true,
+        };
+    }
+
+    /// Whether the root is a literal root rather than a row of the module's
+    /// root table.
+    pub fn isLiteral(self: ComptimeRootKey) bool {
+        return kindIsLiteral(self.kind());
+    }
+
+    /// The source a row root's identity names: its REPL expression,
+    /// definition, selected hoisted root index or expect statement.
+    pub fn source(self: ComptimeRootKey) u32 {
+        std.debug.assert(!self.isLiteral());
+        return @truncate(@backingInt(self));
+    }
+
+    /// Feed the id to a digest: 32 set bits and then its 128-bit identity,
+    /// little-endian, as `canonical_names.digestId` feeds every identity
+    /// that is not a template table row.
+    pub fn digestInto(self: ComptimeRootKey, hasher: anytype) void {
+        var marker: [4]u8 = undefined;
+        std.mem.writeInt(u32, &marker, std.math.maxInt(u32), .little);
+        hasher.update(&marker);
+        var identity: [16]u8 = undefined;
+        std.mem.writeInt(u128, &identity, @backingInt(self), .little);
+        hasher.update(&identity);
+    }
+};
 /// Stable identity of a generalized-local dispatch scope within a checked
 /// module artifact.
 pub const DispatchScopeId = enum(u32) { _ };
@@ -73,7 +150,7 @@ test "OptionalId round-trips none and some" {
     comptime std.debug.assert(@sizeOf(Opt) == 4);
 }
 
-/// One explicit identity for a closure capture. Checked artifacts and active
+/// One explicit identity for a closure capture. Checked modules and active
 /// Monotype instantiation use the checked identities below; final Monotype
 /// publication replaces every materialized capturable local's provisional
 /// identity with a program-global lift identity. Operand↔slot joins therefore
@@ -85,7 +162,7 @@ test "OptionalId round-trips none and some" {
 ///  - **canonical** (high bit clear, `[0, 2^31)`): the identity of a captured
 ///    checked binding. The index is exactly the CIR node of the binder's
 ///    pattern, so a canonical id is a pure function of (module name, source
-///    bytes) and is cache-safe to serialize in checked artifacts. Because the
+///    bytes) and is cache-safe to serialize in checked modules. Because the
 ///    mapping is the identity function, the originating binder is always
 ///    recoverable via `binder()`.
 ///  - **generated** (high bit set, `[2^31, 2^32)`): the identity of a
@@ -100,7 +177,7 @@ test "OptionalId round-trips none and some" {
 ///        captures.
 ///      - **lift** (`0xC000_0000` | index): closure lifting / spec_constr after
 ///        checking. The index is a per-Lifted-program counter. These ids never
-///        enter checked artifacts (post-check IRs are not cached).
+///        enter checked modules (post-check IRs are not cached).
 pub const CaptureId = enum(u32) {
     _,
 

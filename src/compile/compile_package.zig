@@ -1,4 +1,4 @@
-//! Stateless canonicalization, checking, and checked-artifact publication
+//! Stateless canonicalization, checking, and opening checked modules
 //! operations used by the compilation coordinator and snapshot tooling.
 
 const std = @import("std");
@@ -10,7 +10,7 @@ const eval = @import("eval");
 const compiled_builtins = @import("compiled_builtins");
 
 const Check = check.Check;
-const CheckedArtifact = check.CheckedArtifact;
+const Checked = check.Checked;
 const CheckedModules = check.TypedCIR.Modules;
 const Can = can.Can;
 const ModuleEnv = can.ModuleEnv;
@@ -23,9 +23,6 @@ pub const TimingInfo = struct {
     canonicalize_diagnostics_ns: u64 = 0,
     type_checking_ns: u64 = 0,
     check_diagnostics_ns: u64 = 0,
-    /// Compile-time evaluation run inside individual module checks, summed
-    /// across the worker threads that ran those checks.
-    module_compile_time_evaluation_ns: u64 = 0,
     /// Wall time of whole-program finalization, which runs after every module
     /// has been checked.
     program_finalization_ns: u64 = 0,
@@ -33,14 +30,14 @@ pub const TimingInfo = struct {
     /// finalization.
     compile_time_evaluation: eval.CompileTimeFinalization.TimingSnapshot = .{},
     /// Deterministic lowering and emission counters from all compile-time
-    /// evaluation, whether run inside module checks or program finalization.
+    /// evaluation.
     compile_time_counters: eval.CompileTimeFinalization.TimingSnapshot = .{},
     /// The modules whose type checking took longest.
     slowest_type_checks: SlowestTypeChecks = .{},
 };
 
-/// One module's type-checking time: checking and checked-artifact
-/// publication, excluding compile-time evaluation run inside the check.
+/// One module's type-checking time: checking and opening the checked
+/// module.
 /// The name is stored inline because the timing outlives the coordinator.
 pub const ModuleTypeCheckTiming = struct {
     pub const max_name_len = 256;
@@ -123,10 +120,10 @@ const Allocator = std.mem.Allocator;
 
 const CoreCtx = @import("ctx").CoreCtx;
 
-/// Errors that can occur while publishing compile-time finalization results.
-pub const PublishError = CheckedArtifact.CompileTimeFinalizer.Error;
+/// Errors that can occur while evaluating compile-time roots.
+pub const CompileTimeError = Checked.CompileTimeFinalizer.Error;
 /// Errors that can occur while type-checking a module.
-pub const TypeCheckModuleError = Allocator.Error || PublishError || error{Internal};
+pub const TypeCheckModuleError = Allocator.Error || error{Internal};
 
 /// Build CTFE finalization options from the package compiler context.
 pub fn compileTimeFinalizationOptions(
@@ -159,35 +156,35 @@ pub const Mode = enum { single_threaded, multi_threaded };
 /// Semantic facts retained for a checked module.
 pub const SemanticModuleData = struct {
     env: *ModuleEnv,
-    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
+    checked_module: ?*const Checked.CheckedModule,
 };
 
 /// Output of a module that completed successfully, which always includes its
-/// checked artifact.
+/// checked module.
 pub const CheckedModuleData = struct {
     env: *ModuleEnv,
-    checked_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+    checked_module: *const Checked.CheckedModule,
 };
 
-/// Owned output from type checking before the coordinator takes publication.
+/// Owned output from type checking before the coordinator takes the checked module.
 pub const TypeCheckOutput = struct {
     checker: Check,
-    publication: CheckedArtifact.CheckedModuleArtifact,
-    publication_owned: bool = true,
+    checked_module: Checked.CheckedModule,
+    checked_module_owned: bool = true,
     inference_reused: bool = false,
     owner_bindings: u32 = 0,
     reference_bindings: u32 = 0,
     diagnostics_replayed: u32 = 0,
 
     pub fn deinit(self: *TypeCheckOutput) void {
-        if (self.publication_owned) self.publication.deinit(self.publication.canonical_names.allocator);
+        if (self.checked_module_owned) self.checked_module.deinit(self.checked_module.canonical_names.allocator);
         self.checker.deinit();
     }
 
-    pub fn takeCheckedArtifact(self: *TypeCheckOutput) CheckedArtifact.CheckedModuleArtifact {
-        std.debug.assert(self.publication_owned);
-        self.publication_owned = false;
-        return self.publication;
+    pub fn takeCheckedModule(self: *TypeCheckOutput) Checked.CheckedModule {
+        std.debug.assert(self.checked_module_owned);
+        self.checked_module_owned = false;
+        return self.checked_module;
     }
 };
 
@@ -200,26 +197,24 @@ pub const PlatformRequirementsCheckOutput = struct {
     }
 };
 
-/// Public `ArtifactPublicationInputs` declaration.
-pub const ArtifactPublicationInputs = struct {
-    available_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
-    relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
-    platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
-    platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
-    explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
-    problem_store: ?*check.problem.Store = null,
-    /// Waits on the published module's key slots.
+/// What opening a module right after checking it reads beside its
+/// environment and imports.
+pub const OpenAfterCheckingInputs = struct {
+    available_artifacts: []const Checked.ImportedModuleView = &.{},
+    platform_requirement_context: ?Checked.PlatformRequirementContextKey = null,
+    explicit_roots: []const Checked.ExplicitRootRequestInput = &.{},
+    /// Waits on the module's key slots.
     io: std.Io,
-    ctfe_options: eval.CompileTimeFinalization.Options = .{},
-    evaluation_phase: @FieldType(CheckedArtifact.PublishInputs, "evaluation_phase") = .immediate,
     /// How this module's compile-time roots were established. Part of the
-    /// checked-artifact cache identity. See `Can.Validation`.
+    /// checked module's cache identity. See `Can.Validation`.
     validation: Can.Validation = .checking,
+    /// What checking the module output beside its solved source.
+    inference: check.InferenceOutput,
 };
 
-fn importedArtifactsCoverImportedEnvs(
+fn importedModulesCoverImportedEnvs(
     imported_envs: []const *ModuleEnv,
-    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
+    imported_artifacts: []const Checked.CheckedImport,
 ) bool {
     for (imported_envs, 0..) |_, module_idx| {
         var found = false;
@@ -238,8 +233,8 @@ fn importedArtifactsCoverImportedEnvs(
 pub fn buildCheckOwnerEnvs(
     allocator: Allocator,
     imported_envs: []const *ModuleEnv,
-    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
-    available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    imported_artifacts: []const Checked.CheckedImport,
+    available_artifacts: []const Checked.ImportedModuleView,
     platform_requirements: ?Check.PlatformRequirementInput,
 ) Allocator.Error![]const *const ModuleEnv {
     var owner_envs = std.ArrayList(*const ModuleEnv).empty;
@@ -256,7 +251,7 @@ pub fn buildCheckOwnerEnvs(
         }
     }
 
-    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void).init(allocator);
+    var seen_public_dependencies = std.AutoHashMap(Checked.CheckedModuleDigest, void).init(allocator);
     defer seen_public_dependencies.deinit();
 
     for (imported_artifacts) |imported_artifact| {
@@ -275,16 +270,17 @@ pub fn buildCheckOwnerEnvs(
 fn appendCheckOwnerEnvPublicDependencies(
     allocator: Allocator,
     owner_envs: *std.ArrayList(*const ModuleEnv),
-    available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void),
-    view: CheckedArtifact.ImportedModuleView,
+    available_artifacts: []const Checked.ImportedModuleView,
+    seen_public_dependencies: *std.AutoHashMap(Checked.CheckedModuleDigest, void),
+    view: Checked.ImportedModuleView,
 ) Allocator.Error!void {
-    for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
+    const resolver_views = Checked.CheckedImportViews{ .current_owner = view.key.digest(), .direct = &.{}, .available = available_artifacts };
+    for ((try view.publicApiDependencies(resolver_views.resolver())).type_owner_artifacts) |dependency_key| {
         const entry = try seen_public_dependencies.getOrPut(dependency_key);
         if (entry.found_existing) continue;
         entry.value_ptr.* = {};
 
-        const dependency = availableArtifactByKey(available_artifacts, dependency_key) orelse {
+        const dependency = availableModuleByKey(available_artifacts, dependency_key) orelse {
             base.invariant("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
         };
         try appendCheckOwnerEnvIfMissing(allocator, owner_envs, dependency.module_env);
@@ -319,10 +315,10 @@ fn moduleEnvIdentitiesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
     return base.ModuleIdentity.eql(a_hash, b_hash);
 }
 
-fn availableArtifactByKey(
-    available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    key: CheckedArtifact.ModuleId,
-) ?CheckedArtifact.ImportedModuleView {
+fn availableModuleByKey(
+    available_artifacts: []const Checked.ImportedModuleView,
+    key: Checked.ModuleId,
+) ?Checked.ImportedModuleView {
     for (available_artifacts) |artifact| {
         if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
     }
@@ -337,8 +333,8 @@ pub const SnapshotValidationMode = enum {
 
 /// Combined canonicalization and type checking function for snapshot tool
 /// This ensures the SAME module_envs map is used for both phases
-/// Snapshot-only type inspection must not publish post-check lowering input.
-/// Checked-artifact publication owns compile-time evaluation for real builds.
+/// Snapshot-only type inspection opens no checked module for post-check
+/// lowering; only real builds open one and evaluate its roots.
 /// IMPORTANT: The returned checker holds a pointer to module_envs_out, so caller must keep
 /// module_envs_out alive until they're done using the checker (e.g., for type printing)
 pub fn canonicalizeAndTypeCheckModule(
@@ -485,22 +481,21 @@ pub fn canonicalizeModuleWithSiblings(
 /// This ensures all tools use the exact same type checking logic as production builds
 ///
 /// `check_alloc` owns checker/session data that dies with `TypeCheckOutput.deinit`.
-/// `artifact_alloc` owns any published checked artifact returned in `TypeCheckOutput`.
+/// `artifact_alloc` owns any published checked module returned in `TypeCheckOutput`.
 pub fn typeCheckModule(
     check_alloc: Allocator,
     artifact_alloc: Allocator,
     env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
     imported_envs: []const *ModuleEnv,
-    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
-    available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    imported_artifacts: []const Checked.CheckedImport,
+    available_artifacts: []const Checked.ImportedModuleView,
     platform_requirements: ?Check.PlatformRequirementInput,
-    platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey,
-    explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+    platform_requirement_context: ?Checked.PlatformRequirementContextKey,
+    explicit_roots: []const Checked.ExplicitRootRequestInput,
     validation: Can.Validation,
     source_pin_validation: [32]u8,
     io: std.Io,
-    ctfe_options: eval.CompileTimeFinalization.Options,
     deferred_imports: can.ImportResolution.Imports,
     missing_public_types: []const []const u8,
     inference_cache: ?@import("inference_cache.zig").Cache,
@@ -541,12 +536,12 @@ pub fn typeCheckModule(
     defer checking_scope.deinit();
     // The platform's complete checking surface already belongs to the scope.
     // Select its owner parameter here; full platform implementation identity
-    // remains an input to publication below, never inference admission.
+    // remains an input to the checked module's key, never inference admission.
     const requirement_owner = if (platform_requirements) |requirements|
         checking_scope.ordinal(requirements.env.contentIdentityHash().?.*)
     else
         null;
-    const inference_key = CheckedArtifact.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, explicit_roots, validation, source_pin_validation, missing_public_types);
+    const inference_key = Checked.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, validation, source_pin_validation, missing_public_types);
     const loaded = if (inference_cache) |cache| try cache.load(inference_key, env, &checking_scope) else null;
     defer if (loaded) |capsule| capsule.deinit();
 
@@ -574,37 +569,40 @@ pub fn typeCheckModule(
         env.types.seal();
     } else {
         try checker.checkFile();
-        if (inference_cache) |cache| cache.store(inference_key, env, &checker, &checking_scope);
     }
+    // The module's inference output, read from the checker against the
+    // current dependency scope whether checking ran or a capsule restored
+    // it, borrows the checker until opening the module copies it.
+    var inference_arena = base.SingleThreadArena.init(check_alloc);
+    defer inference_arena.deinit();
+    const inference = try check.InferenceOutput.fromChecker(inference_arena.allocator(), &checker, &checking_scope);
+    if (loaded == null) if (inference_cache) |cache| cache.store(inference_key, env, &inference);
 
     module_envs_map.deinit();
 
-    if (!importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts)) {
-        base.invariant("compile.typeCheckModule received an imported module environment without its checked artifact", .{});
+    if (!importedModulesCoverImportedEnvs(imported_envs, imported_artifacts)) {
+        base.invariant("compile.typeCheckModule received an imported module environment without its checked module", .{});
     }
 
-    var checked_artifact = try publishCheckedArtifactFromCheckedModule(
+    var checked_module = try openCheckedModuleAfterChecking(
         artifact_alloc,
         env,
         imported_envs,
         imported_artifacts,
         .{
             .platform_requirement_context = platform_requirement_context,
-            .platform_app_relation = null,
             .explicit_roots = explicit_roots,
             .available_artifacts = available_artifacts,
-            .problem_store = &checker.problems,
             .io = io,
-            .ctfe_options = ctfe_options,
-            .evaluation_phase = .post_frontend,
             .validation = validation,
+            .inference = inference,
         },
     );
-    errdefer checked_artifact.deinit(artifact_alloc);
+    errdefer checked_module.deinit(artifact_alloc);
 
     return .{
         .checker = checker,
-        .publication = checked_artifact,
+        .checked_module = checked_module,
         .inference_reused = loaded != null,
         .owner_bindings = if (loaded != null) @intCast(env.module_identities.count()) else 0,
         .reference_bindings = if (loaded) |capsule| std.math.cast(u32, capsule.metadata.foreign_references.len) orelse return error.OutOfMemory else 0,
@@ -612,71 +610,27 @@ pub fn typeCheckModule(
     };
 }
 
-/// Publish a checked artifact whose module environment is owned by checked source.
-pub fn publishCheckedArtifactFromCheckedModule(
+/// Open the live checked module of `env`, which checking just sealed and
+/// whose storage the checked source owns.
+pub fn openCheckedModuleAfterChecking(
     gpa: Allocator,
     env: *ModuleEnv,
     imported_envs: []const *ModuleEnv,
-    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
-    publication: ArtifactPublicationInputs,
-) PublishError!CheckedArtifact.CheckedModuleArtifact {
-    if (std.debug.runtime_safety and !env.types.isSealed()) {
-        base.invariant("a checked artifact was published from a module whose type store checking never sealed", .{});
-    }
-    return publishCheckedArtifactFromCheckedModuleWithStorage(
-        gpa,
-        env,
-        .{ .checked_source = env },
-        imported_envs,
-        imported_artifacts,
-        publication,
-    );
-}
-
-/// Publish a checked artifact with an explicit module-environment storage owner.
-pub fn publishCheckedArtifactFromCheckedModuleWithStorage(
-    gpa: Allocator,
-    env: *ModuleEnv,
-    module_env_storage: CheckedArtifact.ModuleEnvStorage,
-    imported_envs: []const *ModuleEnv,
-    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
-    publication: ArtifactPublicationInputs,
-) PublishError!CheckedArtifact.CheckedModuleArtifact {
+    imported_artifacts: []const Checked.CheckedImport,
+    inputs: OpenAfterCheckingInputs,
+) Allocator.Error!Checked.CheckedModule {
+    // The module set prepares every environment for the module's readers.
     var typed = try CheckedModules.initForRootModule(gpa, env, imported_envs);
     defer typed.modules.deinit();
-    return publishFromPrebuiltModules(gpa, &typed.modules, typed.module_idx, module_env_storage, imported_artifacts, publication);
-}
-
-/// Publish from an already-built `Modules` graph. The cache-key probe builds the
-/// root graph to compute the key; on a miss the same graph is reused here instead of
-/// rebuilding it (the build runs `prepareRuntimeEnv` over every env, so rebuilding is
-/// real, redundant work).
-pub fn publishFromPrebuiltModules(
-    gpa: Allocator,
-    modules: *const CheckedModules,
-    module_idx: u32,
-    module_env_storage: CheckedArtifact.ModuleEnvStorage,
-    imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
-    publication: ArtifactPublicationInputs,
-) PublishError!CheckedArtifact.CheckedModuleArtifact {
-    var ctfe_options = publication.ctfe_options;
-    return try CheckedArtifact.publishFromTypedModule(
-        gpa,
-        modules,
-        module_idx,
-        .{
-            .module_env_storage = module_env_storage,
-            .io = publication.io,
-            .imports = imported_artifacts,
-            .available_artifacts = publication.available_artifacts,
-            .relation_artifacts = publication.relation_artifacts,
-            .platform_requirement_context = publication.platform_requirement_context,
-            .platform_app_relation = publication.platform_app_relation,
-            .explicit_roots = publication.explicit_roots,
-            .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
-            .evaluation_phase = publication.evaluation_phase,
-            .problem_store = publication.problem_store,
-            .validation = publication.validation,
-        },
-    );
+    return try Checked.openCheckedModule(gpa, .{
+        .module_idx = typed.module_idx,
+        .module_env_storage = .{ .checked_source = env },
+        .io = inputs.io,
+        .imports = imported_artifacts,
+        .available_artifacts = inputs.available_artifacts,
+        .platform_requirement_context = inputs.platform_requirement_context,
+        .explicit_roots = inputs.explicit_roots,
+        .validation = inputs.validation,
+        .outputs = .{ .checked = inputs.inference },
+    });
 }

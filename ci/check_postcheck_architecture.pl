@@ -50,8 +50,8 @@ my @RULES = (
     { category => 'shared-memory-fallback', regex => qr/\bcreateSharedMemoryWithFallback\b/, allowed => {} },
     { category => 'shared-memory-fallback', regex => qr/\bSHARED_MEMORY_FALLBACK_SIZE\b/, allowed => {} },
     { category => 'lir-module-env-boundary', regex => qr/\bcollectModuleEnvViews\b/, allowed => {} },
-    { category => 'raw-provides-scan-after-publication', regex => qr/\bprovides_entries\.items\.items\b/, allowed => { 'src/check/checked_artifact.zig' => 1, 'src/check/Check.zig' => 1, 'src/canonicalize/test/exposed_shadowing_test.zig' => 1 } },
-    { category => 'raw-const-template-mir-value', regex => qr/\bconst_ref:\s*(?:check\.CheckedArtifact\.|checked_artifact\.)ConstRef\b/, allowed => {} },
+    { category => 'raw-provides-scan-after-publication', regex => qr/\bprovides_entries\.items\.items\b/, allowed => { 'src/check/checked_module.zig' => 1, 'src/check/Check.zig' => 1, 'src/canonicalize/test/exposed_shadowing_test.zig' => 1 } },
+    { category => 'raw-const-template-mir-value', regex => qr/\bconst_ref:\s*(?:check\.Checked\.|checked_module\.)ConstRef\b/, allowed => {} },
     { category => 'text-method-lookup-outside-typed-cir', regex => qr/\bresolveAttachedMethodTargetByText\b/, allowed => { 'src/check/typed_cir.zig' => 1 } },
     { category => 'text-ident-lookup-outside-typed-cir', regex => qr/\bfindCommonIdent\b/, allowed => { 'src/check/typed_cir.zig' => 1 } },
     { category => 'nullable-recorded-dispatch-lowering', regex => qr/\)\s*std\.mem\.Allocator\.Error!\?LoweredCall\s*\{/, allowed => {} },
@@ -131,6 +131,79 @@ my @RULES = (
     { category => 'checked-body-store', regex => qr/\bpatternIdForSource\b/, allowed => {} },
     { category => 'checked-body-store', regex => qr/\bSyntheticExprOrigin\b/, allowed => {} },
     { category => 'checked-row-coerce-variant', regex => qr/\brow_coerce\b/, scope => qr{\Asrc/check/}, allowed => {} },
+    # Nested procedure sites, runtime captures, single-source calls and
+    # exhaustiveness sites are slot analyses computed on first demand; no
+    # eager pass computes them for a whole module and no cache entry stores
+    # them.
+    { category => 'eager-nested-proc-sites', regex => qr/\bNestedProcSiteTable\b/, allowed => {} },
+    { category => 'eager-nested-proc-sites', regex => qr/\bNestedProcSiteBuilder\b/, allowed => {} },
+    { category => 'eager-nested-proc-sites', regex => qr/\bfromTemplates\b/, allowed => {} },
+    { category => 'eager-runtime-captures', regex => qr/\bpublishRuntimeCaptures\b/, allowed => {} },
+    { category => 'eager-single-source-calls', regex => qr/\bmarkSingleSourceCalls\b/, allowed => {} },
+    { category => 'eager-single-source-calls', regex => qr/\bSingleSourceCalls\b/, allowed => {} },
+    { category => 'eager-exhaustiveness-sites', regex => qr/\bpublishCheckedExhaustivenessSites\b/, allowed => {} },
+    { category => 'eager-exhaustiveness-sites', regex => qr/\bexhaustivenessOwnerTemplateForSource\b/, allowed => {} },
+    # Template demand vectors are per-component slots of the module's
+    # analyses (`CheckedDispatch.templateDemands`). Nothing publishes them
+    # into the template table or the cache entry.
+    { category => 'eager-template-demand', regex => qr/\bTemplateDemandPass\b/, allowed => {} },
+    { category => 'eager-template-demand', regex => qr/\bdemand_pool\b/, allowed => {} },
+    # Literal requirements, literal edge arguments and literal roots are
+    # slot analyses (`ModuleAnalyses.literalComponent`,
+    # `unitLiteralConversions`); a literal root is named by its literal or its
+    # edge, never by a row appended to the root or template table, and the
+    # module's root requests are a slot (`ModuleAnalyses.rootRequests`).
+    { category => 'eager-literal-roots', regex => qr/\bpublishLiteralArgumentRoots\b/, allowed => {} },
+    { category => 'eager-literal-roots', regex => qr/\bpublishLiteralConversionRoots\b/, allowed => {} },
+    { category => 'eager-literal-roots', regex => qr/\bliteralConversionRootForNode\b/, allowed => {} },
+    { category => 'eager-literal-roots', regex => qr/\bliteral_requirements_pool\b/, allowed => {} },
+    { category => 'eager-literal-roots', regex => qr/\bliteral_edge_args_pool\b/, allowed => {} },
+    { category => 'eager-literal-roots', regex => qr/\bliteral_argument_demand_pool\b/, allowed => {} },
+    { category => 'eager-root-requests', regex => qr/\bRootRequestTable\.fromModule\b/, allowed => {} },
+    # A module's checked data holds only its own nominal declarations; a
+    # reader reads an imported declaration in the module that declares it.
+    { category => 'imported-nominal-embedding', regex => qr/\bembedReachableImportedNominalDecls\b/, allowed => {} },
+    { category => 'imported-nominal-embedding', regex => qr/\bembedOneImportedNominalDecl\b/, allowed => {} },
+    { category => 'imported-nominal-embedding', regex => qr/\bembedImportedNominalDeclFor\b/, allowed => {} },
+    { category => 'imported-nominal-embedding', regex => qr/\bownerViewAndDeclForImportedNominal\b/, allowed => {} },
+    # A platform/app pairing reads its platform in place: a type read under
+    # the pairing resolves through the pairing's overlay on demand, and the
+    # facts that depend on those types are per-pairing slots. Nothing
+    # substitutes, clones or borrows the platform's types, names or tables.
+    { category => 'eager-pairing', regex => qr/\bborrowForPairing\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bPairingTypeColumn\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bPairingTypeImage\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bpairing_types\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bPlatformRelationTypeSubstitutions\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bapplyToPublication\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bpublicationPairingTypes\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\brootsReachingAny\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bpairingCapabilitySource\b/, allowed => {} },
+    { category => 'eager-pairing', regex => qr/\bborrowed_columns\b/, allowed => {} },
+    # Compile-time evaluation writes its module's evaluation output and
+    # nothing else: no checked row holds a payload or a stored value, and
+    # deferred diagnostics are read from the inference output.
+    { category => 'evaluation-in-checked-rows', regex => qr/\bfillStoredConst\b/, allowed => {} },
+    { category => 'evaluation-in-checked-rows', regex => qr/\bLiteralRootPayloadTable\b/, allowed => {} },
+    { category => 'evaluation-in-checked-rows', regex => qr/\bliteral_root_payloads\b/, allowed => {} },
+    { category => 'evaluation-in-checked-rows', regex => qr/\bevaluation_state\b/, allowed => {} },
+    { category => 'evaluation-in-checked-rows', regex => qr/\bcompile_time_root_reads\b/, allowed => {} },
+    { category => 'evaluation-in-checked-rows', regex => qr/\bcompile_time_debug\b/, allowed => {} },
+    { category => 'evaluation-diagnostics-copy', regex => qr/\bevaluation_diagnostics\b/, allowed => {} },
+    { category => 'evaluation-diagnostics-copy', regex => qr/\bEvaluationDiagnostics\b/, allowed => {} },
+    # Procedure bases are structural (`ProcBase`: kind and source ordinal),
+    # never interned into a name store; a stored constant's function value
+    # names its checked type by key and reads the type from its definition.
+    { category => 'interned-proc-base', regex => qr/\binternProcBase\b/, allowed => {} },
+    { category => 'interned-proc-base', regex => qr/\bProcBaseKeyRef\b/, allowed => {} },
+    { category => 'interned-proc-base', regex => qr/\bProcBaseKey\b/, allowed => {} },
+    { category => 'interned-proc-base', regex => qr/\bproc_base_by_key\b/, allowed => {} },
+    { category => 'interned-proc-base', regex => qr/\bliteral_root_proc_base\b/, allowed => {} },
+    { category => 'stored-source-fn-type', regex => qr/\bgenerated_encoder_source_fn_ty\b/, allowed => {} },
+    # The modules dispatch resolution searches are a slot computed from the
+    # module's imports and type-name owners, never a list publication records.
+    { category => 'published-dispatch-imports', regex => qr/\bdispatch_view_keys\b/, allowed => {} },
+    { category => 'published-dispatch-imports', regex => qr/\b(?:attachDispatchImports|setDispatchImports|dispatchViewKeys)\b/, allowed => {} },
     # Post-check code reads sealed solver stores through the checked type
     # reader and never writes one.
     {
@@ -138,7 +211,26 @@ my @RULES = (
         regex => qr/(?:typeStore(?:Const)?\(\)|\.types|types_store|type_store)\.(?:setVarContent|dangerousSetVarDesc|dangerousSetVarRedirect|fresh\w*|append(?:Vars|RecordFields|Tags|StaticDispatchConstraints\w*|InterpolationParts)|canonicalizeAndSeal|seal|setNominalDecl|markNominalDeclInvalid|setDerivedMapPlan|union_|setRank|resolveVarAndCompressPath)\(/,
         scope => qr{\Asrc/postcheck/},
         allowed => {},
-    },
+    },    # A checked module is live data that every embedder opens through one
+    # function (`openCheckedModule`), right after checking it and from its
+    # stored outputs. No pass publishes a frozen copy of it, no table of a
+    # publication survives, and its cache payload beside the `ModuleEnv` is
+    # its inference output and its evaluation output alone
+    # (`check_checked_cache_payload` below pins the payload's fields).
+    { category => 'checked-publication', regex => qr/\bpublishFromTypedModule\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bCheckedModuleArtifact\w*\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bCheckedArtifact\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bPublishInputs\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bPublishImportArtifact\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bCheckedTypePublication\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bpublishMethodCallableType\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bpublishCheckedArtifact\w*\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bpublishFromPrebuiltModules\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bevaluation_phase\b/, allowed => {} },
+    { category => 'checked-cache-payload', regex => qr/\bModuleIdentitySerialized\b/, allowed => {} },
+    { category => 'checked-cache-payload', regex => qr/\bCheckingContextIdentity\.Serialized\b/, allowed => {} },
+    { category => 'checked-cache-payload', regex => qr/\bCheckedTypeStore\.Serialized\b/, allowed => {} },
+    { category => 'checked-cache-payload', regex => qr/\bdeserializeStatic\b/, allowed => {} },
 );
 
 sub iter_zig_files {
@@ -693,6 +785,48 @@ sub check_monotype_same_type_assertions_debug_only {
 }
 
 check_monotype_same_type_assertions_debug_only();
+
+# A checked module's cache payload beside its `ModuleEnv`
+# (`CheckedModule.Serialized`) is its inference output and its evaluation
+# output, in that order, and nothing else.
+sub check_checked_cache_payload {
+    my $rel = 'src/check/checked_module.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+    my @lines = <$fh>;
+    close $fh or die "failed to close $rel: $!\n";
+    chomp @lines;
+
+    my $in_module = 0;
+    my $in_payload = 0;
+    my @fields;
+    my $payload_line = 0;
+    for my $index (0 .. $#lines) {
+        my $code = zig_code_line($lines[$index]);
+        if ($code =~ /^pub const CheckedModule = struct \{/) {
+            $in_module = 1;
+            next;
+        }
+        next unless $in_module;
+        last if $code =~ /^\};/;
+        if (!$in_payload && $code =~ /^    pub const Serialized = extern struct \{/) {
+            $in_payload = 1;
+            $payload_line = $index + 1;
+            next;
+        }
+        next unless $in_payload;
+        last if $code =~ /^    \};/;
+        push @fields, $1 if $code =~ /^        ([a-z_][a-z0-9_]*)\s*:/;
+    }
+    my $found = join(',', @fields);
+    if (!$payload_line) {
+        push @violations, "$rel: checked-cache-payload: CheckedModule.Serialized not found";
+    } elsif ($found ne 'inference,evaluation') {
+        push @violations, "$rel:$payload_line: checked-cache-payload: CheckedModule.Serialized holds [$found], not [inference,evaluation]";
+    }
+}
+
+check_checked_cache_payload();
 
 if (@violations) {
     print "Post-check architecture violations found:\n";

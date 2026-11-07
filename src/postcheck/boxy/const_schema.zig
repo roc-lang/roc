@@ -18,7 +18,7 @@ const types = @import("types.zig");
 const lower = @import("lower.zig");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const const_store = check.ConstStore;
 const static_dispatch = check.StaticDispatchRegistry;
 const LirProgram = lir_core.Program;

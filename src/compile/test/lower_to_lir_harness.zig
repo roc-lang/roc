@@ -119,7 +119,7 @@ pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||
     Coordinator.AppDiscoveryError ||
-    check.CheckedArtifact.CompileTimeFinalizer.Error ||
+    check.Checked.CompileTimeFinalizer.Error ||
     eval.BuiltinModules.InitError ||
     std.Thread.SpawnError ||
     error{
@@ -1233,16 +1233,16 @@ fn lowerAppPathToLir(
         try std.testing.expect(found);
     }
 
-    const root = coord.executableRootCheckedArtifact();
-    const imports = try coord.collectImportedArtifactViews(arena, root);
-    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const root = (try coord.executableRootCheckedModule());
+    const imports = try coord.collectImportedModuleViews(arena, root);
+    const relations = try coord.collectRelationModuleViews(arena, root);
 
     // These scheduler fixtures explicitly exercise checked procedure-use roots;
     // ordinary host compilation selects only provided exports.
     const lir_roots = if (opts.parallel_procedure_root_fixture or opts.prepared_direct_call_root_fixture)
-        try gpa.dupe(check.CheckedArtifact.RootRequest, root.root_requests.runtime_requests)
+        try gpa.dupe(check.Checked.RootRequest, (try root.rootRequests()).runtime_requests)
     else
-        try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+        try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root.rootRequests()).runtime_requests);
     defer gpa.free(lir_roots);
     if (opts.parallel_procedure_root_fixture) {
         var procedure_use_roots: usize = 0;
@@ -1257,7 +1257,7 @@ fn lowerAppPathToLir(
         var mono = try postcheck.Monotype.Lower.run(
             gpa,
             .{
-                .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+                .root = try check.Checked.loweringViewWithRelations(root, relations),
                 .imports = imports,
             },
             .{ .requests = lir_roots },
@@ -1294,7 +1294,7 @@ fn lowerAppPathToLir(
     else
         null;
     const lower_modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+        .root = try check.Checked.loweringViewWithRelations(root, relations),
         .imports = imports,
     };
     const lower_roots: lir.CheckedPipeline.RootRequestSet = .{

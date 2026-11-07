@@ -76,7 +76,7 @@ fn appendText(allocator: Allocator, text: *std.ArrayList(u8), bytes: []const u8)
 
 /// Borrow checker storage until serialization; flatten pointer-bearing strings
 /// and multi-lists into arena-owned arrays with deterministic index order.
-pub fn capture(allocator: Allocator, checker: anytype, scope: *const dependencies.Scope) Allocator.Error!Self {
+pub fn capture(allocator: Allocator, checker: anytype, maybe_scope: ?*const dependencies.Scope) Allocator.Error!Self {
     const snapshots = &checker.snapshots;
     var text = std.ArrayList(u8).empty;
     var tags = std.ArrayList(Tag).empty;
@@ -93,8 +93,11 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: *const dependencie
     for (fields, 0..) |*field, i| field.* = snapshots.record_fields.get(@fromBackingInt(@as(u32, @intCast(i))));
     var sources = std.ArrayList(Source).empty;
     // Platform diagnostics can retain a platform-side source region. Pin that
-    // declared provenance to the current platform source before replay.
+    // declared provenance to the current platform source before replay. A
+    // checker given no dependency scope checked against no platform's
+    // requirements.
     if (checker.problems.problems.items.len != 0) if (checker.platform_requirements) |requirements| {
+        const scope = maybe_scope orelse base.invariant("a checker checked platform requirements without a dependency scope", .{});
         var hash: [32]u8 = undefined;
         base.Sha256.hash(requirements.env.common.source, &hash, .{});
         try sources.append(allocator, .{ .owner = scope.ordinal(requirements.env.contentIdentityHash().?.*), .digest = hash });

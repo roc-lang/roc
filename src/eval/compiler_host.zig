@@ -4,6 +4,7 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const interpreter = @import("interpreter.zig");
+const compile_time_host = @import("compile_time_host.zig");
 
 const RocOps = builtins.host_abi.RocOps;
 
@@ -55,6 +56,14 @@ roc_ops: ?RocOps = null,
 /// calls them must be bound before it evaluates anything.
 out_of_memory: ?interpreter.OutOfMemoryUnwind = null,
 expect_message: ?[]u8 = null,
+/// The largest allocation request Roc code is granted: everything the
+/// allocator can satisfy, unless the host evaluates for a program of a
+/// narrower address space (`compile_time_host.maxAllocationBytes`).
+max_allocation_bytes: usize = std.math.maxInt(usize),
+/// Whether an evaluation since the last `reset` asked for an allocation
+/// larger than a 32-bit `roc_alloc` can be asked for
+/// (`compile_time_host.exceedsU32AddressSpace`), granted or not.
+asked_past_u32_address_space: bool = false,
 
 pub fn init(allocator: std.mem.Allocator) CompilerHost {
     return .{
@@ -77,6 +86,7 @@ pub fn reset(self: *CompilerHost) void {
     self.clearDebugMessages();
     if (self.expect_message) |msg| self.allocator.free(msg);
     self.expect_message = null;
+    self.asked_past_u32_address_space = false;
 }
 
 /// Return the RocOps table used by compiler-owned evaluation.
@@ -144,6 +154,8 @@ fn allocateBlock(self: *CompilerHost, size: usize, alignment: usize) ?*Header {
         1, 2, 4, 8, 16 => {},
         else => base.invariant("{s}", .{"unsupported compiler RocOps allocation alignment"}),
     }
+    if (compile_time_host.exceedsU32AddressSpace(size)) self.asked_past_u32_address_space = true;
+    if (size > self.max_allocation_bytes) return null;
     const block = self.allocator.alignedAlloc(u8, Header.block_alignment, Header.payload_offset + size) catch return null;
     const header: *Header = @ptrCast(@alignCast(block.ptr));
     header.* = .{ .prev = null, .next = self.live_blocks, .size = size, .alignment = alignment };
@@ -197,6 +209,23 @@ fn rocCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
 /// Returns null on allocation failure (OOM).
 fn freeRemainingAllocations(self: *CompilerHost) void {
     while (self.live_blocks) |header| self.freeBlock(header);
+}
+
+test "a 64-bit program's evaluation asks the allocator for any block, and a 32-bit one's refuses what a 32-bit roc_alloc cannot be asked for" {
+    if (@sizeOf(usize) < 8) return error.SkipZigTest;
+    const past_32_bits = @as(usize, std.math.maxInt(u32)) + 1;
+    inline for (.{ base.target.TargetUsize.u64, base.target.TargetUsize.u32 }) |address_space| {
+        var backing = compile_time_host.RefusingAllocator{ .child = std.testing.allocator, .limit = 1 << 20 };
+        var host = CompilerHost.init(backing.allocator());
+        defer host.deinit();
+        host.max_allocation_bytes = compile_time_host.maxAllocationBytes(address_space);
+
+        try std.testing.expectEqual(@as(?*Header, null), host.allocateBlock(past_32_bits, 8));
+        try std.testing.expectEqual(address_space == .u64, backing.refused);
+        // Granted or refused, the request is one only this address space's
+        // evaluation answers this way.
+        try std.testing.expect(host.asked_past_u32_address_space);
+    }
 }
 
 test "compiler host declarations are referenced" {

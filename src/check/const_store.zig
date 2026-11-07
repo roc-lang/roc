@@ -6,6 +6,7 @@ const can = @import("can");
 const collections = @import("collections");
 
 const checked_ids = @import("checked_ids.zig");
+const checked_type_ids = @import("checked_type_ids.zig");
 const names = @import("canonical_names.zig");
 const artifact_serialize = @import("artifact_serialize.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
@@ -96,8 +97,8 @@ pub const CaptureId = checked_ids.CaptureId;
 
 /// Primitive type stored at the ConstStore boundary. Aliased to the checked
 /// artifact's `CheckedPrimitive` so the two cannot drift; Zig permits the
-/// circular file import (`checked_artifact.zig` itself imports this file).
-pub const Primitive = @import("checked_artifact.zig").CheckedPrimitive;
+/// circular file import (`checked_module.zig` itself imports this file).
+pub const Primitive = @import("checked_module.zig").CheckedPrimitive;
 
 /// Checker-authored identities for the public iterator representation.
 pub const IteratorTopology = struct {
@@ -227,7 +228,7 @@ pub const ConstType = union(enum) {
 /// owns the root and the root's id within that module.
 pub const ConstRecursiveBinding = struct {
     module: names.CheckedModuleDigest,
-    root: checked_ids.ComptimeRootId,
+    root: checked_ids.ComptimeRootKey,
 };
 
 /// What a stored closure capture holds, recorded where the captured local was
@@ -283,6 +284,8 @@ pub const ConstFnCallableInstantiation = struct {
     /// Stable checked identity of `callable_ty`. The raw checked id remains
     /// replay payload and may differ between equivalent fresh instantiations.
     callable_key: names.CanonicalTypeKey,
+    /// A source type of `view`'s module (the solver variable checking
+    /// recorded for the edge), so a function of that module's sealed data.
     callable_ty: checked_ids.CheckedTypeId,
 };
 
@@ -373,6 +376,7 @@ pub const RecordedStructuralEdge = struct {
     /// modules are one specialization.
     view: names.CheckedModuleDigest,
     dispatcher_key: names.CanonicalTypeKey,
+    /// Source types of `view`'s module, so functions of its sealed data.
     dispatcher_ty: checked_ids.CheckedTypeId,
     callable_key: names.CanonicalTypeKey,
     callable_ty: checked_ids.CheckedTypeId,
@@ -393,6 +397,8 @@ pub const StoredCodecEdge = struct {
 /// module when the function is restored in another compilation.
 pub const ConstFnTargetEvidence = struct {
     view: names.CheckedModuleDigest,
+    /// Its `callable_ty` is the target definition's solver variable in
+    /// `view`'s module.
     method: static_dispatch.MethodTarget,
     /// Stable checked identity of `method.callable_ty`.
     method_callable_key: names.CanonicalTypeKey,
@@ -550,7 +556,8 @@ pub const ConstFnEvidenceFrame = struct {
 /// Function value stored by compile-time evaluation.
 pub const ConstFn = struct {
     fn_def: FnDef,
-    source_fn_ty: checked_ids.CheckedTypeId,
+    /// The key of the checked function type the value was specialized from.
+    /// A restoring compilation reads the type itself from `fn_def`.
     source_fn_key: names.TypeDigest,
     /// For a nested function, the function type of the template specialization
     /// that built it. A variable of that template can reach neither this
@@ -584,10 +591,10 @@ pub const FnDef = union(enum) {
         /// Set iff `site` is a DEFAULT-ROOT site: a lambda/closure inside a
         /// defaulted-field expression (design.md "Defaulted Fields"). The
         /// payload is the declaring module's 32-byte content identity;
-        /// `site` indexes THAT module's `nested_proc_sites` table, and the
-        /// site's owner there is `.default_root` (it belongs to no checked
-        /// procedure template). Null for template-owned sites, where `owner`
-        /// itself names the site's owning template.
+        /// `site` names an expression of THAT module, and the site's owner
+        /// is the default containing it (it belongs to no checked procedure
+        /// template). Null for template-owned sites, where `owner` itself
+        /// names the site's owning template.
         default_root: ?names.ModuleContentIdentity = null,
         context_fn_key: names.TypeDigest,
         local_proc_context_digest: ?names.TypeDigest = null,
@@ -682,10 +689,14 @@ const StoredValue = union(enum) {
     pending,
     zst,
     scalar: ConstScalar,
-    str: ConstStr,
+    /// A string, with the capacity it was evaluated with (`setCapacity`),
+    /// never less than its length.
+    str: struct { str: ConstStr, capacity: u64 },
     list: union(enum) {
-        nodes: ConstRange,
-        packed_bytes: ConstPackedList,
+        /// Items with the capacity the list was evaluated with, never less
+        /// than its length.
+        nodes: struct { items: ConstRange, capacity: u64 },
+        packed_bytes: struct { list: ConstPackedList, capacity: u64 },
         empty: u64,
     },
     box: ConstNodeId,
@@ -702,7 +713,6 @@ const StoredValue = union(enum) {
 /// POD form of `ConstFn`: captures slice → range into `capture_pool`.
 const StoredFn = struct {
     fn_def: FnDef,
-    source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     owner_fn_ty: ?ConstTypeId = null,
     captures: ConstRange = .{},
@@ -1173,6 +1183,10 @@ pub const ConstStore = struct {
     tag_name_pool: std.ArrayList(u8),
     /// Monomorphic type evidence for roots and function captures.
     type_store: ConstTypeStore,
+    /// The names `type_store`'s types use: labels, type names and module
+    /// identities, interned into this store's own table so a stored type
+    /// names nothing outside the store.
+    type_names: names.NameStore,
     /// Flat pool of function captures.
     capture_pool: std.ArrayList(ConstCapture),
     /// Flat evidence vectors referenced by stored functions.
@@ -1235,6 +1249,7 @@ pub const ConstStore = struct {
             .node_pool = .empty,
             .tag_name_pool = .empty,
             .type_store = ConstTypeStore.init(allocator),
+            .type_names = names.NameStore.init(allocator),
             .capture_pool = .empty,
             .evidence_pool = .empty,
             .evidence_target_pool = .empty,
@@ -1270,7 +1285,7 @@ pub const ConstStore = struct {
             .pending => constStoreInvariant("cannot fill a const node with a pending value"),
             .zst => .zst,
             .scalar => |s| .{ .scalar = s },
-            .str => |s| .{ .str = s },
+            .str => |s| .{ .str = .{ .str = s, .capacity = s.len } },
             .crash => |s| .{ .crash = s },
             .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
@@ -1278,8 +1293,8 @@ pub const ConstStore = struct {
             .fn_value => |f| .{ .fn_value = f },
             .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = try self.appendNodes(function.captures) } },
             .list => |list| .{ .list = switch (list) {
-                .nodes => |items| .{ .nodes = try self.appendNodes(items) },
-                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
+                .nodes => |items| .{ .nodes = .{ .items = try self.appendNodes(items), .capacity = items.len } },
+                .packed_bytes => |packed_list| .{ .packed_bytes = .{ .list = packed_list, .capacity = packed_list.len } },
                 .empty => |capacity| .{ .empty = capacity },
             } },
             .tuple => |items| .{ .tuple = try self.appendNodes(items) },
@@ -1289,6 +1304,46 @@ pub const ConstStore = struct {
                 const payloads_range = try self.appendNodes(tag.payloads);
                 break :blk .{ .tag = .{ .tag_name = name_range, .payloads = payloads_range } };
             },
+        };
+    }
+
+    /// Record that `id`, a filled list or string, was evaluated with room for
+    /// `capacity` items or bytes: more than it holds. Static data keeps a
+    /// value's items alone, so a read that builds the value fresh gives it
+    /// this capacity again (design.md "Fresh forms of static values").
+    pub fn setCapacity(self: *ConstStore, id: ConstNodeId, capacity: u64) void {
+        switch (self.values.items[@backingInt(id)]) {
+            .str => |*str| {
+                if (capacity <= str.str.len) constStoreInvariant("a string's recorded capacity did not exceed its length");
+                str.capacity = capacity;
+            },
+            .list => |*list| switch (list.*) {
+                .nodes => |*nodes| {
+                    if (capacity <= nodes.items.len) constStoreInvariant("a list's recorded capacity did not exceed its length");
+                    nodes.capacity = capacity;
+                },
+                .packed_bytes => |*packed_list| {
+                    if (capacity <= packed_list.list.len) constStoreInvariant("a list's recorded capacity did not exceed its length");
+                    packed_list.capacity = capacity;
+                },
+                .empty => constStoreInvariant("an empty list's capacity is part of its value"),
+            },
+            .pending, .zst, .scalar, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => constStoreInvariant("only a list or string has a capacity"),
+        }
+    }
+
+    /// The capacity `id`'s list or string was evaluated with, when it is
+    /// room beyond what the value holds; null for any other node, and for a
+    /// list or string that holds all it has room for.
+    pub fn spareCapacity(self: *const ConstStore, id: ConstNodeId) ?u64 {
+        return switch (self.values.items[@backingInt(id)]) {
+            .str => |str| if (str.capacity > str.str.len) str.capacity else null,
+            .list => |list| switch (list) {
+                .nodes => |nodes| if (nodes.capacity > nodes.items.len) nodes.capacity else null,
+                .packed_bytes => |packed_list| if (packed_list.capacity > packed_list.list.len) packed_list.capacity else null,
+                .empty => |capacity| if (capacity != 0) capacity else null,
+            },
+            .pending, .zst, .scalar, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value, .boxy_fn => null,
         };
     }
 
@@ -1302,6 +1357,7 @@ pub const ConstStore = struct {
     /// retains ownership of the input `captures` slice and frees it.
     pub fn appendFn(self: *ConstStore, fn_value: ConstFn) Allocator.Error!ConstFnId {
         try validateEvidenceFrames(self.allocator, fn_value);
+        assertEvidenceNamesSourceTypes(fn_value.evidence);
         const id: ConstFnId = @fromBackingInt(std.math.cast(u32, self.fns.items.len) orelse return error.OutOfMemory);
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
         const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence.nodes);
@@ -1313,7 +1369,6 @@ pub const ConstStore = struct {
         const evidence_frames = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidenceFrame, &self.evidence_frame_pool, self.allocator, fn_value.evidence_frames);
         try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,
-            .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .owner_fn_ty = fn_value.owner_fn_ty,
             .captures = captures_range,
@@ -1324,6 +1379,30 @@ pub const ConstStore = struct {
             .evidence_frame_head = fn_value.evidence_frame_head,
         });
         return id;
+    }
+
+    /// Every checked type a stored evidence vector names is a source type of
+    /// the module the entry names: a solver variable, a function of that
+    /// module's sealed data, never an entry of its synthesized-type store.
+    fn assertEvidenceNamesSourceTypes(evidence: ConstFnEvidenceVector) void {
+        if (!std.debug.runtime_safety) return;
+        for (evidence.targets) |target| {
+            if (checked_type_ids.isSynthesized(target.method.callable_ty)) constStoreInvariant("stored target evidence named a synthesized method callable type");
+            if (target.instantiation) |instantiation| {
+                if (checked_type_ids.isSynthesized(instantiation.callable_ty)) constStoreInvariant("stored target evidence named a synthesized instantiation");
+            }
+        }
+        for (evidence.structurals) |structural| {
+            const checked = structural.checked orelse continue;
+            switch (checked) {
+                .recorded => |recorded| {
+                    if (checked_type_ids.isSynthesized(recorded.dispatcher_ty) or checked_type_ids.isSynthesized(recorded.callable_ty)) {
+                        constStoreInvariant("stored structural evidence named a synthesized type");
+                    }
+                },
+                .codec => {},
+            }
+        }
     }
 
     fn validateEvidenceFrames(allocator: Allocator, fn_value: ConstFn) Allocator.Error!void {
@@ -1510,7 +1589,7 @@ pub const ConstStore = struct {
             .pending => .pending,
             .zst => .zst,
             .scalar => |s| .{ .scalar = s },
-            .str => |s| .{ .str = s },
+            .str => |s| .{ .str = s.str },
             .crash => |s| .{ .crash = s },
             .checked_error => |s| .{ .checked_error = s },
             .box => |n| .{ .box = n },
@@ -1518,8 +1597,8 @@ pub const ConstStore = struct {
             .fn_value => |f| .{ .fn_value = f },
             .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = self.nodeSlice(function.captures) } },
             .list => |list| .{ .list = switch (list) {
-                .nodes => |r| .{ .nodes = self.nodeSlice(r) },
-                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
+                .nodes => |nodes| .{ .nodes = self.nodeSlice(nodes.items) },
+                .packed_bytes => |packed_list| .{ .packed_bytes = packed_list.list },
                 .empty => |capacity| .{ .empty = capacity },
             } },
             .tuple => |r| .{ .tuple = self.nodeSlice(r) },
@@ -1535,7 +1614,6 @@ pub const ConstStore = struct {
         const stored = self.fns.items[@backingInt(id)];
         return .{
             .fn_def = stored.fn_def,
-            .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
             .owner_fn_ty = stored.owner_fn_ty,
             .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
@@ -1566,6 +1644,7 @@ pub const ConstStore = struct {
         node_pool: artifact_serialize.SerializedSlice(ConstNodeId) = .{},
         tag_name_pool: artifact_serialize.SerializedSlice(u8) = .{},
         type_store: ConstTypeStore.Serialized = .{},
+        type_names: names.NameStore.Serialized,
         capture_pool: artifact_serialize.SerializedSlice(ConstCapture) = .{},
         evidence_pool: artifact_serialize.SerializedSlice(ConstFnEvidence) = .{},
         evidence_target_pool: artifact_serialize.SerializedSlice(ConstFnTargetEvidence) = .{},
@@ -1575,8 +1654,9 @@ pub const ConstStore = struct {
         blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
 
         comptime {
-            // 11 value/function side lists + 7 nested type-store lists.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 18);
+            // 11 value/function side lists, 7 nested type-store lists and the
+            // type names' 24.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 42);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
@@ -1639,6 +1719,9 @@ pub const ConstStore = struct {
             const value = self.get(node);
             hasher.update(@tagName(std.meta.activeTag(value)));
             hasher.update(&[_]u8{0});
+            // An evaluated capacity is part of the value: a read that builds
+            // it fresh gives it that room again.
+            if (self.spareCapacity(node)) |capacity| hasher.update(std.mem.asBytes(&capacity));
             switch (value) {
                 .pending, .zst => {},
                 .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
@@ -1660,7 +1743,8 @@ pub const ConstStore = struct {
                         hasher.update(if (packed_list.element) |element| @tagName(element) else "product");
                         hashBytes(hasher, self.blobBytes(packed_list.bytes));
                     },
-                    .empty => |capacity| hasher.update(std.mem.asBytes(&capacity)),
+                    // Hashed with every evaluated capacity above.
+                    .empty => {},
                 },
                 inline .tuple, .record => |items| {
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
@@ -1726,6 +1810,7 @@ pub const ConstStore = struct {
 
     pub fn deinit(self: *ConstStore) void {
         self.type_store.deinit();
+        self.type_names.deinit();
         self.blob_index.deinit(self.allocator);
         if (!self.serialized) {
             self.values.deinit(self.allocator);
@@ -1966,7 +2051,6 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         // Distinct non-zero ids: this test asserts captures round-trip; the fn_def
         // fields just need to survive, not be specific values.
         .fn_def = .{ .local_template = .{ .proc_base = @fromBackingInt(@intCast(1)), .template = @fromBackingInt(@intCast(2)) } },
-        .source_fn_ty = @fromBackingInt(@intCast(3)),
         .source_fn_key = .{},
         .captures = caps,
         .evidence = .{ .nodes = &evidence, .targets = &evidence_targets, .structurals = &evidence_structurals },
@@ -2102,7 +2186,6 @@ test "ConstStore: exact function capture back-edge survives serialization" {
     };
     const fn_id = try store.appendFn(.{
         .fn_def = .{ .local_template = .{ .proc_base = @fromBackingInt(@intCast(1)), .template = @fromBackingInt(@intCast(2)) } },
-        .source_fn_ty = @fromBackingInt(@intCast(3)),
         .source_fn_key = .{},
         .captures = &captures,
         .evidence_frames = &evidence_frames,
@@ -2152,7 +2235,6 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
             };
             _ = try store.appendFn(.{
                 .fn_def = .{ .local_template = .{ .proc_base = @fromBackingInt(@intCast(1)), .template = @fromBackingInt(@intCast(2)) } },
-                .source_fn_ty = @fromBackingInt(@intCast(3)),
                 .source_fn_key = .{},
                 .captures = caps,
                 .evidence_frames = &evidence_frames,

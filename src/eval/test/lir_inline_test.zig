@@ -126,7 +126,7 @@ const MonotypeSource = struct {
     }
 };
 
-fn sharedPrePublishedBuiltin() TestError!helpers.PrePublishedBuiltin {
+fn sharedPreOpenedBuiltin() TestError!helpers.PreOpenedBuiltin {
     shared_test_builtins_mutex.lockUncancelable(std.testing.io);
     defer shared_test_builtins_mutex.unlock(std.testing.io);
 
@@ -137,7 +137,7 @@ fn sharedPrePublishedBuiltin() TestError!helpers.PrePublishedBuiltin {
     return .{
         .env = shared_test_builtins.?.builtin_module.env,
         .indices = shared_test_builtins.?.builtin_indices,
-        .artifact = &shared_test_builtins.?.checked_artifact,
+        .artifact = &shared_test_builtins.?.checked_module,
     };
 }
 
@@ -167,36 +167,36 @@ fn lowerModuleWithOptions(
     inline_mode: lir.CheckedPipeline.InlineMode,
     options: LowerModuleOptions,
 ) TestError!LoweredSource {
-    const resources = try helpers.parseProgram(allocator, .module, source, options.imports, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    const resources = try helpers.parseProgram(allocator, .module, source, options.imports, .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    const import_views = try allocator.alloc(check.Checked.ImportedModuleView, import_count);
     defer allocator.free(import_views);
 
     var view_index: usize = 0;
     if (resources.borrowed_builtin_artifact) |builtin_artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        import_views[view_index] = check.Checked.importedView(builtin_artifact);
         view_index += 1;
     }
     for (resources.import_artifacts) |*artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        import_views[view_index] = check.Checked.importedView(artifact);
         view_index += 1;
     }
 
     const main_def = resources.can.explicitRootDefByName("main") orelse return error.MissingRootProcedure;
-    const main_request = for (resources.checked_artifact.root_requests.requests) |request| {
+    const main_request = for ((try resources.checked_module.rootRequests()).requests) |request| {
         switch (request.source) {
             .def => |def| if (def == main_def) break request,
             .expr, .statement, .required_binding, .hoisted, .literal => {},
         }
     } else return error.MissingRootProcedure;
-    const published_roots = [_]check.CheckedArtifact.RootRequest{main_request};
+    const published_roots = [_]check.Checked.RootRequest{main_request};
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.Checked.loweringView(&resources.checked_module),
             .imports = import_views,
         },
         .{ .requests = &published_roots },
@@ -252,29 +252,29 @@ fn lowerMonotypeModuleWithOptions(
     source: []const u8,
     options: LowerMonotypeOptions,
 ) TestError!MonotypeSource {
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    const import_views = try allocator.alloc(check.Checked.ImportedModuleView, import_count);
     defer allocator.free(import_views);
 
     var view_index: usize = 0;
     if (resources.borrowed_builtin_artifact) |builtin_artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        import_views[view_index] = check.Checked.importedView(builtin_artifact);
         view_index += 1;
     }
     for (resources.import_artifacts) |*artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        import_views[view_index] = check.Checked.importedView(artifact);
         view_index += 1;
     }
 
-    var selected_test_roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    var selected_test_roots = std.ArrayList(check.Checked.RootRequest).empty;
     defer selected_test_roots.deinit(allocator);
     const root_requests = switch (options.root_selection) {
-        .all => resources.checked_artifact.root_requests.requests,
+        .all => (try resources.checked_module.rootRequests()).requests,
         .test_expects => blk: {
-            for (resources.checked_artifact.root_requests.requests) |request| {
+            for ((try resources.checked_module.rootRequests()).requests) |request| {
                 if (request.kind == .test_expect) try selected_test_roots.append(allocator, request);
             }
             break :blk selected_test_roots.items;
@@ -284,7 +284,7 @@ fn lowerMonotypeModuleWithOptions(
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.Checked.loweringView(&resources.checked_module),
             .imports = import_views,
         },
         .{
@@ -309,20 +309,20 @@ fn monotypeCountersForModuleWithImports(
     source: []const u8,
     imports: []const helpers.ModuleSource,
 ) TestError!postcheck.Monotype.Lower.SpecializationCounters {
-    var resources = try helpers.parseProgram(allocator, .module, source, imports, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, imports, .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    const import_views = try allocator.alloc(check.Checked.ImportedModuleView, import_count);
     defer allocator.free(import_views);
 
     var view_index: usize = 0;
     if (resources.borrowed_builtin_artifact) |builtin_artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        import_views[view_index] = check.Checked.importedView(builtin_artifact);
         view_index += 1;
     }
     for (resources.import_artifacts) |*artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        import_views[view_index] = check.Checked.importedView(artifact);
         view_index += 1;
     }
 
@@ -330,10 +330,10 @@ fn monotypeCountersForModuleWithImports(
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.Checked.loweringView(&resources.checked_module),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = (try resources.checked_module.rootRequests()).requests },
         .{ .specialization_counters = &counters },
     );
     defer mono.deinit();
@@ -583,7 +583,7 @@ fn boxyStructuralJsonParserCounts(allocator: Allocator, field_count: usize, pars
         source,
         &.{},
         .native,
-        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
+        .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
@@ -624,7 +624,7 @@ fn boxyStructuralJsonEncoderIncrefs(allocator: Allocator, field_count: usize) Te
         source_buf.items,
         &.{},
         .native,
-        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
+        .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
@@ -1035,30 +1035,30 @@ fn liftModuleAfterSpecConstr(
     allocator: Allocator,
     source: []const u8,
 ) TestError!LiftedSource {
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    const import_views = try allocator.alloc(check.Checked.ImportedModuleView, import_count);
     defer allocator.free(import_views);
 
     var view_index: usize = 0;
     if (resources.borrowed_builtin_artifact) |builtin_artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        import_views[view_index] = check.Checked.importedView(builtin_artifact);
         view_index += 1;
     }
     for (resources.import_artifacts) |*artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        import_views[view_index] = check.Checked.importedView(artifact);
         view_index += 1;
     }
 
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.Checked.loweringView(&resources.checked_module),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = (try resources.checked_module.rootRequests()).requests },
         .{},
     );
     var mono_owned = true;
@@ -1244,30 +1244,30 @@ fn expectInlinePlanDecision(
 /// Whether the inline plan inlines the function named `fn_name`.
 fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    const import_views = try allocator.alloc(check.Checked.ImportedModuleView, import_count);
     defer allocator.free(import_views);
 
     var view_index: usize = 0;
     if (resources.borrowed_builtin_artifact) |builtin_artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        import_views[view_index] = check.Checked.importedView(builtin_artifact);
         view_index += 1;
     }
     for (resources.import_artifacts) |*artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        import_views[view_index] = check.Checked.importedView(artifact);
         view_index += 1;
     }
 
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.Checked.loweringView(&resources.checked_module),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = (try resources.checked_module.rootRequests()).requests },
         .{ .proc_debug_names = true },
     );
     var mono_owned = true;
@@ -2142,7 +2142,7 @@ test "boxy root that parses JSON directly receives its codec evidence" {
     ,
         &.{},
         .native,
-        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
+        .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
@@ -2211,7 +2211,7 @@ test "issue 10979 shared JSON record continuations preserve field semantics" {
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -2303,7 +2303,7 @@ test "issue 10121 shared JSON helpers preserve optional nested round trips" {
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -2394,7 +2394,7 @@ test "adjacent expect roots remain isolated and ordered" {
     try std.testing.expect(roots[0].def != roots[1].def);
 
     var root_index: usize = 0;
-    for (lowered.resources.checked_artifact.root_requests.requests) |request| {
+    for ((try lowered.resources.checked_module.rootRequests()).requests) |request| {
         if (request.kind != .test_expect) continue;
         try std.testing.expectEqual(request.order, roots[root_index].request.order);
         root_index += 1;
@@ -3045,7 +3045,7 @@ test "issue 11144 nested lambdas in one large body specialize in linear work" {
             .module,
             source,
             &.{},
-            try sharedPrePublishedBuiltin(),
+            try sharedPreOpenedBuiltin(),
         );
         defer resources.deinit(allocator);
         const diagnostics = try resources.main.module_env.getDiagnostics();
@@ -3267,30 +3267,30 @@ test "differently ordered source record rows produce normalized monotype rows" {
         \\main = choose(Bool.True)
     ;
 
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    const import_views = try allocator.alloc(check.Checked.ImportedModuleView, import_count);
     defer allocator.free(import_views);
 
     var view_index: usize = 0;
     if (resources.borrowed_builtin_artifact) |builtin_artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        import_views[view_index] = check.Checked.importedView(builtin_artifact);
         view_index += 1;
     }
     for (resources.import_artifacts) |*artifact| {
-        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        import_views[view_index] = check.Checked.importedView(artifact);
         view_index += 1;
     }
 
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
-            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .root = try check.Checked.loweringView(&resources.checked_module),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = (try resources.checked_module.rootRequests()).requests },
         .{},
     );
     defer mono.deinit();
@@ -3960,7 +3960,7 @@ test "issue 11024 boxy materializes imported defaults for repeated empty constru
         source,
         &.{.{ .name = "Cfg", .source = cfg_module }},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .boxy,
     );
@@ -3997,7 +3997,7 @@ test "issue 11099 boxy dispatches an imported procedure stored in a record" {
         source,
         &.{.{ .name = "Tp", .source = tp_module }},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .boxy,
     );
@@ -4037,7 +4037,7 @@ test "issue 12609 boxy dispatches an imported inline lambda stored in a record" 
         source,
         &.{.{ .name = "Hooks", .source = hooks_module }},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .boxy,
     );
@@ -4074,7 +4074,7 @@ test "issue 12609 lss dispatches an imported inline lambda stored in a record" {
         source,
         &.{.{ .name = "Hooks", .source = hooks_module }},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -4118,7 +4118,7 @@ test "issue 12609 boxy runs imported stored inline lambdas at two types" {
         source,
         &.{.{ .name = "Hooks", .source = hooks_module }},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .boxy,
     );
@@ -4162,7 +4162,7 @@ test "issue 12609 lss runs imported stored inline lambdas at two types" {
         source,
         &.{.{ .name = "Hooks", .source = hooks_module }},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -4205,7 +4205,7 @@ test "issue 12609 boxy runs imported lambdas a stored conditional, match, or blo
         source,
         &.{.{ .name = "Hooks", .source = hooks_module }},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .boxy,
     );
@@ -4248,7 +4248,7 @@ test "issue 12609 lss runs imported lambdas a stored conditional, match, or bloc
         source,
         &.{.{ .name = "Hooks", .source = hooks_module }},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -4274,7 +4274,7 @@ test "issue 11170 boxy generic inspect preserves SIMD descriptor methods" {
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .boxy,
     );
@@ -6301,8 +6301,9 @@ fn directDispatchPlanIsParametric(
     method: []const u8,
 ) TestError!bool {
     var found: ?bool = null;
-    for (resources.checked_artifact.static_dispatch_plans.plans) |plan| {
-        if (!std.mem.eql(u8, resources.checked_artifact.canonical_names.methodNameText(plan.method), method)) continue;
+    for (0..(try resources.checked_module.checkedTables()).static_dispatch_plans.plans.len) |raw| {
+        const plan = try (try resources.checked_module.dispatch()).plan(@fromBackingInt(@intCast(raw)));
+        if (!std.mem.eql(u8, resources.checked_module.nameStore().methodNameText(plan.method), method)) continue;
         const parametric = switch (plan.resolution) {
             .direct_parametric => true,
             .direct_closed => false,
@@ -6342,7 +6343,7 @@ test "polarity: a method row tail is a closed direct plan only when no enclosing
     // self-dispatch shares its tail with the enclosing template's return row:
     // the surviving plan-side clone of that tail maps back to the template
     // root through the store's identity origins (which clone survives is
-    // pinned by the checked_artifact.zig unit test "direct dispatch
+    // pinned by the checked_module.zig unit test "direct dispatch
     // classification follows instantiation clones to the scheme that
     // quantifies them").
     const allocator = std.testing.allocator;
@@ -9237,7 +9238,6 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     } });
     const worker_fn_id = try mono.addFn(.{
         .fn_def = undefined,
-        .source_fn_ty = undefined,
         .source_fn_key = .{},
         .mono_fn_ty = worker_fn_ty,
     });
@@ -9351,7 +9351,7 @@ test "issue 10181 explicit Str interpolation suffix checks cleanly" {
         .module,
         source,
         &.{},
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
     );
     defer helpers.cleanupParseAndCanonical(allocator, resources);
@@ -9359,30 +9359,6 @@ test "issue 10181 explicit Str interpolation suffix checks cleanly" {
     try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
 }
 
-const dispatch_boundary_source =
-    \\Thing := [Val(Str)].{
-    \\    to_str : Thing -> Str
-    \\    to_str = |Thing.Val(s)| s
-    \\}
-    \\
-    \\main : Str
-    \\main = Thing.Val("hi").to_str()
-;
-
-test "dispatch evidence boundary validator accepts a published artifact" {
-    const allocator = std.testing.allocator;
-    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
-
-    try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
-}
-
-// Depth pin for published evidence paths. Each level of this tuple literal
-// holds its own numeral, so the function's scheme has one evidence param per
-// level with paths of every length up to the nesting depth. Paths share their
-// prefixes, so the published pool grows with the depth; flat per-param paths
-// would total the sum of all the depths, and a literal tens of thousands of
-// levels deep exhausted memory publishing its scheme.
 test "deeply nested tuple literal publishes evidence paths linear in its depth" {
     const allocator = std.testing.allocator;
     const depth = 512;
@@ -9394,15 +9370,20 @@ test "deeply nested tuple literal publishes evidence paths linear in its depth" 
     for (0..depth) |_| try source.appendSlice(allocator, ")");
     try source.appendSlice(allocator, "\n\nmain : Str\nmain = \"ok\"\n");
 
-    var resources = try helpers.parseProgram(allocator, .module, source.items, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
+    var resources = try helpers.parseProgram(allocator, .module, source.items, &.{}, .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    const templates = &resources.checked_artifact.checked_procedure_templates;
+    const templates = &(try resources.checked_module.checkedTables()).checked_procedure_templates;
+    const dispatch = try resources.checked_module.dispatch();
     var deepest_path: u32 = 0;
-    for (templates.evidence_params_pool) |param| deepest_path = @max(deepest_path, param.path.len);
+    var path_nodes: usize = 0;
+    for (0..templates.templates.items.len) |raw| {
+        const schema = try dispatch.templateSchema(@fromBackingInt(@intCast(raw)));
+        for (schema.params) |param| deepest_path = @max(deepest_path, param.path.len);
+        path_nodes += schema.path_nodes.len;
+    }
     try std.testing.expect(deepest_path > depth);
-    try std.testing.expect(templates.evidence_path_nodes.len < 4 * depth);
-    try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
+    try std.testing.expect(path_nodes < 4 * depth);
 }
 
 test "literal conversion ownership includes nested codec evidence" {
@@ -9436,21 +9417,20 @@ test "literal conversion ownership includes nested codec evidence" {
             .module,
             source,
             &.{},
-            .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
+            .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() },
         );
         defer helpers.cleanupParseAndCanonical(allocator, resources);
-        const artifact = &resources.checked_artifact;
+        const artifact = &resources.checked_module;
         try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
-        try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
         var dependent_conversions: usize = 0;
-        const bodies = artifact.bodies();
+        const bodies = try artifact.bodies();
         for (0..bodies.nodeCount()) |raw| {
             if (bodies.index().nodeKind(@intCast(raw)) != .expr) continue;
             const expr_id: check.CheckedBodies.ExprId = @fromBackingInt(@intCast(raw));
             const raw_expr = @backingInt(expr_id);
             const plan_id, const conversion_root = switch (bodies.exprData(expr_id)) {
-                .numeral => .{ bodies.numeralPlan(raw_expr) orelse continue, bodies.literalConversionRoot(raw_expr) },
-                .str => if (bodies.quoteIsCustom(raw_expr)) .{ bodies.quotePlan(raw_expr) orelse continue, bodies.literalConversionRoot(raw_expr) } else continue,
+                .numeral => .{ bodies.numeralPlan(raw_expr) orelse continue, try bodies.literalConversionRoot(raw_expr) },
+                .str => if (bodies.quoteIsCustom(raw_expr)) .{ bodies.quotePlan(raw_expr) orelse continue, try bodies.literalConversionRoot(raw_expr) } else continue,
                 .str_segment,
                 .bytes_literal,
                 .lookup_local,
@@ -9494,7 +9474,7 @@ test "literal conversion ownership includes nested codec evidence" {
                 .run_low_level,
                 => continue,
             };
-            const plan = artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
+            const plan = try (try artifact.dispatch()).plan(plan_id);
             try std.testing.expect(plan.resolution == .direct_parametric);
             try std.testing.expect(conversion_root == null);
             dependent_conversions += 1;
@@ -9529,7 +9509,7 @@ test "custom literal field default gets an ordinary conversion root" {
         .module,
         source,
         &.{},
-        .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() },
+        .{ .io = std.testing.io, .pre_opened_builtin = try sharedPreOpenedBuiltin() },
     );
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
@@ -9539,9 +9519,9 @@ test "custom literal field default gets an ordinary conversion root" {
     // (design.md "Defaulted Fields").
     var numeral_roots: usize = 0;
     var quote_roots: usize = 0;
-    const bodies = resources.checked_artifact.bodies();
+    const bodies = try resources.checked_module.bodies();
     for (bodies.defaultExprs()) |default_expr| {
-        const conversion = resources.checked_artifact.compile_time_roots.root(bodies.literalConversion(default_expr).conversion_root orelse
+        const conversion = try resources.checked_module.compileTimeRoot((try bodies.literalConversionRoot(default_expr)) orelse
             return error.TestUnexpectedResult);
         switch (conversion.kind) {
             .numeral_conversion => numeral_roots += 1,
@@ -9552,312 +9532,9 @@ test "custom literal field default gets an ordinary conversion root" {
     try std.testing.expectEqual(@as(usize, 1), numeral_roots);
     try std.testing.expectEqual(@as(usize, 1), quote_roots);
 
-    // A root link cannot outlive its proof of independence. Pin validation
-    // here as well as checking that both kinds of closed literal retain roots.
-    const artifact = &resources.checked_artifact;
-    try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
-    const plan_id = bodies.literalConversion(bodies.defaultExprs()[0]).plan orelse return error.TestUnexpectedResult;
-    const plan = &artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
-    const saved = plan.resolution;
-    defer plan.resolution = saved;
-    plan.resolution = .{ .direct_parametric = saved.direct_closed };
-    const failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.literal_conversion_root_invalid, failure.kind);
-}
-
-test "dispatch evidence boundary validator rejects malformed specialization interface metadata" {
-    const allocator = std.testing.allocator;
-    const source =
-        \\mk = |f| {
-        \\    show = || f({}).map_err(|_| ShowFailed)
-        \\    show
-        \\}
-        \\
-        \\wrap = |f| mk(f)
-        \\
-        \\main : {} -> Try({}, [ShowFailed])
-        \\main = |_| {
-        \\    f : {} -> Try({}, [Empty])
-        \\    f = |_| Ok({})
-        \\    wrap(f)()
-        \\}
-    ;
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
-
-    const artifact = &resources.checked_artifact;
-    const templates = &artifact.checked_procedure_templates;
-    try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
-    try std.testing.expect(templates.dispatch_scopes.len > 0);
-    try std.testing.expect(templates.specialization_interface_relations.len > 0);
-
-    var template_index: ?usize = null;
-    for (templates.templates.items, 0..) |template, i| {
-        if (template.specialization_interface_relations.len > 0) {
-            template_index = i;
-            break;
-        }
-    }
-    const raw_template = template_index orelse return error.TestUnexpectedResult;
-    const saved_template_span = templates.templates.items[raw_template].specialization_interface_relations;
-    templates.templates.items[raw_template].specialization_interface_relations.start = @intCast(templates.specialization_interface_relations.len);
-    templates.templates.items[raw_template].specialization_interface_relations.len = 1;
-    var failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.template_specialization_relations_out_of_bounds, failure.kind);
-    templates.templates.items[raw_template].specialization_interface_relations = saved_template_span;
-
-    const saved_parent = templates.dispatch_scopes[0].parent;
-    templates.dispatch_scopes[0].parent = @fromBackingInt(@intCast(templates.dispatch_scopes.len));
-    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_parent_invalid, failure.kind);
-    templates.dispatch_scopes[0].parent = saved_parent;
-
-    const saved_scheme_root = templates.dispatch_scopes[0].scheme_root;
-    templates.dispatch_scopes[0].scheme_root = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items.len);
-    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_scheme_root_out_of_bounds, failure.kind);
-    templates.dispatch_scopes[0].scheme_root = saved_scheme_root;
-
-    const saved_scope = templates.specialization_interface_relations[0].scope;
-    templates.specialization_interface_relations[0].scope = .{ .generalized = @fromBackingInt(@intCast(templates.dispatch_scopes.len)) };
-    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_scope_out_of_bounds, failure.kind);
-    templates.specialization_interface_relations[0].scope = saved_scope;
-
-    const saved_relation_data = templates.specialization_interface_relations[0].data;
-    templates.specialization_interface_relations[0].data = .{ .type_equality = .{
-        .left = check.CheckedTypeIds.fromSynthesized(artifact.checked_types.payloads.items.len),
-        .right = templates.dispatch_scopes[0].scheme_root,
-    } };
-    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_type_out_of_bounds, failure.kind);
-    templates.specialization_interface_relations[0].data = saved_relation_data;
-
-    var call_index: ?usize = null;
-    var direct_call_index: ?usize = null;
-    var local_use_index: ?usize = null;
-    for (templates.specialization_interface_relations, 0..) |relation, i| switch (relation.data) {
-        .call => |call| {
-            if (call_index == null) call_index = i;
-            if (call.direct_target != null and direct_call_index == null) direct_call_index = i;
-        },
-        .local_proc_use => if (local_use_index == null) {
-            local_use_index = i;
-        },
-        .type_equality, .procedure => {},
-    };
-
-    const raw_call = call_index orelse return error.TestUnexpectedResult;
-    const saved_args = templates.specialization_interface_relations[raw_call].data.call.args;
-    templates.specialization_interface_relations[raw_call].data.call.args = .{
-        .start = @intCast(templates.specialization_interface_types.len),
-        .len = 1,
-    };
-    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_call_args_out_of_bounds, failure.kind);
-    templates.specialization_interface_relations[raw_call].data.call.args = saved_args;
-
-    const raw_direct_call = direct_call_index orelse return error.TestUnexpectedResult;
-    const saved_direct_target = templates.specialization_interface_relations[raw_direct_call].data.call.direct_target;
-    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = @fromBackingInt(@intCast(artifact.resolved_value_refs.records.len));
-    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_value_ref_out_of_bounds, failure.kind);
-    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
-
-    var non_procedure_ref: ?check.CheckedArtifact.ResolvedValueRefId = null;
-    for (artifact.resolved_value_refs.records, 0..) |record, i| {
-        const ref_tag = std.meta.activeTag(record.ref);
-        if (ref_tag != .local_proc and
-            ref_tag != .top_level_proc and
-            ref_tag != .imported_proc and
-            ref_tag != .hosted_proc and
-            ref_tag != .platform_required_proc and
-            ref_tag != .promoted_top_level_proc)
-        {
-            non_procedure_ref = @fromBackingInt(@intCast(i));
-            break;
-        }
-    }
-    const invalid_procedure_ref = non_procedure_ref orelse return error.TestUnexpectedResult;
-    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = invalid_procedure_ref;
-    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_direct_target_invalid, failure.kind);
-    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
-
-    const raw_local_use = local_use_index orelse return error.TestUnexpectedResult;
-    const saved_local_ref = templates.specialization_interface_relations[raw_local_use].data.local_proc_use;
-    templates.specialization_interface_relations[raw_local_use].data.local_proc_use = invalid_procedure_ref;
-    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
-    templates.specialization_interface_relations[raw_local_use].data.local_proc_use = saved_local_ref;
-
-    const local_record = artifact.resolved_value_refs.records[@backingInt(saved_local_ref)].ref.local_proc;
-    const local_scope = local_record.dispatch_scope orelse return error.TestUnexpectedResult;
-    const raw_local_scope = @backingInt(local_scope);
-    const saved_scope_expr = templates.dispatch_scopes[raw_local_scope].checked_expr;
-    const next_expr = (@backingInt(saved_scope_expr) + 1) % artifact.bodies().nodeCount();
-    templates.dispatch_scopes[raw_local_scope].checked_expr = @fromBackingInt(@intCast(next_expr));
-    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
-    templates.dispatch_scopes[raw_local_scope].checked_expr = saved_scope_expr;
-
-    var path_param_span: ?@TypeOf(templates.templates.items[0].evidence_params) = null;
-    for (templates.templates.items) |template| {
-        const params = templates.evidenceParams(&template);
-        for (params) |param| {
-            if (param.path.len > 0) {
-                path_param_span = template.evidence_params;
-                break;
-            }
-        }
-        if (path_param_span != null) break;
-    }
-    const saved_scope_params = templates.dispatch_scopes[raw_local_scope].evidence_params;
-    templates.dispatch_scopes[raw_local_scope].evidence_params = path_param_span orelse return error.TestUnexpectedResult;
-    failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
-    templates.dispatch_scopes[raw_local_scope].evidence_params = saved_scope_params;
-
-    try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
-}
-
-test "dispatch evidence boundary validator rejects non-normalized and malformed paths" {
-    const allocator = std.testing.allocator;
-    const source =
-        \\helper : a -> Str where [a.to_str : a -> Str]
-        \\helper = |_x| "ok"
-        \\
-        \\main : Str
-        \\main = helper("hi")
-    ;
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
-
-    const templates = &resources.checked_artifact.checked_procedure_templates;
-    const paths = templates.evidence_path_nodes;
-    try std.testing.expect(paths.len > 0);
-    const original_step = paths[0].step;
-
-    // Raw discriminant 8 is the retired checked-store `record_ext` step.
-    paths[0].step.kind = 8;
-    var failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_invalid_kind, failure.kind);
-
-    // A tag label must be immediately paired with a payload-index step.
-    paths[0].step.kind = 9;
-    failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_invalid_shape, failure.kind);
-
-    // A well-formed selector must still resolve over the checked callable.
-    paths[0].step.kind = 0;
-    paths[0].step.data = std.math.maxInt(u32);
-    failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
-
-    // A param's length must match the depth of the node it names.
-    paths[0].step = original_step;
-    try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
-    for (templates.evidence_params_pool) |*param| {
-        if (param.path.len != 0) param.path.len += 1;
-    }
-    failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_out_of_bounds, failure.kind);
-}
-
-test "dispatch evidence boundary validator reports a removed dispatch plan by node" {
-    const allocator = std.testing.allocator;
-    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
-
-    const table = &resources.checked_artifact.static_dispatch_plans;
-    const bodies = resources.checked_artifact.bodies();
-    const removed: usize = for (table.by_node, 0..) |entry, i| {
-        if (bodies.index().nodeKind(entry.key) != .expr) continue;
-        if (bodies.exprData(@fromBackingInt(@intCast(entry.key))) == .dispatch_call) break i;
-    } else return error.TestUnexpectedResult;
-    const removed_node = table.by_node[removed].key;
-
-    const original_by_node = table.by_node;
-    const without_removed = try allocator.alloc(check.StaticDispatchRegistry.PlanKV, original_by_node.len - 1);
-    defer allocator.free(without_removed);
-    @memcpy(without_removed[0..removed], original_by_node[0..removed]);
-    @memcpy(without_removed[removed..], original_by_node[removed + 1 ..]);
-    table.by_node = without_removed;
-    defer table.by_node = original_by_node;
-
-    const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.dispatch_expr_missing_plan, failure.kind);
-    try std.testing.expectEqual(removed_node, failure.node.?);
-}
-
-test "dispatch evidence boundary validator names the method of a dangling evidence node" {
-    const allocator = std.testing.allocator;
-    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
-
-    const table = &resources.checked_artifact.static_dispatch_plans;
-    var corrupted_method: ?[]const u8 = null;
-    for (table.plans) |*plan| {
-        switch (plan.resolution) {
-            .direct_closed => {
-                plan.resolution = .{ .direct_closed = .{ .evidence = @fromBackingInt(@intCast(table.evidence_nodes.len)) } };
-                corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
-                break;
-            },
-            .direct_parametric => {
-                plan.resolution = .{ .direct_parametric = .{ .evidence = @fromBackingInt(@intCast(table.evidence_nodes.len)) } };
-                corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
-                break;
-            },
-            .direct_pending,
-            .evidence_dependent,
-            .structural,
-            .checked_error,
-            .@"unreachable",
-            => {},
-        }
-    }
-    try std.testing.expect(corrupted_method != null);
-
-    const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.plan_evidence_node_out_of_bounds, failure.kind);
-    const named_method = resources.checked_artifact.canonical_names.methodNameText(failure.method orelse return error.TestUnexpectedResult);
-    try std.testing.expectEqualStrings(corrupted_method.?, named_method);
-}
-
-test "dispatch evidence boundary validator reports a site-evidence key outside the module's nodes" {
-    const allocator = std.testing.allocator;
-    // A where-constrained helper instantiated at a concrete type gives the
-    // instantiation site a site-evidence entry to corrupt.
-    const source =
-        \\Thing := [Val(Str)].{
-        \\    to_str : Thing -> Str
-        \\    to_str = |Thing.Val(s)| s
-        \\}
-        \\
-        \\helper : a -> Str where [a.to_str : a -> Str]
-        \\helper = |x| x.to_str()
-        \\
-        \\main : Str
-        \\main = helper(Thing.Val("hi"))
-    ;
-    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .io = std.testing.io, .pre_published_builtin = try sharedPrePublishedBuiltin() });
-    defer helpers.cleanupParseAndCanonical(allocator, resources);
-
-    const table = &resources.checked_artifact.static_dispatch_plans;
-    try std.testing.expect(table.site_evidence.len > 0);
-    table.site_evidence[0].key = @intCast(resources.checked_artifact.bodies().nodeCount());
-
-    const failure = (try resources.checked_artifact.validateDispatchEvidence()) orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.site_evidence_key_out_of_bounds, failure.kind);
-    try std.testing.expectEqual(@as(?u32, 0), failure.index);
+    // A root link needs its proof of independence: the conversion is closed.
+    const plan_id = (try bodies.literalConversion(bodies.defaultExprs()[0])).plan orelse return error.TestUnexpectedResult;
+    try std.testing.expect((try (try resources.checked_module.dispatch()).plan(plan_id)).resolution == .direct_closed);
 }
 
 test "compiler-generated dispatch classes lower via checked evidence" {
@@ -9897,7 +9574,7 @@ test "compiler-generated dispatch classes lower via checked evidence" {
         \\}
     ;
 
-    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(allocator, std.testing.io, .module, source, &.{}, .native, try sharedPrePublishedBuiltin(), null, .lss);
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(allocator, std.testing.io, .module, source, &.{}, .native, try sharedPreOpenedBuiltin(), null, .lss);
     defer compiled.deinit(allocator);
 
     // The program must check cleanly: a reported problem would resolve the
@@ -10011,7 +9688,7 @@ test "W6a open where-method widening and nested evidence lower through explicit 
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -10023,10 +9700,11 @@ test "W6a open where-method widening and nested evidence lower through explicit 
     // where-use complete map must preserve the enclosing slot's resolved
     // nested vector through checked-artifact construction and Monotype lowering.
     var found_requires_record_reuse = false;
-    for (compiled.resources.checked_artifact.static_dispatch_plans.plans) |plan| {
+    for (0..(try compiled.resources.checked_module.checkedTables()).static_dispatch_plans.plans.len) |raw| {
+        const plan = try (try compiled.resources.checked_module.dispatch()).plan(@fromBackingInt(@intCast(raw)));
         if (!std.mem.eql(
             u8,
-            compiled.resources.checked_artifact.canonical_names.methodNameText(plan.method),
+            compiled.resources.checked_module.nameStore().methodNameText(plan.method),
             "plus",
         )) continue;
         switch (plan.resolution) {
@@ -10150,7 +9828,7 @@ test "issue 11626: a shared callee's closed result row is specialized per caller
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -10187,7 +9865,7 @@ test "issue 12625: a construction forwarding a parameter crosses its composed re
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -10252,7 +9930,7 @@ test "issue 12625: a construction forwarding a closed parameter widens like its 
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -10286,7 +9964,7 @@ test "issue 11626: a closed-row callee gets one specialization per widened calle
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -10464,7 +10142,7 @@ test "W6b direct-result row join numbers the impl's result at the requested row 
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -10519,7 +10197,7 @@ test "W6b Try error-row join numbers the impl's error at the requested row at ru
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -10580,7 +10258,7 @@ test "W6b alias-wrapped closed Try error row joins the requested row at run time
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .lss,
     );
@@ -13228,7 +12906,7 @@ test "issue 11291 boxy imported nominal forwarding executes with exact backing d
         source,
         &.{.{ .name = "Container", .source = container_module }},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         .boxy,
     );
@@ -13592,7 +13270,7 @@ fn lowerRowCoercion(allocator: Allocator, source: []const u8, strategy: base.Spe
         .specialization_strategy = strategy,
     });
     errdefer lowered.deinit(allocator);
-    try std.testing.expect(lowered.resources.checked_artifact.moduleEnvConst().row_coerced_results.items.items.len != 0);
+    try std.testing.expect(lowered.resources.checked_module.moduleEnvConst().row_coerced_results.items.items.len != 0);
     return lowered;
 }
 
@@ -14116,7 +13794,7 @@ fn expectIssue12491BlockLocalClosureChain(strategy: base.SpecializationStrategy)
     ,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
         null,
         strategy,
     );
@@ -14142,10 +13820,10 @@ test "issue 12491 nested closure chain bound to a block local lowers under boxy"
 }
 
 /// The procedure template of `artifact` exported as `name`.
-fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) error{TestUnexpectedResult}!check.CheckedArtifact.CheckedProcedureTemplate {
-    for (artifact.checked_procedure_templates.templates.items) |template| {
-        const export_name = artifact.canonical_names.procBase(template.proc_base).export_name orelse continue;
-        if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) return template;
+fn templateNamed(artifact: *const check.Checked.CheckedModule, name: []const u8) error{ TestUnexpectedResult, OutOfMemory }!check.Checked.CheckedProcedureTemplate {
+    for ((try artifact.checkedTables()).checked_procedure_templates.templates.items) |template| {
+        const def_name = check.Checked.procBaseDefName(artifact.moduleEnvConst(), template.proc_base) orelse continue;
+        if (std.mem.eql(u8, def_name, name)) return template;
     }
     std.debug.print("no template named {s}\n", .{name});
     return error.TestUnexpectedResult;
@@ -14165,7 +13843,7 @@ fn procsNamed(allocator: Allocator, result: *const lir.Program.Result, name: []c
 
 test "sealed result rows: an annotated result row is a static worker and widening converts" {
     // `parse` and `read` quantify a bounded row variable each (design.md
-    // "Polarity"), which the checked artifact publishes as such and `.boxy`
+    // "Polarity"), which the checked module publishes as such and `.boxy`
     // seals (design.md "Sealed Result Rows"): neither worker takes a hidden
     // descriptor, and `load`, whose instantiations widen both results,
     // converts them through static conversion workers. `pass` quantifies a
@@ -14204,19 +13882,19 @@ test "sealed result rows: an annotated result row is a static worker and widenin
     ;
     var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = .boxy, .proc_debug_names = true });
     defer lowered.deinit(allocator);
-    const artifact = &lowered.resources.checked_artifact;
+    const artifact = &lowered.resources.checked_module;
     for ([_][]const u8{ "read", "parse" }) |name| {
         const template = try templateNamed(artifact, name);
-        const scheme_vars = artifact.checked_procedure_templates.scheme_vars_pool[template.scheme_vars.start..][0..template.scheme_vars.len];
+        const scheme_vars = try (try artifact.dispatch()).templateSchemeVars(template.template_id);
         try std.testing.expectEqual(@as(usize, 1), scheme_vars.len);
         const payload = artifact.checked_types.payload(scheme_vars[0]);
         try std.testing.expect(payload == .flex);
         try std.testing.expect(payload.flex.bounded_row_ext);
-        try std.testing.expectEqual(check.CheckedArtifact.RowDefault.empty_tag_union, payload.flex.row_default.?);
+        try std.testing.expectEqual(check.Checked.RowDefault.empty_tag_union, payload.flex.row_default.?);
     }
     {
         const template = try templateNamed(artifact, "pass");
-        const scheme_vars = artifact.checked_procedure_templates.scheme_vars_pool[template.scheme_vars.start..][0..template.scheme_vars.len];
+        const scheme_vars = try (try artifact.dispatch()).templateSchemeVars(template.template_id);
         try std.testing.expectEqual(@as(usize, 1), scheme_vars.len);
         try std.testing.expect(artifact.checked_types.payload(scheme_vars[0]) == .rigid);
     }

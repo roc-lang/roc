@@ -8,7 +8,7 @@ const Common = @import("../common.zig");
 const Mono = @import("../monotype/ast.zig");
 const MonoType = @import("../monotype/type.zig");
 const Ast = @import("ast.zig");
-const checked = @import("check").CheckedModule;
+const checked = @import("check").Checked;
 const BinderId = @import("check").CheckedBodies.BinderId;
 
 const Allocator = std.mem.Allocator;

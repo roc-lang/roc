@@ -220,7 +220,9 @@ pub fn Index(comptime Policy: type) type {
     };
 }
 
-fn wouldExceedMaxLoad(new_len: usize, table_size: usize) bool {
+/// Whether a table of `table_size` cells holding `new_len` entries is past
+/// its maximum load.
+pub fn wouldExceedMaxLoad(new_len: usize, table_size: usize) bool {
     return new_len * max_load_denominator >= table_size * max_load_numerator;
 }
 

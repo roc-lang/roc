@@ -80,7 +80,7 @@ test "concurrent cache stores of one key use separate staging files" {
     defer second.deinit();
 
     const key = @as([32]u8, @splat(0x51));
-    const data = "same checked artifact";
+    const data = "same checked module";
     var first_task = CacheStoreTask{ .manager = &first, .directory = tmp_path, .key = key, .data = data };
     var second_task = CacheStoreTask{ .manager = &second, .directory = tmp_path, .key = key, .data = data };
     const first_thread = try std.Thread.spawn(.{}, CacheStoreTask.run, .{&first_task});

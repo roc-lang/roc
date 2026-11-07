@@ -197,7 +197,7 @@ measurements. Implementers should treat this ledger as authoritative.
 **Failed verification—corrected in this document:**
 
 - **"The scheme representation already exists."** Only structurally.
-  `CheckedTypeScheme.gv_start`/`gv_len` (`src/check/checked_artifact.zig`)
+  `CheckedTypeScheme.gv_start`/`gv_len` (`src/check/checked_module.zig`)
   default to zero and no production publication site sets them; the only
   writer of nonzero ranges is a serialization test. `generalizedVars()`
   returns an empty slice for every real scheme, and nested let-generalized
@@ -406,7 +406,7 @@ downstream consumer deliberately.
 ### 6.1 `CheckedTypeStore`: frozen type payloads
 
 Checking finalization produces `CheckedModuleArtifact`
-(`src/check/checked_artifact.zig`): flat, relocatable plain-old-data
+(`src/check/checked_module.zig`): flat, relocatable plain-old-data
 (POD shapes comptime-asserted), cached and consumed by postcheck. Payloads
 are addressed by `CheckedTypeId = enum(u32)`. The payload inventory—listed
 exhaustively because translation totality depends on it:

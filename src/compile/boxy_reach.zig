@@ -12,7 +12,7 @@ const check = @import("check");
 const eval = @import("eval");
 const lir = @import("lir");
 const Allocator = std.mem.Allocator;
-const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
+const Artifact = check.Checked.CheckedModule;
 const TemplateKey = eval.checked_root_graph.TemplateKey;
 
 /// The modules of one link, each with the name its workers are digested
@@ -52,7 +52,7 @@ pub fn compute(gpa: Allocator, root: *const Artifact, modules: Modules) Allocato
     } else base.invariant("the root module is no module of its own link", .{});
     var starts = std.ArrayList(eval.checked_root_graph.Start).empty;
     defer starts.deinit(gpa);
-    for (root.root_requests.runtime_requests) |request| {
+    for ((try root.rootRequests()).runtime_requests) |request| {
         if (request.kind != .provided_export) continue;
         if (request.procedure_template) |template| {
             try starts.append(gpa, .{ .template = template });

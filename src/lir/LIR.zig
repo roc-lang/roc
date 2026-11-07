@@ -413,11 +413,11 @@ pub const ExpectSite = struct {
     region: base.Region,
 };
 
-pub const CheckedExhaustivenessSiteId = check.CheckedModule.CheckedExhaustivenessSiteId;
+pub const CheckedExhaustivenessSiteId = check.Checked.CheckedExhaustivenessSiteId;
 
 /// Dense id of one checked module inside a single lowering's module set.
 ///
-/// `check.CheckedModule.ModuleId` is a large structural key, and the
+/// `check.Checked.ModuleId` is a large structural key, and the
 /// module-local checked ids a post-check IR retains (compile-time roots,
 /// exhaustiveness sites) name nothing without their owner. Monotype lowering
 /// therefore publishes the lowering's checked modules once, as the
@@ -465,7 +465,7 @@ pub const LiteralRootId = enum(u32) { _ };
 /// The producer of one compile-time value: a checked compile-time root of its
 /// module, or a literal root of the lowered program.
 pub const ComptimeProducer = union(enum) {
-    checked: check.CheckedModule.ComptimeRootId,
+    checked: check.Checked.ComptimeRootKey,
     literal: LiteralRootId,
 
     pub fn eql(a: ComptimeProducer, b: ComptimeProducer) bool {
@@ -483,11 +483,16 @@ pub const ComptimeProducer = union(enum) {
 
     /// Feed this producer's tag and index to `hasher`.
     pub fn hash(self: ComptimeProducer, hasher: anytype) void {
-        const tag: u8, const index: u32 = switch (self) {
-            .checked => |root| .{ 0, @backingInt(root) },
-            .literal => |root| .{ 1, @backingInt(root) },
-        };
-        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
+        switch (self) {
+            .checked => |root| {
+                hasher.update(&[_]u8{0});
+                root.digestInto(hasher);
+            },
+            .literal => |root| {
+                const index: u32 = @backingInt(root);
+                hasher.update(&[_]u8{ 1, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
+            },
+        }
     }
 };
 
@@ -1167,8 +1172,9 @@ pub const StrMatchData = struct {
 /// A read of a static data value.
 pub const StaticDataLiteral = struct {
     id: StaticDataId,
-    /// Set only for a read of a compile-time list of copies; `none`
-    /// otherwise.
+    /// Set only for a read of a compile-time value with a fresh form: a list
+    /// of copies, or a value a list or string on whose spine was evaluated
+    /// with spare capacity; `none` otherwise.
     copies: StmtRowId(LiteralExtra) = .none,
 };
 
@@ -1213,16 +1219,16 @@ pub const TailCallLink = enum(u32) {
 pub const max_cf_stmt_count: u32 = std.math.maxInt(u32) - 1;
 
 /// The fields of a `LiteralValue.static_data` read set only for a
-/// compile-time list of copies of one value, stored out of line.
+/// compile-time value with a fresh form, stored out of line.
 pub const LiteralExtra = struct {
-    /// The argument-free procedure that builds the same list fresh. ARC
+    /// The argument-free procedure that builds the same value fresh. ARC
     /// chooses one form per read—the static datum when nothing the value
     /// reaches needs it unique, the fresh build when its birth lets ARC
     /// prove a mutating consumer's argument unique—and clears this, so no
     /// consumer after ARC sees it set.
     fresh_alternative: ?LirProcSpecId = null,
-    /// The list's item count, which the read's value has in either form ARC
-    /// chooses. Range proving binds it as the list's length.
+    /// A list of copies' item count, which the read's value has in either
+    /// form ARC chooses. Range proving binds it as the list's length.
     list_len: ?u64 = null,
 };
 

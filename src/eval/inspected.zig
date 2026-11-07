@@ -17,6 +17,7 @@ const reporting = @import("reporting");
 
 const builtin_static = can.BuiltinStatic;
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
+const BuiltinModules = @import("BuiltinModules.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const RuntimeHostEnv = @import("runtime_host.zig");
@@ -37,7 +38,7 @@ const LirProcSpecId = lir.LirProcSpecId;
 const LirImage = lir.LirImage;
 
 /// Failures while compiling or executing an inspected root.
-pub const Error = Allocator.Error || lir.CheckedPipeline.LowerResourceError || std.Thread.SpawnError || std.DynLib.Error || std.Io.File.OpenError || std.Io.File.Reader.Error || std.Io.File.Writer.Error || std.Io.File.StatError || std.Io.File.ReadPositionalError || std.Io.Writer.Error || check.CheckedArtifact.CompileTimeFinalizer.Error || error{
+pub const Error = Allocator.Error || lir.CheckedPipeline.LowerResourceError || std.Thread.SpawnError || std.DynLib.Error || std.Io.File.OpenError || std.Io.File.Reader.Error || std.Io.File.Writer.Error || std.Io.File.StatError || std.Io.File.ReadPositionalError || std.Io.Writer.Error || check.Checked.CompileTimeFinalizer.Error || error{
     InvalidUtf8,
     LlvmBackendUnavailable,
     DevBackendUnavailable,
@@ -229,7 +230,7 @@ fn importStatementIdx(env: *const ModuleEnv, module_name: []const u8) ?CIR.State
 
 const ModuleValidation = enum {
     roc_check,
-    checked_artifact,
+    checked_module,
 };
 
 /// Compiler stage outputs (parse, canonicalize, typecheck) for a single module.
@@ -264,14 +265,14 @@ pub const ProblemResources = struct {
     }
 };
 
-/// Reference to a pre-published Builtin module artifact. When passed into
+/// Reference to a pre-published Builtin module. When passed into
 /// `parseAndCanonicalize…WithBuiltin` / `compileInspected…WithBuiltin`, the
 /// callee will not re-publish the Builtin and will not deinit `artifact`—
 /// the caller retains ownership.
-pub const PrePublishedBuiltin = struct {
+pub const PreOpenedBuiltin = struct {
     env: *const ModuleEnv,
     indices: CIR.BuiltinIndices,
-    artifact: *check.CheckedArtifact.CheckedModuleArtifact,
+    artifact: *check.Checked.CheckedModule,
 };
 
 /// Fully parsed, canonicalized, and type-checked module ready for LIR lowering.
@@ -280,14 +281,14 @@ pub const ParsedResources = struct {
     parse_ast: *parse.AST,
     can: *Can,
     checker: *Check,
-    checked_artifact: check.CheckedArtifact.CheckedModuleArtifact,
-    import_artifacts: []check.CheckedArtifact.CheckedModuleArtifact,
+    checked_module: check.Checked.CheckedModule,
+    import_artifacts: []check.Checked.CheckedModule,
     /// Locally-loaded Builtin; null when a pre-published Builtin was supplied
     /// and ownership stays with the caller.
     builtin_module: ?builtin_static.BuiltinModuleView,
-    /// Borrowed Builtin artifact when the caller pre-published it. Used during
+    /// Borrowed Builtin module when the caller pre-published it. Used during
     /// lowering to build import views; never deinit'd here.
-    borrowed_builtin_artifact: ?*check.CheckedArtifact.CheckedModuleArtifact = null,
+    borrowed_builtin_artifact: ?*check.Checked.CheckedModule = null,
     builtin_indices: CIR.BuiltinIndices,
     imported_envs: []*const ModuleEnv,
     auto_imported_types: *std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType),
@@ -302,7 +303,7 @@ pub const ParsedResources = struct {
         self.checker.deinit();
         self.can.deinit();
         self.parse_ast.deinit();
-        self.checked_artifact.deinit(allocator);
+        self.checked_module.deinit(allocator);
         for (self.import_artifacts) |*artifact| artifact.deinit(allocator);
         allocator.free(self.import_artifacts);
         allocator.free(self.imported_envs);
@@ -362,7 +363,7 @@ pub const LirImageProgram = struct {
     view: LirImage.ProgramView,
 
     /// First explicit LIR root for eval helpers. The root set was selected by
-    /// checked-artifact publication and lowering; runtime evaluators must not
+    /// checked-module publication and lowering; runtime evaluators must not
     /// rediscover roots from compiler data.
     pub fn mainProc(self: *const LirImageProgram) LirProcSpecId {
         if (self.view.root_procs.len == 0) {
@@ -647,8 +648,8 @@ pub const ParseOptions = struct {
     /// Waits on the published modules' key slots.
     io: std.Io,
     roots: ProgramRoots = .eval,
-    /// A Builtin artifact the caller already published and keeps owning.
-    pre_published_builtin: ?PrePublishedBuiltin = null,
+    /// A Builtin module the caller already published and keeps owning.
+    pre_opened_builtin: ?PreOpenedBuiltin = null,
     problem_reporting: ComptimeProblemReporting = .ignore_comptime_problems,
     ctfe_options: ?*const CompileTimeFinalization.Options = null,
     /// Filesystem access for `import "path" as x : Str`/`: List(U8)`
@@ -657,35 +658,35 @@ pub const ParseOptions = struct {
 };
 
 /// Same as `parseProgram` with published-roots-only selection, reusing a
-/// Builtin artifact the caller has already published.
+/// Builtin module the caller has already published.
 pub fn parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
     allocator: Allocator,
     io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
-    pre_published_builtin: PrePublishedBuiltin,
+    pre_opened_builtin: PreOpenedBuiltin,
     roc_ctx: ?CoreCtx,
 ) Error!ParsedResources {
     return parseProgram(allocator, source_kind, source, imports, .{
         .io = io,
         .roots = .published_only,
-        .pre_published_builtin = pre_published_builtin,
+        .pre_opened_builtin = pre_opened_builtin,
         .roc_ctx = roc_ctx,
     });
 }
 
 /// Parse and type-check a program, returning resources for problem reporting.
-/// With `pre_published_builtin`, the returned `ProblemResources` borrows the
+/// With `pre_opened_builtin`, the returned `ProblemResources` borrows the
 /// builtin env (its `builtin_module` is null) and never deinits it.
 pub fn parseAndCheckProgramForProblems(
     allocator: Allocator,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
-    pre_published_builtin: ?PrePublishedBuiltin,
+    pre_opened_builtin: ?PreOpenedBuiltin,
 ) Error!ProblemResources {
-    return checkProgram(allocator, source_kind, source, imports, problemRoots(source_kind), pre_published_builtin, null);
+    return checkProgram(allocator, source_kind, source, imports, problemRoots(source_kind), pre_opened_builtin, null);
 }
 
 /// A problem check gives an expression its runtime eval root.
@@ -704,15 +705,15 @@ fn checkProgram(
     source: []const u8,
     imports: []const ModuleSource,
     roots: ProgramRoots,
-    pre_published_builtin: ?PrePublishedBuiltin,
+    pre_opened_builtin: ?PreOpenedBuiltin,
     roc_ctx: ?CoreCtx,
 ) Error!ProblemResources {
-    const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
+    const builtin_indices: CIR.BuiltinIndices = if (pre_opened_builtin) |ppb|
         ppb.indices
     else
         compiled_builtins.builtinIndices(CIR);
 
-    var loaded_builtin: ?builtin_static.BuiltinModuleView = if (pre_published_builtin == null)
+    var loaded_builtin: ?builtin_static.BuiltinModuleView = if (pre_opened_builtin == null)
         try builtin_static.moduleView(
             allocator,
             compiled_builtins.builtin_bin[0..],
@@ -723,7 +724,7 @@ fn checkProgram(
         null;
     errdefer if (loaded_builtin) |*lm| lm.deinit();
 
-    const builtin_env: *const ModuleEnv = if (pre_published_builtin) |ppb|
+    const builtin_env: *const ModuleEnv = if (pre_opened_builtin) |ppb|
         ppb.env
     else
         loaded_builtin.?.env;
@@ -746,7 +747,7 @@ fn checkProgram(
             import_module.source,
             false,
             true,
-            .checked_artifact,
+            .checked_module,
             &.{},
             builtin_env,
             builtin_indices,
@@ -782,7 +783,7 @@ fn checkProgram(
         source,
         roots.inspectWrap(),
         false,
-        .checked_artifact,
+        .checked_module,
         executable_roots,
         builtin_env,
         builtin_indices,
@@ -854,7 +855,7 @@ pub fn compileProgram(
 }
 
 /// Compile one explicit evaluation root, reusing a pre-published Builtin
-/// artifact owned by the caller instead of loading it from the embedded
+/// module owned by the caller instead of loading it from the embedded
 /// builtin blob on every call.
 pub fn compileProgramForTargetWithBuiltin(
     allocator: Allocator,
@@ -863,11 +864,11 @@ pub fn compileProgramForTargetWithBuiltin(
     source: []const u8,
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
-    pre_published_builtin: PrePublishedBuiltin,
+    pre_opened_builtin: PreOpenedBuiltin,
 ) Error!CompiledTargetProgram {
     return compileForTarget(allocator, io, source_kind, source, imports, target_usize, .{
         .io = io,
-        .pre_published_builtin = pre_published_builtin,
+        .pre_opened_builtin = pre_opened_builtin,
     }, .lss);
 }
 
@@ -883,7 +884,12 @@ pub fn compileForTarget(
     parse_options: ParseOptions,
     specialization_strategy: base.SpecializationStrategy,
 ) Error!CompiledTargetProgram {
-    var resources = try parseProgram(allocator, source_kind, source, imports, parse_options);
+    // Evaluation runs in the address space of the program it is lowered for.
+    std.debug.assert(parse_options.ctfe_options == null);
+    const target_ctfe_options: CompileTimeFinalization.Options = .{ .address_space = target_usize };
+    var target_parse_options = parse_options;
+    target_parse_options.ctfe_options = &target_ctfe_options;
+    var resources = try parseProgram(allocator, source_kind, source, imports, target_parse_options);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
     // If checking rejected the explicit evaluation root, publication leaves
@@ -913,8 +919,8 @@ pub const WasmLowering = enum { lower, skip };
 
 /// Options for `compileInspectedProgramWithOptions`.
 pub const InspectedCompileOptions = struct {
-    /// A Builtin artifact the caller already published and keeps owning.
-    pre_published_builtin: ?PrePublishedBuiltin = null,
+    /// A Builtin module the caller already published and keeps owning.
+    pre_opened_builtin: ?PreOpenedBuiltin = null,
     /// Filesystem access for file imports; the REPL passes its real `CoreCtx`.
     roc_ctx: ?CoreCtx = null,
     specialization_strategy: base.SpecializationStrategy = .lss,
@@ -933,7 +939,7 @@ pub fn compileInspectedProgram(
 }
 
 /// Same as `compileInspectedProgram` but reuses a pre-published Builtin
-/// artifact owned by the caller. `roc_ctx` supplies filesystem access for file
+/// module owned by the caller. `roc_ctx` supplies filesystem access for file
 /// imports (the REPL passes its real `CoreCtx`); pass `null` otherwise.
 pub fn compileInspectedProgramWithBuiltin(
     allocator: Allocator,
@@ -941,11 +947,11 @@ pub fn compileInspectedProgramWithBuiltin(
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
-    pre_published_builtin: ?PrePublishedBuiltin,
+    pre_opened_builtin: ?PreOpenedBuiltin,
     roc_ctx: ?CoreCtx,
 ) Error!CompiledProgram {
     return compileInspectedProgramWithOptions(allocator, io, source_kind, source, imports, .{
-        .pre_published_builtin = pre_published_builtin,
+        .pre_opened_builtin = pre_opened_builtin,
         .roc_ctx = roc_ctx,
     });
 }
@@ -960,11 +966,20 @@ pub fn compileInspectedProgramWithOptions(
     imports: []const ModuleSource,
     options: InspectedCompileOptions,
 ) Error!CompiledProgram {
+    // One evaluation serves the native program and, unless skipped, the
+    // wasm32 one, so it runs in the narrower address space of the two.
+    const ctfe_options: CompileTimeFinalization.Options = .{
+        .address_space = switch (options.wasm) {
+            .lower => .u32,
+            .skip => .u64,
+        },
+    };
     const resources = try parseProgram(allocator, source_kind, source, imports, .{
         .io = io,
         .roots = .inspected,
-        .pre_published_builtin = options.pre_published_builtin,
+        .pre_opened_builtin = options.pre_opened_builtin,
         .roc_ctx = options.roc_ctx,
+        .ctfe_options = &ctfe_options,
     });
     return lowerInspected(allocator, io, resources, options.specialization_strategy, options.wasm);
 }
@@ -981,20 +996,20 @@ pub fn parseAndCanonicalizeInspectedProgram(
 }
 
 /// Same as `parseAndCanonicalizeInspectedProgram` but reuses a pre-published
-/// Builtin artifact owned by the caller.
+/// Builtin module owned by the caller.
 pub fn parseAndCanonicalizeInspectedProgramWithBuiltin(
     allocator: Allocator,
     io: std.Io,
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
-    pre_published_builtin: ?PrePublishedBuiltin,
+    pre_opened_builtin: ?PreOpenedBuiltin,
     roc_ctx: ?CoreCtx,
 ) Error!ParsedResources {
     return parseProgram(allocator, source_kind, source, imports, .{
         .io = io,
         .roots = .inspected,
-        .pre_published_builtin = pre_published_builtin,
+        .pre_opened_builtin = pre_opened_builtin,
         .roc_ctx = roc_ctx,
     });
 }
@@ -1059,7 +1074,7 @@ pub fn compileInspectedProgramForTarget(
 }
 
 /// Same as `compileInspectedProgramForTarget` but reuses a pre-published
-/// Builtin artifact owned by the caller. `roc_ctx` supplies filesystem access
+/// Builtin module owned by the caller. `roc_ctx` supplies filesystem access
 /// for file imports (the REPL passes its real `CoreCtx`); pass `null` otherwise.
 pub fn compileInspectedProgramForTargetWithBuiltin(
     allocator: Allocator,
@@ -1068,14 +1083,14 @@ pub fn compileInspectedProgramForTargetWithBuiltin(
     source: []const u8,
     imports: []const ModuleSource,
     target_usize: base.target.TargetUsize,
-    pre_published_builtin: ?PrePublishedBuiltin,
+    pre_opened_builtin: ?PreOpenedBuiltin,
     roc_ctx: ?CoreCtx,
     specialization_strategy: base.SpecializationStrategy,
 ) Error!CompiledTargetProgram {
     return compileForTarget(allocator, io, source_kind, source, imports, target_usize, .{
         .io = io,
         .roots = .inspected,
-        .pre_published_builtin = pre_published_builtin,
+        .pre_opened_builtin = pre_opened_builtin,
         .roc_ctx = roc_ctx,
     }, specialization_strategy);
 }
@@ -1101,12 +1116,12 @@ pub fn publishProgramForComptimeProblems(
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
-    pre_published_builtin: ?PrePublishedBuiltin,
+    pre_opened_builtin: ?PreOpenedBuiltin,
 ) Error!ComptimePublishOutcome {
     const resources = try parseProgram(allocator, source_kind, source, imports, .{
         .io = io,
         .roots = .published_only,
-        .pre_published_builtin = pre_published_builtin,
+        .pre_opened_builtin = pre_opened_builtin,
         .problem_reporting = .report_comptime_problems,
     });
     defer cleanupParseAndCanonical(allocator, resources);
@@ -1144,20 +1159,20 @@ pub fn devEvalTopLevelExpects(
     io: std.Io,
     source: []const u8,
     imports: []const ModuleSource,
-    pre_published_builtin: ?PrePublishedBuiltin,
+    pre_opened_builtin: ?PreOpenedBuiltin,
 ) Error!TopLevelExpectRun {
     const resources = try parseProgram(allocator, .module, source, imports, .{
         .io = io,
         .roots = .published_only,
-        .pre_published_builtin = pre_published_builtin,
+        .pre_opened_builtin = pre_opened_builtin,
     });
     defer cleanupParseAndCanonical(allocator, resources);
 
-    var requests = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    var requests = std.ArrayList(check.Checked.RootRequest).empty;
     defer requests.deinit(allocator);
     var test_plan = std.ArrayList(lir.CheckedPipeline.RootTestPlanMetadata).empty;
     defer test_plan.deinit(allocator);
-    for (resources.checked_artifact.root_requests.requests) |request| {
+    for ((try resources.checked_module.rootRequests()).requests) |request| {
         if (request.kind != .test_expect) continue;
         const index: u32 = @intCast(requests.items.len);
         try requests.append(allocator, request);
@@ -1173,7 +1188,7 @@ pub fn devEvalTopLevelExpects(
     const import_views = try parsedImportViews(allocator, &resources);
     defer allocator.free(import_views);
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+        .root = try check.Checked.loweringView(&resources.checked_module),
         .imports = import_views,
     };
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -1249,7 +1264,7 @@ pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
     source_kind: SourceKind,
     source: []const u8,
     imports: []const ModuleSource,
-    pre_published_builtin: PrePublishedBuiltin,
+    pre_opened_builtin: PreOpenedBuiltin,
     roc_ctx: ?CoreCtx,
     event_callback: ?CompileTimeFinalization.EventCallback,
 ) Error!ParsedResources {
@@ -1259,7 +1274,7 @@ pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
     return parseProgram(allocator, source_kind, source, imports, .{
         .io = io,
         .roots = .comptime_repl,
-        .pre_published_builtin = pre_published_builtin,
+        .pre_opened_builtin = pre_opened_builtin,
         .problem_reporting = .report_comptime_problems,
         .ctfe_options = &ctfe_options,
         .roc_ctx = roc_ctx,
@@ -1269,16 +1284,16 @@ pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
 /// Return the finalized string value of the explicitly published compile-time
 /// REPL root. The returned bytes borrow from `resources`.
 pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const u8 {
-    for (resources.checked_artifact.compile_time_roots.roots) |root| {
+    for ((try resources.checked_module.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind != .repl_expr) continue;
 
-        var node = switch (root.payload) {
+        var node = switch (resources.checked_module.evaluation.rootPayload(root.id)) {
             .const_node => |const_node| const_node,
             .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => return error.Internal,
         };
         while (true) {
-            switch (resources.checked_artifact.const_store.get(node)) {
-                .str => |str| return resources.checked_artifact.const_store.strBytes(str),
+            switch (resources.checked_module.evaluation.const_store.get(node)) {
+                .str => |str| return resources.checked_module.evaluation.const_store.strBytes(str),
                 .nominal => |nominal| node = nominal.backing,
                 .boxy_fn,
                 .pending,
@@ -1313,10 +1328,10 @@ pub fn parseProgram(
     imports: []const ModuleSource,
     options: ParseOptions,
 ) Error!ParsedResources {
-    const pre_published_builtin = options.pre_published_builtin;
-    var checked = try checkProgram(allocator, source_kind, source, imports, options.roots, pre_published_builtin, options.roc_ctx);
+    const pre_opened_builtin = options.pre_opened_builtin;
+    var checked = try checkProgram(allocator, source_kind, source, imports, options.roots, pre_opened_builtin, options.roc_ctx);
     // Tracks whether the loaded Builtin view's env-wrapper ownership has
-    // transferred to an import artifact (`publishImportArtifacts`). Once
+    // transferred to an import module (`openImportModules`). Once
     // transferred, the errdefer must not deinit the view.
     var builtin_module_owned_by_artifact = false;
     errdefer {
@@ -1324,11 +1339,11 @@ pub fn parseProgram(
         checked.deinit(allocator);
     }
     const main_checked = &checked.main;
-    const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
+    const builtin_indices: CIR.BuiltinIndices = if (pre_opened_builtin) |ppb|
         ppb.indices
     else
         compiled_builtins.builtinIndices(CIR);
-    const builtin_env: *const ModuleEnv = if (pre_published_builtin) |ppb|
+    const builtin_env: *const ModuleEnv = if (pre_opened_builtin) |ppb|
         ppb.env
     else
         checked.builtin_module.?.env;
@@ -1343,14 +1358,14 @@ pub fn parseProgram(
 
     var typed_cir_modules = try check.TypedCIR.Modules.init(allocator, source_modules);
     defer typed_cir_modules.deinit();
-    const import_artifacts = try publishImportArtifacts(
+    const import_artifacts = try openImportModules(
         allocator,
         options.io,
         &typed_cir_modules,
         if (checked.builtin_module) |*lm| lm else null,
         checked.extra_modules,
         &builtin_module_owned_by_artifact,
-        pre_published_builtin,
+        pre_opened_builtin,
         options.problem_reporting,
     );
     errdefer {
@@ -1358,13 +1373,13 @@ pub fn parseProgram(
         allocator.free(import_artifacts);
     }
 
-    const publish_imports = try publishImportKeysWithBuiltin(allocator, import_artifacts, pre_published_builtin);
+    const publish_imports = try publishImportKeysWithBuiltin(allocator, import_artifacts, pre_opened_builtin);
     defer allocator.free(publish_imports);
     const available_artifacts = try importedViewsFromPublishImports(allocator, publish_imports);
     defer allocator.free(available_artifacts);
 
-    var explicit_root_storage: [1]check.CheckedArtifact.ExplicitRootRequestInput = undefined;
-    var explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput = &.{};
+    var explicit_root_storage: [1]check.Checked.ExplicitRootRequestInput = undefined;
+    var explicit_roots: []const check.Checked.ExplicitRootRequestInput = &.{};
     switch (options.roots) {
         .eval, .inspected => {
             const root_name = evalRootName(source_kind, options.roots.inspectWrap());
@@ -1377,49 +1392,37 @@ pub fn parseProgram(
             };
             explicit_roots = explicit_root_storage[0..];
         },
-        .comptime_repl => {
-            const root_name = evalRootName(source_kind, false);
-            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse base.invariant("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
-            const root_def = main_checked.module_env.store.getDef(root_def_idx);
-            if (main_checked.module_env.store.getExpr(root_def.expr) != .e_runtime_error) {
-                const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse base.invariant("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
-                explicit_root_storage[0] = .{
-                    .kind = .repl_expr,
-                    .source = .{ .expr = body_expr },
-                    .abi = .compile_time,
-                    .exposure = .private,
-                };
-                explicit_roots = explicit_root_storage[0..];
-            }
-        },
-        .published_only => {},
+        // A compile-time REPL root is a candidate checking recorded
+        // (`ModuleEnv.requested_compile_time_roots`).
+        .comptime_repl, .published_only => {},
     }
 
-    var checked_artifact = try check.CheckedArtifact.publishFromTypedModule(
+    var inference_arena = base.SingleThreadArena.init(allocator);
+    defer inference_arena.deinit();
+    var checked_module = try check.Checked.openCheckedModule(allocator, .{
+        .module_idx = 0,
+        .module_env_storage = .{ .checked_source = main_checked.module_env },
+        .io = options.io,
+        .imports = publish_imports,
+        .available_artifacts = available_artifacts,
+        .explicit_roots = explicit_roots,
+        .outputs = .{ .checked = try check.InferenceOutput.fromChecker(inference_arena.allocator(), main_checked.checker, null) },
+    });
+    errdefer checked_module.deinit(allocator);
+    try check.Checked.evaluateOpenedModule(
         allocator,
-        &typed_cir_modules,
-        0,
-        .{
-            .module_env_storage = .{ .checked_source = main_checked.module_env },
-            .io = options.io,
-            .imports = publish_imports,
-            .available_artifacts = available_artifacts,
-            .explicit_roots = explicit_roots,
-            .hoisted_roots = switch (options.roots) {
-                .eval, .inspected, .comptime_repl => .top_level,
-                .published_only => .selected,
-            },
-            .compile_time_finalizer = if (options.ctfe_options) |ctfe_options|
-                CompileTimeFinalization.finalizerWithOptions(ctfe_options)
-            else
-                CompileTimeFinalization.finalizer(),
-            .problem_store = switch (options.problem_reporting) {
-                .ignore_comptime_problems => null,
-                .report_comptime_problems => &main_checked.checker.problems,
-            },
+        &checked_module,
+        if (options.ctfe_options) |ctfe_options|
+            CompileTimeFinalization.finalizerWithOptions(ctfe_options)
+        else
+            CompileTimeFinalization.finalizer(),
+        publish_imports,
+        available_artifacts,
+        switch (options.problem_reporting) {
+            .ignore_comptime_problems => null,
+            .report_comptime_problems => &main_checked.checker.problems,
         },
     );
-    errdefer checked_artifact.deinit(allocator);
     main_checked.published_owns_module_env = true;
     main_checked.owned_source = null;
 
@@ -1428,10 +1431,10 @@ pub fn parseProgram(
         .parse_ast = main_checked.parse_ast,
         .can = main_checked.can,
         .checker = main_checked.checker,
-        .checked_artifact = checked_artifact,
+        .checked_module = checked_module,
         .import_artifacts = import_artifacts,
         .builtin_module = checked.builtin_module,
-        .borrowed_builtin_artifact = if (pre_published_builtin) |ppb| ppb.artifact else null,
+        .borrowed_builtin_artifact = if (pre_opened_builtin) |ppb| ppb.artifact else null,
         .builtin_indices = builtin_indices,
         .imported_envs = main_checked.imported_envs,
         .auto_imported_types = main_checked.auto_imported_types,
@@ -1523,7 +1526,7 @@ pub fn parseCheckModule(
     try czer.canonicalizeFile();
     switch (validation) {
         .roc_check => try czer.validateForChecking(),
-        .checked_artifact => try czer.validateForExplicitRoots(),
+        .checked_module => try czer.validateForExplicitRoots(),
     }
     if (hosted_transform) {
         try can.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
@@ -1617,21 +1620,21 @@ fn lowerParsedProgramToLirWithOptions(
 ) Error!LoweredProgram {
     const import_views = try parsedImportViews(allocator, resources);
     defer allocator.free(import_views);
-    return lowerCheckedRootWithViews(allocator, io, &resources.checked_artifact, import_views, target_usize, options);
+    return lowerCheckedRootWithViews(allocator, io, &resources.checked_module, import_views, target_usize, options);
 }
 
 /// Views of every module a parsed program imports, the borrowed Builtin first.
 fn parsedImportViews(
     allocator: Allocator,
     resources: *const ParsedResources,
-) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
+) Allocator.Error![]check.Checked.ImportedModuleView {
     const borrowed_count: usize = if (resources.borrowed_builtin_artifact == null) 0 else 1;
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, resources.import_artifacts.len + borrowed_count);
+    const import_views = try allocator.alloc(check.Checked.ImportedModuleView, resources.import_artifacts.len + borrowed_count);
     if (resources.borrowed_builtin_artifact) |borrowed| {
-        import_views[0] = check.CheckedArtifact.importedView(borrowed);
+        import_views[0] = check.Checked.importedView(borrowed);
     }
     for (resources.import_artifacts, 0..) |*module, i| {
-        import_views[i + borrowed_count] = check.CheckedArtifact.importedView(module);
+        import_views[i + borrowed_count] = check.Checked.importedView(module);
     }
     return import_views;
 }
@@ -1652,15 +1655,15 @@ fn lowerToLirTarget(target_usize: base.target.TargetUsize, options: LowerToLirOp
 pub fn lowerCheckedModuleSetToLir(
     allocator: Allocator,
     io: std.Io,
-    root_module: *check.CheckedArtifact.CheckedModuleArtifact,
-    import_modules: []check.CheckedArtifact.CheckedModuleArtifact,
+    root_module: *check.Checked.CheckedModule,
+    import_modules: []check.Checked.CheckedModule,
     target_usize: base.target.TargetUsize,
     options: LowerToLirOptions,
 ) Error!LoweredProgram {
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_modules.len);
+    const import_views = try allocator.alloc(check.Checked.ImportedModuleView, import_modules.len);
     defer allocator.free(import_views);
     for (import_modules, 0..) |*module, i| {
-        import_views[i] = check.CheckedArtifact.importedView(module);
+        import_views[i] = check.Checked.importedView(module);
     }
     return lowerCheckedRootWithViews(allocator, io, root_module, import_views, target_usize, options);
 }
@@ -1668,8 +1671,8 @@ pub fn lowerCheckedModuleSetToLir(
 fn lowerCheckedRootWithViews(
     allocator: Allocator,
     io: std.Io,
-    root_module: *check.CheckedArtifact.CheckedModuleArtifact,
-    import_views: []const check.CheckedArtifact.ImportedModuleView,
+    root_module: *check.Checked.CheckedModule,
+    import_views: []const check.Checked.ImportedModuleView,
     target_usize: base.target.TargetUsize,
     options: LowerToLirOptions,
 ) Error!LoweredProgram {
@@ -1681,34 +1684,34 @@ fn lowerCheckedRootWithViews(
     const image_header = try shm_allocator.create(LirImage.Header);
 
     // Publication evaluates under `.lss`, which leaves the literal argument
-    // roots to a `.boxy` compilation: one reopens the artifact to evaluate
+    // roots to a `.boxy` compilation: one reopens the module to evaluate
     // them, as the coordinator does (design.md "Literal Arguments").
     const reopened = options.specialization_strategy == .boxy and
-        root_module.evaluation_state == .finalized and
-        root_module.hasUnevaluatedRequests(.boxy);
+        root_module.evaluation.state == .finalized and
+        try root_module.hasUnevaluatedRequests(.boxy);
     if (reopened) try root_module.reopenForEvaluation();
 
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = check.CheckedArtifact.loweringView(root_module),
+        .root = try check.Checked.loweringView(root_module),
         .imports = import_views,
     };
-    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = root_module.root_requests.runtime_requests };
+    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = (try root_module.rootRequests()).runtime_requests };
     const target = lowerToLirTarget(target_usize, options);
     var lowered = switch (target.specialization_strategy) {
         .lss => try lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, roots, target),
         // A `.boxy` runtime program reads the values compile-time evaluation
         // converts its literals to, as a compilation's runtime consumer does.
         .boxy => blk: {
-            var session = try CompileTimeFinalization.finalizeProgram(allocator, &.{.{ .module = root_module, .problem_store = null }}, modules, roots, roots, target, .{ .strategy = .boxy });
+            var session = try CompileTimeFinalization.finalizeProgram(allocator, &.{.{ .module = root_module, .problem_store = null }}, modules, roots, roots, target, .{ .strategy = .boxy, .address_space = target_usize });
             defer session.deinit();
-            if (reopened) root_module.evaluation_state = .finalized;
+            if (reopened) root_module.evaluation.state = .finalized;
             break :blk try session.takeRuntime(allocator, roots, target);
         },
     };
     defer lowered.deinit();
 
     const image_data = try @import("static_data").buildStaticDataForWidth(allocator, .{
-        .root = check.CheckedArtifact.loweringView(root_module),
+        .root = try check.Checked.loweringView(root_module),
         .imports = import_views,
     }, &lowered, target_usize, .{});
     defer @import("static_data").deinitStaticData(allocator, image_data);
@@ -1881,59 +1884,52 @@ fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRo
     return .{ .lambda = lambda_idx, .body = lambda.body };
 }
 
-fn publishImportArtifacts(
+fn openImportModules(
     allocator: Allocator,
     io: std.Io,
     typed_cir_modules: *const check.TypedCIR.Modules,
     builtin_module: ?*builtin_static.BuiltinModuleView,
     extra_modules: []CheckedModule,
     builtin_module_owned_by_artifact: *bool,
-    pre_published_builtin: ?PrePublishedBuiltin,
+    pre_opened_builtin: ?PreOpenedBuiltin,
     problem_reporting: ComptimeProblemReporting,
-) Error![]check.CheckedArtifact.CheckedModuleArtifact {
+) Error![]check.Checked.CheckedModule {
     const extra_module_count = extra_modules.len;
-    var artifacts = std.ArrayList(check.CheckedArtifact.CheckedModuleArtifact).empty;
+    var artifacts = std.ArrayList(check.Checked.CheckedModule).empty;
     errdefer {
         for (artifacts.items) |*artifact| artifact.deinit(allocator);
         artifacts.deinit(allocator);
     }
     // Reserve the final size up front so `artifacts` never reallocates while we
-    // publish. The `view` we store for each artifact in `published_keys` aliases
-    // the artifact's in-list storage; if the backing array moved, those views
+    // publish. The `view` we store for each module in `published_keys` aliases
+    // the module's in-list storage; if the backing array moved, those views
     // would dangle and later modules would read another module's identity.
-    const builtin_in_artifacts: usize = if (pre_published_builtin == null) 1 else 0;
+    const builtin_in_artifacts: usize = if (pre_opened_builtin == null) 1 else 0;
     try artifacts.ensureTotalCapacityPrecise(allocator, extra_module_count + builtin_in_artifacts);
 
-    var published_keys = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
+    var published_keys = std.ArrayList(check.Checked.CheckedImport).empty;
     defer published_keys.deinit(allocator);
 
-    if (pre_published_builtin) |ppb| {
+    if (pre_opened_builtin) |ppb| {
         try published_keys.append(allocator, .{
             .module_idx = 1,
             .key = ppb.artifact.key,
-            .view = check.CheckedArtifact.importedView(ppb.artifact),
+            .view = check.Checked.importedView(ppb.artifact),
         });
     } else {
-        const builtin_artifact = try check.CheckedArtifact.publishFromTypedModule(
-            allocator,
-            typed_cir_modules,
-            1,
-            .{
-                .module_env_storage = .{ .static_builtin = builtin_module.?.env },
-                .hoisted_roots = .none,
-                .io = io,
-                .compile_time_finalizer = CompileTimeFinalization.finalizer(),
-            },
-        );
+        const builtin_artifact = BuiltinModules.bakedBuiltin(allocator, io, builtin_module.?.env) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.CorruptBuiltinArtifact, error.BuiltinArtifactVersionMismatch, error.CorruptArtifact => return error.CorruptEmbeddedBuiltins,
+        };
         builtin_module_owned_by_artifact.* = true;
         // Move into stable storage first, then build the view from that pointer.
-        // On failure the artifact is owned by `artifacts` and freed by errdefer.
+        // On failure the module is owned by `artifacts` and freed by errdefer.
         artifacts.appendAssumeCapacity(builtin_artifact);
         const builtin_ptr = &artifacts.items[artifacts.items.len - 1];
         try published_keys.append(allocator, .{
             .module_idx = 1,
             .key = builtin_ptr.key,
-            .view = check.CheckedArtifact.importedView(builtin_ptr),
+            .view = check.Checked.importedView(builtin_ptr),
         });
     }
 
@@ -1956,23 +1952,23 @@ fn publishImportArtifacts(
             const available_artifacts = try importedViewsFromPublishImports(allocator, published_keys.items);
             defer allocator.free(available_artifacts);
 
-            const artifact = try check.CheckedArtifact.publishFromTypedModule(
-                allocator,
-                typed_cir_modules,
-                module_idx,
-                .{
-                    .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
-                    .io = io,
-                    .imports = published_keys.items,
-                    .available_artifacts = available_artifacts,
-                    .hoisted_roots = .none,
-                    .compile_time_finalizer = CompileTimeFinalization.finalizer(),
-                    .problem_store = switch (problem_reporting) {
-                        .ignore_comptime_problems => null,
-                        .report_comptime_problems => &extra_modules[extra_i].checker.problems,
-                    },
-                },
-            );
+            var inference_arena = base.SingleThreadArena.init(allocator);
+            defer inference_arena.deinit();
+            var artifact = try check.Checked.openCheckedModule(allocator, .{
+                .module_idx = module_idx,
+                .module_env_storage = .{ .checked_source = extra_modules[extra_i].module_env },
+                .io = io,
+                .imports = published_keys.items,
+                .available_artifacts = available_artifacts,
+                .outputs = .{ .checked = try check.InferenceOutput.fromChecker(inference_arena.allocator(), extra_modules[extra_i].checker, null) },
+            });
+            {
+                errdefer artifact.deinitRetainingModuleEnv(allocator);
+                try check.Checked.evaluateOpenedModule(allocator, &artifact, CompileTimeFinalization.finalizer(), published_keys.items, available_artifacts, switch (problem_reporting) {
+                    .ignore_comptime_problems => null,
+                    .report_comptime_problems => &extra_modules[extra_i].checker.problems,
+                });
+            }
             extra_modules[extra_i].published_owns_module_env = true;
             extra_modules[extra_i].owned_source = null;
 
@@ -1983,7 +1979,7 @@ fn publishImportArtifacts(
             try published_keys.append(allocator, .{
                 .module_idx = module_idx,
                 .key = artifact_ptr.key,
-                .view = check.CheckedArtifact.importedView(artifact_ptr),
+                .view = check.Checked.importedView(artifact_ptr),
             });
 
             published_extra[extra_i] = true;
@@ -2001,9 +1997,9 @@ fn publishImportArtifacts(
 
 fn importedViewsFromPublishImports(
     allocator: Allocator,
-    imports: []const check.CheckedArtifact.PublishImportArtifact,
-) Error![]check.CheckedArtifact.ImportedModuleView {
-    const views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, imports.len);
+    imports: []const check.Checked.CheckedImport,
+) Error![]check.Checked.ImportedModuleView {
+    const views = try allocator.alloc(check.Checked.ImportedModuleView, imports.len);
     for (imports, 0..) |import, i| {
         views[i] = import.view;
     }
@@ -2012,7 +2008,7 @@ fn importedViewsFromPublishImports(
 
 fn directImportsArePublished(
     module: check.TypedCIR.Module,
-    published: []const check.CheckedArtifact.PublishImportArtifact,
+    published: []const check.Checked.CheckedImport,
 ) bool {
     const module_env = module.moduleEnvConst();
     for (module_env.imports.imports.items.items, 0..) |_, i| {
@@ -2032,23 +2028,27 @@ fn directImportsArePublished(
 
 fn publishImportKeysWithBuiltin(
     allocator: Allocator,
-    artifacts: []const check.CheckedArtifact.CheckedModuleArtifact,
-    pre_published_builtin: ?PrePublishedBuiltin,
-) Error![]check.CheckedArtifact.PublishImportArtifact {
-    const borrowed_builtin_count: usize = if (pre_published_builtin == null) 0 else 1;
-    const imports = try allocator.alloc(check.CheckedArtifact.PublishImportArtifact, artifacts.len + borrowed_builtin_count);
-    if (pre_published_builtin) |ppb| {
+    artifacts: []const check.Checked.CheckedModule,
+    pre_opened_builtin: ?PreOpenedBuiltin,
+) Error![]check.Checked.CheckedImport {
+    const borrowed_builtin_count: usize = if (pre_opened_builtin == null) 0 else 1;
+    const imports = try allocator.alloc(check.Checked.CheckedImport, artifacts.len + borrowed_builtin_count);
+    if (pre_opened_builtin) |ppb| {
         imports[0] = .{
             .module_idx = 1,
             .key = ppb.artifact.key,
-            .view = check.CheckedArtifact.importedView(ppb.artifact),
+            .view = check.Checked.importedView(ppb.artifact),
         };
     }
     for (artifacts, 0..) |artifact, i| {
+        // The loaded builtin module (`openImportModules` puts it first)
+        // is the baked one, whose own module index is the builtin compiler's;
+        // in this program Builtin is module 1, as a borrowed one is.
+        const loaded_builtin = pre_opened_builtin == null and i == 0;
         imports[i + borrowed_builtin_count] = .{
-            .module_idx = artifact.module_identity.module_idx,
+            .module_idx = if (loaded_builtin) 1 else artifact.module_identity.module_idx,
             .key = artifact.key,
-            .view = check.CheckedArtifact.importedView(&artifacts[i]),
+            .view = check.Checked.importedView(&artifacts[i]),
         };
     }
     return imports;

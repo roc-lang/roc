@@ -1,6 +1,7 @@
-//! Publication inputs produced by inference, before evaluation. These records
-//! accompany the solved source in the inference cache; a hit republishes them
-//! against current implementation artifacts.
+//! What inference outputs beside the solved source, before evaluation: the
+//! checking outcome with every byte needed to render it, and the foreign
+//! references the inference cache binds on a hit. It is part of the checked module and of both its
+//! inference and its checked cache entries.
 
 const std = @import("std");
 const collections = @import("collections");
@@ -19,7 +20,7 @@ pub const ForeignReference = extern struct { owner: u32, node: u32, slot: u32 };
 outcome: @import("checking_outcome.zig") = .{},
 foreign_references: []const ForeignReference = &.{},
 
-/// Independently relocatable inference publication metadata.
+/// Independently relocatable inference output.
 pub const Serialized = extern struct {
     outcome: @import("checking_outcome.zig").Serialized = .{},
     foreign_references: serde.SerializedSlice(ForeignReference) = .{},
@@ -31,21 +32,44 @@ pub const Serialized = extern struct {
 };
 
 /// The caller supplies an arena; the checking outcome borrows the checker until
-/// the capsule has been written.
-pub fn fromChecker(allocator: Allocator, checker: anytype, scope: *const dependencies.Scope) Allocator.Error!Self {
+/// the output has been copied or written. A checker that checked against no
+/// dependency scope binds no foreign reference.
+pub fn fromChecker(allocator: Allocator, checker: anytype, maybe_scope: ?*const dependencies.Scope) Allocator.Error!Self {
     var references = std.ArrayList(ForeignReference).empty;
-    for (scope.owners.items, 0..) |hash, owner| {
+    if (maybe_scope) |scope| for (scope.owners.items, 0..) |hash, owner| {
         if (owner == 0 or scope.ordinal(hash) != owner) continue;
         const env = scope.environments.get(hash) orelse
             base.invariant("foreign reference tables belong to explicit dependency environments", .{});
         for (env.checking_dependency.references.items.items, 0..) |node, slot| {
             try references.append(allocator, .{ .owner = @intCast(owner), .node = node, .slot = @intCast(slot) });
         }
-    }
+    };
     return .{
-        .outcome = try @import("checking_outcome.zig").capture(allocator, checker, scope),
+        .outcome = try @import("checking_outcome.zig").capture(allocator, checker, maybe_scope),
         .foreign_references = references.items,
     };
+}
+
+/// A copy of `self` whose every column `allocator` owns.
+pub fn dupe(self: Self, allocator: Allocator) Allocator.Error!Self {
+    var result: Self = .{};
+    errdefer result.deinit(allocator);
+    inline for (@typeInfo(@import("checking_outcome.zig")).@"struct".field_names) |name| {
+        const value = @field(self.outcome, name);
+        @field(result.outcome, name) = if (comptime @typeInfo(@TypeOf(value)) == .pointer) try allocator.dupe(@typeInfo(@TypeOf(value)).pointer.child, value) else value;
+    }
+    result.foreign_references = try allocator.dupe(ForeignReference, self.foreign_references);
+    return result;
+}
+
+/// Free a copy `dupe` made.
+pub fn deinit(self: *Self, allocator: Allocator) void {
+    inline for (@typeInfo(@import("checking_outcome.zig")).@"struct".field_names) |name| {
+        const value = @field(self.outcome, name);
+        if (comptime @typeInfo(@TypeOf(value)) == .pointer) allocator.free(value);
+    }
+    allocator.free(self.foreign_references);
+    self.* = .{};
 }
 
 /// Validate side-list ranges before installing untrusted cache metadata.

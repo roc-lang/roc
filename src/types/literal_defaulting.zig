@@ -2,7 +2,7 @@
 //!
 //! "Given this literal's (or literal group's) constraints, what type does it
 //! default to?" is answered here and nowhere else. The checker's defaulting
-//! passes, the canonical-type-key builder, the checked artifact's
+//! passes, the canonical-type-key builder, the checked module's
 //! default-phase scan, and monotype solving/lowering all call in here, so the
 //! decisions cannot drift apart between stages—there is no cross-module
 //! "must agree" contract left to maintain, because there is only one

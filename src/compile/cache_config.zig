@@ -280,7 +280,7 @@ pub const Constants = struct {
     ///      checked procedure names use the module's own name.
     /// 129: Interpolation plans validate segments before assembling values.
     /// 130: Recursive value bindings, erased row evidence, and row-default
-    /// constraint discharge are explicit in checked artifacts.
+    /// constraint discharge are explicit in checked modules.
     /// 131: If-expression metadata records source, and, or or origin instead
     ///      of a boolean warning flag.
     /// 132: Scheme-use records of replayed uses name their source's
@@ -349,7 +349,7 @@ pub const Constants = struct {
     /// 164: sorted array builders serialize zeroed entry padding and an
     ///      integer offset that the cache validator checks.
     /// 165: compile-time reads persist placement and semantic root identity.
-    pub const CACHE_VERSION = 171;
+    pub const CACHE_VERSION = 186;
 };
 
 /// Configuration for the Roc cache system.
@@ -436,14 +436,14 @@ pub const CacheConfig = struct {
     }
 
     /// Logical checked-artifact scope within this compiler compatibility identity.
-    pub fn getCheckedArtifactCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+    pub fn getCheckedModuleCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
     }
 
-    /// Inference capsules share the checked artifact compatibility domain.
+    /// Inference capsules share the checked module compatibility domain.
     pub fn getInferenceCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
@@ -508,7 +508,7 @@ pub const CacheStats = struct {
     canonicalized_bytes_read: u64 = 0,
     canonicalized_bytes_written: u64 = 0,
 
-    /// Inference capsules, separately from fully checked artifacts.
+    /// Inference capsules, separately from fully checked modules.
     inference_hits: u64 = 0,
     inference_misses: u64 = 0,
     inference_invalidations: u64 = 0,
