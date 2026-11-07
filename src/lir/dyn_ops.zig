@@ -157,6 +157,7 @@ pub const Operands = struct {
             .call_erased => |call| {
                 result.single(call.closure);
                 if (call.args) |args| result.single(args);
+                if (call.reuse_source) |source| result.single(source);
             },
             .closure => |closure| {
                 result.single(closure.capture);
@@ -309,4 +310,17 @@ test "every operand of a record construction is visited in order" {
     try Operands.of(op).appendAll(&store, std.testing.allocator, &out);
     try std.testing.expectEqualSlices(LocalId, &.{ desc, a, b }, out.items);
     try std.testing.expectEqual(Ownership.construct, ownership(op));
+}
+
+test "dynamic erased call inventory includes its ownership source" {
+    const closure: LocalId = @fromBackingInt(1);
+    const args: LocalId = @fromBackingInt(2);
+    const owner: LocalId = @fromBackingInt(3);
+    const operands = Operands.of(.{ .call_erased = .{
+        .closure = closure,
+        .args = args,
+        .reuse_closure = true,
+        .reuse_source = owner,
+    } });
+    try std.testing.expectEqualSlices(LocalId, &.{ closure, args, owner }, operands.singles[0..operands.single_count]);
 }

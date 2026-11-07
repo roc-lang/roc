@@ -8025,7 +8025,11 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = dyn_stmt.next, .stop = stop } });
         },
         .assign_ref => |assign| {
-            if (assign.op.kind == .local and try self.refLocalAliasesSource(assign.target, assign.op.source)) {
+            if (assign.op.kind == .field and self.localDyn(assign.op.source) != null) {
+                try self.generateDyn(assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .field_index = .{ .immediate = assign.op.index } } });
+            } else if (assign.op.kind == .local and self.localDyn(assign.target) != null) {
+                try self.generateDyn(assign.target, .{ .copy = .{ .src = assign.op.source, .desc = self.localDyn(assign.target).?.desc } });
+            } else if (assign.op.kind == .local and try self.refLocalAliasesSource(assign.target, assign.op.source)) {
                 // The target names the source's bytes: a pointer copy, not a
                 // copy of the aggregate.
                 try self.emitProcLocal(assign.op.source);
@@ -9084,8 +9088,14 @@ fn bindReturnedScalar(self: *Self, dst: ProcLocalId, vt: ValType) Allocator.Erro
 /// closed target loads the component's bytes.
 fn bindComponentAddress(self: *Self, dst: ProcLocalId) Allocator.Error!void {
     if (self.localDyn(dst)) |dyn| {
-        if (dyn.storage != .view) wasmInvariantFmt("WASM/codegen invariant violated: component address target {d} is not a view", .{@backingInt(dst)});
-        return self.emitBindingSet(try self.procLocalBinding(dst));
+        if (dyn.storage == .view) return self.emitBindingSet(try self.procLocalBinding(dst));
+        const address = try self.emitSetNewLocal(.i32);
+        const target = try self.dynTarget(dst);
+        try self.emitProcLocal(dyn.desc);
+        try self.emitTargetAddress(target);
+        try self.emitLocalGet(address);
+        try self.emitBoxyRuntimeCall(.copy);
+        return self.finishTarget(dst, target);
     }
     const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(dst));
     const size = try self.layoutStorageByteSize(layout_idx);

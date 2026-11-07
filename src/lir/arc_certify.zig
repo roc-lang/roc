@@ -2301,9 +2301,15 @@ const Certifier = struct {
         return value;
     }
 
+    fn isInlineProductRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
+        const value = self.store.getLocal(local);
+        return self.layouts.getLayout(value.layout_idx).tag == .struct_ or
+            (value.product != .none and value.dyn.?.storage != .view);
+    }
+
     fn isInlineAggregateRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
-        const layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
-        return layout.tag == .struct_ or layout.tag == .tag_union;
+        return self.isInlineProductRepresentation(local) or
+            self.layouts.getLayout(self.store.getLocal(local).layout_idx).tag == .tag_union;
     }
 
     fn isListRepresentation(self: *const Certifier, local: LIR.LocalId) bool {
@@ -2415,11 +2421,10 @@ const Certifier = struct {
         const info = self.values.items[value];
         if (info.payload_source == no_value or info.payload_projection.kind != .field or info.payload_taken) return null;
         if (self.layouts.getLayout(self.store.getLocal(info.origin).layout_idx).tag != .struct_) return null;
-        const parent_layout = self.store.getLocal(self.values.items[info.payload_source].origin).layout_idx;
-        if (self.layouts.getLayout(parent_layout).tag != .struct_) return null;
+        const parent = arc_dismantle.ProductFields.of(self.store, self.layouts, self.values.items[info.payload_source].origin) orelse return null;
         return .{
             .parent = info.payload_source,
-            .first = self.layouts.ownershipSlotBase(parent_layout, info.payload_projection.first),
+            .first = parent.slotBase(info.payload_projection.first),
         };
     }
 
@@ -2472,9 +2477,12 @@ const Certifier = struct {
             const container_layout_idx = self.store.getLocal(container_origin).layout_idx;
             const container_layout = self.layouts.getLayout(container_layout_idx);
             const range: SlotRange = switch (container_layout.tag) {
-                .struct_ => carried orelse .{
-                    .first = self.layouts.ownershipSlotBase(container_layout_idx, info.payload_projection.first),
-                    .count = self.layouts.ownershipSlotCount(self.store.getLocal(info.origin).layout_idx),
+                .struct_, .dynamic => blk: {
+                    const fields = arc_dismantle.ProductFields.of(self.store, self.layouts, container_origin) orelse break :walk false;
+                    break :blk carried orelse .{
+                        .first = fields.slotBase(info.payload_projection.first),
+                        .count = self.layouts.ownershipSlotCount(self.store.getLocal(info.origin).layout_idx),
+                    };
                 },
                 .tag_union => blk: {
                     if (!arc_dismantle.projectionOwnsAllRc(
@@ -2496,7 +2504,6 @@ const Certifier = struct {
                 .zst,
                 .hole,
                 .ptr,
-                .dynamic,
                 => break :walk false,
             };
             carried = null;
@@ -2654,6 +2661,15 @@ const Certifier = struct {
     fn requiredClaims(self: *Certifier, value: ValueId) Allocator.Error!?ClaimSet {
         if (value >= self.values.items.len) return null;
         const origin = self.values.items[value].origin;
+        if (self.store.getLocal(origin).product != .none) {
+            const fields = arc_dismantle.ProductFields.of(self.store, self.layouts, origin).?;
+            var slots = std.ArrayList(layout_mod.Store.RcSlot).empty;
+            defer slots.deinit(self.allocator);
+            try fields.appendRcSlots(self.allocator, &slots);
+            var required: ClaimSet = .{};
+            for (slots.items) |slot| required = try required.withField(self.claim_arena.allocator(), slot.slot);
+            return required;
+        }
         return try self.requiredClaimsForLayout(self.store.getLocal(origin).layout_idx);
     }
 
@@ -5994,7 +6010,7 @@ const Certifier = struct {
         shell: anytype,
     ) CertifyError!void {
         if (!self.isRc(target) and self.isRc(source) and
-            self.layouts.getLayout(self.store.getLocal(source).layout_idx).tag == .struct_)
+            self.isInlineProductRepresentation(source))
         {
             _ = try self.requireAggregateRepresentation(state, source);
             return;
@@ -6075,9 +6091,9 @@ const Certifier = struct {
     ) CertifyError!void {
         try self.settleNegativeClaims(state);
         var container = read_container;
-        const read_layout = self.layouts.getLayout(self.store.getLocal(self.values.items[container].origin).layout_idx);
-        var range: SlotRange = if (read_layout.tag == .struct_) .{
-            .first = self.layouts.ownershipSlotBase(self.store.getLocal(self.values.items[container].origin).layout_idx, projection.first),
+        const read_fields = arc_dismantle.ProductFields.of(self.store, self.layouts, self.values.items[container].origin);
+        var range: SlotRange = if (read_fields) |fields| .{
+            .first = fields.slotBase(projection.first),
             .count = self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx),
         } else .{ .first = 0, .count = 1 };
         var steps: usize = 0;
@@ -6092,7 +6108,7 @@ const Certifier = struct {
         const container_origin = self.values.items[container].origin;
         const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
         const taken = switch (container_layout.tag) {
-            .struct_ => blk: {
+            .struct_, .dynamic => blk: {
                 const required = try self.requiredClaims(container) orelse break :blk false;
                 const in_range = try self.claimsInRange(required, range);
                 if (!claims.intersects(in_range)) break :blk false;
@@ -6121,7 +6137,6 @@ const Certifier = struct {
             .zst,
             .hole,
             .ptr,
-            .dynamic,
             => false,
         };
         if (!taken or try self.hasIntactSurplusUnit(state, container)) return;
@@ -10681,4 +10696,81 @@ test "certify known variant prunes a join body's infeasible arm" {
 test "certify known variant does not prune an arm a later jump reaches" {
     // Branches arrive last-listed first, so variant 1 reaches the join first.
     try testing.expectError(error.Certification, certifyKnownVariantJoin(&.{ 0, 1 }));
+}
+
+test "certify dynamic product scalar reads preserve representation but not released payloads" {
+    for ([_]LIR.DynStorage{ .param, .view }) |storage| {
+        for ([_]bool{ false, true }) |read_rc| {
+            var f = try CertifyTest.init(testing.allocator);
+            defer f.deinit();
+            const dynamic = try f.layouts.dynamicLayout();
+            const desc = try f.local(.opaque_ptr);
+            const record = try f.store.addLocal(.{
+                .layout_idx = dynamic,
+                .dyn = .{ .desc = desc, .storage = storage },
+                .product = try f.store.addStmtRow(LIR.ProductShape, .{
+                    .layouts = try f.store.addU32Span(&.{ @backingInt(layout_mod.Idx.str), @backingInt(layout_mod.Idx.i64) }),
+                    .slots = try f.store.addU32Span(&.{ 0, 1, 2 }),
+                    .descriptors = try f.store.addLocalSpan(&.{ desc, desc }),
+                }),
+            });
+            const field = try f.local(.str);
+            const result_layout: layout_mod.Idx = if (read_rc) .str else .i64;
+            const result = try f.local(result_layout);
+            const ret = try f.ret(result);
+            const read = try fieldReadStmt(&f, result, record, if (read_rc) 0 else 1, ret);
+            const join_id = f.freshJoinPointId();
+            const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+            const release = try f.decrefStmt(field, .str, jump);
+            const take = try fieldReadStmt(&f, field, record, 0, release);
+            const body = try f.store.addCFStmt(.{ .join = .{
+                .id = join_id,
+                .params = .empty(),
+                .body = read,
+                .remainder = take,
+            } }, .test_fixture);
+            _ = try f.addProc(&.{ desc, record }, body, result_layout);
+            if (storage == .param and !read_rc) {
+                try f.certify();
+            } else {
+                try testing.expectError(error.Certification, f.certify());
+                try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
+            }
+        }
+    }
+}
+
+test "certify dynamic erased call retains the explicit ownership source across a join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const callable = try f.layouts.insertErasedCallable();
+    const owner = try f.local(callable);
+    const alias = try f.local(callable);
+    const result = try f.local(callable);
+    const ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .dyn = .{
+        .target = result,
+        .data = try f.store.addStmtRow(LIR.DynOp, .{ .call_erased = .{
+            .closure = alias,
+            .args = null,
+            .reuse_closure = true,
+            .reuse_source = owner,
+        } }),
+        .next = ret,
+    } }, .test_fixture);
+    const join_id = f.freshJoinPointId();
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = .empty(),
+        .body = call,
+        .remainder = jump,
+    } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .local(owner),
+        .next = join,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{owner}, body, callable);
+    try f.certify();
 }

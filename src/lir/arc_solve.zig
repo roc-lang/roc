@@ -506,10 +506,9 @@ pub const Solution = struct {
     }
 
     /// Owns parameter positions of a solved signature after the solve:
-    /// the positions whose owned variant takes every stored unit of the
-    /// parameter on every returning path, so the borrowed base would retain
-    /// each of those units where the variant takes them and save no caller
-    /// any work. The parameter's binding stays solved borrowed; emission
+    /// positions taken totally, or beneficial positions committed owned by
+    /// the producer of an exported worker. Callers retain any argument they
+    /// keep under the resulting ABI. The binding stays solved borrowed; emission
     /// overrides it to owned exactly as a demanded variant does.
     pub fn ownParams(self: *Solution, proc: LIR.LirProcSpecId, mask: arc_sig.ParamMask) void {
         const index = @backingInt(proc);

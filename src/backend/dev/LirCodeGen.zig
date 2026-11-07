@@ -17536,9 +17536,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// it, a closed target loads the component's bytes.
         fn bindComponentAddress(self: *Self, dst_local: LocalId) Allocator.Error!void {
             if (self.localDyn(dst_local)) |dyn| {
-                if (dyn.storage != .view) base.invariant("LIR/codegen invariant violated: component address dst_local {d} is not a view", .{@backingInt(dst_local)});
-                try self.emitStore(.w64, frame_ptr, self.localSlot(dst_local), ret_reg_0);
-                return;
+                if (dyn.storage == .view) {
+                    try self.emitStore(.w64, frame_ptr, self.localSlot(dst_local), ret_reg_0);
+                    return;
+                }
+                // Save the returned component address before setting up the
+                // descriptor copy's arguments, which can clobber return regs.
+                const address_slot = self.codegen.allocStackSlot(8);
+                try self.emitStore(.w64, frame_ptr, address_slot, ret_reg_0);
+                const dst = try self.dynTarget(dst_local);
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                try self.addWordArg(&builder, dyn.desc);
+                try addTargetArg(&builder, dst);
+                try builder.addMemArg(frame_ptr, address_slot);
+                try self.callBoxyRuntime(&builder, "roc_desc_copy");
+                return self.finishTarget(dst_local, dst);
             }
             const size = self.getLayoutSize(self.localLayout(dst_local));
             if (size == 0) return self.bindAssignedLocal(dst_local, .{ .immediate_i64 = 0 });
@@ -20567,8 +20580,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node = dyn_stmt.next });
                         },
                         .assign_ref => |assign| {
-                            const value_loc = try self.generateRefOp(assign.op, self.localLayout(assign.target));
-                            try self.bindAssignedLocal(assign.target, value_loc);
+                            if (assign.op.kind == .field and self.localDyn(assign.op.source) != null) {
+                                try self.generateDyn(assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.localDyn(assign.op.source).?.desc, .field_index = .{ .immediate = assign.op.index } } });
+                            } else if (assign.op.kind == .local and self.localDyn(assign.target) != null) {
+                                try self.generateDyn(assign.target, .{ .copy = .{ .src = assign.op.source, .desc = self.localDyn(assign.target).?.desc } });
+                            } else {
+                                const value_loc = try self.generateRefOp(assign.op, self.localLayout(assign.target));
+                                try self.bindAssignedLocal(assign.target, value_loc);
+                            }
                             try work.append(wa, .{ .node = assign.next });
                         },
 

@@ -4582,6 +4582,12 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitAssignRef(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LIR.RefOp) Error!void {
+        if (op.kind == .field and self.localDyn(op.source) != null) {
+            return self.emitDyn(target, .{ .field_addr = .{ .base = op.source, .desc = self.localDyn(op.source).?.desc, .field_index = .{ .immediate = op.index } } });
+        }
+        if (op.kind == .local and self.localDyn(target) != null) {
+            return self.emitDyn(target, .{ .copy = .{ .src = op.source, .desc = self.localDyn(target).?.desc } });
+        }
         if (self.value_plan.place(target) == .view) return;
         switch (op.kind) {
             .local => try self.copyLocal(target, op.source),
@@ -11862,8 +11868,8 @@ pub const MonoLlvmCodeGen = struct {
     /// the component's bytes.
     fn bindComponentAddress(self: *MonoLlvmCodeGen, target: LocalId, address: LlvmBuilder.Value) Error!void {
         if (self.localDyn(target)) |dyn| {
-            if (dyn.storage != .view) llvmInvariantFmt("component address target {d} is not a view", .{@backingInt(target)});
-            return self.storePointer(self.slot(target).ptr, address);
+            if (dyn.storage == .view) return self.storePointer(self.slot(target).ptr, address);
+            return self.emitDescCopy(dyn.desc, try self.targetAddress(target), address);
         }
         try self.prepareLocalWrite(target);
         const target_layout = self.localLayout(target);

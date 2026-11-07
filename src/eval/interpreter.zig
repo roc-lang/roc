@@ -2376,6 +2376,16 @@ pub const Interpreter = struct {
             self.active_stmt_id = current;
             switch (self.store.getCFStmtImmediate(current).*) {
                 .assign_ref => |assign| {
+                    if (assign.op.kind == .field and self.store.getLocal(assign.op.source).dyn != null) {
+                        try self.execDyn(frame, current, assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.store.getLocal(assign.op.source).dyn.?.desc, .field_index = .{ .immediate = assign.op.index } } });
+                        current = assign.next;
+                        continue;
+                    }
+                    if (assign.op.kind == .local and self.store.getLocal(assign.target).dyn != null) {
+                        try self.execDyn(frame, current, assign.target, .{ .copy = .{ .src = assign.op.source, .desc = self.store.getLocal(assign.target).dyn.?.desc } });
+                        current = assign.next;
+                        continue;
+                    }
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
                     const value = try self.evalAssignRef(frame, assign.op, target_layout);
                     try self.setLocalCheckedWithResidualShell(
@@ -8356,10 +8366,11 @@ pub const Interpreter = struct {
     /// the component's bytes.
     fn setComponentTarget(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target: LocalId, address: [*]u8) Error!void {
         if (self.store.getLocal(target).dyn) |dyn| {
-            if (dyn.storage != .view) {
-                return self.invariantFailedError("LIR/interpreter invariant violated: component address target {d} is not a view", .{@backingInt(target)});
+            if (dyn.storage == .view) {
+                bindDynAddress(frame, target, address);
+            } else {
+                try self.writeDynLocal(frame, target, address);
             }
-            bindDynAddress(frame, target, address);
             return;
         }
         try self.setLocalChecked(frame, stmt_id, target, closedValueAt(frame, target, address), false);

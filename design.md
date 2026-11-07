@@ -19546,10 +19546,14 @@ image serializes each row column alongside the statements.
 
 Statement compaction (`ReachableProcs`, which runs before ARC and again after
 ARC and the tail-drive pass) drops every statement no reachable procedure
-reaches, then every row no remaining statement names, and releases the
+reaches, then every row no remaining statement or local names, and releases the
 capacity both occupied. A procedure body that ARC or a procedure-local
 rewrite replaced therefore does not stay resident after the pass that
 replaced it.
+
+Dynamic locals also reference immutable product-shape rows. Compaction marks
+and renames these references alongside statement references; a local's shape
+must survive even when no statement directly names that row.
 
 ### Statement Provenance
 
@@ -20180,10 +20184,29 @@ into the earlier place. One place under a recursive box therefore stands for
 every unrolled occurrence, which matches the typing rule below that nested
 modes are uniform through an owning rc.
 
-A dynamic local is one opaque owned unit to ARC: its payload ownership graph
-is descriptor-defined at runtime, so ARC attaches one resource to the whole
-local and never splits it into positions. ARC consumes the descriptor local
-the dynamic local names; it never treats a dynamic local as refcount-free.
+A dynamic local normally carries one opaque owned unit. For a closed-row
+record or tuple, Boxy lowering also publishes its checked product shape:
+the semantic fields' layouts and descriptor locals. This is ownership data,
+not a physical layout: field addresses and representation sizes still come
+from runtime descriptors. A dynamic field occupies one ownership slot;
+a concrete struct field expands into its concrete slots. An open row or an
+unknown type has no enumerated product shape and remains opaque.
+
+ARC uses this explicit shape for the same field-take and residual-release
+rules as concrete products. Generic record projections copy representation
+bytes into independent frame storage; owning a projected value therefore
+never relies on its container's storage remaining alive. This copy does not
+retain payloads. ARC alone emits the retains, takes and residual decrefs.
+Once a product's stored RC units have all moved, its independent frame or
+parameter representation still permits scalar-field reads. A dynamic interior
+view has no such independent lifetime, and reading an RC field still requires
+its stored unit to be live. Certification distinguishes these cases explicitly.
+Runtime-sized list/box interior views continue to borrow their backing
+storage. ARC's temporary projections used only for an immediate residual
+release may also address the field in place. Every dynamic RC statement uses
+the value's own descriptor. `ROC_VERIFY_ARC` in a developer-diagnostic build
+runs independent certification even when the compiler uses ReleaseFast;
+ordinary release compilers do not read the variable.
 
 Nested resources carry two modes, following the paper's storage/access split:
 
@@ -21067,6 +21090,20 @@ and moving one that dies. A position that lends a borrowed return, or holds a
 demand hole, keeps its borrowed mode, and a pinned signature is never
 changed.
 
+An exported worker additionally commits owned parameter positions for which
+dismantle analysis proved an owned-only field-take benefit, including benefits
+forwarded through its callees. This is a producer-selected boundary convention:
+the module emits it whether or not any importer exists, and publishes that
+exact signature with its object. An importing caller moves a dying argument
+and retains an argument it still needs. A borrowed return's lenders, demand
+holes, and pinned ABI positions retain their existing contracts. The emitted
+body applies the same ownership override as an ordinary owned variant, never
+an ABI bit change applied after emitting a borrowed body. On a read-only or
+early-error path the owning convention can add a retain/drop pair for a caller
+that keeps its argument; on a consuming path it permits the field transfer
+that a fixed borrowed import convention would prevent. No importer requests
+another body, and no extra vector combinations are enumerated for export.
+
 Variant bodies are cloned with the existing statement-cloning machinery and
 added with `LirStore.addProcSpec`. Root procs are never specialized; their
 vectors are pinned. The variant count is bounded by realized demand vectors,
@@ -21416,7 +21453,7 @@ whole.
 
 A container qualifies for dismantling when all of the following hold:
 
-- its committed layout is a struct containing at least one refcounted field
+- its committed layout or explicit descriptor-backed product shape contains at least one refcounted field
 - its binding is owned and bound exactly once, or is a join parameter whose
   definitions are explicit `initialize_join_param` writes. Lowering gives
   every `if`/`match` value join whose result is a struct holding refcounted
@@ -22795,7 +22832,10 @@ be an outer nominal or zero-discriminant tag wrapper only when the emitted
 `assign_ref` chain proves exact pointer representation at every edge. Debug LIR
 certification derives that exact allocation identity from those explicit
 producer operations and rejects a call that would pass one allocation to the
-machine ABI while consuming another in ARC. The representation-transparent
+machine ABI while consuming another in ARC. The
+ownership source is an explicit read in the common operand inventory, including
+for `DynOp.call_erased`; liveness and join summaries must carry it even when
+the callable is read through a different alias. The representation-transparent
 `assign_ref` edge has one definition, `lir_core`'s `ErasedOwnerEdge`: the direct
 LIR lowerer records each emitted `assign_ref` target's provenance from it, and
 the resolution in `lir/erased_owner.zig` follows it. A LIR transform that
