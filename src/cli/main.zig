@@ -1602,10 +1602,11 @@ fn appendHostedCacheEntriesFromView(
     if (checkedModuleKeySeen(seen_keys.items, view.key.bytes)) return;
     try seen_keys.append(allocator, view.key.bytes);
 
-    for (view.hosted_procs.procs) |proc| {
+    const hosted_procs = try view.hostedProcs();
+    for (hosted_procs.procs) |proc| {
         try entries.append(allocator, .{
             .module_key = view.key.bytes,
-            .order_key = proc.orderKey(view.hosted_procs),
+            .order_key = proc.orderKey(hosted_procs),
             .external_symbol_name = view.canonical_names.externalSymbolNameText(proc.external_symbol_name),
             .def_idx = @backingInt(proc.def_idx),
             .deterministic_index = proc.deterministic_index,
@@ -1617,18 +1618,18 @@ fn findHostedBindingView(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
     relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
-) ?HostedBindingView {
+) Allocator.Error!?HostedBindingView {
     if (root_artifact.module_identity.kind == .platform) {
-        return .{ .table = &root_artifact.hosted_bindings, .names = root_artifact.nameStore() };
+        return .{ .table = try root_artifact.hostedBindings(), .names = root_artifact.nameStore() };
     }
     for (imported_artifacts) |view| {
         if (view.module_identity.kind == .platform) {
-            return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+            return .{ .table = try view.hostedBindings(), .names = view.canonical_names };
         }
     }
     for (relation_artifacts) |view| {
         if (view.module_identity.kind == .platform) {
-            return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+            return .{ .table = try view.hostedBindings(), .names = view.canonical_names };
         }
     }
     return null;
@@ -1704,7 +1705,7 @@ fn checkedHostedTable(
         try appendHostedCacheEntriesFromView(allocator, &hosted_entries, &seen_keys, view);
     }
 
-    if (findHostedBindingView(root_artifact, imported_artifacts, relation_artifacts)) |binding_view| {
+    if (try findHostedBindingView(root_artifact, imported_artifacts, relation_artifacts)) |binding_view| {
         try applyHostedBindings(allocator, &hosted_entries, binding_view);
     } else {
         const SortContext = struct {
@@ -1758,7 +1759,7 @@ fn updatePlatformAppRelationIdentity(
     // identity hashed alongside this.
     updateHashBytes(hasher, "platform-app-relations-v2");
 
-    const relations = root_artifact.platform_requirement_relations.relations;
+    const relations = root_artifact.platformRequirementRelations().relations;
     updateHashU32(hasher, @intCast(relations.len));
     for (relations) |relation| {
         updateHashU32(hasher, @backingInt(relation.declaration));
@@ -1766,7 +1767,7 @@ fn updatePlatformAppRelationIdentity(
         updateHashU32(hasher, @backingInt(relation.value_kind));
     }
 
-    const bindings = root_artifact.platform_required_bindings.bindings;
+    const bindings = root_artifact.platformRequiredBindings().bindings;
     updateHashU32(hasher, @intCast(bindings.len));
     for (bindings) |binding| {
         updateHashU32(hasher, @backingInt(binding.declaration));
@@ -1775,7 +1776,7 @@ fn updatePlatformAppRelationIdentity(
         updateHashU32(hasher, @backingInt(std.meta.activeTag(binding.value_use)));
     }
 
-    const checked_error_requires = root_artifact.platform_required_bindings.checked_error_requires;
+    const checked_error_requires = root_artifact.platformRequiredBindings().checked_error_requires;
     updateHashU32(hasher, @intCast(checked_error_requires.len));
     for (checked_error_requires) |requires_idx| updateHashU32(hasher, requires_idx);
 }
@@ -1807,7 +1808,7 @@ fn checkedInterpreterHostIdentity(
     updateHashBytes(&hasher, "roc-run-checked-host-interface-v3");
     updateHashU32(&hasher, @backingInt(target_usize));
 
-    const declarations_hash = try root_artifact.platform_required_declarations.identityHash(root_artifact.nameStore(), root_artifact.typesView());
+    const declarations_hash = try root_artifact.platformRequiredDeclarations().identityHash(root_artifact.typesView());
     hasher.update(&declarations_hash);
     updatePlatformAppRelationIdentity(&hasher, root_artifact);
     updateHostBoundaryIdentity(&hasher, root_metadata);
@@ -5329,7 +5330,7 @@ fn checkedArtifactForBuild(
     }
     // A `provides` entry whose type is erroneous declares no host ABI, so no
     // program exists to link; the error was rendered with the diagnostics.
-    if (artifact.hasProvidedExportWithoutAbi()) return error.TypeCheckingFailed;
+    if (try artifact.hasProvidedExportWithoutAbi()) return error.TypeCheckingFailed;
     return artifact;
 }
 
@@ -6765,7 +6766,7 @@ fn lowerRunUnits(
     const root_artifact = try build_env.executableRootCheckedArtifact();
     // A `provides` entry whose type is erroneous declares no host ABI, so no
     // program exists to run; the error was rendered with the diagnostics.
-    if (root_artifact.hasProvidedExportWithoutAbi()) {
+    if (try root_artifact.hasProvidedExportWithoutAbi()) {
         reporter.fail();
         return error.TypeCheckingFailed;
     }
@@ -6784,7 +6785,7 @@ fn lowerRunUnits(
     const selected_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, (try root_artifact.rootRequests()).runtime_requests);
     defer ctx.gpa.free(selected_roots);
     const entrypoint_names = try ctx.arena.alloc([]const u8, selected_roots.len);
-    for (selected_roots, entrypoint_names) |root, *name| name.* = try ctx.arena.dupe(u8, nativeEntrypointSymbolName(root_artifact, root));
+    for (selected_roots, entrypoint_names) |root, *name| name.* = try ctx.arena.dupe(u8, try nativeEntrypointSymbolName(root_artifact, root));
 
     var root_program: ?lir.CheckedPipeline.LoweredProgram = null;
     errdefer if (root_program) |*program| program.deinit();
@@ -8396,7 +8397,7 @@ fn nativeBuildEntrypoints(
         }
 
         entrypoint.* = .{
-            .symbol_name = nativeEntrypointSymbolName(root_artifact, root),
+            .symbol_name = try nativeEntrypointSymbolName(root_artifact, root),
             .proc = root_proc,
             .arg_layouts = arg_layouts,
             .ret_layout = proc_spec.ret_layout,
@@ -8409,8 +8410,8 @@ fn nativeBuildEntrypoints(
 fn nativeEntrypointSymbolName(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     root: check.CheckedArtifact.RootRequest,
-) []const u8 {
-    const entrypoint_name = root_artifact.providedEntrypointName(root) orelse {
+) Allocator.Error![]const u8 {
+    const entrypoint_name = (try root_artifact.providedEntrypointName(root)) orelse {
         base.invariant(
             "platform entrypoint invariant violated: exported platform root has no published FFI symbol",
             .{},
@@ -10374,7 +10375,7 @@ fn buildBoxyLibraryObjects(
     defer units.deinit(ctx.gpa);
     try units.append(ctx.gpa, &build_env.builtin_modules.checked_artifact);
     for (test_modules orelse visible) |artifact| {
-        if (artifact.platform_type_inputs.requirements.len != 0) continue;
+        if (artifact.hasPlatformRequirements()) continue;
         try units.append(ctx.gpa, artifact);
     }
     // A module's body calls imports its root never sees, and a unit is keyed
@@ -10394,7 +10395,7 @@ fn buildBoxyLibraryObjects(
         const importer = units.items[next_unit];
         for (importer.direct_import_module_keys) |key| {
             const imported = digests.artifacts.get(key.bytes) orelse continue;
-            if (imported.platform_type_inputs.requirements.len != 0) continue;
+            if (imported.hasPlatformRequirements()) continue;
             if ((try seen_units.getOrPut(key.bytes)).found_existing) continue;
             try units.append(ctx.gpa, imported);
         }
@@ -10639,7 +10640,7 @@ fn buildBoxyLibraryObjects(
         try root_modules.append(ctx.arena, view.key.bytes);
     }
     for (visible) |artifact| {
-        if (artifact.platform_type_inputs.requirements.len == 0) continue;
+        if (!artifact.hasPlatformRequirements()) continue;
         try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
         try root_modules.append(ctx.arena, artifact.key.bytes);
     }
@@ -10795,7 +10796,7 @@ fn boxyObjectKey(gpa: Allocator, digests: *compile.boxy_interface.Digests, artif
 /// hosted section binds the hosted functions `artifact` declares to their
 /// host symbols. Null for a module declaring none.
 fn boxyUnitPlatform(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView) ?check.CheckedArtifact.ImportedModuleView {
-    if (artifact.hosted_procs.procs.len == 0) return null;
+    if (!artifact.declaresHostedProcedures()) return null;
     return platform;
 }
 
@@ -15087,14 +15088,14 @@ fn prepareUnitImageTests(
     defer ctx.gpa.free(visible);
     var paired: std.ArrayList(*const Artifact) = .empty;
     defer paired.deinit(ctx.gpa);
-    if (unit_root.platform_type_inputs.requirements.len != 0) try paired.append(ctx.gpa, unit_root);
-    for (visible) |artifact| if (artifact.platform_type_inputs.requirements.len != 0) try paired.append(ctx.gpa, artifact);
+    if (unit_root.hasPlatformRequirements()) try paired.append(ctx.gpa, unit_root);
+    for (visible) |artifact| if (artifact.hasPlatformRequirements()) try paired.append(ctx.gpa, artifact);
     var test_modules: std.ArrayList(*const Artifact) = .empty;
     defer test_modules.deinit(ctx.gpa);
     // A root unit exists only to export the paired modules' wrappers.
     var paired_roots = false;
     for (test_plan.modules) |planned| {
-        if (planned.artifact.platform_type_inputs.requirements.len != 0) {
+        if (planned.artifact.hasPlatformRequirements()) {
             const is_paired = for (paired.items) |artifact| {
                 if (artifact == planned.artifact) break true;
             } else false;

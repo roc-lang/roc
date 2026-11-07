@@ -94,7 +94,7 @@ pub const GlueError = error{
 };
 
 /// Print platform glue information for a platform's main.roc file using the checked-artifact pipeline.
-/// Hosted function ordering comes from published `HostedProcTable` records.
+/// Hosted function ordering comes from each module's hosted procedures.
 pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, std_io: std.Io) GlueError!void {
     rocGlueInner(gpa, stderr, stdout, args, std_io) catch |err| {
         (switch (err) {
@@ -876,24 +876,6 @@ fn glueInvariant(comptime message: []const u8, args: anytype) noreturn {
     base.invariant("glue invariant violated: " ++ message, args);
 }
 
-fn hostedProcSortKey(
-    allocator: Allocator,
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    hosted: CheckedArtifact.HostedProc,
-) Allocator.Error![]const u8 {
-    return try allocator.dupe(u8, hosted.orderKey(&artifact.hosted_procs));
-}
-
-fn hostedProcForDef(
-    table: *const CheckedArtifact.HostedProcTable,
-    def_idx: CIR.Def.Idx,
-) ?CheckedArtifact.HostedProc {
-    for (table.procs) |proc| {
-        if (proc.def_idx == def_idx) return proc;
-    }
-    return null;
-}
-
 /// The host dispatch slot of every hosted procedure the platform binds.
 ///
 /// The platform header's `hosted` section is the authority for those slots, and
@@ -909,7 +891,7 @@ fn collectHostedProcGlobalIndices(
     errdefer indices.deinit(allocator);
 
     if (platformArtifact(modules)) |platform| {
-        const bindings = platform.hosted_bindings.bindings;
+        const bindings = (try platform.hostedBindings()).bindings;
         try indices.ensureTotalCapacity(allocator, bindings.len);
         for (bindings, 0..) |binding, dispatch_index| {
             indices.appendAssumeCapacity(.{
@@ -938,11 +920,12 @@ fn collectHostedProcGlobalIndices(
     for (modules) |mod| {
         if (!(mod.is_platform_sibling or mod.is_platform_main)) continue;
         const artifact = mod.semantic.checked_artifact orelse continue;
-        for (artifact.hosted_procs.procs) |hosted| {
+        const hosted_procs = try artifact.hostedProcs();
+        for (hosted_procs.procs) |hosted| {
             try candidates.append(allocator, .{
                 .artifact_key = artifact.key,
                 .def_idx = hosted.def_idx,
-                .sort_key = try hostedProcSortKey(allocator, artifact, hosted),
+                .sort_key = try allocator.dupe(u8, hosted.orderKey(hosted_procs)),
             });
         }
     }
@@ -1009,7 +992,7 @@ fn selectGlueSpecRootProc(
         std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
         const root = (try root_artifact.lookupRootRequestByOrder(metadata.order)) orelse
             glueInvariant("missing root request order {d}", .{metadata.order});
-        const ffi_symbol = root_artifact.providedEntrypointName(root) orelse
+        const ffi_symbol = (try root_artifact.providedEntrypointName(root)) orelse
             glueInvariant("provided export root has no published FFI symbol", .{});
         if (std.mem.eql(u8, ffi_symbol, expected_ffi_symbol)) return root_proc;
     }
@@ -4490,6 +4473,7 @@ fn collectModuleTypeInfo(
         try member_by_def.put(member_entry.value.def_idx, member_entry.key);
     }
 
+    const hosted_procs = try artifact.hostedProcs();
     for (artifact.top_level_values.entries) |entry| {
         const def_idx = entry.def;
 
@@ -4497,7 +4481,7 @@ fn collectModuleTypeInfo(
         // value rather than a member of an exposed type module, so it reaches
         // the host boundary here without a member entry.
         const is_member = member_by_def.get(def_idx) != null;
-        const hosted_proc_for_entry = hostedProcForDef(&artifact.hosted_procs, def_idx);
+        const hosted_proc_for_entry = hosted_procs.forDef(def_idx);
         if (!is_member and hosted_proc_for_entry == null) continue;
         const source_name = artifact.nameStore().exportNameText(entry.source_name);
         const local_name = if (is_member)
@@ -4521,7 +4505,7 @@ fn collectModuleTypeInfo(
             }
 
             const bound = hostedBindingForDef(hosted_indices, artifact.key, def_idx) orelse
-                glueInvariant("hosted function '{s}' has no platform hosted symbol", .{hosted_proc.orderKey(&artifact.hosted_procs)});
+                glueInvariant("hosted function '{s}' has no platform hosted symbol", .{hosted_proc.orderKey(hosted_procs)});
             const hosted_symbol = bound.symbol;
             const ffi_symbol = try gpa.dupe(u8, hosted_symbol);
             errdefer gpa.free(ffi_symbol);

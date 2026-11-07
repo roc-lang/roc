@@ -17,6 +17,12 @@ const CheckedModuleArtifact = checked_artifact.CheckedModuleArtifact;
 const ImportedModuleView = checked_artifact.ImportedModuleView;
 const ModuleResolver = checked_artifact.ModuleResolver;
 const ExportClosures = checked_artifact.ExportClosures;
+const ExportRows = checked_artifact.ExportRows;
+const ProvidedExportTable = checked_artifact.ProvidedExportTable;
+const PlatformTypeInputs = checked_artifact.PlatformTypeInputs;
+const PlatformRequirementSolutionTable = checked_artifact.PlatformRequirementSolutionTable;
+const HostedProcTable = checked_artifact.HostedProcTable;
+const HostedBindingTable = checked_artifact.HostedBindingTable;
 const PublicApiDependencies = checked_artifact.PublicApiDependencies;
 const LoweringVisibility = checked_artifact.LoweringVisibility;
 const ModuleInterfaceCapabilities = checked_artifact.ModuleInterfaceCapabilities;
@@ -202,6 +208,12 @@ pub const ModuleAnalyses = struct {
     /// The platform a platform/app pairing reads: the pairing's export
     /// closures and public API dependencies are its platform's.
     platform: ?*const CheckedModuleArtifact,
+    export_rows: collections.OnceSlot(*ExportRows, .module_export_rows) = .empty,
+    provided_exports: collections.OnceSlot(*ProvidedExportTable, .module_provided_exports) = .empty,
+    platform_type_inputs: collections.OnceSlot(*PlatformTypeInputs, .module_platform_type_inputs) = .empty,
+    platform_requirement_solutions: collections.OnceSlot(*PlatformRequirementSolutionTable, .module_platform_requirement_solutions) = .empty,
+    hosted_procs: collections.OnceSlot(*HostedProcTable, .module_hosted_procs) = .empty,
+    hosted_bindings: collections.OnceSlot(*HostedBindingTable, .module_hosted_bindings) = .empty,
     export_closures: collections.OnceSlot(*ExportClosures, .module_export_closures) = .empty,
     public_api_dependencies: collections.OnceSlot(*PublicApiDependencies, .module_public_api_dependencies) = .empty,
     lowering_visibility: collections.OnceSlot(*LoweringVisibility, .module_lowering_visibility) = .empty,
@@ -329,6 +341,30 @@ pub const ModuleAnalyses = struct {
             allocator.destroy(owned);
         }
         if (self.export_closures.peek()) |closures| closures.destroy(allocator);
+        if (self.platform_type_inputs.peek()) |inputs| {
+            inputs.deinit(allocator);
+            allocator.destroy(inputs);
+        }
+        if (self.platform_requirement_solutions.peek()) |solutions| {
+            solutions.deinit(allocator);
+            allocator.destroy(solutions);
+        }
+        if (self.hosted_procs.peek()) |table| {
+            table.deinit(allocator);
+            allocator.destroy(table);
+        }
+        if (self.hosted_bindings.peek()) |table| {
+            table.deinit(allocator);
+            allocator.destroy(table);
+        }
+        if (self.provided_exports.peek()) |table| {
+            allocator.free(table.exports);
+            allocator.destroy(table);
+        }
+        if (self.export_rows.peek()) |rows| {
+            rows.deinit(allocator);
+            allocator.destroy(rows);
+        }
         if (self.public_api_dependencies.peek()) |dependencies| {
             dependencies.deinit(allocator);
             allocator.destroy(dependencies);
@@ -372,7 +408,84 @@ pub const ModuleAnalyses = struct {
         self.idle_evidence_traversals.appendAssumeCapacity(traversal);
     }
 
-    /// The template closure of every row of `owner`'s export tables.
+    /// The export rows of `owner`, this module. A platform/app pairing's are
+    /// its platform's.
+    pub fn exportRows(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const ExportRows {
+        self.assertPublished();
+        if (self.platform) |platform| return platformAnalyses(platform).exportRows(checked_artifact.importedView(platform));
+        return self.export_rows.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.exportRows);
+    }
+
+    /// The provided exports of `owner`, this module. A platform/app pairing's
+    /// are its pairing's own slot, read at their types under the pairing.
+    pub fn providedExports(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const ProvidedExportTable {
+        self.assertPublished();
+        if (self.platform != null) checked_artifact.checkedArtifactInvariant("a pairing's provided exports were read from its module analyses", .{});
+        return self.provided_exports.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.providedExports);
+    }
+
+    /// The requirement identity variables of `owner`, this module. A
+    /// platform/app pairing's are its platform's.
+    pub fn platformTypeInputs(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const PlatformTypeInputs {
+        self.assertPublished();
+        if (self.platform) |platform| return platformAnalyses(platform).platformTypeInputs(checked_artifact.importedView(platform));
+        return self.platform_type_inputs.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.platformTypeInputs);
+    }
+
+    /// The solutions of its platform's requirements `owner`, this module,
+    /// recorded. A platform/app pairing's are its platform's.
+    pub fn platformRequirementSolutions(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const PlatformRequirementSolutionTable {
+        self.assertPublished();
+        if (self.platform) |platform| return platformAnalyses(platform).platformRequirementSolutions(checked_artifact.importedView(platform));
+        return self.platform_requirement_solutions.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.platformRequirementSolutions);
+    }
+
+    /// The hosted procedures of `owner`, this module. A platform/app
+    /// pairing's are its platform's.
+    pub fn hostedProcs(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const HostedProcTable {
+        self.assertPublished();
+        if (self.platform) |platform| return platformAnalyses(platform).hostedProcs(checked_artifact.importedView(platform));
+        return self.hosted_procs.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.hostedProcs);
+    }
+
+    /// The hosted bindings of `owner`, this module, a platform's hosted
+    /// section. A platform/app pairing's are its platform's.
+    pub fn hostedBindings(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const HostedBindingTable {
+        self.assertPublished();
+        if (self.platform) |platform| return platformAnalyses(platform).hostedBindings(checked_artifact.importedView(platform));
+        return self.hosted_bindings.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.hostedBindings);
+    }
+
+    const ViewRequest = struct {
+        analyses: *ModuleAnalyses,
+        owner: ImportedModuleView,
+
+        fn hostedProcs(request: ViewRequest) Allocator.Error!*HostedProcTable {
+            return checked_artifact.computeHostedProcs(request.analyses.allocator, request.owner);
+        }
+
+        fn hostedBindings(request: ViewRequest) Allocator.Error!*HostedBindingTable {
+            return checked_artifact.computeHostedBindings(request.analyses.allocator, request.owner, request.analyses.resolver);
+        }
+
+        fn exportRows(request: ViewRequest) Allocator.Error!*ExportRows {
+            return checked_artifact.computeExportRows(request.analyses.allocator, request.owner);
+        }
+
+        fn platformTypeInputs(request: ViewRequest) Allocator.Error!*PlatformTypeInputs {
+            return checked_artifact.computePlatformTypeInputs(request.analyses.allocator, request.owner);
+        }
+
+        fn platformRequirementSolutions(request: ViewRequest) Allocator.Error!*PlatformRequirementSolutionTable {
+            return checked_artifact.computePlatformRequirementSolutions(request.analyses.allocator, request.owner);
+        }
+
+        fn providedExports(request: ViewRequest) Allocator.Error!*ProvidedExportTable {
+            return checked_artifact.computeModuleProvidedExports(request.analyses.allocator, request.owner);
+        }
+    };
+
+    /// The template closure of every row of `owner`'s export rows.
     pub fn exportClosures(self: *ModuleAnalyses, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!*const ExportClosures {
         self.assertPublished();
         if (self.platform) |platform| return platformAnalyses(platform).exportClosures(checked_artifact.importedView(platform), resolver);

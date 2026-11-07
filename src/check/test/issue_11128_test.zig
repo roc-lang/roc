@@ -93,15 +93,13 @@ test "issue 11128 top-level procedure binding appends stay amortized" {
 
 test "issue 11128 wrapper and callable template appends stay amortized" {
     const count: usize = 4096;
-    inline for (.{ CheckedArtifact.IntrinsicWrapperTable, CheckedArtifact.EntryWrapperTable, CheckedArtifact.CallableEvalTemplateTable }) |Table| {
+    inline for (.{ CheckedArtifact.EntryWrapperTable, CheckedArtifact.CallableEvalTemplateTable }) |Table| {
         var bytes = std.testing.FailingAllocator.init(std.testing.allocator, .{});
         const gpa = bytes.allocator();
         var table: Table = .{};
         defer table.deinit(gpa);
         for (0..count) |i| {
-            const ref = if (Table == CheckedArtifact.IntrinsicWrapperTable)
-                try table.append(gpa, .{ .proc_base = @fromBackingInt(@intCast(i)), .template = @fromBackingInt(@intCast(i)) }, @fromBackingInt(@intCast(i)), .structural_eq)
-            else if (Table == CheckedArtifact.EntryWrapperTable)
+            const ref = if (Table == CheckedArtifact.EntryWrapperTable)
                 try table.append(gpa, @fromBackingInt(@intCast(i)), .{ .proc_base = @fromBackingInt(@intCast(i)), .template = @fromBackingInt(@intCast(i)) }, @fromBackingInt(@intCast(i)))
             else
                 try table.append(gpa, @intCast(i), @fromBackingInt(@intCast(i)), @fromBackingInt(@intCast(i)), @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(i)));

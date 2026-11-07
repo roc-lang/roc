@@ -106,7 +106,7 @@ pub const Digests = struct {
         switch (part) {
             .name => hasher.update(&self.nameOf(artifact.key.bytes)),
             .checking => hasher.update(&artifact.moduleEnvConst().checking_dependency.digest),
-            .templates => for (artifact.exported_procedure_templates.templates) |exported| try self.hashTemplateRef(hasher, artifact, exported.template),
+            .templates => for ((try artifact.exportRows()).procedure_templates) |exported| try self.hashTemplateRef(hasher, artifact, exported.template),
             .bindings => try self.hashBindings(hasher, artifact),
             .methods => try self.hashMethods(hasher, artifact),
             .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len)))),
@@ -205,7 +205,7 @@ pub const Digests = struct {
     /// they name, and the stored values they restore.
     fn hashPublicSurface(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         hasher.update(&artifact.moduleEnvConst().checking_dependency.digest);
-        for (artifact.exported_procedure_templates.templates) |exported| {
+        for ((try artifact.exportRows()).procedure_templates) |exported| {
             try self.hashTemplateRef(hasher, artifact, exported.template);
         }
         try self.hashBindings(hasher, artifact);
@@ -217,7 +217,7 @@ pub const Digests = struct {
     }
 
     fn hashBindings(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
-        for (artifact.exported_procedure_bindings.bindings) |binding| {
+        for ((try artifact.exportRows()).procedure_bindings) |binding| {
             hashTag(hasher, @tagName(std.meta.activeTag(binding.body)));
             switch (binding.body) {
                 .direct_template => |direct| switch (direct.template) {
@@ -251,7 +251,7 @@ pub const Digests = struct {
     }
 
     fn hashConsts(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
-        const exported_consts = artifact.exported_const_templates.templates;
+        const exported_consts = (try artifact.exportRows()).const_templates;
         for (exported_consts) |exported| try self.hashConstTemplate(hasher, artifact, exported.template);
         for (artifact.const_templates.templates.items) |template| switch (template.owner) {
             .top_level_binding => try self.hashConstTemplate(hasher, artifact, template),

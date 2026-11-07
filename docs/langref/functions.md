@@ -204,6 +204,44 @@ non-recursive functions, although [tail-call optimization](#tail-call-optimizati
 can eliminate that risk for some recursive functions. (In doing so, the optimization does
 mean a function that recurses forever will loop forever instead of overflowing the stack.)
 
+### Recursion and Type Variables
+
+When a function with [type variables](naming#type-variables) calls itself, it has to pass
+those type variables along unchanged. This is allowed, because the recursive call uses `a`
+for `a`:
+
+```roc
+countdown : U64, a -> a
+countdown = |count, x| if count == 0 x else countdown(count - 1, x)
+```
+
+However, this gives an error at compile time:
+
+```roc
+depth : U64, a -> U64
+depth = |n, x| if n == 0 0 else 1 + depth(n - 1, [x]) # ERROR! Passes List(a) where depth takes a.
+```
+
+Calling `depth(3, "hi")` would call `depth` with a `Str`, then a `List(Str)`, then a
+`List(List(Str))`, and so on. This is called
+[polymorphic recursion](https://en.wikipedia.org/wiki/Polymorphic_recursion), and by design, Roc
+doesn't support it. The compiler works out every type a function gets used with before the
+program runs, which is what lets a `List(U64)` store plain numbers instead of pointers to them.
+Here, the types `depth` gets used with would depend on the number passed in at runtime, so
+there's no way to list them ahead of time.
+
+Passing the same type variables in a different order is an error too:
+
+```roc
+swap : U64, a, b -> U64
+swap = |n, x, y| if n == 0 0 else 1 + swap(n - 1, y, x) # ERROR! Passes b for a and a for b.
+```
+
+The rule only applies to a function calling itself, whether directly or by way of other
+functions that call it back. A function with type variables can freely call a _different_
+function using bigger types, like `List.len([x])`. A recursive call that uses none of the
+function's type variables, like one that passes a `U64` for `a`, is also fine.
+
 ## Tail Calls
 
 A _tail call_ is a function call followed immediately by returning from the current function,
@@ -312,6 +350,10 @@ Both `is_odd(n - 1)` and `is_even(n - 1)` are [tail calls](#tail-calls), so call
 `is_even(10_000_000)` goes back and forth between the two functions ten million times without
 overflowing the stack. Each call takes over the stack space of the one that called it, so the
 stack never grows.
+
+The rule about [recursion and type variables](#recursion-and-type-variables) applies here too:
+by the time a function has been called back, its type variables have to be the same ones it
+started with.
 
 ## Performance
 

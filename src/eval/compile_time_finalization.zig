@@ -2049,7 +2049,7 @@ const ModuleEvaluation = struct {
 
     /// Whether the module's program runs against its imports' objects.
     fn links(self: *const ModuleEvaluation, shared: Shared) bool {
-        return shared.options.boxy_objects != null and self.artifact(shared).platform_type_inputs.requirements.len == 0;
+        return shared.options.boxy_objects != null and !self.artifact(shared).hasPlatformRequirements();
     }
 
     /// Whether the module's program can be lowered: its imports' objects
@@ -4090,7 +4090,7 @@ const RootCompletionState = struct {
             .imported, .hosted => return .{ .complete = true },
             .platform_required => |required| {
                 if (!artifactMatches(required.artifact, self.module.key)) return .{ .complete = true };
-                const required_binding = self.module.platform_required_bindings.lookupByBindingId(@backingInt(required.procedure_binding)) orelse
+                const required_binding = self.module.platformRequiredBindings().lookupByBindingId(@backingInt(required.procedure_binding)) orelse
                     finalizationInvariant("platform-required procedure dependency referenced a missing binding");
                 switch (required_binding.value_use) {
                     .procedure_value => |procedure_use| binding = procedure_use.procedure.binding,

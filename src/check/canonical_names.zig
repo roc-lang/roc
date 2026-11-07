@@ -127,8 +127,6 @@ pub fn digestId(raw: u128, hasher: anytype) void {
 }
 /// Public `NestedProcSiteId` declaration.
 pub const NestedProcSiteId = enum(u32) { _ };
-/// Public `IntrinsicWrapperId` declaration.
-pub const IntrinsicWrapperId = enum(u32) { _ };
 /// Public `EntryWrapperId` declaration.
 pub const EntryWrapperId = enum(u32) { _ };
 
@@ -638,6 +636,10 @@ pub const CanonicalNameStore = struct {
 
     pub fn lookupExportIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?ExportNameId {
         return lookupId(ExportNameId, &self.export_names, idents.getText(ident));
+    }
+
+    pub fn lookupExternalSymbolName(self: *const CanonicalNameStore, text: []const u8) ?ExternalSymbolNameId {
+        return lookupId(ExternalSymbolNameId, &self.external_symbol_names, text);
     }
 
     pub fn lookupExternalSymbolIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?ExternalSymbolNameId {

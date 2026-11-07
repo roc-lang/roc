@@ -395,7 +395,7 @@ const Builder = struct {
 
     /// The template a procedure use reaches, or null when it reaches no
     /// Roc body (a hosted procedure or a rejected binding).
-    fn procedureUseTarget(self: *Builder, use: checked.ProcedureUseTemplate) ?TemplateOrUnbounded {
+    fn procedureUseTarget(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!?TemplateOrUnbounded {
         return switch (use.binding) {
             .top_level => |top_level| blk: {
                 const view = self.views.get(top_level.artifact.bytes) orelse break :blk .unbounded;
@@ -403,7 +403,7 @@ const Builder = struct {
             },
             .imported => |imported| blk: {
                 const view = self.views.get(imported.artifact.bytes) orelse break :blk .unbounded;
-                for (view.exported_procedure_bindings.bindings) |binding| {
+                for ((try view.exportRows()).procedure_bindings) |binding| {
                     if (binding.binding.def != imported.def or binding.binding.pattern != imported.pattern) continue;
                     break :blk switch (binding.body) {
                         .direct_template => |direct| self.bindingBodyTarget(view, .{ .direct_template = direct }),
@@ -475,8 +475,8 @@ const Builder = struct {
             const record = refs.records[@backingInt(ref_id)];
             try self.addTypeEdge(node, view, record.checked_ty);
             switch (record.ref) {
-                .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| try self.addTemplateTarget(node, self.procedureUseTarget(use)),
-                .platform_required_proc => |required| try self.addTemplateTarget(node, self.procedureUseTarget(required.procedure)),
+                .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| try self.addTemplateTarget(node, try self.procedureUseTarget(use)),
+                .platform_required_proc => |required| try self.addTemplateTarget(node, try self.procedureUseTarget(required.procedure)),
                 .top_level_const, .imported_const => |use| if (self.constReadLowersBody(use)) self.markUnbounded(node, "const read"),
                 .selected_hoisted_const => |selected| if (self.constReadLowersBody(selected.const_use)) self.markUnbounded(node, "hoisted const read"),
                 .platform_required_const => |required| if (self.constReadLowersBody(required.const_use)) self.markUnbounded(node, "required const read"),

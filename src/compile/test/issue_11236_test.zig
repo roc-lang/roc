@@ -145,7 +145,7 @@ test "issue 11236: independent valid code still lowers alongside a rejected bind
     }
 }
 
-fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArtifact) error{ TestUnexpectedResult, TestExpectedEqual }!void {
+fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArtifact) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
     var rejected: usize = 0;
     for (artifact.top_level_procedure_bindings.bindings.items) |binding| {
         if (binding.body != .checked_error) continue;
@@ -158,7 +158,7 @@ fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArt
     try std.testing.expectEqual(@as(usize, 0), artifact.callable_eval_templates.templates.items.len);
     var exported_rejected: usize = 0;
     var exported_valid: usize = 0;
-    for (artifact.exported_procedure_bindings.bindings) |binding| {
+    for ((try artifact.exportRows()).procedure_bindings) |binding| {
         switch (binding.body) {
             .checked_error => exported_rejected += 1,
             .direct_template => exported_valid += 1,
@@ -214,8 +214,8 @@ test "issue 11236: rejection survives exports and serialization without callable
     const artifact = build.findModuleByPath(bad_path).?.semanticData().?.checked_artifact.?;
     try expectRejectedBinding(artifact);
     const alias = build.findModuleByPath(alias_path).?.semanticData().?.checked_artifact.?;
-    try std.testing.expectEqual(@as(usize, 1), alias.exported_procedure_bindings.bindings.len);
-    try std.testing.expect(alias.exported_procedure_bindings.bindings[0].body == .checked_error);
+    try std.testing.expectEqual(@as(usize, 1), (try alias.exportRows()).procedure_bindings.len);
+    try std.testing.expect((try alias.exportRows()).procedure_bindings[0].body == .checked_error);
     // The alias's evaluation reaches the rejected binding and stores the crash.
     for (alias.compile_time_roots.roots) |root| {
         try std.testing.expect(alias.evaluation.rootPayload(root.id) == .const_node);

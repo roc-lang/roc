@@ -644,10 +644,14 @@ fn procedureRuntimeTargetForDef(
 
 /// Exact compiler-intrinsic identity for an annotation-only builtin procedure.
 pub fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?can.BuiltinLowLevel.IntrinsicId {
-    const expr_data = module.def(def_idx).expr.data;
+    return intrinsicForEnvProcedureDef(module.moduleEnvConst(), def_idx);
+}
+
+/// The intrinsic Builtin procedure definition `def_idx` of `env` declares.
+pub fn intrinsicForEnvProcedureDef(env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?can.BuiltinLowLevel.IntrinsicId {
+    const expr_data = env.store.getExpr(env.store.getDef(def_idx).expr);
     if (std.meta.activeTag(expr_data) != .e_anno_only) return null;
     const expr_ident = expr_data.e_anno_only.ident;
-    const env = module.moduleEnvConst();
     if (!can.BuiltinLowLevel.isBuiltinModule(env)) return null;
     return can.BuiltinLowLevel.intrinsicAnnotation(env, expr_ident);
 }

@@ -483,9 +483,9 @@ test "nominal views retain captured field slices across projection growth" {
     try testing.expectEqual(before, f.store.len());
 }
 
-test "nominal views exhaustive recursive permutation and mutual closed reset" {
+test "nominal views exhaustive two-parameter recursion and mutual closed reset" {
     const source =
-        \\Pair(a, b) := [Again(Pair(b, a)), Stop(a)]
+        \\Pair(a, b) := [Again(Pair(a, b)), Stop(a)]
         \\Left(a) := [LeftEnd(a), ToRight(Right({}))]
         \\Right(a) := [RightEnd(a), ToLeft(Left({}))]
         \\pair_value : Pair(I64, Str)

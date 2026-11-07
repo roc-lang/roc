@@ -591,7 +591,7 @@ pub const Program = struct {
             .module => |unit| unit,
         };
         if (index == self.modules.views.items[0].index) return true;
-        return unit.root and self.module(index).view.platform_type_inputs.requirements.len != 0;
+        return unit.root and self.module(index).view.hasPlatformRequirements();
     }
 
     /// The content identity of a module's worker (design.md "Per-Module
@@ -2521,7 +2521,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
     for (program.modules.views.items) |view| {
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
-        for (view.view.exported_procedure_bindings.bindings) |*binding| {
+        for ((try view.view.exportRows()).procedure_bindings) |*binding| {
             try program.exported_bindings.put(allocator, .{ .module = view.index, .def = binding.binding.def, .pattern = binding.binding.pattern }, binding);
         }
         for (view.view.callable_eval_templates.templates) |template| {
@@ -2816,7 +2816,8 @@ fn initHosted(program: *Program) Allocator.Error!void {
     var platform: ?*const types.ModuleView = null;
     for (program.modules.views.items) |*view| {
         if (view.view.module_identity.kind == .platform) platform = view;
-        for (view.view.hosted_procs.procs) |proc| {
+        const hosted_procs = try view.view.hostedProcs();
+        for (hosted_procs.procs) |proc| {
             const owner = program.moduleByKey(.{ .bytes = proc.template.artifact.bytes });
             const key: TemplateKey = .{ .module = owner.index, .template = proc.template.template };
             try program.hosted.put(allocator, key, .{
@@ -2824,11 +2825,11 @@ fn initHosted(program: *Program) Allocator.Error!void {
                 .dispatch_index = null,
             });
             try by_def.put(allocator, .{ .module = view.index, .def = @backingInt(proc.def_idx) }, key);
-            try ordered.append(allocator, .{ .key = key, .order = proc.orderKey(view.view.hosted_procs), .def = @backingInt(proc.def_idx), .digest = view.key.bytes });
+            try ordered.append(allocator, .{ .key = key, .order = proc.orderKey(hosted_procs), .def = @backingInt(proc.def_idx), .digest = view.key.bytes });
         }
     }
     if (platform) |view| {
-        for (view.view.hosted_bindings.bindings, 0..) |binding, index| {
+        for ((try view.view.hostedBindings()).bindings, 0..) |binding, index| {
             const target = switch (program.input.unit) {
                 .program => program.moduleByKey(binding.target_checked_module),
                 // A unit binds the hosted functions of the modules it lowers;
@@ -2862,14 +2863,15 @@ fn initHosted(program: *Program) Allocator.Error!void {
 /// the app provides for its requirements.
 fn solvePlatformIdentities(program: *Program) Allocator.Error!void {
     const platform = for (program.modules.views.items) |*view| {
-        if (view.view.platform_type_inputs.requirements.len != 0) break view;
+        if (view.view.hasPlatformRequirements()) break view;
     } else return;
     for (program.modules.views.items) |*app| {
-        const table = app.view.platform_requirement_solutions;
+        const table = try app.view.platformRequirementSolutions();
         for (table.solutions) |solution| {
-            if (solution.requires_idx >= platform.view.platform_type_inputs.requirements.len) invariant("an app solves a requirement its platform does not declare");
-            const requirement = platform.view.platform_type_inputs.requirements[solution.requires_idx];
-            const formals = platform.view.platform_type_inputs.identities[requirement.identities.start..][0..requirement.identities.len];
+            const type_inputs = try platform.view.platformTypeInputs();
+            if (solution.requires_idx >= type_inputs.requirements.len) invariant("an app solves a requirement its platform does not declare");
+            const requirement = type_inputs.requirements[solution.requires_idx];
+            const formals = type_inputs.identities[requirement.identities.start..][0..requirement.identities.len];
             const solved = table.identity_solutions[solution.identity_start..][0..solution.identity_len];
             if (formals.len != solved.len) invariant("an app's requirement solution differs from its requirement's identity variables");
             for (formals, solved) |formal, app_ty| {

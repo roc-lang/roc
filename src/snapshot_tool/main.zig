@@ -3729,7 +3729,7 @@ fn snapshotRootRequestByOrder(
 fn snapshotProvidedEntrypointName(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     root: check.CheckedArtifact.RootRequest,
-) []const u8 {
+) Allocator.Error![]const u8 {
     const def_idx = switch (root.source) {
         .def => |def| def,
         .expr, .statement, .required_binding, .hoisted, .literal => {
@@ -3740,9 +3740,11 @@ fn snapshotProvidedEntrypointName(
         base.invariant("snapshot invariant violated: exported platform root has no published top-level value", .{});
     };
 
-    for (root_artifact.provides_requires.provides) |entry| {
-        if (entry.source_name == top_level.source_name) {
-            return root_artifact.nameStore().externalSymbolNameText(entry.ffi_symbol);
+    for ((try root_artifact.providedExports()).exports) |provided| {
+        switch (provided) {
+            inline .procedure, .data, .checked_error => |entry| if (entry.source_name == top_level.source_name) {
+                return root_artifact.nameStore().externalSymbolNameText(entry.ffi_symbol);
+            },
         }
     }
 
@@ -3791,7 +3793,7 @@ fn snapshotNativeEntrypoints(
             arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
         }
 
-        const entrypoint_name = snapshotProvidedEntrypointName(root_artifact, root);
+        const entrypoint_name = try snapshotProvidedEntrypointName(root_artifact, root);
         const symbol_name = try allocator.dupe(u8, entrypoint_name);
         var symbol_name_owned = true;
         errdefer if (symbol_name_owned) allocator.free(symbol_name);
@@ -3811,8 +3813,8 @@ fn snapshotNativeEntrypoints(
 
 fn snapshotHasProvidedProcedureExports(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) bool {
-    for (root_artifact.provided_exports.exports) |provided| {
+) Allocator.Error!bool {
+    for ((try root_artifact.providedExports()).exports) |provided| {
         switch (provided) {
             .procedure => return true,
             .data, .checked_error => {},
@@ -3823,8 +3825,8 @@ fn snapshotHasProvidedProcedureExports(
 
 fn snapshotHasProvidedDataExports(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) bool {
-    for (root_artifact.provided_exports.exports) |provided| {
+) Allocator.Error!bool {
+    for ((try root_artifact.providedExports()).exports) |provided| {
         switch (provided) {
             .data => return true,
             .procedure, .checked_error => {},
@@ -3885,8 +3887,8 @@ fn processDevObjectSnapshot(
     const relation_artifacts = try build_env.collectRelationArtifactViews(allocator, root_artifact);
     defer allocator.free(relation_artifacts);
 
-    const has_procedure_exports = snapshotHasProvidedProcedureExports(root_artifact);
-    const has_data_exports = snapshotHasProvidedDataExports(root_artifact);
+    const has_procedure_exports = try snapshotHasProvidedProcedureExports(root_artifact);
+    const has_data_exports = try snapshotHasProvidedDataExports(root_artifact);
     if (!has_procedure_exports and !has_data_exports) {
         std.log.err("Failed to produce any exported platform entrypoints or data symbols", .{});
         return false;

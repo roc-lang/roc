@@ -1256,7 +1256,7 @@ const PreparedModuleGraph = struct {
 
     fn edgeCount(self: PreparedModuleGraph, node: usize) usize {
         const artifact = self.entries[node].mod.checkedArtifact().?;
-        return artifact.direct_import_module_keys.len + artifact.platform_required_bindings.bindings.len;
+        return artifact.direct_import_module_keys.len + artifact.platformRequiredBindings().bindings.len;
     }
 
     fn edge(self: PreparedModuleGraph, node: usize, edge_index: usize) ?usize {
@@ -1265,7 +1265,7 @@ const PreparedModuleGraph = struct {
         const key = if (edge_index < imports.len)
             imports[edge_index].bytes
         else
-            artifact.platform_required_bindings.bindings[edge_index - imports.len].app_value.artifact.bytes;
+            artifact.platformRequiredBindings().bindings[edge_index - imports.len].app_value.artifact.bytes;
         return self.by_key.get(key);
     }
 };
@@ -1732,7 +1732,7 @@ const BoxyObjects = struct {
 
     /// The module whose hosted section binds `artifact`'s hosted functions.
     fn platformOf(self: *BoxyObjects, artifact: *const Artifact) ?CheckedArtifact.ImportedModuleView {
-        if (artifact.hosted_procs.procs.len == 0) return null;
+        if (!artifact.declaresHostedProcedures()) return null;
         var packages = self.coordinator.packages.iterator();
         while (packages.next()) |package| {
             for (package.value_ptr.*.modules.items) |*mod| {
@@ -1768,9 +1768,9 @@ const BoxyObjects = struct {
     /// own still to evaluate, or hosted functions no checked platform module
     /// binds while checking continues), or now.
     fn eligibility(self: *BoxyObjects, artifact: *const Artifact) Allocator.Error!enum { never, later, now } {
-        if (artifact.platform_type_inputs.requirements.len != 0) return .never;
+        if (artifact.hasPlatformRequirements()) return .never;
         if (try Coordinator.unevaluatedRequestCount(artifact, .boxy) != 0) return .later;
-        if (artifact.hosted_procs.procs.len != 0 and self.platformOf(artifact) == null) {
+        if (artifact.declaresHostedProcedures() and self.platformOf(artifact) == null) {
             return if (self.coordinator.frontend_complete) .never else .later;
         }
         return .now;
@@ -1908,7 +1908,7 @@ const BoxyObjects = struct {
                 return;
             },
             .later => {
-                if (artifact.hosted_procs.procs.len != 0) try self.unbound_hosted.append(gpa, artifact);
+                if (artifact.declaresHostedProcedures()) try self.unbound_hosted.append(gpa, artifact);
                 return;
             },
             .now => {},
@@ -2945,7 +2945,7 @@ pub const Coordinator = struct {
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
         key: check.CheckedArtifact.ModuleId,
     ) bool {
-        for (root_artifact.platform_required_bindings.bindings) |binding| {
+        for (root_artifact.platformRequiredBindings().bindings) |binding| {
             if (std.mem.eql(u8, &binding.app_value.artifact.bytes, &key.bytes)) return true;
         }
         return false;
@@ -3260,7 +3260,7 @@ pub const Coordinator = struct {
             if (platform_root.mod.checkedArtifact()) |artifact| {
                 if (artifact.checking_context_identity.platform_app_relation != null or
                     (try artifact.rootRequests()).requests.len > 0 or
-                    artifact.provided_exports.exports.len > 0)
+                    (try artifact.providedExports()).exports.len > 0)
                 {
                     return artifact;
                 }
@@ -3282,7 +3282,7 @@ pub const Coordinator = struct {
         var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
         errdefer views.deinit(allocator);
 
-        for (root_artifact.platform_required_bindings.bindings) |binding| {
+        for (root_artifact.platformRequiredBindings().bindings) |binding| {
             const artifact = self.checkedArtifactByKey(binding.app_value.artifact) orelse base.invariant("compile.coordinator.collectRelationArtifactViews missing app artifact for platform relation", .{});
             try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
         }
@@ -8437,8 +8437,8 @@ test "prepared checked imports finalize after frontend and release abandoned dia
         try std.testing.expect((try artifact.rootRequests()).compile_time_requests.len > 0);
         try std.testing.expectEqual(@as(usize, 0), artifact.evaluation.const_store.values.items.len);
         const imported = CheckedArtifact.importedView(artifact);
-        try std.testing.expect(imported.exported_const_templates.templates.len > 0);
-        try std.testing.expect(imported.exported_const_templates.templates[0].template.state == .eval_template);
+        try std.testing.expect((try imported.exportRows()).const_templates.len > 0);
+        try std.testing.expect((try imported.exportRows()).const_templates[0].template.state == .eval_template);
         const key = artifact.key;
 
         if (finish) {
@@ -9226,7 +9226,7 @@ test "app artifact records platform requirement solutions from checking" {
     try std.testing.expect(!coord.hasUserErrors());
 
     const app_artifact = coord.appRootCheckedArtifact();
-    const table = &app_artifact.platform_requirement_solutions;
+    const table = try app_artifact.platformRequirementSolutions();
 
     // One requirement (`prog`), a record of functions, so a const value.
     try std.testing.expectEqual(@as(usize, 1), table.solutions.len);
@@ -9458,7 +9458,7 @@ test "erroneous function requirement publishes an explicit checked-error outcome
     try std.testing.expect(coord.hasUserErrors());
 
     const app_artifact = coord.appRootCheckedArtifact();
-    try std.testing.expectEqual(@as(usize, 0), app_artifact.platform_requirement_solutions.solutions.len);
+    try std.testing.expectEqual(@as(usize, 0), (try app_artifact.platformRequirementSolutions()).solutions.len);
 }
 
 fn writeAliasBackingRequirementFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
@@ -9549,7 +9549,7 @@ test "platform requirement relation specializes identity reached through app ali
         if (root.kind == .hoisted_constant) platform_hoisted_constants += 1;
     }
     try std.testing.expect(platform_hoisted_constants > 0);
-    const relations = platform_artifact.platform_requirement_relations.relations;
+    const relations = platform_artifact.platformRequirementRelations().relations;
     try std.testing.expectEqual(@as(usize, 1), relations.len);
 
     const relation = relations[0];
@@ -9726,7 +9726,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     // so the app's recorded solution references app-owned types only and the
     // platform root defers its publication like any other app build.
     const app_artifact = coord.appRootCheckedArtifact();
-    const table = &app_artifact.platform_requirement_solutions;
+    const table = try app_artifact.platformRequirementSolutions();
     try std.testing.expectEqual(@as(usize, 1), table.solutions.len);
     const solution = table.solutions[0];
     try std.testing.expectEqual(@as(u32, 1), solution.identity_len);
@@ -9743,7 +9743,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
     try std.testing.expectEqual(@as(u32, 1), coord.platform_root_publish_count);
 
     const platform_artifact = (try coord.executableRootCheckedArtifact());
-    const relations = platform_artifact.platform_requirement_relations.relations;
+    const relations = platform_artifact.platformRequirementRelations().relations;
     try std.testing.expectEqual(@as(usize, 1), relations.len);
     try std.testing.expect(platform_artifact.typeStore().payload(relations[0].requested_source_ty_payload) != .pending);
 }
@@ -9876,7 +9876,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
                 if (std.mem.eql(u8, &seen, &view.key.bytes)) continue :views;
             }
             try seen_keys.append(allocator, view.key.bytes);
-            for (view.hosted_procs.procs) |proc| {
+            for ((try view.hostedProcs()).procs) |proc| {
                 try symbols.append(allocator, view.canonical_names.externalSymbolNameText(proc.external_symbol_name));
                 try proc_refs.append(allocator, proc.proc);
             }
@@ -9897,7 +9897,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
     for (view_groups) |views| {
         for (views) |view| {
             if (view.module_identity.kind != .platform) continue;
-            for (view.hosted_bindings.bindings) |binding| {
+            for ((try view.hostedBindings()).bindings) |binding| {
                 const symbol = view.canonical_names.externalSymbolNameText(binding.external_symbol_name);
                 if (first_target) |target| {
                     try std.testing.expect(!std.mem.eql(u8, &target.bytes, &binding.target_checked_module.bytes));

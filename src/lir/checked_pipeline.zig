@@ -1314,7 +1314,7 @@ pub const LoweredProgram = struct {
             std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
             const root = (try root_module.lookupRootRequestByOrder(metadata.order)) orelse
                 checkedPipelineInvariant("platform entrypoint root metadata has no checked root request");
-            const symbol = root_module.providedEntrypointName(root) orelse
+            const symbol = (try root_module.providedEntrypointName(root)) orelse
                 checkedPipelineInvariant("platform entrypoint root metadata has no checked export declaration");
             name.* = try allocator.dupe(u8, symbol);
             initialized += 1;
@@ -2064,7 +2064,7 @@ fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Alloca
     if (builtin.mode != .debug) return;
     switch (target.checked_module_state) {
         .complete => try modules.root.module.verifyComplete(),
-        .checking_finalization => modules.root.module.verifyReadyForCompileTimeLowering(),
+        .checking_finalization => try modules.root.module.verifyReadyForCompileTimeLowering(),
     }
 }
 
@@ -2086,21 +2086,21 @@ fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Alloca
 pub fn requireHostedProceduresBound(
     modules: CheckedModuleSet,
     target: TargetConfig,
-) HostedBindingError!void {
+) LowerResourceError!void {
     switch (target.checked_module_state) {
         .complete => {},
         .checking_finalization => return,
     }
 
     const root_view = checked.importedView(modules.root.module);
-    const bindings = platformHostedBindings(root_view, modules) orelse return;
+    const bindings = try platformHostedBindings(root_view, modules) orelse return;
 
-    if (!hostedProceduresBound(root_view, bindings)) return error.HostedFunctionNotBound;
+    if (!try hostedProceduresBound(root_view, bindings)) return error.HostedFunctionNotBound;
     for (modules.imports) |imported| {
-        if (!hostedProceduresBound(imported, bindings)) return error.HostedFunctionNotBound;
+        if (!try hostedProceduresBound(imported, bindings)) return error.HostedFunctionNotBound;
     }
     for (modules.root.relation_modules) |relation| {
-        if (!hostedProceduresBound(relation, bindings)) return error.HostedFunctionNotBound;
+        if (!try hostedProceduresBound(relation, bindings)) return error.HostedFunctionNotBound;
     }
 }
 
@@ -2109,13 +2109,13 @@ pub fn requireHostedProceduresBound(
 fn platformHostedBindings(
     root_view: checked.ImportedModuleView,
     modules: CheckedModuleSet,
-) ?[]const checked.HostedBinding {
-    if (root_view.module_identity.kind == .platform) return root_view.hosted_bindings.bindings;
+) Allocator.Error!?[]const checked.HostedBinding {
+    if (root_view.module_identity.kind == .platform) return (try root_view.hostedBindings()).bindings;
     for (modules.imports) |imported| {
-        if (imported.module_identity.kind == .platform) return imported.hosted_bindings.bindings;
+        if (imported.module_identity.kind == .platform) return (try imported.hostedBindings()).bindings;
     }
     for (modules.root.relation_modules) |relation| {
-        if (relation.module_identity.kind == .platform) return relation.hosted_bindings.bindings;
+        if (relation.module_identity.kind == .platform) return (try relation.hostedBindings()).bindings;
     }
     return null;
 }
@@ -2123,8 +2123,8 @@ fn platformHostedBindings(
 fn hostedProceduresBound(
     view: checked.ImportedModuleView,
     bindings: []const checked.HostedBinding,
-) bool {
-    for (view.hosted_procs.procs) |proc| {
+) Allocator.Error!bool {
+    for ((try view.hostedProcs()).procs) |proc| {
         var bound = false;
         for (bindings) |binding| {
             if (!std.mem.eql(u8, &binding.target_checked_module.bytes, &view.key.bytes)) continue;
