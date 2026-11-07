@@ -1353,7 +1353,6 @@ fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.
         .checked_procedure_templates = .{},
         .intrinsic_wrappers = .{},
         .top_level_procedure_bindings = .{},
-        .hosted_procs = .{},
         .platform_required_bindings = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},

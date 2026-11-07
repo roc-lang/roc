@@ -1738,7 +1738,7 @@ const BoxyObjects = struct {
 
     /// The module whose hosted section binds `artifact`'s hosted functions.
     fn platformOf(self: *BoxyObjects, artifact: *const Artifact) ?CheckedArtifact.ImportedModuleView {
-        if (artifact.hosted_procs.procs.len == 0) return null;
+        if (!artifact.declaresHostedProcedures()) return null;
         var packages = self.coordinator.packages.iterator();
         while (packages.next()) |package| {
             for (package.value_ptr.*.modules.items) |*mod| {
@@ -1776,7 +1776,7 @@ const BoxyObjects = struct {
     fn eligibility(self: *BoxyObjects, artifact: *const Artifact) Allocator.Error!enum { never, later, now } {
         if (artifact.hasPlatformRequirements()) return .never;
         if (try Coordinator.unevaluatedRequestCount(artifact, .boxy) != 0) return .later;
-        if (artifact.hosted_procs.procs.len != 0 and self.platformOf(artifact) == null) {
+        if (artifact.declaresHostedProcedures() and self.platformOf(artifact) == null) {
             return if (self.coordinator.frontend_complete) .never else .later;
         }
         return .now;
@@ -1914,7 +1914,7 @@ const BoxyObjects = struct {
                 return;
             },
             .later => {
-                if (artifact.hosted_procs.procs.len != 0) try self.unbound_hosted.append(gpa, artifact);
+                if (artifact.declaresHostedProcedures()) try self.unbound_hosted.append(gpa, artifact);
                 return;
             },
             .now => {},
@@ -9658,7 +9658,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
                 if (std.mem.eql(u8, &seen, &view.key.bytes)) continue :views;
             }
             try seen_keys.append(allocator, view.key.bytes);
-            for (view.hosted_procs.procs) |proc| {
+            for ((try view.hostedProcs()).procs) |proc| {
                 try symbols.append(allocator, view.canonical_names.externalSymbolNameText(proc.external_symbol_name));
                 try proc_refs.append(allocator, proc.proc);
             }
@@ -9679,7 +9679,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
     for (view_groups) |views| {
         for (views) |view| {
             if (view.module_identity.kind != .platform) continue;
-            for (view.hosted_bindings.bindings) |binding| {
+            for ((try view.hostedBindings()).bindings) |binding| {
                 const symbol = view.canonical_names.externalSymbolNameText(binding.external_symbol_name);
                 if (first_target) |target| {
                     try std.testing.expect(!std.mem.eql(u8, &target.bytes, &binding.target_checked_module.bytes));

@@ -2816,7 +2816,8 @@ fn initHosted(program: *Program) Allocator.Error!void {
     var platform: ?*const types.ModuleView = null;
     for (program.modules.views.items) |*view| {
         if (view.view.module_identity.kind == .platform) platform = view;
-        for (view.view.hosted_procs.procs) |proc| {
+        const hosted_procs = try view.view.hostedProcs();
+        for (hosted_procs.procs) |proc| {
             const owner = program.moduleByKey(.{ .bytes = proc.template.artifact.bytes });
             const key: TemplateKey = .{ .module = owner.index, .template = proc.template.template };
             try program.hosted.put(allocator, key, .{
@@ -2824,11 +2825,11 @@ fn initHosted(program: *Program) Allocator.Error!void {
                 .dispatch_index = null,
             });
             try by_def.put(allocator, .{ .module = view.index, .def = @backingInt(proc.def_idx) }, key);
-            try ordered.append(allocator, .{ .key = key, .order = proc.orderKey(view.view.hosted_procs), .def = @backingInt(proc.def_idx), .digest = view.key.bytes });
+            try ordered.append(allocator, .{ .key = key, .order = proc.orderKey(hosted_procs), .def = @backingInt(proc.def_idx), .digest = view.key.bytes });
         }
     }
     if (platform) |view| {
-        for (view.view.hosted_bindings.bindings, 0..) |binding, index| {
+        for ((try view.view.hostedBindings()).bindings, 0..) |binding, index| {
             const target = switch (program.input.unit) {
                 .program => program.moduleByKey(binding.target_checked_module),
                 // A unit binds the hosted functions of the modules it lowers;

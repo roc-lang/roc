@@ -21,6 +21,8 @@ const ExportRows = checked_artifact.ExportRows;
 const ProvidedExportTable = checked_artifact.ProvidedExportTable;
 const PlatformTypeInputs = checked_artifact.PlatformTypeInputs;
 const PlatformRequirementSolutionTable = checked_artifact.PlatformRequirementSolutionTable;
+const HostedProcTable = checked_artifact.HostedProcTable;
+const HostedBindingTable = checked_artifact.HostedBindingTable;
 const PublicApiDependencies = checked_artifact.PublicApiDependencies;
 const LoweringVisibility = checked_artifact.LoweringVisibility;
 const ModuleInterfaceCapabilities = checked_artifact.ModuleInterfaceCapabilities;
@@ -210,6 +212,8 @@ pub const ModuleAnalyses = struct {
     provided_exports: collections.OnceSlot(*ProvidedExportTable, .module_provided_exports) = .empty,
     platform_type_inputs: collections.OnceSlot(*PlatformTypeInputs, .module_platform_type_inputs) = .empty,
     platform_requirement_solutions: collections.OnceSlot(*PlatformRequirementSolutionTable, .module_platform_requirement_solutions) = .empty,
+    hosted_procs: collections.OnceSlot(*HostedProcTable, .module_hosted_procs) = .empty,
+    hosted_bindings: collections.OnceSlot(*HostedBindingTable, .module_hosted_bindings) = .empty,
     export_closures: collections.OnceSlot(*ExportClosures, .module_export_closures) = .empty,
     public_api_dependencies: collections.OnceSlot(*PublicApiDependencies, .module_public_api_dependencies) = .empty,
     lowering_visibility: collections.OnceSlot(*LoweringVisibility, .module_lowering_visibility) = .empty,
@@ -345,6 +349,14 @@ pub const ModuleAnalyses = struct {
             solutions.deinit(allocator);
             allocator.destroy(solutions);
         }
+        if (self.hosted_procs.peek()) |table| {
+            table.deinit(allocator);
+            allocator.destroy(table);
+        }
+        if (self.hosted_bindings.peek()) |table| {
+            table.deinit(allocator);
+            allocator.destroy(table);
+        }
         if (self.provided_exports.peek()) |table| {
             allocator.free(table.exports);
             allocator.destroy(table);
@@ -428,9 +440,33 @@ pub const ModuleAnalyses = struct {
         return self.platform_requirement_solutions.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.platformRequirementSolutions);
     }
 
+    /// The hosted procedures of `owner`, this module. A platform/app
+    /// pairing's are its platform's.
+    pub fn hostedProcs(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const HostedProcTable {
+        self.assertPublished();
+        if (self.platform) |platform| return platformAnalyses(platform).hostedProcs(checked_artifact.importedView(platform));
+        return self.hosted_procs.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.hostedProcs);
+    }
+
+    /// The hosted bindings of `owner`, this module, a platform's hosted
+    /// section. A platform/app pairing's are its platform's.
+    pub fn hostedBindings(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const HostedBindingTable {
+        self.assertPublished();
+        if (self.platform) |platform| return platformAnalyses(platform).hostedBindings(checked_artifact.importedView(platform));
+        return self.hosted_bindings.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.hostedBindings);
+    }
+
     const ViewRequest = struct {
         analyses: *ModuleAnalyses,
         owner: ImportedModuleView,
+
+        fn hostedProcs(request: ViewRequest) Allocator.Error!*HostedProcTable {
+            return checked_artifact.computeHostedProcs(request.analyses.allocator, request.owner);
+        }
+
+        fn hostedBindings(request: ViewRequest) Allocator.Error!*HostedBindingTable {
+            return checked_artifact.computeHostedBindings(request.analyses.allocator, request.owner, request.analyses.resolver);
+        }
 
         fn exportRows(request: ViewRequest) Allocator.Error!*ExportRows {
             return checked_artifact.computeExportRows(request.analyses.allocator, request.owner);

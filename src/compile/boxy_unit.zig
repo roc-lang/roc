@@ -155,9 +155,10 @@ pub const Built = struct {
 pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8, run_image: bool, expect_sites: bool, wasm_stack_checks: bool) Allocator.Error!object_cache.Key {
     std.debug.assert(!wasm_stack_checks or imageKind(target) == .wasm);
     const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
-        const inputs = try gpa.alloc(object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.len);
+        const bindings = (try platform_view.hostedBindings()).bindings;
+        const inputs = try gpa.alloc(object_cache.HostedBindingInput, bindings.len);
         defer gpa.free(inputs);
-        for (platform_view.hosted_bindings.bindings, inputs) |binding, *input| input.* = .{
+        for (bindings, inputs) |binding, *input| input.* = .{
             .target_module = binding.target_checked_module.bytes,
             .target_def = @backingInt(binding.target_def),
             .symbol = platform_view.canonical_names.externalSymbolNameText(binding.external_symbol_name),

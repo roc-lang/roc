@@ -1602,10 +1602,11 @@ fn appendHostedCacheEntriesFromView(
     if (checkedModuleKeySeen(seen_keys.items, view.key.bytes)) return;
     try seen_keys.append(allocator, view.key.bytes);
 
-    for (view.hosted_procs.procs) |proc| {
+    const hosted_procs = try view.hostedProcs();
+    for (hosted_procs.procs) |proc| {
         try entries.append(allocator, .{
             .module_key = view.key.bytes,
-            .order_key = proc.orderKey(view.hosted_procs),
+            .order_key = proc.orderKey(hosted_procs),
             .external_symbol_name = view.canonical_names.externalSymbolNameText(proc.external_symbol_name),
             .def_idx = @backingInt(proc.def_idx),
             .deterministic_index = proc.deterministic_index,
@@ -1617,18 +1618,18 @@ fn findHostedBindingView(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
     relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
-) ?HostedBindingView {
+) Allocator.Error!?HostedBindingView {
     if (root_artifact.module_identity.kind == .platform) {
-        return .{ .table = &root_artifact.hosted_bindings, .names = root_artifact.nameStore() };
+        return .{ .table = try root_artifact.hostedBindings(), .names = root_artifact.nameStore() };
     }
     for (imported_artifacts) |view| {
         if (view.module_identity.kind == .platform) {
-            return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+            return .{ .table = try view.hostedBindings(), .names = view.canonical_names };
         }
     }
     for (relation_artifacts) |view| {
         if (view.module_identity.kind == .platform) {
-            return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+            return .{ .table = try view.hostedBindings(), .names = view.canonical_names };
         }
     }
     return null;
@@ -1704,7 +1705,7 @@ fn checkedHostedTable(
         try appendHostedCacheEntriesFromView(allocator, &hosted_entries, &seen_keys, view);
     }
 
-    if (findHostedBindingView(root_artifact, imported_artifacts, relation_artifacts)) |binding_view| {
+    if (try findHostedBindingView(root_artifact, imported_artifacts, relation_artifacts)) |binding_view| {
         try applyHostedBindings(allocator, &hosted_entries, binding_view);
     } else {
         const SortContext = struct {
@@ -10795,7 +10796,7 @@ fn boxyObjectKey(gpa: Allocator, digests: *compile.boxy_interface.Digests, artif
 /// hosted section binds the hosted functions `artifact` declares to their
 /// host symbols. Null for a module declaring none.
 fn boxyUnitPlatform(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView) ?check.CheckedArtifact.ImportedModuleView {
-    if (artifact.hosted_procs.procs.len == 0) return null;
+    if (!artifact.declaresHostedProcedures()) return null;
     return platform;
 }
 

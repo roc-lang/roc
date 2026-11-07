@@ -10473,8 +10473,6 @@ const TestImportViewTables = struct {
     intrinsic_wrappers: IntrinsicWrapperTable = .{},
     resolved_value_refs: ResolvedValueRefTable = .{},
     static_dispatch_plans: static_dispatch.StaticDispatchPlanTable = .{},
-    hosted_procs: HostedProcTable = .{},
-    hosted_bindings: HostedBindingTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable = .{},
     platform_required_bindings: PlatformRequiredBindingTable = .{},
     callable_eval_templates: CallableEvalTemplateTable = .{},
@@ -10531,8 +10529,6 @@ const TestImportViewTables = struct {
             .intrinsic_wrappers = &self.intrinsic_wrappers,
             .resolved_value_refs = &self.resolved_value_refs,
             .static_dispatch_plans = &self.static_dispatch_plans,
-            .hosted_procs = &self.hosted_procs,
-            .hosted_bindings = &self.hosted_bindings,
             .top_level_procedure_bindings = &self.top_level_procedure_bindings,
             .platform_required_bindings = &self.platform_required_bindings,
             .callable_eval_templates = self.callable_eval_templates.view(),
@@ -11849,7 +11845,7 @@ pub const ResolvedValueRefTable = struct {
         artifact_key: CheckedModuleArtifactKey,
         imports: []const PublishImportArtifact,
         available_artifacts: []const ImportedModuleView,
-        hosted_procs: *const HostedProcTable,
+        templates: *const CheckedProcedureTemplateTable,
         platform_required_declarations: PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         top_level_values: *const TopLevelValueTable,
@@ -11877,7 +11873,7 @@ pub const ResolvedValueRefTable = struct {
                 reference,
                 imports,
                 available_artifacts,
-                hosted_procs,
+                templates,
                 platform_required_declarations,
                 platform_required_bindings,
                 top_level_values,
@@ -11979,7 +11975,7 @@ fn publishedValueRef(
     reference: ModuleEnv.ValueReference,
     imports: []const PublishImportArtifact,
     available_artifacts: []const ImportedModuleView,
-    hosted_procs: *const HostedProcTable,
+    templates: *const CheckedProcedureTemplateTable,
     platform_required_declarations: PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     top_level_values: *const TopLevelValueTable,
@@ -12000,7 +11996,7 @@ fn publishedValueRef(
             module,
             artifact_key,
             top_level_values.lookupByDef(def) orelse checkedArtifactInvariant("a top-level lookup target is not a top-level value", .{}),
-            hosted_procs,
+            templates,
         ),
         .hoisted_procedure => |pattern| .{ .top_level_proc = .{
             .binding = .{ .top_level = .{
@@ -12084,19 +12080,19 @@ fn categorizeTopLevelValueRef(
     module: TypedCIR.Module,
     artifact_key: CheckedModuleArtifactKey,
     entry: TopLevelValueEntry,
-    hosted_procs: *const HostedProcTable,
+    templates: *const CheckedProcedureTemplateTable,
 ) ResolvedValueRef {
     return switch (entry.value) {
         .const_ref => |const_ref| .{ .top_level_const = .{
             .const_ref = const_ref,
         } },
-        .procedure_binding => |binding| if (hostedProcForDef(hosted_procs, entry.def)) |hosted|
+        .procedure_binding => |binding| if (hostedProcedureTemplate(module, templates, entry.def)) |template|
             .{ .hosted_proc = .{
                 .binding = .{ .hosted = .{
-                    .module_idx = hosted.module_idx,
-                    .def = hosted.def_idx,
-                    .proc = hosted.proc,
-                    .template = hosted.template,
+                    .module_idx = module.moduleIndex(),
+                    .def = entry.def,
+                    .proc = .{ .artifact = template.artifact, .proc_base = template.proc_base },
+                    .template = template,
                 } },
                 .intrinsic = null,
                 .iterator_procedure = null,
@@ -12359,11 +12355,11 @@ fn categorizeRequiredValueRef(
     };
 }
 
-fn hostedProcForDef(table: *const HostedProcTable, def_idx: CIR.Def.Idx) ?HostedProc {
-    for (table.procs) |proc| {
-        if (proc.def_idx == def_idx) return proc;
-    }
-    return null;
+/// The procedure template of `def_idx` when the hosted transform rewrote it
+/// to a hosted lambda.
+fn hostedProcedureTemplate(module: TypedCIR.Module, templates: *const CheckedProcedureTemplateTable, def_idx: CIR.Def.Idx) ?canonical.ProcedureTemplateRef {
+    if (module.def(def_idx).expr.data != .e_hosted_lambda) return null;
+    return templates.lookupByDef(def_idx) orelse checkedArtifactInvariant("hosted procedure def has no checked template", .{});
 }
 
 fn platformBindingForRequiredIndex(table: *const PlatformRequiredBindingTable, requires_idx: u32) ?PlatformRequiredBinding {
@@ -19557,7 +19553,7 @@ pub const HostedProc = struct {
     expr_idx: CIR.Expr.Idx,
     external_symbol_name: canonical.ExternalSymbolNameId,
     deterministic_index: u32,
-    /// Range into `HostedProcTable.order_key_bytes` (transform-B side list).
+    /// Range into `HostedProcTable.order_key_bytes`.
     order_key_start: u32,
     order_key_len: u32,
     proc: canonical.ProcedureValueRef,
@@ -19569,128 +19565,134 @@ pub const HostedProc = struct {
     }
 };
 
-/// Public `HostedProcTable` declaration.
+/// A module's hosted procedures (`ModuleAnalyses.hostedProcs`).
 pub const HostedProcTable = struct {
     procs: []HostedProc = &.{},
-    /// Flat pool of all procs' order-key bytes (transform-B side list).
+    /// Flat pool of every proc's order-key bytes.
     order_key_bytes: []const u8 = &.{},
 
-    pub const Serialized = extern struct {
-        procs: SerializedSlice(HostedProc) = .{},
-        order_key_bytes: SerializedSlice(u8) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(HostedProcTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
+    pub fn deinit(self: *HostedProcTable, allocator: Allocator) void {
+        allocator.free(self.procs);
+        allocator.free(self.order_key_bytes);
+        self.* = .{};
+    }
 
+    /// The hosted procedure of definition `def_idx`, if it is one.
+    pub fn forDef(self: *const HostedProcTable, def_idx: CIR.Def.Idx) ?HostedProc {
+        for (self.procs) |proc| {
+            if (proc.def_idx == def_idx) return proc;
+        }
+        return null;
+    }
+};
+
+/// Whether `env` declares a hosted procedure: a definition the hosted
+/// transform rewrote to a hosted lambda.
+pub fn declaresHostedProceduresIn(env: *const ModuleEnv) bool {
+    for (env.store.sliceDefs(env.hosted_defs)) |def_idx| {
+        if (env.store.getExpr(env.store.getDef(def_idx).expr) == .e_hosted_lambda) return true;
+    }
+    return false;
+}
+
+/// The external symbol names a module's hosted procedures and hosted section
+/// entries name, interned into its name store before any slot reads them.
+fn internHostedSymbolNames(env: *const ModuleEnv, names: *canonical.CanonicalNameStore) Allocator.Error!void {
+    for (env.store.sliceDefs(env.hosted_defs)) |def_idx| {
+        const expr = env.store.getExpr(env.store.getDef(def_idx).expr);
+        if (expr != .e_hosted_lambda) continue;
+        _ = try names.internExternalSymbolIdent(env.getIdentStoreConst(), expr.e_hosted_lambda.symbol_name);
+    }
+    if (env.module_kind != .platform) return;
+    for (env.hosted_entries.items.items) |entry| {
+        if (entry.target_status != .resolved or entry.target_def == null) continue;
+        _ = try names.internExternalSymbolName(env.getString(entry.symbol));
+    }
+}
+
+/// The hosted procedures of `owner` (`ModuleAnalyses.hostedProcs`): each
+/// definition the hosted transform rewrote to a hosted lambda, ordered by its
+/// qualified symbol name without a trailing `!`, then by definition.
+pub fn computeHostedProcs(allocator: Allocator, owner: ImportedModuleView) Allocator.Error!*HostedProcTable {
+    const env = owner.module_env;
     const Candidate = struct {
-        module_idx: u32,
         def_idx: CIR.Def.Idx,
         expr_idx: CIR.Expr.Idx,
         external_symbol_name: canonical.ExternalSymbolNameId,
-        proc: canonical.ProcedureValueRef,
         template: canonical.ProcedureTemplateRef,
         sort_key: []const u8,
     };
-
-    pub fn fromModule(
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        hosted_defs: []const CIR.Def.Idx,
-        names: *canonical.CanonicalNameStore,
-        templates: *const CheckedProcedureTemplateTable,
-    ) Allocator.Error!HostedProcTable {
-        var candidates = std.ArrayList(Candidate).empty;
-        defer {
-            for (candidates.items) |candidate| allocator.free(candidate.sort_key);
-            candidates.deinit(allocator);
-        }
-
-        var procs = std.ArrayList(HostedProc).empty;
-        errdefer procs.deinit(allocator);
-        var order_key_bytes = std.ArrayList(u8).empty;
-        errdefer order_key_bytes.deinit(allocator);
-
-        for (hosted_defs) |def_idx| {
-            const def = module.def(def_idx);
-            if (def.expr.data == .e_hosted_lambda) {
-                const hosted = def.expr.data.e_hosted_lambda;
-                const template_ref = templates.lookupByDef(def_idx) orelse {
-                    base.invariant("checked artifact invariant violated: hosted procedure def has no checked template", .{});
-                };
-
-                try candidates.append(allocator, .{
-                    .module_idx = module.moduleIndex(),
-                    .def_idx = def_idx,
-                    .expr_idx = def.expr.idx,
-                    .external_symbol_name = try names.internExternalSymbolIdent(module.identStoreConst(), hosted.symbol_name),
-                    .proc = .{
-                        .artifact = template_ref.artifact,
-                        .proc_base = template_ref.proc_base,
-                    },
-                    .template = template_ref,
-                    .sort_key = try hostedProcSortKey(allocator, module, hosted.symbol_name),
-                });
-            }
-        }
-
-        const SortContext = struct {
-            pub fn lessThan(_: void, a: Candidate, b: Candidate) bool {
-                return switch (std.mem.order(u8, a.sort_key, b.sort_key)) {
-                    .lt => true,
-                    .gt => false,
-                    .eq => @backingInt(a.def_idx) < @backingInt(b.def_idx),
-                };
-            }
-        };
-        std.mem.sort(Candidate, candidates.items, {}, SortContext.lessThan);
-
-        for (candidates.items, 0..) |candidate, index| {
-            const order_key_start: u32 = @intCast(order_key_bytes.items.len);
-            try order_key_bytes.appendSlice(allocator, candidate.sort_key);
-            try procs.append(allocator, .{
-                .module_idx = candidate.module_idx,
-                .def_idx = candidate.def_idx,
-                .expr_idx = candidate.expr_idx,
-                .external_symbol_name = candidate.external_symbol_name,
-                .deterministic_index = @intCast(index),
-                .order_key_start = order_key_start,
-                .order_key_len = @intCast(candidate.sort_key.len),
-                .proc = candidate.proc,
-                .template = candidate.template,
-            });
-        }
-
-        return .{
-            .procs = try procs.toOwnedSlice(allocator),
-            .order_key_bytes = try order_key_bytes.toOwnedSlice(allocator),
-        };
+    var candidates = std.ArrayList(Candidate).empty;
+    defer {
+        for (candidates.items) |candidate| allocator.free(candidate.sort_key);
+        candidates.deinit(allocator);
     }
 
-    fn hostedProcSortKey(
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        symbol_name: Ident.Idx,
-    ) Allocator.Error![]const u8 {
-        const module_env = module.moduleEnvConst();
-        var module_name = module_env.module_name;
-        if (Ident.textEndsWith(module_name, ".roc")) {
-            module_name = module_name[0 .. module_name.len - 4];
-        }
-
-        const local_name = module.getIdent(symbol_name);
-        const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, local_name });
-        if (!Ident.textEndsWith(qualified_name, "!")) return qualified_name;
-
-        const stripped = try allocator.dupe(u8, qualified_name[0 .. qualified_name.len - 1]);
-        allocator.free(qualified_name);
-        return stripped;
+    for (env.store.sliceDefs(env.hosted_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const expr = env.store.getExpr(def.expr);
+        if (expr != .e_hosted_lambda) continue;
+        const symbol_name = expr.e_hosted_lambda.symbol_name;
+        const template_ref = owner.checked_procedure_templates.lookupByDef(def_idx) orelse
+            checkedArtifactInvariant("hosted procedure def has no checked template", .{});
+        const sort_key = try hostedProcSortKey(allocator, env, symbol_name);
+        errdefer allocator.free(sort_key);
+        try candidates.append(allocator, .{
+            .def_idx = def_idx,
+            .expr_idx = def.expr,
+            .external_symbol_name = owner.canonical_names.lookupExternalSymbolIdent(env.getIdentStoreConst(), symbol_name) orelse
+                checkedArtifactInvariant("a hosted procedure's symbol name was not interned into its module's names", .{}),
+            .template = template_ref,
+            .sort_key = sort_key,
+        });
     }
 
-    /// Build-time-only teardown (see `StaticDispatchPlanTable.deinit`): a frozen table's
-    /// slices alias the artifact buffer and are freed wholesale by the artifact, never here.
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-};
+    std.mem.sort(Candidate, candidates.items, {}, struct {
+        fn lessThan(_: void, a: Candidate, b: Candidate) bool {
+            return switch (std.mem.order(u8, a.sort_key, b.sort_key)) {
+                .lt => true,
+                .gt => false,
+                .eq => @backingInt(a.def_idx) < @backingInt(b.def_idx),
+            };
+        }
+    }.lessThan);
+
+    const procs = try allocator.alloc(HostedProc, candidates.items.len);
+    errdefer allocator.free(procs);
+    var order_key_len: usize = 0;
+    for (candidates.items) |candidate| order_key_len += candidate.sort_key.len;
+    const order_key_bytes = try allocator.alloc(u8, order_key_len);
+    errdefer allocator.free(order_key_bytes);
+    var order_key_start: usize = 0;
+    for (candidates.items, procs, 0..) |candidate, *proc, index| {
+        @memcpy(order_key_bytes[order_key_start..][0..candidate.sort_key.len], candidate.sort_key);
+        proc.* = .{
+            .module_idx = owner.module_identity.module_idx,
+            .def_idx = candidate.def_idx,
+            .expr_idx = candidate.expr_idx,
+            .external_symbol_name = candidate.external_symbol_name,
+            .deterministic_index = @intCast(index),
+            .order_key_start = @intCast(order_key_start),
+            .order_key_len = @intCast(candidate.sort_key.len),
+            .proc = .{ .artifact = candidate.template.artifact, .proc_base = candidate.template.proc_base },
+            .template = candidate.template,
+        };
+        order_key_start += candidate.sort_key.len;
+    }
+    const result = try allocator.create(HostedProcTable);
+    result.* = .{ .procs = procs, .order_key_bytes = order_key_bytes };
+    return result;
+}
+
+fn hostedProcSortKey(allocator: Allocator, env: *const ModuleEnv, symbol_name: Ident.Idx) Allocator.Error![]const u8 {
+    var module_name = env.module_name;
+    if (Ident.textEndsWith(module_name, ".roc")) {
+        module_name = module_name[0 .. module_name.len - 4];
+    }
+    const local_name = env.getIdent(symbol_name);
+    const trimmed = if (Ident.textEndsWith(local_name, "!")) local_name[0 .. local_name.len - 1] else local_name;
+    return std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, trimmed });
+}
 
 /// One platform-header hosted binding. Slice order is the host dispatch index.
 pub const HostedBinding = struct {
@@ -19699,82 +19701,56 @@ pub const HostedBinding = struct {
     external_symbol_name: canonical.ExternalSymbolNameId,
 };
 
-/// Exact platform-header bindings from external symbols to checked hosted defs.
+/// Exact platform-header bindings from external symbols to checked hosted
+/// defs (`ModuleAnalyses.hostedBindings`).
 pub const HostedBindingTable = struct {
     bindings: []HostedBinding = &.{},
 
-    pub const Serialized = extern struct {
-        bindings: SerializedSlice(HostedBinding) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(HostedBindingTable, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
+    pub fn deinit(self: *HostedBindingTable, allocator: Allocator) void {
+        allocator.free(self.bindings);
+        self.* = .{};
+    }
+};
 
-    /// `own_key` and `own_procs` describe the platform module being published,
-    /// so an entry written without a module name binds the declaration this
-    /// module makes rather than one an import makes.
-    pub fn fromModule(
-        allocator: Allocator,
-        module: TypedCIR.Module,
-        names: *canonical.CanonicalNameStore,
-        imports: []const PublishImportArtifact,
-        own_key: CheckedModuleArtifactKey,
-        own_procs: *const HostedProcTable,
-    ) Allocator.Error!HostedBindingTable {
-        if (module.moduleEnvConst().module_kind != .platform) return .{};
-
-        var bindings = std.ArrayList(HostedBinding).empty;
-        errdefer bindings.deinit(allocator);
-
-        const Target = struct {
-            module_idx: u32,
-            def: CIR.Def.Idx,
-        };
-        var hosted_targets = std.AutoHashMap(Target, usize).init(allocator);
-        defer hosted_targets.deinit();
-        var hosted_target_count: usize = 0;
-        for (imports) |imported| hosted_target_count += imported.view.hosted_procs.procs.len;
-        try hosted_targets.ensureTotalCapacity(@intCast(hosted_target_count));
-        for (imports, 0..) |imported, import_index| {
-            for (imported.view.hosted_procs.procs) |proc| {
-                hosted_targets.putAssumeCapacityNoClobber(.{
-                    .module_idx = imported.module_idx,
-                    .def = proc.def_idx,
-                }, import_index);
-            }
-        }
-
-        for (module.moduleEnvConst().hosted_entries.items.items) |entry| {
+/// The hosted bindings of `owner` (`ModuleAnalyses.hostedBindings`): for a
+/// platform, each resolved entry of its hosted section in header order whose
+/// target is a hosted procedure, of the module the entry's import names or,
+/// for an entry naming no import, of the platform itself. Any other module
+/// binds nothing. `resolver` resolves the platform's direct imports.
+pub fn computeHostedBindings(allocator: Allocator, owner: ImportedModuleView, resolver: ?ModuleResolver) Allocator.Error!*HostedBindingTable {
+    const env = owner.module_env;
+    var bindings = std.ArrayList(HostedBinding).empty;
+    errdefer bindings.deinit(allocator);
+    if (env.module_kind == .platform) {
+        for (env.hosted_entries.items.items) |entry| {
             if (entry.target_status != .resolved) continue;
             const target_def = entry.target_def orelse continue;
-
-            const target_module_key = if (entry.target_import) |import_idx| blk: {
-                const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
-                const import_index = hosted_targets.get(.{
-                    .module_idx = resolved_module_idx,
-                    .def = target_def,
-                }) orelse continue;
-                break :blk imports[import_index].key;
+            const target_module = if (entry.target_import) |import_idx| blk: {
+                const key = owner.importKey(import_idx) orelse continue;
+                const imported = (resolver orelse checkedArtifactInvariant("a platform's hosted bindings were read without a resolver for its imports", .{})).require(key.digest());
+                if ((try imported.hostedProcs()).forDef(target_def) == null) continue;
+                break :blk key.digest();
             } else blk: {
                 // No import means the entry named this module's own
                 // declaration, which is a hosted procedure only if the hosted
                 // transform rewrote it.
-                if (hostedProcForDef(own_procs, target_def) == null) continue;
-                break :blk own_key;
+                if ((try owner.hostedProcs()).forDef(target_def) == null) continue;
+                break :blk owner.key.digest();
             };
-
             try bindings.append(allocator, .{
-                .target_checked_module = target_module_key.digest(),
+                .target_checked_module = target_module,
                 .target_def = target_def,
-                .external_symbol_name = try names.internExternalSymbolName(module.moduleEnvConst().getString(entry.symbol)),
+                .external_symbol_name = owner.canonical_names.lookupExternalSymbolName(env.getString(entry.symbol)) orelse
+                    checkedArtifactInvariant("a hosted section entry's symbol name was not interned into its module's names", .{}),
             });
         }
-
-        return .{ .bindings = try bindings.toOwnedSlice(allocator) };
     }
-
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-};
+    const owned = try bindings.toOwnedSlice(allocator);
+    errdefer allocator.free(owned);
+    const result = try allocator.create(HostedBindingTable);
+    result.* = .{ .bindings = owned };
+    return result;
+}
 
 /// Public `PlatformAppRelationKey` declaration.
 pub const PlatformAppRelationKey = struct {
@@ -24529,8 +24505,6 @@ pub const PlatformPairing = struct {
                 "intrinsic_wrappers",
                 "top_level_procedure_bindings",
                 "callable_eval_templates",
-                "hosted_procs",
-                "hosted_bindings",
                 "top_level_values",
                 "hoisted_constants",
                 // Recorded as `relation`; the rest is the platform's.
@@ -31502,8 +31476,6 @@ pub const CheckedModuleArtifact = struct {
     intrinsic_wrappers: IntrinsicWrapperTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable,
     callable_eval_templates: CallableEvalTemplateTable = .{},
-    hosted_procs: HostedProcTable,
-    hosted_bindings: HostedBindingTable = .{},
     platform_requirement_relations: PlatformRequirementRelationTable = .{},
     platform_required_bindings: PlatformRequiredBindingTable,
     compile_time_roots: CompileTimeRootTable,
@@ -31603,6 +31575,21 @@ pub const CheckedModuleArtifact = struct {
     /// The module's export rows; a paired artifact's are its platform's.
     pub fn exportRows(self: *const CheckedModuleArtifact) Allocator.Error!*const ExportRows {
         return importedView(self).exportRows();
+    }
+
+    /// The module's hosted procedures; a paired artifact's are its platform's.
+    pub fn hostedProcs(self: *const CheckedModuleArtifact) Allocator.Error!*const HostedProcTable {
+        return importedView(self).hostedProcs();
+    }
+
+    /// A platform's hosted bindings; a paired artifact's are its platform's.
+    pub fn hostedBindings(self: *const CheckedModuleArtifact) Allocator.Error!*const HostedBindingTable {
+        return importedView(self).hostedBindings();
+    }
+
+    /// Whether the module declares a hosted procedure.
+    pub fn declaresHostedProcedures(self: *const CheckedModuleArtifact) bool {
+        return declaresHostedProceduresIn(self.moduleEnvConst());
     }
 
     /// The artifact's provided exports at their types. A paired artifact's
@@ -31968,8 +31955,6 @@ pub const CheckedModuleArtifact = struct {
         intrinsic_wrappers: IntrinsicWrapperTable.Serialized,
         top_level_procedure_bindings: TopLevelProcedureBindingTable.Serialized,
         callable_eval_templates: CallableEvalTemplateTable.Serialized,
-        hosted_procs: HostedProcTable.Serialized,
-        hosted_bindings: HostedBindingTable.Serialized,
         compile_time_roots: CompileTimeRootTable.Serialized,
         top_level_values: TopLevelValueTable.Serialized,
         hoisted_constants: HoistedConstTable.Serialized,
@@ -32000,7 +31985,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 162);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 159);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -32537,11 +32522,6 @@ pub const CheckedModuleArtifact = struct {
             )));
         }
 
-        for (self.hosted_procs.procs, 0..) |proc, i| {
-            std.debug.assert(proc.deterministic_index == i);
-            std.debug.assert(proc.module_idx == self.module_identity.module_idx);
-        }
-
         // Another thread may be creating types in the store; the roots its
         // creation made are complete only once it ends.
         const complete_roots = self.typeStore().completeRootCount();
@@ -32888,8 +32868,6 @@ pub const ImportedModuleView = struct {
     intrinsic_wrappers: *const IntrinsicWrapperTable,
     resolved_value_refs: *const ResolvedValueRefTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-    hosted_procs: *const HostedProcTable,
-    hosted_bindings: *const HostedBindingTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     checking_context_identity: *const CheckingContextIdentity = &empty_checking_context_identity,
@@ -32950,6 +32928,32 @@ pub const ImportedModuleView = struct {
     /// The module's export rows.
     pub fn exportRows(self: ImportedModuleView) Allocator.Error!*const ExportRows {
         return self.analyses().exportRows(self);
+    }
+
+    /// The module's hosted procedures.
+    pub fn hostedProcs(self: ImportedModuleView) Allocator.Error!*const HostedProcTable {
+        return self.analyses().hostedProcs(self);
+    }
+
+    /// A platform's hosted bindings (empty for any other module).
+    pub fn hostedBindings(self: ImportedModuleView) Allocator.Error!*const HostedBindingTable {
+        return self.analyses().hostedBindings(self);
+    }
+
+    /// The key of the module import `import_idx` resolves to, or null when it
+    /// resolved to none. The module's direct import keys are its resolved
+    /// imports' keys in import order.
+    pub fn importKey(self: ImportedModuleView, import_idx: CIR.Import.Idx) ?CheckedModuleArtifactKey {
+        const imports = &self.module_env.imports;
+        if (imports.getResolvedModule(import_idx) == null) return null;
+        var position: usize = 0;
+        for (0..@backingInt(import_idx)) |i| {
+            if (imports.getResolvedModule(@fromBackingInt(@as(u32, @intCast(i)))) != null) position += 1;
+        }
+        if (position >= self.direct_import_module_keys.len) {
+            checkedArtifactInvariant("a resolved import has no direct import key", .{});
+        }
+        return self.direct_import_module_keys[position];
     }
 
     /// The template closures of the module's export rows.
@@ -33032,8 +33036,6 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .intrinsic_wrappers = &artifact.intrinsic_wrappers,
         .resolved_value_refs = &artifact.resolved_value_refs,
         .static_dispatch_plans = &artifact.static_dispatch_plans,
-        .hosted_procs = &artifact.hosted_procs,
-        .hosted_bindings = &artifact.hosted_bindings,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .platform_required_bindings = &artifact.platform_required_bindings,
         .checking_context_identity = &artifact.checking_context_identity,
@@ -34275,6 +34277,7 @@ pub fn publishFromTypedModule(
     );
 
     try internProvidedExportNames(module_env, &canonical_names);
+    try internHostedSymbolNames(module_env, &canonical_names);
 
     const owner_artifact = artifact_key.digest();
 
@@ -34358,18 +34361,6 @@ pub fn publishFromTypedModule(
     );
     errdefer static_dispatch_plans.deinit(allocator);
 
-    var hosted_procs = try HostedProcTable.fromModule(
-        allocator,
-        module,
-        module_env.store.sliceDefs(module_env.hosted_defs),
-        &canonical_names,
-        &checked_procedure_templates,
-    );
-    errdefer hosted_procs.deinit(allocator);
-
-    var hosted_bindings = try HostedBindingTable.fromModule(allocator, module, &canonical_names, inputs.imports, artifact_key, &hosted_procs);
-    errdefer hosted_bindings.deinit(allocator);
-
     // A published module has no app relation; only a pairing binds its
     // requirements.
     const platform_required_bindings = PlatformRequiredBindingTable{};
@@ -34450,7 +34441,7 @@ pub fn publishFromTypedModule(
         artifact_key,
         inputs.imports,
         inputs.available_artifacts,
-        &hosted_procs,
+        &checked_procedure_templates,
         platform_required_declarations,
         &platform_required_bindings,
         &top_level_values,
@@ -34526,8 +34517,6 @@ pub fn publishFromTypedModule(
         .intrinsic_wrappers = intrinsic_wrappers,
         .top_level_procedure_bindings = top_level_procedure_bindings,
         .callable_eval_templates = callable_eval_templates,
-        .hosted_procs = hosted_procs,
-        .hosted_bindings = hosted_bindings,
         .platform_requirement_relations = .{},
         .platform_required_bindings = platform_required_bindings,
         .compile_time_roots = compile_time_roots,
@@ -34762,8 +34751,6 @@ test "checked module owns post-check inputs at the checked boundary" {
     try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_procedure_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "callable_eval_templates"));
     try std.testing.expect(!@hasField(CheckedModuleArtifact, "root_requests"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "hosted_procs"));
-    try std.testing.expect(@hasField(CheckedModuleArtifact, "hosted_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "platform_required_bindings"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "compile_time_roots"));
     try std.testing.expect(@hasField(CheckedModuleArtifact, "top_level_values"));
@@ -35232,7 +35219,6 @@ test "relation projection preserves anonymous row identity and provenance" {
         .checked_procedure_templates = .{},
         .intrinsic_wrappers = .{},
         .top_level_procedure_bindings = .{},
-        .hosted_procs = .{},
         .platform_required_bindings = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
@@ -35479,7 +35465,6 @@ test "artifact views are read-only projections" {
         .checked_procedure_templates = .{},
         .intrinsic_wrappers = .{},
         .top_level_procedure_bindings = .{},
-        .hosted_procs = .{},
         .platform_required_bindings = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},
@@ -35572,8 +35557,6 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
     // Total-dispatch plans: resolutions, evidence nodes/refs, site evidence,
     // and iterator plans must survive artifact caching byte-exactly.
     try expectAllSliceStoreRoundTrips(static_dispatch.StaticDispatchPlanTable);
-    try expectAllSliceStoreRoundTrips(HostedProcTable); // transform-B: order_key moved to byte pool
-    try expectAllSliceStoreRoundTrips(HostedBindingTable);
 }
 
 /// Module analyses whose public API dependencies are `dependencies` and
@@ -35627,8 +35610,6 @@ fn testVisibilityImportedView(
         .intrinsic_wrappers = undefined,
         .resolved_value_refs = undefined,
         .static_dispatch_plans = undefined,
-        .hosted_procs = undefined,
-        .hosted_bindings = undefined,
         .top_level_procedure_bindings = undefined,
         .platform_required_bindings = undefined,
         .callable_eval_templates = undefined,
@@ -36058,7 +36039,6 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .resolved_value_refs = .{},
         .checked_procedure_templates = .{},
         .top_level_procedure_bindings = .{},
-        .hosted_procs = .{},
         .platform_required_bindings = .{},
         .compile_time_roots = .{},
         .top_level_values = .{},

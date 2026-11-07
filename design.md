@@ -5642,7 +5642,13 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   (`platformTypeInputs`: each requirement's checked root, the identity
   variables it reaches in key order, and its for-clause aliases) and an
   app's requirement solutions (`platformRequirementSolutions`: each
-  successful solution checking recorded, at its checked types), each
+  successful solution checking recorded, at its checked types), its
+  hosted procedures (`hostedProcs`: each definition the hosted transform
+  rewrote to a hosted lambda, ordered by its qualified symbol name) and a
+  platform's hosted bindings (`hostedBindings`: each resolved entry of its
+  hosted section, in header order, whose target is a hosted procedure of
+  the module the entry's import resolves to, found through the module's
+  direct import keys and resolver, or of the platform itself), each
   read by a platform/app pairing from its platform's slot,
   the template closures of the module's export rows (`exportClosures`),
   the modules a consumer of its public API reads
@@ -25691,9 +25697,9 @@ dispatch order for that table is the `hosted` section's declaration order.
 
 Canonicalization resolves every `hosted` mapping once to an exact imported
 definition. Checking validates that definition is a hosted declaration, and a
-successfully checked platform module stores the header-ordered binding table in
-its `ModuleEnv`, indexed by `(target checked module key, target CIR
-definition)`. `HostedCompiler.replaceAnnoOnlyWithHosted` records the exact
+successfully checked platform module keeps the header-ordered entries in its
+`ModuleEnv`; its hosted bindings (`ModuleAnalyses.hostedBindings`) are those
+entries indexed by `(target checked module key, target CIR definition)`. `HostedCompiler.replaceAnnoOnlyWithHosted` records the exact
 rewritten definition span in `ModuleEnv`, and every reader consumes it
 directly. CLI and post-check consumers join hosted procedures to the binding
 table by those identities in linear time; they must not reconstruct or match

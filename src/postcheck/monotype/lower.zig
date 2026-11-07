@@ -1472,8 +1472,6 @@ const ModuleViewData = struct {
     compile_time_roots: *const checked.CompileTimeRootTable,
     entry_wrappers: *const checked.EntryWrapperTable,
     intrinsic_wrappers: *const checked.IntrinsicWrapperTable,
-    hosted_procs: *const checked.HostedProcTable,
-    hosted_bindings: *const checked.HostedBindingTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     /// The reader over the module's dispatch resolution and schemas.
     dispatch: checked.CheckedDispatch,
@@ -6987,7 +6985,7 @@ const Builder = struct {
             try self.appendHostedCatalogFromView(&entries, self.relationModuleView(index));
         }
 
-        if (self.hostedBindingView()) |binding_view| {
+        if (try self.hostedBindingView()) |binding_view| {
             // The platform header's hosted section is the complete list of
             // functions the host supplies, and it is what gives each one its
             // external symbol and dispatch slot. Retain declarations omitted
@@ -7043,33 +7041,34 @@ const Builder = struct {
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
     }
 
-    fn hostedBindingView(self: *Builder) ?HostedBindingView {
+    fn hostedBindingView(self: *Builder) Allocator.Error!?HostedBindingView {
         const root = self.rootModuleView();
         if (root.module_identity.kind == .platform) {
-            return .{ .table = root.hosted_bindings, .names = root.names };
+            return .{ .table = try root.checked_view.hostedBindings(), .names = root.names };
         }
         for (0..self.modules.imports.len) |index| {
             const view = self.importModuleView(index);
             if (view.module_identity.kind == .platform) {
-                return .{ .table = view.hosted_bindings, .names = view.names };
+                return .{ .table = try view.checked_view.hostedBindings(), .names = view.names };
             }
         }
         for (0..self.modules.root.relation_modules.len) |index| {
             const view = self.relationModuleView(index);
             if (view.module_identity.kind == .platform) {
-                return .{ .table = view.hosted_bindings, .names = view.names };
+                return .{ .table = try view.checked_view.hostedBindings(), .names = view.names };
             }
         }
         return null;
     }
 
     fn appendHostedCatalogFromView(self: *Builder, entries: *std.ArrayList(HostedCatalogEntry), view: ModuleView) Allocator.Error!void {
-        for (view.hosted_procs.procs) |proc| {
+        const hosted_procs = try view.checked_view.hostedProcs();
+        for (hosted_procs.procs) |proc| {
             try entries.append(self.allocator, .{
                 .template = proc.template,
                 .external_symbol_name = try self.program.names.internExternalSymbolName(view.names.externalSymbolNameText(proc.external_symbol_name)),
                 .binding = .unavailable,
-                .order = proc.orderKey(view.hosted_procs),
+                .order = proc.orderKey(hosted_procs),
                 .target_checked_module_digest = view.key.bytes,
                 .def_idx = @backingInt(proc.def_idx),
             });
@@ -69470,8 +69469,6 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .compile_time_roots = view.compile_time_roots,
         .entry_wrappers = view.entry_wrappers,
         .intrinsic_wrappers = view.intrinsic_wrappers,
-        .hosted_procs = view.hosted_procs,
-        .hosted_bindings = view.hosted_bindings,
         .static_dispatch_plans = view.static_dispatch_plans,
         .dispatch = view.dispatch(),
         .method_registry = view.method_registry,
