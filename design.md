@@ -2483,6 +2483,30 @@ is the one measure of every inlining decision, exactly as it is for a C or
 Zig module built for minimum size. The pinned leaf builtins keep
 `alwaysinline` in every mode.
 
+There are two string joins with one meaning. `str_concat` is the join a
+program spells (`Str.concat`); its LLVM wrapper carries the small-into-small
+fast path and is pinned, because a spelled join is usually one of a few and
+its operands are often small. `str_append` is the join generated renderings
+use (`Str.inspect`, `dbg`, and `expect` reports); its wrapper is only the
+call into the shared out-of-line concatenation and is not pinned, because a
+rendering has one join per piece and its accumulator stops being small after
+its first pieces, so at those sites the pinned path is a copy that never
+pays. The cost it avoids is the dominant compile cost of a program that
+renders many types: a pinned copy nets about 43 LLVM instructions after
+simplification, and a program with 22,958 rendering joins in one procedure
+(roc-pg's rebellion example) spends 73% of that procedure's 1.36M
+post-optimization instructions, about 1T of its 2.2T compile instructions,
+about 5 GB of its 8.6 GB peak memory, and 4 MB of its 17.4 MB binary on them.
+Both joins have the same result, the same ownership effect
+(`runtimeUniqueness` of the accumulator), the same backend entry through
+`LowLevelBuiltins.strOp`, and the same handling in every LIR pass; the
+string-append fusion (`src/lir/str_append.zig`, origin `str_append_fuse`)
+fuses a call followed by either join and keeps each join as it was: the
+variant joins onto the caller's accumulator with the consumer's join and
+keeps the source's own join where it folds a direct join return. A spelled
+`Str.concat` is never lowered as `str_append`, and generated renderings never
+use `str_concat`.
+
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
 with many sites. Larger helpers remain ordinary calls so LLVM can simplify each
@@ -15703,6 +15727,38 @@ it too. Each consumer reads its own representation into the shared
   an override call, ...). Monotype lowering builds rendering expressions from
   it, Boxy lowering emits rendering LIR from it, and the Boxy runtime renders
   descriptor-described values to bytes from it.
+
+  Monotype lowering's generated renderings append onto one accumulator.
+  The helper of each rendered type takes the accumulator ahead of the value
+  (`(Str, T) -> Str`) and returns the accumulator with the value's rendering
+  at its end; a nested rendering therefore writes into the same string as
+  its parent, and no rendering is built apart and copied in. Every piece
+  (literal text, a label, a primitive's text, an override's result, a
+  `<missing>` marker, a list separator) is joined with `str_append`, never
+  `str_concat`. A rendering of several pieces first reserves
+  (`str_reserve`) the byte length of the literal text it will append: a
+  record's braces, labels, label separators, and field separators; a tuple's
+  parentheses and separators; a variant's name, payload parentheses, and
+  separators (per variant, since each is its own rendering); a box's
+  `Box(` and `)`; a list's brackets. A child rendering's length is its own
+  rendering's and is not reserved, and neither are a list's item separators,
+  whose count is the list's runtime length; nothing is rendered ahead of
+  time to measure it. A rendering of one piece (a payload-less variant, an
+  empty record or tuple, an empty-element list) is a plain append. `str_reserve`
+  grows a string to exactly the requested length and an append grows it
+  geometrically, so a nested reservation that outgrows the slack reallocates
+  once and the appends after it restore geometric slack; the first
+  reservation of a rendering is its one allocation when its literal text is
+  longer than a small string. `Str.inspect(value)` itself is the helper
+  applied to the empty string, except that a value whose shape renders as one
+  expression (a literal, a primitive, an override, an uninhabited type) is
+  that expression and no accumulator exists. The LIR string-append fusion
+  needs no re-rooting for these helpers, since they already append onto the
+  accumulator they are given; it still fuses `str_append(acc, call)` where a
+  rendering appends an override's result, and a fused source that starts its
+  result from `Str.with_capacity` keeps that allocation and has its finished
+  result joined onto the accumulator at its return. Boxy's rendering is the
+  runtime walk over descriptors and is unaffected.
 - `inspect_override.zig`: `lookupInspectOverride`, the one selection of whose
   registry decides an owner's override (the first view, in method-dispatch
   search order, that declares `owner.to_inspect`), shared by Monotype
