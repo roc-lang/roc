@@ -1412,6 +1412,7 @@ pub const Builder = struct {
             .default => |key| return try self.lowerDefaultBody(key.expr),
             .codec => |piece| return try Codec.lowerPiece(self, piece),
             .crash_dictionary => |kind| return try self.lowerCrashDictionary(kind),
+            .callable_eval_entry => |binding| return try self.lowerCallableEvalEntry(binding),
             .convert => |key| return try self.lowerConvertBody(key.from, key.to),
             .literal_thunk => |key| return try self.lowerLiteralThunkBody(key),
             .root_slot => |key| return try self.lowerRootSlotThunkBody(key),
@@ -2602,7 +2603,20 @@ pub const Builder = struct {
         call: struct { target: WorkerId, hidden: []const LocalId },
         structural: lower.StructuralMethod,
         structural_map: lower.StructuralMap,
+        /// A call of the function value of a computed callable binding.
+        callable_eval: lower.CallableEvalBinding,
     };
+
+    /// The erased entry of a method bound to a computed callable: it
+    /// restores the binding's function value and calls it with its
+    /// arguments (`WorkerKey.callable_eval_entry`).
+    pub fn lowerCallableEvalEntry(self: *Builder, binding: lower.CallableEvalBinding) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        var start = try self.beginErasedWorker(&.{});
+        defer self.allocator.free(start.captures);
+        self.var_descs = &.{};
+        try self.runErasedBody(&start, worker.params, worker.ret, .{ .callable_eval = binding });
+    }
 
     pub fn runErasedBody(self: *Builder, start: *ErasedStart, params: []const TypeId, ret: TypeId, body: ErasedBody) Allocator.Error!void {
         var args: std.ArrayList(LocalId) = .empty;
@@ -2642,6 +2656,11 @@ pub const Builder = struct {
                     .to_inspect => try self.emitDyn(target, .{ .inspect = .{ .value = values[0], .desc = self.var_descs[0] } }),
                 }
                 break :blk target;
+            },
+            .callable_eval => |binding| blk: {
+                const fn_ty = try self.program.store.intern(.{ .function = .{ .args = params, .ret = ret, .effectful = false } });
+                const value = try self.callableEvalValueAt(binding, fn_ty);
+                break :blk try self.emitErasedCall(value, fn_ty, values, ret);
             },
             .structural_map => |map| blk: {
                 try self.structuralMapBranches(map, values[0], values[1], params[0], ret);
@@ -3888,7 +3907,7 @@ pub const Builder = struct {
                 const export_name = view.nameStore().procBase(template.proc_base).export_name orelse break :blk "a template";
                 break :blk view.nameStore().exportNameText(export_name);
             },
-            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| @tagName(kind),
+            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| @tagName(kind),
         };
     }
 
@@ -4198,7 +4217,7 @@ pub const Builder = struct {
                 const node = table.evidenceNode(node_id);
                 const procedure = switch (node.target.kind) {
                     .procedure => |procedure| procedure,
-                    .local_proc, .structural => invariant("a literal argument's edge instantiates no procedure template"),
+                    .local_proc, .structural, .callable_binding => invariant("a literal argument's edge instantiates no procedure template"),
                 };
                 const callee = try self.program.templateRefWorker(procedure.template);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
@@ -4749,7 +4768,7 @@ pub const Builder = struct {
     pub fn localMethodValue(self: *Builder, node: static_dispatch.EvidenceNode, fn_ty: TypeId) Allocator.Error!LocalId {
         const target = switch (node.target.kind) {
             .local_proc => |target| target,
-            .procedure, .structural => invariant("a local method value names a procedure that is not local"),
+            .procedure, .structural, .callable_binding => invariant("a local method value names a procedure that is not local"),
         };
         if (self.program.moduleByIdx(node.target.module_idx).index != self.module) invariant("a method declared in a function body is dispatched outside its module");
         const local: checked.LocalProcedureBinding = .{ .binder = target.binder, .expr = target.expr, .dispatch_scope = target.dispatch_scope };
@@ -4780,7 +4799,7 @@ pub const Builder = struct {
             if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| return .{ scope_worker, id };
             switch (self.program.worker(scope_worker).key) {
                 .lambda => |key| scope_worker = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => break,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => break,
             }
         }
         // No body of the chain declared it: the chain is a stored closure
@@ -5524,7 +5543,7 @@ pub const Builder = struct {
         if (decoded.rebuilt) {
             const target = switch (self.program.worker(decoded.worker).key) {
                 .method_entry => |target| target,
-                .template, .adapter, .default, .lambda, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a rebuilt stored dictionary is not a method entry's"),
+                .template, .adapter, .default, .lambda, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a rebuilt stored dictionary is not a method entry's"),
             };
             const instance = try self.program.targetRequirements(target, decoded.bound);
             return try self.pushValue(try self.dictionaryOfTree(.{ .target = .{ .target = target, .instance = instance } }));
@@ -5662,7 +5681,7 @@ pub const Builder = struct {
     pub fn templateEvidenceParams(self: *Builder, worker_id: WorkerId) []const static_dispatch.EvidenceParamRecord {
         const key = switch (self.program.worker(worker_id).key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("evidence parameters of a worker that is not a procedure template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("evidence parameters of a worker that is not a procedure template's"),
         };
         const view = self.program.module(key.module).view;
         const template = view.checked_procedure_templates.templates.items[@backingInt(key.template)];
@@ -6198,8 +6217,22 @@ pub const Builder = struct {
         return switch (target.kind) {
             .procedure => |procedure| try self.program.templateRefWorker(procedure.template),
             .local_proc => invariant("a method declared in a function body is a local procedure, called through its function value, never as a worker"),
+            .callable_binding => invariant("a method bound to a computed callable is called through its function value, never as a worker"),
             .structural => invariant("a structural method reached a procedure dispatch"),
         };
+    }
+
+    /// The function value of the callable-eval binding `binding`, at `fn_ty`:
+    /// the value its compile-time root evaluated, or, where this program
+    /// evaluated none, the value its entry wrapper computes.
+    pub fn callableEvalValueAt(self: *Builder, binding: lower.CallableEvalBinding, fn_ty: TypeId) Allocator.Error!LocalId {
+        return try self.lowerNow(.{ .restore_callable_eval = .{ .module = binding.module, .template = binding.template, .ty = fn_ty } });
+    }
+
+    /// The function value of a method bound to a computed callable, at the
+    /// callable type `fn_ty` a dispatch calls it at.
+    pub fn callableBindingMethodValue(self: *Builder, binding: static_dispatch.CallableBindingTarget, fn_ty: TypeId) Allocator.Error!LocalId {
+        return try self.callableEvalValueAt(self.program.callableEvalBinding(binding), fn_ty);
     }
 
     /// The dictionary `evidence` denotes (design.md "Dictionaries"),
@@ -6219,6 +6252,17 @@ pub const Builder = struct {
                 if (node.target.kind == .local_proc) {
                     const fn_ty = (try self.instantiationCallable(node.instantiation)) orelse try self.convert(node.target.callable_ty);
                     return try self.localMethodValue(node, fn_ty);
+                }
+                if (node.target.kind == .callable_binding) {
+                    // The entry restores the value when called, so the
+                    // dictionary holds the entry, adapted to the callable
+                    // type it is called at.
+                    const entry = try self.program.callableEvalEntryWorker(self.module, self.program.callableEvalBinding(node.target.kind.callable_binding));
+                    const dictionary = try self.composeDictionary(entry, &.{});
+                    const expected = interface orelse (try self.instantiationCallable(node.instantiation)) orelse return dictionary;
+                    const entry_worker = self.program.worker(entry).*;
+                    const own_fn = try self.program.store.intern(.{ .function = .{ .args = entry_worker.params, .ret = entry_worker.ret, .effectful = false } });
+                    return try self.adaptDictionary(dictionary, own_fn, expected);
                 }
                 const target = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
@@ -6284,7 +6328,7 @@ pub const Builder = struct {
         const target = self.program.worker(callee).*;
         const key = switch (target.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.program.module(key.module).view.checked_procedure_templates;
         return .{
@@ -6401,6 +6445,7 @@ pub const Builder = struct {
                         .structural => |structural| delivered = try self.composeDictionary(try self.program.structuralWorker(self.module, structural.method), &.{try self.descOf(structural.over)}),
                         .crash => |kind| delivered = try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, kind), &.{}),
                         .scope_variable => |variable| delivered = self.variableDictionary(variable, self.program.module(node.requirement.?.module).nameStore().methodNameText(node.requirement.?.method)),
+                        .callable_eval => |entry| delivered = try self.composeDictionary(entry, &.{}),
                         .derived => invariant("a derived codec or map dictionary is resolved from a type alone, but checking records each with its plan at the dispatch it serves"),
                         .target => invariant("a dictionary's target requirement is not a resolved node"),
                     },
@@ -7568,6 +7613,26 @@ pub const Builder = struct {
                         try self.pushOperand(operands[index], operand_types[index]);
                     }
                     try self.pushValue(value);
+                    return;
+                }
+                if (node.target.kind == .callable_binding) {
+                    // A method bound to a computed callable is a call of
+                    // the function value its root evaluated.
+                    const fn_ty = try self.dispatchCallable(call_plan.resolution, call_plan.callable_ty);
+                    switch (call_plan.result_mode) {
+                        .value, .parser_for, .encoder_for, .hash, .map, .map_effectful => {},
+                        .equality => |equality| if (equality.negated) {
+                            try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = result_ty } });
+                        },
+                    }
+                    try self.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = @intCast(operands.len), .result = if (call_plan.result_mode == .equality) try self.program.store.primitive(.bool) else result_ty } });
+                    var index = operands.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try self.pushOperand(operands[index], operand_types[index]);
+                    }
+                    const binding = self.program.callableEvalBinding(node.target.kind.callable_binding);
+                    try self.push(.{ .restore_callable_eval = .{ .module = binding.module, .template = binding.template, .ty = fn_ty } });
                     return;
                 }
                 const callee = try self.methodTargetWorker(node.target);
@@ -9378,7 +9443,7 @@ pub const Builder = struct {
         };
         return switch (node.target.kind) {
             .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
-            .local_proc, .structural => null,
+            .local_proc, .structural, .callable_binding => null,
         };
     }
 
@@ -9765,7 +9830,7 @@ pub const Builder = struct {
         };
         const stamp = switch (node.target.kind) {
             .procedure => |procedure| procedure.runtime_target.iteratorProcedure(),
-            .local_proc, .structural => return null,
+            .local_proc, .structural, .callable_binding => return null,
         };
         if (stamp != .next) return null;
         const owner: static_dispatch.IteratorOwner = switch (self.program.store.get(iterator_ty)) {
@@ -9963,6 +10028,10 @@ pub const Builder = struct {
                 if (node.target.kind == .local_proc) {
                     const fn_ty = try self.dispatchCallable(resolution, callable_ty);
                     return try self.emitErasedCall(try self.localMethodValue(node, fn_ty), fn_ty, args, result_ty);
+                }
+                if (node.target.kind == .callable_binding) {
+                    const fn_ty = try self.dispatchCallable(resolution, callable_ty);
+                    return try self.emitErasedCall(try self.callableBindingMethodValue(node.target.kind.callable_binding, fn_ty), fn_ty, args, result_ty);
                 }
                 const callee = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];

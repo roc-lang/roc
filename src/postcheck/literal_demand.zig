@@ -244,7 +244,7 @@ pub const LiteralDemand = struct {
                     const node = plans.evidenceNode(node_id);
                     switch (node.target.kind) {
                         .procedure => |procedure| result = result.merge(self.templateFlags(procedure.template)),
-                        .local_proc => return Flags.all,
+                        .local_proc, .callable_binding => return Flags.all,
                         .structural => {},
                     }
                     switch (node.nested) {
@@ -502,6 +502,7 @@ const Builder = struct {
             switch (node.target.kind) {
                 .procedure => |procedure| try self.addEdge(from, try self.templateNode(procedure.template)),
                 .local_proc => self.markUnbounded(from, "local procedure evidence"),
+                .callable_binding => self.markUnbounded(from, "computed callable evidence"),
                 .structural => {},
             }
             switch (node.nested) {
@@ -652,6 +653,7 @@ const Builder = struct {
             switch (target.kind) {
                 .procedure => |procedure| try self.addEdge(owner, try self.templateNode(procedure.template)),
                 .local_proc => self.markUnbounded(owner, "local procedure method"),
+                .callable_binding => self.markUnbounded(owner, "computed callable method"),
                 .structural => {},
             }
         }

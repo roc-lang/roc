@@ -238,6 +238,7 @@ pub const Digests = struct {
             hashTag(hasher, @tagName(std.meta.activeTag(target.kind)));
             switch (target.kind) {
                 .procedure => |procedure| self.hashTemplateRef(hasher, artifact, procedure.template),
+                .callable_binding => |binding| hashBytes(hasher, std.mem.asBytes(&@backingInt(binding.template))),
                 .local_proc, .structural => {},
             }
         }

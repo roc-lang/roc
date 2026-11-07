@@ -1257,6 +1257,13 @@ const Gen = struct {
                 }
                 const template = switch (node.target.kind) {
                     .procedure => |procedure| procedure.template,
+                    // A method bound to a computed callable is a call of the
+                    // function value its root evaluated.
+                    .callable_binding => |binding| {
+                        const value = try b.callableBindingMethodValue(binding, callable.fn_ty);
+                        const ret_ty = fnRet(program_, callable.fn_ty);
+                        return .{ .value = try b.emitErasedCall(value, callable.fn_ty, args, ret_ty), .ty = ret_ty };
+                    },
                     .local_proc => invariant("a generated codec's local procedure call has no local value"),
                     .structural => invariant("a generated codec call's callable evidence names a structural target"),
                 };

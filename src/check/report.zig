@@ -55,6 +55,7 @@ const UndeterminedCodecType = problem_mod.UndeterminedCodecType;
 const UndeterminedType = problem_mod.UndeterminedType;
 const UnresolvedDispatcher = problem_mod.UnresolvedDispatcher;
 const RecursiveDispatch = problem_mod.RecursiveDispatch;
+const LocalValueMethod = problem_mod.LocalValueMethod;
 
 // Match/exhaustiveness errors
 const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
@@ -1037,6 +1038,7 @@ pub const ReportBuilder = struct {
                     .unresolved_dispatcher => |data| return self.buildStaticDispatchUnresolvedDispatcher(data),
                     .recursive_dispatch => |data| return self.buildStaticDispatchRecursiveDispatch(data),
                     .undetermined_type => |data| return self.buildUndeterminedType(data),
+                    .local_value_method => |data| return self.buildStaticDispatchLocalValueMethod(data),
                 }
             },
             .recursive_alias => |data| {
@@ -3072,6 +3074,41 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for an unproductive static-dispatch cycle.
+    fn buildStaticDispatchLocalValueMethod(
+        self: *Self,
+        data: LocalValueMethod,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Method Is a Local Value", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("is a value of the function body around this type, so it can't be called as a method."),
+        }, self, &report, &report.headline);
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.fn_var)))) |region| {
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
+            try report.document.addLineBreak();
+        }
+
+        try D.renderSlice(&.{
+            D.bytes("The method is being selected for this type:"),
+        }, self, &report);
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock(snapshot_str);
+        try report.document.addLineBreaks(2);
+        try D.renderSlice(&.{
+            D.bytes("A method of a type declared in a function body must be a function written in the type's declaration, like"),
+            D.bytes("|x| ...").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("or a local function. Write"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("as a function, or declare the type at the top level, where a method can be any function value."),
+        }, self, &report);
+        return report;
+    }
+
     fn buildStaticDispatchRecursiveDispatch(
         self: *Self,
         data: RecursiveDispatch,

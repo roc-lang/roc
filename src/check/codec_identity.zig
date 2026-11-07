@@ -367,6 +367,10 @@ const ContentDigester = struct {
                 self.writeU8(@intFromBool(local.dispatch_scope != null));
                 if (local.dispatch_scope) |scope| self.writeU32(@backingInt(scope));
             },
+            .callable_binding => |binding| {
+                self.hasher.update(&binding.module.bytes);
+                self.writeU32(@backingInt(binding.template));
+            },
             .structural => |kind| self.writeU8(@backingInt(kind)),
         }
         self.writeU8(@intFromBool(target.alias != null));
