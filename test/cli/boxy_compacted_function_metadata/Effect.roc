@@ -10,9 +10,9 @@ Effect(msg) := [Call(Str, List(U8), Box((List(U8) -> Box(msg))))].{
         }
 
     fire : Effect(msg), List(U8) -> msg
-    fire = |effect, reply|
+    fire = |effect, response_bytes|
         match effect {
-            Call(_, _, callback) => Box.unbox(Box.unbox(callback)(reply))
+            Call(_, _, callback) => Box.unbox(Box.unbox(callback)(response_bytes))
         }
 }
 
