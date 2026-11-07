@@ -54,6 +54,14 @@ const MethodRegistryTestModuleIndex = struct {
     }
 };
 
+/// The source's only associated value is a record, which is not a
+/// reference, so publication resolves it to no method target.
+const MethodRegistryTestReferencedTargets = struct {
+    pub fn methodBindingTarget(_: *@This(), _: can.CIR.Expr.Idx, _: static_dispatch.MethodOwner) error{OutOfMemory}!?static_dispatch.ReferencedMethodTarget {
+        return null;
+    }
+};
+
 // primitives - nums //
 
 test "check type - num - float" {
@@ -3816,6 +3824,7 @@ test "checked artifact method registry skips nominal associated values" {
     };
     const checked_types = MethodRegistryTestCheckedTypes{};
     const module_index = MethodRegistryTestModuleIndex{};
+    var referenced_targets = MethodRegistryTestReferencedTargets{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
@@ -3824,9 +3833,11 @@ test "checked artifact method registry skips nominal associated values" {
         testing.allocator,
         module,
         &names,
+        .{},
         &template_lookup,
         &checked_types,
         &module_index,
+        &referenced_targets,
     );
     defer registry.deinit(testing.allocator);
 

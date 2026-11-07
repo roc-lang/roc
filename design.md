@@ -17332,6 +17332,20 @@ alias scope's variables. Monotype seeds the alias's scope with it and
 instantiates the forwarded lookup's own recorded substitution there, alias by
 alias along the chain, which composes the target's substitution exactly.
 
+The chain may leave the module that declares the method: `to_inspect =
+Other.render` forwards to another module's procedure, and that module's own
+aliases forward further. The method registry resolves the chain from the
+resolved value references and procedure bindings publication already holds,
+exactly the chain Monotype and Boxy compose along, so the procedure a method
+dispatches to and the procedure its instantiation composes to are one
+decision. The target names the procedure's template, whose module owns the
+target's data, its callable type included; the alias records the module that
+declares it, which is where composition starts. A chain that reaches a
+binding checking rejected makes the method a rejected declaration (see
+"Methods Never Capture"). A chain that reaches a constant or a computed
+callable reaches no procedure, so the binding is an associated value, not a
+method target.
+
 ### Static Dispatch In Monotype
 
 Static dispatch is DECIDED during checking and CONSUMED during Monotype
