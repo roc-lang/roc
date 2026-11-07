@@ -605,20 +605,14 @@ pub const FnDef = union(enum) {
     },
 };
 
-/// A view into immutable bytes shared by strings and packed lists.
-pub const ConstBlob = struct {
-    data: ConstBlobDataId,
-    offset: u32,
-    len: u32,
-};
-
-/// String view into immutable shared backing bytes.
-pub const ConstStr = ConstBlob;
+/// A string's bytes: one content-interned blob holding exactly those bytes,
+/// so equal strings share it and no string is a view into a longer one.
+pub const ConstStr = ConstBlobDataId;
 
 /// Packed list with little-endian scalar leaves in semantic field order.
-/// Product bytes omit padding. `bytes.len == len * byteWidth()`.
+/// Product bytes omit padding. `blobData(bytes).len == len * byteWidth()`.
 pub const ConstPackedList = struct {
-    bytes: ConstBlob,
+    bytes: ConstBlobDataId,
     len: u32,
     /// Null for products; the stored checked type supplies their field structure.
     element: ?ConstPackedScalar,
@@ -1586,7 +1580,7 @@ pub const ConstStore = struct {
     };
 
     pub fn strBytes(self: *const ConstStore, str: ConstStr) []const u8 {
-        return self.blobBytes(str);
+        return self.blobData(str);
     }
 
     /// Structural equality of two value graphs: scalars bitwise, blob and tag
@@ -1610,15 +1604,15 @@ pub const ConstStore = struct {
                 .pending, .fn_value => return false,
                 .boxy_fn => |function| {
                     const right_function = right.boxy_fn;
-                    if (!sameBytes(self.blobBytes(function.recipe), other.blobBytes(right_function.recipe))) return false;
+                    if (!sameBytes(self.blobData(function.recipe), other.blobData(right_function.recipe))) return false;
                     if (function.captures.len != right_function.captures.len) return false;
                     for (function.captures, right_function.captures) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
                 },
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
-                .str => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.str))) return false,
-                .crash => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.crash))) return false,
-                .checked_error => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.checked_error))) return false,
+                .str => |str| if (!sameBytes(self.blobData(str), other.blobData(right.str))) return false,
+                .crash => |str| if (!sameBytes(self.blobData(str), other.blobData(right.crash))) return false,
+                .checked_error => |str| if (!sameBytes(self.blobData(str), other.blobData(right.checked_error))) return false,
                 .box => |payload| try pending.append(self.allocator, .{ .left = payload, .right = right.box }),
                 .nominal => |nominal| {
                     if (!std.meta.eql(nominal.named_type.module.bytes, right.nominal.named_type.module.bytes)) return false;
@@ -1635,7 +1629,7 @@ pub const ConstStore = struct {
                         .packed_bytes => |packed_list| {
                             const r = right_list.packed_bytes;
                             if (packed_list.len != r.len or packed_list.element != r.element or packed_list.product_width != r.product_width) return false;
-                            if (!sameBytes(self.blobBytes(packed_list.bytes), other.blobBytes(r.bytes))) return false;
+                            if (!sameBytes(self.blobData(packed_list.bytes), other.blobData(r.bytes))) return false;
                         },
                         .empty => |capacity| if (capacity != right_list.empty) return false,
                     }
@@ -1652,16 +1646,6 @@ pub const ConstStore = struct {
             }
         }
         return true;
-    }
-
-    pub fn blobBytes(self: *const ConstStore, blob: ConstBlob) []const u8 {
-        const backing = self.blobData(blob.data);
-        const offset: usize = blob.offset;
-        const len: usize = blob.len;
-        if (@import("builtin").mode == .debug and (offset > backing.len or len > backing.len - offset)) {
-            constStoreInvariant("blob view is outside backing data");
-        }
-        return backing[offset..][0..len];
     }
 
     /// The modules a stored function's recipe names, by checked key: the
@@ -1708,7 +1692,7 @@ pub const ConstStore = struct {
                 .pending, .zst => {},
                 .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
                 .scalar => |scalar| hashScalar(hasher, scalar),
-                inline .str, .crash, .checked_error => |str| hashBytes(hasher, self.blobBytes(str)),
+                inline .str, .crash, .checked_error => |str| hashBytes(hasher, self.blobData(str)),
                 .box => |payload| try pending.append(self.allocator, payload),
                 .nominal => |nominal| {
                     hasher.update(&context.moduleDigest(nominal.named_type.module));
@@ -1723,7 +1707,7 @@ pub const ConstStore = struct {
                         hasher.update(std.mem.asBytes(&packed_list.len));
                         hasher.update(std.mem.asBytes(&packed_list.product_width));
                         hasher.update(if (packed_list.element) |element| @tagName(element) else "product");
-                        hashBytes(hasher, self.blobBytes(packed_list.bytes));
+                        hashBytes(hasher, self.blobData(packed_list.bytes));
                     },
                     .empty => |capacity| hasher.update(std.mem.asBytes(&capacity)),
                 },
@@ -1734,7 +1718,7 @@ pub const ConstStore = struct {
                 .boxy_fn => |function| {
                     // The recipe names its modules by checked key; the
                     // identity names them as `context` does.
-                    const recipe = self.blobBytes(function.recipe);
+                    const recipe = self.blobData(function.recipe);
                     const keys = recipeModuleKeys(recipe);
                     hasher.update(std.mem.asBytes(&@as(u32, @intCast(keys.len))));
                     for (keys) |key| hasher.update(&context.moduleDigest(.{ .bytes = key }));
@@ -1868,7 +1852,7 @@ pub const ConstStore = struct {
                             try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } });
                         },
                         .packed_bytes => |packed_list| {
-                            const bytes = self.blobBytes(packed_list.bytes);
+                            const bytes = self.blobData(packed_list.bytes);
                             const expected_len = @as(u64, packed_list.len) * packed_list.byteWidth();
                             if (bytes.len != expected_len) {
                                 constStoreInvariant("packed list byte length differs from its element encoding");
@@ -1950,14 +1934,15 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     // Strings and packed lists share one content-deduplicated blob backing.
     const sd = try store.addBlobData("hello world");
     try std.testing.expectEqual(sd, try store.addBlobData("hello world"));
-    const str = try store.append(.{ .str = .{ .data = sd, .offset = 0, .len = 5 } });
+    const hello = try store.addBlobData("hello");
+    const str = try store.append(.{ .str = hello });
     const packed_list = try store.append(.{ .list = .{ .packed_bytes = .{
-        .bytes = .{ .data = sd, .offset = 0, .len = 11 },
+        .bytes = sd,
         .len = 11,
         .element = .u8,
     } } });
     const product_list = try store.append(.{ .list = .{ .packed_bytes = .{
-        .bytes = .{ .data = sd, .offset = 1, .len = 10 },
+        .bytes = try store.addBlobData("ello world"),
         .len = 2,
         .element = null,
         .product_width = 5,
@@ -2067,14 +2052,14 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     // String backing
     try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str));
     const loaded_packed = loaded.get(packed_list).list.packed_bytes;
-    try std.testing.expectEqual(sd, loaded_packed.bytes.data);
-    try std.testing.expectEqualStrings("hello world", loaded.blobBytes(loaded_packed.bytes));
+    try std.testing.expectEqual(sd, loaded_packed.bytes);
+    try std.testing.expectEqualStrings("hello world", loaded.blobData(loaded_packed.bytes));
     const loaded_product = loaded.get(product_list).list.packed_bytes;
     try std.testing.expectEqual(@as(?ConstPackedScalar, null), loaded_product.element);
     try std.testing.expectEqual(@as(u32, 5), loaded_product.byteWidth());
     try std.testing.expectEqual(@as(u64, 4096), loaded.get(empty_list).list.empty);
     try std.testing.expectEqual(@as(u32, 2), loaded_product.len);
-    try std.testing.expectEqualStrings("ello world", loaded.blobBytes(loaded_product.bytes));
+    try std.testing.expectEqualStrings("ello world", loaded.blobData(loaded_product.bytes));
     // Function captures
     const loaded_fn = loaded.getFn(fn_id);
     try std.testing.expectEqual(@as(usize, 2), loaded_fn.captures.len);

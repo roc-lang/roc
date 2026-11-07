@@ -93,7 +93,7 @@ fn checkListWithDebug(source: []const u8, scalar: check.ConstStore.ConstPackedSc
         const packed_list = value.list.packed_bytes;
         try std.testing.expectEqual(scalar, packed_list.element.?);
         try std.testing.expectEqual(expected.len / scalar.byteWidth(), packed_list.len);
-        try std.testing.expectEqualSlices(u8, expected, artifact.const_store.blobBytes(packed_list.bytes));
+        try std.testing.expectEqualSlices(u8, expected, artifact.const_store.blobData(packed_list.bytes));
     }
     try std.testing.expectEqual(@as(usize, 1), constants);
     // The constant reads no function value, so the `.boxy` evaluator
