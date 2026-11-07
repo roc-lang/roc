@@ -20482,20 +20482,26 @@ from its returned record keeps its origin around the loop. Origins do not
 leave the procedure that read the value: a returned value or field that
 derives from a candidate is not a unique return, since a callee never learns
 of a candidate and the caller cannot see which form the read takes. A candidate is *needed*
-when a value derived from it meets a runtime uniqueness check its birth
-answers—an argument position an operation may check, or an argument passed to
-a callee position the callee's seed mask names, which a variant would seed—
-while born with no other holder. A procedure's seed mask names the parameters
-whose seed a check in its body would answer, and also those carried into a
-callee position the callee's mask names, so seeds compose through direct calls
-whether or not the callee is inlined; a mask change is a signature change and
-re-analyzes callers. Needed candidates take the fresh form, every
+when a value derived from it, with no other holder, meets an argument position
+whose write in place its birth would serve: one an operation may check at
+runtime, one an operation writes in place unchecked (an operation that returns
+its consumed argument's allocation as a unique result without a runtime check,
+`RcEffect.uncheckedInPlaceArgs`, such as `list_append_unsafe`; its caller
+guarantees the argument is unique with the room it uses, which only the fresh
+form gives), or a callee position the callee's demand mask names. Along the
+path from a candidate the value is the read's, so a join's other incoming
+values do not affect the decision. A procedure's demand mask names the
+parameters carried into such a position in its body, including callee
+positions the callee's mask names, so demands compose through direct calls
+whether or not the callee is inlined; its seed mask is the subset a runtime
+check answers, which a variant would seed. A mask change is a signature change
+and re-analyzes callers. Needed candidates take the fresh form, every
 other candidate stays the static datum, and a local whose origins include a
 candidate that stays static is not unique, whatever its born bit says
 (`unique_origins_ok`). Emission materializes a needed read as a call to the
 fresh procedure and any other as the static literal; no `fresh_alternative`
 survives ARC, which the certifier checks, and the fresh procedures no read
-chose leave with the reachability pass that follows ARC. Callee seed-mask
+chose leave with the reachability pass that follows ARC. Callee demand-mask
 changes re-analyze callers, since a caller's decisions read them.
 
 ### Vocabulary

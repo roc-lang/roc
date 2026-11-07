@@ -1417,7 +1417,7 @@ test "completed successful scalar roots decode to literals; failed and aggregate
     try std.testing.expect(values.literalFor(.{}, .{ .checked = @fromBackingInt(@intCast(6)) }, .str) == null);
 }
 
-test "completed empty list roots decode to their constructions; lists with elements keep their slots" {
+test "a completed empty list root with capacity keeps its slot with its construction as its fresh form; lists with elements keep their slots" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
@@ -1474,8 +1474,11 @@ test "completed empty list roots decode to their constructions; lists with eleme
     var values = try CompletedScalarValues.init(allocator, &program, &frozen);
     defer values.deinit(allocator);
 
-    const empty = values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, list_layout) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u64, 16), empty.empty_list);
+    // A read that only reads the empty list allocates nothing, so the root
+    // keeps its slot; its fresh form is the construction with its capacity.
+    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, list_layout));
+    const empty = values.freshFormFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 16), empty.construction.empty_list);
     // A uniform list and a varied list alike keep their slots: rebuilding
     // either would allocate at every read.
     try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(2)) }, list_layout));
@@ -1507,11 +1510,11 @@ test "completed empty list roots decode to their constructions; lists with eleme
     const empty_target = try ctx.addLocal(reader_list_layout);
     const origin = LIR.StmtOrigin{ .loc = .none, .region = .zero(), .inline_scope = .none, .kind = .scaffold };
     const empty_ret = try reader.store.addCFStmt(.{ .ret = .{ .value = empty_target } }, origin);
-    const reserved = try emit(ctx, &reader.store, &reader.layouts, origin, empty_target, values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, reader_list_layout).?, empty_ret) orelse return error.TestUnexpectedResult;
+    const reserved = try emit(ctx, &reader.store, &reader.layouts, origin, empty_target, empty.construction, empty_ret) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i64, 16), reader.store.getCFStmtImmediate(reserved).assign_literal.value.i64_literal.value);
 }
 
-test "an empty string root and a record of an empty list and a scalar decode to constructions" {
+test "an empty string root decodes to its construction; a record of an empty list with capacity and a scalar keeps its slot" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
@@ -1577,10 +1580,11 @@ test "an empty string root and a record of an empty list and a scalar decode to 
 
     const string = values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, .str) orelse return error.TestUnexpectedResult;
     try std.testing.expect(string == .empty_str);
-    const record = values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(2)) }, record_layout) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 2), record.record.len);
-    try std.testing.expectEqual(@as(u64, 4), record.record[0].empty_list);
-    try std.testing.expectEqual(@as(i128, 9), record.record[1].literal.i128_literal.value);
+    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(2)) }, record_layout));
+    const record = values.freshFormFor(.{}, .{ .checked = @fromBackingInt(@intCast(2)) }) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), record.construction.record.len);
+    try std.testing.expectEqual(@as(u64, 4), record.construction.record[0].empty_list);
+    try std.testing.expectEqual(@as(i128, 9), record.construction.record[1].literal.i128_literal.value);
     try std.testing.expect(values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(3)) }, .str) == null);
 }
 
